@@ -1,0 +1,33 @@
+# Reference: <https://postmarketos.org/deviceinfo>
+# Please use double quotes only. Google Nexus Q (steelhead).
+
+deviceinfo_format_version="0"
+deviceinfo_name="Google Nexus Q"
+deviceinfo_manufacturer="Google"
+deviceinfo_codename="google-steelhead"
+deviceinfo_year="2012"
+deviceinfo_dtb="ti/omap/omap4-steelhead"
+deviceinfo_arch="armv7"
+
+# Device
+deviceinfo_chassis="embedded"
+deviceinfo_keyboard="false"
+deviceinfo_external_storage="false"
+deviceinfo_screen_width="1920"
+deviceinfo_screen_height="1080"
+
+# Bootloader (offsets validated against samsung-maguro / OMAP4460)
+deviceinfo_flash_method="fastboot"
+deviceinfo_generate_bootimg="true"
+deviceinfo_flash_offset_base="0x80000000"
+deviceinfo_flash_offset_kernel="0x00008000"
+deviceinfo_flash_offset_ramdisk="0x01000000"
+deviceinfo_flash_offset_second="0x00f00000"
+deviceinfo_flash_offset_tags="0x00000100"
+deviceinfo_flash_pagesize="2048"
+deviceinfo_kernel_cmdline="console=ttyS2,115200n8 mem=1G"
+
+# USB networking for initial setup (USB gadget on micro-USB port)
+deviceinfo_usb_idVendor="0x18D1"
+deviceinfo_usb_idProduct="0x4EE2"
+deviceinfo_usb_network_function_default="rndis"

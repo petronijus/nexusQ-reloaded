@@ -1,0 +1,68 @@
+# Reference: <https://postmarketos.org/linux-postmarketos>
+# Kernel: mainline for Google Nexus Q (steelhead)
+pkgname=linux-google-steelhead
+pkgver=6.12.12
+pkgrel=0
+pkgdesc="Mainline kernel for Google Nexus Q"
+url="https://kernel.org"
+arch="armv7"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+"
+makedepends="
+	bash
+	bc
+	bison
+	devicepkg-dev
+	flex
+	openssl-dev
+	perl
+	findutils
+	postmarketos-installkernel
+	xz
+"
+
+_flavor="${pkgname#linux-}"
+_config="config-$_flavor.$arch"
+_carch="arm"
+
+source="
+	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
+	$_config
+	0001-ASoC-tas571x-add-TAS5713-support.patch
+	0002-dt-bindings-add-ti-tas5713.patch
+	0003-ARM-dts-omap4-add-steelhead.patch
+"
+
+builddir="$srcdir/linux-$pkgver"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/$_config" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" CC="${CC:-gcc}" \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
+		KCFLAGS="-Wno-array-bounds" \
+		olddefconfig
+	make ARCH="$_carch" CC="${CC:-gcc}" \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
+		KCFLAGS="-Wno-array-bounds"
+}
+
+package() {
+	downstreamkernel_package \
+		"$builddir" "$pkgdir" "$_carch" "$_flavor"
+}
+
+sha512sums="
+SKIP  linux-$pkgver.tar.xz
+SKIP  $_config
+SKIP  0001-ASoC-tas571x-add-TAS5713-support.patch
+SKIP  0002-dt-bindings-add-ti-tas5713.patch
+SKIP  0003-ARM-dts-omap4-add-steelhead.patch
+"

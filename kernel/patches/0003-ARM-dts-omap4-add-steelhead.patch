@@ -1,0 +1,617 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nexus Q Reloaded <nexusq@localhost>
+Date: Wed, 1 Jan 2025 00:00:00 +0000
+Subject: [PATCH 3/3] ARM: dts: omap4: add Google Nexus Q (steelhead)
+
+Add device tree for the Google Nexus Q media player (codename steelhead).
+
+Hardware: TI OMAP4460, 1 GB LPDDR2, 16 GB eMMC, BCM4330 WiFi/BT,
+TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
+(USB), HDMI via TPD12S015A, 32 RGB LEDs via AVR+LP5523.
+
+Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+---
+ arch/arm/boot/dts/ti/omap/Makefile             |   1 +
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 578 +
+ 2 files changed, 579 insertions(+)
+ create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+
+diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
+index abcdef1..abcdef2 100644
+--- a/arch/arm/boot/dts/ti/omap/Makefile
++++ b/arch/arm/boot/dts/ti/omap/Makefile
+@@ -78,6 +78,7 @@
+ 	omap4-panda-es.dtb \
+ 	omap4-sdp.dtb \
+ 	omap4-sdp-es23plus.dtb \
++	omap4-steelhead.dtb \
+ 	omap4-var-dvk-om44.dtb \
+ 	omap4-var-stk-om44.dtb \
+ 	omap4-xyboard-mz609.dtb \
+
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+new file mode 100644
+index 0000000..abcdef1
+--- /dev/null
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -0,0 +1,578 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Device Tree Source for Google Nexus Q (steelhead)
++ *
++ * Copyright (C) 2024-2025 Nexus Q Reloaded Project
++ *
++ * Based on omap4-panda-common.dtsi and original board-steelhead.c
++ * from the CyanogenMod android_kernel_google_steelhead repository.
++ *
++ * Hardware:
++ *   SoC:       TI OMAP4460 (dual Cortex-A9 @ 1.2 GHz)
++ *   RAM:       1 GB LPDDR2 (Elpida ECB240ABACN)
++ *   Storage:   16 GB eMMC (Samsung KLMAG4FEJA-A002)
++ *   WiFi/BT:   Broadcom BCM4330 (SDIO + UART2)
++ *   Audio:     TWL6040 codec (McPDM) + TAS5713 25W amp (I2C4 + McBSP2)
++ *   NFC:       NXP PN544 (I2C3)
++ *   Ethernet:  SMSC LAN9500A (USB EHCI)
++ *   HDMI:      OMAP4 DSS via TPD12S015A (micro-HDMI)
++ *   LEDs:      AVR MCU (I2C2) -> LP5523 drivers (32 RGB LEDs)
++ *   PMIC:      TWL6030 + TPS62361
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++#include "omap4460.dtsi"
++#include "elpida_ecb240abacn.dtsi"
++#include "omap4-mcpdm.dtsi"
++
++/ {
++	model = "Google Nexus Q";
++	compatible = "google,steelhead", "ti,omap4460", "ti,omap4";
++
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x80000000 0x40000000>; /* 1 GB */
++	};
++
++	chosen {
++		stdout-path = &uart3;
++	};
++
++	aliases {
++		ethernet = &ethernet;
++	};
++
++	/* HS USB Port 1 power for SMSC LAN9500A Ethernet */
++	hsusb1_power: hsusb1-power-reg {
++		compatible = "regulator-fixed";
++		regulator-name = "hsusb1_vbus";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&gpio1 1 GPIO_ACTIVE_LOW>; /* gpio_1 */
++		startup-delay-us = <70000>;
++		enable-active-high;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/* HS USB Host PHY on PORT 1 for Ethernet */
++	hsusb1_phy: hsusb1-phy {
++		compatible = "usb-nop-xceiv";
++		reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>; /* gpio_62 */
++		#phy-cells = <0>;
++		vcc-supply = <&hsusb1_power>;
++		clocks = <&auxclk3_ck>;
++		clock-names = "main_clk";
++		clock-frequency = <19200000>;
++	};
++
++	/* BCM4330 WiFi power sequencing */
++	bcm4330_pwrseq: bcm4330-pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		reset-gpios = <&gpio2 11 GPIO_ACTIVE_LOW>; /* gpio_43 WLAN_EN */
++		clocks = <&twl 0>;
++		clock-names = "ext_clock";
++	};
++
++	/* BCM4330 WiFi VMMC regulator */
++	bcm4330_vmmc: bcm4330-vmmc {
++		compatible = "regulator-fixed";
++		regulator-name = "vbcm4330";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&wlan_en_pins>;
++		gpio = <&gpio2 11 GPIO_ACTIVE_HIGH>; /* gpio_43 */
++		startup-delay-us = <200000>;
++		enable-active-high;
++	};
++
++	/* HDMI level converter: TPD12S015A */
++	tpd12s015: encoder0 {
++		compatible = "ti,tpd12s015";
++
++		gpios = <&gpio2 28 GPIO_ACTIVE_HIGH>,	/* gpio_60 CT_CP_HPD */
++			<&gpio2 9 GPIO_ACTIVE_HIGH>,	/* gpio_41 LS_OE */
++			<&gpio2 31 GPIO_ACTIVE_HIGH>;	/* gpio_63 HPD */
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@0 {
++				reg = <0>;
++				tpd12s015_in: endpoint {
++					remote-endpoint = <&hdmi_out>;
++				};
++			};
++
++			port@1 {
++				reg = <1>;
++				tpd12s015_out: endpoint {
++					remote-endpoint = <&hdmi_connector_in>;
++				};
++			};
++		};
++	};
++
++	hdmi0: connector0 {
++		compatible = "hdmi-connector";
++		label = "hdmi";
++		type = "d"; /* micro-HDMI */
++
++		port {
++			hdmi_connector_in: endpoint {
++				remote-endpoint = <&tpd12s015_out>;
++			};
++		};
++	};
++
++	/* S/PDIF digital audio output (TOSLINK) */
++	spdif_dit: spdif-dit {
++		compatible = "linux,spdif-dit";
++		#sound-dai-cells = <0>;
++	};
++
++	/*
++	 * ASoC sound card: TWL6040 codec via McPDM
++	 * TAS5713 is on a separate I2S bus (McBSP2) and managed independently.
++	 */
++	sound: sound {
++		compatible = "ti,abe-twl6040";
++		ti,model = "Nexus Q";
++		ti,mclk-freq = <38400000>;
++		ti,mcpdm = <&mcpdm>;
++		ti,twl6040 = <&twl6040>;
++
++		ti,audio-routing =
++			"Headset Stereophone", "HSOL",
++			"Headset Stereophone", "HSOR",
++			"Ext Spk", "HFL",
++			"Ext Spk", "HFR",
++			"Line Out", "AUXL",
++			"Line Out", "AUXR";
++	};
++};
++
++&omap4_pmx_core {
++	pinctrl-names = "default";
++	pinctrl-0 = <
++		&dss_hdmi_pins
++		&tpd12s015_pins
++		&hsusbb1_pins
++	>;
++
++	twl6040_pins: twl6040-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x120, PIN_OUTPUT | MUX_MODE3)		/* hdq_sio.gpio_127 AUDPWRON */
++			OMAP4_IOPAD(0x1a0, PIN_INPUT | MUX_MODE0)		/* sys_nirq2 */
++		>;
++	};
++
++	i2c1_pins: i2c1-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x122, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_scl */
++			OMAP4_IOPAD(0x124, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_sda */
++		>;
++	};
++
++	i2c2_pins: i2c2-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x126, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_scl */
++			OMAP4_IOPAD(0x128, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_sda */
++		>;
++	};
++
++	i2c3_pins: i2c3-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x12a, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_scl */
++			OMAP4_IOPAD(0x12c, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_sda */
++		>;
++	};
++
++	i2c4_pins: i2c4-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x12e, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_scl */
++			OMAP4_IOPAD(0x130, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_sda */
++		>;
++	};
++
++	dss_hdmi_pins: dss-hdmi-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x09a, PIN_INPUT | MUX_MODE0)		/* hdmi_cec */
++			OMAP4_IOPAD(0x09c, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl */
++			OMAP4_IOPAD(0x09e, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda */
++		>;
++	};
++
++	tpd12s015_pins: tpd12s015-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x062, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a17.gpio_41 LS_OE */
++			OMAP4_IOPAD(0x088, PIN_OUTPUT | MUX_MODE3)		/* gpmc_nbe1.gpio_60 CT_CP_HPD */
++			OMAP4_IOPAD(0x098, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* hdmi_hpd.gpio_63 HPD */
++		>;
++	};
++
++	hsusbb1_pins: hsusbb1-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x0c2, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_clk */
++			OMAP4_IOPAD(0x0c4, PIN_OUTPUT | MUX_MODE4)		/* usbb1_ulpiphy_stp */
++			OMAP4_IOPAD(0x0c6, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dir */
++			OMAP4_IOPAD(0x0c8, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_nxt */
++			OMAP4_IOPAD(0x0ca, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat0 */
++			OMAP4_IOPAD(0x0cc, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat1 */
++			OMAP4_IOPAD(0x0ce, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat2 */
++			OMAP4_IOPAD(0x0d0, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat3 */
++			OMAP4_IOPAD(0x0d2, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat4 */
++			OMAP4_IOPAD(0x0d4, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat5 */
++			OMAP4_IOPAD(0x0d6, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat6 */
++			OMAP4_IOPAD(0x0d8, PIN_INPUT_PULLDOWN | MUX_MODE4)	/* usbb1_ulpiphy_dat7 */
++		>;
++	};
++
++	ethernet_gpios: ethernet-gpios {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x040, PIN_OUTPUT | MUX_MODE3)		/* gpmc_ad0.gpio_1 NENABLE */
++			OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_wait0.gpio_62 NRESET */
++		>;
++	};
++
++	wlan_en_pins: wlan-en-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x066, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a19.gpio_43 WLAN_EN */
++		>;
++	};
++
++	wlan_sdio_pins: wlan-sdio-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x07a, PIN_INPUT | MUX_MODE3)		/* gpmc_ncs3.gpio_53 WLAN_IRQ */
++			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_clk */
++			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_cmd */
++			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat0 */
++			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat1 */
++			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat2 */
++			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat3 */
++		>;
++	};
++
++	bt_pins: bt-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x06c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a22.gpio_46 BT_EN */
++			OMAP4_IOPAD(0x078, PIN_OUTPUT | MUX_MODE3)		/* gpmc_ncs2.gpio_52 BT_RESET */
++			OMAP4_IOPAD(0x06a, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a21.gpio_45 BT_WAKE */
++			OMAP4_IOPAD(0x06e, PIN_INPUT_PULLDOWN | MUX_MODE3)	/* gpmc_a23.gpio_47 HOST_WAKE */
++		>;
++	};
++
++	uart2_pins: uart2-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x118, PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_cts */
++			OMAP4_IOPAD(0x11a, PIN_OUTPUT | MUX_MODE0)		/* uart2_rts */
++			OMAP4_IOPAD(0x11c, PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_rx */
++			OMAP4_IOPAD(0x11e, PIN_OUTPUT | MUX_MODE0)		/* uart2_tx */
++		>;
++	};
++
++	nfc_pins: nfc-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x1b4, PIN_OUTPUT | MUX_MODE3)		/* gpio_162 FW */
++			OMAP4_IOPAD(0x1b6, PIN_OUTPUT | MUX_MODE3)		/* gpio_163 EN */
++			OMAP4_IOPAD(0x1b8, PIN_INPUT_PULLUP | MUX_MODE3)	/* gpio_164 IRQ */
++		>;
++	};
++
++	tas5713_pins: tas5713-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x060, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a16.gpio_40 IFACE_EN */
++			OMAP4_IOPAD(0x064, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a18.gpio_42 RESET */
++			OMAP4_IOPAD(0x068, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 PDN */
++		>;
++	};
++
++	/*
++	 * McBSP2 I2S pads for TAS5713 amplifier.
++	 * These are SEPARATE from the McPDM pads (0x106-0x10e) used by TWL6040.
++	 * McBSP2 pads: clkx=0x110, dr=0x112, dx=0x114, fsx=0x116
++	 */
++	mcbsp2_pins: mcbsp2-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x110, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx */
++			OMAP4_IOPAD(0x114, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_dx */
++			OMAP4_IOPAD(0x116, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx */
++		>;
++	};
++
++	avr_pins: avr-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x070, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a24.gpio_48 RESET */
++			OMAP4_IOPAD(0x072, PIN_INPUT_PULLUP | MUX_MODE3)	/* gpmc_a25.gpio_49 INT */
++		>;
++	};
++};
++
++&omap4_pmx_wkup {
++	msecure_pins: msecure-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x050, PIN_OUTPUT | MUX_MODE3)		/* fref_clk0_out.gpio_wk6 */
++		>;
++	};
++};
++
++/* I2C1: TWL6030 PMIC + TWL6040 Audio Codec */
++&i2c1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c1_pins>;
++	clock-frequency = <400000>;
++
++	twl: twl@48 {
++		reg = <0x48>;
++		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>;
++		#clock-cells = <1>;
++		system-power-controller;
++	};
++
++	twl6040: twl@4b {
++		compatible = "ti,twl6040";
++		#clock-cells = <0>;
++		reg = <0x4b>;
++
++		pinctrl-names = "default";
++		pinctrl-0 = <&twl6040_pins>;
++
++		interrupts = <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>;
++		ti,audpwron-gpio = <&gpio4 31 GPIO_ACTIVE_HIGH>; /* gpio_127 */
++
++		vio-supply = <&v1v8>;
++		v2v1-supply = <&v2v1>;
++		enable-active-high;
++	};
++};
++
++#include "twl6030.dtsi"
++#include "twl6030_omap4.dtsi"
++
++/* I2C2: AVR front panel controller + TMP101 temperature sensor */
++&i2c2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c2_pins>;
++	clock-frequency = <400000>;
++
++	avr@20 {
++		compatible = "google,steelhead-avr";
++		reg = <0x20>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&avr_pins>;
++		interrupt-parent = <&gpio2>;
++		interrupts = <17 IRQ_TYPE_EDGE_FALLING>; /* gpio_49 */
++		reset-gpios = <&gpio2 16 GPIO_ACTIVE_LOW>; /* gpio_48 */
++	};
++
++	tmp101@48 {
++		compatible = "ti,tmp101";
++		reg = <0x48>;
++	};
++};
++
++/* I2C3: NXP PN544 NFC */
++&i2c3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c3_pins>;
++	clock-frequency = <400000>;
++
++	pn544@28 {
++		compatible = "nxp,pn544-i2c";
++		reg = <0x28>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&nfc_pins>;
++		interrupt-parent = <&gpio6>;
++		interrupts = <4 IRQ_TYPE_EDGE_RISING>; /* gpio_164 */
++		enable-gpios = <&gpio6 3 GPIO_ACTIVE_HIGH>; /* gpio_163 */
++		firmware-gpios = <&gpio6 2 GPIO_ACTIVE_HIGH>; /* gpio_162 */
++	};
++};
++
++/* I2C4: TAS5713 25W Class-D amplifier */
++&i2c4 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c4_pins>;
++	clock-frequency = <400000>;
++
++	tas5713: tas5713@1b {
++		compatible = "ti,tas5713";
++		reg = <0x1b>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tas5713_pins>;
++
++		reset-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>; /* gpio_42 */
++		pdn-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>; /* gpio_44 */
++
++		#sound-dai-cells = <0>;
++	};
++};
++
++/* MMC1: eMMC (16 GB Samsung moviNAND), non-removable, 8-bit bus */
++&mmc1 {
++	vmmc-supply = <&vmmc>;
++	bus-width = <8>;
++	non-removable;
++};
++
++&mmc2 {
++	status = "disabled";
++};
++
++&mmc3 {
++	status = "disabled";
++};
++
++&mmc4 {
++	status = "disabled";
++};
++
++/* MMC5: BCM4330 WiFi (SDIO, brcmfmac driver) */
++&mmc5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&wlan_sdio_pins>;
++	vmmc-supply = <&bcm4330_vmmc>;
++	non-removable;
++	bus-width = <4>;
++	cap-power-off-card;
++	mmc-pwrseq = <&bcm4330_pwrseq>;
++
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	brcmf: wifi@1 {
++		compatible = "brcm,bcm4330-fmac", "brcm,bcm4329-fmac";
++		reg = <1>;
++		interrupt-parent = <&gpio2>;
++		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>; /* gpio_53 */
++		interrupt-names = "host-wake";
++	};
++};
++
++&emif1 {
++	cs1-used;
++	device-handle = <&elpida_ECB240ABACN>;
++};
++
++&emif2 {
++	cs1-used;
++	device-handle = <&elpida_ECB240ABACN>;
++};
++
++/* UART2: BCM4330 Bluetooth HCI */
++&uart2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart2_pins>;
++	interrupts-extended = <&wakeupgen GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH
++			       &omap4_pmx_core OMAP4_UART2_RX>;
++
++	bluetooth {
++		compatible = "brcm,bcm4330-bt";
++		pinctrl-names = "default";
++		pinctrl-0 = <&bt_pins>;
++		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; /* gpio_46 BT_EN */
++		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
++		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */
++		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
++		clocks = <&twl 0>;
++		clock-names = "ext_clock";
++	};
++};
++
++/* UART3: Debug console (ttyS2 with mainline 8250 driver) */
++&uart3 {
++	interrupts-extended = <&wakeupgen GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH
++			       &omap4_pmx_core OMAP4_UART3_RX>;
++};
++
++/* UART4: AVR programming port */
++&uart4 {
++	interrupts-extended = <&wakeupgen GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH
++			       &omap4_pmx_core OMAP4_UART4_RX>;
++};
++
++/* USB OTG (Micro-USB service port) */
++&usb_otg_hs {
++	interface-type = <1>;
++	mode = <3>; /* OTG */
++	power = <500>;
++};
++
++/* USB Host for SMSC LAN9500A Ethernet */
++&usbhshost {
++	port1-mode = "ehci-phy";
++};
++
++&usbhsehci {
++	phys = <&hsusb1_phy>;
++
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	ethernet: ethernet@1 {
++		compatible = "usb424,9500";
++		reg = <1>;
++	};
++};
++
++/* McBSP2: I2S output to TAS5713 amplifier */
++&mcbsp2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&mcbsp2_pins>;
++	status = "okay";
++};
++
++&twl_usb_comparator {
++	usb-supply = <&vusb>;
++};
++
++/* HDMI output */
++&dss {
++	status = "okay";
++};
++
++&hdmi {
++	status = "okay";
++	vdda-supply = <&vdac>;
++
++	port {
++		hdmi_out: endpoint {
++			remote-endpoint = <&tpd12s015_in>;
++		};
++	};
++};
++
++/* TWL6030 regulator overrides for steelhead */
++&vmmc {
++	regulator-min-microvolt = <3000000>;
++	regulator-max-microvolt = <3000000>;
++};
++
++&vaux1 {
++	regulator-min-microvolt = <3000000>;
++	regulator-max-microvolt = <3000000>;
++	regulator-always-on;
++};
++
++&vcxio {
++	regulator-always-on;
++};
++
++&vdac {
++	regulator-min-microvolt = <1800000>;
++	regulator-max-microvolt = <1800000>;
++};
++
++&vana {
++	regulator-always-on;
++};
++
++&v2v1 {
++	regulator-always-on;
++};
+-- 
+2.43.0

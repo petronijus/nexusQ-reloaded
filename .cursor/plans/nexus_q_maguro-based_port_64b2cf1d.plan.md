@@ -1,169 +1,205 @@
 ---
 name: Nexus Q Maguro-Based Port
-overview: Revise the Nexus Q postmarketOS port to use the existing Galaxy Nexus (samsung-maguro) port as a validated reference for boot parameters, firmware packaging, and package structure, while keeping our mainline kernel approach with custom DTS and driver patches.
+overview: Port the Google Nexus Q (steelhead) to postmarketOS using a mainline Linux 6.12 LTS kernel with custom device tree and driver patches, modeled on the Galaxy Nexus (samsung-maguro) port for boot parameters and firmware packaging.
 todos:
-  - id: fix-device-apkbuild
-    content: "Fix device-google-steelhead/APKBUILD: remove u-boot-tools, add mkbootimg, change nonfree_firmware depends to firmware-google-steelhead"
+  - id: create-device-tree
+    content: "Create omap4-steelhead.dts: full device tree for OMAP4460 with all peripherals. Verify McBSP2 pad offsets against TRM. Use two-string compatible for WiFi/BT (brcm,bcm4330-fmac + brcm,bcm4329-fmac fallback)."
     status: pending
-  - id: fix-deviceinfo
-    content: "Fix deviceinfo: remove deviceinfo_bootimg_qcdt and deviceinfo_bootimg_dtb_second lines"
-    status: pending
-  - id: create-firmware-pkg
-    content: Create pmos/firmware-google-steelhead/APKBUILD modeled on firmware-samsung-maguro (depends on firmware-aosp-broadcom-wlan + bcmdhd.cal)
-    status: pending
-  - id: bump-kernel-version
-    content: Update linux-google-steelhead/APKBUILD to kernel 6.12 LTS and fix source URL
-    status: pending
-  - id: generate-defconfig
-    content: Regenerate steelhead_defconfig starting from omap2plus_defconfig with our customizations applied on top
+  - id: create-tas5713-patch
+    content: "Create 0001-ASoC-tas571x-add-TAS5713-support.patch: add TAS5713 chip struct, register defaults, and regmap config to sound/soc/codecs/tas571x.c"
     status: pending
   - id: create-dt-bindings-patch
-    content: Create 0002-dt-bindings-add-ti-tas5713.patch for DT binding documentation
+    content: "Create 0002-dt-bindings-add-ti-tas5713.patch: add ti,tas5713 compatible to Documentation/devicetree/bindings/sound/ti,tas571x.yaml"
     status: pending
-  - id: create-dts-patch
-    content: Create 0003-ARM-dts-omap4-add-steelhead.patch from our omap4-steelhead.dts
+  - id: create-dts-kernel-patch
+    content: "Create 0003-ARM-dts-omap4-add-steelhead.patch: add omap4-steelhead.dts to arch/arm/boot/dts/ti/omap/ and its Makefile"
     status: pending
-  - id: update-build-scripts
-    content: Update bootloader/build-and-flash.sh with correct pmbootstrap workflow
+  - id: create-kernel-config
+    content: "Create steelhead defconfig: start from omap2plus_defconfig, add BCM4330 WiFi/BT, TAS5713, LP5523, PN544, SMSC95XX, postmarketOS requirements. Validate with pmbootstrap kconfig check."
+    status: pending
+  - id: create-kernel-apkbuild
+    content: "Create linux-google-steelhead APKBUILD: mainline 6.12 LTS, reference config and 3 patches, use downstreamkernel_package helper"
+    status: pending
+  - id: create-device-apkbuild
+    content: Create device-google-steelhead APKBUILD + deviceinfo + modules-initfs. Use mkbootimg, console=ttyS2 (not ttyO2), fastboot offsets from maguro.
+    status: pending
+  - id: create-firmware-apkbuild
+    content: "Create firmware-google-steelhead APKBUILD: depend on firmware-aosp-broadcom-wlan, install bcmdhd.cal for BCM4330"
+    status: pending
+  - id: create-build-script
+    content: "Create build-and-flash.sh: pmbootstrap init/build/install/export workflow with fastboot boot (temp) and flash (permanent) steps"
+    status: pending
+  - id: validate-and-test
+    content: "Validate: DTS compilation (make dtbs_check), kconfig check, cross-compile, QEMU vexpress-a9 boot test for userspace"
     status: pending
 isProject: false
 ---
 
-# Nexus Q postmarketOS Port - Revised Plan (Maguro-Based)
+# Nexus Q postmarketOS Port
 
-## Context
+## Target Device: Google Nexus Q (Steelhead)
 
-We have confirmed the actual `samsung-maguro` (Galaxy Nexus) postmarketOS port structure from `pmaports`. Key findings:
+Spherical digital media player (4.6" diameter, ~923g), manufactured by Google in the USA, released June 2012. Codename **steelhead**. Headless embedded device -- no screen, no keyboard, no battery.
 
-- **Maguro uses a downstream 3.0.31 kernel** (`linux-samsung-maguro` from LineageOS `android_kernel_samsung_tuna`). We will NOT use this ancient kernel.
-- **Maguro boot offsets are identical** to Nexus Q (same OMAP4460 memory layout): kernel=`0x00008000`, ramdisk=`0x01000000`, tags=`0x00000100`, pagesize=`2048`.
-- **Maguro firmware uses `firmware-aosp-broadcom-wlan`** + a device-specific `bcmdhd.cal` calibration file for the BCM4330. Our current approach uses `linux-firmware-brcm` which is incorrect.
-- **No OMAP4 device in pmaports uses the shared `linux-postmarketos-mainline`** kernel - all use device-specific kernels. Our `linux-google-steelhead` approach is correct.
-- **The mainline kernel has no DTS for Galaxy Nexus or Nexus Q** (only PandaBoard, Droid 4, etc.), so our custom DTS is required.
-- `**linux-postmarketos-mainline` is now at 7.0-rc1** for armv7. Our kernel target of 6.6.60 should be bumped to **6.12 LTS** (current long-term support) for better OMAP4 support.
+### Hardware Component Map
+
+- **SoC**: TI OMAP4460 -- dual-core ARM Cortex-A9 @ 1.2 GHz, PowerVR SGX540 GPU (unused, software rendering only)
+- **RAM**: 1 GB LPDDR2 (Elpida ECB240ABACN) at 0x80000000
+- **Storage**: 16 GB eMMC (Samsung KLMAG4FEJA-A002)
+- **PMIC**: TI TWL6030 + TPS62361 (I2C1, addr 0x48)
+- **Audio codec**: TI TWL6040 (I2C1, addr 0x4b) -- McPDM to ABE
+- **Audio amplifier**: TI TAS5713 25W Class-D (I2C4, addr 0x1b) -- McBSP2 I2S, drives banana jack speakers
+- **WiFi**: Broadcom BCM4330 (SDIO on MMC5, WLAN_EN=GPIO43, IRQ=GPIO53)
+- **Bluetooth**: Broadcom BCM4330 (UART2, BT_EN=GPIO46, BT_RESET=GPIO52)
+- **NFC**: NXP PN544 (I2C3, addr 0x28, IRQ=GPIO164, EN=GPIO163)
+- **Ethernet**: SMSC LAN9500A USB-to-10/100 (USB EHCI Port 1, NRESET=GPIO62)
+- **HDMI**: OMAP4 DSS via TPD12S015A (CT_CP_HPD=GPIO60, LS_OE=GPIO41, HPD=GPIO63), micro-HDMI Type D
+- **LED ring**: AVR MCU (I2C2, addr 0x20) -> LP5523 LED drivers (32 RGB LEDs)
+- **Optical audio**: S/PDIF via McASP -> TOSLINK
+- **Temperature**: TI TMP101 (I2C2, addr 0x48)
+- **USB**: Micro-USB service port (OMAP4 USB OTG via MUSB)
+- **Ports**: Micro-HDMI, Ethernet RJ-45, Micro-USB, TOSLINK, Banana jack L+R, AC power
+
+### Boot Modes
+
+- **Normal boot**: Power on -- circulating blue LED ring
+- **Fastboot mode**: Cover mute LED during power-on -- solid red LED ring. Always reachable via hardware.
+- **Recovery mode**: Cover mute LED at boot, use volume dome to scroll
+
+**Anti-brick safety**: Fastboot is hardware-triggered (capacitive sensor), independent of any software partition. Device is unbrickable as long as `bootloader` partition is never overwritten.
+
+### Partition Safety
+
+- `bootloader` -- **NEVER FLASH** (bricks the device)
+- `boot` -- kernel + ramdisk -- safe, always recoverable via fastboot
+- `system` -- rootfs -- safe, always recoverable via fastboot
+- `recovery`, `userdata`, `cache` -- safe
 
 ## Strategy
 
 ```mermaid
 flowchart TD
-  Maguro[samsung-maguro port] -->|"copy boot params"| Steelhead[device-google-steelhead]
-  Maguro -->|"copy firmware approach"| FW[firmware-google-steelhead]
-  Maguro -->|"validate flash method"| Steelhead
-  
-  MainlineKernel["Mainline Linux 6.12 LTS"] -->|"+ TAS5713 patch"| KernelPkg[linux-google-steelhead]
-  MainlineKernel -->|"+ steelhead DTS"| KernelPkg
-  OMAP2plusDefconfig["omap2plus_defconfig"] -->|"customize"| KernelPkg
-  
-  Steelhead --> Build[pmbootstrap build]
-  KernelPkg --> Build
-  FW --> Build
-  Build --> Flash["fastboot flash"]
+  MainlineKernel["Mainline Linux 6.12 LTS"] -->|"+ TAS5713 driver patch"| KernelPkg[linux-google-steelhead]
+  MainlineKernel -->|"+ steelhead DTS patch"| KernelPkg
+  OMAP2plusDefconfig["omap2plus_defconfig"] -->|"+ device-specific options"| KernelPkg
+
+  KernelPkg --> Build[pmbootstrap build]
+  DevicePkg[device-google-steelhead] --> Build
+  FirmwarePkg[firmware-google-steelhead] --> Build
+  Build --> Test["fastboot boot (temp)"]
+  Test -->|"works"| Flash["fastboot flash (perm)"]
 ```
 
 
 
-## Changes Required
+### Key Design Decisions
 
-### 1. Fix `device-google-steelhead/APKBUILD` ([pmos/device-google-steelhead/APKBUILD](pmos/device-google-steelhead/APKBUILD))
+- **Mainline kernel 6.12 LTS** (not the downstream 3.0.31 that Galaxy Nexus uses) -- modern driver framework, long-term support
+- **Device-specific kernel package** (`linux-google-steelhead`) rather than shared `linux-postmarketos-mainline` -- needed because no OMAP4 device in pmaports uses the shared kernel, and we have custom DTS + TAS5713 patches
+- **Boot parameters from Galaxy Nexus (samsung-maguro)** -- validated identical offsets: kernel=0x00008000, ramdisk=0x01000000, tags=0x00000100, pagesize=2048
+- **Firmware from maguro pattern** -- `firmware-aosp-broadcom-wlan` + device-specific `bcmdhd.cal` for BCM4330
+- **Console is `ttyS2`** (not `ttyO2`) -- mainline 8250 OMAP driver since kernel 3.19 uses `ttyS*` naming
+- **omap2plus_defconfig as base** -- hand-written configs miss critical OMAP4 subsystem deps (pinctrl, clocks, DMA, interconnect, voltage domains)
+- **WiFi/BT DTS compatible strings** must use two-string format: `"brcm,bcm4330-fmac", "brcm,bcm4329-fmac"` (specific + generic fallback per kernel binding docs)
+- **McBSP2 pad offsets** must NOT overlap with McPDM pads (0x106/0x108/0x10a are McPDM, used by omap4-mcpdm.dtsi for TWL6040). Correct McBSP2 offsets must be verified against OMAP4460 TRM (SWPU235).
 
-Current issues:
+## Files to Create
 
-- `depends` includes `u-boot-tools` - Nexus Q uses stock Android bootloader, not U-Boot
-- `depends` missing `mkbootimg` - required for generating boot images (maguro has it)
-- `nonfree_firmware()` uses `linux-firmware-brcm` - should use `firmware-google-steelhead` (our own package, modeled on `firmware-samsung-maguro`)
+### postmarketOS Packages (`pmos/`)
 
-Changes:
+- `**device-google-steelhead/APKBUILD`** -- device package, depends on `linux-google-steelhead`, `mkbootimg`, `postmarketos-base`, `mesa-dri-gallium`
+- `**device-google-steelhead/deviceinfo**` -- codename, arch=armv7, flash_method=fastboot, boot offsets, `console=ttyS2,115200n8`, DTB path, USB networking
+- `**device-google-steelhead/modules-initfs**` -- omap_hsmmc, smsc95xx, omapdss, omapdrm, tpd12s015
+- `**linux-google-steelhead/APKBUILD**` -- mainline 6.12 LTS kernel, references config + 3 patches
+- `**firmware-google-steelhead/APKBUILD**` -- depends on `firmware-aosp-broadcom-wlan`, installs `bcmdhd.cal`
 
-- Remove `u-boot-tools`, add `mkbootimg` to depends
-- Change `nonfree_firmware()` depends to `firmware-google-steelhead`
+### Kernel Artifacts (`kernel/`)
 
-### 2. Fix `device-google-steelhead/deviceinfo` ([pmos/device-google-steelhead/deviceinfo](pmos/device-google-steelhead/deviceinfo))
+- `**dts/omap4-steelhead.dts**` -- complete device tree (OMAP4460, TWL6030/6040, TAS5713, BCM4330, PN544, LAN9500A, LP5523, HDMI, all pinmux)
+- `**configs/steelhead_defconfig**` -- based on omap2plus_defconfig + device-specific drivers + postmarketOS requirements
+- `**patches/0001-ASoC-tas571x-add-TAS5713-support.patch**` -- add TAS5713 to mainline tas571x codec driver
+- `**patches/0002-dt-bindings-add-ti-tas5713.patch**` -- add ti,tas5713 to DT binding YAML
+- `**patches/0003-ARM-dts-omap4-add-steelhead.patch**` -- add DTS file to kernel tree + Makefile
 
-Current issues:
+### Build Scripts
 
-- Has `deviceinfo_bootimg_qcdt="false"` and `deviceinfo_bootimg_dtb_second="false"` - Qualcomm-specific, not in maguro, should be removed
-- `deviceinfo_flash_offset_base` is present but maguro doesn't have it - keep it (OMAP4 specific, harmless)
+- `**build-and-flash.sh**` -- pmbootstrap init/build/install/export + fastboot workflow
 
-Changes:
+### Reference Files (informational)
 
-- Remove `deviceinfo_bootimg_qcdt` and `deviceinfo_bootimg_dtb_second` lines
+- `**README.md**` -- project overview, hardware table, quick start
+- `**firmware/README.md**` -- how to extract BCM4330 firmware from device
 
-### 3. Create `firmware-google-steelhead/APKBUILD` (NEW file, modeled on [firmware-samsung-maguro](https://raw.githubusercontent.com/SakuraKyuo-open-source/pmaports/master/device/testing/firmware-samsung-maguro/APKBUILD))
+## Testing Pipeline
 
-The maguro firmware package:
-
-- Depends on `firmware-aosp-broadcom-wlan` (provides BCM4330 NVRAM and firmware blobs)
-- Installs a device-specific `bcmdhd.cal` calibration file to `/lib/firmware/postmarketos/bcmdhd/bcm4330/`
-
-We need an equivalent for steelhead:
-
-- Same `firmware-aosp-broadcom-wlan` dependency
-- Extract steelhead-specific `bcmdhd.cal` from the original Android firmware partition
-
-### 4. Bump kernel version in `linux-google-steelhead/APKBUILD` ([pmos/linux-google-steelhead/APKBUILD](pmos/linux-google-steelhead/APKBUILD))
-
-- Change `pkgver=6.6.60` to `pkgver=6.12.12` (latest 6.12 LTS point release)
-- Update source URL from `v6.x` to `v6.x` (still correct for 6.12)
-- Generate a proper kernel config starting from mainline `omap2plus_defconfig` and adding our customizations
-
-### 5. Generate kernel config from `omap2plus_defconfig` ([kernel/configs/steelhead_defconfig](kernel/configs/steelhead_defconfig))
-
-The current hand-written defconfig (267 lines) is likely missing many critical OMAP4 options. The correct approach:
-
-- Start from mainline `arch/arm/configs/omap2plus_defconfig`
-- Apply our customizations on top (BCM4330 WiFi/BT, TAS5713, LP5523, PN544, USB Ethernet, postmarketOS requirements)
-- This ensures all OMAP4 subsystem dependencies are correctly resolved
-
-### 6. Create missing patch files
-
-Two patches referenced in `linux-google-steelhead/APKBUILD` don't exist yet:
-
-- `**0002-dt-bindings-add-ti-tas5713.patch**`: Add TAS5713 compatible string to `Documentation/devicetree/bindings/sound/ti,tas571x.yaml`
-- `**0003-ARM-dts-omap4-add-steelhead.patch**`: Add `omap4-steelhead.dts` to `arch/arm/boot/dts/ti/omap/` and the Makefile
-
-### 7. Update build/flash scripts
-
-- Update [bootloader/build-and-flash.sh](bootloader/build-and-flash.sh) to use correct pmbootstrap workflow
-- Target device codename: `google-steelhead`
-- Flash method: `fastboot` (matching maguro)
-
-## File Summary
+```mermaid
+flowchart LR
+  DTS["1. DTS Validation"] --> KConfig["2. Kconfig Check"]
+  KConfig --> CrossBuild["3. Cross-compile"]
+  CrossBuild --> QEMU["4. QEMU Boot"]
+  QEMU --> FastbootBoot["5. fastboot boot"]
+  FastbootBoot --> FastbootFlash["6. fastboot flash"]
+```
 
 
-| File                                      | Action     | Key Change                                           |
-| ----------------------------------------- | ---------- | ---------------------------------------------------- |
-| `pmos/device-google-steelhead/APKBUILD`   | Edit       | Remove u-boot-tools, add mkbootimg, fix firmware dep |
-| `pmos/device-google-steelhead/deviceinfo` | Edit       | Remove Qualcomm-specific fields                      |
-| `pmos/firmware-google-steelhead/APKBUILD` | Create     | BCM4330 calibration (from maguro template)           |
-| `pmos/linux-google-steelhead/APKBUILD`    | Edit       | Bump to 6.12 LTS                                     |
-| `kernel/configs/steelhead_defconfig`      | Regenerate | Base on omap2plus_defconfig                          |
-| `kernel/patches/0002-*.patch`             | Create     | DT bindings for TAS5713                              |
-| `kernel/patches/0003-*.patch`             | Create     | Add steelhead DTS to kernel tree                     |
-| `bootloader/build-and-flash.sh`           | Edit       | Fix pmbootstrap workflow                             |
 
-
-## Build Workflow (pmbootstrap)
+### Stage 1: DTS Validation (no hardware)
 
 ```bash
-# 1. Install pmbootstrap
-pip3 install pmbootstrap
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- dtbs
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- dtbs_check
+make ARCH=arm dt_binding_check DT_SCHEMA_FILES=sound/ti,tas571x.yaml
+```
 
-# 2. Initialize (creates chroot, clones pmaports)
-pmbootstrap init
-# Select: vendor=google, device=steelhead, UI=sway
+Catches: wrong compatible strings, invalid properties, phandle errors, Makefile issues.
 
-# 3. Copy our packages into pmaports
-PMAPORTS=$(pmbootstrap config aports)
-cp -r pmos/device-google-steelhead "$PMAPORTS/device/testing/"
-cp -r pmos/linux-google-steelhead "$PMAPORTS/device/testing/"
-cp -r pmos/firmware-google-steelhead "$PMAPORTS/device/testing/"
+### Stage 2: Kconfig Validation (no hardware)
 
-# 4. Build
+```bash
+pmbootstrap kconfig check linux-google-steelhead
+```
+
+Validates config against postmarketOS requirements (cgroups, namespaces, devtmpfs, etc.).
+
+### Stage 3: Cross-compile (no hardware)
+
+```bash
+pmbootstrap build linux-google-steelhead
 pmbootstrap build device-google-steelhead
-pmbootstrap install
+```
 
-# 5. Flash via fastboot
+Catches: compile errors, missing includes, driver build failures.
+
+### Stage 4: QEMU Boot Test (no hardware)
+
+QEMU `vexpress-a9` emulates Cortex-A9 (same core as OMAP4460). Tests kernel boot, initramfs, userspace (Sway, PipeWire). Does NOT test device-specific peripherals.
+
+```bash
+pmbootstrap init  # select qemu-vexpress, armv7, sway
+pmbootstrap install
+pmbootstrap qemu --image-size=2G
+# SSH: ssh -p 2222 user@127.0.0.1
+```
+
+### Stage 5: Temporary Boot (real hardware, non-destructive)
+
+```bash
+pmbootstrap install
+pmbootstrap export
+fastboot boot /tmp/postmarketOS-export/boot.img
+```
+
+Loads kernel+ramdisk into RAM without writing to flash. Power-cycle reverts to original. Tests: OMAP4460 boot, HDMI output, USB networking, serial console.
+
+### Stage 6: Permanent Flash (real hardware, reversible)
+
+```bash
 pmbootstrap flasher flash_kernel
 pmbootstrap flasher flash_rootfs
 ```
 
+Always recoverable via fastboot mode (cover mute LED during power-on).
+
+### What QEMU Cannot Test (hardware only)
+
+HDMI, WiFi/BT (BCM4330), audio amp (TAS5713), LED ring (AVR+LP5523), Ethernet (LAN9500A), NFC (PN544), eMMC timing, TWL6030 power sequencing. All safe to test via `fastboot boot`.

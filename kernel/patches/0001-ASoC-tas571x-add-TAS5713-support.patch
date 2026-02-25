@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nexus Q Reloaded <nexusq@localhost>
+Date: Wed, 1 Jan 2025 00:00:00 +0000
+Subject: [PATCH 1/3] ASoC: tas571x: add TAS5713 support
+
+The TAS5713 is a 25W stereo Class-D amplifier from the same register-
+compatible family as TAS5707/TAS5711/TAS5717/TAS5719/TAS5721. It is
+used in the Google Nexus Q (steelhead) media player.
+
+The TAS5713 shares the same register layout and supply configuration
+as the TAS5711, so we reuse its regmap_config, supply_names, and
+volume controls.
+
+Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+---
+ sound/soc/codecs/tas571x.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
+index abcdef1..abcdef2 100644
+--- a/sound/soc/codecs/tas571x.c
++++ b/sound/soc/codecs/tas571x.c
+@@ -785,6 +785,15 @@
+ 	.vol_reg_size			= 1,
+ };
+ 
++static const struct tas571x_chip tas5713_chip = {
++	.supply_names			= tas5711_supply_names,
++	.num_supply_names		= ARRAY_SIZE(tas5711_supply_names),
++	.controls			= tas5711_controls,
++	.num_controls			= ARRAY_SIZE(tas5711_controls),
++	.regmap_config			= &tas5711_regmap_config,
++	.vol_reg_size			= 1,
++};
++
+ static const struct snd_soc_dapm_widget tas571x_dapm_widgets[] = {
+ 	SND_SOC_DAPM_DAC("DACL", NULL, SND_SOC_NOPM, 0, 0),
+ 	SND_SOC_DAPM_DAC("DACR", NULL, SND_SOC_NOPM, 0, 0),
+@@ -944,6 +953,7 @@
+ 	{ .compatible = "ti,tas5719", .data = &tas5717_chip, },
+ 	{ .compatible = "ti,tas5721", .data = &tas5721_chip, },
+ 	{ .compatible = "ti,tas5733", .data = &tas5733_chip, },
++	{ .compatible = "ti,tas5713", .data = &tas5713_chip, },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, tas571x_of_match);
+@@ -955,6 +965,7 @@
+ 	{ "tas5719", (kernel_ulong_t) &tas5717_chip },
+ 	{ "tas5721", (kernel_ulong_t) &tas5721_chip },
+ 	{ "tas5733", (kernel_ulong_t) &tas5733_chip },
++	{ "tas5713", (kernel_ulong_t) &tas5713_chip },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(i2c, tas571x_i2c_id);
+-- 
+2.43.0

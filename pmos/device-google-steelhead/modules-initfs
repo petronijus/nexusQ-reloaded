@@ -1,0 +1,10 @@
+# Modules needed in initramfs for Google Nexus Q
+# eMMC storage
+omap_hsmmc
+
+# USB Ethernet (for early network during setup)
+smsc95xx
+
+# Display (HDMI output via omapdrm)
+omapdrm
+ti-tpd12s015

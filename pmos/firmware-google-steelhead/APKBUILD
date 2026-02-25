@@ -1,0 +1,31 @@
+# Reference: <https://postmarketos.org/devicepkg>
+# Firmware: Google Nexus Q (steelhead) -- BCM4330 WiFi/BT calibration
+# Modeled on firmware-samsung-maguro (identical BCM4330 chip)
+pkgname=firmware-google-steelhead
+pkgver=1
+pkgrel=0
+pkgdesc="Google Nexus Q BCM4330 WiFi/BT firmware"
+url="https://postmarketos.org"
+arch="armv7"
+license="proprietary"
+depends="firmware-aosp-broadcom-wlan"
+options="!strip !check !archcheck !spdx !tracedeps"
+# The bcmdhd.cal calibration file must be extracted from the device's
+# original Android firmware partition. See firmware/README.md for
+# instructions.  Until extracted, WiFi may work with generic defaults.
+#
+# To add the cal file, uncomment the source line and package() below:
+# source="bcmdhd.cal"
+
+build() {
+	true
+}
+
+package() {
+	mkdir -p "$pkgdir"
+	# Uncomment when bcmdhd.cal is available:
+	# install -Dm644 "$srcdir/bcmdhd.cal" \
+	# 	"$pkgdir"/lib/firmware/postmarketos/bcmdhd/bcm4330/bcmdhd.cal
+}
+
+sha512sums=""

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nexus Q Reloaded <nexusq@localhost>
+Date: Wed, 1 Jan 2025 00:00:00 +0000
+Subject: [PATCH 2/3] dt-bindings: sound: tas57xx: add ti,tas5713 compatible
+
+Add the TAS5713 25W stereo Class-D amplifier to the list of supported
+compatible strings in the tas57xx device tree binding.
+
+Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+---
+ Documentation/devicetree/bindings/sound/ti,tas57xx.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml b/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
+index abcdef1..abcdef2 100644
+--- a/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
++++ b/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
+@@ -16,6 +16,7 @@ properties:
+       - ti,tas5707
+       - ti,tas5711
+       - ti,tas5717
++      - ti,tas5713
+       - ti,tas5719
+       - ti,tas5721
+       - ti,tas5733
+-- 
+2.43.0
