@@ -108,7 +108,7 @@ flowchart TD
 ### postmarketOS Packages (`pmos/`)
 
 - `**device-google-steelhead/APKBUILD`** -- device package, depends on `linux-google-steelhead`, `mkbootimg`, `postmarketos-base`, `mesa-dri-gallium`
-- `**device-google-steelhead/deviceinfo**` -- codename, arch=armv7, flash_method=fastboot, boot offsets, `console=ttyS2,115200n8`, DTB path, USB networking
+- `**device-google-steelhead/deviceinfo`** -- codename, arch=armv7, flash_method=fastboot, boot offsets, `console=ttyS2,115200n8`, DTB path, USB networking
 - `**device-google-steelhead/modules-initfs**` -- omap_hsmmc, smsc95xx, omapdss, omapdrm, tpd12s015
 - `**linux-google-steelhead/APKBUILD**` -- mainline 6.12 LTS kernel, references config + 3 patches
 - `**firmware-google-steelhead/APKBUILD**` -- depends on `firmware-aosp-broadcom-wlan`, installs `bcmdhd.cal`
