@@ -1,5 +1,6 @@
 # Reference: <https://postmarketos.org/linux-postmarketos>
 # Kernel: mainline for Google Nexus Q (steelhead)
+# Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
 pkgrel=0
@@ -15,11 +16,10 @@ makedepends="
 	bash
 	bc
 	bison
-	devicepkg-dev
+	findutils
 	flex
 	openssl-dev
 	perl
-	findutils
 	postmarketos-installkernel
 	xz
 "
@@ -55,8 +55,17 @@ build() {
 }
 
 package() {
-	downstreamkernel_package \
-		"$builddir" "$pkgdir" "$_carch" "$_flavor"
+	mkdir -p "$pkgdir"/boot
+
+	make zinstall modules_install dtbs_install \
+		ARCH="$_carch" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_PATH="$pkgdir"/boot \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs"
+
+	install -D "$builddir"/include/config/kernel.release \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
 }
 
 sha512sums="

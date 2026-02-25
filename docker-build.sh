@@ -206,9 +206,33 @@ if [ $BUILD_RC -eq 0 ]; then
     set -e
     if [ $INSTALL_RC -ne 0 ]; then
         echo ""
-        echo "=== INSTALL FAILED ==="
-        echo "--- Last 100 lines of log.txt ---"
-        tail -100 "$WORK/log.txt" 2>/dev/null
+        echo "=== INSTALL FAILED (exit code $INSTALL_RC) ==="
+        echo "--- Searching log.txt for errors ---"
+        grep -n "error\|ERROR\|FAIL\|unsatisfiable\|broken\|missing.*dependency\|trigger.*fail\|1 error" "$WORK/log.txt" 2>/dev/null | tail -40
+        echo ""
+        echo "--- Lines around ^^^ marker ---"
+        grep -n -B 30 '^\^' "$WORK/log.txt" 2>/dev/null | tail -60
+        echo ""
+        echo "--- Last 150 lines of log.txt ---"
+        tail -150 "$WORK/log.txt" 2>/dev/null
+        echo ""
+
+        echo "=== Attempting install with --no-fde flag ==="
+        set +e
+        pmbootstrap install --no-fde 2>&1
+        INSTALL_RC2=$?
+        set -e
+        echo "=== Second install attempt exit code: $INSTALL_RC2 ==="
+        if [ $INSTALL_RC2 -ne 0 ]; then
+            echo "--- Searching log.txt for errors (attempt 2) ---"
+            grep -n "error\|ERROR\|FAIL\|unsatisfiable\|broken\|missing.*dependency\|trigger.*fail\|1 error" "$WORK/log.txt" 2>/dev/null | tail -40
+            echo ""
+            echo "--- Lines around ^^^ marker (attempt 2) ---"
+            grep -n -B 30 '^\^' "$WORK/log.txt" 2>/dev/null | tail -60
+            echo ""
+            echo "--- Last 150 lines of log.txt (attempt 2) ---"
+            tail -150 "$WORK/log.txt" 2>/dev/null
+        fi
         echo "=== END LOG ==="
     fi
 else
