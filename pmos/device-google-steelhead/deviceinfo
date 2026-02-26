@@ -6,7 +6,7 @@ deviceinfo_name="Google Nexus Q"
 deviceinfo_manufacturer="Google"
 deviceinfo_codename="google-steelhead"
 deviceinfo_year="2012"
-deviceinfo_dtb="ti/omap/omap4-steelhead"
+deviceinfo_dtb="omap4-steelhead"
 deviceinfo_arch="armv7"
 
 # Device

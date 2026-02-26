@@ -27,7 +27,6 @@ for apkbuild in \
         echo "  ERROR: $apkbuild not found!"
         continue
     fi
-    # Source the APKBUILD safely
     (
         source "$apkbuild" 2>/dev/null
         echo "  pkgname=$pkgname"
@@ -44,8 +43,6 @@ config="$SRC/kernel/configs/steelhead_defconfig"
 if [ -f "$config" ]; then
     total=$(grep -c '^CONFIG_' "$config" || true)
     echo "  Total CONFIG_ entries: $total"
-    
-    # Critical checks
     for key in CONFIG_ARCH_OMAP4 CONFIG_SMP CONFIG_BRCMFMAC CONFIG_SND_SOC_TAS571X \
         CONFIG_DRM_OMAP CONFIG_SERIAL_8250_OMAP CONFIG_MMC_OMAP_HS CONFIG_USB_EHCI_HCD \
         CONFIG_NFC_PN544_I2C CONFIG_LEDS_LP5523 CONFIG_DEVTMPFS CONFIG_BLK_DEV_INITRD; do
@@ -64,7 +61,6 @@ echo "=== Phase 4: Validate kernel patches ==="
 for patch in "$SRC/kernel/patches/"*.patch; do
     name=$(basename "$patch")
     echo "--- $name ---"
-    # Basic format checks
     if head -1 "$patch" | grep -q '^From '; then
         echo "  Format: valid git format-patch header"
     else
@@ -91,7 +87,6 @@ sudo chown -R pmos:pmos /home/pmos
 
 echo "pmbootstrap version: $(pmbootstrap --version)"
 
-# Clone pmaports
 echo "Cloning pmaports (this takes a while)..."
 PMAPORTS="/home/pmos/pmaports"
 if [ ! -d "$PMAPORTS" ]; then
@@ -115,6 +110,91 @@ for patch in "$SRC/kernel/patches/"*.patch; do
     cp "$patch" "$PMAPORTS/device/testing/linux-google-steelhead/"
     echo "  Installed: $(basename "$patch")"
 done
+
+echo ""
+echo "=== Phase 6b: Patch pmbootstrap for Docker compatibility ==="
+
+APK_PY="/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
+PART_PY="/usr/lib/python3.12/site-packages/pmb/install/partition.py"
+LOSETUP_PY="/usr/lib/python3.12/site-packages/pmb/install/losetup.py"
+
+sudo python3 << 'PATCH_APK'
+path = "/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
+with open(path) as f:
+    content = f.read()
+
+old = "        pmb.helpers.cli.progress_flush()\n        pmb.helpers.run_core.check_return_code(p_apk.returncode, log_msg)"
+new = """        pmb.helpers.cli.progress_flush()
+        if p_apk.returncode != 0:
+            _log_file = get_context().config.work / "log.txt"
+            try:
+                _log_lines = _log_file.read_text().split("\\n")[-50:]
+                _sock = sum(1 for _l in _log_lines if "Socket not connected" in _l)
+                _errs = sum(1 for _l in _log_lines if _l.strip().startswith("ERROR:"))
+                if _sock > 0 and _sock >= _errs:
+                    logging.warning("Ignoring %d non-critical APK 'Socket not connected' error(s)", _sock)
+                else:
+                    pmb.helpers.run_core.check_return_code(p_apk.returncode, log_msg)
+            except Exception:
+                pmb.helpers.run_core.check_return_code(p_apk.returncode, log_msg)
+        """
+
+if old in content:
+    content = content.replace(old, new)
+    with open(path, "w") as f:
+        f.write(content)
+    print("  Patched apk.py: tolerate APK Socket errors in chroot")
+else:
+    print("  apk.py: already patched or pattern changed")
+PATCH_APK
+
+sudo python3 << 'PATCH_PARTITION'
+path = "/usr/lib/python3.12/site-packages/pmb/install/partition.py"
+with open(path) as f:
+    content = f.read()
+
+old = """    if not found:
+        raise RuntimeError(
+            f"Unable to find the first partition of {disk}, "
+            f"expected it to be at {partition_prefix}1!"
+        )"""
+
+new = """    if not found:
+        logging.info(f"Partition device not found at {partition_prefix}1, trying kpartx...")
+        import subprocess
+        subprocess.run(["sudo", "kpartx", "-a", "-s", str(disk)], check=False)
+        time.sleep(1)
+        dev_name = disk.name if isinstance(disk, Path) else os.path.basename(str(disk))
+        mapper_path = f"/dev/mapper/{dev_name}p1"
+        if os.path.exists(mapper_path):
+            logging.info(f"Found partition via device-mapper at {mapper_path}")
+            for n in range(1, 16):
+                mapper_p = f"/dev/mapper/{dev_name}p{n}"
+                direct_p = f"{partition_prefix}{n}"
+                if os.path.exists(mapper_p) and not os.path.exists(direct_p):
+                    subprocess.run(["sudo", "ln", "-sf", mapper_p, direct_p], check=False)
+                    logging.info(f"Created symlink: {direct_p} -> {mapper_p}")
+            if os.path.exists(f"{partition_prefix}1"):
+                found = True
+
+    if not found:
+        raise RuntimeError(
+            f"Unable to find the first partition of {disk}, "
+            f"expected it to be at {partition_prefix}1!"
+        )"""
+
+if old in content:
+    content = content.replace(old, new)
+    with open(path, "w") as f:
+        f.write(content)
+    print("  Patched partition.py: kpartx fallback for loop device partitions")
+else:
+    print("  partition.py: already patched or pattern changed")
+PATCH_PARTITION
+
+echo "  Compiling patched files..."
+sudo python3 -c "import py_compile; py_compile.compile('$APK_PY', doraise=True)" && echo "    apk.py: OK"
+sudo python3 -c "import py_compile; py_compile.compile('$PART_PY', doraise=True)" && echo "    partition.py: OK"
 
 echo ""
 echo "=== Phase 7: Initialize pmbootstrap config ==="
@@ -187,7 +267,7 @@ set -e
 echo ""
 echo "=== Build exit code: $BUILD_RC ==="
 if [ $BUILD_RC -ne 0 ]; then
-    echo "=== KERNEL BUILD FAILED ==="
+    echo "=== BUILD FAILED ==="
     echo "--- Errors and key lines from log.txt ---"
     grep -n "ERROR\|error:\|FAILED\|failed.*patch\|Hunk\|^^^\|>>> \|applying patch\|ARCH_MULTI\|olddefconfig" "$WORK/log.txt" 2>/dev/null | tail -60
     echo ""
@@ -201,39 +281,39 @@ if [ $BUILD_RC -eq 0 ]; then
     echo ""
     echo "=== Phase 9: Install image ==="
     set +e
-    pmbootstrap install 2>&1
+    pmbootstrap install --password 147147 2>&1
     INSTALL_RC=$?
     set -e
     if [ $INSTALL_RC -ne 0 ]; then
         echo ""
         echo "=== INSTALL FAILED (exit code $INSTALL_RC) ==="
         echo "--- Searching log.txt for errors ---"
-        grep -n "error\|ERROR\|FAIL\|unsatisfiable\|broken\|missing.*dependency\|trigger.*fail\|1 error" "$WORK/log.txt" 2>/dev/null | tail -40
+        grep -n "error\|ERROR\|FAIL\|unsatisfiable\|broken\|missing.*dependency" "$WORK/log.txt" 2>/dev/null | tail -40
         echo ""
         echo "--- Lines around ^^^ marker ---"
         grep -n -B 30 '^\^' "$WORK/log.txt" 2>/dev/null | tail -60
         echo ""
         echo "--- Last 150 lines of log.txt ---"
         tail -150 "$WORK/log.txt" 2>/dev/null
-        echo ""
-
-        echo "=== Attempting install with --no-fde flag ==="
-        set +e
-        pmbootstrap install --no-fde 2>&1
-        INSTALL_RC2=$?
-        set -e
-        echo "=== Second install attempt exit code: $INSTALL_RC2 ==="
-        if [ $INSTALL_RC2 -ne 0 ]; then
-            echo "--- Searching log.txt for errors (attempt 2) ---"
-            grep -n "error\|ERROR\|FAIL\|unsatisfiable\|broken\|missing.*dependency\|trigger.*fail\|1 error" "$WORK/log.txt" 2>/dev/null | tail -40
-            echo ""
-            echo "--- Lines around ^^^ marker (attempt 2) ---"
-            grep -n -B 30 '^\^' "$WORK/log.txt" 2>/dev/null | tail -60
-            echo ""
-            echo "--- Last 150 lines of log.txt (attempt 2) ---"
-            tail -150 "$WORK/log.txt" 2>/dev/null
-        fi
         echo "=== END LOG ==="
+    fi
+
+    if [ $INSTALL_RC -eq 0 ]; then
+        echo ""
+        echo "=== Phase 10: Export images ==="
+        ROOTFS="/home/pmos/.local/var/pmbootstrap/chroot_rootfs_google-steelhead"
+        NATIVE="/home/pmos/.local/var/pmbootstrap/chroot_native"
+        mkdir -p /tmp/output
+
+        cp "$ROOTFS/boot/boot.img" /tmp/output/ 2>/dev/null && echo "  Exported: boot.img"
+        cp "$NATIVE/home/pmos/rootfs/google-steelhead.img" /tmp/output/ 2>/dev/null && echo "  Exported: google-steelhead.img"
+
+        echo ""
+        echo "=== Build artifacts ==="
+        ls -lh /tmp/output/
+        echo ""
+        echo "Kernel: $(cat "$ROOTFS/usr/share/kernel/google-steelhead/kernel.release" 2>/dev/null)"
+        echo "DTB: $(find "$ROOTFS/boot/dtbs/" -name "*steelhead*" 2>/dev/null)"
     fi
 else
     echo "=== Skipping remaining phases due to build failure ==="
