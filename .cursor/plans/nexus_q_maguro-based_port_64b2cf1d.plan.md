@@ -71,9 +71,10 @@ Spherical digital media player (4.6" diameter, ~923g), manufactured by Google in
 ### Partition Safety
 
 - `bootloader` -- **NEVER FLASH** (bricks the device)
-- `boot` -- kernel + ramdisk -- safe, always recoverable via fastboot
-- `system` -- rootfs -- safe, always recoverable via fastboot
-- `recovery`, `userdata`, `cache` -- safe
+- `boot` -- 8 MB, kernel + ramdisk -- safe, but boot.img (~14 MB) exceeds it; use `fastboot boot` (RAM) instead
+- `system` -- 1 GB, too small for rootfs; not used
+- `userdata` -- 13 GB, **rootfs target** -- safe, always recoverable via fastboot
+- `recovery`, `cache` -- safe
 
 ## Strategy
 
@@ -109,7 +110,7 @@ flowchart TD
 
 - `**device-google-steelhead/APKBUILD`** -- device package, depends on `linux-google-steelhead`, `mkbootimg`, `postmarketos-base`, `mesa-dri-gallium`
 - `**device-google-steelhead/deviceinfo`** -- codename, arch=armv7, flash_method=fastboot, boot offsets, `console=ttyS2,115200n8`, DTB path, USB networking
-- `**device-google-steelhead/modules-initfs**` -- omap_hsmmc, smsc95xx, omapdss, omapdrm, tpd12s015
+- `**device-google-steelhead/modules-initfs`** -- omap_hsmmc, smsc95xx, omapdss, omapdrm, tpd12s015
 - `**linux-google-steelhead/APKBUILD**` -- mainline 6.12 LTS kernel, references config + 3 patches
 - `**firmware-google-steelhead/APKBUILD**` -- depends on `firmware-aosp-broadcom-wlan`, installs `bcmdhd.cal`
 
@@ -184,22 +185,113 @@ pmbootstrap qemu --image-size=2G
 ### Stage 5: Temporary Boot (real hardware, non-destructive)
 
 ```bash
-pmbootstrap install
-pmbootstrap export
-fastboot boot /tmp/postmarketOS-export/boot.img
+fastboot boot output/boot.img
 ```
 
-Loads kernel+ramdisk into RAM without writing to flash. Power-cycle reverts to original. Tests: OMAP4460 boot, HDMI output, USB networking, serial console.
+Loads kernel+ramdisk into RAM (13.6 MB) without writing to flash. Power-cycle reverts to original. Tests: OMAP4460 boot, HDMI output, USB networking, serial console.
 
 ### Stage 6: Permanent Flash (real hardware, reversible)
 
 ```bash
-pmbootstrap flasher flash_kernel
-pmbootstrap flasher flash_rootfs
+# Convert to U-Boot-compatible sparse format (RAW + DONT_CARE only)
+python raw2simg.py output/google-steelhead.img output/google-steelhead-sparse.img
+
+# Flash rootfs to userdata in 64 MB chunks (avoids USB stalls)
+fastboot flash -S 64M userdata output/google-steelhead-sparse.img
+
+# Boot kernel from RAM (boot.img too large for 8 MB boot partition)
+fastboot boot output/boot.img
 ```
 
-Always recoverable via fastboot mode (cover mute LED during power-on).
+Always recoverable via fastboot mode (cover mute LED during power-on). Do NOT use `pmbootstrap flasher` -- it does not handle the sparse format conversion or chunk size constraints.
 
 ### What QEMU Cannot Test (hardware only)
 
 HDMI, WiFi/BT (BCM4330), audio amp (TAS5713), LED ring (AVR+LP5523), Ethernet (LAN9500A), NFC (PN544), eMMC timing, TWL6030 power sequencing. All safe to test via `fastboot boot`.
+
+## Flashing Procedure -- Findings
+
+Discovered through trial and error on real hardware. The Nexus Q's 2012 U-Boot fastboot implementation has several constraints not documented anywhere.
+
+### Partition Layout Constraints
+
+From `fastboot getvar all`:
+
+| Partition | Size | Notes |
+|-----------|------|-------|
+| boot | 8 MB | Too small for generated boot.img (~14 MB) |
+| system | 1 GB | Too small for rootfs (~720 MB raw) -- download buffer rejects it |
+| userdata | 13.17 GB | **Rootfs target** -- only partition large enough |
+| recovery | 8 MB | Same size as boot |
+
+Key constraint: the bootloader's fastboot download buffer is somewhere between 128 MB and 720 MB. Raw images larger than this limit are rejected with `FAILED (remote: 'data too large')`.
+
+### Image Preparation
+
+pmbootstrap generates a **full disk image** (`google-steelhead.img`) containing a partition table + boot partition + rootfs partition. This cannot be flashed directly to a single partition. The rootfs ext4 partition must be extracted:
+
+```bash
+# In docker-build.sh Phase 10:
+ROOTFS_INFO=$(sfdisk -J "$DISK_IMG" | python3 -c "
+  import json, sys
+  d = json.load(sys.stdin)
+  p = d['partitiontable']['partitions'][1]  # partition 2 = rootfs
+  ss = d['partitiontable'].get('sectorsize', 512)
+  print(f'{p[\"start\"]} {p[\"size\"]} {ss}')
+")
+dd if="$DISK_IMG" of=rootfs.img bs=$SECTOR_SIZE skip=$START count=$SECTORS
+```
+
+Result: 720 MB raw ext4 image (down from ~965 MB full disk image).
+
+### Sparse Format Compatibility
+
+The U-Boot bootloader (steelheadB4H0J, April 2012) supports Android sparse format but **only two chunk types**:
+
+| Chunk Type | ID | U-Boot Support |
+|------------|------|----------------|
+| RAW | 0xCAC1 | Yes |
+| FILL | 0xCAC2 | **No** -- "unknown chunk ID cac2" |
+| DONT_CARE | 0xCAC3 | Yes |
+| CRC32 | 0xCAC4 | Unknown (not tested) |
+
+Modern `fastboot -S` creates sparse images with FILL chunks for zero-filled regions, which the bootloader rejects. A custom converter (`raw2simg.py`) creates sparse images using only RAW + DONT_CARE chunks:
+
+- Zero blocks (4096 bytes of 0x00) become DONT_CARE chunks (not stored, just skipped)
+- Non-zero blocks become RAW chunks (stored verbatim)
+- Result: ~531 MB sparse image (26% smaller than raw 720 MB)
+
+### USB Transfer Stability
+
+- **64 MB chunks work reliably** (`fastboot flash -S 64M`) -- 9 chunks, ~45 seconds total
+- **128 MB chunks are unreliable** -- USB stalls on the 4th chunk, device becomes unresponsive
+- **Interrupted transfers corrupt the USB session** -- device serial appears as `????????????`, `fastboot getvar` hangs. Requires full power cycle (unplug power, cover mute LED, re-plug) to recover
+- Transfer speed: ~43 MB/s over USB 2.0
+
+### Working Flash Procedure
+
+```bash
+# 1. Generate compatible sparse image (only RAW + DONT_CARE chunks)
+python raw2simg.py output/google-steelhead.img output/google-steelhead-sparse.img
+
+# 2. Flash rootfs to userdata in 64 MB chunks
+fastboot flash -S 64M userdata output/google-steelhead-sparse.img
+# Output: 9/9 chunks, ~45 seconds
+
+# 3. Boot kernel from RAM (boot.img exceeds 8 MB boot partition)
+fastboot boot output/boot.img
+
+# 4. Connect via USB networking
+ssh user@172.16.42.1  # password: 147147
+```
+
+### deviceinfo Configuration
+
+```ini
+# Flash rootfs to userdata (13 GB) instead of system (1 GB)
+deviceinfo_flash_fastboot_partition_system="userdata"
+```
+
+### Build Environment Note (Windows)
+
+All source files on a Windows volume mount have CRLF line endings. The Docker entrypoint strips `\r` from the build script, and `dos2unix` is run on all APKBUILD, deviceinfo, patch, and config files after copying them into the pmaports tree. Without this, pmbootstrap rejects the APKBUILDs with "Wrong line endings" and `abuild` fails with "not found" errors on CRLF-terminated lines.

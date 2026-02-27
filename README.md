@@ -44,11 +44,31 @@ pmos/
 build-and-flash.sh                 Automated build and flash script
 ```
 
-## Flashing Safety
+## Flashing
 
 The Nexus Q has hardware-triggered fastboot mode (cover mute LED during
 power-on). The device is **unbrickable** as long as the `bootloader`
-partition is never overwritten. Always test with `fastboot boot` first.
+partition is never overwritten.
+
+### Partition Layout
+
+| Partition | Size | Usage |
+|-----------|------|-------|
+| boot | 8 MB | Too small for boot.img -- use `fastboot boot` (RAM load) |
+| system | 1 GB | Not used (too small for rootfs) |
+| userdata | 13 GB | **Rootfs target** |
+
+### Flash Commands
+
+```bash
+# Temporary boot (loads to RAM, non-destructive, recommended first):
+fastboot boot output/boot.img
+
+# Permanently flash rootfs to userdata partition:
+fastboot flash userdata output/google-steelhead.img
+```
+
+**WARNING:** NEVER flash the `bootloader` partition.
 
 ## Testing Pipeline
 
@@ -57,4 +77,4 @@ partition is never overwritten. Always test with `fastboot boot` first.
 3. `pmbootstrap build` -- cross-compile
 4. `pmbootstrap qemu` -- QEMU boot test (vexpress-a9)
 5. `fastboot boot boot.img` -- temporary boot on real hardware
-6. `pmbootstrap flasher flash_kernel` -- permanent flash
+6. `fastboot flash userdata google-steelhead.img` -- permanent flash rootfs

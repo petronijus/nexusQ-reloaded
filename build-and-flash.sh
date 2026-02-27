@@ -27,6 +27,7 @@ echo "[2/4] Building postmarketOS image (kernel compilation takes ~70 min)..."
 docker run --rm --privileged \
     -v "$SCRIPT_DIR:/src:ro" \
     -v nexusq-output:/tmp/output \
+    -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
     --name nexusq-build \
     nexusq-builder /src/docker-build.sh 2>&1
 
@@ -53,9 +54,13 @@ echo ""
 echo "3. TEMPORARILY boot (non-destructive, recommended first):"
 echo "   fastboot boot output/boot.img"
 echo ""
-echo "4. PERMANENTLY flash (reversible via fastboot):"
-echo "   fastboot flash boot output/boot.img"
-echo "   fastboot flash system output/google-steelhead.img"
+echo "4. PERMANENTLY flash rootfs to userdata partition (reversible via fastboot):"
+echo "   fastboot flash userdata output/google-steelhead.img"
+echo ""
+echo "NOTE: boot.img ($(du -h output/boot.img 2>/dev/null | cut -f1)) exceeds the"
+echo "      8 MB boot partition. Use 'fastboot boot' (RAM load) instead of"
+echo "      'fastboot flash boot'. Rootfs is flashed to userdata (13 GB)"
+echo "      because the system partition is only 1 GB."
 echo ""
 echo "Recovery: cover mute LED during power-on -> solid red = fastboot mode"
 echo "WARNING: NEVER flash the bootloader partition!"

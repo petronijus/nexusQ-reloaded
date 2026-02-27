@@ -111,6 +111,10 @@ for patch in "$SRC/kernel/patches/"*.patch; do
     echo "  Installed: $(basename "$patch")"
 done
 
+echo "  Converting line endings (CRLF -> LF)..."
+find "$PMAPORTS/device/testing/" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" \) -exec dos2unix -q {} +
+echo "  Done."
+
 echo ""
 echo "=== Phase 6b: Patch pmbootstrap for Docker compatibility ==="
 
@@ -303,10 +307,31 @@ if [ $BUILD_RC -eq 0 ]; then
         echo "=== Phase 10: Export images ==="
         ROOTFS="/home/pmos/.local/var/pmbootstrap/chroot_rootfs_google-steelhead"
         NATIVE="/home/pmos/.local/var/pmbootstrap/chroot_native"
-        mkdir -p /tmp/output
+        DISK_IMG="$NATIVE/home/pmos/rootfs/google-steelhead.img"
+        sudo mkdir -p /tmp/output
+        sudo chown pmos:pmos /tmp/output
 
         cp "$ROOTFS/boot/boot.img" /tmp/output/ 2>/dev/null && echo "  Exported: boot.img"
-        cp "$NATIVE/home/pmos/rootfs/google-steelhead.img" /tmp/output/ 2>/dev/null && echo "  Exported: google-steelhead.img"
+
+        echo "  Extracting rootfs partition from disk image..."
+        ROOTFS_INFO=$(sfdisk -J "$DISK_IMG" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+parts = d['partitiontable']['partitions']
+# Rootfs is partition 2 (index 1) if multiple, else partition 1
+p = parts[1] if len(parts) > 1 else parts[0]
+ss = d['partitiontable'].get('sectorsize', 512)
+print(f\"{p['start']} {p['size']} {ss}\")
+")
+        ROOTFS_START=$(echo "$ROOTFS_INFO" | awk '{print $1}')
+        ROOTFS_SECTORS=$(echo "$ROOTFS_INFO" | awk '{print $2}')
+        SECTOR_SIZE=$(echo "$ROOTFS_INFO" | awk '{print $3}')
+        echo "  Rootfs: start=$ROOTFS_START sectors=$ROOTFS_SECTORS sector_size=$SECTOR_SIZE"
+
+        dd if="$DISK_IMG" of=/tmp/output/google-steelhead.img \
+            bs="$SECTOR_SIZE" skip="$ROOTFS_START" count="$ROOTFS_SECTORS" \
+            status=progress
+        echo "  Exported: google-steelhead.img (rootfs partition extracted)"
 
         echo ""
         echo "=== Build artifacts ==="

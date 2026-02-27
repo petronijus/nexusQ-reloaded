@@ -27,6 +27,11 @@ deviceinfo_flash_offset_tags="0x00000100"
 deviceinfo_flash_pagesize="2048"
 deviceinfo_kernel_cmdline="console=ttyS2,115200n8 mem=1G"
 
+# Rootfs goes to userdata (13 GB) since system partition is only 1 GB and the
+# rootfs image exceeds fastboot's download buffer. Boot is loaded via RAM
+# (fastboot boot) since boot.img exceeds the 8 MB boot partition.
+deviceinfo_flash_fastboot_partition_system="userdata"
+
 # USB networking for initial setup (USB gadget on micro-USB port)
 deviceinfo_usb_idVendor="0x18D1"
 deviceinfo_usb_idProduct="0x4EE2"
