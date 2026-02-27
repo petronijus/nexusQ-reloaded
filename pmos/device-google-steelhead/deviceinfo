@@ -7,6 +7,7 @@ deviceinfo_manufacturer="Google"
 deviceinfo_codename="google-steelhead"
 deviceinfo_year="2012"
 deviceinfo_dtb="omap4-steelhead"
+deviceinfo_append_dtb="true"
 deviceinfo_arch="armv7"
 
 # Device

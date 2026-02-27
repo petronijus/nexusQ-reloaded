@@ -2,9 +2,23 @@
 # eMMC storage
 omap_hsmmc
 
-# USB Ethernet (for early network during setup)
+# USB core + PHY (needed before any USB works; USB=m in defconfig)
+phy-omap-usb2
+twl6030-usb
+
+# USB host (EHCI -- for LAN9500A Ethernet adapter)
+ehci-hcd
+ehci-platform
+
+# USB gadget (MUSB OTG -- for RNDIS networking over micro-USB)
+musb-hdrc
+omap2430
+
+# USB Ethernet (SMSC LAN9500A on USB EHCI)
 smsc95xx
 
 # Display (HDMI output via omapdrm)
+omapdss
 omapdrm
 ti-tpd12s015
+display-connector
