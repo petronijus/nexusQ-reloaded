@@ -26,7 +26,7 @@ deviceinfo_flash_offset_ramdisk="0x01000000"
 deviceinfo_flash_offset_second="0x00f00000"
 deviceinfo_flash_offset_tags="0x00000100"
 deviceinfo_flash_pagesize="2048"
-deviceinfo_kernel_cmdline="console=ttyS2,115200n8 mem=1G"
+deviceinfo_kernel_cmdline="console=tty0 console=ttyS2,115200n8 mem=1G earlyprintk loglevel=7 ignore_loglevel panic=30"
 
 # Rootfs goes to userdata (13 GB) since system partition is only 1 GB and the
 # rootfs image exceeds fastboot's download buffer. Boot is loaded via RAM
