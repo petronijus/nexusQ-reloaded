@@ -37,12 +37,15 @@ CONFIG_ARCH_OMAP4=y
 # CONFIG_POWER_AVS_OMAP is not set
 # CONFIG_POWER_AVS_OMAP_CLASS3 is not set
 CONFIG_ARM_THUMBEE=y
-CONFIG_SMP=y
-CONFIG_NR_CPUS=2
+# SMP disabled: U-Boot 2011.09 leaves CPU1 in undefined state, causing
+# mainline SMP startup to hang. Single-core boot is reliable.
+# CONFIG_SMP is not set
 CONFIG_ARM_APPENDED_DTB=y
-CONFIG_ARM_ATAG_DTB_COMPAT=y
+# ATAG_DTB_COMPAT disabled: U-Boot passes ATAGs that crash the
+# decompressor's ATAG-to-DTB merge code. Appended DTB is sufficient.
+# CONFIG_ARM_ATAG_DTB_COMPAT is not set
 CONFIG_CMDLINE="console=tty0 console=ttyS2,115200 earlyprintk loglevel=7 ignore_loglevel panic=30"
-CONFIG_CMDLINE_EXTEND=y
+CONFIG_CMDLINE_FORCE=y
 CONFIG_KEXEC=y
 CONFIG_CPU_FREQ=y
 CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y

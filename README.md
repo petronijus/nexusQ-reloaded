@@ -18,14 +18,20 @@ mainline Linux 6.12 LTS kernel.
 | LEDs | AVR MCU + LP5523 | leds-lp5523 | I2C2 |
 | PMIC | TI TWL6030 | twl-core | I2C1 |
 
+## Status
+
+**Kernel boots!** (as of 2026-02-27) -- HDMI framebuffer console works, eMMC detected, all partitions visible. Currently running single-core (SMP disabled due to U-Boot bug). Full postmarketOS userspace boot is next.
+
+See `HANDOFF.md` for detailed technical notes and root cause analysis.
+
 ## Quick Start
 
 ```bash
-# Install pmbootstrap
-pip3 install pmbootstrap
+# Build inside Docker
+./docker-build.sh
 
-# Build and flash
-./build-and-flash.sh
+# Or: build boot image manually (requires arm-none-eabi-gcc cross compiler)
+# See docker-build.sh for the full build procedure
 ```
 
 ## Project Structure
@@ -54,21 +60,26 @@ partition is never overwritten.
 
 | Partition | Size | Usage |
 |-----------|------|-------|
-| boot | 8 MB | Too small for boot.img -- use `fastboot boot` (RAM load) |
+| boot | 8 MB | Kernel + DTB (6.2 MB fits; full initramfs does not) |
 | system | 1 GB | Not used (too small for rootfs) |
 | userdata | 13 GB | **Rootfs target** |
 
 ### Flash Commands
 
 ```bash
-# Temporary boot (loads to RAM, non-destructive, recommended first):
-fastboot boot output/boot.img
+# Flash kernel to boot partition (RECOMMENDED -- reliable boot path):
+fastboot flash boot output/boot-test-nosmp-noatag.img
 
-# Permanently flash rootfs to userdata partition:
-fastboot flash userdata output/google-steelhead.img
+# Flash rootfs to userdata partition:
+fastboot flash userdata output/google-steelhead-sparse.img
+
+# Then power-cycle WITHOUT holding mute sensor to boot normally.
 ```
 
-**WARNING:** NEVER flash the `bootloader` partition.
+**IMPORTANT:**
+- Always do a **full power cycle** (unplug power) between flash operations
+- **Do NOT use `fastboot boot`** (RAM boot) -- it is unreliable on this U-Boot
+- NEVER flash the `bootloader` partition
 
 ## Testing Pipeline
 

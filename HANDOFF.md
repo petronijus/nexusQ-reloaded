@@ -4,25 +4,38 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Current Status: KERNEL DOES NOT BOOT
+## Current Status: KERNEL BOOTS (HDMI output confirmed)
 
-The kernel compiles, the DTB is valid, `fastboot` accepts and loads the image, but the kernel **never produces any output** -- no HDMI, no USB enumeration, no network, nothing. The device silently disappears from fastboot and sits dark for 90+ seconds.
+**Milestone achieved 2026-02-27:** The kernel boots, HDMI output works (framebuffer console with Tux logo), eMMC is fully detected with all partitions, and the kernel panics with "Unable to mount root fs" -- which is expected since no rootfs is configured yet.
 
-This happens consistently across:
-- `fastboot boot` (RAM boot) and `fastboot flash boot` + power-cycle (partition boot)
-- Full postmarketOS initramfs and minimal diagnostic initramfs
-- Module-based drivers AND built-in drivers (DRM, USB, FBCON all =y)
-- With and without ramdisk
+### What Was Wrong (Root Causes)
 
-## What Has Been Tried (and Failed)
+Three kernel config options prevented boot:
 
-### Boot Image Variants Tested
+1. **`CONFIG_SMP=y`** (CRITICAL) -- The U-Boot 2011.09 bootloader leaves CPU1 (second Cortex-A9 core) in an undefined state. The mainline kernel's SMP startup code hangs trying to bring it online. **Fix: `CONFIG_SMP` disabled.**
+
+2. **`CONFIG_ARM_ATAG_DTB_COMPAT=y`** -- U-Boot passes ATAGs that crash the zImage decompressor's ATAG-to-DTB merge code. Since the DTB is appended to the kernel (`CONFIG_ARM_APPENDED_DTB=y`), ATAG merging is unnecessary. **Fix: `CONFIG_ARM_ATAG_DTB_COMPAT` disabled.**
+
+3. **`CONFIG_CMDLINE_EXTEND=y`** -- With ATAG_DTB_COMPAT disabled, the bootloader's cmdline (from mkbootimg header) is not passed to the kernel. All cmdline parameters must be compiled in. **Fix: `CONFIG_CMDLINE_FORCE=y` with all parameters in `CONFIG_CMDLINE`.**
+
+### Boot Method
+
+- **Reliable: `fastboot flash boot` + normal power-on** -- Flash to the 8 MB boot partition, then power-cycle without holding mute sensor. U-Boot loads from partition and boots reliably.
+- **Unreliable: `fastboot boot` (RAM boot)** -- Intermittent on this U-Boot. Works sometimes, fails silently other times. Avoid for testing.
+
+### Remaining Issue
+
+The full boot.img with initramfs is **14.6 MB**, exceeding the 8 MB boot partition. The kernel+DTB alone is 6.2 MB (fits), but the pmos initramfs adds 8.4 MB. Need to either shrink the image or find another boot strategy.
+
+## Boot Image Variants Tested
 | Image | Size | Description | Result |
 |-------|------|-------------|--------|
-| `boot.img` | 13.5 MB | Full pmos initramfs, all drivers as modules | No output |
-| `boot-diag.img` | 5.9 MB | Minimal diag initramfs, hardcoded insmod, telnetd | No output |
-| `boot-builtin.img` | 8.8 MB | Full initramfs, DRM+USB+FBCON built-in (=y) | No output |
-| `boot-noramdisk.img` | 5.0 MB | Kernel+DTB only, no ramdisk, console=tty0 | **NOT YET TESTED** |
+| `boot.img` | 13.5 MB | Full pmos initramfs, all drivers as modules | No output (SMP bug) |
+| `boot-diag.img` | 5.9 MB | Minimal diag initramfs, hardcoded insmod, telnetd | No output (SMP bug) |
+| `boot-builtin.img` | 8.8 MB | Full initramfs, DRM+USB+FBCON built-in (=y) | No output (SMP bug) |
+| `boot-noramdisk.img` | 5.0 MB | Kernel+DTB only, no ramdisk, console=tty0 | No output (SMP bug) |
+| `boot-test-nosmp-noatag.img` | 6.2 MB | SMP=n, ATAG_COMPAT=n, CMDLINE_FORCE, no ramdisk | **BOOTS! HDMI works!** |
+| `boot-full-working.img` | 14.6 MB | Same fixes + pmos initramfs | Too large for boot partition |
 
 ### Kernel Configuration Changes (Current State)
 These drivers were changed from `=m` (module) to `=y` (built-in) in `kernel/configs/steelhead_defconfig`:
@@ -43,31 +56,50 @@ These drivers were changed from `=m` (module) to `=y` (built-in) in `kernel/conf
 - Rootfs flashes to `userdata` partition (13 GB) since `system` is only 1 GB
 - Custom `raw2simg.py` for sparse image conversion (U-Boot only supports RAW+DONT_CARE chunks)
 
-## Key Unknowns / Suspected Root Causes
+## Resolved Root Causes
 
-1. **The kernel may panic during early decompression/startup** before any console is available. Since serial output goes to UART3 (physical pins requiring soldering), we cannot see early boot messages.
+1. **`CONFIG_SMP=y` caused a hard hang** -- U-Boot 2011.09 leaves the secondary CPU (CPU1) in an undefined state. The mainline kernel's OMAP4 SMP startup code tries to bring CPU1 online and hangs indefinitely. No panic, no output, just a silent deadlock. Fixed by disabling SMP.
 
-2. **Possible DTB issues**: The `omap4-steelhead.dts` was written from scratch based on the old CyanogenMod board file. It may have incorrect clock parents, regulator configurations, or missing nodes that cause the PMIC to fail, which would kill power to the SoC subsystems.
+2. **`CONFIG_ARM_ATAG_DTB_COMPAT=y` crashed the decompressor** -- U-Boot passes ATAGs in r2 that the zImage decompressor's atags_to_fdt() function can't handle properly. Since we use `CONFIG_ARM_APPENDED_DTB=y` (DTB concatenated after zImage), ATAG merging is unnecessary. Fixed by disabling ATAG_DTB_COMPAT.
 
-3. **U-Boot 2012 compatibility**: The bootloader is from April 2012 and may not properly set up ATAGs or memory for a modern mainline kernel. The `CONFIG_ARM_ATAG_DTB_COMPAT=y` flag is supposed to handle this, but there may be edge cases.
+3. **`CONFIG_CMDLINE_EXTEND` produced an empty cmdline** -- With ATAG_DTB_COMPAT disabled, the bootloader's cmdline (from mkbootimg header, passed via ATAGs) never reaches the kernel. The DTS has no `/chosen/bootargs`. With CMDLINE_EXTEND, the result was just CONFIG_CMDLINE (which worked). Changed to CMDLINE_FORCE for clarity.
 
-4. **Kernel LZMA decompression**: `CONFIG_KERNEL_LZMA=y` -- if the decompressor has issues on this specific U-Boot version, the kernel would silently fail. Consider trying `CONFIG_KERNEL_GZIP=y` instead.
+4. **`fastboot boot` (RAM boot) is unreliable** -- The steelhead U-Boot's RAM boot path is intermittent. Flashing to the boot partition (`fastboot flash boot`) and doing a normal power-on boot is 100% reliable.
+
+### What Was NOT the Problem
+- LZMA compression (was a red herring; GZIP kept for slightly faster boot)
+- `CONFIG_OMAP_RESET_CLOCKS` (disabled as precaution, may be safe to re-enable)
+- `CONFIG_POWER_AVS_OMAP` (disabled as precaution, may be safe to re-enable)
+- The device tree (omap4-steelhead.dts is correct)
+- The boot image format (mkbootimg header v0, correct addresses)
 
 ## Immediate Next Steps
 
-### 1. Test `boot-noramdisk.img` (Already Built, ~5.0 MB)
-Located at `output/boot-noramdisk.img`. This is kernel+DTB only with `console=tty0 loglevel=7 ignore_loglevel earlyprintk panic=30`. If no HDMI output even with built-in FBCON/DRM and no ramdisk, the problem is definitively in the kernel or DTB, not the initramfs.
+### 1. Solve the Boot Partition Size Problem
+The full boot.img (kernel 6.1 MB + DTB 93 KB + initramfs 8.4 MB = 14.6 MB) exceeds the 8 MB boot partition. Options:
+- **Switch drivers back to modules** (=m) to reduce kernel size, move bulk to rootfs
+- **Switch compression back to LZMA** (now safe since the real issue was SMP, not LZMA)
+- **Strip the initramfs** (remove unnecessary modules/files)
+- **Use a two-stage boot**: minimal initramfs loads the full rootfs from userdata
+- **Boot from recovery partition** (also 8 MB) to free boot for a larger image
 
-### 2. Try Simpler Kernel Configurations
-- Switch compression from LZMA to GZIP: `CONFIG_KERNEL_GZIP=y` (delete `CONFIG_KERNEL_LZMA=y`)
-- Try `CONFIG_OMAP_RESET_CLOCKS=n` (this aggressively disables unused clocks at boot -- may kill DSS/USB clocks before drivers probe)
-- Try disabling `CONFIG_POWER_AVS_OMAP=y` and `CONFIG_POWER_AVS_OMAP_CLASS3=y` (Adaptive Voltage Scaling can cause issues with power domains)
+### 2. Flash and Boot Full postmarketOS
+Once the size issue is solved:
+- Flash rootfs to userdata: `fastboot flash userdata output/google-steelhead-sparse.img`
+  (Note: 488 MB transfer; may need to split into smaller chunks for this U-Boot)
+- Flash boot.img to boot partition: `fastboot flash boot output/boot.img`
+- Normal power-on (don't hold mute sensor)
 
-### 3. Try a Known-Working Kernel
-The original Android 4.2 kernel and the CyanogenMod kernel (3.0.x) are known to boot on this hardware. Building one of those with a simple initramfs would confirm the hardware works. Repo: `https://github.com/AdrianDC/android_kernel_google_steelhead`
+### 3. Enable USB Networking
+The pmos initramfs configures USB gadget (RNDIS) for initial access. Once booted:
+- The device should appear as a USB network adapter on the host
+- SSH into the device via USB network
 
-### 4. Serial Console Access
-If software approaches fail, connecting to UART3 (pins on the board) is the only way to see early kernel output. The Nexus Q's UART3 is on the 10-pin header (J400): TX=pin 6, RX=pin 7, GND=pin 10. Requires 1.8V logic level UART adapter.
+### 4. Re-enable SMP (Future)
+Investigate proper OMAP4460 SMP startup with this U-Boot. May need:
+- Custom SMP startup code that handles the undefined CPU1 state
+- A secondary CPU holding pen implementation
+- Patching the kernel's OMAP4 SMP code to reset CPU1 before bringing it online
 
 ## Device Information
 
