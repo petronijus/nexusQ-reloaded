@@ -8,34 +8,47 @@ Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"),
 
 **Milestone achieved 2026-02-27:** The kernel boots, HDMI output works (framebuffer console with Tux logo), eMMC is fully detected with all partitions, and the kernel panics with "Unable to mount root fs" -- which is expected since no rootfs is configured yet.
 
-### What Was Wrong (Root Causes)
+### What Was Wrong (Root Cause)
 
-Three kernel config options prevented boot:
+**`CONFIG_SMP=y`** was the sole root cause of boot failure. The U-Boot 2011.09 bootloader leaves CPU1 (second Cortex-A9 core) in an undefined state. The mainline kernel's OMAP4 SMP startup code hangs trying to bring it online -- no panic, no output, silent deadlock. **Fix: `CONFIG_SMP` disabled.**
 
-1. **`CONFIG_SMP=y`** (CRITICAL) -- The U-Boot 2011.09 bootloader leaves CPU1 (second Cortex-A9 core) in an undefined state. The mainline kernel's SMP startup code hangs trying to bring it online. **Fix: `CONFIG_SMP` disabled.**
+### Required Config for Boot (all must be set)
 
-2. **`CONFIG_ARM_ATAG_DTB_COMPAT=y`** -- U-Boot passes ATAGs that crash the zImage decompressor's ATAG-to-DTB merge code. Since the DTB is appended to the kernel (`CONFIG_ARM_APPENDED_DTB=y`), ATAG merging is unnecessary. **Fix: `CONFIG_ARM_ATAG_DTB_COMPAT` disabled.**
-
-3. **`CONFIG_CMDLINE_EXTEND=y`** -- With ATAG_DTB_COMPAT disabled, the bootloader's cmdline (from mkbootimg header) is not passed to the kernel. All cmdline parameters must be compiled in. **Fix: `CONFIG_CMDLINE_FORCE=y` with all parameters in `CONFIG_CMDLINE`.**
+| Option | Value | Why |
+|--------|-------|-----|
+| `CONFIG_SMP` | `n` | U-Boot leaves CPU1 in bad state; SMP startup hangs |
+| `CONFIG_ARM_ATAG_DTB_COMPAT` | `y` | **REQUIRED** -- kernel does NOT boot without it; U-Boot passes ATAGs that the kernel needs for proper initialization |
+| `CONFIG_ARM_APPENDED_DTB` | `y` | DTB appended to zImage (standard for this platform) |
+| `CONFIG_CMDLINE_FORCE` | `y` | U-Boot's cmdline is unreliable; compiled-in cmdline only |
+| `CONFIG_INITRAMFS_SOURCE` | `"mini-initramfs.cpio"` | Initramfs MUST be embedded in kernel (see below) |
 
 ### Boot Method
 
 - **Reliable: `fastboot flash boot` + normal power-on** -- Flash to the 8 MB boot partition, then power-cycle without holding mute sensor. U-Boot loads from partition and boots reliably.
 - **Unreliable: `fastboot boot` (RAM boot)** -- Intermittent on this U-Boot. Works sometimes, fails silently other times. Avoid for testing.
 
-### Remaining Issue
+### Initramfs Strategy: MUST Be Embedded in Kernel
 
-The full boot.img with initramfs is **14.6 MB**, exceeding the 8 MB boot partition. The kernel+DTB alone is 6.2 MB (fits), but the pmos initramfs adds 8.4 MB. Need to either shrink the image or find another boot strategy.
+**U-Boot does NOT load the ramdisk from the boot partition** during normal boot. The boot.img ramdisk section is ignored. Therefore:
+- External ramdisk in boot.img: **DOES NOT WORK** (U-Boot ignores it)
+- DTB initrd-start/end: **DOES NOT WORK** (U-Boot doesn't load ramdisk to RAM)
+- `CONFIG_INITRAMFS_SOURCE`: **WORKS** (initramfs compiled into zImage)
+
+A minimal initramfs (busybox + USB gadget setup, 549 KB compressed) is embedded in the kernel via `CONFIG_INITRAMFS_SOURCE="mini-initramfs.cpio"`. Total boot image: 6.7 MB, fits in 8 MB partition.
+
+The full pmOS initramfs (8.4 MB) is too large to embed. Solution: use the minimal initramfs for initial boot, mount full rootfs from userdata partition.
 
 ## Boot Image Variants Tested
 | Image | Size | Description | Result |
 |-------|------|-------------|--------|
-| `boot.img` | 13.5 MB | Full pmos initramfs, all drivers as modules | No output (SMP bug) |
-| `boot-diag.img` | 5.9 MB | Minimal diag initramfs, hardcoded insmod, telnetd | No output (SMP bug) |
-| `boot-builtin.img` | 8.8 MB | Full initramfs, DRM+USB+FBCON built-in (=y) | No output (SMP bug) |
-| `boot-noramdisk.img` | 5.0 MB | Kernel+DTB only, no ramdisk, console=tty0 | No output (SMP bug) |
-| `boot-test-nosmp-noatag.img` | 6.2 MB | SMP=n, ATAG_COMPAT=n, CMDLINE_FORCE, no ramdisk | **BOOTS! HDMI works!** |
-| `boot-full-working.img` | 14.6 MB | Same fixes + pmos initramfs | Too large for boot partition |
+| `boot.img` | 13.5 MB | Full pmos initramfs, SMP=y | No output (SMP bug) |
+| `boot-diag.img` | 5.9 MB | Minimal diag initramfs, SMP=y | No output (SMP bug) |
+| `boot-builtin.img` | 8.8 MB | Full initramfs, built-in drivers, SMP=y | No output (SMP bug) |
+| `boot-noramdisk.img` | 5.0 MB | Kernel+DTB only, SMP=y | No output (SMP bug) |
+| `boot-test-nosmp-noatag.img` | 6.2 MB | SMP=n, ATAG=n, no ramdisk | Boots (HDMI+kernel panic) |
+| `boot-atag-initramfs.img` | 6.7 MB | SMP=n, ATAG=y, external ramdisk | Boots (panic: ramdisk not found) |
+| `boot-atag-embedded.img` | 6.7 MB | SMP=n, ATAG=y, embedded initramfs | **Testing...** |
+| Various rebuild tests | 6.2 MB | SMP=n, ATAG=n, no ramdisk | No output (ATAG required) |
 
 ### Kernel Configuration Changes (Current State)
 These drivers were changed from `=m` (module) to `=y` (built-in) in `kernel/configs/steelhead_defconfig`:
@@ -52,54 +65,83 @@ These drivers were changed from `=m` (module) to `=y` (built-in) in `kernel/conf
 ### Other Fixes Applied
 - `deviceinfo_dtb` changed from `"ti/omap/omap4-steelhead"` to `"omap4-steelhead"` (kernel installs DTBs flat, not under `ti/omap/`)
 - `deviceinfo_append_dtb="true"` added (appends DTB to zImage)
-- `CONFIG_ARM_APPENDED_DTB=y` and `CONFIG_ARM_ATAG_DTB_COMPAT=y` in defconfig
+- `CONFIG_ARM_APPENDED_DTB=y` in defconfig (DTB concatenated after zImage)
+- `CONFIG_ARM_ATAG_DTB_COMPAT=y` in defconfig (REQUIRED for boot, see Investigation Log)
 - Rootfs flashes to `userdata` partition (13 GB) since `system` is only 1 GB
 - Custom `raw2simg.py` for sparse image conversion (U-Boot only supports RAW+DONT_CARE chunks)
 
-## Resolved Root Causes
+## Investigation Log & Key Findings
 
-1. **`CONFIG_SMP=y` caused a hard hang** -- U-Boot 2011.09 leaves the secondary CPU (CPU1) in an undefined state. The mainline kernel's OMAP4 SMP startup code tries to bring CPU1 online and hangs indefinitely. No panic, no output, just a silent deadlock. Fixed by disabling SMP.
+### Finding 1: SMP Is the Only Boot Blocker
+`CONFIG_SMP=y` causes a silent deadlock during OMAP4 SMP startup. All other early boot failures were caused by SMP, not by other config options. With SMP disabled, the kernel boots reliably.
 
-2. **`CONFIG_ARM_ATAG_DTB_COMPAT=y` crashed the decompressor** -- U-Boot passes ATAGs in r2 that the zImage decompressor's atags_to_fdt() function can't handle properly. Since we use `CONFIG_ARM_APPENDED_DTB=y` (DTB concatenated after zImage), ATAG merging is unnecessary. Fixed by disabling ATAG_DTB_COMPAT.
+### Finding 2: ATAG_DTB_COMPAT Is REQUIRED (Corrected)
+Earlier testing incorrectly concluded that `CONFIG_ARM_ATAG_DTB_COMPAT=y` caused crashes. This was wrong -- ATAG_DTB_COMPAT was always disabled alongside SMP, so the real culprit (SMP) was masked. When we later rebuilt with ATAG_DTB_COMPAT=y and SMP=n, the kernel booted fine (6.12.12 #2).
 
-3. **`CONFIG_CMDLINE_EXTEND` produced an empty cmdline** -- With ATAG_DTB_COMPAT disabled, the bootloader's cmdline (from mkbootimg header, passed via ATAGs) never reaches the kernel. The DTS has no `/chosen/bootargs`. With CMDLINE_EXTEND, the result was just CONFIG_CMDLINE (which worked). Changed to CMDLINE_FORCE for clarity.
+**With ATAG_DTB_COMPAT=n, kernel rebuilds do NOT boot.** The original working binary was a fluke or compiled under slightly different conditions. Multiple clean rebuilds with ATAG_DTB_COMPAT=n (identical config, verified via extract-ikconfig, only 43 bytes of timestamp differences) all failed to boot.
 
-4. **`fastboot boot` (RAM boot) is unreliable** -- The steelhead U-Boot's RAM boot path is intermittent. Flashing to the boot partition (`fastboot flash boot`) and doing a normal power-on boot is 100% reliable.
+### Finding 3: U-Boot Ignores Boot.img Ramdisk on Partition Boot
+U-Boot 2011.09 on the Nexus Q does NOT load the ramdisk section of the Android boot.img when booting from the boot partition. Only the kernel is loaded and executed. This means:
+- External ramdisk in boot.img is useless for partition boot
+- The initramfs must be embedded in the kernel via `CONFIG_INITRAMFS_SOURCE`
+- CyanogenMod worked because it used `fastboot boot` (RAM boot) which DOES load the ramdisk, or because its U-Boot had ramdisk loading patched in
+
+### Finding 4: Boot Method Reliability
+- `fastboot flash boot` + cold power-cycle (unplug/replug): **RELIABLE**
+- `fastboot boot` (RAM boot): **UNRELIABLE** (intermittent)
+- `fastboot reboot`: **UNRELIABLE** (often re-enters fastboot instead of booting)
+- Software reboot (panic=XX): Re-enters fastboot
 
 ### What Was NOT the Problem
-- LZMA compression (was a red herring; GZIP kept for slightly faster boot)
-- `CONFIG_OMAP_RESET_CLOCKS` (disabled as precaution, may be safe to re-enable)
-- `CONFIG_POWER_AVS_OMAP` (disabled as precaution, may be safe to re-enable)
+- LZMA compression (GZIP kept for compatibility)
+- `CONFIG_OMAP_RESET_CLOCKS` (disabled as precaution)
+- `CONFIG_POWER_AVS_OMAP` (disabled as precaution)
 - The device tree (omap4-steelhead.dts is correct)
 - The boot image format (mkbootimg header v0, correct addresses)
+- `CONFIG_ARM_ATAG_DTB_COMPAT` (was falsely suspected)
 
 ## Immediate Next Steps
 
-### 1. Solve the Boot Partition Size Problem
-The full boot.img (kernel 6.1 MB + DTB 93 KB + initramfs 8.4 MB = 14.6 MB) exceeds the 8 MB boot partition. Options:
-- **Switch drivers back to modules** (=m) to reduce kernel size, move bulk to rootfs
-- **Switch compression back to LZMA** (now safe since the real issue was SMP, not LZMA)
-- **Strip the initramfs** (remove unnecessary modules/files)
-- **Use a two-stage boot**: minimal initramfs loads the full rootfs from userdata
-- **Boot from recovery partition** (also 8 MB) to free boot for a larger image
+### 1. Verify Embedded Initramfs Boot (IN PROGRESS)
+`boot-atag-embedded.img` (6.7 MB) has the kernel with embedded mini-initramfs and ATAG_DTB_COMPAT=y. Currently being tested.
 
-### 2. Flash and Boot Full postmarketOS
-Once the size issue is solved:
-- Flash rootfs to userdata: `fastboot flash userdata output/google-steelhead-sparse.img`
-  (Note: 488 MB transfer; may need to split into smaller chunks for this U-Boot)
-- Flash boot.img to boot partition: `fastboot flash boot output/boot.img`
-- Normal power-on (don't hold mute sensor)
+### 2. Get USB Networking / Telnet Access
+The mini-initramfs sets up:
+- USB gadget RNDIS on micro-USB (host IP 172.16.42.1, client 172.16.42.2)
+- Telnet on 172.16.42.1:23
+- Tries to mount rootfs from /dev/mmcblk0p13 (userdata)
+- Falls back to interactive shell on HDMI console
 
-### 3. Enable USB Networking
-The pmos initramfs configures USB gadget (RNDIS) for initial access. Once booted:
-- The device should appear as a USB network adapter on the host
-- SSH into the device via USB network
+### 3. Flash Full Rootfs to Userdata
+Once we have shell access:
+- Flash the full pmOS rootfs to userdata partition (mmcblk0p13)
+- Or create a minimal rootfs with networking, then expand later
 
 ### 4. Re-enable SMP (Future)
 Investigate proper OMAP4460 SMP startup with this U-Boot. May need:
 - Custom SMP startup code that handles the undefined CPU1 state
 - A secondary CPU holding pen implementation
 - Patching the kernel's OMAP4 SMP code to reset CPU1 before bringing it online
+
+## How to Reproduce a Working Boot
+
+```bash
+# 1. Build kernel (from /tmp/linux-6.12.12)
+export ARCH=arm CROSS_COMPILE=/path/to/arm-none-linux-gnueabihf-
+# Ensure .config has: SMP=n, ATAG_DTB_COMPAT=y, INITRAMFS_SOURCE="mini-initramfs.cpio"
+make -j$(nproc) zImage dtbs
+
+# 2. Create boot image (kernel + appended DTB, no external ramdisk)
+cat arch/arm/boot/zImage arch/arm/boot/dts/ti/omap/omap4-steelhead.dtb > zImage-dtb
+# Use Python mkbootimg script (see output/ directory) with:
+#   base=0x80000000, kernel_offset=0x8000, ramdisk_size=0, pagesize=2048
+
+# 3. Flash
+fastboot flash boot output/boot-atag-embedded.img
+
+# 4. Cold power-cycle (UNPLUG power, wait 5s, replug WITHOUT mute sensor)
+# Do NOT use 'fastboot reboot' -- it re-enters fastboot
+```
 
 ## Device Information
 
@@ -216,12 +258,13 @@ If `mkinitfs` fails in the chroot (QEMU binfmt issues), use `manual-export.sh` w
 ### Output Images
 | File | Size | Description |
 |------|------|-------------|
-| `output/boot.img` | 13.5 MB | Original full image (modules) |
-| `output/boot-diag.img` | 5.9 MB | Diagnostic image |
-| `output/boot-builtin.img` | 8.8 MB | Built-in drivers image |
-| `output/boot-noramdisk.img` | 5.0 MB | Kernel+DTB only |
+| `output/boot-atag-embedded.img` | 6.7 MB | **CURRENT** -- SMP=n, ATAG=y, embedded initramfs |
+| `output/boot-test-nosmp-noatag.img` | 6.2 MB | Milestone: first boot (SMP=n, ATAG=n, no ramdisk) |
+| `output/boot-atag-initramfs.img` | 6.7 MB | SMP=n, ATAG=y, external ramdisk (boots, no initramfs) |
+| `output/boot.img` | 13.5 MB | Original full image (SMP=y, no boot) |
 | `output/google-steelhead.img` | 720 MB | Rootfs (raw ext4) |
 | `output/google-steelhead-sparse.img` | 530 MB | Rootfs (sparse, for flashing) |
+| `output/milestone-kernel-boot-2026-02-27.png` | -- | Screenshot of first kernel boot |
 
 ## Ubuntu Transition Notes
 

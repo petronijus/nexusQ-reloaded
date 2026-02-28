@@ -60,7 +60,7 @@ partition is never overwritten.
 
 | Partition | Size | Usage |
 |-----------|------|-------|
-| boot | 8 MB | Kernel + DTB (6.2 MB fits; full initramfs does not) |
+| boot | 8 MB | Kernel + embedded initramfs + DTB (6.7 MB fits) |
 | system | 1 GB | Not used (too small for rootfs) |
 | userdata | 13 GB | **Rootfs target** |
 
@@ -68,7 +68,7 @@ partition is never overwritten.
 
 ```bash
 # Flash kernel to boot partition (RECOMMENDED -- reliable boot path):
-fastboot flash boot output/boot-test-nosmp-noatag.img
+fastboot flash boot output/boot-atag-embedded.img
 
 # Flash rootfs to userdata partition:
 fastboot flash userdata output/google-steelhead-sparse.img

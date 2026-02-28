@@ -41,11 +41,18 @@ CONFIG_ARM_THUMBEE=y
 # mainline SMP startup to hang. Single-core boot is reliable.
 # CONFIG_SMP is not set
 CONFIG_ARM_APPENDED_DTB=y
-# ATAG_DTB_COMPAT disabled: U-Boot passes ATAGs that crash the
-# decompressor's ATAG-to-DTB merge code. Appended DTB is sufficient.
-# CONFIG_ARM_ATAG_DTB_COMPAT is not set
+# ATAG_DTB_COMPAT REQUIRED: kernel does not boot without it on this U-Boot.
+# Earlier theory that it "crashed the decompressor" was wrong -- the crash
+# was actually caused by CONFIG_SMP=y, which was always disabled alongside
+# ATAG_DTB_COMPAT in those tests.
+CONFIG_ARM_ATAG_DTB_COMPAT=y
+CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_FROM_BOOTLOADER=y
+# CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_EXTEND is not set
 CONFIG_CMDLINE="console=tty0 console=ttyS2,115200 earlyprintk loglevel=7 ignore_loglevel panic=30"
 CONFIG_CMDLINE_FORCE=y
+# Initramfs MUST be embedded: U-Boot ignores the ramdisk section of boot.img
+# during normal partition boot. Only CONFIG_INITRAMFS_SOURCE works.
+CONFIG_INITRAMFS_SOURCE="mini-initramfs.cpio"
 CONFIG_KEXEC=y
 CONFIG_CPU_FREQ=y
 CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y
