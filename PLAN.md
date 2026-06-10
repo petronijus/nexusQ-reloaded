@@ -68,15 +68,24 @@ debugging/ops on the HDMI port. Normal desktop (not mobile UI).
       binds, `nfc0` registers. 🟠 "could not detect nfc_en polarity" warning
       -- chip health unverified until tested with an actual NFC tag
 
-### 7. Flaky boot (research)
+### 7. TOSLINK / SPDIF output (audio, nice-to-have)
+Optical out is driven by the OMAP4's own McASP block -- fully independent of
+the dead TWL6040 codec. `spdif_dit` node already exists in the DTS.
+- [ ] check mainline support for the OMAP4 McASP variant (davinci-mcasp may
+      not know it -- might need a small driver patch)
+- [ ] wire a second simple-audio-card: McASP -> spdif_dit
+- [ ] test into a DAC/AV receiver
+- Payoff for a vinyl/music household: bit-perfect digital out into a hi-fi DAC
+
+### 8. Flaky boot (research)
 - [ ] needs UART serial console (requires opening the device / soldering)
 - [ ] until then workaround: power-cycle again
 - Candidates: U-Boot DRAM init, kernel early race
 
-### 8. LED ring (long-term, fun)
+### 9. LED ring (long-term, fun)
 - [ ] write a kernel driver for the steelhead AVR i2c protocol
       (userspace reference exists in the AOSP steelhead tree)
 
-### 9. SMP / second core (long-term, risky)
+### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
       but risks boot regressions -- do last, with UART console available
