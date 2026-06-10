@@ -4,6 +4,80 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
+## Session 2026-06-10: Userspace boots, WiFi works, ethernet is dead HW
+
+### Status: postmarketOS (systemd) boots, SSH over USB gadget, WiFi functional
+
+### Root causes found today (in order of discovery)
+1. **U-Boot kernel-size ceiling (~6.5-7 MB)** when loading from the boot
+   partition: 6.45 MB zImage+DTB boots, 7.3 MB does not. This was the hidden
+   variable behind "Finding 2" (identical-config rebuilds not booting) --
+   embedded initramfs pushed the image over the limit.
+2. **Ubuntu GCC 15.2 kernels do NOT boot** (black screen). Only the Arm GNU
+   Toolchain 13.3.Rel1 (same as original builds) produces booting kernels.
+   Toolchain lives in `build/arm-gnu-toolchain-13.3.rel1-*/bin`,
+   prefix `arm-none-linux-gnueabihf-`.
+3. **Feb rootfs flash silently failed**: 511 MB sparse image exceeds the
+   U-Boot fastboot download buffer (~150 MB). Flash userdata with
+   `fastboot -S 100M flash userdata <img>` -- works reliably (6 chunks).
+4. **Rootfs is pmOS systemd variant** (/sbin/init -> ../lib/systemd/systemd).
+   /etc/inittab and /etc/init.d are decoys. Emergency mode was caused by an
+   fstab entry for a /boot partition UUID that only existed in the build VM;
+   line removed. Root account unlocked (password 147147, same as user).
+5. **Ethernet (LAN9500A) is dead hardware.** Verified at register/pad level:
+   pinmux applied, GPIO pads toggle (DATAIN readback), 38.4 MHz PHY refclk
+   running, ULPI PHY (SMSC USB3320, id 0x0424/0x0007) responds via the EHCI
+   ULPI viewport (INSNREG05 @ 0x4A064CA4), EHCI port powered -- but PORTSC
+   CCS never asserts. gpio_1 (ethernet NENABLE) is physically clamped low
+   (drive-high reads back 0). DTS ethernet fixes applied anyway (38.4 MHz
+   clock per board-steelhead-usbhost.c, NENABLE polarity, gpio_wk1 pad 0x042
+   in wkup domain, fref_clk3_out mux) -- correct for a healthy unit.
+6. **WiFi (BCM4330) works.** Chain of fixes:
+   - kernel patch 0004: twl-core registers the clk mfd cell for TWL6030
+     (mainline only did TWL6032; register bases 0x8C/0x8F are identical)
+   - DTS: pwrseq clocks = <&twl 1> (clk32kaudio, per board-steelhead-wifi.c)
+   - DTS: WLAN_EN (gpio_43) only in pwrseq (was double-claimed by the vmmc
+     regulator -> EBUSY); vmmc is a plain always-on 3.3 V fixed regulator
+     (3.3 V matters: SDIO OCR negotiation fails at 1.8 V "no support for
+     card's volts")
+   - nvram: **original bcmdhd.cal recovered from the old Android system
+     partition (mmcblk0p11, still intact!)** -> /lib/firmware/brcm/
+     brcmfmac4330-sdio.txt. Generic Prowise nvram does NOT work (dongle
+     timeout -110). Also recovered bcm4330.hcd (Bluetooth patchram).
+     Both backed up in `firmware/` in this repo.
+
+### Access to the running device
+- USB gadget RNDIS via micro-USB: device 172.16.42.1, host 172.16.42.2/24
+  (NetworkManager profile "nexusq" on this PC; iface name changes each boot
+  -- random MAC -- fix with `nmcli con mod nexusq connection.interface-name <enx...>`)
+- SSH as root (password 147147, petronijus' ed25519 key authorized)
+- Gadget+sshd is started by /usr/local/bin/nexus-diag.sh (systemd unit
+  nexus-diag.service), which also dumps diagnostics to /dev/tty1 and
+  /var/log/nexus-diag.log
+- **Boot images can be written from the running system**:
+  `dd if=boot.img of=/dev/mmcblk0p9 bs=1M conv=fsync` -- no fastboot needed
+- pstore/ramoops configured in cmdline (last 1 MB of RAM, mem=1008M) --
+  survives warm reboots only
+
+### Current images
+- boot: `output/boot-wifi-v5.img` (GCC 13.3, gzip, no initramfs,
+  root=/dev/mmcblk0p13 + ramoops in cmdline, DTS with all fixes)
+- rootfs: `output/work-rootfs.img` (raw) / `work-rootfs-sparse.img` (flash)
+  -- modules for this exact kernel installed, fstab fixed, sshd fixed
+  (UsePAM drop-in removed), root unlocked, host keys baked in
+- mini mkbootimg replacement: `make-bootimg.py` (or reuse a proven header)
+
+### Known issues / next steps
+1. **Intermittent boot failure** (~1 in 3 boots: black screen, retry helps).
+   Unexplained. Candidates: U-Boot flakiness, DRAM init, kernel race.
+   pstore won't help across cold cycles. Consider UART2/3 serial console.
+2. WiFi: NetworkManager connection profile not yet configured (needs SSID
+   + password). brcmfmac autoloads on boot; firmware+nvram persist in rootfs.
+3. Bluetooth: bcm4330.hcd recovered; hci_bcm + UART2 wiring in DTS untested.
+4. SMP still disabled (single core) -- original U-Boot CPU1 issue.
+5. Audio (TWL6040/TAS5713), NFC, LEDs untested.
+6. APKBUILD sha512sums need refresh (0004 patch added with SKIP).
+
 ## Current Status: KERNEL BOOTS (HDMI output confirmed)
 
 **Milestone achieved 2026-02-27:** The kernel boots, HDMI output works (framebuffer console with Tux logo), eMMC is fully detected with all partitions, and the kernel panics with "Unable to mount root fs" -- which is expected since no rootfs is configured yet.

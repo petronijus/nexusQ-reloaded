@@ -34,6 +34,7 @@ source="
 	0001-ASoC-tas571x-add-TAS5713-support.patch
 	0002-dt-bindings-add-ti-tas5713.patch
 	0003-ARM-dts-omap4-add-steelhead.patch
+	0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -74,4 +75,5 @@ SKIP  $_config
 SKIP  0001-ASoC-tas571x-add-TAS5713-support.patch
 SKIP  0002-dt-bindings-add-ti-tas5713.patch
 SKIP  0003-ARM-dts-omap4-add-steelhead.patch
+SKIP  0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 "

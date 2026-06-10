@@ -52,9 +52,9 @@
 		regulator-name = "hsusb1_vbus";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio1 1 GPIO_ACTIVE_LOW>; /* gpio_1 */
+		/* NENABLE: 3.3V rail enabled by driving gpio_1 low */
+		gpio = <&gpio1 1 GPIO_ACTIVE_LOW>; /* gpio_wk1 */
 		startup-delay-us = <70000>;
-		enable-active-high;
 		regulator-always-on;
 		regulator-boot-on;
 	};
@@ -67,28 +67,30 @@
 		vcc-supply = <&hsusb1_power>;
 		clocks = <&auxclk3_ck>;
 		clock-names = "main_clk";
-		clock-frequency = <19200000>;
+		/* board-steelhead-usbhost.c: PHY needs 38.4 MHz, not panda's 19.2 */
+		clock-frequency = <38400000>;
 	};
 
-	/* BCM4330 WiFi power sequencing */
+	/* BCM4330 WiFi power sequencing: clk32kaudio + WLAN_EN (gpio_43),
+	 * mirrors steelhead_wifi_power() in board-steelhead-wifi.c */
 	bcm4330_pwrseq: bcm4330-pwrseq {
 		compatible = "mmc-pwrseq-simple";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wlan_en_pins>;
 		reset-gpios = <&gpio2 11 GPIO_ACTIVE_LOW>; /* gpio_43 WLAN_EN */
-		clocks = <&twl 0>;
+		post-power-on-delay-ms = <200>;
+		clocks = <&twl 1>; /* clk32kaudio */
 		clock-names = "ext_clock";
 	};
 
-	/* BCM4330 WiFi VMMC regulator */
+	/* BCM4330 VBAT 3.3V - static rail, WLAN_EN is handled by pwrseq.
+	 * 3.3V matters for SDIO OCR negotiation (card advertises 3.2-3.4V). */
 	bcm4330_vmmc: bcm4330-vmmc {
 		compatible = "regulator-fixed";
 		regulator-name = "vbcm4330";
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&wlan_en_pins>;
-		gpio = <&gpio2 11 GPIO_ACTIVE_HIGH>; /* gpio_43 */
-		startup-delay-us = <200000>;
-		enable-active-high;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
 	};
 
 	/* HDMI level converter: TPD12S015A */
@@ -164,6 +166,7 @@
 		&dss_hdmi_pins
 		&tpd12s015_pins
 		&hsusbb1_pins
+		&ethernet_gpios
 	>;
 
 	twl6040_pins: twl6040-pins {
@@ -234,9 +237,9 @@
 		>;
 	};
 
+	/* gpio_1 (NENABLE) is gpio_wk1 in the wkup padconf, not here */
 	ethernet_gpios: ethernet-gpios {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x040, PIN_OUTPUT | MUX_MODE3)		/* gpmc_ad0.gpio_1 NENABLE */
 			OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_wait0.gpio_62 NRESET */
 		>;
 	};
@@ -315,9 +318,19 @@
 };
 
 &omap4_pmx_wkup {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ethernet_wkup_pins>;
+
 	msecure_pins: msecure-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x050, PIN_OUTPUT | MUX_MODE3)		/* fref_clk0_out.gpio_wk6 */
+		>;
+	};
+
+	ethernet_wkup_pins: ethernet-wkup-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x042, PIN_OUTPUT | MUX_MODE3)		/* gpio_wk1 NENABLE */
+			OMAP4_IOPAD(0x058, PIN_OUTPUT | MUX_MODE0)		/* fref_clk3_out -> PHY 38.4 MHz */
 		>;
 	};
 };
@@ -480,7 +493,7 @@
 		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
 		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */
 		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
-		clocks = <&twl 0>;
+		clocks = <&twl 1>; /* clk32kaudio, dle board-steelhead-wifi.c */
 		clock-names = "ext_clock";
 	};
 };
