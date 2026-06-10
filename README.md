@@ -20,9 +20,14 @@ mainline Linux 6.12 LTS kernel.
 
 ## Status
 
-**Kernel boots!** (as of 2026-02-27) -- HDMI framebuffer console works, eMMC detected, all partitions visible. Currently running single-core (SMP disabled due to U-Boot bug). Full postmarketOS userspace boot is next.
+**Userspace boots, WiFi works!** (as of 2026-06-10) -- postmarketOS (systemd)
+boots from the userdata partition, SSH access over USB gadget and WiFi
+(BCM4330 with original calibration). Still single-core (SMP disabled due to
+U-Boot bug). Ethernet confirmed dead hardware on this unit.
 
 See `HANDOFF.md` for detailed technical notes and root cause analysis.
+See `PLAN.md` for the hardware status map and the prioritized roadmap
+(TAS5713 amplifier first).
 
 ## Quick Start
 
