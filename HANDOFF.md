@@ -56,6 +56,9 @@ Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"),
   /var/log/nexus-diag.log
 - **Boot images can be written from the running system**:
   `dd if=boot.img of=/dev/mmcblk0p9 bs=1M conv=fsync` -- no fastboot needed
+- **`systemctl reboot` over SSH works cleanly** (~90 s to gadget back up).
+  The old "software reboot re-enters fastboot" note applied to panic-reboots
+  and `fastboot reboot`, NOT to a clean systemd reboot.
 - pstore/ramoops configured in cmdline (last 1 MB of RAM, mem=1008M) --
   survives warm reboots only
 

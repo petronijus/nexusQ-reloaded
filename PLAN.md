@@ -25,38 +25,48 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 ## Plan (by priority)
 
 ### 1. TAS5713 amplifier  ← TOP PRIORITY
-The reason this device exists. Estimated: one afternoon.
-- [ ] DTS: `simple-audio-card` node wiring McBSP2 (I2S, CPU DAI) → TAS5713 (codec DAI)
-- [ ] DTS: MCLK 12.288 MHz -- `auxclk1` with /5 divider, muxed out on `fref_clk1_out`
-      (exact recipe: `board-steelhead.c` lines 755-808 in AOSP android-omap-steelhead)
-- [ ] verify `snd-soc-omap-mcbsp` module present and probing
-- [ ] `speaker-test` / `aplay` over SSH, tune `tas571x` register defaults if needed
-- Output: rear speaker terminals / banana jacks play audio
+The reason this device exists. **🟠 SW path verified 2026-06-10, speaker output untested.**
+- [x] DTS: `simple-audio-card` "NexusQ-Speaker" wiring McBSP2 → TAS5713
+- [x] DTS: MCLK 12.288 MHz (dpll_per_m3x2 61.44 MHz → auxclk1 /5 → fref_clk1_out
+      pad 0x19a); McBSP2 master (clkx/fsx pads OUTPUT), SRG from abe_24m_fclk
+- [x] `snd-soc-omap-mcbsp` module enabled (=m) and probing
+- [x] `speaker-test -D plughw:NexusQSpeaker` runs clean (rc=0, no dmesg errors)
+- [ ] 🟠 physical listening test once speakers are attached to the rear terminals
 
-### 2. Bluetooth (~30 min)
-- [ ] install `firmware/bcm4330.hcd` as `/lib/firmware/brcm/BCM.hcd` (name hci_bcm asks for)
-- [ ] `bluetoothctl` scan test
-- Bonus: BT keyboard/mouse solves the input problem for the GUI
+### 2. Bluetooth  ✅ DONE 2026-06-10
+- [x] firmware installed (BCM.hcd + BCM4330B1.hcd); loads automatically at boot
+      ("Proxima - BCM4330B1 37.4 MHz Class 1.5" -- device-specific config)
+- [x] scan finds devices; controller powered, name "Google Nexus Q"
+- [ ] pair a BT keyboard when at hand (solves GUI input)
 
-### 3. HDMI audio smoke test (~10 min)
-- [ ] `speaker-test -D hw:0` -- likely already functional
+### 3. HDMI audio smoke test  🟠 blocked by monitor
+- [x] tested 2026-06-10: ALSA opens fail with -22 because the Philips 190C
+      (DVI-era panel) provides no audio EDID ("timeout reading edid").
+      Retest against a real TV/AV receiver -- expected to work.
 
 ### 4. GUI: lightweight desktop (XFCE4)
 Decision: device runs **primarily headless**; desktop is for occasional
 debugging/ops on the HDMI port. Normal desktop (not mobile UI).
-- [ ] `apk add postmarketos-ui-xfce4` (or plain xfce4 + lightdm) over SSH
-- [ ] software rendering only (PowerVR SGX540 has no mainline driver) --
+- [x] `apk add postmarketos-ui-xfce4` -- done 2026-06-10, lightdm enabled,
+      graphical.target default, screen blanking disabled (no input to wake it)
+- [x] software rendering only (PowerVR SGX540 has no mainline driver) --
       single core means "retro PC" responsiveness, fine for the purpose
 - [ ] input: BT keyboard (after #2) or USB OTG adapter (sacrifices gadget
       network -- acceptable once WiFi is the primary link)
 
-### 5. TWL6040 codec (~2 h)
-- [ ] find why the driver never binds (module? AUDPWRON gpio_127? 32k clock --
-      possibly fixed already by patch 0004 / clk32kg)
-- [ ] unblocks headset jack and the ABE routing ("sound" card stops deferring)
+### 5. TWL6040 codec  🔴 DEAD HARDWARE (closed 2026-06-10)
+- [x] root-caused: chip never ACKs on I2C 0x4b (-121/EREMOTEIO) with all
+      inputs verified live: V1V8+V2V1 rails enabled, CLK32KG running,
+      AUDPWRON (gpio_127) raised, bus healthy (TWL6030 ACKs on 0x48-0x4a).
+      Second dead chip on this unit (with ethernet). Headset jack gone;
+      TAS5713 speaker path and HDMI audio are unaffected.
+- [x] sound + twl6040 nodes disabled in DTS -> clean boot, no deferred loop
 
-### 6. NFC + temp sensor (~15 min, completeness)
-- [ ] `modprobe pn544_i2c`, `modprobe lm75`; add to /etc/modules if OK
+### 6. NFC + temp sensor  ✅/🟠 done 2026-06-10
+- [x] TMP101: lm75 module added, binds, reads 41.75 °C on the board
+- [x] PN544: NFC modules added (NFC_SHDLC=y was the missing dep), driver
+      binds, `nfc0` registers. 🟠 "could not detect nfc_en polarity" warning
+      -- chip health unverified until tested with an actual NFC tag
 
 ### 7. Flaky boot (research)
 - [ ] needs UART serial console (requires opening the device / soldering)

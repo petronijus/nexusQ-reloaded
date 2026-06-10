@@ -143,7 +143,11 @@
 	 * ASoC sound card: TWL6040 codec via McPDM
 	 * TAS5713 is on a separate I2S bus (McBSP2) and managed independently.
 	 */
+	/* DISABLED 2026-06-10: TWL6040 codec is dead hardware on this unit
+	 * (no I2C ACK on 0x4b with all rails/clk32k/AUDPWRON verified live).
+	 * Headset jack unavailable; TAS5713 speaker path is independent. */
 	sound: sound {
+		status = "disabled";
 		compatible = "ti,abe-twl6040";
 		ti,model = "Nexus Q";
 		ti,mclk-freq = <38400000>;
@@ -157,6 +161,24 @@
 			"Ext Spk", "HFR",
 			"Line Out", "AUXL",
 			"Line Out", "AUXR";
+	};
+
+	/* Speaker amp: McBSP2 I2S -> TAS5713 (25 W class-D) */
+	sound_tas5713: sound-tas5713 {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "NexusQ-Speaker";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,bitclock-master = <&tas5713_cpu>;
+		simple-audio-card,frame-master = <&tas5713_cpu>;
+
+		tas5713_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcbsp2>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&tas5713>;
+		};
 	};
 };
 
@@ -293,6 +315,7 @@
 			OMAP4_IOPAD(0x060, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a16.gpio_40 IFACE_EN */
 			OMAP4_IOPAD(0x064, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a18.gpio_42 RESET */
 			OMAP4_IOPAD(0x068, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a20.gpio_44 PDN */
+			OMAP4_IOPAD(0x19a, PIN_OUTPUT | MUX_MODE0)		/* fref_clk1_out -> TAS5713 MCLK */
 		>;
 	};
 
@@ -303,9 +326,11 @@
 	 */
 	mcbsp2_pins: mcbsp2-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x110, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_clkx */
+			/* McBSP2 is bit/frame master -> all pads outputs
+			 * (board-steelhead.c muxes clkx/dx/fsx as OUTPUT) */
+			OMAP4_IOPAD(0x110, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_clkx */
 			OMAP4_IOPAD(0x114, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_dx */
-			OMAP4_IOPAD(0x116, PIN_INPUT | MUX_MODE0)		/* abe_mcbsp2_fsx */
+			OMAP4_IOPAD(0x116, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_fsx */
 		>;
 	};
 
@@ -349,6 +374,7 @@
 	};
 
 	twl6040: twl@4b {
+		status = "disabled"; /* dead chip, see sound node note */
 		compatible = "ti,twl6040";
 		#clock-cells = <0>;
 		reg = <0x4b>;
@@ -422,6 +448,15 @@
 
 		reset-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>; /* gpio_42 */
 		pdn-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>; /* gpio_44 */
+
+		/* MCLK 12.288 MHz (256 x 48 kHz) on fref_clk1_out:
+		 * dpll_per_m3x2 -> 61.44 MHz, auxclk1 divides by 5
+		 * (board-steelhead.c lines 755-810) */
+		clocks = <&auxclk1_ck>;
+		clock-names = "mclk";
+		assigned-clocks = <&dpll_per_m3x2_ck>, <&auxclk1_src_ck>, <&auxclk1_ck>;
+		assigned-clock-parents = <0>, <&dpll_per_m3x2_ck>, <0>;
+		assigned-clock-rates = <61440000>, <0>, <12288000>;
 
 		#sound-dai-cells = <0>;
 	};
@@ -534,10 +569,16 @@
 	};
 };
 
-/* McBSP2: I2S output to TAS5713 amplifier */
+/* McBSP2: I2S output to TAS5713 amplifier.
+ * Internal (PRCM) functional clock must come from the ABE DPLL
+ * (abe_24m_fclk, 24.576 MHz = 512 x 48 kHz) so the SRG can derive
+ * integer bit-clock dividers -- board-steelhead.c did the same. */
 &mcbsp2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcbsp2_pins>;
+	assigned-clocks = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
+	assigned-clock-parents = <&abe_24m_fclk>;
+	#sound-dai-cells = <0>;
 	status = "okay";
 };
 
