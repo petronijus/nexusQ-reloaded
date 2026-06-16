@@ -1,32 +1,41 @@
 # BCM4330 Firmware for Nexus Q
 
-The Broadcom BCM4330 WiFi/Bluetooth chip requires proprietary firmware
-blobs to operate. The main firmware is provided by the
-`firmware-aosp-broadcom-wlan` package in postmarketOS.
+The Broadcom BCM4330 WiFi/Bluetooth chip needs proprietary firmware to operate.
 
-## Device-Specific Calibration
+## What ships where
 
-The Nexus Q may have a device-specific calibration file (`bcmdhd.cal`)
-that tunes the radio for the device's antenna layout. To extract it:
+- **WiFi base firmware** (`fw_bcmdhd.bin`, `fw_bcmdhd_apsta.bin`, NVRAM) comes
+  from the **`firmware-aosp-broadcom-wlan`** postmarketOS package — it is *not*
+  in this repo and is pulled in automatically by the build.
+- **WiFi calibration** (`bcmdhd.cal`) and the **Bluetooth patchram**
+  (`bcm4330.hcd`) are device-specific blobs recovered from the Nexus Q's
+  Android vendor partition. They are **proprietary and not redistributable**, so
+  they are **not committed to this public repo**. You provide them yourself.
 
-1. Boot the Nexus Q into its original Android system
-2. Connect via ADB:
-   ```
-   adb pull /system/vendor/firmware/bcmdhd.cal
-   ```
-3. Place the file in this directory and update the firmware APKBUILD
+## Getting the blobs
 
-If the calibration file is unavailable, WiFi will still function using
-the generic calibration from `firmware-aosp-broadcom-wlan`, though RF
-performance may not be optimal.
+**Maintainer (private overlay):** the blobs live in the `nexusQ-reloaded-private`
+overlay. Clone it into `./private` and stage them into the build tree:
 
-## Firmware Files
+```bash
+git clone <nexusQ-reloaded-private> private
+./scripts/setup-firmware.sh        # copies private/firmware/* -> firmware/ (gitignored)
+```
 
-The `firmware-aosp-broadcom-wlan` package provides:
+**Anyone else (extract from your own device):** boot the Nexus Q into its
+original Android system and pull the files over ADB:
 
-- `/lib/firmware/postmarketos/bcmdhd/bcm4330/fw_bcmdhd.bin` -- WiFi firmware
-- `/lib/firmware/postmarketos/bcmdhd/bcm4330/fw_bcmdhd_apsta.bin` -- AP mode
-- NVRAM configuration
+```bash
+adb pull /system/vendor/firmware/bcmdhd.cal firmware/bcmdhd.cal
+# the BCM4330 BT .hcd patchram lives alongside the vendor BT firmware
+```
 
-The Bluetooth firmware is loaded by the `hci_bcm` driver via the standard
-`brcm/BCM4330B1.hcd` file from the `linux-firmware` package.
+Place them at `firmware/bcmdhd.cal` and `firmware/bcm4330.hcd` (both gitignored).
+Without the calibration, WiFi still works on generic defaults (RF performance
+may be sub-optimal); without the `.hcd`, Bluetooth won't come up.
+
+## Packaging
+
+`pmos/firmware-google-steelhead/APKBUILD` installs the calibration into the
+rootfs. Its `source=`/`package()` blocks are commented until you've staged the
+blob (the package must not carry the proprietary file in a public tree).

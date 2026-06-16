@@ -5,3 +5,8 @@ build/
 .cursor/
 fb_err.txt
 fb_out.txt
+
+# Private overlay (non-redistributable firmware)
+/private/
+firmware/bcm4330.hcd
+firmware/bcmdhd.cal

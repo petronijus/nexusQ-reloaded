@@ -11,10 +11,10 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | ✅ works | ALSA `card0 HDMI` registers; needs a quick `speaker-test` |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
-| WiFi (BCM4330) | ✅ works | original `bcmdhd.cal` nvram (repo `firmware/`), NM autoconnect |
+| WiFi (BCM4330) | ✅ works | original `bcmdhd.cal` nvram (staged via `scripts/setup-firmware.sh`, not in repo), NM autoconnect |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
 | **TAS5713 amplifier** | 🟡 chip alive, no audio path | I2C driver bound (`3-001b`), reset/pdn GPIOs OK; missing: sound card node (McBSP2 I2S → TAS5713) + 12.288 MHz MCLK |
-| Bluetooth (BCM4330) | 🟡 almost | `hci0` registers, wants firmware named `BCM.hcd` -- we have it (repo `firmware/bcm4330.hcd`) |
+| Bluetooth (BCM4330) | 🟡 almost | `hci0` registers, wants firmware named `BCM.hcd` -- we have it (staged via `scripts/setup-firmware.sh`, not in repo) |
 | TWL6040 codec | 🟡 deferred | driver never binds; `omap-abe-twl6040` card loops on -EPROBE_DEFER |
 | NFC (PN544) | 🟡 detected | i2c device `2-0028` present, driver not loaded |
 | TMP101 temp sensor | 🟡 detected | i2c device `1-0048`, needs `modprobe lm75` |
