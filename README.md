@@ -94,3 +94,19 @@ fastboot flash userdata output/google-steelhead-sparse.img
 4. `pmbootstrap qemu` -- QEMU boot test (vexpress-a9)
 5. `fastboot boot boot.img` -- temporary boot on real hardware
 6. `fastboot flash userdata google-steelhead.img` -- permanent flash rootfs
+
+## Releases
+
+Versioning is tag-only (milestone-based). Images are built locally (the kernel
+and rootfs aren't built in GitHub CI) and attached to the GitHub release:
+
+- `nexusq-boot-vX.Y.Z.img` -- kernel + initramfs boot image
+- `nexusq-rootfs-vX.Y.Z-sparse.img` -- postmarketOS rootfs (Android sparse)
+
+End-user flashing is in [INSTALL.md](INSTALL.md); build steps in `HANDOFF.md`;
+version history in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+[GPL-2.0](LICENSE) -- this repository carries Linux kernel patches, a device
+tree and a defconfig, which are derivative works of the Linux kernel (GPLv2).

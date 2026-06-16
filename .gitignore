@@ -1,2 +1,7 @@
 output/
 build/
+
+# IDE / debug scratch
+.cursor/
+fb_err.txt
+fb_out.txt

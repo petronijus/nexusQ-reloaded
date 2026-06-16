@@ -1,0 +1,16 @@
+name: nexusq-reloaded
+tag_format: v{version}
+version_files: []                 # tag-only versioning (kernel port milestones)
+changelog: CHANGELOG.md
+artifacts:
+  mode: local                     # built locally (pmbootstrap/Docker), not in GitHub CI
+  local_build: ./docker-build.sh
+  # Build emits output/boot.img + output/google-steelhead.img; the release step
+  # renames to the versioned scheme and sparse-converts the rootfs (raw2simg.py),
+  # matching the v0.1.0 assets:
+  local_upload:
+    - nexusq-boot-v*.img
+    - nexusq-rootfs-v*-sparse.img
+registry:
+  images: []
+preflight_extra: []
