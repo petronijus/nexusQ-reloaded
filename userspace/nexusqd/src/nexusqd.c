@@ -8,6 +8,8 @@
 #include "themes.h"
 #include "reaction.h"
 #include "screensaver.h"
+#include "audio.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,7 +41,7 @@ static int manual_render(void *c, double t, struct frame *out) {
 
 /* --- screensaver layer (priority 5): the idle breathing screensaver -------- */
 static int screensaver_layer_render(void *c, double t, struct frame *out) {
-    screensaver_render((struct screensaver *)c, t, out); return 0;   /* always renders (black when blanked) */
+    (void)t; screensaver_render((struct screensaver *)c, out); return 0;   /* updated in the main loop */
 }
 
 /* --- reaction layer (priority 10): the volume overlay (Plan 2b) ------------ */
@@ -62,8 +64,16 @@ int main(void) {
     struct reaction rx = {0};
     struct screensaver ss; screensaver_init(&ss, start);
     struct manual_ctx manual = { { 0, 0, 0 } };
-    int volume = 50;            /* virtual master volume (no audio path yet) */
+    int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
+
+    /* Plan 3b audio tap: spawn arecord on the ALSA loopback; the screensaver fades
+     * when the captured output mix has signal (getVolume >= 0.01). */
+    signal(SIGCHLD, SIG_IGN);   /* reap arecord automatically if it exits */
+    int afd = audio_open();
+    float audio_vol = 0.0f;
+    double last_pcm = -1.0, prev_now = start;
+    int prev_audio = 0;
 
     struct compositor comp = {0};
     comp_add(&comp, (struct layer){ screensaver_layer_render, &ss, 5, 1 });
@@ -84,14 +94,16 @@ int main(void) {
     int prev_overlay = 0;
     uint8_t lastpk[RING*3] = {0}, pk[RING*3];
     for (;;) {
-        struct pollfd pfds[2]; int np = 0;
-        if (kfd >= 0) { pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
+        struct pollfd pfds[3]; int np = 0;
+        int ki = -1, ai = -1;
+        if (kfd >= 0) { ki = np; pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
+        if (afd >= 0) { ai = np; pfds[np].fd = afd; pfds[np].events = POLLIN; np++; }
         pfds[np].fd = srv; pfds[np].events = POLLIN; int srvi = np; np++;
         /* 16 ms during the volume fade; otherwise 50 ms is smooth for the 10 s breath */
         int to = reaction_overlay_active(&rx, now_s()) ? 16 : 50;
         poll(pfds, np, to);
 
-        if (kfd >= 0 && (pfds[0].revents & POLLIN)) {
+        if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
             uint8_t b[INPUT_EVENT_SIZE*64]; int r = (int)read(kfd, b, sizeof(b));
             struct keyev ev[64]; int n = r > 0 ? keys_decode(b, r, ev, 64) : 0;
             for (int i = 0; i < n; i++) {
@@ -140,6 +152,27 @@ int main(void) {
         }
 
         double now = now_s();
+        double dt = now - prev_now; prev_now = now;
+
+        /* drain captured PCM -> getVolume; hold ~150 ms so brief gaps aren't silence */
+        if (ai >= 0 && (pfds[ai].revents & POLLIN)) {
+            static int16_t pcm[8192];
+            ssize_t rr = read(afd, pcm, sizeof pcm);
+            if (rr > 0) {
+                audio_vol = audio_mean_abs(pcm, (int)(rr / (ssize_t)sizeof pcm[0]));
+                last_pcm = now;
+                char junk[4096]; while (read(afd, junk, sizeof junk) > 0) { }   /* keep latency low */
+            }
+        }
+        if (last_pcm >= 0.0 && now - last_pcm > 0.15) audio_vol = 0.0f;
+
+        screensaver_update(&ss, now, dt, audio_vol);
+        int audio_on = audio_vol >= SS_AUDIO_THRESH;
+        if (audio_on != prev_audio) {
+            fprintf(stderr, "[nexusqd] audio %s (vol=%.3f)\n", audio_on ? "DETECTED" : "silent", audio_vol);
+            prev_audio = audio_on;
+        }
+
         int cur_overlay = reaction_overlay_active(&rx, now);
         if (prev_overlay && !cur_overlay) apply_mute_led(muted);  /* overlay timed out -> restore mute LED */
         prev_overlay = cur_overlay;

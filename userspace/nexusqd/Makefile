@@ -1,6 +1,6 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Iinclude
-SRC      = src/frame.c src/themes.c src/avr.c src/compositor.c src/keys.c src/control.c src/reaction.c src/screensaver.c
+SRC      = src/frame.c src/themes.c src/avr.c src/compositor.c src/keys.c src/control.c src/reaction.c src/screensaver.c src/audio.c
 DAEMON   = src/nexusqd.c $(SRC)
 CLI      = src/nexusled.c src/avr.c src/frame.c
 TESTS    = $(wildcard tests/test_*.c)
