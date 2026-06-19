@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,632 @@
+@@ -0,0 +1,682 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -613,8 +613,25 @@ index 0000000..abcdef1
 +&mcbsp2 {
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&mcbsp2_pins>;
-+	assigned-clocks = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
-+	assigned-clock-parents = <&abe_24m_fclk>;
++	/*
++	 * McBSP2 functional clock tree (ABE clkctrl @ 0x30):
++	 *   bit 26 = func_mcbsp2_gfclk sync mux  -> abe_24m_fclk (24.576 MHz)
++	 *   bit 24 = func_mcbsp2_gfclk           -> bit 26 (its sync mux)
++	 *
++	 * The previous DTS tried to reparent bit 24 directly to abe_24m_fclk,
++	 * but abe_24m_fclk is NOT a legal parent of bit 24 (its only parents are
++	 * "abe-clkctrl:0030:26", "pad_clks_ck", "slimbus_clk" -- see
++	 * drivers/clk/ti/clk-44xx.c omap4_func_mcbsp2_gfclk_parents[]). That
++	 * produced the boot error:
++	 *   clk: failed to reparent abe-clkctrl:0030:24 to abe_24m_fclk: -22
++	 * The internal SRG already runs at 24.576 MHz via the bit-26 default;
++	 * we now set the parents explicitly so the intent is unambiguous and the
++	 * invalid -EINVAL reparent is gone.
++	 */
++	assigned-clocks = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>,
++			  <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
++	assigned-clock-parents = <&abe_24m_fclk>,
++				 <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>;
 +	#sound-dai-cells = <0>;
 +	status = "okay";
 +};
@@ -667,3 +684,36 @@ index 0000000..abcdef1
 +&v2v1 {
 +	regulator-always-on;
 +};
++
++/*
++ * Disable genuinely-unused OMAP4 interconnect target-modules that otherwise
++ * print failed-probe noise during boot (see docs/2026-06-19-boot-warnings-followup.md).
++ *
++ * Hardware RNG (0x48091fe0 / rng_target): lives in the l4_secure clock domain.
++ * On this U-Boot-booted GP-style flow the secure clkctrl fck is not exposed, so
++ * ti-sysc fails with "clock get error for fck: -2" (-ENOENT). The Nexus Q does
++ * not use the on-chip hwrng -> disable it to silence the probe failure.
++ */
++&rng_target {
++	status = "disabled";
++};
++
++/*
++ * HDQ / 1-wire (0x480b2000): battery/EEPROM 1-wire master. The Nexus Q has no
++ * HDQ/1-wire device wired, the module is left unclocked, and ti-sysc reports
++ * "OCP softreset timed out" when it tries to reset it. Disable it.
++ * (Node has no label upstream, so reference it by full path.)
++ */
++&{/ocp/interconnect@48000000/segment@0/target-module@b2000} {
++	status = "disabled";
++};
++
++/*
++ * NOTE on the remaining ti-sysc message:
++ *   ti-sysc 4a318000.target-module: probe ... failed with error -16 (-EBUSY)
++ * That module is GPTIMER1 (timer1_target), the always-on system clockevent
++ * ("TI gptimer clockevent: always-on 32768 Hz ..."). The OMAP timer core claims
++ * the timer directly, so ti-sysc legitimately sees the region busy. This is
++ * expected on every OMAP4 board and MUST NOT be disabled (it would break
++ * timekeeping). Left as-is intentionally.
++ */
