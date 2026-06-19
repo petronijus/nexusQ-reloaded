@@ -11,7 +11,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | ✅ works | ALSA `card0 HDMI` registers; needs a quick `speaker-test` |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
-| WiFi (BCM4330) | ✅ works | original `bcmdhd.cal` nvram (staged via `scripts/setup-firmware.sh`, not in repo), NM autoconnect |
+| WiFi (BCM4330) | 🟡 connects, bulk flaky | assoc + small packets fine, but **can't sustain bulk transfers** (driver/firmware, not signal −33dBm/channel/regdomain; stuck 54Mb/s, no 11n, clm_blob missing). Deploy over the USB gadget net. NEEDS INVESTIGATION — see `docs/2026-06-20-session-handoff.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
 | **TAS5713 amplifier** | 🟡 chip alive, no audio path | I2C driver bound (`3-001b`), reset/pdn GPIOs OK; missing: sound card node (McBSP2 I2S → TAS5713) + 12.288 MHz MCLK |
 | Bluetooth (BCM4330) | 🟡 almost | `hci0` registers, wants firmware named `BCM.hcd` -- we have it (staged via `scripts/setup-firmware.sh`, not in repo) |
@@ -130,9 +130,15 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       breathes a uniform `#0099CC × A` (#000F14 ↔ #007AA3, 10 s cosine), 5 s fade-in,
       locks dim after 300 s without audio, blanks after 600 s. Compositor layer priority 5;
       `nexusled auto` resumes it after a manual override. Verified live (breathing + colors).
-- [ ] **Plan 3b (music-reactive):** the waveform/pointmorph/icebox/starfield/circles nodes
-      driven by `AudioCapture` (FFT). Gated on the audio path (§1). Assets + decompiled
-      sources in the private overlay (`private/nexusq-original/`).
+- [x] **Plan 3b music-reactive (done 2026-06-20):** all 5 scenes (Waveform/WaveformSolid/
+      Circles/PointMorph/StarField) + AudioCapture/FFT/BeatProcessor ported pixel-perfect from
+      the decompiled `Visualizer.apk` and wired into `nexusqd` (audio tap = arecord on the
+      snd-aloop loopback). Verified live: a track played into the loopback drives the ring.
+      RE: `docs/2026-06-19-music-effects-RE.md`. Audio source for now is the loopback (local
+      WAV or, once the WiFi bulk issue is fixed, librespot/Spotify Connect "Nexus Q").
+- [ ] LED follow-ons: Spotify-driven (blocked by the WiFi bulk issue, see §WiFi /
+      `docs/2026-06-20-session-handoff.md`); scene auto-cycling (FadeTransition not ported);
+      ship the musl apk (currently a static binary deployed over USB).
 
 ### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
