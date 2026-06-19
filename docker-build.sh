@@ -224,7 +224,11 @@ cat > "$XDG_CONFIG_HOME/pmbootstrap_v3.cfg" << CFGEOF
 aports = $PMAPORTS
 work = $WORK
 device = google-steelhead
-ui = console
+# Lightweight Wayland desktop on the HDMI port: weston with the pixman software
+# renderer (no GPU driver yet — see docs/2026-06-19-gpu-sgx540-acceleration-
+# research.md). The device package ships the device-specific weston.ini +
+# tinydm session. Replaced the earlier XFCE/X11 desktop (removed 2026-06-19).
+ui = weston
 build_pkgs_on_install = True
 hostname = steelhead
 extra_packages = none

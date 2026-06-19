@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Weston (Nexus Q)
+Comment=Weston with the device config (pixman SW renderer, headless-tolerant)
+# Explicit --config so weston loads /etc/xdg/weston/weston.ini (it only searches
+# $XDG_CONFIG_HOME otherwise) and therefore selects the pixman renderer.
+Exec=weston --config=/etc/xdg/weston/weston.ini
+Type=Application
+DesktopNames=Weston

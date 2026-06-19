@@ -44,13 +44,23 @@ The reason this device exists. **🟠 SW path verified 2026-06-10, speaker outpu
       (DVI-era panel) provides no audio EDID ("timeout reading edid").
       Retest against a real TV/AV receiver -- expected to work.
 
-### 4. GUI: lightweight desktop (XFCE4)
+### 4. GUI: lightweight Wayland desktop (weston)  ✅ DONE 2026-06-19
 Decision: device runs **primarily headless**; desktop is for occasional
-debugging/ops on the HDMI port. Normal desktop (not mobile UI).
-- [x] `apk add postmarketos-ui-xfce4` -- done 2026-06-10, lightdm enabled,
-      graphical.target default, screen blanking disabled (no input to wake it)
-- [x] software rendering only (PowerVR SGX540 has no mainline driver) --
-      single core means "retro PC" responsiveness, fine for the purpose
+debugging/ops on the HDMI port. Switched X11/XFCE → Wayland/weston so the
+future SGX540 GPU path is viable (X11/glamor ES2 is the broken path on the SGX
+blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
+- [x] **was** XFCE4 + lightdm (2026-06-10, X11, llvmpipe). **Removed 2026-06-19**
+      (`apk del postmarketos-ui-xfce4 lightdm`).
+- [x] **now** `postmarketos-ui-weston` + `tinydm` (auto-login, no greeter).
+      Reproducible: `docker-build.sh` `ui = weston`; device package ships
+      `/etc/xdg/weston/weston.ini` + `weston-nexusq.desktop` session + a
+      post-install that sets the default tinydm session.
+- [x] **pixman** SW renderer forced (`[core] renderer=pixman` + explicit
+      `--config`): lighter than GL-on-llvmpipe on the single A9. Idle bg #000F14.
+- [x] headless-tolerant: `require-input=false` (DRM backend otherwise aborts
+      with "failed to create input devices" -- no keyboard/mouse attached).
+- [x] verified live on `192.168.20.179`: weston auto-starts on HDMI-A-1
+      (1024x768@60), survives reboot, ~190 MB RAM.
 - [ ] input: BT keyboard (after #2) or USB OTG adapter (sacrifices gadget
       network -- acceptable once WiFi is the primary link)
 

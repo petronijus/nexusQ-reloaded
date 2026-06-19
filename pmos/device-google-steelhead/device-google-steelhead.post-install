@@ -1,0 +1,9 @@
+#!/bin/sh
+# Make the device-specific weston session (pixman, headless-tolerant) the
+# default tinydm session. Done as a plain symlink so it does not depend on
+# tinydm-set-session being present at the moment this package is configured.
+mkdir -p /var/lib/tinydm
+ln -sf /usr/share/wayland-sessions/weston-nexusq.desktop \
+	/var/lib/tinydm/default-session.desktop
+
+exit 0

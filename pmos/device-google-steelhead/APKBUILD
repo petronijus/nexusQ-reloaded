@@ -15,10 +15,14 @@ depends="
 	postmarketos-base
 "
 makedepends="devicepkg-dev"
+install="$pkgname.post-install"
 subpackages="$pkgname-nonfree-firmware:nonfree_firmware"
 source="
 	deviceinfo
 	modules-initfs
+	weston.ini
+	weston-nexusq.desktop
+	$pkgname.post-install
 "
 
 build() {
@@ -27,6 +31,16 @@ build() {
 
 package() {
 	devicepkg_package $startdir $pkgname
+
+	# Device-specific weston config (pixman SW renderer, headless-tolerant)
+	# and the matching tinydm session. The UI itself (postmarketos-ui-weston)
+	# is installed via the build's `ui = weston`; here we only override its
+	# defaults for this headless single-core OMAP4 board. The default tinydm
+	# session is wired up by the post-install script.
+	install -Dm644 "$srcdir"/weston.ini \
+		"$pkgdir"/etc/xdg/weston/weston.ini
+	install -Dm644 "$srcdir"/weston-nexusq.desktop \
+		"$pkgdir"/usr/share/wayland-sessions/weston-nexusq.desktop
 }
 
 nonfree_firmware() {
@@ -38,4 +52,7 @@ nonfree_firmware() {
 sha512sums="
 SKIP  deviceinfo
 SKIP  modules-initfs
+SKIP  weston.ini
+SKIP  weston-nexusq.desktop
+SKIP  device-google-steelhead.post-install
 "
