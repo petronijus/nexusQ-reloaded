@@ -15,11 +15,19 @@ at boot (verified across a reboot; clean boot, no failed services).
 - Source of truth: `kernel/drivers/{steelhead_avr.h,leds-steelhead-avr.c,leds-steelhead-avr-test.c}`, shipped via `kernel/patches/0005-leds-add-steelhead-avr.patch`, enabled in `kernel/configs/steelhead_defconfig` (=m).
 - Spec: `docs/superpowers/specs/2026-06-19-nexusq-led-ring-driver-design.md`; plan: `docs/superpowers/plans/2026-06-19-led-ring-kernel-driver.md`.
 
-### 🔧 Plan 2 — `nexusqd` daemon (C + postmarketOS aport) — IN PROGRESS
-Plan: `docs/superpowers/plans/2026-06-19-nexusqd-daemon.md` (C11, no deps, proper musl aport — no shortcuts).
-- **Task 1 DONE** (`userspace/nexusqd/`): `frame` model + 96-byte packing + host test harness + Makefile. `make test` → green, 0 warnings.
-- **Tasks 2–8 REMAIN:** themes parser, keys (evdev decode), control parser, avr+compositor, daemon main, nexusled CLI, the `pmos/nexusqd` aport. Each task is fully specced with code + tests in the plan.
-- **Correction from the RE (below):** the idle color in the plan/daemon should be **`#000F14`**, NOT `0x00385c`. Fix `idle_render`'s default in Task 6 accordingly.
+### ✅ Plan 2 — `nexusqd` daemon (C + postmarketOS aport) — DONE (2026-06-19, on Linux)
+Plan: `docs/superpowers/plans/2026-06-19-nexusqd-daemon.md` (C11, no deps, proper musl aport — no shortcuts). All 8 tasks committed + pushed (`0dfac30`→`5bd98d8`).
+- **Tasks 1–5** (`userspace/nexusqd/`): `frame`, `themes` (no-dep JSON), `keys` (evdev decode + node scan), `control` (cmd parser), `avr` (sysfs out) + `compositor` (priority layers). `make test` → 4/4 green, 0 warnings (host + cross).
+- **Task 6** `nexusqd.c`: idle layer (`0x00385c`), `/run/nexusqd.sock` control, mute key, **inactive priority-10 reaction-layer seam** (Plan 2b). Cross-built static (ARM 13.3) + smoke-tested live: idle/colors/mute confirmed by hand.
+- **Task 7** `nexusled` CLI + `nexusqd.service`: socket path + direct-sysfs fallback, both verified live.
+- **Task 8** `pmos/nexusqd/APKBUILD` + `docker-build.sh` staging (Phase 2 validate, Phase 6 stage aport+sources→`main/nexusqd`, Phase 7c build+export apk). Autostart enabled declaratively via the `multi-user.target.wants` symlink. **Autostart-after-reboot verified** on device (static functional install: `active`/`enabled`, PID 416 at boot, idle ring confirmed).
+- **Fixes made vs the plan code:** `_POSIX_C_SOURCE 200809L` in `nexusqd.c`/`nexusled.c` (else `clock_gettime` etc. hidden under `-std=c11`); `test_keys.c` offsets via `INPUT_EVENT_SIZE` (plan hardcoded 16 → invalid on 64-bit host); guarded `fgets`/`write` returns (0-warnings).
+- **Current device state:** **static** `/usr/bin/{nexusqd,nexusled}` + `/etc/systemd/system/nexusqd.service` (works on musl, no deps). When `docker-build.sh` runs, `apk add nexusqd-*.apk` replaces them with the musl build.
+- **NOTE — idle color:** the RE doc says true idle is **`#000F14`**, not the plan default `0x00385c`. This (+ pixel-perfect volume/mute) is deferred to **Plan 2b**, the priority-10 reaction layer seam already wired in Task 6.
+
+### 🛠️ Build env on Linux (this box, `petronijus-PC`)
+- ARM GNU Toolchain **13.3.Rel1** installed at `/home/petronijus/nexusq-build/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-linux-gnueabihf/`. Host gcc 15.2 covers the unit tests.
+- `pmbootstrap` NOT installed — the Task 8 apk build runs via the Docker pipeline (`docker-build.sh`), not natively.
 
 ### 🎯 Volume/mute/idle behavior — REVERSE-ENGINEERED (exact) — `docs/2026-06-19-volume-mute-RE.md`
 Deodexed `TungstenLEDService` (`SystemStatusReceiver`) + `LedController`. Headlines:
@@ -61,6 +69,7 @@ at boot; `nexusled` (once Plan 2 ships) or direct sysfs (`/sys/bus/i2c/devices/1
 - **Verify LED behavior visually on real hardware** — `rc=0` is not proof (this hid the SET_RANGE `rgb_triples` bug and the stale-patch-0005 bug). See memory `always-most-correct-path`.
 
 ## Suggested next steps (in order)
-1. Plan 2 Tasks 2–8 (themes → keys → control → avr/compositor → daemon → CLI → aport), folding in the exact idle/volume/mute from the RE doc (idle `#000F14`; reaction layer pixel-perfect).
-2. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.
-3. Plan 3 — music visualizer (audio tap + FFT + ported shaders).
+1. **Plan 2b** — pixel-perfect volume-ring + mute + true idle `#000F14`, implemented in the inactive priority-10 reaction-layer seam already wired in `nexusqd.c` (Task 6), using the exact algorithm in `docs/2026-06-19-volume-mute-RE.md`. No approximation.
+2. Run the **Docker pipeline** (`docker-build.sh`) to build the real `nexusqd-*.apk` (musl) and `apk add` it on the device, replacing the static `/usr/bin` binaries.
+3. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.
+4. Plan 3 — music visualizer (audio tap + FFT + ported shaders).

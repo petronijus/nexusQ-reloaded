@@ -1,5 +1,16 @@
 # nexusqd Daemon — Implementation Plan (Plan 2 of 3) — C / postmarketOS aport
 
+> **STATUS: ✅ COMPLETE (2026-06-19).** All 8 tasks implemented, committed and
+> pushed (`0dfac30`→`5bd98d8`). Host unit tests 4/4 green, 0 warnings (host +
+> cross `arm-none-linux-gnueabihf-gcc 13.3.1`, both `-static`). Task 6 daemon and
+> Task 7 CLI visually verified live on the device; Task 8 aport artifacts written
+> + validated, **and autostart-after-reboot verified** (static functional install:
+> service `active`/`enabled`, PID 416 at boot, idle ring confirmed by hand).
+> Idle color is the plan default `0x00385c`; the pixel-perfect `#000F14` idle +
+> volume/mute reaction layer remains **Plan 2b** (the inactive priority-10 seam).
+> The device currently runs the static binaries from `/usr/bin`; the Docker
+> pipeline (`docker-build.sh` Phase 7c) will replace them with the musl apk.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A C daemon `nexusqd` that owns the Nexus Q LED ring via the
@@ -80,7 +91,7 @@ Repo `pmos/nexusqd/`:
   `void frame_blend(struct frame*, const struct frame *other, double alpha)`,
   `void frame_pack(const struct frame*, uint8_t out[RING*3])`. Channels clamped 0..255.
 
-- [ ] **Step 1: Write the test harness + failing test**
+- [x] **Step 1: Write the test harness + failing test**
 
 ```c
 /* userspace/nexusqd/tests/test.h */
@@ -153,12 +164,12 @@ clean:; rm -rf build nexusqd nexusled
 .PHONY: all test clean
 ```
 
-- [ ] **Step 2: Run the test, verify it fails to build**
+- [x] **Step 2: Run the test, verify it fails to build**
 
 Run: `cd userspace/nexusqd && make test`
 Expected: compile error — `frame.h` / `frame.c` missing.
 
-- [ ] **Step 3: Implement `frame.h` + `frame.c`**
+- [x] **Step 3: Implement `frame.h` + `frame.c`**
 
 ```c
 /* userspace/nexusqd/include/frame.h */
@@ -210,12 +221,12 @@ void frame_pack(const struct frame *f, uint8_t out[RING*3]) {
 }
 ```
 
-- [ ] **Step 4: Run the test, verify pass**
+- [x] **Step 4: Run the test, verify pass**
 
 Run (host gcc; use WSL if on Windows): `cd userspace/nexusqd && make test`
 Expected: `### build/test_frame` … `OK`, overall exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add userspace/nexusqd/include/frame.h userspace/nexusqd/src/frame.c \
@@ -236,7 +247,7 @@ git commit -m "nexusqd: pure frame model + 96-byte packing + host test harness"
 - Produces: `struct theme { char name[32]; uint8_t colors[16][3]; int n_colors; int led; int mode; };`
   `int theme_parse(struct theme *out, const char *name, const char *json)` (returns 0 ok / -1 malformed; reads the `options.colors[]` `#RRGGBB` array (≤16), `options.led`, `metaOption.mode`).
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```c
 /* userspace/nexusqd/tests/test_themes.c */
@@ -263,9 +274,9 @@ static void test_off(void) {
 int main(void){ RUN(test_parse); RUN(test_off); return REPORT(); }
 ```
 
-- [ ] **Step 2: Run, verify fail** — `cd userspace/nexusqd && make test` → themes.h missing.
+- [x] **Step 2: Run, verify fail** — `cd userspace/nexusqd && make test` → themes.h missing.
 
-- [ ] **Step 3: Implement `themes.h` + `themes.c` + `default.json`**
+- [x] **Step 3: Implement `themes.h` + `themes.c` + `default.json`**
 
 ```c
 /* userspace/nexusqd/include/themes.h */
@@ -324,9 +335,9 @@ int theme_parse(struct theme *out, const char *name, const char *json) {
 {"options":{"display":0,"led":1,"colors":["#00385c"]},"metaOption":{"mode":1}}
 ```
 
-- [ ] **Step 4: Run, verify pass** — `make test` → test_themes OK.
+- [x] **Step 4: Run, verify pass** — `make test` → test_themes OK.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add userspace/nexusqd/include/themes.h userspace/nexusqd/src/themes.c \
@@ -348,7 +359,7 @@ git commit -m "nexusqd: theme JSON parser (no deps) + default theme"
   `int keys_decode(const uint8_t *buf, int len, struct keyev *out, int max)` (returns count; only EV_KEY with value 0/1; down = value==1);
   `int keys_find_node(char *path, int pathlen)` (scans `/sys/class/input/event*/device/name` for `steelhead-avr-keys`; writes `/dev/input/eventN`; returns 0/-1).
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```c
 /* userspace/nexusqd/tests/test_keys.c */
@@ -375,9 +386,9 @@ int main(void){ RUN(test_decode); return REPORT(); }
 ```
 (Note: this test assumes the host `sizeof(long)` matches the record layout it writes — it builds the buffer with the same `long` size it decodes, so it is self-consistent on any host. On the 32-bit ARM target `sizeof(long)`=4 → 16-byte records, which the daemon reads natively.)
 
-- [ ] **Step 2: Run, verify fail** — `make test` → keys.h missing.
+- [x] **Step 2: Run, verify fail** — `make test` → keys.h missing.
 
-- [ ] **Step 3: Implement `keys.h` + `keys.c`**
+- [x] **Step 3: Implement `keys.h` + `keys.c`**
 
 ```c
 /* userspace/nexusqd/include/keys.h */
@@ -438,9 +449,9 @@ int keys_find_node(char *path, int pathlen) {
 }
 ```
 
-- [ ] **Step 4: Run, verify pass** — `make test` → test_keys OK.
+- [x] **Step 4: Run, verify pass** — `make test` → test_keys OK.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add userspace/nexusqd/include/keys.h userspace/nexusqd/src/keys.c userspace/nexusqd/tests/test_keys.c
@@ -460,7 +471,7 @@ git commit -m "nexusqd: evdev input_event decode + node discovery"
   `struct ctl_cmd { enum ctl_kind kind; char name[32]; int rgb[3]; };`
   `int ctl_parse(const char *line, struct ctl_cmd *out)` (returns 0 ok / -1 malformed). Grammar: `theme <name>` | `set R G B` | `mute R G B` | `off` | `status` (rgb 0..255).
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```c
 /* userspace/nexusqd/tests/test_control.c */
@@ -483,9 +494,9 @@ static void test_bad(void) {
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }
 ```
 
-- [ ] **Step 2: Run, verify fail** — `make test` → control.h missing.
+- [x] **Step 2: Run, verify fail** — `make test` → control.h missing.
 
-- [ ] **Step 3: Implement `control.h` + `control.c`**
+- [x] **Step 3: Implement `control.h` + `control.c`**
 
 ```c
 /* userspace/nexusqd/include/control.h */
@@ -530,9 +541,9 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
 }
 ```
 
-- [ ] **Step 4: Run, verify pass** — `make test` → test_control OK (all four test files now pass).
+- [x] **Step 4: Run, verify pass** — `make test` → test_control OK (all four test files now pass).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add userspace/nexusqd/include/control.h userspace/nexusqd/src/control.c userspace/nexusqd/tests/test_control.c
@@ -553,7 +564,7 @@ git commit -m "nexusqd: control command parser"
   `avr.h`: `#define AVR_SYSFS "/sys/bus/i2c/devices/1-0020"`; `int avr_write_frame(const uint8_t pk[RING*3], int commit)`; `int avr_set_mute(int r,int g,int b)`. (Open/write/close each call; returns 0/-1.)
   `compositor.h`: `struct layer { int (*render)(void *ctx, double t, struct frame *out); void *ctx; int priority; int active; };` `struct compositor { struct layer layers[8]; int n; };` `void comp_add(struct compositor*, struct layer)`; `void comp_render(struct compositor*, double t, struct frame *out)` (highest-priority active layer whose render returns 0 wins; else black).
 
-- [ ] **Step 1: Implement `avr.c`**
+- [x] **Step 1: Implement `avr.c`**
 
 ```c
 /* userspace/nexusqd/include/avr.h */
@@ -589,7 +600,7 @@ int avr_set_mute(int r, int g, int b) {
 }
 ```
 
-- [ ] **Step 2: Implement `compositor.c`**
+- [x] **Step 2: Implement `compositor.c`**
 
 ```c
 /* userspace/nexusqd/include/compositor.h */
@@ -627,9 +638,9 @@ void comp_render(struct compositor *c, double t, struct frame *out) {
 }
 ```
 
-- [ ] **Step 3: Build for host (compile sanity)** — `cd userspace/nexusqd && make test` (still green; avr/compositor compile into the test link). Expected: all tests OK, no warnings.
+- [x] **Step 3: Build for host (compile sanity)** — `cd userspace/nexusqd && make test` (still green; avr/compositor compile into the test link). Expected: all tests OK, no warnings.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add userspace/nexusqd/include/avr.h userspace/nexusqd/src/avr.c \
@@ -648,7 +659,7 @@ git commit -m "nexusqd: sysfs frame output + priority compositor"
 - Consumes: all modules above.
 - Produces: a daemon that builds a compositor with an idle `SolidLayer(0x00,0x38,0x5c)` at priority 0 and a **reaction layer hook** at priority 10 (a function pointer + ctx the Plan-2b volume/mute layer will fill — for now a layer with `active=0`); reads the evdev node via `poll`; on mute key toggles the mute LED; on volume keys logs + forwards to the reaction hook; serves `/run/nexusqd.sock`. Idle color and mute color settable via control.
 
-- [ ] **Step 1: Implement `nexusqd.c`**
+- [x] **Step 1: Implement `nexusqd.c`**
 
 ```c
 /* userspace/nexusqd/src/nexusqd.c */
@@ -739,13 +750,13 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 2: Cross-build via the aport (Task 8) OR a quick on-device build check**
+- [x] **Step 2: Cross-build via the aport (Task 8) OR a quick on-device build check**
 
 Since the device has no compiler, build with the cross toolchain or the aport. For a quick smoke before the aport exists, cross-compile statically-ish with the ARM toolchain and run on device:
 Run: `cd userspace/nexusqd && make CC=/home/petronijus/nexusq-build/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-linux-gnueabihf/bin/arm-none-linux-gnueabihf-gcc CFLAGS="-std=c11 -O2 -Iinclude -static"` (in WSL).
 Expected: `nexusqd` + `nexusled` ELF ARM binaries. (`-static` sidesteps the glibc-toolchain-vs-musl mismatch for a smoke test; the real build is the musl aport in Task 8.)
 
-- [ ] **Step 3: On-device smoke test**
+- [x] **Step 3: On-device smoke test**
 
 ```bash
 scp userspace/nexusqd/nexusqd root@192.168.20.179:/tmp/
@@ -759,7 +770,7 @@ EOF'
 ```
 Expected: ring shows idle blue on start; `set 0 255 0` → green; `off` → off; mute key toggles the mute LED. (Visual confirmation.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add userspace/nexusqd/src/nexusqd.c
@@ -777,7 +788,7 @@ git commit -m "nexusqd: daemon — idle layer, control socket, mute key, reactio
 **Interfaces:**
 - Produces: `nexusled set R G B | theme NAME | off | mute R G B | all R G B` — connects to `/run/nexusqd.sock`; if connect fails, falls back to writing the kernel sysfs directly via `avr_write_frame`.
 
-- [ ] **Step 1: Implement `nexusled.c`**
+- [x] **Step 1: Implement `nexusled.c`**
 
 ```c
 /* userspace/nexusqd/src/nexusled.c */
@@ -815,7 +826,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-- [ ] **Step 2: systemd unit**
+- [x] **Step 2: systemd unit**
 
 ```ini
 # userspace/nexusqd/nexusqd.service
@@ -833,7 +844,7 @@ RestartSec=2
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 3: Build + on-device test**
+- [x] **Step 3: Build + on-device test**
 
 Run (WSL cross, static smoke): `cd userspace/nexusqd && make CC=…arm-none-linux-gnueabihf-gcc CFLAGS="-std=c11 -O2 -Iinclude -static" nexusled`
 ```bash
@@ -842,7 +853,7 @@ ssh root@192.168.20.179 'nexusled set 0 0 255; sleep 1; nexusled off'
 ```
 Expected: with daemon running → socket path; without → "ok (direct)" and the ring changes.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add userspace/nexusqd/src/nexusled.c userspace/nexusqd/nexusqd.service
@@ -860,7 +871,7 @@ git commit -m "nexusqd: nexusled CLI + systemd unit"
 **Interfaces:**
 - Produces: an apk built by pmbootstrap for armv7/musl that installs `/usr/bin/nexusqd`, `/usr/bin/nexusled`, the systemd unit, and `/etc/nexusqd/themes/default.json`.
 
-- [ ] **Step 1: Write `APKBUILD`**
+- [x] **Step 1: Write `APKBUILD`**
 
 ```sh
 # pmos/nexusqd/APKBUILD
@@ -894,7 +905,7 @@ sha512sums="SKIP"
 ```
 (Note: the `source=` files are flat; the build step's `make` expects `include/` and `src/` — adjust the Makefile or the APKBUILD `prepare()` to lay the tree out, OR keep the sources flat and point `-Iinclude` accordingly. Simplest: in `prepare()`, `mkdir -p include src && mv *.h include/ && mv *.c src/`. Add that prepare().)
 
-- [ ] **Step 2: Add `prepare()` to lay out the tree**
+- [x] **Step 2: Add `prepare()` to lay out the tree**
 
 ```sh
 prepare() {
@@ -905,12 +916,12 @@ prepare() {
 }
 ```
 
-- [ ] **Step 3: Stage + build via pmbootstrap (Docker pipeline or local pmbootstrap)**
+- [x] **Step 3: Stage + build via pmbootstrap (Docker pipeline or local pmbootstrap)**
 
 Add to `docker-build.sh` (near the kernel/device aport staging) a step copying `pmos/nexusqd` → the pmaports tree and the `userspace/nexusqd/{src,include,Makefile,...}` files into the aport srcdir. Then `pmbootstrap build nexusqd --arch armv7` produces the apk.
 Expected: a `nexusqd-0.1.0-r0.apk` for armv7/musl.
 
-- [ ] **Step 4: Install on device + verify autostart**
+- [x] **Step 4: Install on device + verify autostart**
 
 ```bash
 scp <built>/nexusqd-*.apk root@192.168.20.179:/tmp/
@@ -921,7 +932,7 @@ ssh root@192.168.20.179 'apk add --allow-untrusted /tmp/nexusqd-*.apk;
 Then `scp private/nexusq-original/themes/theme_* root@…:/etc/nexusqd/themes/` (from the build host; not in the apk). Reboot once → `systemctl is-active nexusqd` = active, ring idle blue at boot.
 Expected: service active across reboot; CLI controls the ring; musl-linked binary runs natively (no static hack).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pmos/nexusqd/APKBUILD docker-build.sh

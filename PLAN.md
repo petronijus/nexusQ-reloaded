@@ -18,7 +18,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | TWL6040 codec | 🟡 deferred | driver never binds; `omap-abe-twl6040` card loops on -EPROBE_DEFER |
 | NFC (PN544) | 🟡 detected | i2c device `2-0028` present, driver not loaded |
 | TMP101 temp sensor | 🟡 detected | i2c device `1-0048`, needs `modprobe lm75` |
-| LED ring (32× RGB) | 🔴 long-term | behind `steelhead-avr` MCU (i2c `1-0020`) -- no mainline driver exists, must be written |
+| LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`) |
 | Ethernet (LAN9500A) | 🔴 dead hardware | enable pad clamped low; verified down to ULPI/PORTSC level -- do not revisit |
 | SMP (2nd core) | 🔴 disabled | U-Boot leaves CPU1 undefined; needs custom holding-pen / CPU1 reset |
 
@@ -82,7 +82,7 @@ the dead TWL6040 codec. `spdif_dit` node already exists in the DTS.
 - [ ] until then workaround: power-cycle again
 - Candidates: U-Boot DRAM init, kernel early race
 
-### 9. LED ring  🟠 PROTOCOL CONFIRMED LIVE 2026-06-19
+### 9. LED ring  ✅ DONE 2026-06-19 (driver + daemon)
 The 32 RGB LEDs sit behind the steelhead-AVR MCU (i2c `1-0020`, DT node
 `avr@20` compatible "google,steelhead-avr"). The AVR speaks a simple
 register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
@@ -94,9 +94,16 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
 - [x] verified from userspace via /dev/i2c-1 (no driver bound): AVR reports
       HW_TYPE=0x01 (SPHERE), LED count=32; "HOST mode + SET_ALL dim-blue +
       COMMIT" lit the whole ring blue. Reads work with plain write-then-read.
-- [ ] deliverable: userspace control tool, and/or port AOSP
-      `drivers/misc/steelhead_avr.c` to a mainline 6.12 driver (leds-class /
-      input for the mute/volume keys; DT node already present)
+- [x] **driver (Plan 1):** mainline 6.12 `leds-steelhead-avr` — multicolor LED
+      class for the 32 ring + mute, batch `frame` sysfs channel, mute/volume keys
+      via threaded IRQ, AVR-reset restore. Merged to `main`, auto-loads at boot,
+      validated live. Plan: `docs/superpowers/plans/2026-06-19-led-ring-kernel-driver.md`.
+- [x] **daemon + CLI (Plan 2):** `nexusqd` (C11/musl) — idle glow, theme palettes,
+      `/run/nexusqd.sock` control + `nexusled` CLI, mute key, postmarketOS aport,
+      systemd autostart (verified across reboot). `userspace/nexusqd/`, `pmos/nexusqd/`.
+      Plan: `docs/superpowers/plans/2026-06-19-nexusqd-daemon.md`.
+- [ ] **Plan 2b:** pixel-perfect volume-ring + mute + true idle `#000F14` in the
+      priority-10 reaction-layer seam (exact algo in `docs/2026-06-19-volume-mute-RE.md`).
 
 ### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
