@@ -26,5 +26,11 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
     if (!strcmp(tok[0], "mute") && n == 4) { out->kind = CTL_MUTE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "off") && n == 1)    { out->kind = CTL_OFF; return 0; }
     if (!strcmp(tok[0], "status") && n == 1) { out->kind = CTL_STATUS; return 0; }
+    if (!strcmp(tok[0], "mtoggle") && n == 1){ out->kind = CTL_MTOGGLE; return 0; }
+    if (!strcmp(tok[0], "vol") && n == 2) {
+        char *e; long v = strtol(tok[1], &e, 10);
+        if (*e != 0 || v < 0 || v > 100) return -1;
+        out->kind = CTL_VOL; out->value = (int)v; return 0;
+    }
     return -1;
 }

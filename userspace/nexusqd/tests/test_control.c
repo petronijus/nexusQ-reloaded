@@ -9,10 +9,15 @@ static void test_ok(void) {
     CHECK(ctl_parse("mute 0 64 0", &c) == 0 && c.kind == CTL_MUTE && c.rgb[1]==64);
     CHECK(ctl_parse("off", &c) == 0 && c.kind == CTL_OFF);
     CHECK(ctl_parse("status", &c) == 0 && c.kind == CTL_STATUS);
+    CHECK(ctl_parse("mtoggle", &c) == 0 && c.kind == CTL_MTOGGLE);
+    CHECK(ctl_parse("vol 0", &c) == 0 && c.kind == CTL_VOL && c.value == 0);
+    CHECK(ctl_parse("vol 100", &c) == 0 && c.kind == CTL_VOL && c.value == 100);
+    CHECK(ctl_parse("vol 55", &c) == 0 && c.kind == CTL_VOL && c.value == 55);
 }
 static void test_bad(void) {
     struct ctl_cmd c;
-    const char *bad[] = {"", "set 1 2", "set 1 2 999", "theme", "bogus", NULL};
+    const char *bad[] = {"", "set 1 2", "set 1 2 999", "theme", "bogus",
+                         "vol", "vol 101", "vol -1", "vol x", "vol 5 5", "mtoggle x", NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }

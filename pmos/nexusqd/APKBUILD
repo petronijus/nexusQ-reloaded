@@ -13,7 +13,7 @@ options="!check"   # unit tests run on the host CI, not in the cross build
 # (from userspace/nexusqd/{src,include,Makefile,...}); prepare() restores the tree.
 source="
 	frame.c frame.h themes.c themes.h avr.c avr.h compositor.c compositor.h
-	keys.c keys.h control.c control.h nexusqd.c nexusled.c
+	keys.c keys.h control.c control.h reaction.c reaction.h nexusqd.c nexusled.c
 	Makefile nexusqd.service default.json
 "
 builddir="$srcdir"
