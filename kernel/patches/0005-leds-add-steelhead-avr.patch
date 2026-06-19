@@ -1,0 +1,657 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nexus Q Reloaded <nexusq@localhost>
+Date: Wed, 1 Jan 2025 00:00:00 +0000
+Subject: [PATCH 5/5] leds: add Google Nexus Q (steelhead) AVR LED ring driver
+
+Add the steelhead-AVR LED ring + keys driver for the Google Nexus Q
+(codename steelhead). The AVR MCU on i2c2 drives 32 RGB ring LEDs plus a
+mute LED and reports the capacitive mute/volume keys.
+
+Registers a multicolor LED class device per LED (mute + 32 ring), a
+"frame" binary sysfs attribute for whole-ring updates, and an input
+device for the keys. Includes KUnit tests for the pure-logic encode/
+decode helpers.
+
+Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+---
+ drivers/leds/Kconfig                    |  15 +
+ drivers/leds/Makefile                   |   2 +
+ drivers/leds/leds-steelhead-avr-test.c  |  57 +++
+ drivers/leds/leds-steelhead-avr.c       | 468 ++++++++++++++++++++++++
+ drivers/leds/steelhead_avr.h            |  49 +++
+ 5 files changed, 591 insertions(+)
+ create mode 100644 drivers/leds/leds-steelhead-avr-test.c
+ create mode 100644 drivers/leds/leds-steelhead-avr.c
+ create mode 100644 drivers/leds/steelhead_avr.h
+
+diff --git a/drivers/leds/steelhead_avr.h b/drivers/leds/steelhead_avr.h
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/drivers/leds/steelhead_avr.h
+@@ -0,0 +1,49 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Google Nexus Q (steelhead) front-panel AVR: 32 RGB ring LEDs + mute LED
++ * + capacitive mute/volume keys, over i2c. Register protocol from AOSP. */
++#ifndef _LEDS_STEELHEAD_AVR_H
++#define _LEDS_STEELHEAD_AVR_H
++
++#include <linux/types.h>
++
++#define AVR_REG_KEY_FIFO	0x00
++#define AVR_REG_MUTE_THRESH	0x01
++#define AVR_REG_LED_MODE	0x02
++#define   AVR_LED_MODE_BOOT_ANIM	0x00
++#define   AVR_LED_MODE_HOST_AUTO	0x01
++#define   AVR_LED_MODE_HOST		0x02
++#define   AVR_LED_MODE_POWERUP_ANIM	0x03
++#define AVR_REG_SET_ALL		0x03
++#define AVR_REG_SET_RANGE	0x04
++#define AVR_REG_COMMIT		0x05
++#define   AVR_COMMIT_IMMEDIATE	0x00
++#define   AVR_COMMIT_INTERPOLATE 0x01
++#define AVR_REG_SET_MUTE	0x06
++#define AVR_REG_GET_COUNT	0x07
++#define AVR_REG_HW_TYPE		0x08
++#define AVR_REG_HW_REV		0x09
++#define AVR_REG_FW_VER		0x0A
++
++#define AVR_KEY_DOWN		0x80
++#define AVR_KEY_CODE_MASK	0x3F
++#define AVR_KEY_RESET		0xFE
++#define AVR_KEY_EMPTY		0xFF
++#define AVR_KEYCODE_MUTE	0x00
++#define AVR_KEYCODE_VOL_UP	0x01
++#define AVR_KEYCODE_VOL_DOWN	0x02
++
++#define AVR_RING_LEDS		32
++#define AVR_I2C_RETRIES		5
++
++struct avr_rgb { u8 r, g, b; };
++
++/* Encode a SET_RANGE write into buf: [reg, start, count, r,g,b ...].
++ * Returns total bytes written, or -EINVAL on bad args / buffer too small. */
++int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
++			 const struct avr_rgb *leds, u8 count);
++
++/* Decode one KEY_FIFO byte. Returns 0 + fills keycode/down for a real key;
++ * -EAGAIN for EMPTY (0xFF); -ERESTART for RESET (0xFE); -EINVAL for unknown. */
++int avr_decode_key(u8 fifo_byte, u16 *keycode, bool *down);
++
++#endif /* _LEDS_STEELHEAD_AVR_H */
+
+diff --git a/drivers/leds/leds-steelhead-avr.c b/drivers/leds/leds-steelhead-avr.c
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/drivers/leds/leds-steelhead-avr.c
+@@ -0,0 +1,468 @@
++// SPDX-License-Identifier: GPL-2.0
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/input.h>
++#include <linux/i2c.h>
++#include <linux/gpio/consumer.h>
++#include <linux/mutex.h>
++#include <linux/delay.h>
++#include <linux/of.h>
++#include <linux/leds.h>
++#include <linux/led-class-multicolor.h>
++#include <linux/sysfs.h>
++#include "steelhead_avr.h"
++
++int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
++			 const struct avr_rgb *leds, u8 count)
++{
++	size_t need = 3 + (size_t)count * 3;
++	int i;
++
++	if (!buf || !leds || count == 0 || buflen < need)
++		return -EINVAL;
++	buf[0] = AVR_REG_SET_RANGE;
++	buf[1] = start;
++	buf[2] = count;
++	for (i = 0; i < count; i++) {
++		buf[3 + i*3 + 0] = leds[i].r;
++		buf[3 + i*3 + 1] = leds[i].g;
++		buf[3 + i*3 + 2] = leds[i].b;
++	}
++	return (int)need;
++}
++
++int avr_decode_key(u8 b, u16 *keycode, bool *down)
++{
++	u8 code;
++
++	if (b == AVR_KEY_EMPTY)
++		return -EAGAIN;
++	if (b == AVR_KEY_RESET)
++		return -ERESTART;
++	*down = !!(b & AVR_KEY_DOWN);
++	code = b & AVR_KEY_CODE_MASK;
++	switch (code) {
++	case AVR_KEYCODE_MUTE:     *keycode = KEY_MUTE;       return 0;
++	case AVR_KEYCODE_VOL_UP:   *keycode = KEY_VOLUMEUP;   return 0;
++	case AVR_KEYCODE_VOL_DOWN: *keycode = KEY_VOLUMEDOWN; return 0;
++	default:                   return -EINVAL;
++	}
++}
++
++/* The AVR runs a boot sequence after reset and may NAK i2c for up to a
++ * second or more before it is ready. Poll for readiness rather than using a
++ * fixed delay. */
++#define AVR_READY_POLL_MS	50
++#define AVR_READY_TIMEOUT_MS	2000
++
++struct avr_dev {
++	struct i2c_client *client;
++	struct gpio_desc *reset;
++	struct mutex io_lock;
++	struct avr_rgb ring[AVR_RING_LEDS];
++	struct avr_rgb mute;
++	u8 mode;
++	u8 commit_mode;
++	struct input_dev *input;
++};
++
++static int avr_write(struct avr_dev *a, const u8 *buf, size_t len)
++{
++	int i, ret = -EIO;
++
++	for (i = 0; i < AVR_I2C_RETRIES; i++) {
++		ret = i2c_master_send(a->client, buf, len);
++		if (ret == (int)len)
++			return 0;
++		usleep_range(1000, 2000);
++	}
++	dev_err(&a->client->dev, "i2c write failed: %d\n", ret);
++	return ret < 0 ? ret : -EIO;
++}
++
++static int avr_read_reg(struct avr_dev *a, u8 reg, u8 *val)
++{
++	int i, ret = -EIO;
++
++	for (i = 0; i < AVR_I2C_RETRIES; i++) {
++		ret = i2c_master_send(a->client, &reg, 1);
++		if (ret == 1) {
++			ret = i2c_master_recv(a->client, val, 1);
++			if (ret == 1)
++				return 0;
++		}
++		usleep_range(1000, 2000);
++	}
++	dev_err(&a->client->dev, "i2c read reg 0x%02x failed: %d\n", reg, ret);
++	return ret < 0 ? ret : -EIO;
++}
++
++/* Quiet single-shot register read for the post-reset readiness poll: no
++ * retries and no dev_err, so a NAK from a still-booting AVR does not spam
++ * dmesg. Returns 0 on success, negative errno (e.g. -EREMOTEIO) otherwise. */
++static int avr_read_reg_quiet(struct avr_dev *a, u8 reg, u8 *val)
++{
++	int ret;
++
++	ret = i2c_master_send(a->client, &reg, 1);
++	if (ret == 1) {
++		ret = i2c_master_recv(a->client, val, 1);
++		if (ret == 1)
++			return 0;
++	}
++	return ret < 0 ? ret : -EIO;
++}
++
++/* Wait for the AVR to finish its post-reset boot and start ACKing on i2c.
++ * Polls AVR_REG_FW_VER quietly up to AVR_READY_TIMEOUT_MS. Returns 0 once it
++ * ACKs, -ENODEV on timeout. */
++static int avr_wait_ready(struct avr_dev *a)
++{
++	unsigned long deadline = jiffies + msecs_to_jiffies(AVR_READY_TIMEOUT_MS);
++	u8 fw;
++	int ret;
++
++	for (;;) {
++		ret = avr_read_reg_quiet(a, AVR_REG_FW_VER, &fw);
++		if (!ret)
++			return 0;
++		if (time_after(jiffies, deadline))
++			return -ENODEV;
++		msleep(AVR_READY_POLL_MS);
++	}
++}
++
++static int avr_set_mode(struct avr_dev *a, u8 mode)
++{
++	u8 buf[2] = { AVR_REG_LED_MODE, mode };
++	int ret = avr_write(a, buf, sizeof(buf));
++
++	if (!ret)
++		a->mode = mode;
++	return ret;
++}
++
++static int avr_commit(struct avr_dev *a, u8 mode)
++{
++	u8 buf[2] = { AVR_REG_COMMIT, mode };
++	return avr_write(a, buf, sizeof(buf));
++}
++
++/* caller holds io_lock */
++static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
++{
++	u8 buf[3 + AVR_RING_LEDS * 3];
++	int n, ret;
++
++	n = avr_encode_set_range(buf, sizeof(buf), start, &a->ring[start], count);
++	if (n < 0)
++		return n;
++	ret = avr_write(a, buf, n);
++	if (ret)
++		return ret;
++	return avr_commit(a, AVR_COMMIT_IMMEDIATE);
++}
++
++/* caller holds io_lock */
++static int avr_restore_state_locked(struct avr_dev *a)
++{
++	u8 mbuf[4] = { AVR_REG_SET_MUTE, a->mute.r, a->mute.g, a->mute.b };
++	int ret = avr_set_mode(a, AVR_LED_MODE_HOST);
++
++	if (!ret) ret = avr_write(a, mbuf, sizeof(mbuf));
++	if (!ret) ret = avr_flush_range_locked(a, 0, AVR_RING_LEDS);
++	return ret;
++}
++
++static irqreturn_t avr_irq(int irq, void *data)
++{
++	struct avr_dev *a = data;
++	int budget = 64;	/* FIFO drain cap */
++
++	while (budget--) {
++		u8 b; u16 code; bool down; int ret;
++
++		mutex_lock(&a->io_lock);
++		ret = avr_read_reg(a, AVR_REG_KEY_FIFO, &b);
++		mutex_unlock(&a->io_lock);
++		if (ret) {
++			dev_warn_ratelimited(&a->client->dev,
++					     "key FIFO read failed: %d\n", ret);
++			break;
++		}
++
++		ret = avr_decode_key(b, &code, &down);
++		if (ret == -EAGAIN)
++			break;			/* FIFO empty */
++		if (ret == -ERESTART) {		/* AVR reset: restore */
++			mutex_lock(&a->io_lock);
++			ret = avr_restore_state_locked(a);
++			mutex_unlock(&a->io_lock);
++			if (ret)
++				dev_warn_ratelimited(&a->client->dev,
++						     "state restore after AVR reset failed: %d\n",
++						     ret);
++			continue;
++		}
++		if (ret)
++			continue;		/* unknown code */
++		input_report_key(a->input, code, down);
++		input_sync(a->input);
++	}
++	return IRQ_HANDLED;
++}
++
++static int avr_register_input(struct avr_dev *a)
++{
++	struct input_dev *in = devm_input_allocate_device(&a->client->dev);
++
++	if (!in)
++		return -ENOMEM;
++	in->name = "steelhead-avr-keys";
++	in->id.bustype = BUS_I2C;
++	input_set_capability(in, EV_KEY, KEY_MUTE);
++	input_set_capability(in, EV_KEY, KEY_VOLUMEUP);
++	input_set_capability(in, EV_KEY, KEY_VOLUMEDOWN);
++	a->input = in;
++	return input_register_device(in);
++}
++
++static ssize_t frame_write(struct file *fp, struct kobject *kobj,
++			   struct bin_attribute *attr, char *buf,
++			   loff_t off, size_t count)
++{
++	struct device *dev = kobj_to_dev(kobj);
++	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
++	int i, ret;
++
++	if (off != 0 || count != AVR_RING_LEDS * 3)
++		return -EINVAL;
++	mutex_lock(&a->io_lock);
++	for (i = 0; i < AVR_RING_LEDS; i++) {
++		a->ring[i].r = buf[i*3 + 0];
++		a->ring[i].g = buf[i*3 + 1];
++		a->ring[i].b = buf[i*3 + 2];
++	}
++	{
++		u8 obuf[3 + AVR_RING_LEDS * 3];
++		int n = avr_encode_set_range(obuf, sizeof(obuf), 0,
++					     a->ring, AVR_RING_LEDS);
++		ret = (n < 0) ? n : avr_write(a, obuf, n);
++		if (!ret)
++			ret = avr_commit(a, a->commit_mode);
++	}
++	mutex_unlock(&a->io_lock);
++	return ret ? ret : (ssize_t)count;
++}
++static BIN_ATTR(frame, 0200, NULL, frame_write, AVR_RING_LEDS * 3);
++
++static ssize_t commit_mode_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
++	return sysfs_emit(buf, "%u\n", a->commit_mode);
++}
++static ssize_t commit_mode_store(struct device *dev,
++				 struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
++	u8 v;
++	if (kstrtou8(buf, 0, &v) || v > AVR_COMMIT_INTERPOLATE)
++		return -EINVAL;
++	a->commit_mode = v;
++	return count;
++}
++static DEVICE_ATTR_RW(commit_mode);
++
++static ssize_t mute_store(struct device *dev, struct device_attribute *attr,
++			  const char *buf, size_t count)
++{
++	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
++	unsigned int r, g, b;
++	u8 obuf[4];
++	int ret;
++	if (sscanf(buf, "%u %u %u", &r, &g, &b) != 3 || r > 255 || g > 255 || b > 255)
++		return -EINVAL;
++	obuf[0] = AVR_REG_SET_MUTE; obuf[1] = r; obuf[2] = g; obuf[3] = b;
++	mutex_lock(&a->io_lock);
++	a->mute = (struct avr_rgb){ r, g, b };
++	ret = avr_write(a, obuf, sizeof(obuf));
++	if (!ret) ret = avr_commit(a, AVR_COMMIT_IMMEDIATE);
++	mutex_unlock(&a->io_lock);
++	return ret ? ret : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(mute);
++
++static struct attribute *avr_attrs[] = {
++	&dev_attr_commit_mode.attr, &dev_attr_mute.attr, NULL,
++};
++static struct bin_attribute *avr_bin_attrs[] = { &bin_attr_frame, NULL };
++static const struct attribute_group avr_group = {
++	.attrs = avr_attrs, .bin_attrs = avr_bin_attrs,
++};
++
++struct avr_mc_led {
++	struct led_classdev_mc mc;
++	struct mc_subled subs[3];
++	struct avr_dev *avr;
++	int index;		/* 0 = mute, 1..32 = ring (ring[index-1]) */
++};
++#define to_avr_mc(c) container_of(c, struct avr_mc_led, mc.led_cdev)
++
++static int avr_mc_set(struct led_classdev *cdev, enum led_brightness bright)
++{
++	struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
++	struct avr_mc_led *l = to_avr_mc(cdev);
++	struct avr_dev *a = l->avr;
++	struct avr_rgb rgb;
++	int ret;
++
++	led_mc_calc_color_components(mc, bright);
++	rgb.r = mc->subled_info[0].brightness;
++	rgb.g = mc->subled_info[1].brightness;
++	rgb.b = mc->subled_info[2].brightness;
++
++	mutex_lock(&a->io_lock);
++	if (l->index == 0) {
++		u8 buf[4] = { AVR_REG_SET_MUTE, rgb.r, rgb.g, rgb.b };
++		a->mute = rgb;
++		ret = avr_write(a, buf, sizeof(buf));
++		if (!ret) ret = avr_commit(a, AVR_COMMIT_IMMEDIATE);
++	} else {
++		a->ring[l->index - 1] = rgb;
++		ret = avr_flush_range_locked(a, l->index - 1, 1);
++	}
++	mutex_unlock(&a->io_lock);
++	return ret;
++}
++
++static int avr_register_one_mc(struct avr_dev *a, int index)
++{
++	struct device *dev = &a->client->dev;
++	struct avr_mc_led *l;
++	struct led_init_data init = {};
++	char *name;
++
++	l = devm_kzalloc(dev, sizeof(*l), GFP_KERNEL);
++	if (!l)
++		return -ENOMEM;
++	l->avr = a;
++	l->index = index;
++	l->subs[0].color_index = LED_COLOR_ID_RED;
++	l->subs[1].color_index = LED_COLOR_ID_GREEN;
++	l->subs[2].color_index = LED_COLOR_ID_BLUE;
++	l->subs[0].intensity = l->subs[1].intensity = l->subs[2].intensity = 0;
++	l->mc.subled_info = l->subs;
++	l->mc.num_colors = 3;
++	l->mc.led_cdev.max_brightness = 255;
++	l->mc.led_cdev.brightness_set_blocking = avr_mc_set;
++
++	if (index == 0)
++		name = devm_kasprintf(dev, GFP_KERNEL, "steelhead:rgb:mute");
++	else
++		name = devm_kasprintf(dev, GFP_KERNEL, "steelhead:rgb:ring-%d",
++				      index - 1);
++	if (!name)
++		return -ENOMEM;
++	init.devicename = NULL;
++	l->mc.led_cdev.name = name;
++
++	return devm_led_classdev_multicolor_register(dev, &l->mc);
++}
++
++static int avr_register_leds(struct avr_dev *a)
++{
++	int i, ret;
++
++	for (i = 0; i <= AVR_RING_LEDS; i++) {	/* 0=mute, 1..32=ring */
++		ret = avr_register_one_mc(a, i);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++static int avr_probe(struct i2c_client *client)
++{
++	struct avr_dev *a;
++	u8 fw = 0, hw = 0, rev = 0, count = 0;
++	int ret;
++
++	a = devm_kzalloc(&client->dev, sizeof(*a), GFP_KERNEL);
++	if (!a)
++		return -ENOMEM;
++	a->client = client;
++	mutex_init(&a->io_lock);
++	i2c_set_clientdata(client, a);
++
++	a->reset = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(a->reset))
++		return dev_err_probe(&client->dev, PTR_ERR(a->reset),
++				     "no reset gpio\n");
++	/* pulse reset: active-low asserted by OUT_HIGH above, release */
++	msleep(10);
++	gpiod_set_value_cansleep(a->reset, 0);
++
++	mutex_lock(&a->io_lock);
++	/* The AVR is not ready to ACK on i2c for some time after reset; wait
++	 * for it instead of using a fixed delay (a fixed 50 ms NAKs on real
++	 * hardware). */
++	ret = avr_wait_ready(a);
++	if (ret) {
++		mutex_unlock(&a->io_lock);
++		return dev_err_probe(&client->dev, ret,
++				     "AVR not ready after reset\n");
++	}
++
++	ret = avr_read_reg(a, AVR_REG_FW_VER, &fw);
++	if (!ret) ret = avr_read_reg(a, AVR_REG_HW_TYPE, &hw);
++	if (!ret) ret = avr_read_reg(a, AVR_REG_HW_REV, &rev);
++	if (!ret) ret = avr_read_reg(a, AVR_REG_GET_COUNT, &count);
++	if (!ret) ret = avr_set_mode(a, AVR_LED_MODE_HOST);
++	mutex_unlock(&a->io_lock);
++	if (ret)
++		return ret;
++
++	dev_info(&client->dev,
++		 "steelhead-avr: fw=0x%02x hw=0x%02x rev=0x%02x leds=%u, HOST mode\n",
++		 fw, hw, rev, count);
++	if (count != AVR_RING_LEDS)
++		dev_warn(&client->dev, "expected %d LEDs, got %u\n",
++			 AVR_RING_LEDS, count);
++
++	ret = avr_register_leds(a);
++	if (ret)
++		return ret;
++
++	ret = devm_device_add_group(&client->dev, &avr_group);
++	if (ret)
++		return ret;
++
++	ret = avr_register_input(a);
++	if (ret)
++		return ret;
++
++	ret = devm_request_threaded_irq(&client->dev, client->irq, NULL,
++					avr_irq, IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
++					"steelhead-avr", a);
++	if (ret)
++		return dev_err_probe(&client->dev, ret, "irq request failed\n");
++	return 0;
++}
++
++static const struct of_device_id avr_of_match[] = {
++	{ .compatible = "google,steelhead-avr" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, avr_of_match);
++
++static struct i2c_driver avr_driver = {
++	.driver = { .name = "steelhead-avr", .of_match_table = avr_of_match },
++	.probe = avr_probe,
++};
++module_i2c_driver(avr_driver);
++
++MODULE_DESCRIPTION("Google Nexus Q steelhead-AVR LED ring + keys");
++MODULE_AUTHOR("nexusQ-reloaded");
++MODULE_LICENSE("GPL");
+
+diff --git a/drivers/leds/leds-steelhead-avr-test.c b/drivers/leds/leds-steelhead-avr-test.c
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/drivers/leds/leds-steelhead-avr-test.c
+@@ -0,0 +1,57 @@
++// SPDX-License-Identifier: GPL-2.0
++#include <kunit/test.h>
++#include <linux/input.h>
++#include "steelhead_avr.h"
++
++static void test_encode_set_range_basic(struct kunit *test)
++{
++	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
++	u8 buf[16];
++	int n = avr_encode_set_range(buf, sizeof(buf), 0, leds, 2);
++
++	KUNIT_EXPECT_EQ(test, n, 9);          /* reg+start+count + 2*3 */
++	KUNIT_EXPECT_EQ(test, buf[0], AVR_REG_SET_RANGE);
++	KUNIT_EXPECT_EQ(test, buf[1], 0);     /* start */
++	KUNIT_EXPECT_EQ(test, buf[2], 2);     /* count */
++	KUNIT_EXPECT_EQ(test, buf[3], 1);
++	KUNIT_EXPECT_EQ(test, buf[8], 6);
++}
++
++static void test_encode_set_range_buf_too_small(struct kunit *test)
++{
++	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
++	u8 buf[4];
++	KUNIT_EXPECT_EQ(test, avr_encode_set_range(buf, sizeof(buf), 0, leds, 2), -EINVAL);
++}
++
++static void test_decode_key_down_up(struct kunit *test)
++{
++	u16 code; bool down;
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_DOWN | AVR_KEYCODE_MUTE, &code, &down), 0);
++	KUNIT_EXPECT_EQ(test, code, (u16)KEY_MUTE);
++	KUNIT_EXPECT_TRUE(test, down);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEYCODE_VOL_UP, &code, &down), 0);
++	KUNIT_EXPECT_EQ(test, code, (u16)KEY_VOLUMEUP);
++	KUNIT_EXPECT_FALSE(test, down);
++}
++
++static void test_decode_key_empty_and_reset(struct kunit *test)
++{
++	u16 code; bool down;
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_EMPTY, &code, &down), -EAGAIN);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_RESET, &code, &down), -ERESTART);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(0x3F, &code, &down), -EINVAL);
++}
++
++static struct kunit_case avr_test_cases[] = {
++	KUNIT_CASE(test_encode_set_range_basic),
++	KUNIT_CASE(test_encode_set_range_buf_too_small),
++	KUNIT_CASE(test_decode_key_down_up),
++	KUNIT_CASE(test_decode_key_empty_and_reset),
++	{}
++};
++static struct kunit_suite avr_test_suite = {
++	.name = "leds-steelhead-avr", .test_cases = avr_test_cases,
++};
++kunit_test_suite(avr_test_suite);
++MODULE_LICENSE("GPL");
+
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -959,6 +959,21 @@
+ 	  This option enables support for the Power Button LED of
+ 	  Acer Iconia Tab A500.
+ 
++config LEDS_STEELHEAD_AVR
++	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
++	depends on I2C && OF
++	select LEDS_CLASS
++	select LEDS_CLASS_MULTICOLOR
++	select INPUT
++	help
++	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
++	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.
++
++config LEDS_STEELHEAD_AVR_KUNIT_TEST
++	tristate "KUnit tests for steelhead-AVR" if !KUNIT_ALL_TESTS
++	depends on LEDS_STEELHEAD_AVR && KUNIT
++	default KUNIT_ALL_TESTS
++
+ source "drivers/leds/blink/Kconfig"
+ 
+ comment "Flash and Torch LED drivers"
+
+--- a/drivers/leds/Makefile
++++ b/drivers/leds/Makefile
+@@ -101,6 +101,8 @@
+ obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
+ obj-$(CONFIG_LEDS_EL15203000)		+= leds-el15203000.o
+ obj-$(CONFIG_LEDS_SPI_BYTE)		+= leds-spi-byte.o
++obj-$(CONFIG_LEDS_STEELHEAD_AVR)            += leds-steelhead-avr.o
++obj-$(CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST) += leds-steelhead-avr-test.o
+ 
+ # LED Userspace Drivers
+ obj-$(CONFIG_LEDS_USER)			+= uleds.o
