@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
+#include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/i2c.h>
 #include <linux/gpio/consumer.h>
@@ -62,6 +63,7 @@ struct avr_dev {
 	struct avr_rgb mute;
 	u8 mode;
 	u8 commit_mode;
+	struct input_dev *input;
 };
 
 static int avr_write(struct avr_dev *a, const u8 *buf, size_t len)
@@ -159,6 +161,63 @@ static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
 	if (ret)
 		return ret;
 	return avr_commit(a, AVR_COMMIT_IMMEDIATE);
+}
+
+/* caller holds io_lock */
+static int avr_restore_state_locked(struct avr_dev *a)
+{
+	u8 mbuf[4] = { AVR_REG_SET_MUTE, a->mute.r, a->mute.g, a->mute.b };
+	int ret = avr_set_mode(a, AVR_LED_MODE_HOST);
+
+	if (!ret) ret = avr_write(a, mbuf, sizeof(mbuf));
+	if (!ret) ret = avr_flush_range_locked(a, 0, AVR_RING_LEDS);
+	return ret;
+}
+
+static irqreturn_t avr_irq(int irq, void *data)
+{
+	struct avr_dev *a = data;
+	int budget = 64;	/* FIFO drain cap */
+
+	while (budget--) {
+		u8 b; u16 code; bool down; int ret;
+
+		mutex_lock(&a->io_lock);
+		ret = avr_read_reg(a, AVR_REG_KEY_FIFO, &b);
+		mutex_unlock(&a->io_lock);
+		if (ret)
+			break;
+
+		ret = avr_decode_key(b, &code, &down);
+		if (ret == -EAGAIN)
+			break;			/* FIFO empty */
+		if (ret == -ERESTART) {		/* AVR reset: restore */
+			mutex_lock(&a->io_lock);
+			avr_restore_state_locked(a);
+			mutex_unlock(&a->io_lock);
+			continue;
+		}
+		if (ret)
+			continue;		/* unknown code */
+		input_report_key(a->input, code, down);
+		input_sync(a->input);
+	}
+	return IRQ_HANDLED;
+}
+
+static int avr_register_input(struct avr_dev *a)
+{
+	struct input_dev *in = devm_input_allocate_device(&a->client->dev);
+
+	if (!in)
+		return -ENOMEM;
+	in->name = "steelhead-avr-keys";
+	in->id.bustype = BUS_I2C;
+	input_set_capability(in, EV_KEY, KEY_MUTE);
+	input_set_capability(in, EV_KEY, KEY_VOLUMEUP);
+	input_set_capability(in, EV_KEY, KEY_VOLUMEDOWN);
+	a->input = in;
+	return input_register_device(in);
 }
 
 static ssize_t frame_write(struct file *fp, struct kobject *kobj,
@@ -372,6 +431,16 @@ static int avr_probe(struct i2c_client *client)
 	ret = devm_device_add_group(&client->dev, &avr_group);
 	if (ret)
 		return ret;
+
+	ret = avr_register_input(a);
+	if (ret)
+		return ret;
+
+	ret = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+					avr_irq, IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
+					"steelhead-avr", a);
+	if (ret)
+		return dev_err_probe(&client->dev, ret, "irq request failed\n");
 	return 0;
 }
 
