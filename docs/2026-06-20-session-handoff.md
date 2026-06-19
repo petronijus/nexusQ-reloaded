@@ -32,6 +32,16 @@ Firewall drop-in `/etc/nftables.d/60_spotify.nft` opens UDP 5353 (mDNS) + TCP 37
 443` works around VLAN20 blocking the default AP port 4070. **Streaming still fails** — audio
 content fetch stalls because of the WiFi bulk issue below.
 
+## 🎧 Roon Bridge — DEFERRED until WiFi is fixed
+Requested 2026-06-20. Blocked by the same WiFi bulk issue (can't even `apk add` the deps over
+WiFi — `gcompat` download timed out). Prep already done: the armv7hf build is downloaded on
+the host at `/home/petronijus/nexusq-build/RoonBridge_linuxarmv7hf.tar.bz2` (16 MB, push over
+USB). Deps exist in apk: **`gcompat`** (glibc shim — Roon is glibc, device is musl) + **`ffmpeg`**
++ `libstdc++`. Once the device has reliable internet (WiFi fixed, or USB-tether NAT through the
+host), `apk add gcompat ffmpeg`, extract RoonBridge, run its `check.sh`/start. Caveat: Roon on
+musl-via-gcompat is finicky and may need tweaking; and like Spotify it streams over the network
+so it also needs the WiFi fix to actually play.
+
 ## ⚠️ WiFi (BCM4330) — NEEDS INVESTIGATION (the "flaky" thing)
 **The Nexus Q WiFi can't sustain bulk/throughput**, while small packets are fine. Symptoms:
 SSH commands/pings/TLS-auth work, but bulk HTTP/HTTPS hang, scp of the 4 MB daemon corrupts
