@@ -34,7 +34,7 @@ threaded IRQ. Cross-build via the repo's Docker pipeline (Arm GNU Toolchain
 - `kernel/drivers/steelhead_avr.h` — register/constant definitions + pure-logic prototypes.
 - `kernel/drivers/leds-steelhead-avr-test.c` — KUnit tests for the pure logic.
 - `kernel/patches/0005-leds-add-steelhead-avr.patch` — installs the above into the linux tree + Kconfig/Makefile hunks (generated in the final task).
-- `kernel/configs/steelhead_defconfig` — add `CONFIG_LEDS_STEELHEAD_AVR=m`, `CONFIG_LEDS_CLASS_MULTICOLOR=m`, `CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST=m`.
+- `kernel/configs/steelhead_defconfig` — add `CONFIG_LEDS_STEELHEAD_AVR=m`, `CONFIG_LEDS_CLASS_MULTICOLOR=m` (and `CONFIG_INPUT_EVDEV=m`, already present). NOTE: `CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST` / `CONFIG_KUNIT` are deliberately NOT enabled in the device defconfig — KUnit runs host-only (UML via `kunit.py`), so the test object is not built into the device kernel.
 - `scripts/build-led-module.sh` — helper to build just the `.ko` in the extracted kernel tree and print its path.
 
 Development model: write/iterate the source under `kernel/drivers/`. For build, the
