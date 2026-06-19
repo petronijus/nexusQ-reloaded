@@ -185,16 +185,23 @@ static irqreturn_t avr_irq(int irq, void *data)
 		mutex_lock(&a->io_lock);
 		ret = avr_read_reg(a, AVR_REG_KEY_FIFO, &b);
 		mutex_unlock(&a->io_lock);
-		if (ret)
+		if (ret) {
+			dev_warn_ratelimited(&a->client->dev,
+					     "key FIFO read failed: %d\n", ret);
 			break;
+		}
 
 		ret = avr_decode_key(b, &code, &down);
 		if (ret == -EAGAIN)
 			break;			/* FIFO empty */
 		if (ret == -ERESTART) {		/* AVR reset: restore */
 			mutex_lock(&a->io_lock);
-			avr_restore_state_locked(a);
+			ret = avr_restore_state_locked(a);
 			mutex_unlock(&a->io_lock);
+			if (ret)
+				dev_warn_ratelimited(&a->client->dev,
+						     "state restore after AVR reset failed: %d\n",
+						     ret);
 			continue;
 		}
 		if (ret)
