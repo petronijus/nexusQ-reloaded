@@ -20,7 +20,8 @@ echo "=== Phase 2: Validate APKBUILD structure ==="
 for apkbuild in \
     "$SRC/pmos/device-google-steelhead/APKBUILD" \
     "$SRC/pmos/linux-google-steelhead/APKBUILD" \
-    "$SRC/pmos/firmware-google-steelhead/APKBUILD"; do
+    "$SRC/pmos/firmware-google-steelhead/APKBUILD" \
+    "$SRC/pmos/nexusqd/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -111,8 +112,20 @@ for patch in "$SRC/kernel/patches/"*.patch; do
     echo "  Installed: $(basename "$patch")"
 done
 
+# nexusqd LED daemon: stage the aport + the flat C sources (from userspace/nexusqd)
+# next to its APKBUILD; the APKBUILD's prepare() restores the include/ + src/ tree.
+NEXUSQD_DIR="$PMAPORTS/main/nexusqd"
+mkdir -p "$NEXUSQD_DIR"
+cp "$SRC/pmos/nexusqd/APKBUILD"            "$NEXUSQD_DIR/"
+cp "$SRC/userspace/nexusqd/src/"*.c        "$NEXUSQD_DIR/"
+cp "$SRC/userspace/nexusqd/include/"*.h    "$NEXUSQD_DIR/"
+cp "$SRC/userspace/nexusqd/Makefile"       "$NEXUSQD_DIR/"
+cp "$SRC/userspace/nexusqd/nexusqd.service" "$NEXUSQD_DIR/"
+cp "$SRC/userspace/nexusqd/default.json"   "$NEXUSQD_DIR/"
+echo "  Installed: nexusqd (aport + C sources -> main/nexusqd)"
+
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -260,6 +273,26 @@ echo "Generating checksums for device package..."
 pmbootstrap checksum device-google-steelhead 2>&1 || true
 echo "Generating checksums for firmware package..."
 pmbootstrap checksum firmware-google-steelhead 2>&1 || true
+
+echo ""
+echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
+sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
+set +e
+pmbootstrap build nexusqd --arch armv7 2>&1
+NEXUSQD_RC=$?
+set -e
+echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
+if [ $NEXUSQD_RC -eq 0 ]; then
+    NEXUSQD_APK=$(find "$WORK/packages" -name 'nexusqd-*.apk' 2>/dev/null | head -1)
+    if [ -n "$NEXUSQD_APK" ]; then
+        cp "$NEXUSQD_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQD_APK")"
+    else
+        echo "  WARNING: nexusqd apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  WARNING: nexusqd build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
 
 echo ""
 echo "=== Phase 8: Build all packages ==="

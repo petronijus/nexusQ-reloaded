@@ -1,0 +1,45 @@
+# Maintainer: nexusQ-reloaded
+# Nexus Q (steelhead) LED ring daemon — C11/musl, drives the leds-steelhead-avr
+# kernel frame channel. Built for the target by pmbootstrap (armv7/musl).
+pkgname=nexusqd
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q LED ring daemon (steelhead-avr)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="armv7"
+license="GPL-2.0-only"
+options="!check"   # unit tests run on the host CI, not in the cross build
+# Source files are staged flat next to this APKBUILD by docker-build.sh
+# (from userspace/nexusqd/{src,include,Makefile,...}); prepare() restores the tree.
+source="
+	frame.c frame.h themes.c themes.h avr.c avr.h compositor.c compositor.h
+	keys.c keys.h control.c control.h nexusqd.c nexusled.c
+	Makefile nexusqd.service default.json
+"
+builddir="$srcdir"
+
+prepare() {
+	default_prepare
+	mkdir -p include src
+	cp "$srcdir"/*.h include/ 2>/dev/null || true
+	cp "$srcdir"/*.c src/ 2>/dev/null || true
+}
+
+build() {
+	make CC="${CC:-cc}" CFLAGS="-std=c11 -O2 -Wall -Iinclude"
+}
+
+package() {
+	install -Dm755 nexusqd  "$pkgdir"/usr/bin/nexusqd
+	install -Dm755 nexusled "$pkgdir"/usr/bin/nexusled
+	install -Dm644 nexusqd.service "$pkgdir"/usr/lib/systemd/system/nexusqd.service
+	install -Dm644 default.json "$pkgdir"/etc/nexusqd/themes/default.json
+
+	# Enable autostart declaratively (no post-install / no manual systemctl enable):
+	# the WantedBy=multi-user.target symlink is what `systemctl enable` would create.
+	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../nexusqd.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusqd.service
+}
+
+sha512sums="SKIP"
