@@ -10,6 +10,7 @@ static void test_ok(void) {
     CHECK(ctl_parse("off", &c) == 0 && c.kind == CTL_OFF);
     CHECK(ctl_parse("status", &c) == 0 && c.kind == CTL_STATUS);
     CHECK(ctl_parse("mtoggle", &c) == 0 && c.kind == CTL_MTOGGLE);
+    CHECK(ctl_parse("auto", &c) == 0 && c.kind == CTL_AUTO);
     CHECK(ctl_parse("vol 0", &c) == 0 && c.kind == CTL_VOL && c.value == 0);
     CHECK(ctl_parse("vol 100", &c) == 0 && c.kind == CTL_VOL && c.value == 100);
     CHECK(ctl_parse("vol 55", &c) == 0 && c.kind == CTL_VOL && c.value == 55);
