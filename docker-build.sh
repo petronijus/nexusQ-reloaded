@@ -94,6 +94,20 @@ if [ ! -d "$PMAPORTS" ]; then
     git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS" 2>&1 | tail -3
 fi
 
+# pmaports renamed its default branch master -> main, but pmbootstrap (>=3.9.0)
+# still reads channels.cfg via the hardcoded `git show origin/master:channels.cfg`
+# (pmb/helpers/git.py parse_channels_cfg). On a fresh clone only origin/main
+# exists, so that read fails with "invalid object name 'origin/master'" and the
+# whole build aborts. Alias origin/master -> origin/main so the lookup resolves
+# (channels.cfg is identical; the worktree is correctly on main, matching it).
+if git -C "$PMAPORTS" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+    git -C "$PMAPORTS" update-ref refs/remotes/origin/master refs/remotes/origin/main
+    echo "  pmaports: aliased origin/master -> origin/main (master->main rename workaround)"
+fi
+# Belt-and-suspenders: also let pmbootstrap read channels.cfg straight from the
+# worktree file, bypassing the git ref entirely.
+export PMB_CHANNELS_CFG="$PMAPORTS/channels.cfg"
+
 echo ""
 echo "=== Phase 6: Install device packages into pmaports ==="
 for pkg in device-google-steelhead linux-google-steelhead firmware-google-steelhead; do
@@ -282,6 +296,11 @@ echo ""
 echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 set +e
+# The nexusqd sources are staged flat into the aport above (frame.c, fx_*.c, ...)
+# and the APKBUILD ships sha512sums="SKIP" as a placeholder, so abuild aborts with
+# "<file> is missing in checksums". Regenerate the per-file checksums against the
+# just-staged sources before building (same step the kernel/device/firmware get).
+pmbootstrap checksum nexusqd 2>&1 || true
 pmbootstrap build nexusqd --arch armv7 2>&1
 NEXUSQD_RC=$?
 set -e
