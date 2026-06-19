@@ -1,6 +1,10 @@
 output/
 build/
 
+# nexusqd compiled binaries (built by make / the aport, never committed)
+userspace/nexusqd/nexusqd
+userspace/nexusqd/nexusled
+
 # IDE / debug scratch
 .cursor/
 fb_err.txt
