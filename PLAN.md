@@ -61,8 +61,16 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       with "failed to create input devices" -- no keyboard/mouse attached).
 - [x] verified live on `192.168.20.179`: weston auto-starts on HDMI-A-1
       (1024x768@60), survives reboot, ~190 MB RAM.
-- [ ] input: BT keyboard (after #2) or USB OTG adapter (sacrifices gadget
-      network -- acceptable once WiFi is the primary link)
+- [~] input: a **BLE** mouse/keyboard (e.g. Logitech MX Master 4) pairs +
+      bonds fine over the BCM4330, but delivers **no input** until the kernel
+      has `CONFIG_UHID` — HID-over-GATT (HOGP) needs `/dev/uhid` to spawn the
+      input device. Symptom without it: `Paired: yes`/`Connected: yes` yet
+      bluetoothd loops `input-hog profile accept failed` and no `/dev/input/event*`
+      appears. **Fixed in `steelhead_defconfig` (CONFIG_UHID=y + CONFIG_HIDRAW=y,
+      2026-06-19) — pending a kernel rebuild + boot reflash.** `CONFIG_BT_HIDP=m`
+      only covers Classic-BT HID, not BLE. The bond lives on the rootfs, so a
+      boot-only reflash keeps it; the mouse will just connect once uhid is present.
+      Alt: USB OTG mouse/Logi-Bolt receiver (sacrifices the gadget network).
 
 ### 5. TWL6040 codec  🔴 DEAD HARDWARE (closed 2026-06-10)
 - [x] root-caused: chip never ACKs on I2C 0x4b (-121/EREMOTEIO) with all
