@@ -9,12 +9,13 @@ static void test_encode_set_range_basic(struct kunit *test)
 	u8 buf[16];
 	int n = avr_encode_set_range(buf, sizeof(buf), 0, leds, 2);
 
-	KUNIT_EXPECT_EQ(test, n, 9);          /* reg+start+count + 2*3 */
+	KUNIT_EXPECT_EQ(test, n, 10);         /* reg+start+count+rgb_triples + 2*3 */
 	KUNIT_EXPECT_EQ(test, buf[0], AVR_REG_SET_RANGE);
 	KUNIT_EXPECT_EQ(test, buf[1], 0);     /* start */
 	KUNIT_EXPECT_EQ(test, buf[2], 2);     /* count */
-	KUNIT_EXPECT_EQ(test, buf[3], 1);
-	KUNIT_EXPECT_EQ(test, buf[8], 6);
+	KUNIT_EXPECT_EQ(test, buf[3], 2);     /* rgb_triples == count */
+	KUNIT_EXPECT_EQ(test, buf[4], 1);     /* first R */
+	KUNIT_EXPECT_EQ(test, buf[9], 6);     /* last B */
 }
 
 static void test_encode_set_range_buf_too_small(struct kunit *test)

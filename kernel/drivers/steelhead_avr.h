@@ -37,7 +37,8 @@
 
 struct avr_rgb { u8 r, g, b; };
 
-/* Encode a SET_RANGE write into buf: [reg, start, count, r,g,b ...].
+/* Encode a SET_RANGE write into buf: [reg, start, count, rgb_triples, r,g,b ...]
+ * where rgb_triples == count (one RGB triple per LED).
  * Returns total bytes written, or -EINVAL on bad args / buffer too small. */
 int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
 			 const struct avr_rgb *leds, u8 count);

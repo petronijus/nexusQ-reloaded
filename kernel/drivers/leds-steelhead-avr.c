@@ -15,7 +15,7 @@
 int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
 			 const struct avr_rgb *leds, u8 count)
 {
-	size_t need = 3 + (size_t)count * 3;
+	size_t need = 4 + (size_t)count * 3;
 	int i;
 
 	if (!buf || !leds || count == 0 || buflen < need)
@@ -23,10 +23,11 @@ int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
 	buf[0] = AVR_REG_SET_RANGE;
 	buf[1] = start;
 	buf[2] = count;
+	buf[3] = count;	/* rgb_triples: one triple per LED */
 	for (i = 0; i < count; i++) {
-		buf[3 + i*3 + 0] = leds[i].r;
-		buf[3 + i*3 + 1] = leds[i].g;
-		buf[3 + i*3 + 2] = leds[i].b;
+		buf[4 + i*3 + 0] = leds[i].r;
+		buf[4 + i*3 + 1] = leds[i].g;
+		buf[4 + i*3 + 2] = leds[i].b;
 	}
 	return (int)need;
 }
@@ -151,7 +152,7 @@ static int avr_commit(struct avr_dev *a, u8 mode)
 /* caller holds io_lock */
 static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
 {
-	u8 buf[3 + AVR_RING_LEDS * 3];
+	u8 buf[4 + AVR_RING_LEDS * 3];
 	int n, ret;
 
 	if ((unsigned int)start + count > AVR_RING_LEDS)
@@ -249,7 +250,7 @@ static ssize_t frame_write(struct file *fp, struct kobject *kobj,
 		a->ring[i].b = buf[i*3 + 2];
 	}
 	{
-		u8 obuf[3 + AVR_RING_LEDS * 3];
+		u8 obuf[4 + AVR_RING_LEDS * 3];
 		int n = avr_encode_set_range(obuf, sizeof(obuf), 0,
 					     a->ring, AVR_RING_LEDS);
 		ret = (n < 0) ? n : avr_write(a, obuf, n);
