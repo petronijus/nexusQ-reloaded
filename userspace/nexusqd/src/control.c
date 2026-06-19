@@ -33,5 +33,10 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
         if (*e != 0 || v < 0 || v > 100) return -1;
         out->kind = CTL_VOL; out->value = (int)v; return 0;
     }
+    if (!strcmp(tok[0], "scene") && n == 2) {
+        char *e; long v = strtol(tok[1], &e, 10);
+        if (*e != 0 || v < 0 || v > 4) return -1;
+        out->kind = CTL_SCENE; out->value = (int)v; return 0;
+    }
     return -1;
 }

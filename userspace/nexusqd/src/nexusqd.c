@@ -9,6 +9,8 @@
 #include "reaction.h"
 #include "screensaver.h"
 #include "audio.h"
+#include "audiocap.h"
+#include "music.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,18 +27,28 @@
 #define THEMES_DIR "/etc/nexusqd/themes"
 #define VOL_STEP 2          /* master-volume % per rotary detent (the ring emits many events/turn) */
 
-/* Compositor layers, by priority:
+/* Compositor layers, by priority (matches the original arbitration):
  *   10  reaction   — volume overlay (Plan 2b), active only during the overlay
- *    6  manual     — CLI/socket override (set/theme/off), off until used (our feature)
+ *    8  manual     — CLI/socket override (set/theme/off), off until used (our feature)
+ *    7  music      — the audio-reactive scene (Plan 3b), shown while audio plays
  *    5  screensaver— the idle breathing screensaver (Plan 3), always on
- * When nothing higher renders, the screensaver owns the ring (matching the
- * original Visualizer at priority 5). */
+ * The music scene fades in (childAlpha) when audio is present and the screensaver
+ * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
 
-/* --- manual override layer (priority 6) ----------------------------------- */
+/* --- manual override layer (priority 8) ----------------------------------- */
 struct manual_ctx { int rgb[3]; };
 static int manual_render(void *c, double t, struct frame *out) {
     (void)t; struct manual_ctx *m = c;
     frame_fill(out, m->rgb[0], m->rgb[1], m->rgb[2]); return 0;
+}
+
+/* --- music layer (priority 7): the audio-reactive scene ------------------- */
+struct music_layer { struct music *m; float alpha; };
+static int music_layer_render(void *c, double t, struct frame *out) {
+    (void)t; struct music_layer *ml = c;
+    if (ml->alpha <= 0.0f) return -1;          /* no music -> fall through to screensaver */
+    music_render(ml->m, ml->alpha, out);
+    return 0;
 }
 
 /* --- screensaver layer (priority 5): the idle breathing screensaver -------- */
@@ -67,18 +79,25 @@ int main(void) {
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
 
-    /* Plan 3b audio tap: spawn arecord on the ALSA loopback; the screensaver fades
-     * when the captured output mix has signal (getVolume >= 0.01). */
+    /* Plan 3b audio: spawn arecord on the ALSA loopback, feed PCM segments to the
+     * AudioCapture port (volume/FFT/beat); the music scene reacts and the
+     * screensaver fades when getVolume >= 0.01. */
     signal(SIGCHLD, SIG_IGN);   /* reap arecord automatically if it exits */
     int afd = audio_open();
-    float audio_vol = 0.0f;
-    double last_pcm = -1.0, prev_now = start;
+    struct audio_state ac; audiocap_init(&ac);
+    struct music music; music_init(&music, (uint64_t)(start * 1e9));
+    struct music_layer ml = { &music, 0.0f };
+    float child_alpha = 0.0f;    /* mChildAlpha: the music scene's fade level */
+    double no_audio_t = 0.0;     /* seconds since audio (for the scene fade-out delay) */
+    double last_pcm = -1.0, prev_now = start, last_seg = -1.0;
     int prev_audio = 0;
+    static float monoacc[SAMPLES_PER_SEGMENT]; int monofill = 0;
 
     struct compositor comp = {0};
     comp_add(&comp, (struct layer){ screensaver_layer_render, &ss, 5, 1 });
+    comp_add(&comp, (struct layer){ music_layer_render, &ml, 7, 1 });      /* renders only when alpha>0 */
     int manual_idx = comp.n;
-    comp_add(&comp, (struct layer){ manual_render, &manual, 6, 0 });   /* override, off by default */
+    comp_add(&comp, (struct layer){ manual_render, &manual, 8, 0 });       /* override, off by default */
     comp_add(&comp, (struct layer){ reaction_layer_render, &rx, 10, 1 });
 
     apply_mute_led(muted);      /* idle mute LED = unmuted #006B8E */
@@ -99,8 +118,8 @@ int main(void) {
         if (kfd >= 0) { ki = np; pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
         if (afd >= 0) { ai = np; pfds[np].fd = afd; pfds[np].events = POLLIN; np++; }
         pfds[np].fd = srv; pfds[np].events = POLLIN; int srvi = np; np++;
-        /* 16 ms during the volume fade; otherwise 50 ms is smooth for the 10 s breath */
-        int to = reaction_overlay_active(&rx, now_s()) ? 16 : 50;
+        /* 16 ms during the volume fade; 30 ms (~33 fps) while a music scene plays; else 50 ms */
+        int to = reaction_overlay_active(&rx, now_s()) ? 16 : (child_alpha > 0.0f ? 30 : 50);
         poll(pfds, np, to);
 
         if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
@@ -129,7 +148,8 @@ int main(void) {
                 if (r > 0 && ctl_parse(line, &cmd) == 0) {
                     if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; comp.layers[manual_idx].active = 1; }
-                    else if (cmd.kind == CTL_AUTO) { comp.layers[manual_idx].active = 0; }   /* resume screensaver */
+                    else if (cmd.kind == CTL_AUTO) { comp.layers[manual_idx].active = 0; }   /* resume screensaver/music */
+                    else if (cmd.kind == CTL_SCENE) { music_set_scene(&music, cmd.value); }
                     else if (cmd.kind == CTL_MUTE) avr_set_mute(cmd.rgb[0],cmd.rgb[1],cmd.rgb[2]);
                     else if (cmd.kind == CTL_MTOGGLE) { muted = !muted; apply_mute_led(muted); screensaver_on_activity(&ss, now_s()); }
                     else if (cmd.kind == CTL_VOL) {
@@ -154,22 +174,52 @@ int main(void) {
         double now = now_s();
         double dt = now - prev_now; prev_now = now;
 
-        /* drain captured PCM -> getVolume; hold ~150 ms so brief gaps aren't silence */
+        /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND */
         if (ai >= 0 && (pfds[ai].revents & POLLIN)) {
             static int16_t pcm[8192];
-            ssize_t rr = read(afd, pcm, sizeof pcm);
-            if (rr > 0) {
-                audio_vol = audio_mean_abs(pcm, (int)(rr / (ssize_t)sizeof pcm[0]));
-                last_pcm = now;
-                char junk[4096]; while (read(afd, junk, sizeof junk) > 0) { }   /* keep latency low */
+            ssize_t rr;
+            int got = 0;
+            while ((rr = read(afd, pcm, sizeof pcm)) > 0) {
+                int frames = (int)(rr / (ssize_t)sizeof(int16_t)) / AUDIO_CHANNELS;
+                for (int fr = 0; fr < frames; fr++) {
+                    int l = pcm[fr*AUDIO_CHANNELS], r2 = pcm[fr*AUDIO_CHANNELS + 1];
+                    monoacc[monofill++] = (l + r2) / 2.0f / 32768.0f;
+                    if (monofill == SAMPLES_PER_SEGMENT) {
+                        if (last_seg < 0.0 || now - last_seg >= 1.0 / SEGMENTS_PER_SECOND) {
+                            audiocap_on_segment(&ac, monoacc);
+                            last_seg = now;
+                        }
+                        monofill = 0;
+                    }
+                }
+                got = 1;
+            }
+            if (got) last_pcm = now;
+        }
+        audiocap_on_new_frame(&ac);
+        float vol = audiocap_volume(&ac);
+        if (last_pcm < 0.0 || now - last_pcm > 0.15) vol = 0.0f;   /* no data -> silence */
+
+        /* BaseScreensaver fade split: music scene (childAlpha) vs idle breathing */
+        if (vol >= SS_AUDIO_THRESH) {
+            no_audio_t = 0.0;
+            child_alpha += (float)(dt / 1.0);                 /* mSceneFadeSeconds = 1 */
+            if (child_alpha > 1.0f) child_alpha = 1.0f;
+        } else {
+            no_audio_t += dt;
+            if (no_audio_t > 2.0) {                            /* mSecondsBeforeSceneFadeOut = 2 */
+                child_alpha -= (float)(dt / 1.0);
+                if (child_alpha < 0.0f) child_alpha = 0.0f;
             }
         }
-        if (last_pcm >= 0.0 && now - last_pcm > 0.15) audio_vol = 0.0f;
+        screensaver_update(&ss, now, dt, vol);
+        if (child_alpha > 0.0f) music_update(&music, &ac, (float)dt);
+        ml.alpha = child_alpha;
 
-        screensaver_update(&ss, now, dt, audio_vol);
-        int audio_on = audio_vol >= SS_AUDIO_THRESH;
+        int audio_on = vol >= SS_AUDIO_THRESH;
         if (audio_on != prev_audio) {
-            fprintf(stderr, "[nexusqd] audio %s (vol=%.3f)\n", audio_on ? "DETECTED" : "silent", audio_vol);
+            fprintf(stderr, "[nexusqd] audio %s (vol=%.3f) scene=%d\n",
+                    audio_on ? "DETECTED" : "silent", vol, music_scene(&music));
             prev_audio = audio_on;
         }
 

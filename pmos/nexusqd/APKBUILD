@@ -8,12 +8,19 @@ pkgdesc="Nexus Q LED ring daemon (steelhead-avr)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="armv7"
 license="GPL-2.0-only"
+# arecord (alsa-utils) is the Plan 3b audio tap; needs the snd-aloop loopback
+# module loaded (see scripts/build-aloop-module.sh + /etc/modules-load.d).
+depends="alsa-utils"
 options="!check"   # unit tests run on the host CI, not in the cross build
 # Source files are staged flat next to this APKBUILD by docker-build.sh
 # (from userspace/nexusqd/{src,include,Makefile,...}); prepare() restores the tree.
 source="
 	frame.c frame.h themes.c themes.h avr.c avr.h compositor.c compositor.h
-	keys.c keys.h control.c control.h reaction.c reaction.h screensaver.c screensaver.h nexusqd.c nexusled.c
+	keys.c keys.h control.c control.h reaction.c reaction.h screensaver.c screensaver.h
+	audio.c audio.h audiocap.c audiocap.h themecolor.c themecolor.h jrandom.c jrandom.h
+	ledcfg.c ledcfg.h fx_waveform.c fx_waveform.h fx_waveformsolid.c fx_waveformsolid.h
+	fx_circles.c fx_circles.h fx_pointmorph.c fx_pointmorph.h fx_starfield.c fx_starfield.h
+	music.c music.h nexusqd.c nexusled.c
 	Makefile nexusqd.service default.json
 "
 builddir="$srcdir"

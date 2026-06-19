@@ -14,11 +14,14 @@ static void test_ok(void) {
     CHECK(ctl_parse("vol 0", &c) == 0 && c.kind == CTL_VOL && c.value == 0);
     CHECK(ctl_parse("vol 100", &c) == 0 && c.kind == CTL_VOL && c.value == 100);
     CHECK(ctl_parse("vol 55", &c) == 0 && c.kind == CTL_VOL && c.value == 55);
+    CHECK(ctl_parse("scene 0", &c) == 0 && c.kind == CTL_SCENE && c.value == 0);
+    CHECK(ctl_parse("scene 4", &c) == 0 && c.kind == CTL_SCENE && c.value == 4);
 }
 static void test_bad(void) {
     struct ctl_cmd c;
     const char *bad[] = {"", "set 1 2", "set 1 2 999", "theme", "bogus",
-                         "vol", "vol 101", "vol -1", "vol x", "vol 5 5", "mtoggle x", NULL};
+                         "vol", "vol 101", "vol -1", "vol x", "vol 5 5", "mtoggle x",
+                         "scene", "scene 5", "scene -1", "scene x", NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }
