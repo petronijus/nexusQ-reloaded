@@ -1,0 +1,28 @@
+# Kconfig stanzas for the Google Nexus Q steelhead-AVR LED ring driver.
+#
+# These hunks are applied into the in-tree kernel build files by the Task 8
+# patch. They are kept here verbatim so the patch can reuse the exact text.
+#
+# Target file: drivers/leds/Kconfig
+# (insert the two config blocks below into the LED drivers menu)
+
+config LEDS_STEELHEAD_AVR
+	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
+	depends on I2C && OF
+	select LEDS_CLASS
+	select LEDS_CLASS_MULTICOLOR
+	select INPUT
+	help
+	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
+	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.
+
+config LEDS_STEELHEAD_AVR_KUNIT_TEST
+	tristate "KUnit tests for steelhead-AVR" if !KUNIT_ALL_TESTS
+	depends on LEDS_STEELHEAD_AVR && KUNIT
+	default KUNIT_ALL_TESTS
+
+# Target file: drivers/leds/Makefile
+# (append the two obj lines below)
+#
+# obj-$(CONFIG_LEDS_STEELHEAD_AVR)            += leds-steelhead-avr.o
+# obj-$(CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST) += leds-steelhead-avr-test.o
