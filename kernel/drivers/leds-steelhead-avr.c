@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
 #include <linux/input.h>
+#include <linux/i2c.h>
+#include <linux/gpio/consumer.h>
+#include <linux/mutex.h>
+#include <linux/delay.h>
+#include <linux/of.h>
+#include <linux/leds.h>
+#include <linux/led-class-multicolor.h>
 #include "steelhead_avr.h"
 
 int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
@@ -39,12 +46,6 @@ int avr_decode_key(u8 b, u16 *keycode, bool *down)
 	default:                   return -EINVAL;
 	}
 }
-
-#include <linux/i2c.h>
-#include <linux/gpio/consumer.h>
-#include <linux/mutex.h>
-#include <linux/delay.h>
-#include <linux/of.h>
 
 /* The AVR runs a boot sequence after reset and may NAK i2c for up to a
  * second or more before it is ready. Poll for readiness rather than using a
@@ -137,6 +138,108 @@ static int avr_set_mode(struct avr_dev *a, u8 mode)
 	return ret;
 }
 
+static int avr_commit(struct avr_dev *a, u8 mode)
+{
+	u8 buf[2] = { AVR_REG_COMMIT, mode };
+	return avr_write(a, buf, sizeof(buf));
+}
+
+/* caller holds io_lock */
+static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
+{
+	u8 buf[3 + AVR_RING_LEDS * 3];
+	int n, ret;
+
+	n = avr_encode_set_range(buf, sizeof(buf), start, &a->ring[start], count);
+	if (n < 0)
+		return n;
+	ret = avr_write(a, buf, n);
+	if (ret)
+		return ret;
+	return avr_commit(a, AVR_COMMIT_IMMEDIATE);
+}
+
+struct avr_mc_led {
+	struct led_classdev_mc mc;
+	struct mc_subled subs[3];
+	struct avr_dev *avr;
+	int index;		/* 0 = mute, 1..32 = ring (ring[index-1]) */
+};
+#define to_avr_mc(c) container_of(c, struct avr_mc_led, mc.led_cdev)
+
+static int avr_mc_set(struct led_classdev *cdev, enum led_brightness bright)
+{
+	struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
+	struct avr_mc_led *l = to_avr_mc(cdev);
+	struct avr_dev *a = l->avr;
+	struct avr_rgb rgb;
+	int ret;
+
+	led_mc_calc_color_components(mc, bright);
+	rgb.r = mc->subled_info[0].brightness;
+	rgb.g = mc->subled_info[1].brightness;
+	rgb.b = mc->subled_info[2].brightness;
+
+	mutex_lock(&a->io_lock);
+	if (l->index == 0) {
+		u8 buf[4] = { AVR_REG_SET_MUTE, rgb.r, rgb.g, rgb.b };
+		a->mute = rgb;
+		ret = avr_write(a, buf, sizeof(buf));
+		if (!ret) ret = avr_commit(a, AVR_COMMIT_IMMEDIATE);
+	} else {
+		a->ring[l->index - 1] = rgb;
+		ret = avr_flush_range_locked(a, l->index - 1, 1);
+	}
+	mutex_unlock(&a->io_lock);
+	return ret;
+}
+
+static int avr_register_one_mc(struct avr_dev *a, int index)
+{
+	struct device *dev = &a->client->dev;
+	struct avr_mc_led *l;
+	struct led_init_data init = {};
+	char *name;
+
+	l = devm_kzalloc(dev, sizeof(*l), GFP_KERNEL);
+	if (!l)
+		return -ENOMEM;
+	l->avr = a;
+	l->index = index;
+	l->subs[0].color_index = LED_COLOR_ID_RED;
+	l->subs[1].color_index = LED_COLOR_ID_GREEN;
+	l->subs[2].color_index = LED_COLOR_ID_BLUE;
+	l->subs[0].intensity = l->subs[1].intensity = l->subs[2].intensity = 0;
+	l->mc.subled_info = l->subs;
+	l->mc.num_colors = 3;
+	l->mc.led_cdev.max_brightness = 255;
+	l->mc.led_cdev.brightness_set_blocking = avr_mc_set;
+
+	if (index == 0)
+		name = devm_kasprintf(dev, GFP_KERNEL, "steelhead:rgb:mute");
+	else
+		name = devm_kasprintf(dev, GFP_KERNEL, "steelhead:rgb:ring-%d",
+				      index - 1);
+	if (!name)
+		return -ENOMEM;
+	init.devicename = NULL;
+	l->mc.led_cdev.name = name;
+
+	return devm_led_classdev_multicolor_register(dev, &l->mc);
+}
+
+static int avr_register_leds(struct avr_dev *a)
+{
+	int i, ret;
+
+	for (i = 0; i <= AVR_RING_LEDS; i++) {	/* 0=mute, 1..32=ring */
+		ret = avr_register_one_mc(a, i);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 static int avr_probe(struct i2c_client *client)
 {
 	struct avr_dev *a;
@@ -184,6 +287,10 @@ static int avr_probe(struct i2c_client *client)
 	if (count != AVR_RING_LEDS)
 		dev_warn(&client->dev, "expected %d LEDs, got %u\n",
 			 AVR_RING_LEDS, count);
+
+	ret = avr_register_leds(a);
+	if (ret)
+		return ret;
 	return 0;
 }
 
