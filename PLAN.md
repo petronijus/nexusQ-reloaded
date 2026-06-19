@@ -82,9 +82,21 @@ the dead TWL6040 codec. `spdif_dit` node already exists in the DTS.
 - [ ] until then workaround: power-cycle again
 - Candidates: U-Boot DRAM init, kernel early race
 
-### 9. LED ring (long-term, fun)
-- [ ] write a kernel driver for the steelhead AVR i2c protocol
-      (userspace reference exists in the AOSP steelhead tree)
+### 9. LED ring  🟠 PROTOCOL CONFIRMED LIVE 2026-06-19
+The 32 RGB LEDs sit behind the steelhead-AVR MCU (i2c `1-0020`, DT node
+`avr@20` compatible "google,steelhead-avr"). The AVR speaks a simple
+register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
+  - 0x02 LED_MODE   (0x02 = HOST full control, 0x00 boot anim, 0x03 power-up)
+  - 0x03 SET_ALL    payload R,G,B
+  - 0x04 SET_RANGE  start, count, R,G,B...
+  - 0x05 COMMIT     (0x00 immediate, 0x01 interpolate)
+  - 0x06 SET_MUTE ; 0x07 GET_COUNT ; 0x08 HW_TYPE ; 0x09 HW_REV ; 0x0A FW_VER
+- [x] verified from userspace via /dev/i2c-1 (no driver bound): AVR reports
+      HW_TYPE=0x01 (SPHERE), LED count=32; "HOST mode + SET_ALL dim-blue +
+      COMMIT" lit the whole ring blue. Reads work with plain write-then-read.
+- [ ] deliverable: userspace control tool, and/or port AOSP
+      `drivers/misc/steelhead_avr.c` to a mainline 6.12 driver (leds-class /
+      input for the mute/volume keys; DT node already present)
 
 ### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
