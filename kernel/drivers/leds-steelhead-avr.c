@@ -154,6 +154,8 @@ static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
 	u8 buf[3 + AVR_RING_LEDS * 3];
 	int n, ret;
 
+	if ((unsigned int)start + count > AVR_RING_LEDS)
+		return -EINVAL;
 	n = avr_encode_set_range(buf, sizeof(buf), start, &a->ring[start], count);
 	if (n < 0)
 		return n;
@@ -195,6 +197,9 @@ static irqreturn_t avr_irq(int irq, void *data)
 		if (ret == -EAGAIN)
 			break;			/* FIFO empty */
 		if (ret == -ERESTART) {		/* AVR reset: restore */
+			/* AVR reset: restore full state. Holds io_lock across a
+			 * multi-write i2c burst (mode+mute+32 LEDs); rare path,
+			 * blocks other writers briefly. */
 			mutex_lock(&a->io_lock);
 			ret = avr_restore_state_locked(a);
 			mutex_unlock(&a->io_lock);
@@ -341,7 +346,6 @@ static int avr_register_one_mc(struct avr_dev *a, int index)
 {
 	struct device *dev = &a->client->dev;
 	struct avr_mc_led *l;
-	struct led_init_data init = {};
 	char *name;
 
 	l = devm_kzalloc(dev, sizeof(*l), GFP_KERNEL);
@@ -365,7 +369,6 @@ static int avr_register_one_mc(struct avr_dev *a, int index)
 				      index - 1);
 	if (!name)
 		return -ENOMEM;
-	init.devicename = NULL;
 	l->mc.led_cdev.name = name;
 
 	return devm_led_classdev_multicolor_register(dev, &l->mc);
