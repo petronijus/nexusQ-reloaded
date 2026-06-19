@@ -108,6 +108,113 @@ is worth having.
 
 ---
 
+---
+
+## INVESTIGATION RESULTS (2026-06-19, branch `fix/boot-warnings`)
+
+### HIGH — ABE / `dpll_per_m3x2` audio clock — TWO independent faults
+
+**Fault A — the `-22` reparent (FIXED in DTS):**
+The `&mcbsp2` node had:
+```
+assigned-clocks        = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
+assigned-clock-parents = <&abe_24m_fclk>;
+```
+`abe-clkctrl:0030:24` is the McBSP2 *functional* gfclk. Per
+`drivers/clk/ti/clk-44xx.c` (`omap4_func_mcbsp2_gfclk_parents[]`) its **only**
+legal parents are `abe-clkctrl:0030:26` (its sync mux), `pad_clks_ck`, and
+`slimbus_clk`. `abe_24m_fclk` is **not** in that list → `clk_set_parent`
+returns `-EINVAL` → the boot error `failed to reparent abe-clkctrl:0030:24 to
+abe_24m_fclk: -22`. `abe_24m_fclk` *is* a legal parent of **bit 26** (the sync
+mux), not bit 24. At runtime the gfclk already resolves to 24.576 MHz via the
+bit-26 default, so the McBSP2 SRG was actually fine — the warning was pure
+noise from an impossible reparent.
+**Fix:** reparent **bit 26 → `abe_24m_fclk`** and **bit 24 → bit 26** explicitly:
+```
+assigned-clocks        = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>,
+                         <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
+assigned-clock-parents = <&abe_24m_fclk>,
+                         <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>;
+```
+Confirmed in the decompiled DTB (`<… 0x30 0x1a>` = bit 26, `<… 0x30 0x18>` =
+bit 24; parents `abe_24m_fclk`, then bit 26). **Needs flash-test** only to
+confirm the warning is gone; the clock tree is unchanged from the working
+default, so this is low-risk.
+
+**Fault B — `dpll_per_m3x2_ck` cannot be set to 61.44 MHz (UNRESOLVED, needs flash-test):**
+Live `clk_summary` (read 2026-06-19, no reboot):
+```
+dpll_per_ck        768 MHz
+ dpll_per_x2_ck   1536 MHz
+  dpll_per_m3x2_ck 256 MHz  (N)   <- stuck, consumed ONLY by auxclk1_src_ck
+   auxclk1_src_ck  256 MHz  (N)
+    auxclk1_ck      16 MHz  (Y)   <- tas5713@1b mclk; WANT 12.288 MHz
+```
+The math is reachable: `1536 / 25 = 61.44 MHz` (divider max-div 31, so div 25
+is valid) and `61.44 / 5 = 12.288 MHz`. `dpll_per_m3x2_ck` is consumed by
+nothing except this audio path, so changing it is safe (no shared-consumer
+conflict). The error fires at ~63 s, i.e. when `tas5713`'s `assigned-clocks`
+are applied (`drivers/clk/clk-conf.c`), not at provider init.
+
+Deep code trace of *why* `clk_set_rate(dpll_per_m3x2_ck, 61440000)` returns
+`-EINVAL`: `dpll_per_m3x2_ck` is a `ti,composite-clock` (gate + divider, **no
+mux**). `clk_register_composite()` therefore wires `clk_composite_round_rate`
+(NOT `clk_composite_determine_rate`) as its rate op, and the underlying
+`ti_clk_divider` provides a working `round_rate`/`set_rate` for div=25. By
+static analysis the set *should* succeed (parent 1536 MHz, no
+`CLK_SET_RATE_PARENT`, no min/max constraint: live `clk_min_rate=0`,
+`clk_max_rate=4294967295`). The device nevertheless reports `-22`. The
+contradiction could not be resolved read-only (no reboot allowed; the device
+is shared with the LED workstream). **Left the correct 61.44/12.288 assignment
+in place** (changing the *value* would be wrong — those rates are exact and
+derive cleanly). After the reparent fix + the RNG/HDQ disables (which change
+probe ordering and remove a competing clkctrl consumer), a **flash-test** must
+re-check whether `dpll_per_m3x2_ck` reaches 61.44 MHz and `auxclk1_ck` reaches
+12.288 MHz. **Fallback if `-22` persists:** small kernel patch to
+`drivers/clk/clk-composite.c` `clk_composite_determine_rate()` to add a
+`round_rate` fallback in the no-mux branch (currently only handles
+`determine_rate` there), since OMAP4 composite `dpll_per_m*x2` clocks expose
+only `round_rate`. No mainline OMAP4 board sets a `dpll_per_m3x2` rate via
+`assigned-clocks`, so this path is genuinely under-exercised upstream.
+
+### MEDIUM — three `ti-sysc` target-modules — IDENTIFIED
+
+| Addr | What it is | Cause | Action |
+|---|---|---|---|
+| `0x4a318000` | **GPTIMER1** (`timer1_target`, `ti,timer-alwon`) — the always-on system clockevent ("TI gptimer clockevent: always-on 32768 Hz"). | The OMAP timer core claims the timer region directly, so `ti-sysc` sees it busy → `-EBUSY (-16)`. **Expected on every OMAP4 board.** | **Left as-is.** Disabling it would break timekeeping. Documented in DTS. |
+| `0x48091fe0` | **Hardware RNG** (`rng_target`, `ti,omap4-rng`), in the `l4_secure` clock domain. | `OMAP4_RNG_CLKCTRL` fck lives behind the secure-side clkctrl, not exposed on this U-Boot/GP flow → `clock get error for fck: -2` (`-ENOENT`). Nexus Q does not use the on-chip hwrng. | **`status = "disabled"`** in DTS. |
+| `0x480b2000` | **HDQ / 1-wire** master (`ti,omap3-1w`). | No HDQ/1-wire device wired on the Nexus Q; module left unclocked → `OCP softreset timed out`. | **`status = "disabled"`** in DTS (referenced by full path — node has no upstream label). |
+
+All three verified against `arch/arm/boot/dts/ti/omap/omap4-l4.dtsi`. RNG/HDQ
+disables confirmed in the decompiled DTB; timer1 confirmed untouched. **Needs
+flash-test** to confirm the two `ti-sysc` failures are gone (DTB-only change,
+low-risk).
+
+### MEDIUM — WiFi CLM/TXCAP blob — CONFIRMED BENIGN
+The BCM4330 (`brcmfmac4330-sdio`, FWID `01-cafa6b3e`, ver 5.90.195.114) has its
+regulatory data baked into the firmware blob — WiFi associates and passes
+traffic without a separate `.clm_blob`. No upstream `brcmfmac4330-sdio.clm_blob`
+exists for this FWID, so the `-2` is expected, not a fault. Leave as-is; the
+recurring `fweh event handler failed (72)` is known BCM4330 event-queue noise
+and did not correlate with disconnects in the captured session.
+
+### Build verification (no device reboot)
+- DTB compiles clean (no dtc warnings) from the edited DTS.
+- Regenerated `kernel/patches/0003-ARM-dts-omap4-add-steelhead.patch` (now 682
+  DTS lines); all five patches `0001`–`0005` apply cleanly to a fresh
+  `linux-6.12.12` tree and the patched tree compiles `omap4-steelhead.dtb`.
+- `build-clean-modules.sh` therefore stays consistent.
+
+### What still needs a flash + boot test (controller to coordinate)
+1. Confirm `failed to reparent abe-clkctrl:0030:24` is gone.
+2. Confirm `dpll_per_m3x2_ck` reaches 61.44 MHz and `auxclk1_ck` 12.288 MHz
+   (re-read `clk_summary`); if `-22` persists, apply the documented
+   `clk-composite.c` fallback patch.
+3. Confirm the `48091fe0` (RNG) and `480b2000` (HDQ) `ti-sysc` errors are gone
+   and nothing else regressed (timer1 `-EBUSY` is expected to remain).
+
+---
+
 ## Suggested order of work
 
 1. **ABE/`dpll_per_m3x2` 61.44 MHz** — gate it before the TAS5713 listening test
