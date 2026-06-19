@@ -14,78 +14,124 @@ decode helpers.
 
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
- drivers/leds/Kconfig                    |  15 +
- drivers/leds/Makefile                   |   2 +
- drivers/leds/leds-steelhead-avr-test.c  |  57 +++
- drivers/leds/leds-steelhead-avr.c       | 468 ++++++++++++++++++++++++
- drivers/leds/steelhead_avr.h            |  49 +++
- 5 files changed, 591 insertions(+)
+ drivers/leds/Kconfig                   |  14 +
+ drivers/leds/Makefile                  |   2 +
+ drivers/leds/leds-steelhead-avr-test.c |  58 ++++
+ drivers/leds/leds-steelhead-avr.c      | 472 +++++++++++++++++++++++++++++++++
+ drivers/leds/steelhead_avr.h           |  50 ++++
+ 5 files changed, 596 insertions(+)
  create mode 100644 drivers/leds/leds-steelhead-avr-test.c
  create mode 100644 drivers/leds/leds-steelhead-avr.c
  create mode 100644 drivers/leds/steelhead_avr.h
 
-diff --git a/drivers/leds/steelhead_avr.h b/drivers/leds/steelhead_avr.h
-new file mode 100644
-index 0000000..1111111
+diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+index b784bb74a..ff81ae1c2 100644
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -959,6 +959,20 @@ config LEDS_ACER_A500
+ 	  This option enables support for the Power Button LED of
+ 	  Acer Iconia Tab A500.
+ 
++config LEDS_STEELHEAD_AVR
++	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
++	depends on I2C && OF && INPUT
++	select LEDS_CLASS
++	select LEDS_CLASS_MULTICOLOR
++	help
++	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
++	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.
++
++config LEDS_STEELHEAD_AVR_KUNIT_TEST
++	tristate "KUnit tests for steelhead-AVR" if !KUNIT_ALL_TESTS
++	depends on LEDS_STEELHEAD_AVR && KUNIT
++	default KUNIT_ALL_TESTS
++
+ source "drivers/leds/blink/Kconfig"
+ 
+ comment "Flash and Torch LED drivers"
+diff --git a/drivers/leds/Makefile b/drivers/leds/Makefile
+index 18afbb5a2..aa4f13419 100644
+--- a/drivers/leds/Makefile
++++ b/drivers/leds/Makefile
+@@ -101,6 +101,8 @@ obj-$(CONFIG_LEDS_CR0014114)		+= leds-cr0014114.o
+ obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
+ obj-$(CONFIG_LEDS_EL15203000)		+= leds-el15203000.o
+ obj-$(CONFIG_LEDS_SPI_BYTE)		+= leds-spi-byte.o
++obj-$(CONFIG_LEDS_STEELHEAD_AVR)            += leds-steelhead-avr.o
++obj-$(CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST) += leds-steelhead-avr-test.o
+ 
+ # LED Userspace Drivers
+ obj-$(CONFIG_LEDS_USER)			+= uleds.o
+diff --git a/drivers/leds/leds-steelhead-avr-test.c b/drivers/leds/leds-steelhead-avr-test.c
+new file mode 100755
+index 000000000..8090e1121
 --- /dev/null
-+++ b/drivers/leds/steelhead_avr.h
-@@ -0,0 +1,49 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
-+/* Google Nexus Q (steelhead) front-panel AVR: 32 RGB ring LEDs + mute LED
-+ * + capacitive mute/volume keys, over i2c. Register protocol from AOSP. */
-+#ifndef _LEDS_STEELHEAD_AVR_H
-+#define _LEDS_STEELHEAD_AVR_H
++++ b/drivers/leds/leds-steelhead-avr-test.c
+@@ -0,0 +1,58 @@
++// SPDX-License-Identifier: GPL-2.0
++#include <kunit/test.h>
++#include <linux/input.h>
++#include "steelhead_avr.h"
 +
-+#include <linux/types.h>
++static void test_encode_set_range_basic(struct kunit *test)
++{
++	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
++	u8 buf[16];
++	int n = avr_encode_set_range(buf, sizeof(buf), 0, leds, 2);
 +
-+#define AVR_REG_KEY_FIFO	0x00
-+#define AVR_REG_MUTE_THRESH	0x01
-+#define AVR_REG_LED_MODE	0x02
-+#define   AVR_LED_MODE_BOOT_ANIM	0x00
-+#define   AVR_LED_MODE_HOST_AUTO	0x01
-+#define   AVR_LED_MODE_HOST		0x02
-+#define   AVR_LED_MODE_POWERUP_ANIM	0x03
-+#define AVR_REG_SET_ALL		0x03
-+#define AVR_REG_SET_RANGE	0x04
-+#define AVR_REG_COMMIT		0x05
-+#define   AVR_COMMIT_IMMEDIATE	0x00
-+#define   AVR_COMMIT_INTERPOLATE 0x01
-+#define AVR_REG_SET_MUTE	0x06
-+#define AVR_REG_GET_COUNT	0x07
-+#define AVR_REG_HW_TYPE		0x08
-+#define AVR_REG_HW_REV		0x09
-+#define AVR_REG_FW_VER		0x0A
++	KUNIT_EXPECT_EQ(test, n, 10);         /* reg+start+count+rgb_triples + 2*3 */
++	KUNIT_EXPECT_EQ(test, buf[0], AVR_REG_SET_RANGE);
++	KUNIT_EXPECT_EQ(test, buf[1], 0);     /* start */
++	KUNIT_EXPECT_EQ(test, buf[2], 2);     /* count */
++	KUNIT_EXPECT_EQ(test, buf[3], 2);     /* rgb_triples == count */
++	KUNIT_EXPECT_EQ(test, buf[4], 1);     /* first R */
++	KUNIT_EXPECT_EQ(test, buf[9], 6);     /* last B */
++}
 +
-+#define AVR_KEY_DOWN		0x80
-+#define AVR_KEY_CODE_MASK	0x3F
-+#define AVR_KEY_RESET		0xFE
-+#define AVR_KEY_EMPTY		0xFF
-+#define AVR_KEYCODE_MUTE	0x00
-+#define AVR_KEYCODE_VOL_UP	0x01
-+#define AVR_KEYCODE_VOL_DOWN	0x02
++static void test_encode_set_range_buf_too_small(struct kunit *test)
++{
++	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
++	u8 buf[4];
++	KUNIT_EXPECT_EQ(test, avr_encode_set_range(buf, sizeof(buf), 0, leds, 2), -EINVAL);
++}
 +
-+#define AVR_RING_LEDS		32
-+#define AVR_I2C_RETRIES		5
++static void test_decode_key_down_up(struct kunit *test)
++{
++	u16 code; bool down;
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_DOWN | AVR_KEYCODE_MUTE, &code, &down), 0);
++	KUNIT_EXPECT_EQ(test, code, (u16)KEY_MUTE);
++	KUNIT_EXPECT_TRUE(test, down);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEYCODE_VOL_UP, &code, &down), 0);
++	KUNIT_EXPECT_EQ(test, code, (u16)KEY_VOLUMEUP);
++	KUNIT_EXPECT_FALSE(test, down);
++}
 +
-+struct avr_rgb { u8 r, g, b; };
++static void test_decode_key_empty_and_reset(struct kunit *test)
++{
++	u16 code; bool down;
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_EMPTY, &code, &down), -EAGAIN);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_RESET, &code, &down), -ERESTART);
++	KUNIT_EXPECT_EQ(test, avr_decode_key(0x3F, &code, &down), -EINVAL);
++}
 +
-+/* Encode a SET_RANGE write into buf: [reg, start, count, r,g,b ...].
-+ * Returns total bytes written, or -EINVAL on bad args / buffer too small. */
-+int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
-+			 const struct avr_rgb *leds, u8 count);
-+
-+/* Decode one KEY_FIFO byte. Returns 0 + fills keycode/down for a real key;
-+ * -EAGAIN for EMPTY (0xFF); -ERESTART for RESET (0xFE); -EINVAL for unknown. */
-+int avr_decode_key(u8 fifo_byte, u16 *keycode, bool *down);
-+
-+#endif /* _LEDS_STEELHEAD_AVR_H */
-
++static struct kunit_case avr_test_cases[] = {
++	KUNIT_CASE(test_encode_set_range_basic),
++	KUNIT_CASE(test_encode_set_range_buf_too_small),
++	KUNIT_CASE(test_decode_key_down_up),
++	KUNIT_CASE(test_decode_key_empty_and_reset),
++	{}
++};
++static struct kunit_suite avr_test_suite = {
++	.name = "leds-steelhead-avr", .test_cases = avr_test_cases,
++};
++kunit_test_suite(avr_test_suite);
++MODULE_LICENSE("GPL");
 diff --git a/drivers/leds/leds-steelhead-avr.c b/drivers/leds/leds-steelhead-avr.c
-new file mode 100644
-index 0000000..1111111
+new file mode 100755
+index 000000000..75598e846
 --- /dev/null
 +++ b/drivers/leds/leds-steelhead-avr.c
-@@ -0,0 +1,468 @@
+@@ -0,0 +1,472 @@
 +// SPDX-License-Identifier: GPL-2.0
 +#include <linux/module.h>
 +#include <linux/interrupt.h>
@@ -103,7 +149,7 @@ index 0000000..1111111
 +int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
 +			 const struct avr_rgb *leds, u8 count)
 +{
-+	size_t need = 3 + (size_t)count * 3;
++	size_t need = 4 + (size_t)count * 3;
 +	int i;
 +
 +	if (!buf || !leds || count == 0 || buflen < need)
@@ -111,10 +157,11 @@ index 0000000..1111111
 +	buf[0] = AVR_REG_SET_RANGE;
 +	buf[1] = start;
 +	buf[2] = count;
++	buf[3] = count;	/* rgb_triples: one triple per LED */
 +	for (i = 0; i < count; i++) {
-+		buf[3 + i*3 + 0] = leds[i].r;
-+		buf[3 + i*3 + 1] = leds[i].g;
-+		buf[3 + i*3 + 2] = leds[i].b;
++		buf[4 + i*3 + 0] = leds[i].r;
++		buf[4 + i*3 + 1] = leds[i].g;
++		buf[4 + i*3 + 2] = leds[i].b;
 +	}
 +	return (int)need;
 +}
@@ -239,9 +286,11 @@ index 0000000..1111111
 +/* caller holds io_lock */
 +static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
 +{
-+	u8 buf[3 + AVR_RING_LEDS * 3];
++	u8 buf[4 + AVR_RING_LEDS * 3];
 +	int n, ret;
 +
++	if ((unsigned int)start + count > AVR_RING_LEDS)
++		return -EINVAL;
 +	n = avr_encode_set_range(buf, sizeof(buf), start, &a->ring[start], count);
 +	if (n < 0)
 +		return n;
@@ -283,6 +332,9 @@ index 0000000..1111111
 +		if (ret == -EAGAIN)
 +			break;			/* FIFO empty */
 +		if (ret == -ERESTART) {		/* AVR reset: restore */
++			/* AVR reset: restore full state. Holds io_lock across a
++			 * multi-write i2c burst (mode+mute+32 LEDs); rare path,
++			 * blocks other writers briefly. */
 +			mutex_lock(&a->io_lock);
 +			ret = avr_restore_state_locked(a);
 +			mutex_unlock(&a->io_lock);
@@ -332,7 +384,7 @@ index 0000000..1111111
 +		a->ring[i].b = buf[i*3 + 2];
 +	}
 +	{
-+		u8 obuf[3 + AVR_RING_LEDS * 3];
++		u8 obuf[4 + AVR_RING_LEDS * 3];
 +		int n = avr_encode_set_range(obuf, sizeof(obuf), 0,
 +					     a->ring, AVR_RING_LEDS);
 +		ret = (n < 0) ? n : avr_write(a, obuf, n);
@@ -429,7 +481,6 @@ index 0000000..1111111
 +{
 +	struct device *dev = &a->client->dev;
 +	struct avr_mc_led *l;
-+	struct led_init_data init = {};
 +	char *name;
 +
 +	l = devm_kzalloc(dev, sizeof(*l), GFP_KERNEL);
@@ -453,7 +504,6 @@ index 0000000..1111111
 +				      index - 1);
 +	if (!name)
 +		return -ENOMEM;
-+	init.devicename = NULL;
 +	l->mc.led_cdev.name = name;
 +
 +	return devm_led_classdev_multicolor_register(dev, &l->mc);
@@ -554,103 +604,59 @@ index 0000000..1111111
 +MODULE_DESCRIPTION("Google Nexus Q steelhead-AVR LED ring + keys");
 +MODULE_AUTHOR("nexusQ-reloaded");
 +MODULE_LICENSE("GPL");
-
-diff --git a/drivers/leds/leds-steelhead-avr-test.c b/drivers/leds/leds-steelhead-avr-test.c
-new file mode 100644
-index 0000000..1111111
+diff --git a/drivers/leds/steelhead_avr.h b/drivers/leds/steelhead_avr.h
+new file mode 100755
+index 000000000..c9575ac65
 --- /dev/null
-+++ b/drivers/leds/leds-steelhead-avr-test.c
-@@ -0,0 +1,57 @@
-+// SPDX-License-Identifier: GPL-2.0
-+#include <kunit/test.h>
-+#include <linux/input.h>
-+#include "steelhead_avr.h"
++++ b/drivers/leds/steelhead_avr.h
+@@ -0,0 +1,50 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Google Nexus Q (steelhead) front-panel AVR: 32 RGB ring LEDs + mute LED
++ * + capacitive mute/volume keys, over i2c. Register protocol from AOSP. */
++#ifndef _LEDS_STEELHEAD_AVR_H
++#define _LEDS_STEELHEAD_AVR_H
 +
-+static void test_encode_set_range_basic(struct kunit *test)
-+{
-+	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
-+	u8 buf[16];
-+	int n = avr_encode_set_range(buf, sizeof(buf), 0, leds, 2);
++#include <linux/types.h>
 +
-+	KUNIT_EXPECT_EQ(test, n, 9);          /* reg+start+count + 2*3 */
-+	KUNIT_EXPECT_EQ(test, buf[0], AVR_REG_SET_RANGE);
-+	KUNIT_EXPECT_EQ(test, buf[1], 0);     /* start */
-+	KUNIT_EXPECT_EQ(test, buf[2], 2);     /* count */
-+	KUNIT_EXPECT_EQ(test, buf[3], 1);
-+	KUNIT_EXPECT_EQ(test, buf[8], 6);
-+}
++#define AVR_REG_KEY_FIFO	0x00
++#define AVR_REG_MUTE_THRESH	0x01
++#define AVR_REG_LED_MODE	0x02
++#define   AVR_LED_MODE_BOOT_ANIM	0x00
++#define   AVR_LED_MODE_HOST_AUTO	0x01
++#define   AVR_LED_MODE_HOST		0x02
++#define   AVR_LED_MODE_POWERUP_ANIM	0x03
++#define AVR_REG_SET_ALL		0x03
++#define AVR_REG_SET_RANGE	0x04
++#define AVR_REG_COMMIT		0x05
++#define   AVR_COMMIT_IMMEDIATE	0x00
++#define   AVR_COMMIT_INTERPOLATE 0x01
++#define AVR_REG_SET_MUTE	0x06
++#define AVR_REG_GET_COUNT	0x07
++#define AVR_REG_HW_TYPE		0x08
++#define AVR_REG_HW_REV		0x09
++#define AVR_REG_FW_VER		0x0A
 +
-+static void test_encode_set_range_buf_too_small(struct kunit *test)
-+{
-+	struct avr_rgb leds[2] = { {1,2,3}, {4,5,6} };
-+	u8 buf[4];
-+	KUNIT_EXPECT_EQ(test, avr_encode_set_range(buf, sizeof(buf), 0, leds, 2), -EINVAL);
-+}
++#define AVR_KEY_DOWN		0x80
++#define AVR_KEY_CODE_MASK	0x3F
++#define AVR_KEY_RESET		0xFE
++#define AVR_KEY_EMPTY		0xFF
++#define AVR_KEYCODE_MUTE	0x00
++#define AVR_KEYCODE_VOL_UP	0x01
++#define AVR_KEYCODE_VOL_DOWN	0x02
 +
-+static void test_decode_key_down_up(struct kunit *test)
-+{
-+	u16 code; bool down;
-+	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_DOWN | AVR_KEYCODE_MUTE, &code, &down), 0);
-+	KUNIT_EXPECT_EQ(test, code, (u16)KEY_MUTE);
-+	KUNIT_EXPECT_TRUE(test, down);
-+	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEYCODE_VOL_UP, &code, &down), 0);
-+	KUNIT_EXPECT_EQ(test, code, (u16)KEY_VOLUMEUP);
-+	KUNIT_EXPECT_FALSE(test, down);
-+}
++#define AVR_RING_LEDS		32
++#define AVR_I2C_RETRIES		5
 +
-+static void test_decode_key_empty_and_reset(struct kunit *test)
-+{
-+	u16 code; bool down;
-+	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_EMPTY, &code, &down), -EAGAIN);
-+	KUNIT_EXPECT_EQ(test, avr_decode_key(AVR_KEY_RESET, &code, &down), -ERESTART);
-+	KUNIT_EXPECT_EQ(test, avr_decode_key(0x3F, &code, &down), -EINVAL);
-+}
++struct avr_rgb { u8 r, g, b; };
 +
-+static struct kunit_case avr_test_cases[] = {
-+	KUNIT_CASE(test_encode_set_range_basic),
-+	KUNIT_CASE(test_encode_set_range_buf_too_small),
-+	KUNIT_CASE(test_decode_key_down_up),
-+	KUNIT_CASE(test_decode_key_empty_and_reset),
-+	{}
-+};
-+static struct kunit_suite avr_test_suite = {
-+	.name = "leds-steelhead-avr", .test_cases = avr_test_cases,
-+};
-+kunit_test_suite(avr_test_suite);
-+MODULE_LICENSE("GPL");
-
---- a/drivers/leds/Kconfig
-+++ b/drivers/leds/Kconfig
-@@ -959,6 +959,20 @@
- 	  This option enables support for the Power Button LED of
- 	  Acer Iconia Tab A500.
- 
-+config LEDS_STEELHEAD_AVR
-+	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
-+	depends on I2C && OF && INPUT
-+	select LEDS_CLASS
-+	select LEDS_CLASS_MULTICOLOR
-+	help
-+	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
-+	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.
++/* Encode a SET_RANGE write into buf: [reg, start, count, rgb_triples, r,g,b ...]
++ * where rgb_triples == count (one RGB triple per LED).
++ * Returns total bytes written, or -EINVAL on bad args / buffer too small. */
++int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
++			 const struct avr_rgb *leds, u8 count);
 +
-+config LEDS_STEELHEAD_AVR_KUNIT_TEST
-+	tristate "KUnit tests for steelhead-AVR" if !KUNIT_ALL_TESTS
-+	depends on LEDS_STEELHEAD_AVR && KUNIT
-+	default KUNIT_ALL_TESTS
++/* Decode one KEY_FIFO byte. Returns 0 + fills keycode/down for a real key;
++ * -EAGAIN for EMPTY (0xFF); -ERESTART for RESET (0xFE); -EINVAL for unknown. */
++int avr_decode_key(u8 fifo_byte, u16 *keycode, bool *down);
 +
- source "drivers/leds/blink/Kconfig"
- 
- comment "Flash and Torch LED drivers"
-
---- a/drivers/leds/Makefile
-+++ b/drivers/leds/Makefile
-@@ -101,6 +101,8 @@
- obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
- obj-$(CONFIG_LEDS_EL15203000)		+= leds-el15203000.o
- obj-$(CONFIG_LEDS_SPI_BYTE)		+= leds-spi-byte.o
-+obj-$(CONFIG_LEDS_STEELHEAD_AVR)            += leds-steelhead-avr.o
-+obj-$(CONFIG_LEDS_STEELHEAD_AVR_KUNIT_TEST) += leds-steelhead-avr-test.o
- 
- # LED Userspace Drivers
- obj-$(CONFIG_LEDS_USER)			+= uleds.o
++#endif /* _LEDS_STEELHEAD_AVR_H */
