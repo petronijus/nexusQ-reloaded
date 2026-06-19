@@ -80,7 +80,20 @@ Implemented in the priority-10 reaction-layer seam. New pure module
 `evtest`). Note: mute shows on the dedicated mute LED, NOT the ring (the ring stays
 `#000F14`), per the original.
 
+### ✅ Plan 3 idle screensaver — DONE (2026-06-19)
+Pixel-perfect port of the factory ICS ParticleScreensaver LED path. RE'd by pulling the
+**tungsten-ian67k factory image** (`system.img` sparse→raw ext4 via a tiny `simg2img.py` +
+`debugfs`), extracting `Visualizer.odex` + framework odexes, deodexing with baksmali 2.5.2 and
+decompiling with jadx (all under `/home/petronijus/nexusq-build/`). Findings:
+`docs/2026-06-19-particle-screensaver-RE.md`. The 40-particle field is HDMI/GL only; the ring
+is a uniform breathing `#0099CC × A` (#000F14 ↔ #007AA3, 10 s cosine, 5 s startup fade-in, lock
+dim after 300 s w/o audio, blank after 600 s). New pure module `screensaver.c` (+ test) as
+compositor layer **priority 5**; manual override moved to **priority 6** (`set/theme/off`, `auto`
+resumes the screensaver). Verified live (breathing + colors). The private overlay
+(`private/nexusq-original/`, repo `nexusQ-reloaded-private`) is now cloned here — it holds the
+Visualizer assets (shaders/textures/models) + the `Visualizer.apk`/`HubBroker.apk`.
+
 ## Suggested next steps (in order)
-1. Run the **Docker pipeline** (`docker-build.sh`) to build the real `nexusqd-*.apk` (musl) and `apk add` it on the device, replacing the static `/usr/bin` binaries.
-2. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.
-3. Plan 3 — music visualizer (audio tap + FFT + ported shaders).
+1. **Plan 3b** — music-reactive effects (waveform/pointmorph/icebox/starfield/circles) driven by `AudioCapture` (FFT). Gated on a working audio tap (PLAN §1). Decompiled sources are in `/home/petronijus/nexusq-build/visualizer-java/` for the next RE pass.
+2. Run the **Docker pipeline** (`docker-build.sh`) to build the real `nexusqd-*.apk` (musl) and `apk add` it on the device, replacing the static `/usr/bin` binaries.
+3. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.

@@ -106,6 +106,15 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `#000F14` in the priority-10 reaction-layer seam (exact algo in
       `docs/2026-06-19-volume-mute-RE.md`). Verified live: fade-in + brightness levels +
       mute LED (#001E28/#006B8E) + idle #000F14. Volume ring is a rotary encoder (evtest).
+- [x] **Plan 3 idle screensaver (done 2026-06-19):** pixel-perfect port of the factory
+      ICS ParticleScreensaver LED path (RE'd from the tungsten-ian67k factory image →
+      deodexed Visualizer.odex; `docs/2026-06-19-particle-screensaver-RE.md`). The ring
+      breathes a uniform `#0099CC × A` (#000F14 ↔ #007AA3, 10 s cosine), 5 s fade-in,
+      locks dim after 300 s without audio, blanks after 600 s. Compositor layer priority 5;
+      `nexusled auto` resumes it after a manual override. Verified live (breathing + colors).
+- [ ] **Plan 3b (music-reactive):** the waveform/pointmorph/icebox/starfield/circles nodes
+      driven by `AudioCapture` (FFT). Gated on the audio path (§1). Assets + decompiled
+      sources in the private overlay (`private/nexusq-original/`).
 
 ### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
