@@ -8,6 +8,7 @@
 #include <linux/of.h>
 #include <linux/leds.h>
 #include <linux/led-class-multicolor.h>
+#include <linux/sysfs.h>
 #include "steelhead_avr.h"
 
 int avr_encode_set_range(u8 *buf, size_t buflen, u8 start,
@@ -60,6 +61,7 @@ struct avr_dev {
 	struct avr_rgb ring[AVR_RING_LEDS];
 	struct avr_rgb mute;
 	u8 mode;
+	u8 commit_mode;
 };
 
 static int avr_write(struct avr_dev *a, const u8 *buf, size_t len)
@@ -158,6 +160,81 @@ static int avr_flush_range_locked(struct avr_dev *a, u8 start, u8 count)
 		return ret;
 	return avr_commit(a, AVR_COMMIT_IMMEDIATE);
 }
+
+static ssize_t frame_write(struct file *fp, struct kobject *kobj,
+			   struct bin_attribute *attr, char *buf,
+			   loff_t off, size_t count)
+{
+	struct device *dev = kobj_to_dev(kobj);
+	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
+	int i, ret;
+
+	if (off != 0 || count != AVR_RING_LEDS * 3)
+		return -EINVAL;
+	mutex_lock(&a->io_lock);
+	for (i = 0; i < AVR_RING_LEDS; i++) {
+		a->ring[i].r = buf[i*3 + 0];
+		a->ring[i].g = buf[i*3 + 1];
+		a->ring[i].b = buf[i*3 + 2];
+	}
+	{
+		u8 obuf[3 + AVR_RING_LEDS * 3];
+		int n = avr_encode_set_range(obuf, sizeof(obuf), 0,
+					     a->ring, AVR_RING_LEDS);
+		ret = (n < 0) ? n : avr_write(a, obuf, n);
+		if (!ret)
+			ret = avr_commit(a, a->commit_mode);
+	}
+	mutex_unlock(&a->io_lock);
+	return ret ? ret : (ssize_t)count;
+}
+static BIN_ATTR(frame, 0200, NULL, frame_write, AVR_RING_LEDS * 3);
+
+static ssize_t commit_mode_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
+	return sysfs_emit(buf, "%u\n", a->commit_mode);
+}
+static ssize_t commit_mode_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
+	u8 v;
+	if (kstrtou8(buf, 0, &v) || v > AVR_COMMIT_INTERPOLATE)
+		return -EINVAL;
+	a->commit_mode = v;
+	return count;
+}
+static DEVICE_ATTR_RW(commit_mode);
+
+static ssize_t mute_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t count)
+{
+	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
+	unsigned int r, g, b;
+	u8 obuf[4];
+	int ret;
+	if (sscanf(buf, "%u %u %u", &r, &g, &b) != 3 || r > 255 || g > 255 || b > 255)
+		return -EINVAL;
+	obuf[0] = AVR_REG_SET_MUTE; obuf[1] = r; obuf[2] = g; obuf[3] = b;
+	mutex_lock(&a->io_lock);
+	a->mute = (struct avr_rgb){ r, g, b };
+	ret = avr_write(a, obuf, sizeof(obuf));
+	if (!ret) ret = avr_commit(a, AVR_COMMIT_IMMEDIATE);
+	mutex_unlock(&a->io_lock);
+	return ret ? ret : (ssize_t)count;
+}
+static DEVICE_ATTR_WO(mute);
+
+static struct attribute *avr_attrs[] = {
+	&dev_attr_commit_mode.attr, &dev_attr_mute.attr, NULL,
+};
+static struct bin_attribute *avr_bin_attrs[] = { &bin_attr_frame, NULL };
+static const struct attribute_group avr_group = {
+	.attrs = avr_attrs, .bin_attrs = avr_bin_attrs,
+};
 
 struct avr_mc_led {
 	struct led_classdev_mc mc;
@@ -289,6 +366,10 @@ static int avr_probe(struct i2c_client *client)
 			 AVR_RING_LEDS, count);
 
 	ret = avr_register_leds(a);
+	if (ret)
+		return ret;
+
+	ret = devm_device_add_group(&client->dev, &avr_group);
 	if (ret)
 		return ret;
 	return 0;
