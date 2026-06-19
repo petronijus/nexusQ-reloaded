@@ -68,8 +68,19 @@ at boot; `nexusled` (once Plan 2 ships) or direct sysfs (`/sys/bus/i2c/devices/1
 - WSL invoked via PowerShell mangles `$VAR`/`$(...)`/`~` in `wsl bash -lc '...'` — use absolute paths.
 - **Verify LED behavior visually on real hardware** — `rc=0` is not proof (this hid the SET_RANGE `rgb_triples` bug and the stale-patch-0005 bug). See memory `always-most-correct-path`.
 
+### ✅ Plan 2b — pixel-perfect volume/mute reaction layer — DONE (2026-06-19)
+Implemented in the priority-10 reaction-layer seam. New pure module
+`userspace/nexusqd/src/reaction.c` (+ host test `test_reaction.c`) reproducing
+`docs/2026-06-19-volume-mute-RE.md` exactly: ring = `#0099CC × (0.1+vol/100·0.9)`,
+336 ms DecelerateInterpolator fade-in, 1000 ms overlay then relinquish; mute LED
+`#001E28`/`#006B8E`; idle ring `#000F14`. Wired into `nexusqd.c` (volume keys +
+`vol N` / `mtoggle` socket cmds; 16 ms tick during the fade). **Verified live**
+(fade, brightness levels, mute LED toggle via journal, idle color). `VOL_STEP=2`
+— the volume ring is a **rotary encoder** emitting many events/turn (confirmed via
+`evtest`). Note: mute shows on the dedicated mute LED, NOT the ring (the ring stays
+`#000F14`), per the original.
+
 ## Suggested next steps (in order)
-1. **Plan 2b** — pixel-perfect volume-ring + mute + true idle `#000F14`, implemented in the inactive priority-10 reaction-layer seam already wired in `nexusqd.c` (Task 6), using the exact algorithm in `docs/2026-06-19-volume-mute-RE.md`. No approximation.
-2. Run the **Docker pipeline** (`docker-build.sh`) to build the real `nexusqd-*.apk` (musl) and `apk add` it on the device, replacing the static `/usr/bin` binaries.
-3. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.
-4. Plan 3 — music visualizer (audio tap + FFT + ported shaders).
+1. Run the **Docker pipeline** (`docker-build.sh`) to build the real `nexusqd-*.apk` (musl) and `apk add` it on the device, replacing the static `/usr/bin` binaries.
+2. Flash-test `fix/boot-warnings` (audio-clock/MCLK — PLAN §1 gate), then merge.
+3. Plan 3 — music visualizer (audio tap + FFT + ported shaders).

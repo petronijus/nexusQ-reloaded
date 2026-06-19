@@ -102,8 +102,10 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `/run/nexusqd.sock` control + `nexusled` CLI, mute key, postmarketOS aport,
       systemd autostart (verified across reboot). `userspace/nexusqd/`, `pmos/nexusqd/`.
       Plan: `docs/superpowers/plans/2026-06-19-nexusqd-daemon.md`.
-- [ ] **Plan 2b:** pixel-perfect volume-ring + mute + true idle `#000F14` in the
-      priority-10 reaction-layer seam (exact algo in `docs/2026-06-19-volume-mute-RE.md`).
+- [x] **Plan 2b (done 2026-06-19):** pixel-perfect volume-ring + mute + true idle
+      `#000F14` in the priority-10 reaction-layer seam (exact algo in
+      `docs/2026-06-19-volume-mute-RE.md`). Verified live: fade-in + brightness levels +
+      mute LED (#001E28/#006B8E) + idle #000F14. Volume ring is a rotary encoder (evtest).
 
 ### 10. SMP / second core (long-term, risky)
 - [ ] custom CPU1 holding-pen or reset before online; doubles performance
