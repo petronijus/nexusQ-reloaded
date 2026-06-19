@@ -46,6 +46,12 @@ int avr_decode_key(u8 b, u16 *keycode, bool *down)
 #include <linux/delay.h>
 #include <linux/of.h>
 
+/* The AVR runs a boot sequence after reset and may NAK i2c for up to a
+ * second or more before it is ready. Poll for readiness rather than using a
+ * fixed delay. */
+#define AVR_READY_POLL_MS	50
+#define AVR_READY_TIMEOUT_MS	2000
+
 struct avr_dev {
 	struct i2c_client *client;
 	struct gpio_desc *reset;
@@ -86,6 +92,41 @@ static int avr_read_reg(struct avr_dev *a, u8 reg, u8 *val)
 	return ret < 0 ? ret : -EIO;
 }
 
+/* Quiet single-shot register read for the post-reset readiness poll: no
+ * retries and no dev_err, so a NAK from a still-booting AVR does not spam
+ * dmesg. Returns 0 on success, negative errno (e.g. -EREMOTEIO) otherwise. */
+static int avr_read_reg_quiet(struct avr_dev *a, u8 reg, u8 *val)
+{
+	int ret;
+
+	ret = i2c_master_send(a->client, &reg, 1);
+	if (ret == 1) {
+		ret = i2c_master_recv(a->client, val, 1);
+		if (ret == 1)
+			return 0;
+	}
+	return ret < 0 ? ret : -EIO;
+}
+
+/* Wait for the AVR to finish its post-reset boot and start ACKing on i2c.
+ * Polls AVR_REG_FW_VER quietly up to AVR_READY_TIMEOUT_MS. Returns 0 once it
+ * ACKs, -ENODEV on timeout. */
+static int avr_wait_ready(struct avr_dev *a)
+{
+	unsigned long deadline = jiffies + msecs_to_jiffies(AVR_READY_TIMEOUT_MS);
+	u8 fw;
+	int ret;
+
+	for (;;) {
+		ret = avr_read_reg_quiet(a, AVR_REG_FW_VER, &fw);
+		if (!ret)
+			return 0;
+		if (time_after(jiffies, deadline))
+			return -ENODEV;
+		msleep(AVR_READY_POLL_MS);
+	}
+}
+
 static int avr_set_mode(struct avr_dev *a, u8 mode)
 {
 	u8 buf[2] = { AVR_REG_LED_MODE, mode };
@@ -116,9 +157,18 @@ static int avr_probe(struct i2c_client *client)
 	/* pulse reset: active-low asserted by OUT_HIGH above, release */
 	msleep(10);
 	gpiod_set_value_cansleep(a->reset, 0);
-	msleep(50);	/* let AVR boot */
 
 	mutex_lock(&a->io_lock);
+	/* The AVR is not ready to ACK on i2c for some time after reset; wait
+	 * for it instead of using a fixed delay (a fixed 50 ms NAKs on real
+	 * hardware). */
+	ret = avr_wait_ready(a);
+	if (ret) {
+		mutex_unlock(&a->io_lock);
+		return dev_err_probe(&client->dev, ret,
+				     "AVR not ready after reset\n");
+	}
+
 	ret = avr_read_reg(a, AVR_REG_FW_VER, &fw);
 	if (!ret) ret = avr_read_reg(a, AVR_REG_HW_TYPE, &hw);
 	if (!ret) ret = avr_read_reg(a, AVR_REG_HW_REV, &rev);
