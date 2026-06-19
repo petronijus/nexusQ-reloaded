@@ -621,16 +621,15 @@ index 0000000..1111111
 
 --- a/drivers/leds/Kconfig
 +++ b/drivers/leds/Kconfig
-@@ -959,6 +959,21 @@
+@@ -959,6 +959,20 @@
  	  This option enables support for the Power Button LED of
  	  Acer Iconia Tab A500.
  
 +config LEDS_STEELHEAD_AVR
 +	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
-+	depends on I2C && OF
++	depends on I2C && OF && INPUT
 +	select LEDS_CLASS
 +	select LEDS_CLASS_MULTICOLOR
-+	select INPUT
 +	help
 +	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
 +	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.

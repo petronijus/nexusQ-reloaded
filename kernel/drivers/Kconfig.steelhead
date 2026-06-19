@@ -8,10 +8,9 @@
 
 config LEDS_STEELHEAD_AVR
 	tristate "Google Nexus Q steelhead-AVR LED ring + keys"
-	depends on I2C && OF
+	depends on I2C && OF && INPUT
 	select LEDS_CLASS
 	select LEDS_CLASS_MULTICOLOR
-	select INPUT
 	help
 	  32 RGB ring LEDs + mute LED and the capacitive mute/volume keys on the
 	  Google Nexus Q, behind the steelhead-AVR MCU on i2c.
