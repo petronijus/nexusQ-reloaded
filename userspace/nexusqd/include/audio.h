@@ -16,6 +16,10 @@
 #define AUDIO_DEVICE   "hw:Loopback,1"
 #define AUDIO_RATE     48000
 #define AUDIO_CHANNELS 2
+/* seconds to wait before re-spawning arecord after it exits (e.g. hw:Loopback,1
+ * absent because snd-aloop is not loaded). Bounds the cost of a missing tap to one
+ * short-lived arecord per interval instead of a busy-spin on the EOF'd pipe. */
+#define AUDIO_RESPAWN_S 3.0
 
 /* mean(|sample|/32768) over n S16 samples, in [0,1]; 0 if n<=0. (pure) */
 float audio_mean_abs(const int16_t *samples, int n);

@@ -112,14 +112,31 @@ int main(void) {
 
     int prev_overlay = 0;
     uint8_t lastpk[RING*3] = {0}, pk[RING*3];
+    double next_frame = now_s();   /* monotonic render deadline (decouples fps from audio) */
+    double afd_retry = 0.0;        /* next time to re-spawn arecord after it died */
     for (;;) {
+        /* arecord exits immediately if hw:Loopback,1 is absent (snd-aloop not
+         * loaded) or the device is busy; the loop below then closes afd. Re-spawn
+         * it periodically so audio recovers once the loopback appears, without
+         * busy-spinning on a dead pipe in the meantime. */
+        if (afd < 0 && now_s() >= afd_retry) { afd = audio_open(); afd_retry = now_s() + AUDIO_RESPAWN_S; }
+
         struct pollfd pfds[3]; int np = 0;
         int ki = -1, ai = -1;
         if (kfd >= 0) { ki = np; pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
         if (afd >= 0) { ai = np; pfds[np].fd = afd; pfds[np].events = POLLIN; np++; }
         pfds[np].fd = srv; pfds[np].events = POLLIN; int srvi = np; np++;
-        /* 16 ms during the volume fade; 30 ms (~33 fps) while a music scene plays; else 50 ms */
-        int to = reaction_overlay_active(&rx, now_s()) ? 16 : (child_alpha > 0.0f ? 30 : 50);
+        /* Frame cadence: 16 ms during the volume fade, 30 ms (~33 fps) while a
+         * music scene plays, else 50 ms (20 fps). The render is driven by the
+         * `next_frame` monotonic deadline below, NOT by audio-pipe readability:
+         * a continuously-fed ALSA loopback keeps `afd` readable, so polling on it
+         * would return instantly and free-run the render loop (the old ~37% CPU
+         * bug). poll() now only sleeps until the next frame is due; audio/input
+         * that arrives sooner just wakes us to drain, then we loop and re-sleep. */
+        double frame_int = reaction_overlay_active(&rx, now_s()) ? 0.016
+                         : (child_alpha > 0.0f ? 0.030 : 0.050);
+        int to = (int)((next_frame - now_s()) * 1000.0);
+        if (to < 0) to = 0;
         poll(pfds, np, to);
 
         if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
@@ -172,14 +189,18 @@ int main(void) {
         }
 
         double now = now_s();
-        double dt = now - prev_now; prev_now = now;
 
-        /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND */
-        if (ai >= 0 && (pfds[ai].revents & POLLIN)) {
+        /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND.
+         * Runs on every wake (cheap: copy + rate-limited segment hand-off) so the
+         * pipe never backs up, regardless of whether this wake is a frame tick. */
+        if (ai >= 0 && (pfds[ai].revents & (POLLIN | POLLHUP | POLLERR))) {
             static int16_t pcm[8192];
             ssize_t rr;
-            int got = 0;
-            while ((rr = read(afd, pcm, sizeof pcm)) > 0) {
+            int got = 0, dead = 0;
+            for (;;) {
+                rr = read(afd, pcm, sizeof pcm);
+                if (rr == 0) { dead = 1; break; }   /* EOF: arecord exited, pipe closed */
+                if (rr < 0)  break;                  /* EAGAIN: drained for now */
                 int frames = (int)(rr / (ssize_t)sizeof(int16_t)) / AUDIO_CHANNELS;
                 for (int fr = 0; fr < frames; fr++) {
                     int l = pcm[fr*AUDIO_CHANNELS], r2 = pcm[fr*AUDIO_CHANNELS + 1];
@@ -195,7 +216,24 @@ int main(void) {
                 got = 1;
             }
             if (got) last_pcm = now;
+            /* If arecord died (EOF) or the fd errored, stop polling the dead pipe:
+             * a HUP/ERR fd keeps poll() returning instantly, which free-runs the
+             * loop at ~90% CPU. Close it; the top-of-loop re-spawn retries later. */
+            if (dead || (pfds[ai].revents & (POLLHUP | POLLERR))) {
+                close(afd); afd = -1; ai = -1; monofill = 0;
+                afd_retry = now + AUDIO_RESPAWN_S;
+            }
         }
+
+        /* Frame tick: skip the heavy per-frame work (FFT, fades, compositor,
+         * AVR write) on early audio/input-driven wakes; only run it once the
+         * monotonic deadline is due. dt is measured render-to-render, not
+         * wake-to-wake, so the fades advance at real time. */
+        if (now < next_frame) continue;
+        next_frame += frame_int;
+        if (next_frame < now) next_frame = now + frame_int;   /* fell behind -> resync */
+        double dt = now - prev_now; prev_now = now;
+
         audiocap_on_new_frame(&ac);
         float vol = audiocap_volume(&ac);
         if (last_pcm < 0.0 || now - last_pcm > 0.15) vol = 0.0f;   /* no data -> silence */

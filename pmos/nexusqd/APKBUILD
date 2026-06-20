@@ -1,4 +1,3 @@
-# Maintainer: nexusQ-reloaded
 # Nexus Q (steelhead) LED ring daemon — C11/musl, drives the leds-steelhead-avr
 # kernel frame channel. Built for the target by pmbootstrap (armv7/musl).
 pkgname=nexusqd
