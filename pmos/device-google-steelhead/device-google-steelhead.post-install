@@ -1,9 +1,10 @@
 #!/bin/sh
-# Make the device-specific weston session (pixman, headless-tolerant) the
+# Make the LXQt-Wayland session (labwc compositor, Pixman SW renderer) the
 # default tinydm session. Done as a plain symlink so it does not depend on
 # tinydm-set-session being present at the moment this package is configured.
+# weston-nexusq.desktop stays available as a fallback session to pick manually.
 mkdir -p /var/lib/tinydm
-ln -sf /usr/share/wayland-sessions/weston-nexusq.desktop \
+ln -sf /usr/share/wayland-sessions/lxqt-wayland.desktop \
 	/var/lib/tinydm/default-session.desktop
 
 exit 0

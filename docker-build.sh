@@ -238,11 +238,18 @@ cat > "$XDG_CONFIG_HOME/pmbootstrap_v3.cfg" << CFGEOF
 aports = $PMAPORTS
 work = $WORK
 device = google-steelhead
-# Lightweight Wayland desktop on the HDMI port: weston with the pixman software
-# renderer (no GPU driver yet — see docs/2026-06-19-gpu-sgx540-acceleration-
-# research.md). The device package ships the device-specific weston.ini +
-# tinydm session. Replaced the earlier XFCE/X11 desktop (removed 2026-06-19).
-ui = weston
+# Full Wayland desktop on the HDMI port: LXQt-Wayland, running on labwc as the
+# compositor (no GPU driver yet — see docs/2026-06-19-gpu-sgx540-acceleration-
+# research.md). The device package forces the wlroots Pixman SW renderer
+# (/etc/profile.d), pins the labwc compositor (/etc/xdg/lxqt/session.conf) and
+# wires the LXQt-Wayland tinydm session; weston is kept as a fallback session.
+# Needs musl >= 1.2.6 (renameat2) for Qt6 — a fresh edge build pulls that.
+# NOTE: postmarketos-ui-lxqt is X11-by-default (drags in xorg-server, unused
+# under our Wayland session); the device package adds lxqt-wayland-session +
+# labwc and makes the LXQt-Wayland session the tinydm default. A future cleanup
+# could switch to `ui = none` + an explicit Wayland-only LXQt depends to drop X11.
+# Replaced the bare weston desktop (2026-06-20). See memory: nexusq-desktop-lxqt.
+ui = lxqt
 build_pkgs_on_install = True
 hostname = steelhead
 extra_packages = none
@@ -320,8 +327,12 @@ fi
 echo ""
 echo "=== Phase 8: Build all packages ==="
 echo "Running: pmbootstrap --no-cross build device-google-steelhead (triggers all deps)"
+# --force: defeat the persistent nexusq-workdir cache. pkgver/pkgrel may collide
+# with a previously-built apk in the work volume; without --force pmbootstrap can
+# skip the rebuild and reuse a stale kernel/DTB (this is exactly how build #1
+# shipped the pre-fix DTB). Force a rebuild so the current patches always apply.
 set +e
-pmbootstrap --no-cross build device-google-steelhead 2>&1
+pmbootstrap --no-cross build --force device-google-steelhead 2>&1
 BUILD_RC=$?
 set -e
 echo ""

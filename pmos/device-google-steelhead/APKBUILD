@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -13,6 +13,12 @@ depends="
 	mesa-dri-gallium
 	mkbootimg
 	postmarketos-base
+	lxqt-wayland-session
+	labwc
+	swaybg
+	weston
+	netsurf
+	mpv
 "
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"
@@ -22,6 +28,8 @@ source="
 	modules-initfs
 	weston.ini
 	weston-nexusq.desktop
+	lxqt-session.conf
+	nexusq-wayland.sh
 	$pkgname.post-install
 "
 
@@ -32,11 +40,19 @@ build() {
 package() {
 	devicepkg_package $startdir $pkgname
 
-	# Device-specific weston config (pixman SW renderer, headless-tolerant)
-	# and the matching tinydm session. The UI itself (postmarketos-ui-weston)
-	# is installed via the build's `ui = weston`; here we only override its
-	# defaults for this headless single-core OMAP4 board. The default tinydm
-	# session is wired up by the post-install script.
+	# LXQt-Wayland is the UI (installed via the build's `ui = lxqt`); these
+	# device files make it actually paint on this GPU-less, headless single-core
+	# OMAP4 board:
+	#  - force the wlroots Pixman SW renderer (else labwc aborts: no GPU)
+	install -Dm644 "$srcdir"/nexusq-wayland.sh \
+		"$pkgdir"/etc/profile.d/nexusq-wayland.sh
+	#  - pin the LXQt compositor to labwc so the full session starts on boot 1
+	install -Dm644 "$srcdir"/lxqt-session.conf \
+		"$pkgdir"/etc/xdg/lxqt/session.conf
+
+	# Fallback session: device-specific weston config (pixman, headless-tolerant)
+	# kept selectable in case LXQt misbehaves. The default tinydm session
+	# (LXQt-Wayland) is wired up by the post-install script.
 	install -Dm644 "$srcdir"/weston.ini \
 		"$pkgdir"/etc/xdg/weston/weston.ini
 	install -Dm644 "$srcdir"/weston-nexusq.desktop \
@@ -54,5 +70,7 @@ SKIP  deviceinfo
 SKIP  modules-initfs
 SKIP  weston.ini
 SKIP  weston-nexusq.desktop
+SKIP  lxqt-session.conf
+SKIP  nexusq-wayland.sh
 SKIP  device-google-steelhead.post-install
 "
