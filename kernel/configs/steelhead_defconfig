@@ -3057,7 +3057,11 @@ CONFIG_SND_CTL_FAST_LOOKUP=y
 # CONFIG_SND_SEQUENCER is not set
 CONFIG_SND_DRIVERS=y
 # CONFIG_SND_DUMMY is not set
-# CONFIG_SND_ALOOP is not set
+# snd-aloop: ALSA loopback for the Plan 3b audio tap. librespot plays to
+# hw:Loopback,0; nexusqd's arecord captures the same PCM from hw:Loopback,1.
+# Built-in (=y) so the loopback always exists without a /lib/modules .ko (a
+# missing snd-aloop.ko was why arecord died and nexusqd spun at ~90% CPU).
+CONFIG_SND_ALOOP=y
 # CONFIG_SND_PCMTEST is not set
 # CONFIG_SND_MTPAV is not set
 # CONFIG_SND_SERIAL_U16550 is not set

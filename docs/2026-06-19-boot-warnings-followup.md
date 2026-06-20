@@ -224,3 +224,88 @@ and did not correlate with disconnects in the captured session.
 3. **CLM blob** — confirm whether one exists for this FWID; if not, document as
    expected.
 4. The LOW items only if chasing a pristine dmesg.
+
+---
+
+---
+
+## FLASH-TEST RESULTS — kernel `6.12.12 #2-postmarketOS` (2026-06-20)
+
+Built clean from `main` (commit `1c0a9d2`, with the fix) via `docker-build.sh`;
+`pkgrel` bumped `0→1` as an on-device verification marker (`uname` now shows
+`#2`). Kernel-only boot.img (6.34 MB: vmlinuz+appended DTB, no external ramdisk,
+matching the working p9 format) `dd`-flashed to `/dev/mmcblk0p9`. Booted OK,
+modules load clean (taint=512 = the cpu-map WARN only, no module taint).
+
+| Boot-warnings item | Before (#1) | After (#2) | Status |
+|---|---|---|---|
+| McBSP2 `reparent abe-clkctrl:0030:24 … -22` | present | **gone** | ✅ FIXED |
+| `ti-sysc 48091fe0` (RNG) `-2` | present | **gone** | ✅ FIXED |
+| `ti-sysc 480b2000` (HDQ) softreset | present | **gone** | ✅ FIXED |
+| `ti-sysc 4a318000` (GPTIMER1) `-16` | present | present | ⏳ see B1 below |
+| `dpll_per_m3x2_ck … 61440000 (-22)` (Fault B) | present | present | ❌ OPEN (B7) |
+
+`leds-steelhead-avr` still probes clean (`fw=0x00 hw=0x01 leds=32, HOST mode`).
+
+---
+
+## FULL BOOT-ERROR INVENTORY (2026-06-20) — *every* dmesg item is ours to fix
+
+Policy: nothing is "benign/environmental/expected". Each line below is a defect
+with a root cause and a planned fix. `#2` boot, captured over the USB gadget net.
+
+| ID | dmesg / unit | Root cause | Planned fix | Where |
+|----|--------------|-----------|-------------|-------|
+| **B1** | `ti-sysc 4a318000.target-module: probe … -16` | GPTIMER1 always-on clockevent; the OMAP timer core claims the region, so ti-sysc sees `-EBUSY`. | Stop ti-sysc from binding the timer region (mark the target-module so it isn't double-probed, mirroring how mainline omap4 keeps the clockevent out of ti-sysc), without disabling the timer. | DTS |
+| **B2** | `WARNING … arm_dt_init_cpu_maps devtree.c:129: DT /cpu 2 nodes greater than max cores 1, capping them` | DTS declares `cpu@0`+`cpu@1` but the kernel is single-core (`SMP=n`/`NR_CPUS=1`). | Single-core reality: remove `cpu@1` from the DTS (re-add it together with the SMP bring-up — see the 2nd-core research doc). Silences the WARN and clears taint=512. | DTS |
+| **B3** | `omap4_sram_init: Unable to get sram pool needed to handle errata I688` | `sram@40304000` exists but exposes no `pool`/`barrier` child region, so the I688 barrier workaround can't allocate SRAM. | Add the mmio-sram `barrier` reserved region (per mainline `omap4.dtsi` `ocmcram`/`sram` + `omap4-cpu-thermal`/errata setup) so `omap4_sram_init` gets its pool. | DTS |
+| **B4** | `brcmfmac … brcmfmac4330-sdio.clm_blob failed -2` / `no clm_blob`, `no txcap_blob` | No regulatory CLM/TXCAP blob file for FWID `01-cafa6b3e`. | Source/provide `brcmfmac4330-sdio.clm_blob` for this FWID if it exists; otherwise ship a documented stub + confirm channels/TX caps are correct from the in-firmware defaults. | firmware pkg |
+| **B5** | `brcmf_p2p_create_p2pdev: timeout` / `add iface p2p-dev-wlan0 … err=-5` | brcmfmac tries to create a P2P device the BCM4330 firmware doesn't support here. | Disable P2P (`brcmfmac.p2pon=0` is default; set module/feature-disable or NM `p2p-dev` off) so the iface is never created. | module cfg |
+| **B6** | `display-connector connector0: No GPIO consumer hpd found` / `ddc-en found`; `HDMICORE: timeout reading edid` (every ~6 s) | DTS `connector0` has no `hpd-gpios`/`ddc-en-gpios` and there is no DDC/EDID path, so omapdss polls EDID forever. | Give the connector a fixed mode / `ddc-i2c-bus` or an embedded EDID so it stops polling (and wire `hpd`/`ddc-en` if the board has them). | DTS |
+| **B7** | `clk: couldn't set dpll_per_m3x2_ck … 61440000 (-22)`; `auxclk1_ck`=16 MHz (want 12.288), `dpll_per_m3x2_ck`=256 MHz (want 61.44) | OMAP4 composite `dpll_per_m3x2` exposes only `round_rate`; `clk_composite_determine_rate()` no-mux branch lacks a `round_rate` fallback → `assigned-clock-rates` returns `-EINVAL`. **TAS5713 MCLK is wrong.** | Kernel patch `drivers/clk/clk-composite.c`: add `round_rate` fallback in the no-mux branch. New patch `0006-*`. | kernel patch |
+| **B8** | `Alternate GPT is invalid, using primary GPT` | Backup GPT at end of `mmcblk0` is stale/misplaced (rootfs `dd`'d without fixing the secondary header for the 14.7 GB eMMC). | `sgdisk -e` (move backup GPT to true end) + verify. | device-side |
+| **B9** | `systemd-vconsole-setup.service` failed: `loadkeys` / `KD_FONT_OP_GET … I/O error` | The omapdrm fbcon VT doesn't implement font/keymap ioctls; there is no real text VT (UI is weston/labwc). | Mask `systemd-vconsole-setup.service` (and `getty` on tty if unused) in the device package. | device pkg |
+| **B10** | `hw-breakpoint: Failed to enable monitor mode on CPU 0` | HW debug/watchpoint monitor mode is gated by the secure side on this GP-fused OMAP4460. | Likely a genuine HW/secure limit — confirm it's secure-blocked, then document precisely; suppress only if confirmed unreachable. | (investigate) |
+
+### Userspace (not dmesg, but ours)
+- **U1 — nexusqd CPU 44%→3%:** TWO compounding bugs. (a) the main loop free-ran
+  because `poll()` woke on the audio pipe; (b) the real driver — `arecord` exits
+  immediately (snd-aloop absent, see B11), leaving the pipe at EOF so `poll()`
+  returned `POLLHUP` instantly and the loop spun (the 44% old binary was
+  render-bound at this spin; a frame-clock-only fix made it *worse*, 91%, by
+  spinning faster). **FIXED** in `src/nexusqd.c`: (1) monotonic `next_frame`
+  deadline so the heavy render runs at fps, not per wake; (2) on EOF/`POLLHUP`/
+  `POLLERR` close `afd`, stop polling the dead pipe, and re-spawn `arecord` every
+  `AUDIO_RESPAWN_S`=3 s (audio.h). **Measured on-device: 3% CPU, nonvoluntary
+  ctxt/s=0, 75% idle** (was 0% idle / 83% sys). Deployed (binary swap to
+  `/usr/bin/nexusqd`).
+- **U2 — nexusqd APKBUILD:** invalid `# Maintainer:` (not RFC822) aborted the
+  aport build. **FIXED** (line removed, matches the other aports).
+- **U3 — apk signing fails in `build-nexusqd-only.sh`:** `abuild` can't read
+  `~/.abuild/*.rsa` (`Permission denied`) on a reused work volume, so the **apk**
+  can't be produced (we extract the compiled binary from the chroot pkgdir to
+  deploy — fine for updating a running device, but a clean apk needs the key perms
+  fixed/regenerated). OPEN (build hygiene).
+
+### B11 — snd-aloop missing (audio tap / Spotify loopback never worked)
+`CONFIG_SND_ALOOP is not set` in the defconfig → no `snd-aloop.ko`, so
+`hw:Loopback,{0,1}` don't exist: librespot can't play to `plughw:Loopback,0` and
+nexusqd's `arecord` on `hw:Loopback,1` dies instantly (root cause of U1's spin).
+`modules-load.d/snd-aloop.conf` already wants it. **FIX (defconfig, done; needs
+kernel batch):** `CONFIG_SND_ALOOP=y` (built-in → exists without a `.ko`, so only
+boot.img needs reflashing, not the rootfs).
+
+### Build-process fixes captured (so #N+1 is reproducible)
+- Build from `main` *after* the fix is merged (build #1 shipped the pre-fix DTB).
+- `pkgrel` bump → `uname` marker to prove the new kernel actually flashed.
+- `pmbootstrap build --force` in `docker-build.sh` (defeat stale work-volume cache).
+- `distfiles` permission error → use a clean work volume (`docker volume rm`).
+- `build-nexusqd-only.sh` for fast userspace iteration: must NOT `chown -R` a
+  reused work volume (breaks chroot root-owned files → `/bin/sh: Permission
+  denied`); it `zap`s chroots to recreate them clean.
+
+### Fix batching
+- **Kernel/DTS batch (one rebuild+flash):** B1, B2, B3, B6, B7 (+ B4/B5 firmware/module).
+- **Device-side (over SSH):** B8 (sgdisk), B9 (mask unit), B5 (NM/module cfg).
+- **Userspace:** U1 deploy.
+- **Investigate:** B10.
