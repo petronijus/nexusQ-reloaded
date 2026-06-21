@@ -36,6 +36,7 @@ source="
 	0003-ARM-dts-omap4-add-steelhead.patch
 	0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 	0005-leds-add-steelhead-avr.patch
+	0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -78,4 +79,5 @@ SKIP  0002-dt-bindings-add-ti-tas5713.patch
 SKIP  0003-ARM-dts-omap4-add-steelhead.patch
 SKIP  0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 SKIP  0005-leds-add-steelhead-avr.patch
+SKIP  0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp.patch
 "

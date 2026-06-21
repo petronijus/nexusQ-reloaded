@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Sat, 20 Jun 2026 11:55:00 +0200
+Subject: [PATCH] usb: ehci-omap: steelhead: keep ethernet port alive + ULPI
+ diag
+
+On the Google Nexus Q (steelhead) the SMSC LAN9500A USB-Ethernet chip is
+soldered to EHCI port 1 behind an external SMSC USB3320 ULPI PHY. The
+mainline OMAP EHCI lets its root hub autosuspend, which bus-suspends and
+halts the controller and gates the port clocks whenever no USB device is
+attached. A soldered-down peripheral that is slow to signal connect is
+then never enumerated, and the clock-gated controller cannot be probed
+from user space (register writes are dropped, the ULPI viewport returns
+garbage), making it impossible to tell a board/clock/reset fault from a
+genuinely dead chip.
+
+Keep the EHCI root hub awake so the LAN9500A always gets a powered,
+running port, and log the USB3320 ULPI identity (VID 0x0424 / PID 0x0007
+when healthy) and PORTSC once during probe, while the controller is
+guaranteed running. This is steelhead-specific bring-up support.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+diff --git a/drivers/usb/host/ehci-omap.c b/drivers/usb/host/ehci-omap.c
+index b24f371..2df2309 100644
+--- a/drivers/usb/host/ehci-omap.c
++++ b/drivers/usb/host/ehci-omap.c
+@@ -29,6 +29,7 @@
+ #include <linux/usb/hcd.h>
+ #include <linux/of.h>
+ #include <linux/dma-mapping.h>
++#include <linux/delay.h>
+ 
+ #include "ehci.h"
+ 
+@@ -61,6 +62,38 @@ static inline void ehci_write(void __iomem *base, u32 reg, u32 val)
+ 	__raw_writel(val, base + reg);
+ }
+ 
++static inline u32 ehci_read(void __iomem *base, u32 reg)
++{
++	return __raw_readl(base + reg);
++}
++
++/*
++ * Read one 8-bit ULPI PHY register through the OMAP EHCI INSNREG05 viewport.
++ * 'port' is the 1-based ULPI port select (port 1 == first EHCI port). Returns
++ * the register byte (0..0xff), or -ETIMEDOUT if the viewport never goes idle
++ * (which means the external ULPI PHY is unclocked or held in reset).
++ */
++static int omap_ehci_ulpi_read(void __iomem *regs, int port, u8 ulpi_reg)
++{
++	u32 val;
++	int timeout = 1000;
++
++	val = (1 << EHCI_INSNREG05_ULPI_CONTROL_SHIFT) |
++	      (port << EHCI_INSNREG05_ULPI_PORTSEL_SHIFT) |
++	      (3 << EHCI_INSNREG05_ULPI_OPSEL_SHIFT) |	/* 3 = read */
++	      ((u32)ulpi_reg << EHCI_INSNREG05_ULPI_REGADD_SHIFT);
++	ehci_write(regs, EHCI_INSNREG05_ULPI, val);
++
++	while ((ehci_read(regs, EHCI_INSNREG05_ULPI) &
++		(1 << EHCI_INSNREG05_ULPI_CONTROL_SHIFT)) && --timeout)
++		udelay(1);
++
++	if (!timeout)
++		return -ETIMEDOUT;
++
++	return ehci_read(regs, EHCI_INSNREG05_ULPI) & 0xff;
++}
++
+ /* configure so an HC device and id are always provided */
+ /* always called with process context; sleeping is OK */
+ 
+@@ -194,6 +227,47 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
+ 	}
+ 	device_wakeup_enable(hcd->self.controller);
+ 
++	/*
++	 * Nexus Q (steelhead) bring-up: the SMSC LAN9500A USB-Ethernet chip
++	 * hangs off EHCI port 1 behind an external SMSC USB3320 ULPI PHY. Two
++	 * things matter for it to work:
++	 *
++	 *  1) Probe the ULPI PHY identity once now, while the controller is
++	 *     guaranteed running, and log it. A healthy USB3320 answers with
++	 *     VID 0x0424 / PID 0x0007; a -ETIMEDOUT means the PHY is unclocked
++	 *     or held in reset (a board/DTS fault rather than a dead chip).
++	 *
++	 *  2) The OMAP EHCI lets its root hub autosuspend, which bus-suspends
++	 *     (halts) the controller and gates the port clocks whenever no USB
++	 *     device is attached. A soldered-down peripheral that is slow to
++	 *     signal connect can then be missed forever. Keep the root hub
++	 *     awake so the LAN9500A always gets a powered, running port.
++	 */
++	for (i = 0; i < omap->nports; i++) {
++		struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++		int port = i + 1;	/* ULPI viewport PORTSEL is 1-based */
++		int vidl, vidh, pidl, pidh;
++
++		if (pdata->port_mode[i] != OMAP_EHCI_PORT_MODE_PHY)
++			continue;
++
++		vidl = omap_ehci_ulpi_read(regs, port, 0x00);
++		vidh = omap_ehci_ulpi_read(regs, port, 0x01);
++		pidl = omap_ehci_ulpi_read(regs, port, 0x02);
++		pidh = omap_ehci_ulpi_read(regs, port, 0x03);
++
++		dev_info(dev,
++			 "steelhead: port%d ULPI VID=%#x:%#x PID=%#x:%#x PORTSC=%08x\n",
++			 port, vidh, vidl, pidh, pidl,
++			 ehci_readl(ehci, &ehci->regs->port_status[i]));
++	}
++
++	if (hcd->self.root_hub) {
++		usb_disable_autosuspend(hcd->self.root_hub);
++		dev_info(dev,
++			 "steelhead: root-hub autosuspend disabled, keeping ehci port powered\n");
++	}
++
+ 	/*
+ 	 * Bring PHYs out of reset for non PHY modes.
+ 	 * Even though HSIC mode is a PHY-less mode, the reset
