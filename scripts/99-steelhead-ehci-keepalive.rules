@@ -1,0 +1,8 @@
+# Nexus Q (steelhead): keep the OMAP EHCI port (SMSC LAN9500A ethernet) always
+# powered. The soldered LAN9500A is slow/quiet to signal connect; if the EHCI
+# root hub is allowed to autosuspend (pmOS 60-autosuspend.rules sets it from
+# hwdb) the controller halts and drops port power, so the chip never enumerates.
+# Force the controller + its root hub to stay runtime-active at device-add time,
+# before the first autosuspend can happen.
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="4a064c00.ehci", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", KERNELS=="4a064c00.ehci", ATTR{power/control}="on", ATTR{power/autosuspend_delay_ms}="-1"
