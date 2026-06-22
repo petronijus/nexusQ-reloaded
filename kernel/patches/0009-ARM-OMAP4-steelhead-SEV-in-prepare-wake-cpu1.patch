@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000009 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Sun, 22 Jun 2026 18:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: steelhead: SEV in prepare_cpus to wake CPU1 (stock parity)
+
+On the OMAP4460 HS Nexus Q, CONFIG_SMP silently deadlocked the whole boot
+(no console/HDMI/network) when CPU1 was brought up. Disassembling the stock
+Android 3.0.8 SMP kernel (reverse-eng/vmlinux.bin) shows stock issues an SEV
+inside platform_smp_prepare_cpus (dmb;dsb;sev;dsb) immediately after writing
+the CPU1 startup address to AUX_CORE_BOOT_1. Out of cold U-Boot reset CPU1 is
+parked in ROM WFE; the ROM only (re)reads AUX_CORE_BOOT_1 after an SEV wakes it,
+moving CPU1 into the kernel secondary hold loop. Mainline omap4_smp_prepare_cpus
+omits this SEV and relies solely on the later SGI + dsb_sev in
+omap4_boot_secondary, so on this bootloader CPU1 never leaves ROM WFE and
+__cpu_up() blocks during smp_init, before any console -> the silent hang.
+
+Mirror stock: add dsb_sev() at the end of omap4_smp_prepare_cpus, after the
+AUX_CORE_BOOT_1 write. Verified on hardware: CPU1 comes online (nproc=2).
+
+Note: pair with cpuidle.off=1 on the cmdline (stock ships
+cpuidle44xx.disallow_smp_idle) -- OMAP4 secondary deep-idle otherwise faults.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+--- a/arch/arm/mach-omap2/omap-smp.c
++++ b/arch/arm/mach-omap2/omap-smp.c
+@@ -403,6 +403,16 @@
+ 	else
+ 		writel_relaxed(__pa_symbol(cfg.startup_addr),
+ 			       cfg.wakeupgen_base + OMAP_AUX_CORE_BOOT_1);
++
++	/*
++	 * Steelhead OMAP4460 HS: stock issues an SEV here, in prepare, right after
++	 * writing AUX_CORE_BOOT_1, to kick CPU1 out of ROM WFE so it reads the
++	 * startup address and enters the kernel secondary hold loop. Mainline omits
++	 * this and relies only on the later SGI + dsb_sev in omap4_boot_secondary,
++	 * which on a cold U-Boot boot leaves CPU1 parked in ROM WFE -> the OMAP4
++	 * silent SMP deadlock. Mirror stock (vmlinux.bin platform_smp_prepare_cpus).
++	 */
++	dsb_sev();
+ }
+ 
+ const struct smp_operations omap4_smp_ops __initconst = {
