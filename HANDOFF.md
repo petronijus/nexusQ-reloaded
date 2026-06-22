@@ -4,6 +4,26 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
+## Session 2026-06-22: TAS5713 amp clock fixed, single-core taint cleared; ethernet still dead
+
+Built and flashed kernel **#4** (`6.12.12`), verified live over the USB gadget
+(WiFi is unstable — flash/diagnostics go over `172.16.42.1`).
+
+- **TAS5713 amplifier MCLK fixed** (kernel patch 0007). OMAP4 composite-clock
+  `round_rate`/`set_rate` were `-EINVAL` stubs; delegated to
+  `ti_clk_divider_ops`. On HW: `dpll_per_m3x2_ck` = 61.44 MHz, `auxclk1_ck` =
+  12.288 MHz (256×48 kHz), ALSA `card 0 NexusQ-Speaker` registers, no clock
+  error. (Actual audio playback through speakers not yet tested.)
+- **Single-core taint cleared.** DTS now `/delete-node/ cpu@1` (matches
+  `CONFIG_SMP=n`). `/proc/sys/kernel/tainted` = 0 (was 512), no DT cpu-cap WARN.
+- `CONFIG_SRAM=y`; new helper scripts `regen-dts-patch.sh`,
+  `extract-and-repack.sh`; device password moved to gitignored `.nexus_pw`.
+- **Ethernet (LAN9500A) STILL DEAD.** #4 kernel: EHCI port powered, ULPI PHY
+  (USB3320, VID 0x4:0x24) responds, `PORTSC=00001000` (PP set, CCS clear) — no
+  enumeration, no `eth0`, EHCI bus 002 has only the root hub. This is the next
+  thing to investigate/fix. Backup of the pre-#4 boot partition:
+  `output/p9-backup-pre-clockfix-b7.img`.
+
 ## Session 2026-06-10: Userspace boots, WiFi works, ethernet is dead HW
 
 ### Status: postmarketOS (systemd) boots, SSH over USB gadget, WiFi functional

@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 578 +
- 2 files changed, 579 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 698 +
+ 2 files changed, 699 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,682 @@
+@@ -0,0 +1,698 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -717,3 +717,19 @@ index 0000000..abcdef1
 + * expected on every OMAP4 board and MUST NOT be disabled (it would break
 + * timekeeping). Left as-is intentionally.
 + */
++
++/*
++ * B2: single-core reality. The shared omap4.dtsi declares cpu@0 and cpu@1, but
++ * this kernel is built single-core (CONFIG_SMP=n / NR_CPUS=1), so the second
++ * CPU node makes the early DT parser warn and taint the kernel:
++ *   WARNING ... arm_dt_init_cpu_maps devtree.c: DT /cpu 2 nodes greater than
++ *   max cores 1, capping them
++ * Drop cpu@1 to match the single-core build (clears the WARN and taint=512).
++ * cpu@1 is unlabeled upstream, so delete it via its parent's path.
++ *
++ * RE-ADD this node together with the OMAP4460 SMP / CPU1 bring-up (see the
++ * deferred 2nd-core research notes) -- it is required to boot the second core.
++ */
++&{/cpus} {
++	/delete-node/ cpu@1;
++};

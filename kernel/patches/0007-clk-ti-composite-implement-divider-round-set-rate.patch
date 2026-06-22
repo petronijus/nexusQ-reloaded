@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000007 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Sun, 22 Jun 2026 09:00:00 +0200
+Subject: [PATCH] clk: ti: composite: implement divider round_rate/set_rate
+
+OMAP4 "ti,composite-clock" nodes (gate + divider, no mux) wire their rate
+component to ti_composite_divider_ops. While .recalc_rate delegates to the
+real ti_clk_divider_ops, .round_rate and .set_rate were left as stubs that
+unconditionally return -EINVAL. The generic clk-composite core therefore
+exposes only a round_rate that always fails, so any clk_set_rate() on such a
+clock (e.g. via assigned-clock-rates) returns -EINVAL.
+
+On the Google Nexus Q (steelhead) this breaks the TAS5713 amplifier MCLK
+path: the DTS sets dpll_per_m3x2_ck to 61.44 MHz (-> auxclk1 /5 ->
+fref_clk1_out 12.288 MHz = 256 x 48 kHz), but the assignment fails with:
+
+  clk: couldn't set dpll_per_m3x2_ck clk rate to 61440000 (-22),
+       current rate: 256000000
+
+leaving auxclk1 at 16 MHz and the amplifier without a correct master clock.
+
+Delegate round_rate and set_rate to ti_clk_divider_ops, exactly as
+recalc_rate already does. The rate_hw passed to these ops is the divider's
+clk_hw (recalc_rate already operates on it successfully), so the divider ops
+apply unchanged. This lets a composite divider's rate be rounded and set,
+matching what the vendor board-steelhead.c clock setup did.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+ drivers/clk/ti/composite.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/drivers/clk/ti/composite.c
++++ b/drivers/clk/ti/composite.c
+@@ -29,13 +29,13 @@
+ static long ti_composite_round_rate(struct clk_hw *hw, unsigned long rate,
+ 				    unsigned long *prate)
+ {
+-	return -EINVAL;
++	return ti_clk_divider_ops.round_rate(hw, rate, prate);
+ }
+ 
+ static int ti_composite_set_rate(struct clk_hw *hw, unsigned long rate,
+ 				 unsigned long parent_rate)
+ {
+-	return -EINVAL;
++	return ti_clk_divider_ops.set_rate(hw, rate, parent_rate);
+ }
+ 
+ static const struct clk_ops ti_composite_divider_ops = {

@@ -680,3 +680,19 @@
  * expected on every OMAP4 board and MUST NOT be disabled (it would break
  * timekeeping). Left as-is intentionally.
  */
+
+/*
+ * B2: single-core reality. The shared omap4.dtsi declares cpu@0 and cpu@1, but
+ * this kernel is built single-core (CONFIG_SMP=n / NR_CPUS=1), so the second
+ * CPU node makes the early DT parser warn and taint the kernel:
+ *   WARNING ... arm_dt_init_cpu_maps devtree.c: DT /cpu 2 nodes greater than
+ *   max cores 1, capping them
+ * Drop cpu@1 to match the single-core build (clears the WARN and taint=512).
+ * cpu@1 is unlabeled upstream, so delete it via its parent's path.
+ *
+ * RE-ADD this node together with the OMAP4460 SMP / CPU1 bring-up (see the
+ * deferred 2nd-core research notes) -- it is required to boot the second core.
+ */
+&{/cpus} {
+	/delete-node/ cpu@1;
+};

@@ -19,5 +19,8 @@ firmware/bcmdhd.cal
 build-*.log
 gadget-install.log
 
+# Device root password (read at runtime by flash/SSH helpers; never committed)
+.nexus_pw
+
 # Reverse-engineering scratch (extracted Google factory image — non-redistributable, large)
 reverse-eng/
