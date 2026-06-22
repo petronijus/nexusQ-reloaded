@@ -318,6 +318,18 @@ sudo chown -R 12345:12345 "$WORK/packages"
 echo "  $WORK/packages now owned by uid 12345 (chroot abuild user):"
 ls -lan "$WORK/packages" | head
 
+# Same EACCES root cause applies to the armv7 ccache dir: abuild inside the
+# chroot (uid 12345) writes ccache objects into $WORK/cache_ccache_armv7, but the
+# broad `sudo chown -R pmos:pmos /home/pmos` in Phase 5 (re)sets it to uid 1000
+# (mode 0755, no group/other write). uid 12345 then cannot recreate ccache's
+# bucket dirs -> `make olddefconfig` aborts with "ccache: error: Permission
+# denied". (Especially after the cache contents were cleared out-of-band, which
+# leaves only the uid-1000 parent + ccache.conf behind.) Hand it to uid 12345
+# unconditionally, mirroring the $WORK/packages fix above.
+sudo mkdir -p "$WORK/cache_ccache_armv7"
+sudo chown -R 12345:12345 "$WORK/cache_ccache_armv7"
+echo "  $WORK/cache_ccache_armv7 now owned by uid 12345 (chroot abuild user)"
+
 echo ""
 echo "=== Phase 7b: Generate checksums ==="
 echo "Generating checksums for kernel package..."
