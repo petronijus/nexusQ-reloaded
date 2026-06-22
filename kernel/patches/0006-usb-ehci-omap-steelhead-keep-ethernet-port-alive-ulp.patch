@@ -24,7 +24,13 @@ Replicate the vendor host init, all BEFORE usb_add_hcd() (the order matters):
     BEFORE usb_add_hcd(). Without it the USB3320 answers register reads but never
     drives the downstream bus; doing it after the controller starts (an earlier
     version of this patch) does not bring the device up -- the vendor does it
-    here, before the port is started.
+    here, before the port is started. Precede that ULPI reset with the
+    vendor's udelay(1000) settle (stock VA 0xc0329ba4): without it the soft
+    reset can land before the USB3320/LAN9500A link state machine is stable,
+    so the chip answers register reads but never drives the bus and the port
+    never reports connect (PORTSC CCS stuck 0) -- the intermittent 'eth0 only
+    enumerates on some cold boots' failure (a cold power-cycle recovers it,
+    unbind/bind does not).
 
 Also log the ULPI identity once and pin the root hub runtime-active (userspace
 udev re-enables autosuspend via hwdb, which would halt the controller, gate the
@@ -59,7 +65,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,76 @@
+@@ -61,6 +67,89 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -109,6 +115,19 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 +	u32 reg;
 +
++	/*
++	 * Steelhead/stock parity: the vendor omap_ehci_soft_phy_reset issues a
++	 * udelay(1000) HERE, before striking the ULPI Function-Control reset, to
++	 * let the just-released USB3320 PHY / LAN9500A link state machine settle
++	 * (stock VA 0xc0329ba4: mov r0,#0x3e8; bl udelay). Without it the soft
++	 * reset can land before the transceiver is stable, so it answers register
++	 * reads but never drives the downstream bus and the port never reports
++	 * connect (PORTSC CCS stuck 0) -- the intermittent 'eth0 enumerates only
++	 * on some cold boots' failure, which a cold power-cycle (re-runs the whole
++	 * timed sequence) recovers but an unbind/bind (no settle) does not.
++	 */
++	udelay(1000);
++
 +	reg = ULPI_FUNC_CTRL_RESET
 +		/* FUNCTION_CTRL_SET register */
 +		| (ULPI_SET(ULPI_FUNC_CTRL) << EHCI_INSNREG05_ULPI_REGADD_SHIFT)
@@ -136,7 +155,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -144,6 +220,53 @@
+@@ -144,6 +233,53 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -190,7 +209,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +310,35 @@
+@@ -187,6 +323,35 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -226,7 +245,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +347,83 @@
+@@ -195,6 +360,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*

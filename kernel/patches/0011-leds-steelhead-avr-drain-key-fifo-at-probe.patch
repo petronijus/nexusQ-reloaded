@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Mon, 23 Jun 2026 01:00:00 +0200
+Subject: [PATCH] leds: steelhead-avr: drain key FIFO at probe (fix dead keys)
+
+The Nexus Q capacitive mute/volume keys (the rotary volume ring) intermittently
+did not work: pressing/rotating produced no input events and the AVR IRQ count
+stayed 0, even though the AVR itself was detecting keys (its KEY_FIFO, read
+directly over i2c, returned VOL_UP/VOL_DOWN/MUTE codes the whole time).
+
+Root cause: the AVR holds its INT line low while KEY_FIFO is non-empty, and the
+driver requests the irq as IRQF_TRIGGER_FALLING. If the FIFO already has entries
+when the driver probes (stale presses queued before attach), INT is already low,
+so no falling edge ever arrives -> avr_irq() never runs -> the FIFO is never
+drained -> INT stays low forever. Whether this happens depends on the FIFO state
+at probe, which is why the keys "worked sometimes" (a cold boot that probed with
+an empty FIFO) and were dead other times.
+
+Fix: after requesting the irq, drain the KEY_FIFO empty in probe. That releases
+INT (goes high) and arms the falling edge for the first real key press.
+(Confirmed on HW: draining the FIFO live made the IRQ start firing and all
+mute/volume/rotation events appear immediately.)
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+--- a/drivers/leds/leds-steelhead-avr.c
++++ b/drivers/leds/leds-steelhead-avr.c
+@@ -452,6 +452,28 @@
+ 					"steelhead-avr", a);
+ 	if (ret)
+ 		return dev_err_probe(&client->dev, ret, "irq request failed\n");
++
++	/*
++	 * Drain any key events the AVR queued before we attached the IRQ. The
++	 * AVR holds its INT line low while KEY_FIFO is non-empty; with an
++	 * EDGE_FALLING irq a FIFO that is already non-empty at probe leaves INT
++	 * low with no further falling edge, so the irq never fires and the keys
++	 * stay dead until a cold boot that happens to probe with an empty FIFO
++	 * (the intermittent 'keys/volume sometimes work' symptom). Read the
++	 * FIFO empty here to release INT and arm the edge for the first press.
++	 */
++	while (true) {
++		u16 code;
++		bool down;
++		u8 b;
++
++		mutex_lock(&a->io_lock);
++		ret = avr_read_reg(a, AVR_REG_KEY_FIFO, &b);
++		mutex_unlock(&a->io_lock);
++		if (ret || avr_decode_key(b, &code, &down) == -EAGAIN)
++			break;
++	}
++
+ 	return 0;
+ }
+ 

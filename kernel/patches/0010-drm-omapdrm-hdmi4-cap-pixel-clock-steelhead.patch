@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Mon, 23 Jun 2026 00:10:00 +0200
+Subject: [PATCH] drm/omapdrm: hdmi4: cap pixel clock to known-good (steelhead)
+
+On the Nexus Q the OMAP4 HDMI PLL does not cleanly generate the pixel clocks of
+the higher modes the monitor advertises (1440x900@106.5MHz, 1280x1024@108MHz):
+the TMDS link comes up but the sink cannot lock, so the panel detects a signal
+yet stays blank. The hdmi4 bridge had no .mode_valid, so every EDID mode was
+offered to userspace and the compositor (wlroots) selected the EDID-preferred
+1440x900 -> blank desktop (boot fbcon at the cmdline mode was visible, which
+masked it). Neither the monitor (140MHz max) nor the HDMI PHY (186MHz) is the
+limit; it is an omapdrm mode-set/PLL issue specific to these modes.
+
+Add a .mode_valid that caps the advertised pixel clock at 75MHz, so a
+displayable mode is selected (keeps 1280x720@74.25 and 1024x768@65, rejects the
+blank-inducing 1440x900/1280x1024). Pair with video=HDMI-A-1:1280x720@60.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+--- a/drivers/gpu/drm/omapdrm/dss/hdmi4.c
++++ b/drivers/gpu/drm/omapdrm/dss/hdmi4.c
+@@ -491,8 +491,28 @@
+ 	return drm_edid;
+ }
+ 
++/*
++ * Steelhead: the OMAP4 HDMI PLL does not cleanly generate the pixel clocks of
++ * the higher modes the monitor advertises (e.g. 1440x900@106.5MHz,
++ * 1280x1024@108MHz): TMDS comes up but the sink cannot lock and the screen
++ * stays blank. The HDMI bridge had no .mode_valid, so these modes were offered
++ * to userspace and the compositor picked the EDID-preferred 1440x900 -> blank
++ * desktop. Cap the advertised pixel clock to a known-good value so a
++ * displayable mode is selected. (~75MHz keeps 1280x720@74 and 1024x768@65.)
++ */
++static enum drm_mode_status
++hdmi4_bridge_mode_valid(struct drm_bridge *bridge,
++			const struct drm_display_info *info,
++			const struct drm_display_mode *mode)
++{
++	if (mode->clock > 75000)
++		return MODE_CLOCK_HIGH;
++	return MODE_OK;
++}
++
+ static const struct drm_bridge_funcs hdmi4_bridge_funcs = {
+ 	.attach = hdmi4_bridge_attach,
++	.mode_valid = hdmi4_bridge_mode_valid,
+ 	.mode_set = hdmi4_bridge_mode_set,
+ 	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+ 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,

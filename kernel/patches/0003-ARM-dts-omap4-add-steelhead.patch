@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 709 +
- 2 files changed, 710 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 718 +
+ 2 files changed, 719 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,709 @@
+@@ -0,0 +1,718 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -257,9 +257,18 @@ index 0000000..abcdef1
 +
 +	dss_hdmi_pins: dss-hdmi-pins {
 +		pinctrl-single,pins = <
-+			OMAP4_IOPAD(0x09a, PIN_INPUT | MUX_MODE0)		/* hdmi_cec */
-+			OMAP4_IOPAD(0x09c, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl */
-+			OMAP4_IOPAD(0x09e, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda */
++			OMAP4_IOPAD(0x09a, PIN_INPUT | MUX_MODE0)	/* hdmi_cec */
++			/*
++			 * DDC (EDID I2C) pads: do NOT force the SoC internal
++			 * pull-up. These are open-drain DDC lines; the TPD12S015
++			 * companion provides the external pull-ups. Forcing the
++			 * weak (~50k) internal PULLUP fights the external pulls
++			 * and corrupts SCL/SDA edges -> "HDMICORE timeout reading
++			 * edid" (TMDS is a separate pad group, so video still
++			 * works). Stock leaves these pads un-muxed (no SW pull).
++			 */
++			OMAP4_IOPAD(0x09c, PIN_INPUT | MUX_MODE0)	/* hdmi_scl (DDC) */
++			OMAP4_IOPAD(0x09e, PIN_INPUT | MUX_MODE0)	/* hdmi_sda (DDC) */
 +		>;
 +	};
 +
