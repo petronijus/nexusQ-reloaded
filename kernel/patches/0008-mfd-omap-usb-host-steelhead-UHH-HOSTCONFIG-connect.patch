@@ -23,11 +23,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 ---
 --- a/drivers/mfd/omap-usb-host.c
 +++ b/drivers/mfd/omap-usb-host.c
-@@ -441,11 +441,20 @@
- 	pm_runtime_get_sync(dev);
- 
- 	reg = usbhs_read(omap->uhh_base, OMAP_UHH_HOSTCONFIG);
- 	/* setup ULPI bypass and burst configurations */
+@@ -445,7 +445,16 @@
  	reg |= (OMAP_UHH_HOSTCONFIG_INCR4_BURST_EN
  			| OMAP_UHH_HOSTCONFIG_INCR8_BURST_EN
  			| OMAP_UHH_HOSTCONFIG_INCR16_BURST_EN);

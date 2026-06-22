@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Sun, 22 Jun 2026 18:00:00 +0200
+Subject: [PATCH] ARM: OMAP4: steelhead: self-contained CPU1 bring-up auto-probe (debug)
+
+Observability for the OMAP4460 HS silent SMP deadlock WITHOUT relying on the
+(flaky) network. On a maxcpus=1 boot a late_initcall kthread waits ~30 s for the
+HDMI framebuffer console to come up, then onlines CPU1 (add_cpu(1)). Combined
+with the instrumentation patch, the STEELHEAD-SMP milestones print synchronously
+to the screen, so the last line before a freeze pinpoints exactly where CPU1
+bring-up dies; on success nr_online jumps to 2. Pair with cmdline
+systemd.unit=multi-user.target so the desktop compositor does not own HDMI.
+
+NOT for release -- debug probe, drop once CPU1 bring-up works.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+--- a/arch/arm/mach-omap2/omap-smp.c
++++ b/arch/arm/mach-omap2/omap-smp.c
+@@ -15,6 +15,9 @@
+ #include <linux/init.h>
+ #include <linux/device.h>
+ #include <linux/smp.h>
++#include <linux/cpu.h>
++#include <linux/kthread.h>
++#include <linux/delay.h>
+ #include <linux/io.h>
+ #include <linux/irqchip/arm-gic.h>
+ 
+@@ -426,6 +429,33 @@
+ 	dsb_sev();
+ }
+ 
++/*
++ * Steelhead DEBUG (drop before release): self-contained CPU1 bring-up probe.
++ * On a maxcpus=1 boot, ~30 s after init (once the HDMI fb console is up), online
++ * CPU1 from a kthread so the patch-0009 milestones print to the screen with NO
++ * network needed. The last STEELHEAD-SMP line before a freeze pinpoints where
++ * CPU1 bring-up dies; if it succeeds, nr_online jumps to 2.
++ */
++static int steelhead_smp_probe(void *unused)
++{
++	int rc;
++
++	ssleep(30);
++	pr_emerg("STEELHEAD-SMP: ===== AUTO-PROBE: onlining CPU1 now (nr_online=%d) =====\n",
++		 num_online_cpus());
++	rc = add_cpu(1);
++	pr_emerg("STEELHEAD-SMP: ===== AUTO-PROBE: add_cpu(1) rc=%d nr_online=%d =====\n",
++		 rc, num_online_cpus());
++	return 0;
++}
++
++static int __init steelhead_smp_probe_init(void)
++{
++	kthread_run(steelhead_smp_probe, NULL, "steelhead-smp-probe");
++	return 0;
++}
++late_initcall(steelhead_smp_probe_init);
++
+ const struct smp_operations omap4_smp_ops __initconst = {
+ 	.smp_init_cpus		= omap4_smp_init_cpus,
+ 	.smp_prepare_cpus	= omap4_smp_prepare_cpus,
