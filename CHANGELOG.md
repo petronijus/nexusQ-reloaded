@@ -18,9 +18,16 @@ All notable changes to Nexus Q Reloaded. Format follows
 - `CONFIG_SRAM=y` in the defconfig (OMAP4 on-chip SRAM driver).
 - Tooling: `scripts/regen-dts-patch.sh` (regenerate patch 0003 from the working
   DTS) and `scripts/extract-and-repack.sh` (pull kernel+DTB from the build
-  chroot pkgdir and repack a partition-sized boot image — the final `abuild`
-  `create_apks` step fails on a chroot perms quirk, but the compiled artifacts
-  in pkgdir are complete).
+  chroot pkgdir and repack a partition-sized boot image — a fast path that skips
+  the rootfs build).
+- **Build fix:** the recurring `abuild create_apks` "Permission denied" on
+  `/home/pmos/packages//pmos/armv7/...apk` is fixed. On a reused `nexusq-workdir`
+  volume `$WORK/packages` was owned by the container `pmos` (uid 1000) while
+  abuild inside the chroot runs as uid 12345, so it could not write its `.apk`.
+  `docker-build.sh` Phase 7a now `chown`s `$WORK/packages` to 12345 before the
+  build, so `linux-google-steelhead-*.apk` is created cleanly and `pmbootstrap
+  install` runs. `extract-and-repack.sh` is kept as a fast path, no longer a
+  required workaround.
 
 ### Changed
 - DTS: delete the upstream `cpu@1` node to match the single-core build

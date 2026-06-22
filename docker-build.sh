@@ -289,6 +289,36 @@ pmbootstrap config device 2>&1 || {
 }
 
 echo ""
+echo "=== Phase 7a: Fix abuild REPODEST ownership on the work volume ==="
+# ROOT CAUSE of the recurring "can't create .../pmos/armv7/...apk: Permission
+# denied" in abuild's create_apks step:
+#
+# Inside the buildroot chroot, abuild's REPODEST is /home/pmos/packages, where
+# pmbootstrap symlinks .../packages/pmos -> /mnt/pmbootstrap/packages/<channel>,
+# a bind mount of this work dir's $WORK/packages/<channel> (on the persistent
+# nexusq-workdir volume). The chroot's abuild user is uid 12345
+# (pmb.config.chroot_uid_user), NOT the container's pmos (uid 1000). So abuild
+# writes the .apk as uid 12345 into $WORK/packages/<channel>/armv7/.
+#
+# pmbootstrap (pmb/build/backend.py) only chowns $WORK/packages to 12345 when
+# $WORK/packages/<channel> does NOT yet exist. On a *reused* work volume that
+# dir already exists, and the broad `sudo chown -R pmos:pmos /home/pmos` in
+# Phase 5 above has (re)set the whole tree to uid 1000 (mode 0755, no group/
+# other write). uid 12345 can then no longer create files there -> create_apks
+# fails with EACCES and rootpkg/create_apks aborts even though the kernel,
+# modules and DTBs compiled fine into the pkgdir.
+#
+# Fix: hand $WORK/packages to the chroot's abuild uid (12345) explicitly, every
+# run, so abuild can always write its .apk. This mirrors exactly what
+# pmbootstrap's own (only-if-missing) chown does, just unconditionally and after
+# the Phase 5 chown that would otherwise clobber it. mkdir -p covers a fresh
+# volume; the chown re-asserts ownership on a reused one.
+sudo mkdir -p "$WORK/packages"
+sudo chown -R 12345:12345 "$WORK/packages"
+echo "  $WORK/packages now owned by uid 12345 (chroot abuild user):"
+ls -lan "$WORK/packages" | head
+
+echo ""
 echo "=== Phase 7b: Generate checksums ==="
 echo "Generating checksums for kernel package..."
 pmbootstrap checksum linux-google-steelhead 2>&1 || {

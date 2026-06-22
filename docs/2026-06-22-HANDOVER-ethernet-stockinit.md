@@ -48,12 +48,14 @@ implemented. Revisit only if connect works but suspend/resume is flaky.
 # clear ccache first (build gotcha: stale ccache -> olddefconfig "unknown assembler")
 docker run --rm -v nexusq-workdir:/work alpine:3.21 sh -c \
   'cd /work/cache_ccache_armv7 && find . -mindepth 1 -maxdepth 1 ! -name ccache.conf -exec rm -rf {} +'
-# build (docker-build.sh; create_apks fails on a perms quirk -- that's EXPECTED,
-# the compiled kernel+dtb land in the pkgdir anyway)
+# build (docker-build.sh). The create_apks perms failure is now FIXED (Phase 7a
+# chowns $WORK/packages to the chroot abuild uid 12345), so a clean run produces
+# linux-google-steelhead-*.apk and pmbootstrap install runs to completion.
 docker run --rm --privileged -v "$PWD:/src:ro" -v nexusq-output:/tmp/output \
   -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
   --name nexusq-build nexusq-builder /src/docker-build.sh 2>&1 | tee build-6.log
-# repack boot image from pkgdir (create_apks failure is worked around here)
+# OPTIONAL fast path: repack a kernel-only boot image straight from the pkgdir,
+# skipping the rootfs build (quicker when only the kernel/DTB changed)
 docker run --rm -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
   -v "$PWD:/src:ro" -v "$PWD/output:/out" nexusq-builder /src/scripts/extract-and-repack.sh
 ```

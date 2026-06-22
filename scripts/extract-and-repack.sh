@@ -3,12 +3,22 @@
 # linux-google-steelhead BUILD chroot pkgdir and repack a kernel-only boot.img
 # (zImage + appended DTB, no ramdisk) sized for the Nexus Q p9 boot partition.
 #
-# Why pkgdir and not the rootfs chroot: abuild's final create_apks step fails on
-# /home/pmos/packages perms (a work-volume hygiene issue), so `pmbootstrap
-# install` never runs and chroot_rootfs has no kernel. The pkgdir, however,
-# holds exactly what abuild would have packaged -- `make zinstall
-# modules_install dtbs_install` ran successfully into it -- so these artifacts
-# are identical to the .apk contents.
+# Why pkgdir and not the rootfs chroot: the pkgdir holds exactly what abuild
+# packages -- `make zinstall modules_install dtbs_install` ran into it -- so
+# these artifacts are byte-identical to the .apk contents but available without
+# waiting for `pmbootstrap install`.
+#
+# HISTORICAL NOTE (fixed 2026-06-22): abuild's final create_apks step used to
+# fail with "can't create /home/pmos/packages//pmos/armv7/...apk: Permission
+# denied", so `pmbootstrap install` never ran and chroot_rootfs had no kernel --
+# this script was the only way out. Root cause: $WORK/packages on the reused
+# nexusq-workdir volume was owned by the container pmos (uid 1000), but abuild
+# inside the chroot runs as uid 12345, so it could not write its .apk. Fixed in
+# docker-build.sh "Phase 7a" (chown $WORK/packages -> 12345 before the build).
+# Builds now produce linux-google-steelhead-*.apk cleanly and `pmbootstrap
+# install` runs. This script is KEPT as a still-useful fast path: it skips the
+# rootfs build entirely and repacks a kernel-only boot.img straight from the
+# pkgdir, which is much quicker when you only changed the kernel/DTB.
 #
 # Runs INSIDE the nexusq-builder container via the entrypoint:
 #   docker run --rm \

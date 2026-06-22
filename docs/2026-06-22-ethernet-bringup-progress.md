@@ -12,10 +12,15 @@ against the original Android factory image.
   Build gotchas found & fixed: `boot_size` must be **512** (was 256, newer
   pmbootstrap rejects it) in `docker-build.sh`; abuild **signing key** perms
   (`config_abuild/pmos@local-*.rsa` must be 0644 for the in-chroot uid); the
-  apk-packaging step still fails on `/home/pmos/packages` perms, but the
-  **compiled `vmlinuz` + dtb are taken straight from the build chroot**
+  apk-packaging step's `/home/pmos/packages` perms failure is now **FIXED** —
+  same uid-12345 class of bug as the signing key: `$WORK/packages` on the reused
+  work volume was owned by the container `pmos` (uid 1000) while abuild in the
+  chroot runs as uid 12345, so it could not write the `.apk`. `docker-build.sh`
+  Phase 7a chowns `$WORK/packages` to 12345 before the build, so create_apks
+  succeeds and `pmbootstrap install` runs. As a fast path the
+  **compiled `vmlinuz` + dtb can still be taken straight from the build chroot**
   (`chroot_buildroot_armv7/home/pmos/build/pkg/linux-google-steelhead/boot/`)
-  and repacked — no apk needed.
+  and repacked — no full rootfs build needed.
   - **CRITICAL build gotcha:** a *populated* ccache makes the kernel `olddefconfig`
     fail with `cc: unknown assembler invoked` / "Sorry, this assembler is not
     supported". **Clear `cache_ccache_*` before each kernel build** (empty ccache

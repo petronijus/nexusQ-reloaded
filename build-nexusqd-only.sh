@@ -104,6 +104,14 @@ echo "=== Phase 7b: Zap chroots (recreate clean; prior runs may have left them"
 echo "    half-set-up or root-owned). Keeps built packages + caches. ==="
 pmbootstrap -y zap 2>&1 | tail -3 || true
 
+# Same abuild REPODEST fix as docker-build.sh Phase 7a: on a reused work volume
+# $WORK/packages/<channel>/armv7 may be owned by the container pmos (uid 1000),
+# but abuild inside the chroot runs as uid 12345 and must write the .apk there.
+# pmbootstrap only chowns it to 12345 when the dir is missing, so re-assert it.
+echo "=== Phase 7a: Fix abuild REPODEST ownership on the work volume ==="
+sudo mkdir -p "$WORK/packages"
+sudo chown -R 12345:12345 "$WORK/packages"
+
 echo "=== Phase 7c: Build nexusqd (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 pmbootstrap checksum nexusqd 2>&1 || true
