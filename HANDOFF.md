@@ -4,7 +4,44 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-22 (latest): SECOND CPU CORE WORKS ✅ — dual-core SMP
+## Session 2026-06-23 (latest): device hardening — AVR keys, HDMI desktop, WiFi; ethernet still open
+
+Released **v1.2.0**. Built on the dual-core SMP win. Full detail in
+`docs/2026-06-23-session-findings.md`; ethernet next steps in
+`docs/2026-06-23-ethernet-continuation.md`.
+
+- **AVR rotary volume + mute keys FIXED** (patch 0011) — the keys were dead
+  because the AVR holds INT low while its KEY_FIFO is non-empty and the driver
+  uses an `EDGE_FALLING` irq: stale FIFO entries at probe meant the line was
+  already low → no edge → the irq never fired → FIFO never drained (latent driver
+  bug; intermittent). Drain the FIFO in probe to release INT. Proven by reading
+  the KEY_FIFO directly over i²c (the AVR was detecting keys the whole time) and
+  by the IRQ count going 0→118 once drained. The LED ring (nexusqd) now responds
+  to the dome again.
+- **HDMI desktop visible** — DDC pads to `PIN_INPUT` (EDID reads) + hdmi4 bridge
+  `.mode_valid` cap at 75 MHz (patch 0010) so wlroots picks a DSS-displayable
+  1280×720 instead of the blank native 1440×900.
+- **WiFi latency** fixed via NM `wifi.powersave = 2` drop-in.
+- **Ethernet LAN9500A — still intermittent.** stock-parity-auditor REFUTED the
+  board-level timing/power-cycle hypothesis (stock uses identical udelay(2), no
+  power-cycle, no retry) and found one real divergence: stock's **1 ms ULPI
+  pre-reset settle** (added, commit `3b06c41`) — but it is **not** sufficient; a
+  cold boot still shows PORTSC CCS=0 / no enumeration. **Prime open suspect:**
+  `UHH_HOSTCONFIG` not holding `0x11c` across `usbhs_runtime_resume`. Next: a
+  kernel-side diag build dumping `UHH_HOSTCONFIG` + USB3320 ULPI identity (userspace
+  `/dev/mem` faults on the clock-gated USBHS). See the continuation doc.
+
+### Process reminders reinforced this session
+- **Verify every hypothesis against stock before building.** The user's "does
+  stock confirm this?" caught a wrong ethernet fix mid-flight (a board-level
+  power-cycle that stock does not do) before it was flashed.
+- **Nothing is "benign/cosmetic."** Every half-working subsystem gets root-caused.
+- **sha-verify the on-device boot image before `dd`** (a slow-WiFi scp once
+  silently transferred a 0-byte file); flash via fastboot or the USB gadget.
+- Test ethernet only by **cold power-cycle** over **multiple boots** — warm
+  `fastboot reboot` is not representative and one good boot is luck.
+
+## Session 2026-06-22: SECOND CPU CORE WORKS ✅ — dual-core SMP
 
 The OMAP4460 HS second Cortex-A9 is online and stable on mainline 6.12.
 `CONFIG_SMP=y` had silently deadlocked the boot for the life of the port; root

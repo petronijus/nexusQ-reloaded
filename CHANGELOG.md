@@ -6,6 +6,77 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Known issues / in progress
+- **Ethernet (LAN9500A) is intermittent again.** Enumerates only on some cold
+  boots (PORTSC CCS stuck 0, chip does not drive D+); cold power-cycle recovers,
+  unbind/bind does not. Stock's 1 ms ULPI pre-reset settle was added (real
+  parity) but is **not** sufficient. Prime suspect: `UHH_HOSTCONFIG` not holding
+  `0x11c` across `usbhs_runtime_resume`. Diagnostic plan in
+  `docs/2026-06-23-ethernet-continuation.md`.
+
+## [1.2.0] - 2026-06-23
+
+### Added
+- **Second CPU core (dual-core SMP) now works** 🧠 — the OMAP4460 ES1.1 **HS**
+  ("steelhead") had always silently dead-locked with `CONFIG_SMP=y`. Two changes:
+  - Kernel patch `0009-ARM-OMAP4-steelhead-SEV-in-prepare-wake-cpu1` — stock
+    issues a `dsb_sev()` at the end of `omap4_smp_prepare_cpus` after writing
+    `AUX_CORE_BOOT_1`; mainline omitted it, so CPU1 (parked in the ROM WFE
+    holding pen) never re-read the boot address. Adding the SEV releases it.
+  - `cpuidle.off=1` on the cmdline (stock = `cpuidle44xx.disallow_smp_idle`) —
+    OMAP4 secondary deep-idle faults → "Attempted to kill the idle task" panic
+    on `swapper/1`. Disabling cpuidle keeps SMP stable.
+  - `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, `CONFIG_HOTPLUG_CPU=y`, `cpu@1` restored
+    in the DTS. **Verified on hardware**: both cores online (`nproc` = 2), load
+    spreads across CPUs, idle desktop ~70 % idle (the second core absorbs the
+    software-rendered compositor that saturated single-core).
+  - Kernel switched to **LZMA** compression to keep the now-larger SMP image
+    under the ~6.6 MB U-Boot boot-partition ceiling.
+- **HDMI EDID now reads + the desktop is visible.** DDC pads
+  (`hdmi_scl 0x09c` / `hdmi_sda 0x09e`) changed from `PIN_INPUT_PULLUP` to
+  `PIN_INPUT` — the forced internal pull-up fought the board's external DDC
+  pull-ups and corrupted the I²C, so EDID never read. Then patch
+  `0010-drm-omapdrm-hdmi4-cap-pixel-clock-steelhead` adds `.mode_valid` to the
+  hdmi4 bridge capping the pixel clock at 75 MHz: the wlroots compositor was
+  selecting the monitor's native 1440×900 @ 106.5 MHz (which the OMAP4 HDMI PLL
+  can't generate → blank), and `video=` only constrains fbcon, not the
+  compositor. With the cap, wlroots picks **1280×720 @ 60 Hz** and the
+  LXQt-Wayland desktop renders. **Verified on hardware.** Native 1440×900 is a
+  follow-up (omapdrm PLL).
+- **Rotary volume + mute keys work again** 🎛️ — patch
+  `0011-leds-steelhead-avr-drain-key-fifo-at-probe`. The `steelhead-avr` keys
+  were dead: the AVR holds INT low while its KEY_FIFO is non-empty, the driver
+  requests an `IRQF_TRIGGER_FALLING` irq, so a FIFO with stale entries at probe
+  left INT already-low → no falling edge → the irq never fired → the FIFO was
+  never drained (a latent driver bug; "worked sometimes" = a boot that probed
+  with an empty FIFO). Draining the FIFO in probe releases INT and arms the edge.
+  **Verified on hardware**: the IRQ fires (0 → 118), `KEY_VOLUMEUP/DOWN` stream as
+  you rotate the dome, and the LED ring (driven by `nexusqd`) responds again. The
+  AVR was detecting keys all along — confirmed by reading its KEY_FIFO directly
+  over i²c. (Mapping the keys to actual audio volume + fixing the
+  pulseaudio/wireplumber audio stack is a remaining userspace follow-up.)
+
+### Changed
+- **WiFi (BCM4330) power-save disabled by default** — NetworkManager drop-in
+  `wifi.powersave = 2` shipped by the device package. Fixes severe latency jitter
+  (ping avg ~175 ms, spikes 545–660 ms → stable ~15 ms). Bulk throughput is a
+  separate firmware limitation, untouched.
+
+### Added (ethernet, partial)
+- Kernel patch `0006` gains stock's **1 ms `udelay(1000)` ULPI pre-reset settle**
+  in `omap_ehci_soft_phy_reset` (stock VA `0xc0329ba4`). Real stock parity, but
+  not sufficient to make LAN9500A enumeration deterministic — see Known issues.
+
+### Tooling / docs
+- `scripts/build-kernel-boot.sh` — fast docker kernel-only rebuild + boot.img
+  repack reusing the warm `nexusq-workdir` volume (skips the rootfs).
+- Comprehensive writeups: `docs/SMP-second-core.md`,
+  `docs/2026-06-22-smp-session-findings.md`, `docs/ethernet-bringup-procedure.md`,
+  `docs/2026-06-23-session-findings.md`,
+  `docs/2026-06-23-ethernet-continuation.md`.
+- `reverse-eng/` ground-truth: stock 3.0.8 SMP `vmlinux.bin` extracted for the
+  stock-parity-auditor (gitignored; recreation in `reverse-eng/README.md`).
+
 ## [1.1.0] - 2026-06-22
 
 ### Added
