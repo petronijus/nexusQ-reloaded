@@ -40,6 +40,7 @@ source="
 	0007-clk-ti-composite-implement-divider-round-set-rate.patch
 	0008-mfd-omap-usb-host-steelhead-UHH-HOSTCONFIG-connect.patch
 	0009-ARM-OMAP4-steelhead-SEV-in-prepare-wake-cpu1.patch
+	0010-drm-omapdrm-hdmi4-cap-pixel-clock-steelhead.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -86,4 +87,5 @@ SKIP  0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp.patch
 SKIP  0007-clk-ti-composite-implement-divider-round-set-rate.patch
 SKIP  0008-mfd-omap-usb-host-steelhead-UHH-HOSTCONFIG-connect.patch
 SKIP  0009-ARM-OMAP4-steelhead-SEV-in-prepare-wake-cpu1.patch
+SKIP  0010-drm-omapdrm-hdmi4-cap-pixel-clock-steelhead.patch
 "
