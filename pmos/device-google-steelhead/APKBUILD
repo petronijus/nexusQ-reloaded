@@ -30,6 +30,7 @@ source="
 	weston-nexusq.desktop
 	lxqt-session.conf
 	nexusq-wayland.sh
+	wifi-powersave-off.conf
 	$pkgname.post-install
 "
 
@@ -57,6 +58,10 @@ package() {
 		"$pkgdir"/etc/xdg/weston/weston.ini
 	install -Dm644 "$srcdir"/weston-nexusq.desktop \
 		"$pkgdir"/usr/share/wayland-sessions/weston-nexusq.desktop
+
+	# Disable WiFi power-save (BCM4330): fixes severe latency jitter (~175->~15 ms).
+	install -Dm644 "$srcdir"/wifi-powersave-off.conf \
+		"$pkgdir"/etc/NetworkManager/conf.d/wifi-powersave-off.conf
 }
 
 nonfree_firmware() {
@@ -72,5 +77,6 @@ SKIP  weston.ini
 SKIP  weston-nexusq.desktop
 SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
+SKIP  wifi-powersave-off.conf
 SKIP  device-google-steelhead.post-install
 "
