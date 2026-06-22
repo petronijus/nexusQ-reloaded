@@ -220,9 +220,18 @@
 
 	dss_hdmi_pins: dss-hdmi-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x09a, PIN_INPUT | MUX_MODE0)		/* hdmi_cec */
-			OMAP4_IOPAD(0x09c, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_scl */
-			OMAP4_IOPAD(0x09e, PIN_INPUT_PULLUP | MUX_MODE0)	/* hdmi_sda */
+			OMAP4_IOPAD(0x09a, PIN_INPUT | MUX_MODE0)	/* hdmi_cec */
+			/*
+			 * DDC (EDID I2C) pads: do NOT force the SoC internal
+			 * pull-up. These are open-drain DDC lines; the TPD12S015
+			 * companion provides the external pull-ups. Forcing the
+			 * weak (~50k) internal PULLUP fights the external pulls
+			 * and corrupts SCL/SDA edges -> "HDMICORE timeout reading
+			 * edid" (TMDS is a separate pad group, so video still
+			 * works). Stock leaves these pads un-muxed (no SW pull).
+			 */
+			OMAP4_IOPAD(0x09c, PIN_INPUT | MUX_MODE0)	/* hdmi_scl (DDC) */
+			OMAP4_IOPAD(0x09e, PIN_INPUT | MUX_MODE0)	/* hdmi_sda (DDC) */
 		>;
 	};
 
