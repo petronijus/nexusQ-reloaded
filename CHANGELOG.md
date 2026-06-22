@@ -6,6 +6,8 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-22
+
 ### Added
 - **Ethernet (LAN9500A) now works** 🎉 — the soldered on-board SMSC LAN9500A
   USB-ethernet enumerates and carries traffic. Two kernel changes did it:
