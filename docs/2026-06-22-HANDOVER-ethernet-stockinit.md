@@ -1,5 +1,14 @@
 # HANDOVER — Nexus Q ethernet (LAN9500A), 2026-06-22
 
+> **✅ RESOLVED 2026-06-22 (released v1.1.0).** Ethernet works. Build #8 (patch 0008)
+> was built, flashed and hardware-verified: `eth0` enumerates and passes bidirectional
+> traffic. The diagnostic `dev_info` printed the real value — mainline
+> `UHH_HOSTCONFIG before = 0x1c` (not the APP_START_CLK-set value guessed below); the
+> patch sets it to the vendor `0x11c`. Also note **#7 (patch 0006 alone) already
+> enumerated `eth0`** — the "#4–#7 all failed / eth0 absent" verdict below was a
+> mis-test. The notes below are kept as the investigation record. See `HANDOFF.md`
+> (top) for the final write-up.
+
 Continue seamlessly (e.g. after switching to Linux). Native `fastboot`/`adb` on
 Linux means **no Zadig/WinUSB hassle** — the Windows-only driver dance is gone.
 

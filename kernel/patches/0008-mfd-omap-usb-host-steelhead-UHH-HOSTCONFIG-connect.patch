@@ -3,25 +3,30 @@ From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 Date: Sun, 22 Jun 2026 16:30:00 +0200
 Subject: [PATCH] mfd: omap-usb-host: steelhead UHH_HOSTCONFIG to match vendor
 
-On the Nexus Q the soldered SMSC LAN9500A enumerates fine under the vendor 3.0
-kernel but not mainline, even though GPIOs/clock/reset/VBUS and the USB3320 ULPI
-PHY state are identical (verified live: OTG_CTRL=0x66 both, PORTSC CCS=1 vendor /
-CCS=0 mainline). The one register that differs is UHH_HOSTCONFIG: vendor=0x11C
-(P1_CONNECT_STATUS set, APP_START_CLK clear), mainline sets APP_START_CLK and
-leaves P1_CONNECT_STATUS at the reset default. Match the vendor so EHCI latches
-the port-1 connect. Also log the before/after value (info) for verification.
+On the Nexus Q the soldered SMSC LAN9500A USB-ethernet enumerates under the
+vendor Android 3.0 kernel but, before this change, the EHCI controller never
+latched the port-1 connect under mainline even though GPIOs, clock, reset, VBUS
+and the USB3320 ULPI PHY state were all identical (verified live: OTG_CTRL=0x66
+on both; PORTSC CCS=1 vendor vs CCS=0 mainline).
 
-TEST patch (diagnostic dev_info included); fold/clean up once confirmed.
+The one register that differed is UHH_HOSTCONFIG. Measured on hardware, mainline
+leaves it at 0x1c (INCR4/8/16 burst-enables only) and then sets APP_START_CLK;
+the vendor instead programs 0x11c — P1_CONNECT_STATUS (bit 8) set and
+APP_START_CLK (bit 31) left clear. Match the vendor: set P1_CONNECT_STATUS so
+the EHCI latches the port-1 connect, and leave APP_START_CLK clear so the UHH
+does not auto clock-gate and drop the port when idle.
+
+With this, eth0 enumerates (0424:9e00 -> smsc95xx) and passes bidirectional
+traffic on hardware.
 
 Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 ---
 --- a/drivers/mfd/omap-usb-host.c
 +++ b/drivers/mfd/omap-usb-host.c
-@@ -441,11 +441,21 @@
+@@ -441,11 +441,20 @@
  	pm_runtime_get_sync(dev);
  
  	reg = usbhs_read(omap->uhh_base, OMAP_UHH_HOSTCONFIG);
-+	dev_info(dev, "steelhead: UHH_HOSTCONFIG before = %#x\n", reg);
  	/* setup ULPI bypass and burst configurations */
  	reg |= (OMAP_UHH_HOSTCONFIG_INCR4_BURST_EN
  			| OMAP_UHH_HOSTCONFIG_INCR8_BURST_EN
@@ -40,12 +45,3 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	reg &= ~OMAP_UHH_HOSTCONFIG_INCRX_ALIGN_EN;
  
  	switch (omap->usbhs_rev) {
-@@ -463,7 +473,7 @@
- 	}
- 
- 	usbhs_write(omap->uhh_base, OMAP_UHH_HOSTCONFIG, reg);
--	dev_dbg(dev, "UHH setup done, uhh_hostconfig=%x\n", reg);
-+	dev_info(dev, "steelhead: UHH setup done, uhh_hostconfig=%#x (vendor=0x11c)\n", reg);
- 
- 	pm_runtime_put_sync(dev);
- }

@@ -7,6 +7,26 @@ All notable changes to Nexus Q Reloaded. Format follows
 ## [Unreleased]
 
 ### Added
+- **Ethernet (LAN9500A) now works** 🎉 — the soldered on-board SMSC LAN9500A
+  USB-ethernet enumerates and carries traffic. Two kernel changes did it:
+  - `0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp` — steelhead
+    host-init in `ehci-omap`: INSNREG01 burst thresholds, a ULPI Function-Control
+    soft reset of the USB3320 PHY *before* `usb_add_hcd()`, and
+    `usb_disable_autosuspend()` on the root hub so the idle port is not
+    clock-gated away.
+  - `0008-mfd-omap-usb-host-steelhead-UHH-HOSTCONFIG-connect` — program
+    `UHH_HOSTCONFIG` to the vendor's `0x11c` (set `P1_CONNECT_STATUS`, leave
+    `APP_START_CLK` clear) so the EHCI latches the port-1 connect. Measured
+    mainline default was `0x1c`; the stock Android 3.0 kernel uses `0x11c`.
+
+  The long-standing "ethernet is dead hardware" verdict was **wrong** — the stock
+  kernel enumerates the same chip on this unit, proving the HW is fine and the bug
+  was ours. **Verified on hardware** (#8 kernel): `eth0` (`0424:9e00` → `smsc95xx`)
+  links at 100 Mbps/Full and passes bidirectional traffic — 0% packet loss over a
+  direct cable, zero rx/tx/CRC/frame errors after ~660 MB moved. Throughput
+  ~30–60 Mbps (USB2 / single-core OMAP4 bound, not a link fault). Reach the device
+  over ethernet with the persistent `eth-direct` NetworkManager profile
+  (static `10.42.0.2/24`).
 - Kernel patch `0007-clk-ti-composite-implement-divider-round-set-rate` — OMAP4
   `ti,composite-clock` nodes (gate + divider) had stub `round_rate`/`set_rate`
   returning `-EINVAL`, so any `clk_set_rate()` on them failed. Delegated both to
@@ -28,6 +48,10 @@ All notable changes to Nexus Q Reloaded. Format follows
   build, so `linux-google-steelhead-*.apk` is created cleanly and `pmbootstrap
   install` runs. `extract-and-repack.sh` is kept as a fast path, no longer a
   required workaround.
+- **Build fix:** clearing the armv7 ccache out-of-band leaves its directory owned
+  by uid 1000, so abuild inside the chroot (uid 12345) then hits `ccache: error:
+  Permission denied` at `make olddefconfig`. `docker-build.sh` Phase 7a now also
+  `chown`s `$WORK/cache_ccache_armv7` to 12345 (alongside `$WORK/packages`).
 
 ### Changed
 - DTS: delete the upstream `cpu@1` node to match the single-core build
@@ -38,12 +62,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   (no hard-coded credential in the SSH/flash helpers).
 
 ### Known limitations
-- **Ethernet (LAN9500A) still non-functional** on this unit. On the #4 kernel
-  the EHCI port is powered and the ULPI PHY (SMSC USB3320, VID 0x4:0x24)
-  responds, but `PORTSC` CCS never asserts — the LAN9500A never enumerates
-  (no `eth0`, EHCI bus has only the root hub). Matches the earlier
-  register/pad-level diagnosis (`gpio_1`/NENABLE clamped low). Investigation
-  ongoing.
+- Rootfs image build (`pmbootstrap install`, Phase 9) currently fails on a
+  `device-google-steelhead` post-install step (exit 127); the kernel `.apk` and
+  boot image build fine, so kernel/DTB iteration is unaffected. Reflash boot only.
 
 ## [0.1.0] - 2026-06-10
 

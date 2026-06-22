@@ -4,6 +4,50 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
+## Session 2026-06-22 (late): ETHERNET FIXED ✅ — kernel #8, released v1.1.0
+
+The on-board **SMSC LAN9500A USB-ethernet works.** This retires the multi-month
+"ethernet is dead hardware" verdict, which was wrong: the stock Android 3.0 kernel
+enumerates the same chip on this unit, so the bug was always in our mainline port.
+
+**Two kernel patches, both required:**
+- `0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp` — vendor steelhead
+  host-init in `ehci-omap` done *before* `usb_add_hcd()`: LAN9500A power-on-reset
+  sequence (auxclk3 38.4 MHz, NENABLE/NRESET gpios), `INSNREG01` burst thresholds
+  = 0x80, a ULPI Function-Control soft reset of the USB3320, plus
+  `usb_disable_autosuspend()` on the root hub so the idle port is not clock-gated.
+- `0008-mfd-omap-usb-host-steelhead-UHH-HOSTCONFIG-connect` — in `omap_usbhs_init`,
+  program `UHH_HOSTCONFIG` to the vendor's **0x11c**: set `P1_CONNECT_STATUS`
+  (bit 8) so EHCI latches the port-1 connect, and leave `APP_START_CLK` (bit 31)
+  **clear** so the UHH does not auto clock-gate. Measured mainline default was
+  **0x1c** (the "ethernet-stockinit" handover's APP_START_CLK guess was wrong).
+
+**Discovery note:** kernel **#7** (patch 0006 alone) already enumerated `eth0` —
+the `docs/2026-06-22-HANDOVER-ethernet-stockinit.md` "#4–#7 all failed, eth0 absent"
+conclusion was a mis-test. #8 adds the UHH_HOSTCONFIG change as the *more-correct*
+root-cause form (matches the vendor exactly, no autosuspend reliance) and is the
+released kernel.
+
+**Verified on hardware (#8):** `eth0` (`0424:9e00` → `smsc95xx`) at 100 Mbps/Full,
+bidirectional ping 0% loss (~0.69 ms avg), **zero** rx/tx/CRC/frame/over errors and
+zero collisions after ~660 MB transferred. Throughput TX ~60 / RX ~28 Mbps —
+USB2 + single-core OMAP4 bound (device ~64% idle during RX), not a link fault.
+
+**Access over ethernet (now preferred over the renaming USB gadget):** the Nexus
+RJ45 is cabled directly to `petronijus-PC` NIC `enp7s0` (Intel I225-V, 100M). Device
+`eth0` has a persistent NetworkManager profile **`eth-direct`** (`ipv4.method
+manual`, `10.42.0.2/24`, never-default, autoconnect, bound to ifname not MAC since
+smsc95xx has no EEPROM MAC) → survives reboot and stopped the earlier NM-DHCP-timeout
+link flap. PC side: `enp7s0` = `10.42.0.1/24`, set NM-unmanaged so the IP sticks.
+`ssh root@10.42.0.2`.
+
+Artifacts: `#7` backup `output/p9-backup-7-working.img` (sha c0dd95d1); released
+`#8` boot image `output/boot-eth-8.img` (sha 8c7b4f75, 6496 KB, under the ~6.5 MB
+U-Boot ceiling). The released boot image is #8 *with* a one-time diagnostic
+`UHH_HOSTCONFIG` boot log; source patch 0008 in the v1.1.0 tag omits that logging
+(functionally identical). Build gotcha fixed: `docker-build.sh` Phase 7a now also
+chowns `$WORK/cache_ccache_armv7` to uid 12345.
+
 ## Session 2026-06-22: TAS5713 amp clock fixed, single-core taint cleared; ethernet still dead
 
 Built and flashed kernel **#4** (`6.12.12`), verified live over the USB gadget
