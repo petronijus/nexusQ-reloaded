@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 704 +
- 2 files changed, 705 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 716 +
+ 2 files changed, 717 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,704 @@
+@@ -0,0 +1,716 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -610,6 +610,18 @@ index 0000000..abcdef1
 +		compatible = "usb424,9500";
 +		reg = <1>;
 +	};
++};
++
++/*
++ * OMAP4 USBHS muxes ONE external ULPI PHY (port 1) between the EHCI and the
++ * OHCI cores. The Nexus Q only uses port 1 for the high-speed LAN9500A on EHCI;
++ * the vendor board kernel explicitly held the OHCI suspended (HcControl =
++ * OHCI_USB_SUSPEND) at EHCI probe so it never contends for / drives the shared
++ * ULPI port. Mainline brings OHCI up as a live HCD on the same PHY (bus 3),
++ * which can keep the EHCI from seeing a downstream connect. Disable it.
++ */
++&usbhsohci {
++	status = "disabled";
 +};
 +
 +/* McBSP2: I2S output to TAS5713 amplifier.

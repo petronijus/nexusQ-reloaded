@@ -226,7 +226,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +347,56 @@
+@@ -195,6 +347,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
@@ -257,6 +257,33 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +			 "steelhead: port%d ULPI VID=%#x:%#x PID=%#x:%#x FUNC=%#x OTG=%#x DBG=%#x PORTSC=%08x\n",
 +			 port, vidh, vidl, pidh, pidl, func, otg, dbg,
 +			 ehci_readl(ehci, &ehci->regs->port_status[i]));
++	}
++
++	/*
++	 * Steelhead diag (temporary): sample the ULPI LineState (DEBUG reg, bits
++	 * 1:0; 00=SE0) and PORTSC over ~1s now that the controller is running, to
++	 * see whether the LAN9500A ever pulls up D+ (LineState leaves SE0 / PORTSC
++	 * CCS bit0 asserts) at all. Kernel-side ULPI-viewport reads only -- safe,
++	 * unlike userspace devmem on the gated module. Remove once root-caused.
++	 */
++	for (i = 0; i < omap->nports; i++) {
++		struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++		int port = i + 1;
++		int j;
++
++		if (pdata->port_mode[i] != OMAP_EHCI_PORT_MODE_PHY)
++			continue;
++
++		for (j = 0; j < 10; j++) {
++			int dbg = omap_ehci_ulpi_read(regs, port, ULPI_DEBUG);
++			u32 portsc = ehci_readl(ehci,
++						&ehci->regs->port_status[i]);
++
++			dev_info(dev,
++				 "steelhead: diag t+%dms port%d ULPI DBG=%#x PORTSC=%08x\n",
++				 j * 100, port, dbg, portsc);
++			msleep(100);
++		}
 +	}
 +
 +	if (hcd->self.root_hub) {

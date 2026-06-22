@@ -3,6 +3,64 @@
 Continue seamlessly (e.g. after switching to Linux). Native `fastboot`/`adb` on
 Linux means **no Zadig/WinUSB hassle** — the Windows-only driver dance is gone.
 
+---
+## ⭐ LATEST STATE (read this first) — UHH_HOSTCONFIG lead, build #8 ready
+
+Builds #4–#7 all failed identically (eth0 absent, PORTSC CCS=0). #5 proved
+GPIO/clock/reset match stock; #6 added vendor ehci-omap host-init (INSNREG01 +
+soft-reset-before-add_hcd); #7 disabled OHCI (`&usbhsohci status=disabled`) +
+added a kernel LineState/PORTSC diag. None worked — but #7's diag + a **live
+register comparison against the booted stock** (read via `busybox devmem` over
+adb — STRICT_DEVMEM blocks RAM not MMIO) cracked it open:
+
+**Stock (eth0 UP) vs mainline #7 (broken), live USB3320/EHCI/USBHS regs:**
+| reg | stock | mainline | note |
+|---|---|---|---|
+| ULPI OTG_CTRL | 0x66 | 0x66 | **VBUS identical → not VBUS** |
+| ULPI DEBUG (LineState) | 0x00 (SE0) | 0x00 (SE0) | **SE0 is normal HS-idle**, not "no device" (earlier misread) |
+| gpio_1 / gpio_62 | low / high | low / high | match |
+| EHCI INSNREG01 | 0x00800080 | 0x00800080 | our threshold matches ✓ |
+| EHCI PORTSC | **0x1005** (PP+PE+CCS) | **0x1000** (PP only) | connect vs none |
+| **UHH_HOSTCONFIG (0x4A064040)** | **0x0000011C** | sets APP_START_CLK / leaves P1_CONNECT_STATUS default | **THE DIFF** |
+
+Stock `0x11C` = INCR4/8/16 bursts + **P1_CONNECT_STATUS (bit 8) SET** +
+**APP_START_CLK (bit 31) CLEAR**. Mainline `omap_usbhs_init` does the opposite
+(`reg |= APP_START_CLK`; never sets P1_CONNECT_STATUS, which gates whether the
+port reports connect → CCS stays 0). APP_START_CLK=1 is also the UHH auto-clock-
+gating that made the USBHS go dark when idle (the devmem hangs we saw).
+
+**THE TEST = kernel patch `0008-mfd-omap-usb-host-steelhead-UHH-HOSTCONFIG-connect.patch`**
+(on `drivers/mfd/omap-usb-host.c`, in `omap_usbhs_init`): set P1_CONNECT_STATUS,
+clear APP_START_CLK to match stock's 0x11C, and `dev_info` the before/after value
+(so even on failure we finally learn mainline's actual HOSTCONFIG). pkgrel bumped
+to 7 (= kernel **#8**). Build #8 was interrupted to switch to Linux.
+
+### DO THIS FIRST on Linux
+1. `git pull`. Build #8 (steps in "Build kernel" below; result is kernel **#8**).
+   ⚠️ With the create_apks fix, the build now succeeds past the kernel and the
+   pkgdir gets ZAPPED — get vmlinuz+dtb from the **.apk**, not pkgdir:
+   `unzip/tar -xzf $WORK/packages/edge/armv7/linux-google-steelhead-6.12.12-r7.apk`
+   → `boot/vmlinuz` + `boot/dtbs/omap4-steelhead.dtb`, then `cat vmlinuz dtb > z` and
+   `make-bootimg.py z out.img - "<cmdline>"` (cmdline in `extract-and-repack.sh`).
+   (A new, SEPARATE rootfs error — `device-google-steelhead post-install exit 127`
+   — appears in Phase 9; it does NOT block the kernel. Worth fixing later.)
+2. Flash to p9 (see below), reboot, check:
+   `dmesg | grep -iE 'UHH_HOSTCONFIG|eth0|usb 1-1|0424|smsc95|steelhead: diag'`.
+   - SUCCESS = `usb 1-1 ... 0424:9e00` + `eth0`.
+   - Either way, the `steelhead: UHH_HOSTCONFIG before = 0x...` line tells us
+     mainline's real value vs stock 0x11C → next move.
+3. If still no eth0: the diff is confirmed at HOSTCONFIG; bisect bit8 vs bit31, or
+   re-read the live stock regs with `scripts/ulpiread.c` (static-ARM mmap tool;
+   cross-compile `arm-linux-gnueabihf-gcc -static -O2`) or `busybox devmem` on the
+   stock-adb boot, and widen the reg comparison (USBCMD/USBSTS/CONFIGFLAG already
+   match: stock USBCMD=0x10005 running, CONFIGFLAG=1).
+
+Tooling added: `scripts/ulpiread.c` (ULPI viewport reader via /dev/mem).
+Live stock read recipe: `fastboot boot output/stock-adb-boot.img` → adb →
+`busybox devmem 0xADDR 32` (write form needs hex value: `printf '0x%x'` to avoid
+the (1<<31) signed-overflow that busybox rejects).
+---
+
 ## TL;DR — where we are
 
 - **HARDWARE IS FINE.** Proven on HW: the stock Android 3.0 kernel enumerates the

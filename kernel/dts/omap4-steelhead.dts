@@ -575,6 +575,18 @@
 	};
 };
 
+/*
+ * OMAP4 USBHS muxes ONE external ULPI PHY (port 1) between the EHCI and the
+ * OHCI cores. The Nexus Q only uses port 1 for the high-speed LAN9500A on EHCI;
+ * the vendor board kernel explicitly held the OHCI suspended (HcControl =
+ * OHCI_USB_SUSPEND) at EHCI probe so it never contends for / drives the shared
+ * ULPI port. Mainline brings OHCI up as a live HCD on the same PHY (bus 3),
+ * which can keep the EHCI from seeing a downstream connect. Disable it.
+ */
+&usbhsohci {
+	status = "disabled";
+};
+
 /* McBSP2: I2S output to TAS5713 amplifier.
  * Internal (PRCM) functional clock must come from the ABE DPLL
  * (abe_24m_fclk, 24.576 MHz = 512 x 48 kHz) so the SRG can derive
