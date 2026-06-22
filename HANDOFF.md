@@ -4,6 +4,38 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
+## Session 2026-06-22 (latest): SECOND CPU CORE WORKS ✅ — dual-core SMP
+
+The OMAP4460 HS second Cortex-A9 is online and stable on mainline 6.12.
+`CONFIG_SMP=y` had silently deadlocked the boot for the life of the port; root
+cause found by disassembling the stock kernel (`reverse-eng/vmlinux.bin`):
+
+- **Missing SEV in `omap4_smp_prepare_cpus`** — stock issues `dsb;sev` after
+  writing AUX_CORE_BOOT_1 to kick CPU1 out of ROM WFE; mainline omits it → CPU1
+  never starts → `__cpu_up` hangs before any console. Fix: **patch 0009**
+  (`dsb_sev()` at end of prepare).
+- **CPU1 cpuidle panic** once online (`Attempted to kill the idle task`, on
+  `swapper/1`). Fix: **`cpuidle.off=1`** (stock ships `cpuidle44xx.disallow_smp_idle`).
+
+Secure SMC service IDs already matched stock byte-for-byte; `omap_type()=HS`.
+defconfig: `CONFIG_SMP=y`, `NR_CPUS=2`, `HOTPLUG_CPU=y`, `KERNEL_LZMA` (SMP+gzip
+busted the ~6.6 MB U-Boot ceiling; LZMA → ~5.1 MB); DTS `cpu@1` restored.
+
+**Validated** (cold boot, `boot-smp-dualcore.img`): `nproc=2`, online/possible=0-1,
+`taint=0`, 0 module-ABI errors, `SMP: Total of 2 processors activated`, CPU1 up at
+`[0.25s]`, both cores load under stress, ~59 °C; audio/LED-ring/wifi/BT/USB up.
+Dual-core also cured the single-core-saturation network flakiness.
+
+Build: `scripts/build-kernel-boot.sh` (fast kernel-only docker build). Branch
+`feat/smp-cpu1-bringup` (`510f8ab` breakthrough+debug, `8d4df5d` clean dual-core).
+Also fixed a repo-integrity bug: patch 0008 (ethernet) applied with `git apply`
+but FAILED under GNU `patch` (abuild) — regenerated clean.
+
+**Full writeup: `docs/SMP-second-core.md`.** Open items (cpuidle proper, eth
+LAN9500A enumeration reliability, wifi BCM4330 power-save, making SMP the default
+after multi-cold-boot reliability validation) tracked in
+`docs/2026-06-22-smp-session-findings.md`.
+
 ## Session 2026-06-22 (late): ETHERNET FIXED ✅ — kernel #8, released v1.1.0
 
 The on-board **SMSC LAN9500A USB-ethernet works.** This retires the multi-month
