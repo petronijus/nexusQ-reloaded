@@ -1,39 +1,47 @@
 From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 Date: Sat, 20 Jun 2026 11:55:00 +0200
-Subject: [PATCH] usb: ehci-omap: steelhead: ULPI soft PHY reset + pin root hub
- + diag
+Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A bring-up (vendor host init)
 
-On the Google Nexus Q (steelhead) the SMSC LAN9500A USB-Ethernet chip is
-soldered to EHCI port 1 behind an external SMSC USB3320 ULPI PHY modelled only
-as usb-nop-xceiv. Two mainline gaps stop the soldered chip from enumerating:
+The Google Nexus Q has a soldered SMSC LAN9500A USB-Ethernet chip on EHCI port 1
+behind an external SMSC USB3320 ULPI PHY (modelled as usb-nop-xceiv). It did not
+enumerate on mainline. Reverse-engineering the vendor board kernel
+(android-omap-steelhead-3.0: drivers/usb/host/ehci-omap.c #ifdef
+CONFIG_MACH_STEELHEAD, and board-steelhead-usbhost.c) shows the host-init steps
+mainline lacks. Verified on hardware: under the stock kernel the LAN9500A
+enumerates (idVendor=0424 idProduct=9e00 -> eth0), so the chip is healthy and the
+gap is purely these software steps.
 
- 1) The OMAP EHCI no longer issues the ULPI Function-Control soft reset an
-    external ULPI PHY needs once the controller is running (dropped when PHY
-    handling moved to the generic framework); without it the USB3320 answers
-    register reads but does not drive the downstream bus. Re-introduce
-    omap_ehci_soft_phy_reset() for PHY-mode ports.
+Replicate the vendor host init, all BEFORE usb_add_hcd() (the order matters):
 
- 2) The root hub autosuspends (userspace udev re-enables it via hwdb, so
-    usb_disable_autosuspend alone is overridden), ehci_bus_suspend() halts the
-    controller and the OMAP gates the EHCI functional clock, dropping port
-    power so the slow-to-connect LAN9500A loses VBUS. Pin the root hub
-    runtime-active (hold a PM usage reference) so the port stays powered.
+ 1) Power-on-reset the LAN9500A in board order -- with the 38.4 MHz PHY refclk
+    (auxclk3) enabled: NENABLE(gpio_1) low, settle, NRESET(gpio_62) high. Owned
+    via the steelhead DT (enable/reset gpios + clock on &usbhsehci); optional, so
+    a no-op on other boards.
+ 2) Set INSNREG01 OUT/IN burst thresholds to 0x80 (vendor steelhead-only); the
+    reset default does not work for this ULPI-PHY data path.
+ 3) Issue the ULPI Function-Control soft reset of the external transceiver
+    BEFORE usb_add_hcd(). Without it the USB3320 answers register reads but never
+    drives the downstream bus; doing it after the controller starts (an earlier
+    version of this patch) does not bring the device up -- the vendor does it
+    here, before the port is started.
 
-Also log the USB3320 ULPI identity / function / OTG / line state once during
-probe. Steelhead-specific bring-up support.
+Also log the ULPI identity once and pin the root hub runtime-active (userspace
+udev re-enables autosuspend via hwdb, which would halt the controller, gate the
+EHCI fclk and drop port power before the slow-to-connect LAN9500A is seen).
 
 Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 ---
 --- a/drivers/usb/host/ehci-omap.c
 +++ b/drivers/usb/host/ehci-omap.c
-@@ -23,12 +23,14 @@
+@@ -23,18 +23,24 @@
  #include <linux/platform_device.h>
  #include <linux/slab.h>
  #include <linux/usb/ulpi.h>
 +#include <linux/ulpi/regs.h>
  #include <linux/pm_runtime.h>
  #include <linux/clk.h>
++#include <linux/gpio/consumer.h>
  #include <linux/usb.h>
  #include <linux/usb/hcd.h>
  #include <linux/of.h>
@@ -42,7 +50,16 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  
  #include "ehci.h"
  
-@@ -61,6 +63,76 @@
+ #include <linux/platform_data/usb-omap.h>
+ 
+ /* EHCI Register Set */
++#define	EHCI_INSNREG01					(0x94)
++#define	EHCI_INSNREG01_OUT_THRESHOLD_SHIFT		16
++#define	EHCI_INSNREG01_IN_THRESHOLD_SHIFT		0
+ #define EHCI_INSNREG04					(0xA0)
+ #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
+ #define	EHCI_INSNREG05_ULPI				(0xA4)
+@@ -61,6 +67,76 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -119,29 +136,106 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -195,6 +267,71 @@
+@@ -144,6 +220,53 @@
+ 
+ 	platform_set_drvdata(pdev, hcd);
+ 
++	/*
++	 * Nexus Q (steelhead): stage the SMSC LAN9500A USB-Ethernet power-on
++	 * reset in the vendor board order BEFORE the PHY is initialised and the
++	 * controller is started. The chip hangs off port 1 behind the USB3320
++	 * ULPI PHY; the two share the 38.4 MHz reference clock (auxclk3) and the
++	 * reset line (gpio_62 NRESET), with the rail enabled by gpio_1 NENABLE.
++	 * The vendor board file (steelhead_usbhost_init), with the PHY refclk
++	 * already running, does:
++	 *	clk_enable(auxclk3) -> udelay(100) -> NENABLE low (power on)
++	 *	-> udelay(2) -> NRESET high (release reset)
++	 * Mainline otherwise lets nop-xceiv / regulator probe order release
++	 * NRESET before the refclk is stable. The resources are optional and only
++	 * present in the steelhead DT, so this is a no-op on other boards.
++	 *
++	 * The gpios are declared GPIO_ACTIVE_LOW in DT, so a logical 1 is the
++	 * asserted state (NENABLE on / NRESET held) and logical 0 is deasserted.
++	 */
++	{
++		struct gpio_desc *eth_en, *eth_reset;
++		struct clk *eth_phyclk;
++
++		/* NENABLE deasserted (off), NRESET asserted (held in reset) */
++		eth_en = devm_gpiod_get_optional(dev,
++				"steelhead-ethernet-enable", GPIOD_OUT_LOW);
++		eth_reset = devm_gpiod_get_optional(dev,
++				"steelhead-ethernet-reset", GPIOD_OUT_HIGH);
++		if (IS_ERR(eth_en))
++			eth_en = NULL;
++		if (IS_ERR(eth_reset))
++			eth_reset = NULL;
++
++		if (eth_en && eth_reset) {
++			eth_phyclk = devm_clk_get_optional(dev,
++					"steelhead-ethernet-phy");
++			if (!IS_ERR_OR_NULL(eth_phyclk)) {
++				clk_set_rate(eth_phyclk, 38400000);
++				clk_prepare_enable(eth_phyclk);
++			}
++			udelay(100);				/* refclk settle */
++			gpiod_set_value_cansleep(eth_en, 1);	/* power/enable on */
++			udelay(2);				/* power-good settle */
++			gpiod_set_value_cansleep(eth_reset, 0);	/* release reset */
++			dev_info(dev,
++				 "steelhead: LAN9500A power-on-reset sequenced (clk->enable->reset)\n");
++		}
++	}
++
+ 	/* get the PHY devices if needed */
+ 	for (i = 0 ; i < omap->nports ; i++) {
+ 		struct usb_phy *phy;
+@@ -187,6 +310,35 @@
+ 	ehci_write(regs, EHCI_INSNREG04,
+ 				EHCI_INSNREG04_DISABLE_UNSUSPEND);
+ 
++	/*
++	 * Nexus Q (steelhead) EHCI host init, BEFORE usb_add_hcd() -- exactly
++	 * the order the vendor board kernel used (drivers/usb/host/ehci-omap.c,
++	 * android-omap-steelhead-3.0). Two steelhead-specific steps the mainline
++	 * driver lacks are required for the soldered SMSC LAN9500A behind the
++	 * external SMSC USB3320 ULPI PHY to enumerate:
++	 *
++	 *  1) INSNREG01 OUT/IN burst thresholds = 0x80 (vendor #ifdef
++	 *     CONFIG_MACH_STEELHEAD). The reset default does not work for this
++	 *     ULPI-PHY data path.
++	 *  2) The ULPI Function-Control soft reset of the external transceiver,
++	 *     issued *before* the controller is started -- the USB3320 otherwise
++	 *     answers register reads but never drives the downstream bus, so the
++	 *     LAN9500A never signals connect. Doing it after usb_add_hcd() (as an
++	 *     earlier version of this patch did) resets the PHY after the EHCI
++	 *     core has already configured/started the port, which does not bring
++	 *     the device up; the vendor does it here, before usb_add_hcd().
++	 */
++	ehci_write(regs, EHCI_INSNREG01,
++		   (0x80 << EHCI_INSNREG01_OUT_THRESHOLD_SHIFT) |
++		   (0x80 << EHCI_INSNREG01_IN_THRESHOLD_SHIFT));
++
++	for (i = 0; i < omap->nports; i++) {
++		int port = i + 1;	/* ULPI viewport PORTSEL is 1-based */
++
++		if (pdata->port_mode[i] == OMAP_EHCI_PORT_MODE_PHY)
++			omap_ehci_soft_phy_reset(regs, port);
++	}
++
+ 	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
+ 	if (ret) {
+ 		dev_err(dev, "failed to add hcd with err %d\n", ret);
+@@ -195,6 +347,56 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
-+	 * Nexus Q (steelhead) bring-up. The SMSC LAN9500A USB-Ethernet chip
-+	 * hangs off EHCI port 1 behind an external SMSC USB3320 ULPI PHY that
-+	 * is modelled only as a usb-nop-xceiv (no dedicated PHY driver). Two
-+	 * things matter for the soldered-down chip to be seen:
-+	 *
-+	 *  1) Issue the ULPI Function-Control soft reset that mainline dropped
-+	 *     when PHY handling moved to the generic framework. The OMAP EHCI
-+	 *     needs to soft-reset an external ULPI PHY's transceiver once the
-+	 *     controller is running; without it the USB3320 answers register
-+	 *     reads but never drives the downstream bus, so the LAN9500A never
-+	 *     signals connect. Done now, after usb_add_hcd(), with the
-+	 *     controller guaranteed running.
-+	 *
-+	 *  2) Log the ULPI identity and state once (a healthy USB3320 answers
-+	 *     VID 0x0424 / PID 0x0007); -ETIMEDOUT means the PHY is unclocked
-+	 *     or held in reset.
-+	 *
-+	 * Then keep the root hub awake so the slow-to-connect soldered
-+	 * peripheral always gets a powered, running port.
++	 * Nexus Q (steelhead): log the ULPI identity and state once now that the
++	 * controller is running (a healthy USB3320 answers VID 0x0424/PID 0x0007;
++	 * -ETIMEDOUT means the PHY is unclocked or held in reset), then keep the
++	 * root hub awake so the slow-to-connect soldered LAN9500A always gets a
++	 * powered, running port. The PHY soft reset itself is done earlier, before
++	 * usb_add_hcd() (see above).
 +	 */
 +	for (i = 0; i < omap->nports; i++) {
 +		struct ehci_hcd *ehci = hcd_to_ehci(hcd);
@@ -150,8 +244,6 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +
 +		if (pdata->port_mode[i] != OMAP_EHCI_PORT_MODE_PHY)
 +			continue;
-+
-+		omap_ehci_soft_phy_reset(regs, port);
 +
 +		vidl = omap_ehci_ulpi_read(regs, port, ULPI_VENDOR_ID_LOW);
 +		vidh = omap_ehci_ulpi_read(regs, port, ULPI_VENDOR_ID_HIGH);

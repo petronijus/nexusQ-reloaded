@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 698 +
- 2 files changed, 699 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 704 +
+ 2 files changed, 705 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,704 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -83,29 +83,21 @@ index 0000000..abcdef1
 +		ethernet = &ethernet;
 +	};
 +
-+	/* HS USB Port 1 power for SMSC LAN9500A Ethernet */
-+	hsusb1_power: hsusb1-power-reg {
-+		compatible = "regulator-fixed";
-+		regulator-name = "hsusb1_vbus";
-+		regulator-min-microvolt = <3300000>;
-+		regulator-max-microvolt = <3300000>;
-+		/* NENABLE: 3.3V rail enabled by driving gpio_1 low */
-+		gpio = <&gpio1 1 GPIO_ACTIVE_LOW>; /* gpio_wk1 */
-+		startup-delay-us = <70000>;
-+		regulator-always-on;
-+		regulator-boot-on;
-+	};
-+
-+	/* HS USB Host PHY on PORT 1 for Ethernet */
++	/*
++	 * HS USB Host PHY on PORT 1 for Ethernet (SMSC USB3320, ULPI).
++	 * Modelled as a bare nop-xceiv: the USB3320 is driven directly through
++	 * the OMAP EHCI ULPI viewport, and its 38.4 MHz reference clock
++	 * (auxclk3), power enable (gpio_1 NENABLE) and reset (gpio_62 NRESET)
++	 * are sequenced imperatively by the steelhead ehci-omap bring-up in the
++	 * vendor board order (clk -> enable -> reset), NOT by nop-xceiv /
++	 * regulator probe order -- which released reset before the refclk was
++	 * stable, so the LAN9500A never enumerated (PORTSC CCS stayed 0). The
++	 * power rail (was a regulator-fixed "hsusb1_vbus" on gpio_1) and the
++	 * PHY clock/reset are therefore owned by &usbhsehci, see below.
++	 */
 +	hsusb1_phy: hsusb1-phy {
 +		compatible = "usb-nop-xceiv";
-+		reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>; /* gpio_62 */
 +		#phy-cells = <0>;
-+		vcc-supply = <&hsusb1_power>;
-+		clocks = <&auxclk3_ck>;
-+		clock-names = "main_clk";
-+		/* board-steelhead-usbhost.c: PHY needs 38.4 MHz, not panda's 19.2 */
-+		clock-frequency = <38400000>;
 +	};
 +
 +	/* BCM4330 WiFi power sequencing: clk32kaudio + WLAN_EN (gpio_43),
@@ -596,6 +588,20 @@ index 0000000..abcdef1
 +
 +&usbhsehci {
 +	phys = <&hsusb1_phy>;
++
++	/*
++	 * Steelhead LAN9500A bring-up resources, sequenced by ehci-omap in the
++	 * vendor board order (steelhead_usbhost_init): with the 38.4 MHz PHY
++	 * refclk (auxclk3) enabled, drive NENABLE low (power on), settle, then
++	 * release NRESET high, before the controller is started. Both gpios are
++	 * active-low (raw: NENABLE HIGH=off / LOW=on, NRESET LOW=reset /
++	 * HIGH=run); the driver uses logical levels (asserted = enabled / in
++	 * reset). Optional in the driver, so a no-op on non-steelhead boards.
++	 */
++	clocks = <&auxclk3_ck>;
++	clock-names = "steelhead-ethernet-phy";
++	steelhead-ethernet-enable-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* gpio_1  NENABLE */
++	steelhead-ethernet-reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>;	/* gpio_62 NRESET  */
 +
 +	#address-cells = <1>;
 +	#size-cells = <0>;
