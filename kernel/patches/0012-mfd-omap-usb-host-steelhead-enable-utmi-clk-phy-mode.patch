@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Tue, 24 Jun 2026 21:00:00 +0200
 Subject: [PATCH] mfd: omap-usb-host: steelhead: enable port UTMI clock in PHY mode
 
@@ -15,7 +15,7 @@ this clock gated on for the port. Add OMAP_EHCI_PORT_MODE_PHY to the same case a
 TLL in both runtime_resume (enable) and runtime_suspend (disable) so a PHY-mode
 port gets, and releases, its UTMI clock symmetrically.
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/drivers/mfd/omap-usb-host.c	2026-06-24 21:51:09.041502267 +0200
 +++ b/drivers/mfd/omap-usb-host.c	2026-06-24 21:51:38.078188242 +0200

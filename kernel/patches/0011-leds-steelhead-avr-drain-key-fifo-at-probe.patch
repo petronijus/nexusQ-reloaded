@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Mon, 23 Jun 2026 01:00:00 +0200
 Subject: [PATCH] leds: steelhead-avr: drain key FIFO at probe (fix dead keys)
 
@@ -21,7 +21,7 @@ INT (goes high) and arms the falling edge for the first real key press.
 (Confirmed on HW: draining the FIFO live made the IRQ start firing and all
 mute/volume/rotation events appear immediately.)
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/drivers/leds/leds-steelhead-avr.c
 +++ b/drivers/leds/leds-steelhead-avr.c

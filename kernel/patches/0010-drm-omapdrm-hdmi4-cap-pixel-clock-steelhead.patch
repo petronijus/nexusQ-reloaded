@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Mon, 23 Jun 2026 00:10:00 +0200
 Subject: [PATCH] drm/omapdrm: hdmi4: cap pixel clock to known-good (steelhead)
 
@@ -16,7 +16,7 @@ Add a .mode_valid that caps the advertised pixel clock at 75MHz, so a
 displayable mode is selected (keeps 1280x720@74.25 and 1024x768@65, rejects the
 blank-inducing 1440x900/1280x1024). Pair with video=HDMI-A-1:1280x720@60.
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/drivers/gpu/drm/omapdrm/dss/hdmi4.c
 +++ b/drivers/gpu/drm/omapdrm/dss/hdmi4.c

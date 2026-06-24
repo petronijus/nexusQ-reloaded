@@ -1,4 +1,4 @@
-From: Nexus Q Reloaded Project <nexusq@localhost>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] mfd: twl-core: register clock mfd cell for TWL6030 too
 
 The clk-twl driver handles clk32kg/clk32kaudio for both TWL6030 and

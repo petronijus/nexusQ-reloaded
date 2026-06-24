@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000008 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Sun, 22 Jun 2026 16:30:00 +0200
 Subject: [PATCH] mfd: omap-usb-host: steelhead UHH_HOSTCONFIG to match vendor
 
@@ -19,7 +19,7 @@ does not auto clock-gate and drop the port when idle.
 With this, eth0 enumerates (0424:9e00 -> smsc95xx) and passes bidirectional
 traffic on hardware.
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/drivers/mfd/omap-usb-host.c
 +++ b/drivers/mfd/omap-usb-host.c

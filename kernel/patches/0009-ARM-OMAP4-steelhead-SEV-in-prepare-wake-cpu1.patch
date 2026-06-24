@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000009 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Sun, 22 Jun 2026 18:30:00 +0200
 Subject: [PATCH] ARM: OMAP4: steelhead: SEV in prepare_cpus to wake CPU1 (stock parity)
 
@@ -20,7 +20,7 @@ AUX_CORE_BOOT_1 write. Verified on hardware: CPU1 comes online (nproc=2).
 Note: pair with cpuidle.off=1 on the cmdline (stock ships
 cpuidle44xx.disallow_smp_idle) -- OMAP4 secondary deep-idle otherwise faults.
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/arch/arm/mach-omap2/omap-smp.c
 +++ b/arch/arm/mach-omap2/omap-smp.c

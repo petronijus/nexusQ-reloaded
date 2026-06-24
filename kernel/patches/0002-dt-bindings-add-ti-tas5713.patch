@@ -1,12 +1,12 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Nexus Q Reloaded <nexusq@localhost>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Wed, 1 Jan 2025 00:00:00 +0000
 Subject: [PATCH 2/3] dt-bindings: sound: tas57xx: add ti,tas5713 compatible
 
 Add the TAS5713 25W stereo Class-D amplifier to the list of supported
 compatible strings in the tas57xx device tree binding.
 
-Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  Documentation/devicetree/bindings/sound/ti,tas57xx.yaml | 1 +
  1 file changed, 1 insertion(+)

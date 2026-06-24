@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
-From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Sat, 20 Jun 2026 11:55:00 +0200
 Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A bring-up (vendor host init)
 
@@ -45,7 +45,7 @@ Also log the ULPI identity once and pin the root hub runtime-active (userspace
 udev re-enables autosuspend via hwdb, which would halt the controller, gate the
 EHCI fclk and drop port power before the slow-to-connect LAN9500A is seen).
 
-Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 --- a/drivers/usb/host/ehci-omap.c
 +++ b/drivers/usb/host/ehci-omap.c

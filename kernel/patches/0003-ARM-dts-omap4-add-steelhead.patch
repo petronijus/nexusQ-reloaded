@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Nexus Q Reloaded <nexusq@localhost>
+From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Wed, 1 Jan 2025 00:00:00 +0000
 Subject: [PATCH 3/3] ARM: dts: omap4: add Google Nexus Q (steelhead)
 
@@ -9,7 +9,7 @@ Hardware: TI OMAP4460, 1 GB LPDDR2, 16 GB eMMC, BCM4330 WiFi/BT,
 TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 (USB), HDMI via TPD12S015A, 32 RGB LEDs via AVR+LP5523.
 
-Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
  arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 723 +
