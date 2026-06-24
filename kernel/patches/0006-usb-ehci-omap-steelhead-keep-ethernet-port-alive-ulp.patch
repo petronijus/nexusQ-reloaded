@@ -74,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,166 @@
+@@ -61,6 +67,198 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -200,11 +200,43 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 + * just-reset, running controller. This hook re-runs on every controller reset,
 + * exactly as stock does.
 + */
++/* OMAP4 USBHS UHH module: base = EHCI base (0x4A064C00) - 0xC00 = 0x4A064000 */
++#define OMAP_UHH_OFFSET_FROM_EHCI	0xC00
++#define OMAP_UHH_SYSCONFIG		0x10
++#define OMAP_UHH_SYSCONFIG_SOFTRESET	(1 << 0)
++#define OMAP_UHH_HOSTCONFIG_REG		0x40
++
 +static int omap_ehci_reset(struct usb_hcd *hcd)
 +{
 +	struct omap_hcd *omap = (struct omap_hcd *)hcd_to_ehci(hcd)->priv;
 +	void __iomem *regs = hcd->regs;
++	void __iomem *uhh;
 +	int ret, i;
++
++	/*
++	 * Stock host-level half of omap_ehci_soft_phy_reset (stock VA 0xc0331cc8):
++	 * pulse the UHH module SOFTRESET to re-arm the USBHS host port state
++	 * machine, saving/restoring UHH_HOSTCONFIG across it (the softreset clears
++	 * it). Our port omitted this entirely and only re-programmed the ULPI PHY;
++	 * stock proved on this unit that with the PHY configured AND this UHH
++	 * re-arm the EHCI latches the port-1 connect (CCS=1). Done BEFORE
++	 * ehci_setup() so the controller is then configured on a freshly re-armed
++	 * USBHS. UHH base = EHCI base - 0xC00 (0x4A064000 on OMAP4).
++	 */
++	uhh = ioremap(hcd->rsrc_start - OMAP_UHH_OFFSET_FROM_EHCI, 0x100);
++	if (uhh) {
++		u32 saved = readl(uhh + OMAP_UHH_HOSTCONFIG_REG);
++		int t = 1000;
++
++		writel(OMAP_UHH_SYSCONFIG_SOFTRESET, uhh + OMAP_UHH_SYSCONFIG);
++		while ((readl(uhh + OMAP_UHH_SYSCONFIG) &
++			OMAP_UHH_SYSCONFIG_SOFTRESET) && --t)
++			udelay(1);
++		writel(saved, uhh + OMAP_UHH_HOSTCONFIG_REG);
++		iounmap(uhh);
++		pr_info("steelhead: UHH softreset (HOSTCONFIG=%#x restored, %s)\n",
++			saved, t ? "clear" : "TIMEOUT");
++	}
 +
 +	ret = ehci_setup(hcd);
 +	if (ret)
@@ -241,7 +273,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +234,7 @@
+@@ -68,6 +266,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -249,7 +281,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +311,53 @@
+@@ -144,6 +343,53 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -303,7 +335,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +401,16 @@
+@@ -187,6 +433,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -320,7 +352,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +419,83 @@
+@@ -195,6 +451,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
