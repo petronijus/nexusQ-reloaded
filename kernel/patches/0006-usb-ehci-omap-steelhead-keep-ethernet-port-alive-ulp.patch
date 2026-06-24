@@ -12,25 +12,34 @@ mainline lacks. Verified on hardware: under the stock kernel the LAN9500A
 enumerates (idVendor=0424 idProduct=9e00 -> eth0), so the chip is healthy and the
 gap is purely these software steps.
 
-Replicate the vendor host init, all BEFORE usb_add_hcd() (the order matters):
+Replicate the vendor host init (the order/placement matters):
 
  1) Power-on-reset the LAN9500A in board order -- with the 38.4 MHz PHY refclk
     (auxclk3) enabled: NENABLE(gpio_1) low, settle, NRESET(gpio_62) high. Owned
     via the steelhead DT (enable/reset gpios + clock on &usbhsehci); optional, so
-    a no-op on other boards.
- 2) Set INSNREG01 OUT/IN burst thresholds to 0x80 (vendor steelhead-only); the
-    reset default does not work for this ULPI-PHY data path.
- 3) Issue the ULPI Function-Control soft reset of the external transceiver
-    BEFORE usb_add_hcd(). Without it the USB3320 answers register reads but never
-    drives the downstream bus; doing it after the controller starts (an earlier
-    version of this patch) does not bring the device up -- the vendor does it
-    here, before the port is started. Precede that ULPI reset with the
-    vendor's udelay(1000) settle (stock VA 0xc0329ba4): without it the soft
-    reset can land before the USB3320/LAN9500A link state machine is stable,
-    so the chip answers register reads but never drives the bus and the port
-    never reports connect (PORTSC CCS stuck 0) -- the intermittent 'eth0 only
-    enumerates on some cold boots' failure (a cold power-cycle recovers it,
-    unbind/bind does not).
+    a no-op on other boards. Done in probe before usb_add_hcd(); gpio_62 resets
+    BOTH the USB3320 PHY and the LAN9500A (verified: holding it -ETIMEDOUTs ULPI).
+ 2) Program the external USB3320 ULPI PHY into its working host state from the
+    EHCI .reset hook (omap_ehci_reset: ehci_setup() then the ULPI burst), which
+    runs from inside usb_add_hcd() AFTER the controller is reset/set up -- exactly
+    where the vendor omap_ehci_soft_phy_reset (stock VA 0xC0331BDC) does it. This
+    placement is the crux: the INSNREG05 ULPI viewport only accepts writes once
+    ehci_setup() has run, so an earlier version that issued the burst BEFORE
+    usb_add_hcd() silently dropped them (proven: a .reset-hook readback shows
+    IFC=0x18, our written value, sticking). The vendor also does NOT stop at a
+    single Function-Control soft reset: after a settle it writes five ULPI regs,
+    EACH 20 times, to force them through the marginal external ULPI link:
+        FUNC_CTRL_SET(0x05)=0x20 (RESET), FUNC_CTRL(0x04)=0x41, IFC_CTRL(0x07)=0x18,
+        OTG_CTRL(0x0a)=0x66 (host Dp/Dm pull-downs), FUNC_CTRL(0x04)=0x45 -- each x20.
+    Also set INSNREG01 OUT/IN burst thresholds = 0x80 here (vendor steelhead-only).
+
+NOTE (2026-06-24): the LAN9500A still does not enumerate with all of the above,
+even though the ULPI state is now byte-identical to stock (FUNC=0x45/IFC=0x18/
+OTG=0x66) and stock enumerates the same chip on this unit today (proven via
+stock-adb: port:1 CCS=1). So the remaining gap is NOT the PHY registers but a
+host/USBHS-level difference -- still open. This patch keeps the correct,
+stock-faithful structure (`.reset`-hook placement + full ULPI programming) as the
+base to build on; see docs/2026-06-24-ethernet-stock-proven-its-our-sw.md.
 
 Also log the ULPI identity once and pin the root hub runtime-active (userspace
 udev re-enables autosuspend via hwdb, which would halt the controller, gate the
@@ -65,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,89 @@
+@@ -61,6 +67,166 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -102,40 +111,20 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +}
 +
 +/*
-+ * Issue a ULPI Function-Control soft reset to the external PHY on 'port'
-+ * (1-based) through the INSNREG05 viewport. The mainline ehci-omap dropped
-+ * this when PHY handling moved to the generic framework, but an external ULPI
-+ * PHY modelled only as usb-nop-xceiv (e.g. the SMSC USB3320 on the Nexus Q)
-+ * still needs the controller to soft-reset its transceiver once the link is
-+ * up, otherwise a soldered-down downstream device never appears on the bus.
-+ * Mirrors omap_ehci_soft_phy_reset() from the vendor/older OMAP EHCI driver.
++ * Write one 8-bit value to a ULPI PHY register through the OMAP EHCI INSNREG05
++ * viewport (OPSEL = 2 = write). Mirrors omap_ehci_ulpi_write() from the vendor
++ * driver; used to program the external USB3320 into its working host state.
 + */
-+static void omap_ehci_soft_phy_reset(void __iomem *regs, int port)
++static void omap_ehci_ulpi_write(void __iomem *regs, int port, u8 ulpi_reg,
++				 u8 val)
 +{
 +	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 +	u32 reg;
 +
-+	/*
-+	 * Steelhead/stock parity: the vendor omap_ehci_soft_phy_reset issues a
-+	 * udelay(1000) HERE, before striking the ULPI Function-Control reset, to
-+	 * let the just-released USB3320 PHY / LAN9500A link state machine settle
-+	 * (stock VA 0xc0329ba4: mov r0,#0x3e8; bl udelay). Without it the soft
-+	 * reset can land before the transceiver is stable, so it answers register
-+	 * reads but never drives the downstream bus and the port never reports
-+	 * connect (PORTSC CCS stuck 0) -- the intermittent 'eth0 enumerates only
-+	 * on some cold boots' failure, which a cold power-cycle (re-runs the whole
-+	 * timed sequence) recovers but an unbind/bind (no settle) does not.
-+	 */
-+	udelay(1000);
-+
-+	reg = ULPI_FUNC_CTRL_RESET
-+		/* FUNCTION_CTRL_SET register */
-+		| (ULPI_SET(ULPI_FUNC_CTRL) << EHCI_INSNREG05_ULPI_REGADD_SHIFT)
-+		/* Write */
-+		| (2 << EHCI_INSNREG05_ULPI_OPSEL_SHIFT)
-+		/* PORTn */
++	reg = (u32)val
++		| ((u32)ulpi_reg << EHCI_INSNREG05_ULPI_REGADD_SHIFT)
++		| (2 << EHCI_INSNREG05_ULPI_OPSEL_SHIFT)	/* 2 = write */
 +		| (port << EHCI_INSNREG05_ULPI_PORTSEL_SHIFT)
-+		/* start ULPI access */
 +		| (1 << EHCI_INSNREG05_ULPI_CONTROL_SHIFT);
 +
 +	ehci_write(regs, EHCI_INSNREG05_ULPI, reg);
@@ -146,16 +135,121 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +		cpu_relax();
 +
 +		if (time_after(jiffies, timeout)) {
-+			pr_err("%s: ulpi write timeout\n", __func__);
++			pr_err("%s: ulpi write timeout (reg %#x)\n",
++			       __func__, ulpi_reg);
 +			break;
 +		}
 +	}
 +}
 +
++/*
++ * Bring the external SMSC USB3320 ULPI PHY (port 1 -- the Nexus Q's soldered
++ * LAN9500A USB-ethernet path) into its working host state, mirroring the vendor
++ * omap_ehci_soft_phy_reset (stock VA 0xC0331BDC). The stock routine does NOT
++ * stop at a single Function-Control soft reset: after a settle it programs five
++ * ULPI registers and writes EACH one 20 times, to force the value through the
++ * marginal external ULPI link. Doing only the one-shot RESET (as this driver did
++ * before) relied on the PHY's reset defaults happening to land at FUNC=0x45 /
++ * OTG=0x66 -- which is exactly why enumeration was intermittent: on a bad boot
++ * OTG_CTRL was left without the host-side Dp/Dm pull-downs (0x66) and IFC_CTRL
++ * was not forced (0x18), so the PHY answered register reads (ULPI VID 0x0424 --
++ * alive) but the controller never saw the LAN9500A pull up D+ and the port sat
++ * at SE0 / PORTSC CCS=0. A warm gpio_1 rail power-cycle cannot fix it because
++ * the PHY *registers*, not the rail, are wrong. Replicate the full sequence.
++ */
++static void omap_ehci_soft_phy_reset(void __iomem *regs, int port)
++{
++	int i;
++
++	/*
++	 * Stock does a controller reset then udelay(2000) before the ULPI
++	 * register burst (VA 0xc0331f10) -- let the just-released USB3320 /
++	 * LAN9500A link state machine settle before programming it.
++	 */
++	udelay(2000);
++
++	/* FUNCTION_CTRL_SET = RESET (0x20): soft-reset the transceiver */
++	for (i = 0; i < 20; i++)
++		omap_ehci_ulpi_write(regs, port, ULPI_SET(ULPI_FUNC_CTRL),
++				     ULPI_FUNC_CTRL_RESET);
++	/* FUNC_CTRL = 0x41 */
++	for (i = 0; i < 20; i++)
++		omap_ehci_ulpi_write(regs, port, ULPI_FUNC_CTRL, 0x41);
++	/* IFC_CTRL = 0x18 */
++	for (i = 0; i < 20; i++)
++		omap_ehci_ulpi_write(regs, port, ULPI_IFC_CTRL, 0x18);
++	/* OTG_CTRL = 0x66 (host Dp/Dm pull-downs + IdPullup -- lets the EHCI
++	 * see the downstream LAN9500A assert connect) */
++	for (i = 0; i < 20; i++)
++		omap_ehci_ulpi_write(regs, port, ULPI_OTG_CTRL, 0x66);
++	/* FUNC_CTRL = 0x45 (XcvrSelect HS + OpMode) */
++	for (i = 0; i < 20; i++)
++		omap_ehci_ulpi_write(regs, port, ULPI_FUNC_CTRL, 0x45);
++}
++
++/*
++ * EHCI .reset override. The vendor steelhead kernel programs the external
++ * USB3320 ULPI PHY from inside its EHCI .reset hook (stock VA 0xC0331BDC),
++ * AFTER the standard controller reset -- NOT once before usb_add_hcd(). That
++ * ordering is essential: the INSNREG05 ULPI viewport only accepts writes once
++ * the controller has been set up by ehci_setup(), so issuing the ULPI burst
++ * before usb_add_hcd() (as an earlier version of this driver did) silently
++ * dropped the writes -- the PHY kept its reset defaults and the LAN9500A's
++ * connect was missed on the "bad" boots. Run ehci_setup() first, then set the
++ * steelhead INSNREG01 burst thresholds and the full ULPI PHY programming on the
++ * just-reset, running controller. This hook re-runs on every controller reset,
++ * exactly as stock does.
++ */
++static int omap_ehci_reset(struct usb_hcd *hcd)
++{
++	struct omap_hcd *omap = (struct omap_hcd *)hcd_to_ehci(hcd)->priv;
++	void __iomem *regs = hcd->regs;
++	int ret, i;
++
++	ret = ehci_setup(hcd);
++	if (ret)
++		return ret;
++
++	/* INSNREG01 OUT/IN burst thresholds = 0x80 (vendor steelhead-only) */
++	ehci_write(regs, EHCI_INSNREG01,
++		   (0x80 << EHCI_INSNREG01_OUT_THRESHOLD_SHIFT) |
++		   (0x80 << EHCI_INSNREG01_IN_THRESHOLD_SHIFT));
++
++	/* program the external USB3320 ULPI PHY on each PHY-mode port */
++	for (i = 0; i < omap->nports; i++)
++		if (omap->phy[i]) {
++			omap_ehci_soft_phy_reset(regs, i + 1);
++			/*
++			 * DIAG (temporary): confirm this hook actually ran on the
++			 * set-up controller AND that the ULPI writes stuck -- read
++			 * the registers back. Expect FUNC=0x45 IFC=0x18 OTG=0x66 if
++			 * the writes took; an IFC != 0x18 means the viewport still
++			 * dropped them. Remove once root-caused.
++			 */
++			pr_info("steelhead: omap_ehci_reset port%d readback FUNC=%#x IFC=%#x OTG=%#x VID=%#x:%#x\n",
++				i + 1,
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_FUNC_CTRL),
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_IFC_CTRL),
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_OTG_CTRL),
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_VENDOR_ID_HIGH),
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_VENDOR_ID_LOW));
++		}
++
++	return 0;
++}
++
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -144,6 +233,53 @@
+@@ -68,6 +234,7 @@
+ 
+ static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
+ 	.extra_priv_size = sizeof(struct omap_hcd),
++	.reset = omap_ehci_reset,
+ };
+ 
+ /**
+@@ -144,6 +311,53 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -209,43 +303,24 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +323,35 @@
+@@ -187,6 +401,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
 +	/*
-+	 * Nexus Q (steelhead) EHCI host init, BEFORE usb_add_hcd() -- exactly
-+	 * the order the vendor board kernel used (drivers/usb/host/ehci-omap.c,
-+	 * android-omap-steelhead-3.0). Two steelhead-specific steps the mainline
-+	 * driver lacks are required for the soldered SMSC LAN9500A behind the
-+	 * external SMSC USB3320 ULPI PHY to enumerate:
-+	 *
-+	 *  1) INSNREG01 OUT/IN burst thresholds = 0x80 (vendor #ifdef
-+	 *     CONFIG_MACH_STEELHEAD). The reset default does not work for this
-+	 *     ULPI-PHY data path.
-+	 *  2) The ULPI Function-Control soft reset of the external transceiver,
-+	 *     issued *before* the controller is started -- the USB3320 otherwise
-+	 *     answers register reads but never drives the downstream bus, so the
-+	 *     LAN9500A never signals connect. Doing it after usb_add_hcd() (as an
-+	 *     earlier version of this patch did) resets the PHY after the EHCI
-+	 *     core has already configured/started the port, which does not bring
-+	 *     the device up; the vendor does it here, before usb_add_hcd().
++	 * Nexus Q (steelhead) EHCI host init -- the INSNREG01 burst thresholds and
++	 * the full USB3320 ULPI PHY programming are done in omap_ehci_reset() (the
++	 * EHCI .reset hook), which runs from inside usb_add_hcd() *after*
++	 * ehci_setup() has reset and set up the controller. That is where the
++	 * vendor does it, and it is the only point at which the INSNREG05 ULPI
++	 * viewport actually accepts the writes. The board-level LAN9500A
++	 * power-on-reset gpio sequence above has already run here, before
++	 * usb_add_hcd(), so the chip is powered and out of reset by then.
 +	 */
-+	ehci_write(regs, EHCI_INSNREG01,
-+		   (0x80 << EHCI_INSNREG01_OUT_THRESHOLD_SHIFT) |
-+		   (0x80 << EHCI_INSNREG01_IN_THRESHOLD_SHIFT));
-+
-+	for (i = 0; i < omap->nports; i++) {
-+		int port = i + 1;	/* ULPI viewport PORTSEL is 1-based */
-+
-+		if (pdata->port_mode[i] == OMAP_EHCI_PORT_MODE_PHY)
-+			omap_ehci_soft_phy_reset(regs, port);
-+	}
-+
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +360,83 @@
+@@ -195,6 +419,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
