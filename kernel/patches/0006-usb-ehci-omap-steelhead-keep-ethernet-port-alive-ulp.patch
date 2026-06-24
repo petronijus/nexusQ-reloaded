@@ -74,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,267 @@
+@@ -61,6 +67,288 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -225,11 +225,24 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +
 +static int omap_ehci_reset(struct usb_hcd *hcd)
 +{
-+	struct omap_hcd *omap = (struct omap_hcd *)hcd_to_ehci(hcd)->priv;
++	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++	struct omap_hcd *omap = (struct omap_hcd *)ehci->priv;
 +	void __iomem *regs = hcd->regs;
 +	void __iomem *uhh;
 +	void __iomem *cm;
 +	int ret, i;
++
++	/*
++	 * Stock's omap_ehci_soft_phy_reset is NOT the .reset hook -- it is a runtime
++	 * recovery handler called from ehci_hub_control after a port reset/resume
++	 * times out, on an ALREADY set-up + HCRESET + running controller. So run the
++	 * generic ehci_setup() (HCRESET, caps read, CONFIGFLAG=1) FIRST here, then do
++	 * the UHH softreset / gpio159 / clk re-park as a re-arm, and NEVER HCRESET
++	 * again -- an ehci_setup() in the middle (as before) discarded the UHH re-arm.
++	 */
++	ret = ehci_setup(hcd);
++	if (ret)
++		return ret;
 +
 +	/*
 +	 * Stock parks the port-1 UTMI clock on the INTERNAL 60 MHz across the PHY
@@ -307,9 +320,17 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +		pr_info("steelhead: port-1 UTMI clock parked internal across reset, back to external\n");
 +	}
 +
-+	ret = ehci_setup(hcd);
-+	if (ret)
-+		return ret;
++	/*
++	 * Re-assert CONFIGFLAG=1 (route all root-hub ports to the EHCI, not the
++	 * companion) after the UHH softreset -- stock writes op+0x40 = 1 here. DIAG:
++	 * dump CMD/STS/CONFIGFLAG to compare against stock (command 0x10005). Remove
++	 * the dump once root-caused.
++	 */
++	ehci_writel(ehci, FLAG_CF, &ehci->regs->configured_flag);
++	pr_info("steelhead: ehci CMD=%#x STS=%#x CONFIGFLAG=%#x\n",
++		ehci_readl(ehci, &ehci->regs->command),
++		ehci_readl(ehci, &ehci->regs->status),
++		ehci_readl(ehci, &ehci->regs->configured_flag));
 +
 +	/* INSNREG01 OUT/IN burst thresholds = 0x80 (vendor steelhead-only) */
 +	ehci_write(regs, EHCI_INSNREG01,
@@ -342,7 +363,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +335,7 @@
+@@ -68,6 +356,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -350,7 +371,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +412,61 @@
+@@ -144,6 +433,61 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -412,7 +433,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +510,16 @@
+@@ -187,6 +531,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -429,7 +450,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +528,83 @@
+@@ -195,6 +549,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
