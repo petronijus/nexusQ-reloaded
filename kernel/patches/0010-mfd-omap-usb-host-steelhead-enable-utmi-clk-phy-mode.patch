@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+Date: Tue, 24 Jun 2026 21:00:00 +0200
+Subject: [PATCH] mfd: omap-usb-host: steelhead: enable port UTMI clock in PHY mode
+
+usbhs_runtime_resume()/suspend() only gate the per-port UTMI functional clock
+(usb_host_hs_utmi_pN_clk -- the L3INIT CLKCTRL OPTFCLKEN, bit 8) for TLL and
+HSIC port modes; an external-PHY (ULPI) port falls through to default: and never
+has its UTMI clock enabled. On the Nexus Q the LAN9500A hangs off a PHY-mode
+EHCI port 1 (port1-mode = "ehci-phy"), and clk_summary on a running board shows
+usb_host_hs_utmi_p1_clk disabled (enable_count = 0) -- so the port-1 UTMI link
+block has no functional clock and the controller never latches the downstream
+device's connect (PORTSC CCS stays 0). The reverse-engineered stock kernel keeps
+this clock gated on for the port. Add OMAP_EHCI_PORT_MODE_PHY to the same case as
+TLL in both runtime_resume (enable) and runtime_suspend (disable) so a PHY-mode
+port gets, and releases, its UTMI clock symmetrically.
+
+Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
+---
+--- a/drivers/mfd/omap-usb-host.c	2026-06-24 21:51:09.041502267 +0200
++++ b/drivers/mfd/omap-usb-host.c	2026-06-24 21:51:38.078188242 +0200
+@@ -309,6 +309,14 @@
+ 			}
+ 			fallthrough;	/* as HSIC mode needs utmi_clk */
+ 
++		case OMAP_EHCI_PORT_MODE_PHY:	/* steelhead: an external-PHY (ULPI)
++						 * port also needs its UTMI functional
++						 * clock (usb_host_hs_utmi_pN_clk, the
++						 * OPTFCLKEN gate) enabled -- mainline only
++						 * gated it on for TLL/HSIC, leaving the
++						 * PHY-mode port-1 link without a clock so
++						 * the controller never latched the
++						 * downstream LAN9500A connect. */
+ 		case OMAP_EHCI_PORT_MODE_TLL:
+ 			if (!IS_ERR(omap->utmi_clk[i])) {
+ 				r = clk_prepare_enable(omap->utmi_clk[i]);
+@@ -345,6 +353,8 @@
+ 				clk_disable_unprepare(omap->hsic480m_clk[i]);
+ 			fallthrough;	/* as utmi_clks were used in HSIC mode */
+ 
++		case OMAP_EHCI_PORT_MODE_PHY:	/* steelhead: balance the PHY-mode
++						 * utmi_clk enable in runtime_resume */
+ 		case OMAP_EHCI_PORT_MODE_TLL:
+ 			if (!IS_ERR(omap->utmi_clk[i]))
+ 				clk_disable_unprepare(omap->utmi_clk[i]);
