@@ -74,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,230 @@
+@@ -61,6 +67,267 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -208,6 +208,15 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +#define OMAP_UHH_HOSTCONFIG_P1_CONNECT	(1 << 8)
 +
 +/*
++ * PRCM CM_L3INIT_USB_HOST_HS_CLKCTRL (0x4A009358): bit8 = OPTFCLKEN for the
++ * port-1 UTMI clock, bit24 = CLKSEL_UTMI_P1 source mux (0 = internal
++ * init_60m_fclk, 1 = external xclk60mhsp1_ck from the USB3320 PHY).
++ */
++#define OMAP_CM_USB_HOST_HS_CLKCTRL	0x4A009358
++#define USB_HOST_HS_OPTFCLKEN_UTMI_P1	(1 << 8)
++#define USB_HOST_HS_CLKSEL_UTMI_P1	(1 << 24)
++
++/*
 + * Steelhead gpio_159 (gpio5 bit31): a third reset line stock pulses inside
 + * soft_phy_reset. Captured by ehci_hcd_omap_probe, pulsed by omap_ehci_reset.
 + * Single-instance steelhead-only, so a file static is fine.
@@ -219,7 +228,23 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +	struct omap_hcd *omap = (struct omap_hcd *)hcd_to_ehci(hcd)->priv;
 +	void __iomem *regs = hcd->regs;
 +	void __iomem *uhh;
++	void __iomem *cm;
 +	int ret, i;
++
++	/*
++	 * Stock parks the port-1 UTMI clock on the INTERNAL 60 MHz across the PHY
++	 * reset (stock VA 0xc0331bf0): set OPTFCLKEN (bit8) and select
++	 * init_60m_fclk (clear CLKSEL bit24). The external source xclk60mhsp1_ck
++	 * comes FROM the USB3320 PHY, whose 60 MHz output is unstable/absent while
++	 * the PHY is being reset -- if port 1 keeps sourcing it during the reset the
++	 * UTMI link logic glitches and never latches the connect. Mainline leaves it
++	 * on the external clock the whole time (clk_set_parent in the parent probe),
++	 * which is exactly the gap. Park internal here; switch back after the reset.
++	 */
++	cm = ioremap(OMAP_CM_USB_HOST_HS_CLKCTRL, 4);
++	if (cm)
++		writel((readl(cm) | USB_HOST_HS_OPTFCLKEN_UTMI_P1) &
++		       ~USB_HOST_HS_CLKSEL_UTMI_P1, cm);
 +
 +	/*
 +	 * Stock host-level half of omap_ehci_soft_phy_reset (stock VA 0xc0331cc8):
@@ -270,6 +295,18 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +		pr_info("steelhead: gpio_159 reset pulse (low->2ms->high)\n");
 +	}
 +
++	/*
++	 * PHY is back up -- hand the port-1 UTMI clock back to the external
++	 * xclk60mhsp1_ck (set CLKSEL bit24), the source the running link must use
++	 * (stock VA 0xc0331d6c). This matches what mainline's clk_set_parent
++	 * already selects, so CCF stays in sync.
++	 */
++	if (cm) {
++		writel(readl(cm) | USB_HOST_HS_CLKSEL_UTMI_P1, cm);
++		iounmap(cm);
++		pr_info("steelhead: port-1 UTMI clock parked internal across reset, back to external\n");
++	}
++
 +	ret = ehci_setup(hcd);
 +	if (ret)
 +		return ret;
@@ -305,7 +342,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +298,7 @@
+@@ -68,6 +335,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -313,7 +350,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +375,61 @@
+@@ -144,6 +412,61 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -375,7 +412,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +473,16 @@
+@@ -187,6 +510,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -392,7 +429,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +491,83 @@
+@@ -195,6 +528,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
