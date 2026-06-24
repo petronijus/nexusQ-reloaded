@@ -33,7 +33,12 @@ deviceinfo_kernel_cmdline="console=tty0 console=ttyS2,115200n8 mem=1G earlyprint
 # (fastboot boot) since boot.img exceeds the 8 MB boot partition.
 deviceinfo_flash_fastboot_partition_system="userdata"
 
-# USB networking for initial setup (USB gadget on micro-USB port)
+# USB gadget on the micro-USB port. pmOS brings it up as an RNDIS network device;
+# nexusq-usb-acm-console.service then swaps it to an ACM serial debug console once
+# the usb0 net device appears (networking lives on the on-board ethernet since
+# v1.3.0). Keep "rndis" here — the service triggers off usb0 appearing, so the
+# RNDIS gadget must be created first, then it is reshaped to ACM. fastboot is
+# unaffected (bootloader-level, not this booted gadget).
 deviceinfo_usb_idVendor="0x18D1"
 deviceinfo_usb_idProduct="0x4EE2"
 deviceinfo_usb_network_function_default="rndis"

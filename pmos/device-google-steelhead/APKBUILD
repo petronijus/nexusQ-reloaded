@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=1
+pkgrel=2
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -31,6 +31,8 @@ source="
 	lxqt-session.conf
 	nexusq-wayland.sh
 	wifi-powersave-off.conf
+	nexusq-usb-acm-console.sh
+	nexusq-usb-acm-console.service
 	$pkgname.post-install
 "
 
@@ -62,6 +64,20 @@ package() {
 	# Disable WiFi power-save (BCM4330): fixes severe latency jitter (~175->~15 ms).
 	install -Dm644 "$srcdir"/wifi-powersave-off.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-powersave-off.conf
+
+	# USB gadget = ACM serial debug console instead of the RNDIS network gadget
+	# (networking is on the on-board ethernet since v1.3.0). The service swaps the
+	# pmOS-created RNDIS gadget to ACM when the usb0 net device appears; statically
+	# enable it via that device's .wants so it fires every boot. fastboot is
+	# unaffected (bootloader-level).
+	install -Dm755 "$srcdir"/nexusq-usb-acm-console.sh \
+		"$pkgdir"/usr/local/bin/nexusq-usb-acm-console.sh
+	install -Dm644 "$srcdir"/nexusq-usb-acm-console.service \
+		"$pkgdir"/etc/systemd/system/nexusq-usb-acm-console.service
+	install -dm755 \
+		"$pkgdir"/etc/systemd/system/sys-subsystem-net-devices-usb0.device.wants
+	ln -sf ../nexusq-usb-acm-console.service \
+		"$pkgdir"/etc/systemd/system/sys-subsystem-net-devices-usb0.device.wants/nexusq-usb-acm-console.service
 }
 
 nonfree_firmware() {
@@ -78,5 +94,7 @@ SKIP  weston-nexusq.desktop
 SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
+SKIP  nexusq-usb-acm-console.sh
+SKIP  nexusq-usb-acm-console.service
 SKIP  device-google-steelhead.post-install
 "
