@@ -7,12 +7,43 @@ All notable changes to Nexus Q Reloaded. Format follows
 ## [Unreleased]
 
 ### Known issues / in progress
-- **Ethernet (LAN9500A) is intermittent again.** Enumerates only on some cold
-  boots (PORTSC CCS stuck 0, chip does not drive D+); cold power-cycle recovers,
-  unbind/bind does not. Stock's 1 ms ULPI pre-reset settle was added (real
-  parity) but is **not** sufficient. Prime suspect: `UHH_HOSTCONFIG` not holding
-  `0x11c` across `usbhs_runtime_resume`. Diagnostic plan in
-  `docs/2026-06-23-ethernet-continuation.md`.
+- **CPU is stuck at 350 MHz (OPP50).** `cpufreq-dt` is built as a module and
+  never loads, so there is no frequency scaling — the OMAP4460 runs at its
+  low-power boot OPP instead of up to 1.2 GHz, which makes the system feel slow
+  and caps ssh / USB-ethernet throughput (CPU-bound). Enabling OMAP4 cpufreq
+  (cpufreq-dt built-in + a `cpu-supply` regulator for voltage scaling) is the
+  next task.
+
+## [1.3.0] - 2026-06-24
+
+### Fixed
+- **On-board LAN9500A USB-Ethernet now works on mainline 6.12** 🌐 — the
+  long-standing "intermittent / never enumerates" problem is **resolved**. The
+  chip enumerates on every boot (`0424:9e00` → `smsc95xx … eth0`), the link comes
+  up at 100 Mbps/Full and passes traffic cleanly. Verified on hardware: 5/5
+  reboots all enumerate, 600 sustained pings at **0 % loss**, 410 MB moved with
+  **zero** rx/tx/CRC/drop errors. Root cause was two combined bugs, both found by
+  stock-parity auditing against the factory Android kernel:
+  - **Patch 0012** (`mfd: omap-usb-host`): mainline only enables the per-port
+    UTMI functional clock (`usb_host_hs_utmi_pN_clk` — the L3INIT CLKCTRL
+    OPTFCLKEN gate) for **TLL/HSIC** port modes. An external-PHY (`ehci-phy`)
+    port falls through to `default:` and never gets its clock, so the port-1 UTMI
+    link block ran unclocked (`clk_summary` showed it disabled) and the
+    controller never latched the downstream connect (PORTSC CCS stuck 0). Added
+    `OMAP_EHCI_PORT_MODE_PHY` to the clock enable/disable paths.
+  - **Patch 0006** (`usb: ehci-omap`): stock's `omap_ehci_soft_phy_reset` (the
+    UHH softreset / gpio pulse / clock re-park / ULPI register burst) is **not**
+    the EHCI `.reset` hook — it is a runtime `ehci_hub_control` *recovery*
+    handler that only fires when a port reset/resume times out, **after** a
+    device has connected. We were running that whole sequence at bring-up, which
+    blocked the very first connect. The `.reset` hook is now a plain
+    `ehci_setup()` bring-up (the USB3320's reset defaults already put it in host
+    mode); the ULPI/UHH recovery helpers are retained for a future hub_control
+    hook.
+
+### Changed
+- All kernel patch headers now carry `petronijus@bastla.com` (was a work email /
+  placeholder).
 
 ## [1.2.0] - 2026-06-23
 
