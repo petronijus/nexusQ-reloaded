@@ -74,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,288 @@
+@@ -61,6 +67,210 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -157,7 +157,13 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 + * at SE0 / PORTSC CCS=0. A warm gpio_1 rail power-cycle cannot fix it because
 + * the PHY *registers*, not the rail, are wrong. Replicate the full sequence.
 + */
-+static void omap_ehci_soft_phy_reset(void __iomem *regs, int port)
++/*
++ * Retained for a future ehci_hub_control recovery hook (stock's actual call
++ * site for this sequence); not used in the plain bring-up path. References
++ * omap_ehci_ulpi_write so that stays live too.
++ */
++static void __maybe_unused
++omap_ehci_soft_phy_reset(void __iomem *regs, int port)
 +{
 +	int i;
 +
@@ -228,134 +234,50 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 +	struct omap_hcd *omap = (struct omap_hcd *)ehci->priv;
 +	void __iomem *regs = hcd->regs;
-+	void __iomem *uhh;
-+	void __iomem *cm;
 +	int ret, i;
 +
 +	/*
-+	 * Stock's omap_ehci_soft_phy_reset is NOT the .reset hook -- it is a runtime
-+	 * recovery handler called from ehci_hub_control after a port reset/resume
-+	 * times out, on an ALREADY set-up + HCRESET + running controller. So run the
-+	 * generic ehci_setup() (HCRESET, caps read, CONFIGFLAG=1) FIRST here, then do
-+	 * the UHH softreset / gpio159 / clk re-park as a re-arm, and NEVER HCRESET
-+	 * again -- an ehci_setup() in the middle (as before) discarded the UHH re-arm.
++	 * PLAIN, stock-faithful bring-up. The stock-parity audit proved
++	 * omap_ehci_soft_phy_reset (UHH softreset / gpio_159 / clk re-park / the
++	 * ULPI 5-reg burst) is NOT run at bring-up: it is a runtime
++	 * ehci_hub_control recovery handler that only fires when a port
++	 * reset/resume times out, AFTER a device has already connected. At bring-up
++	 * stock does a plain ehci_setup() and relies on the USB3320 reset defaults
++	 * (FUNC=0x45 / OTG=0x66 -- host Dp/Dm pull-downs present) plus gpio_62
++	 * NRESET released in probe; it does NOT pre-write the ULPI registers (e.g.
++	 * the non-default IFC=0x18) before the first connect. Doing that recovery
++	 * sequence at bring-up is the prime suspect for why the LAN9500A never
++	 * asserted connect, and stock proved gpio_159 is not even an ethernet line
++	 * (unused in stock's gpio table). So bring-up is now just ehci_setup() + the
++	 * OMAP INSNREG01 burst thresholds; the port-1 UTMI functional clock is
++	 * enabled by the omap-usb-host PHY-mode fix (patch 0012). The ULPI/UHH
++	 * recovery helpers are retained for a future hub_control recovery hook
++	 * (stock's actual placement).
 +	 */
 +	ret = ehci_setup(hcd);
 +	if (ret)
 +		return ret;
-+
-+	/*
-+	 * Stock parks the port-1 UTMI clock on the INTERNAL 60 MHz across the PHY
-+	 * reset (stock VA 0xc0331bf0): set OPTFCLKEN (bit8) and select
-+	 * init_60m_fclk (clear CLKSEL bit24). The external source xclk60mhsp1_ck
-+	 * comes FROM the USB3320 PHY, whose 60 MHz output is unstable/absent while
-+	 * the PHY is being reset -- if port 1 keeps sourcing it during the reset the
-+	 * UTMI link logic glitches and never latches the connect. Mainline leaves it
-+	 * on the external clock the whole time (clk_set_parent in the parent probe),
-+	 * which is exactly the gap. Park internal here; switch back after the reset.
-+	 */
-+	cm = ioremap(OMAP_CM_USB_HOST_HS_CLKCTRL, 4);
-+	if (cm)
-+		writel((readl(cm) | USB_HOST_HS_OPTFCLKEN_UTMI_P1) &
-+		       ~USB_HOST_HS_CLKSEL_UTMI_P1, cm);
-+
-+	/*
-+	 * Stock host-level half of omap_ehci_soft_phy_reset (stock VA 0xc0331cc8):
-+	 * pulse the UHH module SOFTRESET to re-arm the USBHS host port state
-+	 * machine, saving/restoring UHH_HOSTCONFIG across it (the softreset clears
-+	 * it). Our port omitted this entirely and only re-programmed the ULPI PHY;
-+	 * stock proved on this unit that with the PHY configured AND this UHH
-+	 * re-arm the EHCI latches the port-1 connect (CCS=1). Done BEFORE
-+	 * ehci_setup() so the controller is then configured on a freshly re-armed
-+	 * USBHS. UHH base = EHCI base - 0xC00 (0x4A064000 on OMAP4).
-+	 */
-+	uhh = ioremap(hcd->rsrc_start - OMAP_UHH_OFFSET_FROM_EHCI, 0x100);
-+	if (uhh) {
-+		u32 saved = readl(uhh + OMAP_UHH_HOSTCONFIG_REG);
-+		int t = 1000;
-+
-+		writel(OMAP_UHH_SYSCONFIG_SOFTRESET, uhh + OMAP_UHH_SYSCONFIG);
-+		while ((readl(uhh + OMAP_UHH_SYSCONFIG) &
-+			OMAP_UHH_SYSCONFIG_SOFTRESET) && --t)
-+			udelay(1);
-+		/*
-+		 * Restore HOSTCONFIG (the softreset clears it). The live value is 0x1c
-+		 * (INCR bursts only) -- which MATCHES stock; forcing P1_CONNECT_STATUS
-+		 * (bit8) to 0x11c was tested and made no difference, so we leave it at
-+		 * the stock 0x1c.
-+		 */
-+		writel(saved, uhh + OMAP_UHH_HOSTCONFIG_REG);
-+		iounmap(uhh);
-+		pr_info("steelhead: UHH softreset (HOSTCONFIG=%#x restored, %s)\n",
-+			saved, t ? "clear" : "TIMEOUT");
-+	}
-+
-+	/*
-+	 * Stock pulses a THIRD reset line here (gpio_159 = gpio5 bit31) in
-+	 * soft_phy_reset, after the UHH softreset and before the ULPI burst:
-+	 * gpio_direction_output(159,0) -> udelay(2000) -> (159,1) -> udelay(2000)
-+	 * (stock VA 0xc0331d3c). It is an active-low reset pulse on the otherwise
-+	 * unused usbb2_ulpitll_dir pad (CONTROL_PADCONF 0x164, MUX_MODE3); its board
-+	 * net is unproven from vmlinux but it is a hard reset to the LAN9500A or the
-+	 * USB3320 that mainline never drove. Replicate the pulse (GPIO_ACTIVE_LOW in
-+	 * DT, so assert = logical 1 = physical low, release = logical 0 = high).
-+	 */
-+	if (steelhead_eth_phy_reset) {
-+		gpiod_set_value_cansleep(steelhead_eth_phy_reset, 1);	/* assert (low) */
-+		udelay(2000);
-+		gpiod_set_value_cansleep(steelhead_eth_phy_reset, 0);	/* release (high) */
-+		udelay(2000);
-+		pr_info("steelhead: gpio_159 reset pulse (low->2ms->high)\n");
-+	}
-+
-+	/*
-+	 * PHY is back up -- hand the port-1 UTMI clock back to the external
-+	 * xclk60mhsp1_ck (set CLKSEL bit24), the source the running link must use
-+	 * (stock VA 0xc0331d6c). This matches what mainline's clk_set_parent
-+	 * already selects, so CCF stays in sync.
-+	 */
-+	if (cm) {
-+		writel(readl(cm) | USB_HOST_HS_CLKSEL_UTMI_P1, cm);
-+		iounmap(cm);
-+		pr_info("steelhead: port-1 UTMI clock parked internal across reset, back to external\n");
-+	}
-+
-+	/*
-+	 * Re-assert CONFIGFLAG=1 (route all root-hub ports to the EHCI, not the
-+	 * companion) after the UHH softreset -- stock writes op+0x40 = 1 here. DIAG:
-+	 * dump CMD/STS/CONFIGFLAG to compare against stock (command 0x10005). Remove
-+	 * the dump once root-caused.
-+	 */
-+	ehci_writel(ehci, FLAG_CF, &ehci->regs->configured_flag);
-+	pr_info("steelhead: ehci CMD=%#x STS=%#x CONFIGFLAG=%#x\n",
-+		ehci_readl(ehci, &ehci->regs->command),
-+		ehci_readl(ehci, &ehci->regs->status),
-+		ehci_readl(ehci, &ehci->regs->configured_flag));
 +
 +	/* INSNREG01 OUT/IN burst thresholds = 0x80 (vendor steelhead-only) */
 +	ehci_write(regs, EHCI_INSNREG01,
 +		   (0x80 << EHCI_INSNREG01_OUT_THRESHOLD_SHIFT) |
 +		   (0x80 << EHCI_INSNREG01_IN_THRESHOLD_SHIFT));
 +
-+	/* program the external USB3320 ULPI PHY on each PHY-mode port */
++	/*
++	 * DIAG: log the USB3320's *default* ULPI state (no writes) + CONFIGFLAG, so
++	 * we can confirm the PHY is in host mode at bring-up (expect host pull-downs
++	 * OTG=0x66) on the values stock relies on. Remove once root-caused.
++	 */
 +	for (i = 0; i < omap->nports; i++)
-+		if (omap->phy[i]) {
-+			omap_ehci_soft_phy_reset(regs, i + 1);
-+			/*
-+			 * DIAG (temporary): confirm this hook actually ran on the
-+			 * set-up controller AND that the ULPI writes stuck -- read
-+			 * the registers back. Expect FUNC=0x45 IFC=0x18 OTG=0x66 if
-+			 * the writes took; an IFC != 0x18 means the viewport still
-+			 * dropped them. Remove once root-caused.
-+			 */
-+			pr_info("steelhead: omap_ehci_reset port%d readback FUNC=%#x IFC=%#x OTG=%#x VID=%#x:%#x\n",
++		if (omap->phy[i])
++			pr_info("steelhead: plain bring-up port%d PHY defaults FUNC=%#x IFC=%#x OTG=%#x VID=%#x:%#x CONFIGFLAG=%#x\n",
 +				i + 1,
 +				omap_ehci_ulpi_read(regs, i + 1, ULPI_FUNC_CTRL),
 +				omap_ehci_ulpi_read(regs, i + 1, ULPI_IFC_CTRL),
 +				omap_ehci_ulpi_read(regs, i + 1, ULPI_OTG_CTRL),
 +				omap_ehci_ulpi_read(regs, i + 1, ULPI_VENDOR_ID_HIGH),
-+				omap_ehci_ulpi_read(regs, i + 1, ULPI_VENDOR_ID_LOW));
-+		}
++				omap_ehci_ulpi_read(regs, i + 1, ULPI_VENDOR_ID_LOW),
++				ehci_readl(ehci, &ehci->regs->configured_flag));
 +
 +	return 0;
 +}
@@ -363,7 +285,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +356,7 @@
+@@ -68,6 +278,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -371,7 +293,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +433,61 @@
+@@ -144,6 +355,61 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -433,7 +355,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +531,16 @@
+@@ -187,6 +453,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -450,7 +372,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +549,83 @@
+@@ -195,6 +471,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
