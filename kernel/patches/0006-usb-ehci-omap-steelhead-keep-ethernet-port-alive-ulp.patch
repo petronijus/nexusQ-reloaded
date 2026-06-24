@@ -313,7 +313,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +375,59 @@
+@@ -144,6 +375,61 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -348,9 +348,11 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +		if (IS_ERR(eth_reset))
 +			eth_reset = NULL;
 +
-+		/* gpio_159: 3rd reset line pulsed later in omap_ehci_reset (stock). */
++		/* gpio_159: 3rd reset line pulsed later in omap_ehci_reset (stock).
++		 * Keep the con_id short -- "<id>-gpios" must fit gpiolib's 32-char
++		 * property-name buffer (the longer "...-phy-reset" got truncated). */
 +		steelhead_eth_phy_reset = devm_gpiod_get_optional(dev,
-+				"steelhead-ethernet-phy-reset", GPIOD_OUT_LOW);
++				"steelhead-eth-phy-reset", GPIOD_OUT_LOW);
 +		if (IS_ERR(steelhead_eth_phy_reset))
 +			steelhead_eth_phy_reset = NULL;
 +
@@ -373,7 +375,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +471,16 @@
+@@ -187,6 +473,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -390,7 +392,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +489,83 @@
+@@ -195,6 +491,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*

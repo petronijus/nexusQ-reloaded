@@ -578,7 +578,7 @@
 	/* 3rd reset line stock pulses (low->2ms->high) in soft_phy_reset, after the
 	 * UHH softreset, before the ULPI burst -- gpio_159 (gpio5 bit31). Purpose
 	 * not proven from vmlinux (hard reset to the LAN9500A or USB3320). */
-	steelhead-ethernet-phy-reset-gpios = <&gpio5 31 GPIO_ACTIVE_LOW>;	/* gpio_159 */
+	steelhead-eth-phy-reset-gpios = <&gpio5 31 GPIO_ACTIVE_LOW>;	/* gpio_159 (name <=32 chars for the gpiolib buffer) */
 
 	#address-cells = <1>;
 	#size-cells = <0>;
