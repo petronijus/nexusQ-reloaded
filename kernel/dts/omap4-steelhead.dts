@@ -264,6 +264,7 @@
 	ethernet_gpios: ethernet-gpios {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_wait0.gpio_62 NRESET */
+			OMAP4_IOPAD(0x164, PIN_OUTPUT | MUX_MODE3)		/* usbb2_ulpitll_dir.gpio_159 -- 3rd reset line stock pulses in soft_phy_reset */
 		>;
 	};
 
@@ -574,6 +575,10 @@
 	clock-names = "steelhead-ethernet-phy";
 	steelhead-ethernet-enable-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* gpio_1  NENABLE */
 	steelhead-ethernet-reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>;	/* gpio_62 NRESET  */
+	/* 3rd reset line stock pulses (low->2ms->high) in soft_phy_reset, after the
+	 * UHH softreset, before the ULPI burst -- gpio_159 (gpio5 bit31). Purpose
+	 * not proven from vmlinux (hard reset to the LAN9500A or USB3320). */
+	steelhead-ethernet-phy-reset-gpios = <&gpio5 31 GPIO_ACTIVE_LOW>;	/* gpio_159 */
 
 	#address-cells = <1>;
 	#size-cells = <0>;

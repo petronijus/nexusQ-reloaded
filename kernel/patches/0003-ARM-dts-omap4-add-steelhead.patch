@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Nexus Q Reloaded <nexusq@localhost>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 718 +
- 2 files changed, 719 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 723 +
+ 2 files changed, 724 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,718 @@
+@@ -0,0 +1,723 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -301,6 +301,7 @@ index 0000000..abcdef1
 +	ethernet_gpios: ethernet-gpios {
 +		pinctrl-single,pins = <
 +			OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_wait0.gpio_62 NRESET */
++			OMAP4_IOPAD(0x164, PIN_OUTPUT | MUX_MODE3)		/* usbb2_ulpitll_dir.gpio_159 -- 3rd reset line stock pulses in soft_phy_reset */
 +		>;
 +	};
 +
@@ -611,6 +612,10 @@ index 0000000..abcdef1
 +	clock-names = "steelhead-ethernet-phy";
 +	steelhead-ethernet-enable-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* gpio_1  NENABLE */
 +	steelhead-ethernet-reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>;	/* gpio_62 NRESET  */
++	/* 3rd reset line stock pulses (low->2ms->high) in soft_phy_reset, after the
++	 * UHH softreset, before the ULPI burst -- gpio_159 (gpio5 bit31). Purpose
++	 * not proven from vmlinux (hard reset to the LAN9500A or USB3320). */
++	steelhead-ethernet-phy-reset-gpios = <&gpio5 31 GPIO_ACTIVE_LOW>;	/* gpio_159 */
 +
 +	#address-cells = <1>;
 +	#size-cells = <0>;

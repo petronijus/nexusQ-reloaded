@@ -74,7 +74,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,205 @@
+@@ -61,6 +67,230 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -207,6 +207,13 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +#define OMAP_UHH_HOSTCONFIG_REG		0x40
 +#define OMAP_UHH_HOSTCONFIG_P1_CONNECT	(1 << 8)
 +
++/*
++ * Steelhead gpio_159 (gpio5 bit31): a third reset line stock pulses inside
++ * soft_phy_reset. Captured by ehci_hcd_omap_probe, pulsed by omap_ehci_reset.
++ * Single-instance steelhead-only, so a file static is fine.
++ */
++static struct gpio_desc *steelhead_eth_phy_reset;
++
 +static int omap_ehci_reset(struct usb_hcd *hcd)
 +{
 +	struct omap_hcd *omap = (struct omap_hcd *)hcd_to_ehci(hcd)->priv;
@@ -245,6 +252,24 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +			saved, t ? "clear" : "TIMEOUT");
 +	}
 +
++	/*
++	 * Stock pulses a THIRD reset line here (gpio_159 = gpio5 bit31) in
++	 * soft_phy_reset, after the UHH softreset and before the ULPI burst:
++	 * gpio_direction_output(159,0) -> udelay(2000) -> (159,1) -> udelay(2000)
++	 * (stock VA 0xc0331d3c). It is an active-low reset pulse on the otherwise
++	 * unused usbb2_ulpitll_dir pad (CONTROL_PADCONF 0x164, MUX_MODE3); its board
++	 * net is unproven from vmlinux but it is a hard reset to the LAN9500A or the
++	 * USB3320 that mainline never drove. Replicate the pulse (GPIO_ACTIVE_LOW in
++	 * DT, so assert = logical 1 = physical low, release = logical 0 = high).
++	 */
++	if (steelhead_eth_phy_reset) {
++		gpiod_set_value_cansleep(steelhead_eth_phy_reset, 1);	/* assert (low) */
++		udelay(2000);
++		gpiod_set_value_cansleep(steelhead_eth_phy_reset, 0);	/* release (high) */
++		udelay(2000);
++		pr_info("steelhead: gpio_159 reset pulse (low->2ms->high)\n");
++	}
++
 +	ret = ehci_setup(hcd);
 +	if (ret)
 +		return ret;
@@ -280,7 +305,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +273,7 @@
+@@ -68,6 +298,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -288,7 +313,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  };
  
  /**
-@@ -144,6 +350,53 @@
+@@ -144,6 +375,59 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -323,6 +348,12 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
 +		if (IS_ERR(eth_reset))
 +			eth_reset = NULL;
 +
++		/* gpio_159: 3rd reset line pulsed later in omap_ehci_reset (stock). */
++		steelhead_eth_phy_reset = devm_gpiod_get_optional(dev,
++				"steelhead-ethernet-phy-reset", GPIOD_OUT_LOW);
++		if (IS_ERR(steelhead_eth_phy_reset))
++			steelhead_eth_phy_reset = NULL;
++
 +		if (eth_en && eth_reset) {
 +			eth_phyclk = devm_clk_get_optional(dev,
 +					"steelhead-ethernet-phy");
@@ -342,7 +373,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +440,16 @@
+@@ -187,6 +471,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -359,7 +390,7 @@ Signed-off-by: Petr Parkan Janda <petr.parkan.janda@oh-so.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +458,83 @@
+@@ -195,6 +489,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
