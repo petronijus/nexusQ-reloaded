@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000015 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 01:00:00 +0200
+Subject: [PATCH] ARM: OMAP4460: steelhead: VC-bridge cpu-supply regulator
+
+Stage 1c of MPU DVFS. The TPS62361 that drives VDD_MPU lives on the write-only
+PRM VC SR-i2c and has no Linux i2c regulator, but cpufreq-dt needs a "cpu-supply"
+regulator to scale the MPU rail. Add a thin regulator (compatible
+"steelhead,vc-mpu-supply", referenced from cpu0 cpu-supply) whose set_voltage()
+drives the mpu voltage domain through the OMAP voltage layer.
+
+Scaling goes via a new public omap_voltage_scale_voltage() wrapper around the
+(static) voltdm_scale(), so it uses the configured voltdm->scale -- which on
+OMAP4 is omap_vp_forceupdate_scale (VP force-update, with the VP vstep min/max
+ramp limits and transaction-done polling). This mirrors how the stock 3.0.8
+kernel scales VDD_MPU for runtime DVFS (decoded: stock's default mpu
+voltdm->scale = omap_vp_forceupdate_scale; the raw VC bypass is only the one-time
+Stage-1b hand-over channel). SmartReflex is off, so the OPP voltages are the
+stock-measured open-loop nominals and the VP commands them open-loop -- no AVS
+closed loop is required by this path.
+
+With the OPP table capped to OPP50 in the steelhead DTS this changes nothing at
+runtime yet; it proves the cpufreq + voltage-layer plumbing (and exercises the VP
+force-update path) at the safe 350 MHz boot point before higher OPPs are added.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/voltage.c	2026-06-26 00:53:40.418660437 +0200
++++ b/arch/arm/mach-omap2/voltage.c	2026-06-26 00:54:22.066202587 +0200
+@@ -140,6 +140,23 @@
+ }
+ 
+ /**
++ * omap_voltage_scale_voltage() - scale a voltage domain to a target voltage
++ * @voltdm:		the voltage domain to scale
++ * @target_volt:	target voltage in microvolts (snapped to the OPP volt_data)
++ *
++ * Public wrapper around voltdm_scale() so SoC / regulator code can drive DVFS
++ * through the voltage layer -- i.e. the configured voltdm->scale, which on OMAP4
++ * is omap_vp_forceupdate_scale (VP force-update with ramp/timeout supervision),
++ * the same path stock uses for runtime MPU scaling. Used by the steelhead
++ * VC-bridge cpu-supply regulator.
++ */
++int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
++			       unsigned long target_volt)
++{
++	return voltdm_scale(voltdm, target_volt);
++}
++
++/**
+  * omap_voltage_get_volttable() - API to get the voltage table associated with a
+  *				particular voltage domain.
+  * @voltdm:	pointer to the VDD for which the voltage table is required
+--- a/arch/arm/mach-omap2/voltage.h	2026-06-26 00:53:40.420540551 +0200
++++ b/arch/arm/mach-omap2/voltage.h	2026-06-26 00:54:24.906274286 +0200
+@@ -164,5 +164,7 @@
+ struct voltagedomain *voltdm_lookup(const char *name);
+ void voltdm_init(struct voltagedomain **voltdm_list);
+ void voltdm_reset(struct voltagedomain *voltdm);
++int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
++			       unsigned long target_volt);
+ unsigned long voltdm_get_voltage(struct voltagedomain *voltdm);
+ #endif
+--- a/arch/arm/mach-omap2/Makefile	2026-06-26 00:43:14.812590589 +0200
++++ b/arch/arm/mach-omap2/Makefile	2026-06-26 00:43:49.754503765 +0200
+@@ -128,6 +128,7 @@
+ obj-$(CONFIG_ARCH_OMAP3)		+= voltagedomains3xxx_data.o
+ obj-$(CONFIG_ARCH_OMAP4)		+= $(voltagedomain-common)
+ obj-$(CONFIG_ARCH_OMAP4)		+= voltagedomains44xx_data.o
++obj-$(CONFIG_ARCH_OMAP4)		+= steelhead-vc-mpu-regulator.o
+ obj-$(CONFIG_SOC_AM33XX)		+= $(voltagedomain-common)
+ obj-$(CONFIG_SOC_AM43XX)		+= $(voltagedomain-common)
+ obj-$(CONFIG_SOC_OMAP5)			+= $(voltagedomain-common)
+--- /dev/null	2026-06-24 10:40:12.838001481 +0200
++++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 00:55:31.114940685 +0200
+@@ -0,0 +1,113 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * steelhead-vc-mpu-regulator.c - VC-bridge regulator for the Nexus Q VDD_MPU.
++ *
++ * On OMAP4460 (steelhead) VDD_MPU is supplied by an external TPS62361 that lives
++ * on the write-only PRM Voltage-Controller SR-i2c, not on a normal i2c bus -- so
++ * it has no Linux i2c regulator. cpufreq-dt, however, drives the MPU rail through
++ * a Linux "cpu-supply" regulator (regulator_set_voltage). This thin regulator
++ * bridges the two: its set_voltage() scales the mpu voltage domain through the
++ * OMAP voltage layer (omap_voltage_scale_voltage -> the configured voltdm->scale,
++ * which on OMAP4 is omap_vp_forceupdate_scale -- VP force-update with the VP ramp
++ * and transaction-done supervision), the same path stock uses for runtime MPU
++ * DVFS; this ultimately programs the TPS62361 SET1 register over the PRM VC.
++ * SmartReflex is off, so the OPP voltages are the stock-measured open-loop
++ * nominals and the VP commands them open-loop; this regulator never undervolts.
++ */
++
++#include <linux/err.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++
++#include "voltage.h"
++
++struct vc_mpu_reg {
++	struct voltagedomain	*voltdm;
++	int			cur_uV;
++};
++
++static int vc_mpu_set_voltage(struct regulator_dev *rdev, int min_uV,
++			      int max_uV, unsigned int *selector)
++{
++	struct vc_mpu_reg *vr = rdev_get_drvdata(rdev);
++	int ret;
++
++	/*
++	 * Scale through the OMAP voltage layer, which uses omap_vp_forceupdate_scale
++	 * (VP force-update with ramp/timeout supervision) for the mpu domain -- the
++	 * same path stock uses for runtime DVFS. This programs the TPS62361 (slave
++	 * 0x60 / SET1) over the PRM VC. (Raw omap_vc_bypass_scale is faithful only for
++	 * the one-time Stage-1b hand-over, not per-OPP scaling.)
++	 */
++	ret = omap_voltage_scale_voltage(vr->voltdm, min_uV);
++	if (!ret)
++		vr->cur_uV = min_uV;
++	return ret;
++}
++
++static int vc_mpu_get_voltage(struct regulator_dev *rdev)
++{
++	struct vc_mpu_reg *vr = rdev_get_drvdata(rdev);
++
++	return vr->cur_uV;
++}
++
++static const struct regulator_ops vc_mpu_ops = {
++	.set_voltage	= vc_mpu_set_voltage,
++	.get_voltage	= vc_mpu_get_voltage,
++};
++
++static const struct regulator_desc vc_mpu_desc = {
++	.name			= "vdd_mpu",
++	.ops			= &vc_mpu_ops,
++	.type			= REGULATOR_VOLTAGE,
++	.owner			= THIS_MODULE,
++	.continuous_voltage_range = true,
++};
++
++static int vc_mpu_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct regulator_config cfg = { };
++	struct regulator_dev *rdev;
++	struct vc_mpu_reg *vr;
++
++	vr = devm_kzalloc(dev, sizeof(*vr), GFP_KERNEL);
++	if (!vr)
++		return -ENOMEM;
++
++	vr->voltdm = voltdm_lookup("mpu");
++	if (IS_ERR_OR_NULL(vr->voltdm))
++		return -EPROBE_DEFER;	/* omap_voltage layer not up yet */
++	vr->cur_uV = 1025000;		/* 350 MHz boot OPP (current rail) */
++
++	cfg.dev = dev;
++	cfg.of_node = dev->of_node;
++	cfg.init_data = of_get_regulator_init_data(dev, dev->of_node, &vc_mpu_desc);
++	cfg.driver_data = vr;
++
++	rdev = devm_regulator_register(dev, &vc_mpu_desc, &cfg);
++	if (IS_ERR(rdev))
++		return PTR_ERR(rdev);
++
++	dev_info(dev, "steelhead: VDD_MPU VC-bridge regulator registered\n");
++	return 0;
++}
++
++static const struct of_device_id vc_mpu_of_match[] = {
++	{ .compatible = "steelhead,vc-mpu-supply" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, vc_mpu_of_match);
++
++static struct platform_driver vc_mpu_driver = {
++	.probe	= vc_mpu_probe,
++	.driver	= {
++		.name		= "steelhead-vc-mpu-supply",
++		.of_match_table	= vc_mpu_of_match,
++	},
++};
++builtin_platform_driver(vc_mpu_driver);

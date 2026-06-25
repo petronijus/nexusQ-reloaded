@@ -85,6 +85,22 @@
 		regulator-always-on;
 	};
 
+	/*
+	 * VDD_MPU cpu-supply for cpufreq. The TPS62361 lives on the write-only PRM
+	 * VC SR-i2c (no Linux i2c regulator), so this VC-bridge regulator
+	 * (steelhead-vc-mpu-regulator.c) translates regulator_set_voltage() into an
+	 * omap_vc_bypass_scale() on the mpu voltage domain. Range is OPP50-only for
+	 * now (Stage 1c); Stage 2 widens it to the higher OPP voltages.
+	 */
+	vc_mpu_supply: regulator-vc-mpu {
+		compatible = "steelhead,vc-mpu-supply";
+		regulator-name = "vdd_mpu";
+		regulator-min-microvolt = <1025000>;
+		regulator-max-microvolt = <1025000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
 	/* HDMI level converter: TPD12S015A */
 	tpd12s015: encoder0 {
 		compatible = "ti,tpd12s015";
@@ -677,6 +693,22 @@
 			remote-endpoint = <&tpd12s015_in>;
 		};
 	};
+};
+
+/*
+ * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
+ * Voltage Controller). The OPP table is capped to OPP50 (350 MHz / 1025 mV, the
+ * boot point) for Stage 1c -- this proves the cpufreq + VC plumbing without any
+ * runtime voltage change. Stage 2 restores 700/920 (and the bridge scales V with
+ * f); jumping to a higher freq WITHOUT raising the voltage would undervolt-crash,
+ * so the cap must stay until cpu-supply scaling is validated.
+ */
+&cpu0 {
+	cpu-supply = <&vc_mpu_supply>;
+	operating-points = <
+		/* kHz     uV */
+		350000  1025000
+	>;
 };
 
 /* TWL6030 regulator overrides for steelhead */

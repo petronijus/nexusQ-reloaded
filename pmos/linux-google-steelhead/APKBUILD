@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=9
+pkgrel=10
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -45,6 +45,7 @@ source="
 	0012-mfd-omap-usb-host-steelhead-enable-utmi-clk-phy-mode.patch
 	0013-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-pmic.patch
 	0014-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-retask.patch
+	0015-ARM-OMAP4460-steelhead-vc-mpu-bridge-regulator.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -96,4 +97,5 @@ SKIP  0011-leds-steelhead-avr-drain-key-fifo-at-probe.patch
 SKIP  0012-mfd-omap-usb-host-steelhead-enable-utmi-clk-phy-mode.patch
 SKIP  0013-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-pmic.patch
 SKIP  0014-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-retask.patch
+SKIP  0015-ARM-OMAP4460-steelhead-vc-mpu-bridge-regulator.patch
 "
