@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000013 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 25 Jun 2026 12:00:00 +0200
+Subject: [PATCH] ARM: OMAP4460: steelhead: TPS62361 VDD_MPU PMIC descriptor
+
+Stage 1a of enabling MPU DVFS on the Nexus Q. On OMAP4460 (steelhead) VDD_MPU is
+supplied by an external TI TPS62361 on the PRM Voltage-Controller SR-i2c (slave
+0x60, voltage in the SET1 register 0x01, linear law uV = 500000 + vsel*10000), not
+the TWL6030 VCORE1 that mainline's omap4_mpu_pmic assumes. These values were read
+live from this unit's PRM_VC (PRM_VC_SMPS_SA MPU byte = 0x60, PRM_VC_VAL_SMPS_RA_VOL
+MPU byte = 0x01), cross-checked against the live curr_vp_volt (840000 uV = vsel
+0x22) -- the PandaBoard-ES reference uses a GPIO for VSEL and is NOT applicable.
+
+Add a tps62361 vsel<->uV pair, an omap4460_mpu_pmic descriptor, and select it for
+the MPU voltage domain in omap4_twl_init() when soc_is_omap446x() (other OMAP4 keep
+the TWL6030 descriptor). omap4_twl_init() is already called by omap2_common_pm_late
+_init(); omap_voltage_late_init() only configures the VC channel (no scale is
+issued), so this just programs the VC for slave 0x60 / SET1 -- VDD_MPU stays
+physically on VCORE1 until the later retasking stage, so the rail is unchanged.
+
+This is the groundwork; no cpufreq/OPP/retasking yet (those are later stages). A
+pr_info logs the selected MPU PMIC for validation.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/omap_twl.c	2026-06-25 09:18:23.839103289 +0200
++++ b/arch/arm/mach-omap2/omap_twl.c	2026-06-25 09:20:07.363710766 +0200
+@@ -36,6 +36,18 @@
+ #define OMAP4_VDD_CORE_SR_VOLT_REG	0x61
+ #define OMAP4_VDD_CORE_SR_CMD_REG	0x62
+ 
++/*
++ * OMAP4460 (steelhead / Nexus Q): VDD_MPU is supplied by an external TI TPS62361
++ * on the PRM VC SR-i2c, not the TWL6030 VCORE1. Slave 0x60, voltage/command in the
++ * SET1 register (0x01), linear law uV = 500000 + vsel*10000. These values were read
++ * live from this unit's PRM_VC (PRM_VC_SMPS_SA MPU=0x60, PRM_VC_VAL_SMPS_RA_VOL
++ * MPU=0x01), confirmed against curr_vp_volt (840000 uV = vsel 0x22).
++ */
++#define OMAP4460_TPS62361_SLAVE_ADDR	0x60
++#define OMAP4460_TPS62361_SET1_REG	0x01
++#define OMAP4460_TPS62361_BASE_UV	500000
++#define OMAP4460_TPS62361_STEP_UV	10000
++
+ static bool is_offset_valid;
+ static u8 smps_offset;
+ 
+@@ -124,6 +136,21 @@
+ 		return DIV_ROUND_UP(uv - 607700, 12660) + 1;
+ }
+ 
++/* TPS62361 (OMAP4460 VDD_MPU): linear, base 0.5 V, 10 mV step, SET1 register. */
++static unsigned long tps62361_vsel_to_uv(const u8 vsel)
++{
++	return OMAP4460_TPS62361_BASE_UV +
++	       ((unsigned long)vsel * OMAP4460_TPS62361_STEP_UV);
++}
++
++static u8 tps62361_uv_to_vsel(unsigned long uv)
++{
++	if (uv < OMAP4460_TPS62361_BASE_UV)
++		uv = OMAP4460_TPS62361_BASE_UV;
++	return DIV_ROUND_UP(uv - OMAP4460_TPS62361_BASE_UV,
++			    OMAP4460_TPS62361_STEP_UV);
++}
++
+ static struct omap_voltdm_pmic omap3_mpu_pmic = {
+ 	.slew_rate		= 4000,
+ 	.step_size		= 12500,
+@@ -174,6 +201,29 @@
+ 	.uv_to_vsel		= twl6030_uv_to_vsel,
+ };
+ 
++/*
++ * OMAP4460 VDD_MPU via the external TPS62361 (SR-i2c slave 0x60, SET1 reg 0x01).
++ * Voltages come from the stock-measured OPP table (350/1025 .. 1200/1380 mV); the
++ * range is bounded a touch above OPP-Nitro for safety, not the chip's full 1.77 V.
++ */
++static struct omap_voltdm_pmic omap4460_mpu_pmic = {
++	.slew_rate		= 4000,
++	.step_size		= OMAP4460_TPS62361_STEP_UV,
++	.vp_erroroffset		= OMAP4_VP_CONFIG_ERROROFFSET,
++	.vp_vstepmin		= OMAP4_VP_VSTEPMIN_VSTEPMIN,
++	.vp_vstepmax		= OMAP4_VP_VSTEPMAX_VSTEPMAX,
++	.vddmin			= OMAP4460_TPS62361_BASE_UV,
++	.vddmax			= 1390000,
++	.vp_timeout_us		= OMAP4_VP_VLIMITTO_TIMEOUT_US,
++	.i2c_slave_addr		= OMAP4460_TPS62361_SLAVE_ADDR,
++	.volt_reg_addr		= OMAP4460_TPS62361_SET1_REG,
++	.cmd_reg_addr		= OMAP4460_TPS62361_SET1_REG,
++	.i2c_high_speed		= true,
++	.i2c_pad_load		= 3,
++	.vsel_to_uv		= tps62361_vsel_to_uv,
++	.uv_to_vsel		= tps62361_uv_to_vsel,
++};
++
+ static struct omap_voltdm_pmic omap4_iva_pmic = {
+ 	.slew_rate		= 4000,
+ 	.step_size		= 12660,
+@@ -213,13 +263,25 @@
+ int __init omap4_twl_init(void)
+ {
+ 	struct voltagedomain *voltdm;
++	struct omap_voltdm_pmic *mpu_pmic;
+ 
+ 	if (!cpu_is_omap44xx() ||
+ 	    of_find_compatible_node(NULL, NULL, "motorola,cpcap"))
+ 		return -ENODEV;
+ 
++	/*
++	 * OMAP4460 (steelhead) drives VDD_MPU from an external TPS62361 over the
++	 * PRM VC SR-i2c, not the TWL6030 VCORE1 -- select the TPS62361 PMIC for the
++	 * MPU domain so the VC channel is programmed with slave 0x60 / SET1 (0x01).
++	 * Other OMAP4 variants keep the TWL6030 VCORE1 descriptor.
++	 */
++	mpu_pmic = soc_is_omap446x() ? &omap4460_mpu_pmic : &omap4_mpu_pmic;
++
+ 	voltdm = voltdm_lookup("mpu");
+-	omap_voltage_register_pmic(voltdm, &omap4_mpu_pmic);
++	omap_voltage_register_pmic(voltdm, mpu_pmic);
++	pr_info("steelhead: vdd_mpu PMIC=%s i2c=0x%02x volt_reg=0x%02x\n",
++		soc_is_omap446x() ? "TPS62361" : "TWL6030-VCORE1",
++		mpu_pmic->i2c_slave_addr, mpu_pmic->volt_reg_addr);
+ 
+ 	voltdm = voltdm_lookup("iva");
+ 	omap_voltage_register_pmic(voltdm, &omap4_iva_pmic);

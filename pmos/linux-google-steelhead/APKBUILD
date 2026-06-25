@@ -43,6 +43,7 @@ source="
 	0010-drm-omapdrm-hdmi4-cap-pixel-clock-steelhead.patch
 	0011-leds-steelhead-avr-drain-key-fifo-at-probe.patch
 	0012-mfd-omap-usb-host-steelhead-enable-utmi-clk-phy-mode.patch
+	0013-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-pmic.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -92,4 +93,5 @@ SKIP  0009-ARM-OMAP4-steelhead-SEV-in-prepare-wake-cpu1.patch
 SKIP  0010-drm-omapdrm-hdmi4-cap-pixel-clock-steelhead.patch
 SKIP  0011-leds-steelhead-avr-drain-key-fifo-at-probe.patch
 SKIP  0012-mfd-omap-usb-host-steelhead-enable-utmi-clk-phy-mode.patch
+SKIP  0013-ARM-OMAP4460-steelhead-tps62361-vdd-mpu-pmic.patch
 "
