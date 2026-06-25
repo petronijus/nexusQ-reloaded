@@ -1,0 +1,311 @@
+From 0000000000000000000000000000000000000014 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 25 Jun 2026 14:00:00 +0200
+Subject: [PATCH] ARM: OMAP4460: steelhead: hand VDD_MPU over to the TPS62361
+
+Stage 1b of enabling MPU DVFS on the Nexus Q. Stage 1a (0013) registered the
+TPS62361 PMIC so the VC channel targets slave 0x60 / SET1, but VDD_MPU is still
+physically driven by the TWL6030 VCORE1 SMPS. This performs the rail hand-over,
+replicating the stock omap4_twl_tps62361_enable() (decoded from vmlinux.bin):
+
+  Phase A (TPS first, over the VC SR-i2c, slave 0x60), guarded:
+    SET1 (0x01)    = vsel for the 350 MHz boot OPP (~1025 mV, = current VCORE1
+                     rail, so the hand-over is a no-step transition)
+    RMP_CTRL(0x06) = 0x06   (default/slowest ramp, as stock)
+    reg 0x05       = 0x00   (control clear)
+  If any TPS write fails, abort before touching the TWL6030 (rail stays on
+  VCORE1) -- the glitch-free guarantee stock relies on.
+
+  Phase B (TWL6030 POWER slave 0x48, read-modify-write), only if Phase A passed:
+    activate the SYSEN resource that gates the external TPS (regs 0xB3/0xB4) and
+    un-map VCORE3/VMEM from APE PREQ1 (regs 0x5E/0x64), taking the VCORE1 group
+    off VDD_MPU. The exact reg/value/mask were also confirmed by reading the live
+    stock TWL6030 (0xB3=0x01, 0xB4=0x01, 0x5E=0x00, 0x64=0x00).
+
+The hand-over needs both the OMAP VC (ready at omap_voltage_late_init time) and
+the TWL6030 control i2c -- but on a DT boot the OMAP i2c controllers and the
+TWL6030 mfd probe asynchronously ~3-4 s into boot, long after the late init call.
+So we cannot call the retask synchronously from omap2_common_pm_late_init(); doing
+so fails Phase B with "twl: not initialized". Instead schedule a delayed work that
+polls the TWL6030 until it answers, then runs the hand-over once.
+
+Adds omap_vc_bypass_send_i2c_msg() to vc.c (a raw VC-bypass write for the TPS
+ramp/control regs, factored from omap_vc_bypass_scale()), the retask + its poll
+work in omap_twl.c, and a soc_is_omap446x()-gated schedule from
+omap2_common_pm_late_init(). The TPS VSEL0 select line (gpio_wk7) is held high by
+the steelhead DTS (pinmux + gpio-hog) so the chip outputs SET1. No OPP table /
+cpufreq yet (later stages); the rail just moves to the TPS at the boot voltage.
+
+Sequence, register/value/mask, gpio and the SET1/0x60 values were all decoded from
+this unit's stock kernel and confirmed against its live PRM_VC + TWL6030.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/vc.h	2026-06-25 23:22:00.083483486 +0200
++++ b/arch/arm/mach-omap2/vc.h	2026-06-25 23:26:17.040874754 +0200
+@@ -128,6 +128,8 @@
+ 			u8 target_vsel, u8 current_vsel);
+ int omap_vc_bypass_scale(struct voltagedomain *voltdm,
+ 			 unsigned long target_volt);
++int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
++				u8 reg_addr, u8 data);
+ 
+ #endif
+ 
+--- a/arch/arm/mach-omap2/vc.c	2026-06-25 23:22:00.081541824 +0200
++++ b/arch/arm/mach-omap2/vc.c	2026-06-25 23:26:14.671824432 +0200
+@@ -236,6 +236,49 @@
+ 	return 0;
+ }
+ 
++/*
++ * omap_vc_bypass_send_i2c_msg - VC-bypass write of one arbitrary (reg, data)
++ * byte to a PMIC on the SR-i2c. Same PRM_VC_VAL_BYPASS transaction as
++ * omap_vc_bypass_scale(), but for registers other than the voltage register
++ * (e.g. the TPS62361 ramp/control regs) and without the voltage-scale
++ * bookkeeping. Mirrors the stock omap4_twl_tps62361_enable() helper.
++ */
++int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
++				u8 reg_addr, u8 data)
++{
++	struct omap_vc_channel *vc = voltdm->vc;
++	u32 loop_cnt = 0, retries_cnt = 0;
++	u32 vc_valid, vc_bypass_val_reg, vc_bypass_value;
++
++	vc_valid = vc->common->valid;
++	vc_bypass_val_reg = vc->common->bypass_val_reg;
++	vc_bypass_value = (data << vc->common->data_shift) |
++		(reg_addr << vc->common->regaddr_shift) |
++		(slave_addr << vc->common->slaveaddr_shift);
++
++	voltdm->write(vc_bypass_value, vc_bypass_val_reg);
++	voltdm->write(vc_bypass_value | vc_valid, vc_bypass_val_reg);
++
++	vc_bypass_value = voltdm->read(vc_bypass_val_reg);
++	while (!(vc_bypass_value & vc_valid)) {
++		loop_cnt++;
++
++		if (retries_cnt > 10) {
++			pr_warn("%s: Retry count exceeded\n", __func__);
++			return -ETIMEDOUT;
++		}
++
++		if (loop_cnt > 50) {
++			retries_cnt++;
++			loop_cnt = 0;
++			udelay(10);
++		}
++		vc_bypass_value = voltdm->read(vc_bypass_val_reg);
++	}
++
++	return 0;
++}
++
+ /* Convert microsecond value to number of 32kHz clock cycles */
+ static inline u32 omap_usec_to_32k(u32 usec)
+ {
+--- a/arch/arm/mach-omap2/omap_twl.c	2026-06-25 23:22:00.089553505 +0200
++++ b/arch/arm/mach-omap2/omap_twl.c	2026-06-26 00:00:45.680714693 +0200
+@@ -14,9 +14,11 @@
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/mfd/twl.h>
++#include <linux/workqueue.h>
+ 
+ #include "soc.h"
+ #include "voltage.h"
++#include "vc.h"
+ 
+ #include "pm.h"
+ 
+@@ -292,6 +294,153 @@
+ 	return 0;
+ }
+ 
++/*
++ * twl6030_pm_modify - read-modify-write one TWL6030 POWER (slave 0x48) register:
++ * new = (old & ~mask) | (value & mask). Mirrors the stock twl_modify() helper.
++ */
++static int twl6030_pm_modify(u8 reg, u8 value, u8 mask)
++{
++	u8 val;
++	int ret;
++
++	ret = twl_i2c_read_u8(TWL6030_MODULE_ID0, &val, reg);
++	if (ret)
++		return ret;
++	val = (val & ~mask) | (value & mask);
++	return twl_i2c_write_u8(TWL6030_MODULE_ID0, val, reg);
++}
++
++/*
++ * omap4460_vdd_mpu_retask - hand VDD_MPU from the TWL6030 VCORE1 SMPS to the
++ * external TPS62361, replicating stock omap4_twl_tps62361_enable(). TPS-first and
++ * guarded: program the TPS over the VC SR-i2c to the current rail voltage (the
++ * 350 MHz boot OPP, ~1025 mV) plus its ramp/control, then -- only if every TPS
++ * write succeeded -- retask the TWL6030 so VCORE1 leaves VDD_MPU. If any TPS write
++ * fails we abort before touching the TWL6030, so the rail stays on VCORE1.
++ *
++ * Preconditions: omap4_twl_init() registered the TPS62361 PMIC (VC channel targets
++ * slave 0x60 / SET1) and omap_voltage_late_init() ran (voltdm->vc set); VSEL0
++ * (gpio_wk7) is held high by a DT gpio-hog so the TPS outputs SET1 -- the register
++ * the VC writes to. Sequence + register values are decoded from the stock kernel
++ * (omap4_twl_tps62361_enable, reverse-eng/vmlinux.bin).
++ */
++static int omap4460_vdd_mpu_do_retask(void)
++{
++	struct voltagedomain *voltdm;
++	u8 vsel;
++	int ret;
++
++	voltdm = voltdm_lookup("mpu");
++	if (IS_ERR_OR_NULL(voltdm)) {
++		pr_err("steelhead: vdd_mpu retask: no mpu voltdm\n");
++		return -ENODEV;
++	}
++
++	/*
++	 * Command the TPS to the 350 MHz boot OPP voltage (= the current VCORE1
++	 * rail, ~1025 mV) so the hand-over is a no-step transition. vsel 0x35.
++	 */
++	vsel = tps62361_uv_to_vsel(1025000);
++
++	/* Phase A: program the TPS62361 over the VC SR-i2c (slave 0x60). Guarded. */
++	ret = omap_vc_bypass_send_i2c_msg(voltdm, OMAP4460_TPS62361_SLAVE_ADDR,
++					  OMAP4460_TPS62361_SET1_REG, vsel);
++	if (ret)
++		goto tps_fail;
++	ret = omap_vc_bypass_send_i2c_msg(voltdm, OMAP4460_TPS62361_SLAVE_ADDR,
++					  0x06, 0x06);	/* RMP_CTRL: default ramp */
++	if (ret)
++		goto tps_fail;
++	ret = omap_vc_bypass_send_i2c_msg(voltdm, OMAP4460_TPS62361_SLAVE_ADDR,
++					  0x05, 0x00);	/* control clear */
++	if (ret)
++		goto tps_fail;
++
++	/*
++	 * Phase B: retask the TWL6030 (POWER slave 0x48) so VCORE1 leaves VDD_MPU
++	 * and the TPS (gated by the SYSEN resource) takes over. Order + reg/value/
++	 * mask are the stock sequence.
++	 */
++	ret = twl6030_pm_modify(0xB4, 0x00, 0x20);	/* map APE PREQ1 */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0xB4, 0x01, 0x03);	/* SYSEN active */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0xB4, 0x00, 0x0C);	/* SYSEN sleep */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0xB4, 0x00, 0x30);	/* SYSEN off */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0xB3, 0x01, 0x07);	/* map APE SYEN */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0x5E, 0x00, 0x01);	/* unmap APE VCORE3 */
++	if (ret)
++		goto twl_fail;
++	ret = twl6030_pm_modify(0x64, 0x00, 0x01);	/* unmap APE VMEM */
++	if (ret)
++		goto twl_fail;
++
++	pr_info("steelhead: VDD_MPU handed to TPS62361 (SET1 vsel 0x%02x = %lu uV)\n",
++		vsel, tps62361_vsel_to_uv(vsel));
++	return 0;
++
++tps_fail:
++	pr_err("steelhead: vdd_mpu retask: TPS62361 VC write failed (%d) -- aborted before TWL6030, rail stays on VCORE1\n",
++	       ret);
++	return ret;
++twl_fail:
++	pr_err("steelhead: vdd_mpu retask: TWL6030 retask write failed (%d) -- rail state UNCERTAIN\n",
++	       ret);
++	return ret;
++}
++
++/*
++ * The TWL6030 control i2c (where Phase B writes go) only comes up well after the
++ * arch/late init calls -- the OMAP i2c controllers probe asynchronously ~3-4 s into
++ * boot -- so the hand-over cannot run straight from omap2_common_pm_late_init()
++ * (Phase B fails with "twl: not initialized"). Poll from a workqueue until the
++ * TWL6030 answers, then run the retask once. The VC / Phase-A side is ready early;
++ * only Phase B needs the i2c, and re-running Phase A on the (single) success pass
++ * is harmless.
++ */
++static void omap4460_vdd_mpu_retask_work(struct work_struct *work)
++{
++	static int attempts;
++	u8 tmp;
++
++	/* TWL6030 control i2c (slave 0x48) initialized yet? */
++	if (twl_i2c_read_u8(TWL6030_MODULE_ID0, &tmp, 0x00)) {
++		if (++attempts < 60) {
++			schedule_delayed_work(to_delayed_work(work),
++					      msecs_to_jiffies(500));
++			return;
++		}
++		pr_err("steelhead: vdd_mpu retask: TWL6030 never came up (%d tries); rail stays on VCORE1\n",
++		       attempts);
++		return;
++	}
++
++	omap4460_vdd_mpu_do_retask();
++}
++static DECLARE_DELAYED_WORK(omap4460_mpu_retask_dwork,
++			    omap4460_vdd_mpu_retask_work);
++
++int omap4460_vdd_mpu_retask(void)
++{
++	if (!soc_is_omap446x())
++		return 0;
++
++	/*
++	 * Defer: the TWL6030 i2c is not yet probed at this (late_initcall) point, so
++	 * Phase B would fail. The work polls until it is up, then hands the rail over.
++	 */
++	schedule_delayed_work(&omap4460_mpu_retask_dwork, msecs_to_jiffies(500));
++	return 0;
++}
++
+ int __init omap3_twl_init(void)
+ {
+ 	struct voltagedomain *voltdm;
+--- a/arch/arm/mach-omap2/pm.h	2026-06-25 23:22:51.174164801 +0200
++++ b/arch/arm/mach-omap2/pm.h	2026-06-25 23:26:20.315944306 +0200
+@@ -103,6 +103,7 @@
+ #ifdef CONFIG_TWL4030_CORE
+ extern int omap3_twl_init(void);
+ extern int omap4_twl_init(void);
++extern int omap4460_vdd_mpu_retask(void);
+ #else
+ static inline int omap3_twl_init(void)
+ {
+@@ -112,6 +113,10 @@
+ {
+ 	return -EINVAL;
+ }
++static inline int omap4460_vdd_mpu_retask(void)
++{
++	return -EINVAL;
++}
+ #endif
+ 
+ #if IS_ENABLED(CONFIG_MFD_CPCAP)
+--- a/arch/arm/mach-omap2/pm.c	2026-06-25 23:22:00.085470389 +0200
++++ b/arch/arm/mach-omap2/pm.c	2026-06-25 23:26:23.141004287 +0200
+@@ -147,6 +147,13 @@
+ 	omap4_cpcap_init();
+ 	omap_voltage_late_init();
+ 
++	/*
++	 * steelhead (OMAP4460): hand VDD_MPU from the TWL6030 VCORE1 SMPS to the
++	 * external TPS62361 now that the VC channel is configured. No-op on other
++	 * SoCs (guarded by soc_is_omap446x() inside).
++	 */
++	omap4460_vdd_mpu_retask();
++
+ 	/* Smartreflex device init */
+ 	omap_devinit_smartreflex();
+ 

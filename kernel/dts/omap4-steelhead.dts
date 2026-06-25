@@ -346,7 +346,7 @@
 
 &omap4_pmx_wkup {
 	pinctrl-names = "default";
-	pinctrl-0 = <&ethernet_wkup_pins>;
+	pinctrl-0 = <&ethernet_wkup_pins &tps62361_vsel_pins>;
 
 	msecure_pins: msecure-pins {
 		pinctrl-single,pins = <
@@ -359,6 +359,34 @@
 			OMAP4_IOPAD(0x042, PIN_OUTPUT | MUX_MODE3)		/* gpio_wk1 NENABLE */
 			OMAP4_IOPAD(0x058, PIN_OUTPUT | MUX_MODE0)		/* fref_clk3_out -> PHY 38.4 MHz */
 		>;
+	};
+
+	/*
+	 * TPS62361 VDD_MPU regulator VSEL0 select line. gpio_wk7 is driven high
+	 * (see the &gpio1 hog below) so the chip outputs its SET1 register -- the
+	 * register the OMAP Voltage Controller writes VDD_MPU voltages to. Pad,
+	 * mux mode and drive level were decoded from the stock kernel (gpio 7,
+	 * fref_clk4_req mode 3, gpio_direction_output high).
+	 */
+	tps62361_vsel_pins: tps62361-vsel-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x05a, PIN_OUTPUT | MUX_MODE3)		/* fref_clk4_req.gpio_wk7 TPS62361 VSEL0 */
+		>;
+	};
+};
+
+&gpio1 {
+	/*
+	 * Hold TPS62361 VSEL0 (gpio_wk7) high from boot so VDD_MPU is taken from
+	 * the TPS SET1 register. The TPS is dormant (VCORE1 drives VDD_MPU) until
+	 * the Stage-1b retasking (omap4460_vdd_mpu_retask) enables it, so driving
+	 * this line early is harmless.
+	 */
+	tps62361_vsel0_hog {
+		gpio-hog;
+		gpios = <7 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "tps62361-vsel0";
 	};
 };
 
