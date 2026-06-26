@@ -355,7 +355,7 @@ NEXUSQD_RC=$?
 set -e
 echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
 if [ $NEXUSQD_RC -eq 0 ]; then
-    NEXUSQD_APK=$(find "$WORK/packages" -name 'nexusqd-*.apk' 2>/dev/null | head -1)
+    NEXUSQD_APK=$(find "$WORK/packages" -name 'nexusqd-*.apk' -print -quit 2>/dev/null)
     if [ -n "$NEXUSQD_APK" ]; then
         cp "$NEXUSQD_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQD_APK")"
     else
