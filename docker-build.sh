@@ -394,6 +394,13 @@ if [ $BUILD_RC -eq 0 ]; then
     echo ""
     echo "=== Phase 9: Install image ==="
     set +e
+    # pmbootstrap-in-Docker uid drift: the native chroot's `pmos` user is uid 12345
+    # (pmbootstrap's sandbox uid) while its /home/pmos is owned by 1000, so the install
+    # step `mkdir -p /home/pmos/rootfs` (run as pmos) fails with EPERM. The chroot is
+    # fully built by now and `install` only adds packages into it, so re-aligning the
+    # ownership here sticks through the mkdir. (A pre-build chown does NOT survive --
+    # Phase 5/8 re-create the native chroot and reset it back to 1000.)
+    sudo chown 12345:12345 /home/pmos/.local/var/pmbootstrap/chroot_native/home/pmos 2>/dev/null || true
     pmbootstrap install --password 147147 2>&1
     INSTALL_RC=$?
     set -e
