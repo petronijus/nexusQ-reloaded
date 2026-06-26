@@ -11,6 +11,15 @@ All notable changes to Nexus Q Reloaded. Format follows
   `=y`) with stock-faithful tweaks — a 20 ms VEN settle and a level-triggered IRQ.
   The chip is proven alive (it ACKs i2c when powered); full NFC functionality is a
   follow-up.
+- **Nexus Q diagnostics suite.** `nq-healthd` continuously watches the things that
+  silently fail in the field (LED-ring / nexusqd hangs, VDD_MPU-vs-OPP drift,
+  thermal throttle, kernel errors) and logs to `/var/log/nq-health`;
+  `nq-diag-snapshot` captures a full one-shot device snapshot. Both ship enabled in
+  the device image, with host-side helpers (`scripts/diag/`) and a `nexusq-diag`
+  skill to collect and analyse it over the best available link.
+- **nexusqd** now signals systemd readiness + watchdog via `sd_notify`
+  (self-contained, no libsystemd dependency), so the LED-ring daemon runs as a
+  proper `Type=notify` unit.
 
 ### Changed
 - **DTS regulators now point at the real board rails** — DSS `vdda_video`→vcxio,
@@ -22,6 +31,8 @@ All notable changes to Nexus Q Reloaded. Format follows
 - **Ethernet (LAN9500A) is reliable again** — it came up on every boot tested in
   v1.5.0 (the v1.4.0 cpufreq-build bring-up intermittency was not reproducible),
   sustaining full ~100 Mbit/s line-rate throughput.
+- **Device image UI:** added `nm-tray` (network applet), `blueman` (Bluetooth
+  manager) and `breeze-icons` to the LXQt-Wayland session.
 
 ### Fixed
 - **WiFi: the BCM4330 radio no longer sleeps when idle.** brcmfmac forced the
