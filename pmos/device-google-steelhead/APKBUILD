@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=2
+pkgrel=3
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -31,6 +31,7 @@ source="
 	lxqt-session.conf
 	nexusq-wayland.sh
 	wifi-powersave-off.conf
+	brcmfmac-no-p2p.conf
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
 	$pkgname.post-install
@@ -65,6 +66,13 @@ package() {
 	install -Dm644 "$srcdir"/wifi-powersave-off.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-powersave-off.conf
 
+	# Disable brcmfmac P2P: the BCM4330 firmware advertises "p2p" but cannot create
+	# the P2P_DEVICE interface (p2p_disc handshake times out), so wpa_supplicant/NM
+	# spam failed p2p-dev creations + orphaned "event handler failed (72)". The
+	# Nexus Q does not use Wi-Fi Direct. feature_disable=16 = BIT(BRCMF_FEAT_P2P).
+	install -Dm644 "$srcdir"/brcmfmac-no-p2p.conf \
+		"$pkgdir"/etc/modprobe.d/brcmfmac-no-p2p.conf
+
 	# USB gadget = ACM serial debug console instead of the RNDIS network gadget
 	# (networking is on the on-board ethernet since v1.3.0). The service swaps the
 	# pmOS-created RNDIS gadget to ACM when the usb0 net device appears; statically
@@ -94,6 +102,7 @@ SKIP  weston-nexusq.desktop
 SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
+SKIP  brcmfmac-no-p2p.conf
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  device-google-steelhead.post-install
