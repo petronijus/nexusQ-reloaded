@@ -836,13 +836,13 @@ index 0000000..abcdef1
 +};
 +
 +/*
-+ * NOTE on the remaining ti-sysc message:
-+ *   ti-sysc 4a318000.target-module: probe ... failed with error -16 (-EBUSY)
-+ * That module is GPTIMER1 (timer1_target), the always-on system clockevent
-+ * ("TI gptimer clockevent: always-on 32768 Hz ..."). The OMAP timer core claims
-+ * the timer directly, so ti-sysc legitimately sees the region busy. This is
-+ * expected on every OMAP4 board and MUST NOT be disabled (it would break
-+ * timekeeping). Left as-is intentionally.
++ * GPTIMER1 (timer1_target, 4a318000) is the always-on system clockevent
++ * ("TI gptimer clockevent: always-on 32768 Hz ..."), owned by the timer core.
++ * ti-sysc must keep its hands off it, and it MUST NOT be disabled here (that
++ * would break timekeeping). Upstream ti-sysc signalled that hands-off with
++ * -EBUSY, which the driver core logged as a boot error; patch 0019 turns it
++ * into a silent -ENODEV ("rejects match"). The timer keeps its
++ * ti,no-reset-on-init / ti,no-idle quirks from omap4.dtsi -- no DTS change.
 + */
 +
 +/*

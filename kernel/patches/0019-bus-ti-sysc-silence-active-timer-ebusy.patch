@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000019 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 16:00:00 +0200
+Subject: [PATCH] bus: ti-sysc: don't error on an active OMAP4 system timer
+
+On OMAP4 the always-on system clockevent (GPTIMER1, 4a318000.target-module,
+carrying ti,no-reset-on-init + ti,no-idle) is owned by the timer core, so
+sysc_check_active_timer() correctly tells ti-sysc to keep its hands off it.
+For non-omap3 SoCs it signals that with -EBUSY, which sysc_probe() returns as a
+hard error -- and the driver core then logs
+
+  ti-sysc 4a318000.target-module: probe with driver ti-sysc failed with error -16
+
+on every boot. The timer works fine (the clockevent is set up directly by the
+dmtimer system-timer code); only the message is misleading.
+
+Translate that -EBUSY into -ENODEV in sysc_probe(), which the driver core logs at
+debug level ("rejects match") instead of as an error. Behaviour is unchanged --
+ti-sysc still returns early without touching the timer -- this only drops a benign
+boot-time error line.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/bus/ti-sysc.c	2026-06-26 14:14:04.737380313 +0200
++++ b/drivers/bus/ti-sysc.c	2026-06-26 14:14:19.900248271 +0200
+@@ -3224,6 +3224,16 @@
+ 	error = sysc_check_active_timer(ddata);
+ 	if (error == -ENXIO)
+ 		ddata->reserved = true;
++	else if (error == -EBUSY)
++		/*
++		 * An active OMAP4+ system timer (e.g. GPTIMER1, the always-on
++		 * clockevent) is owned by the timer core, so ti-sysc must not manage
++		 * it. sysc_check_active_timer() reports that as -EBUSY; return -ENODEV
++		 * instead so the driver core logs it at debug level ("rejects match")
++		 * rather than erroring out -- the timer works regardless, this only
++		 * silences a benign boot-time error.
++		 */
++		return -ENODEV;
+ 	else if (error)
+ 		return error;
+ 
