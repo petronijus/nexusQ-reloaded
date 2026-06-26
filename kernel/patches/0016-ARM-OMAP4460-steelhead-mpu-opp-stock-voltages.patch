@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000016 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 09:00:00 +0200
+Subject: [PATCH] ARM: OMAP4460: use this unit's stock-measured VDD_MPU nominals
+
+Bump the omap446x VDD_MPU OPP voltages to the values measured from this Nexus Q's
+stock kernel (700/1203, 920/1317, 1200/1380 mV); mainline had 1200/1313/1375
+(3-5 mV low). With SmartReflex off these open-loop nominals are final, and the
+steelhead VC-bridge cpu-supply scales through voltdm_scale(), which snaps the
+cpufreq target up to the nearest volt_data entry >= target -- so a 1203 mV request
+against a 1200 mV table entry would snap to the next entry (1317 mV) and over-volt
+VDD_MPU. The table must hold the exact stock nominals for correct DVFS. OPP50
+(350 MHz / 1025 mV) already matched.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/opp4xxx_data.c	2026-06-26 09:43:36.315406452 +0200
++++ b/arch/arm/mach-omap2/opp4xxx_data.c	2026-06-26 09:44:06.593135236 +0200
+@@ -57,10 +57,18 @@
+ 	VOLT_DATA_DEFINE(0, 0, 0, 0),
+ };
+ 
++/*
++ * Nexus Q (steelhead) runs these open-loop (SmartReflex off), so use this unit's
++ * stock-measured VDD_MPU nominals. Mainline's OPP100/Turbo/Nitro were 3-5 mV low
++ * (1200000/1313000/1375000); the VC-bridge cpu-supply scales via voltdm_scale(),
++ * which snaps the cpufreq target up to the nearest volt_data entry >= target -- so
++ * a 1203 mV request against a 1200 mV table entry would snap to the next one
++ * (1317 mV) and over-volt. The table must therefore hold the exact stock nominals.
++ */
+ #define OMAP4460_VDD_MPU_OPP50_UV		1025000
+-#define OMAP4460_VDD_MPU_OPP100_UV		1200000
+-#define OMAP4460_VDD_MPU_OPPTURBO_UV		1313000
+-#define OMAP4460_VDD_MPU_OPPNITRO_UV		1375000
++#define OMAP4460_VDD_MPU_OPP100_UV		1203000
++#define OMAP4460_VDD_MPU_OPPTURBO_UV		1317000
++#define OMAP4460_VDD_MPU_OPPNITRO_UV		1380000
+ 
+ struct omap_volt_data omap446x_vdd_mpu_volt_data[] = {
+ 	VOLT_DATA_DEFINE(OMAP4460_VDD_MPU_OPP50_UV, OMAP44XX_CONTROL_FUSE_MPU_OPP50, 0xf4, 0x0c),

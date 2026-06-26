@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 783 +
- 2 files changed, 784 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 785 +
+ 2 files changed, 786 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,783 @@
+@@ -0,0 +1,785 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -125,15 +125,16 @@ index 0000000..abcdef1
 +	/*
 +	 * VDD_MPU cpu-supply for cpufreq. The TPS62361 lives on the write-only PRM
 +	 * VC SR-i2c (no Linux i2c regulator), so this VC-bridge regulator
-+	 * (steelhead-vc-mpu-regulator.c) translates regulator_set_voltage() into an
-+	 * omap_vc_bypass_scale() on the mpu voltage domain. Range is OPP50-only for
-+	 * now (Stage 1c); Stage 2 widens it to the higher OPP voltages.
++	 * (steelhead-vc-mpu-regulator.c) translates regulator_set_voltage() into a
++	 * scale on the mpu voltage domain via the OMAP voltage layer (VP force-update).
++	 * Range covers OPP50..OPP100 (1025..1203 mV) for Stage 2 (350/700 MHz); later
++	 * stages widen max to 1317 (920 MHz) / 1380 mV (1.2 GHz, +ABB).
 +	 */
 +	vc_mpu_supply: regulator-vc-mpu {
 +		compatible = "steelhead,vc-mpu-supply";
 +		regulator-name = "vdd_mpu";
 +		regulator-min-microvolt = <1025000>;
-+		regulator-max-microvolt = <1025000>;
++		regulator-max-microvolt = <1203000>;
 +		regulator-boot-on;
 +		regulator-always-on;
 +	};
@@ -734,17 +735,18 @@ index 0000000..abcdef1
 +
 +/*
 + * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
-+ * Voltage Controller). The OPP table is capped to OPP50 (350 MHz / 1025 mV, the
-+ * boot point) for Stage 1c -- this proves the cpufreq + VC plumbing without any
-+ * runtime voltage change. Stage 2 restores 700/920 (and the bridge scales V with
-+ * f); jumping to a higher freq WITHOUT raising the voltage would undervolt-crash,
-+ * so the cap must stay until cpu-supply scaling is validated.
++ * Voltage Controller, VP force-update). Stage 2 OPP table = OPP50 + OPP100
++ * (350 / 700 MHz); the cpu-supply scales VDD_MPU 1025 <-> 1203 mV with the
++ * frequency (stock-measured nominals; voltdm_scale snaps to the opp4xxx table).
++ * Higher OPPs (920 / 1200 MHz) come in later stages once each is validated; 1.2
++ * GHz additionally needs ABB/FBB on VDD_MPU.
 + */
 +&cpu0 {
 +	cpu-supply = <&vc_mpu_supply>;
 +	operating-points = <
 +		/* kHz     uV */
 +		350000  1025000
++		700000  1203000
 +	>;
 +};
 +
