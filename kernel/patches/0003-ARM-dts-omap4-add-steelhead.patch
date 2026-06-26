@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 785 +
- 2 files changed, 786 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 786 +
+ 2 files changed, 787 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,785 @@
+@@ -0,0 +1,786 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -127,14 +127,14 @@ index 0000000..abcdef1
 +	 * VC SR-i2c (no Linux i2c regulator), so this VC-bridge regulator
 +	 * (steelhead-vc-mpu-regulator.c) translates regulator_set_voltage() into a
 +	 * scale on the mpu voltage domain via the OMAP voltage layer (VP force-update).
-+	 * Range covers OPP50..OPP100 (1025..1203 mV) for Stage 2 (350/700 MHz); later
-+	 * stages widen max to 1317 (920 MHz) / 1380 mV (1.2 GHz, +ABB).
++	 * Range covers OPP50..OPP-Turbo (1025..1317 mV, 350/700/920 MHz); Stage 4
++	 * widens max to 1380 mV (1.2 GHz, +ABB/FBB).
 +	 */
 +	vc_mpu_supply: regulator-vc-mpu {
 +		compatible = "steelhead,vc-mpu-supply";
 +		regulator-name = "vdd_mpu";
 +		regulator-min-microvolt = <1025000>;
-+		regulator-max-microvolt = <1203000>;
++		regulator-max-microvolt = <1317000>;
 +		regulator-boot-on;
 +		regulator-always-on;
 +	};
@@ -735,11 +735,11 @@ index 0000000..abcdef1
 +
 +/*
 + * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
-+ * Voltage Controller, VP force-update). Stage 2 OPP table = OPP50 + OPP100
-+ * (350 / 700 MHz); the cpu-supply scales VDD_MPU 1025 <-> 1203 mV with the
++ * Voltage Controller, VP force-update). OPP table = OPP50/100/Turbo
++ * (350 / 700 / 920 MHz); the cpu-supply scales VDD_MPU 1025..1317 mV with the
 + * frequency (stock-measured nominals; voltdm_scale snaps to the opp4xxx table).
-+ * Higher OPPs (920 / 1200 MHz) come in later stages once each is validated; 1.2
-+ * GHz additionally needs ABB/FBB on VDD_MPU.
++ * OPP-Nitro (1.2 GHz) comes in Stage 4 (needs max 1380 mV + ABB/FBB on VDD_MPU
++ * + the Nitro DPLL-trim eFuse gate).
 + */
 +&cpu0 {
 +	cpu-supply = <&vc_mpu_supply>;
@@ -747,6 +747,7 @@ index 0000000..abcdef1
 +		/* kHz     uV */
 +		350000  1025000
 +		700000  1203000
++		920000  1317000
 +	>;
 +};
 +
