@@ -1,0 +1,156 @@
+#!/bin/sh
+# nq-diag-snapshot — comprehensive, read-only "log everything" state dump for the
+# Nexus Q (steelhead). One self-contained snapshot of every subsystem we care
+# about (compute, power, thermal, clocks, LED/AVR, USB, net, kernel log, pstore)
+# so a single capture is enough to reason about almost any fault after the fact.
+#
+# Pure POSIX sh / busybox-safe. Every probe is wrapped so a slow/blocking sysfs
+# read can never hang the whole snapshot. Nothing here writes device state.
+#
+# Usage:
+#   nq-diag-snapshot            # full dump to stdout
+#   nq-diag-snapshot FILE       # full dump to FILE
+#   nq-diag-snapshot --brief    # one-screen health line (for tty1 / quick look)
+
+TO="${NQ_TIMEOUT:-5}"            # per-command timeout (s)
+have() { command -v "$1" >/dev/null 2>&1; }
+t() { if have timeout; then timeout "$TO" "$@"; else "$@"; fi; }
+
+sec() { printf '\n==================== %s ====================\n' "$*"; }
+sub() { printf '\n--- %s ---\n' "$*"; }
+# run a command, labelled, never fatal
+run() { sub "$*"; t "$@" 2>&1 || echo "(failed: $*)"; }
+# cat a file/glob if present
+catf() { for f in "$@"; do [ -e "$f" ] && { printf '# %s\n' "$f"; t cat "$f" 2>&1; }; done; }
+
+brief() {
+	C=/sys/devices/system/cpu/cpu0/cpufreq
+	echo "freq=$(cat $C/scaling_cur_freq 2>/dev/null)kHz/$(cat $C/scaling_governor 2>/dev/null) x$(nproc 2>/dev/null) temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(systemctl is-active librespot 2>/dev/null) load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
+}
+
+snapshot() {
+printf '########## NEXUS Q SNAPSHOT ##########\n'
+echo "captured(mono uptime)=$(cut -d. -f1 /proc/uptime 2>/dev/null)s  wall=$(date 2>/dev/null)"
+
+sec SYSTEM
+run uname -a
+catf /proc/cmdline /proc/version
+run uptime
+sub "memory"; catf /proc/meminfo
+run df -h
+
+sec CPU
+echo "nproc=$(nproc 2>/dev/null)"
+catf /proc/loadavg
+sub "per-cpu cpufreq"
+for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+	printf '# %s\n' "$c"
+	for a in scaling_governor scaling_cur_freq scaling_min_freq scaling_max_freq \
+	         scaling_available_frequencies scaling_available_governors scaling_driver \
+	         cpuinfo_cur_freq related_cpus; do
+		printf '  %-30s %s\n' "$a" "$(cat "$c/$a" 2>/dev/null)"
+	done
+done
+sub "cpufreq stats (if enabled)"; catf /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state
+catf /proc/cpuinfo
+
+sec CLOCKS
+sub "clk_summary"; catf /sys/kernel/debug/clk/clk_summary
+sub "key DPLLs"
+catf /sys/kernel/debug/clk/dpll_mpu_ck/clk_rate /sys/kernel/debug/clk/dpll_core_ck/clk_rate \
+     /sys/kernel/debug/clk/dpll_per_ck/clk_rate /sys/kernel/debug/clk/auxclk3_ck/clk_rate
+
+sec POWER_REGULATORS
+sub "all regulators"
+for r in /sys/class/regulator/regulator.*; do
+	n=$(cat "$r/name" 2>/dev/null); [ -n "$n" ] || continue
+	printf '%-18s state=%-9s %suV  users=%s type=%s\n' \
+		"$n" "$(cat "$r/state" 2>/dev/null)" "$(cat "$r/microvolts" 2>/dev/null)" \
+		"$(cat "$r/num_users" 2>/dev/null)" "$(cat "$r/type" 2>/dev/null)"
+done
+sub "regulator_summary (debugfs)"; catf /sys/kernel/debug/regulator/regulator_summary
+sub "vdd_mpu vs OPP expectation"
+cur=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
+case "$cur" in 350000) exp=1025000;; 700000) exp=1203000;; 920000) exp=1317000;; 1200000) exp=1380000;; *) exp=0;; esac
+vdd=$(for r in /sys/class/regulator/regulator.*; do [ "$(cat $r/name 2>/dev/null)" = vdd_mpu ] && cat $r/microvolts 2>/dev/null; done)
+echo "vdd_mpu=${vdd}uV expected=${exp}uV for ${cur}kHz (OPP 350/1025 700/1203 920/1317 1200/1380)"
+
+sec THERMAL
+for z in /sys/class/thermal/thermal_zone*; do
+	printf '# %s  type=%s temp=%smC mode=%s policy=%s\n' "$z" \
+		"$(cat $z/type 2>/dev/null)" "$(cat $z/temp 2>/dev/null)" \
+		"$(cat $z/mode 2>/dev/null)" "$(cat $z/policy 2>/dev/null)"
+	for tp in $z/trip_point_*; do printf '  %s=%s\n' "$(basename $tp)" "$(cat $tp 2>/dev/null)"; done
+done
+sub "cooling devices"
+for cd in /sys/class/thermal/cooling_device*; do
+	printf '%s: %s/%s (%s)\n' "$(basename $cd)" "$(cat $cd/cur_state 2>/dev/null)" \
+		"$(cat $cd/max_state 2>/dev/null)" "$(cat $cd/type 2>/dev/null)"
+done
+
+sec LED_AVR_NEXUSQD
+sub "nexusqd / librespot units"
+for u in nexusqd librespot; do
+	echo "$u: active=$(systemctl is-active $u 2>/dev/null) sub=$(systemctl show -p SubState --value $u 2>/dev/null) pid=$(systemctl show -p MainPID --value $u 2>/dev/null) restarts=$(systemctl show -p NRestarts --value $u 2>/dev/null) watchdog=$(systemctl show -p WatchdogUSec --value $u 2>/dev/null)"
+done
+run nexusled status
+sub "nexusqd recent journal"; t journalctl -u nexusqd --no-pager -n 40 2>/dev/null || echo "(no journal)"
+sub "AVR interrupt"; grep -i steelhead-avr /proc/interrupts 2>/dev/null
+sub "all LED brightness (ring 0..31 + mute)"
+for l in /sys/class/leds/steelhead:rgb:*; do
+	printf '%-26s b=%s max=%s trig=%s\n' "$(basename $l)" \
+		"$(cat $l/brightness 2>/dev/null)" "$(cat $l/max_brightness 2>/dev/null)" \
+		"$(sed -n 's/.*\[\(.*\)\].*/\1/p' $l/trigger 2>/dev/null)"
+done
+sub "AVR device attrs"; catf /sys/bus/i2c/devices/2-0020/commit_mode
+
+sec USB
+run ls /sys/bus/usb/devices/
+sub "gadget configfs"
+catf /sys/kernel/config/usb_gadget/g1/UDC /sys/kernel/config/usb_gadget/g1/idVendor /sys/kernel/config/usb_gadget/g1/idProduct
+sub "gadget functions / config links"; t ls -l /sys/kernel/config/usb_gadget/g1/functions /sys/kernel/config/usb_gadget/g1/configs/c.1 2>/dev/null
+sub "ehci/musb dmesg"; dmesg 2>/dev/null | grep -iE "ehci|musb|hsusb|otg|usb[0-9]" | tail -20
+
+sec ETHERNET
+run ip -s link show eth0
+have ethtool && run ethtool eth0
+sub "eth/phy dmesg"; dmesg 2>/dev/null | grep -iE "phy|smsc|lan95|eth|mdio" | tail -20
+
+sec NETWORK
+run ip -br addr
+run ip route
+have nmcli && run nmcli -t -f NAME,TYPE,DEVICE,STATE con show
+have ss && run ss -tlnp
+
+sec GPIO_PINMUX
+sub "gpio"; catf /sys/kernel/debug/gpio
+sub "pinmux (active pins)"; t sh -c 'cat /sys/kernel/debug/pinctrl/*/pinmux-pins 2>/dev/null | grep -v "UNCLAIMED" | head -120'
+
+sec INTERRUPTS
+catf /proc/interrupts
+
+sec SYSTEMD
+run systemctl --failed --no-legend
+sub "running units"; t systemctl list-units --type=service --state=running --no-legend 2>/dev/null
+
+sec PSTORE
+if [ -n "$(ls /sys/fs/pstore 2>/dev/null)" ]; then
+	for f in /sys/fs/pstore/*; do sub "$f"; t cat "$f" 2>&1; done
+else
+	echo "(empty — no crash dumps from a previous boot)"
+fi
+
+sec PROCESSES
+run ps w
+
+sec KERNEL_LOG_FULL
+t dmesg 2>&1
+
+printf '\n########## SNAPSHOT END ##########\n'
+}
+
+case "${1:-}" in
+	--brief) brief ;;
+	"" )     snapshot ;;
+	* )      snapshot > "$1" 2>&1; echo "snapshot written to $1" >&2 ;;
+esac

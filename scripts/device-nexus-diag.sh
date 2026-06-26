@@ -1,19 +1,31 @@
 #!/bin/sh
 sleep 5
 LOG=/var/log/nexus-diag.log
+# Full "log everything" capture. Prefer the shared comprehensive collector
+# (nq-diag-snapshot, shipped by the device package); fall back to a curated
+# inline subset if it is not installed (e.g. this script run standalone).
+if command -v nq-diag-snapshot >/dev/null 2>&1; then
+	nq-diag-snapshot > $LOG 2>&1
+else
 {
-echo "########## NEXUS DIAG v2 ##########"
+echo "########## NEXUS DIAG v3 (fallback: nq-diag-snapshot not installed) ##########"
 echo "--- eth diagnostics ---"
 dmesg | grep -iE "phy|regulator|auxclk|nop_usb|usb3320|hsusb|smsc|lan95|ehci" | tail -30
 echo "--- gpio state (1=NENABLE, 62=NRESET) ---"
 grep -E "gpio-(1|62)\b" /sys/kernel/debug/gpio
 echo "--- auxclk3 ---"
 for f in clk_rate clk_enable_count clk_prepare_count; do printf "%s=%s " $f "$(cat /sys/kernel/debug/clk/auxclk3_ck/$f 2>/dev/null)"; done; echo
-echo "--- regulators ---"
-for r in /sys/class/regulator/regulator.*; do echo "$(cat $r/name 2>/dev/null): $(cat $r/state 2>/dev/null)"; done | grep -iE "hsusb|vbus"
+echo "--- cpufreq / thermal / power ---"
+C=/sys/devices/system/cpu/cpu0/cpufreq
+echo "gov=$(cat $C/scaling_governor 2>/dev/null) cur=$(cat $C/scaling_cur_freq 2>/dev/null)kHz nproc=$(nproc) temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC"
+for r in /sys/class/regulator/regulator.*; do n=$(cat $r/name 2>/dev/null); [ -n "$n" ] && echo "$n: $(cat $r/state 2>/dev/null) $(cat $r/microvolts 2>/dev/null)uV"; done
+echo "--- LED / nexusqd / AVR ---"
+echo "nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(systemctl is-active librespot 2>/dev/null) avr_irq=[$(grep -i steelhead-avr /proc/interrupts)]"
 echo "--- USB devices ---"
 ls /sys/bus/usb/devices/
+echo "--- pstore ---"; ls /sys/fs/pstore/ 2>/dev/null || echo "(empty)"
 } > $LOG 2>&1
+fi
 
 # USB gadget network (RNDIS) + sshd on 172.16.42.1
 {
@@ -69,11 +81,14 @@ echo "gadget: UDC=$UDC fn=$FN if=$IF" >> $LOG
 } 2>>$LOG
 
 {
-echo "########## NEXUS DIAG v2 ##########"
+echo "########## NEXUS DIAG v3 ##########"
 grep -E "gpio-(1|62)\b" /sys/kernel/debug/gpio
 echo "auxclk3: $(cat /sys/kernel/debug/clk/auxclk3_ck/clk_rate 2>/dev/null) Hz, en=$(cat /sys/kernel/debug/clk/auxclk3_ck/clk_enable_count 2>/dev/null)"
 ls /sys/bus/usb/devices/
 echo "USB-GADGET: $(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null), IP 172.16.42.1"
 pgrep -x sshd >/dev/null && echo "sshd: BEZI" || echo "sshd: NEBEZI"
+C=/sys/devices/system/cpu/cpu0/cpufreq
+echo "CPU: $(cat $C/scaling_cur_freq 2>/dev/null)kHz/$(cat $C/scaling_governor 2>/dev/null) x$(nproc)  temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC"
+echo "LED: nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(systemctl is-active librespot 2>/dev/null)"
 echo "########## DIAG END ##########"
 } > /dev/tty1 2>&1

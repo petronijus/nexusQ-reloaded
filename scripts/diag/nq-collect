@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# nq-collect — one-shot "go through the whole device, save it locally, analyze it".
+#
+# This is the engine behind the nexusq-diag skill. It:
+#   1. ensures a path to the device (via nqctl; tries USB-net if nothing is up),
+#   2. runs the comprehensive nq-diag-snapshot on the device,
+#   3. pulls the nq-healthd time-series + events (or, if the daemon is not on the
+#      image yet, bootstraps the tools into /tmp and gathers a short live burst),
+#   4. saves everything under nq-captures/<timestamp>/ on this PC,
+#   5. runs nq-health-report to produce report.txt + report.json (the findings).
+#
+# Designed to work against TODAY's image (no reflash needed) and against a future
+# image that already ships the tools. Stdlib + nqctl only.
+#
+# Usage:
+#   nq-collect [OUTDIR] [--burst N] [--interval S]
+#     OUTDIR     where to store captures   (default: <repo>/nq-captures)
+#     --burst N  live samples to gather if the daemon log is empty (default 12)
+#     --interval sample interval for the burst (default 2s)
+
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+NQCTL="$HERE/nqctl"
+REPORT="$HERE/nq-health-report"
+REPO="$(cd "$HERE/../.." && pwd)"
+
+OUTROOT="$REPO/nq-captures"
+BURST=12
+INTERVAL=2
+args=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--burst) BURST="$2"; shift 2 ;;
+		--interval) INTERVAL="$2"; shift 2 ;;
+		*) args+=("$1"); shift ;;
+	esac
+done
+[ "${#args[@]}" -gt 0 ] && OUTROOT="${args[0]}"
+
+say() { printf '%s\n' "$*" >&2; }
+ts="$(date +%Y%m%d-%H%M%S)"
+DIR="$OUTROOT/$ts"
+mkdir -p "$DIR"
+
+# --- 1. connectivity --------------------------------------------------------
+if ! "$NQCTL" status | grep -q UP; then
+	say "[collect] no path up; attempting 'nqctl net-usb up' ..."
+	"$NQCTL" net-usb up || { say "[collect] FAILED: device unreachable on every path."; exit 1; }
+fi
+say "[collect] device reachable; capturing to $DIR"
+"$NQCTL" status > "$DIR/paths.txt" 2>&1 || true
+
+# helper: run a command on the device via the best path
+dev() { "$NQCTL" run "$@"; }
+
+# --- 2. bootstrap on-device tools if the image predates them ----------------
+have_snapshot='command -v nq-diag-snapshot >/dev/null 2>&1 || [ -x /tmp/nq-diag-snapshot ]'
+if ! dev "$have_snapshot"; then
+	say "[collect] nq-diag-snapshot not on device; pushing to /tmp ..."
+	"$NQCTL" push "$REPO/pmos/device-google-steelhead/nq-diag-snapshot" /tmp/nq-diag-snapshot
+	dev 'chmod +x /tmp/nq-diag-snapshot'
+fi
+SNAPCMD='command -v nq-diag-snapshot >/dev/null 2>&1 && nq-diag-snapshot || /tmp/nq-diag-snapshot'
+
+# --- 3. comprehensive snapshot ----------------------------------------------
+say "[collect] running full snapshot ..."
+dev "$SNAPCMD" > "$DIR/snapshot.txt" 2>&1
+say "[collect] snapshot: $(wc -l < "$DIR/snapshot.txt") lines"
+
+# --- 4. health time-series --------------------------------------------------
+dev 'cat /var/log/nq-health/health.jsonl 2>/dev/null' > "$DIR/health.jsonl" 2>/dev/null || true
+dev 'cat /var/log/nq-health/events.jsonl 2>/dev/null' > "$DIR/events.jsonl" 2>/dev/null || true
+
+if [ ! -s "$DIR/health.jsonl" ]; then
+	say "[collect] no persistent health log (daemon not on image); gathering a $((BURST*INTERVAL))s live burst ..."
+	if ! dev 'command -v nq-healthd >/dev/null 2>&1 || [ -x /tmp/nq-healthd ]'; then
+		"$NQCTL" push "$REPO/pmos/device-google-steelhead/nq-healthd" /tmp/nq-healthd
+		dev 'chmod +x /tmp/nq-healthd'
+	fi
+	# emit BURST single samples at INTERVAL into a temp log, then fetch it
+	dev "HC=\$(command -v nq-healthd || echo /tmp/nq-healthd); rm -f /tmp/nqburst.jsonl; i=0; while [ \$i -lt $BURST ]; do \$HC --once >> /tmp/nqburst.jsonl; i=\$((i+1)); sleep $INTERVAL; done"
+	dev 'cat /tmp/nqburst.jsonl 2>/dev/null' > "$DIR/health.jsonl" 2>/dev/null || true
+	say "[collect] burst: $(wc -l < "$DIR/health.jsonl") samples"
+fi
+
+# --- 5. analyze -------------------------------------------------------------
+say "[collect] analyzing ..."
+python3 "$REPORT" "$DIR" | tee "$DIR/report.txt"
+python3 "$REPORT" "$DIR" --json > "$DIR/report.json" 2>/dev/null || true
+
+# stable 'latest' pointer for the skill / agent
+ln -sfn "$ts" "$OUTROOT/latest"
+say ""
+say "[collect] saved: $DIR"
+say "[collect] report: $DIR/report.txt  (json: report.json, raw: snapshot.txt/health.jsonl)"

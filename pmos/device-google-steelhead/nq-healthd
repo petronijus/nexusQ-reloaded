@@ -1,0 +1,249 @@
+#!/bin/sh
+# nq-healthd — Nexus Q (steelhead) runtime health monitor
+#
+# Samples the compute/power/LED subsystems at a fixed interval and appends one
+# JSON object per line (JSONL) to a rotating log. A second "events" log records
+# only anomalies (threshold trips, state changes) so a later failure — e.g. the
+# LED ring "rotation" freezing — can be correlated against what cpufreq, the
+# regulators, thermal and nexusqd were doing at that moment.
+#
+# Pure POSIX sh / busybox-safe (the device shell is /bin/ash). No bashisms.
+#
+# Why these signals (all verified against the live device + repo, not guessed):
+#   - nexusqd drives the LED ring and has NO systemd watchdog, so a *hang*
+#     (vs a crash, which Restart=on-failure already covers) goes unnoticed.
+#     We detect it two ways: control-socket responsiveness (nexusled status)
+#     AND forward progress of the daemon's CPU time + the LED frame changing.
+#   - vdd_mpu should track the current OPP's voltage; a mismatch points at the
+#     VC-bridge / TPS62361 power path (path B). We log expected-vs-actual.
+#   - thermal trips are 100 C (passive throttle) / 125 C (critical).
+#   - the device RTC is wrong (year 2000), so the authoritative timestamp is the
+#     monotonic uptime; wall-clock is logged best-effort for human reference.
+#
+# Usage:
+#   nq-healthd                # daemon: loop forever, append to $LOG
+#   nq-healthd --once         # emit a single sample to stdout and exit
+#   NQ_INTERVAL=2 nq-healthd  # override sample interval (seconds, default 5)
+
+set -u
+
+INTERVAL="${NQ_INTERVAL:-5}"
+LOGDIR="${NQ_LOGDIR:-/var/log/nq-health}"
+LOG="$LOGDIR/health.jsonl"
+EVENTS="$LOGDIR/events.jsonl"
+MAXBYTES="${NQ_MAXBYTES:-4194304}"   # rotate health.jsonl past 4 MiB
+
+# --- expected VDD_MPU (uV) per OPP frequency (kHz). From omap4-steelhead.dts. ---
+opp_voltage() {
+	case "$1" in
+		350000)  echo 1025000 ;;
+		700000)  echo 1203000 ;;
+		920000)  echo 1317000 ;;
+		1200000) echo 1380000 ;;
+		*)       echo 0 ;;
+	esac
+}
+
+rd() { cat "$1" 2>/dev/null; }
+
+# Resolve a regulator's sysfs dir once by its name attribute (dirs are
+# regulator.N with an opaque index; the stable key is the "name" file).
+reg_dir() {
+	for d in /sys/class/regulator/regulator.*; do
+		[ "$(rd "$d/name")" = "$1" ] && { echo "$d"; return 0; }
+	done
+	return 1
+}
+
+# JSON string escaper (minimal: backslash and double-quote).
+jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# --- resolve stable paths/indices once at startup -----------------------------
+CPUFREQ=/sys/devices/system/cpu/cpu0/cpufreq
+TZ0=/sys/class/thermal/thermal_zone0
+COOL0=/sys/class/thermal/cooling_device0
+VDD_DIR="$(reg_dir vdd_mpu || true)"
+ABB_DIR="$(reg_dir abb_mpu || true)"
+# steelhead-avr IRQ line (GPIO edge); match by the "steelhead-avr" name column.
+AVR_IRQ_RE='steelhead-avr'
+# A representative spread of ring LEDs to fingerprint frame activity cheaply.
+LED_SAMPLE="0 4 8 12 16 20 24 28"
+
+# rolling state for delta/changed detection
+PREV_NEXUSQD_TICKS=-1
+PREV_LED_FP=""
+PREV_DMESG_ERR=-1
+PREV_NEXUSQD_RESTARTS=-1
+PREV_LIBRESPOT_RESTARTS=-1
+PREV_NEXUSQD_RESP=-1
+PREV_PSTORE=-1
+LED_STALL=0          # consecutive samples where nexusqd is up but frame frozen
+
+emit_event() {
+	# emit_event <mono> <severity> <kind> <message>
+	mkdir -p "$LOGDIR"
+	printf '{"t_mono":%s,"sev":"%s","kind":"%s","msg":"%s"}\n' \
+		"$1" "$2" "$3" "$(jstr "$4")" >> "$EVENTS"
+}
+
+rotate_if_big() {
+	[ -f "$LOG" ] || return 0
+	sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+	[ "$sz" -gt "$MAXBYTES" ] 2>/dev/null && mv -f "$LOG" "$LOG.1"
+	return 0
+}
+
+sample() {
+	# --- time (monotonic is authoritative; RTC is unreliable) ---
+	mono=$(cut -d. -f1 /proc/uptime 2>/dev/null); : "${mono:=0}"
+	wall=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+
+	# --- cpufreq ---
+	gov=$(rd "$CPUFREQ/scaling_governor"); : "${gov:=?}"
+	freq=$(rd "$CPUFREQ/scaling_cur_freq"); : "${freq:=0}"
+
+	# --- thermal ---
+	temp=$(rd "$TZ0/temp"); : "${temp:=0}"
+	cool=$(rd "$COOL0/cur_state"); : "${cool:=-1}"
+
+	# --- power: vdd_mpu vs expected for current OPP ---
+	vdd=0; abb=0
+	[ -n "$VDD_DIR" ] && vdd=$(rd "$VDD_DIR/microvolts"); : "${vdd:=0}"
+	[ -n "$ABB_DIR" ] && abb=$(rd "$ABB_DIR/microvolts"); : "${abb:=0}"
+	vexp=$(opp_voltage "$freq")
+	vmismatch=0
+	if [ "$vexp" -gt 0 ] && [ "$vdd" -gt 0 ]; then
+		d=$(( vdd - vexp )); [ "$d" -lt 0 ] && d=$(( -d ))
+		[ "$d" -gt 20000 ] && vmismatch=1
+	fi
+
+	# --- nexusqd: crash AND hang detection ---
+	nq_active=$(systemctl is-active nexusqd.service 2>/dev/null); : "${nq_active:=unknown}"
+	nq_pid=$(systemctl show -p MainPID --value nexusqd.service 2>/dev/null); : "${nq_pid:=0}"
+	nq_restarts=$(systemctl show -p NRestarts --value nexusqd.service 2>/dev/null); : "${nq_restarts:=0}"
+	nq_alive=0; nq_state="-"; nq_ticks=0
+	if [ "$nq_pid" -gt 0 ] 2>/dev/null && [ -r "/proc/$nq_pid/stat" ]; then
+		nq_alive=1
+		# field 3 = state, fields 14+15 = utime+stime (clock ticks)
+		nq_state=$(awk '{print $3}' "/proc/$nq_pid/stat" 2>/dev/null)
+		nq_ticks=$(awk '{print $14+$15}' "/proc/$nq_pid/stat" 2>/dev/null)
+		: "${nq_ticks:=0}"
+	fi
+	# control-socket responsiveness — the real "is it wedged?" probe.
+	nq_resp=0
+	if [ "$nq_alive" = 1 ]; then
+		if command -v nexusled >/dev/null 2>&1; then
+			timeout 3 nexusled status >/dev/null 2>&1 && nq_resp=1
+		elif [ -S /run/nexusqd.sock ]; then
+			nq_resp=1   # socket exists; best-effort without a query tool
+		fi
+	fi
+	# forward progress of daemon CPU time (0 = no progress since last sample)
+	nq_progress=1
+	if [ "$PREV_NEXUSQD_TICKS" -ge 0 ] 2>/dev/null; then
+		[ "$nq_ticks" = "$PREV_NEXUSQD_TICKS" ] && nq_progress=0
+	fi
+	PREV_NEXUSQD_TICKS="$nq_ticks"
+
+	# --- librespot (audio source feeding the visualizer) ---
+	ls_active=$(systemctl is-active librespot.service 2>/dev/null); : "${ls_active:=unknown}"
+	ls_restarts=$(systemctl show -p NRestarts --value librespot.service 2>/dev/null); : "${ls_restarts:=0}"
+
+	# --- AVR interrupt counter (sum across CPUs) ---
+	avr_irq=$(awk -v re="$AVR_IRQ_RE" '$0 ~ re {s=0; for(i=2;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i; print s; exit}' /proc/interrupts 2>/dev/null)
+	: "${avr_irq:=-1}"
+
+	# --- LED frame activity fingerprint ---
+	led_sum=0; led_fp=""
+	for i in $LED_SAMPLE; do
+		b=$(rd "/sys/class/leds/steelhead:rgb:ring-$i/brightness"); : "${b:=0}"
+		led_sum=$(( led_sum + b ))
+		led_fp="$led_fp:$b"
+	done
+	led_changed=1
+	[ -n "$PREV_LED_FP" ] && [ "$led_fp" = "$PREV_LED_FP" ] && led_changed=0
+	PREV_LED_FP="$led_fp"
+	# "rotation frozen": nexusqd up but the frame has not changed for a while.
+	if [ "$nq_alive" = 1 ] && [ "$led_changed" = 0 ]; then
+		LED_STALL=$(( LED_STALL + 1 ))
+	else
+		LED_STALL=0
+	fi
+
+	# --- dmesg error delta ---
+	derr=$(dmesg 2>/dev/null | grep -icE 'oops|panic|call trace|bug:|hung task|rcu_sched stall|i2c.*(timeout|fail)|omap_voltage|under.?volt|brown.?out|thermal.*(shutdown|crit)' )
+	: "${derr:=0}"
+	derr_new=0
+	if [ "$PREV_DMESG_ERR" -ge 0 ] 2>/dev/null; then
+		derr_new=$(( derr - PREV_DMESG_ERR ))
+		[ "$derr_new" -lt 0 ] && derr_new=0   # ring buffer wrapped
+	fi
+	PREV_DMESG_ERR="$derr"
+
+	# --- pstore (crash dumps from a previous boot) ---
+	pstore=$(ls /sys/fs/pstore 2>/dev/null | wc -l); : "${pstore:=0}"
+
+	# --- system ---
+	load1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null); : "${load1:=0}"
+	memav=$(awk '/MemAvailable/{print $2; exit}' /proc/meminfo 2>/dev/null); : "${memav:=0}"
+
+	# --- write the sample (JSONL) ---
+	printf '{"t_mono":%s,"wall":"%s","gov":"%s","freq":%s,"temp_mC":%s,"cool":%s,"vdd_uV":%s,"vdd_exp_uV":%s,"vdd_mismatch":%s,"abb_uV":%s,"nq_active":"%s","nq_pid":%s,"nq_alive":%s,"nq_state":"%s","nq_resp":%s,"nq_progress":%s,"nq_restarts":%s,"ls_active":"%s","ls_restarts":%s,"avr_irq":%s,"led_sum":%s,"led_changed":%s,"led_stall":%s,"dmesg_err":%s,"dmesg_err_new":%s,"pstore":%s,"load1":%s,"mem_avail_kB":%s}\n' \
+		"$mono" "$wall" "$gov" "$freq" "$temp" "$cool" \
+		"$vdd" "$vexp" "$vmismatch" "$abb" \
+		"$nq_active" "$nq_pid" "$nq_alive" "$nq_state" "$nq_resp" "$nq_progress" "$nq_restarts" \
+		"$ls_active" "$ls_restarts" "$avr_irq" \
+		"$led_sum" "$led_changed" "$LED_STALL" \
+		"$derr" "$derr_new" "$pstore" "$load1" "$memav"
+
+	# --- anomaly events (only on transition / threshold, not every sample) ---
+	if [ "${1:-}" != "--once" ]; then
+		# nexusqd wedged: alive but unresponsive, or frame frozen >= 6 samples
+		if [ "$nq_alive" = 1 ] && [ "$nq_resp" = 0 ] && [ "$PREV_NEXUSQD_RESP" != 0 ]; then
+			emit_event "$mono" crit nexusqd_hang "nexusqd PID $nq_pid alive but control socket unresponsive (state=$nq_state, progress=$nq_progress)"
+		fi
+		if [ "$LED_STALL" = 6 ]; then
+			emit_event "$mono" crit led_frozen "LED frame unchanged for 6 samples while nexusqd up (likely ring/AVR/nexusqd hang)"
+		fi
+		if [ "$PREV_NEXUSQD_RESTARTS" -ge 0 ] 2>/dev/null && [ "$nq_restarts" -gt "$PREV_NEXUSQD_RESTARTS" ]; then
+			emit_event "$mono" warn nexusqd_restart "nexusqd restarted (NRestarts $PREV_NEXUSQD_RESTARTS -> $nq_restarts)"
+		fi
+		if [ "$PREV_LIBRESPOT_RESTARTS" -ge 0 ] 2>/dev/null && [ "$ls_restarts" -gt "$PREV_LIBRESPOT_RESTARTS" ]; then
+			emit_event "$mono" warn librespot_restart "librespot restarted (NRestarts $PREV_LIBRESPOT_RESTARTS -> $ls_restarts)"
+		fi
+		if [ "$vmismatch" = 1 ]; then
+			emit_event "$mono" warn vdd_mismatch "vdd_mpu ${vdd}uV != expected ${vexp}uV for ${freq}kHz OPP"
+		fi
+		if [ "$temp" -ge 95000 ] 2>/dev/null; then
+			emit_event "$mono" warn thermal_high "cpu_thermal ${temp}mC approaching passive trip (100C)"
+		fi
+		if [ "$temp" -ge 120000 ] 2>/dev/null; then
+			emit_event "$mono" crit thermal_crit "cpu_thermal ${temp}mC approaching critical trip (125C)"
+		fi
+		if [ "$derr_new" -gt 0 ] 2>/dev/null; then
+			emit_event "$mono" warn dmesg_errors "$derr_new new kernel error line(s) since last sample"
+		fi
+		if [ "$PREV_PSTORE" -ge 0 ] 2>/dev/null && [ "$pstore" -gt "$PREV_PSTORE" ]; then
+			emit_event "$mono" crit pstore_new "new pstore crash dump(s) present: $pstore file(s)"
+		fi
+	fi
+	PREV_NEXUSQD_RESTARTS="$nq_restarts"
+	PREV_LIBRESPOT_RESTARTS="$ls_restarts"
+	PREV_NEXUSQD_RESP="$nq_resp"
+	PREV_PSTORE="$pstore"
+}
+
+case "${1:-}" in
+	--once)
+		sample --once
+		exit 0
+		;;
+esac
+
+mkdir -p "$LOGDIR"
+emit_event "$(cut -d. -f1 /proc/uptime)" info start "nq-healthd started (interval=${INTERVAL}s)"
+while :; do
+	rotate_if_big
+	sample >> "$LOG"
+	sleep "$INTERVAL"
+done

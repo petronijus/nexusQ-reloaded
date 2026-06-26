@@ -7,4 +7,36 @@ mkdir -p /var/lib/tinydm
 ln -sf /usr/share/wayland-sessions/lxqt-wayland.desktop \
 	/var/lib/tinydm/default-session.desktop
 
+# --- Default desktop look for the `user` home (populated from /etc/skel) ---
+# These patch /etc/skel, which postmarketOS copies into the default user's home
+# the first time it is created. We touch /etc/skel (not a tracked package file)
+# so there is no apk file-ownership conflict with labwc / lxqt-wayland-session,
+# both of which are hard deps and therefore already unpacked at this point.
+
+# Icon theme: LXQt ships NO default icon theme, so folder/menu/system-tray icons
+# render blank. Ship breeze-dark (light glyphs for the dark panel); the
+# breeze-icons package is pulled in via depends=.
+mkdir -p /etc/skel/.config/lxqt
+cat > /etc/skel/.config/lxqt/lxqt.conf <<'EOF'
+[General]
+__userfile__=true
+icon_theme=breeze-dark
+EOF
+
+# Wallpaper: the stock labwc autostart launches `swaybg -i origami-dark-labwc.png`.
+# Replace it with a flat dark fill (#1a1a1a, matches the panel). Patch the swaybg
+# line in place so the rest of the autostart (swayidle, dbus env) is preserved;
+# fall back to a minimal autostart if the skel file is somehow absent.
+skel_autostart=/etc/skel/.config/labwc/autostart
+if [ -f "$skel_autostart" ]; then
+	sed -i 's|^swaybg .*|swaybg -c 1a1a1a >/dev/null 2>\&1 \&|' "$skel_autostart"
+else
+	mkdir -p /etc/skel/.config/labwc
+	cat > "$skel_autostart" <<'EOF'
+# labwc LXQt session autostart (Nexus Q)
+swaybg -c 1a1a1a >/dev/null 2>&1 &
+dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY >/dev/null 2>&1 &
+EOF
+fi
+
 exit 0

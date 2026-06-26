@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# nqctl — one command to reach the Nexus Q (steelhead) no matter which link is up.
+#
+# The device is reachable three ways, each with different failure modes:
+#   - WiFi  (BCM4330)  ssh root@<device-wifi-ip> — routable but drops under bulk
+#   - USB-net (RNDIS)  ssh root@172.16.42.1     — rock-solid once established,
+#                                                 but the gadget defaults to an
+#                                                 ACM serial console, not net
+#   - USB serial       /dev/ttyACM0             — always present; the bootstrap
+#                                                 path used to flip the gadget
+#
+# nqctl picks the best reachable path automatically, and `nqctl net-usb up`
+# performs the whole RNDIS-gadget + host-NAT dance (previously done by hand).
+#
+# Commands:
+#   nqctl status                 show which paths are reachable
+#   nqctl run [--path P] CMD...  run CMD on the device (P = auto|usb|wifi)
+#   nqctl ssh  [--path P]        interactive shell
+#   nqctl push LOCAL REMOTE      copy a file to the device
+#   nqctl pull REMOTE LOCAL      copy a file from the device
+#   nqctl net-usb up|down|status bring the stable USB-net link up / tear it down
+#   nqctl logs   [--follow]      pull (or tail) /var/log/nq-health on the device
+#   nqctl snapshot [OUTDIR]      run nq-diag-snapshot on the device and fetch it
+#   nqctl serial                 attach to the raw serial console (/dev/ttyACM0)
+#
+# Host-side config (override via env):
+NQ_WIFI_HOST="${NQ_WIFI_HOST:-}"
+NQ_USB_HOST="${NQ_USB_HOST:-172.16.42.1}"
+NQ_USB_HOST_IP="${NQ_USB_HOST_IP:-172.16.42.2}"
+NQ_USB_CIDR="${NQ_USB_CIDR:-24}"
+NQ_SERIAL="${NQ_SERIAL:-/dev/ttyACM0}"
+NQ_USER="${NQ_USER:-root}"
+NQ_UPLINK="${NQ_UPLINK:-}"          # host iface with internet; auto-detected if empty
+SSH_OPTS=(-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+
+set -u
+say() { printf '%s\n' "$*" >&2; }
+die() { say "nqctl: $*"; exit 1; }
+
+# --- reachability ------------------------------------------------------------
+reachable() { # reachable <host>
+	ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" true 2>/dev/null
+}
+
+pick_host() { # echoes the best reachable host IP, or empty; prefers stable USB
+	case "${1:-auto}" in
+		usb)  reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST"; return 0; } ;;
+		wifi) reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; } ;;
+		auto)
+			reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST";  return 0; }
+			reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; }
+			;;
+	esac
+	return 1
+}
+
+# --- USB-net gadget + host NAT ----------------------------------------------
+detect_uplink() {
+	[ -n "$NQ_UPLINK" ] && { echo "$NQ_UPLINK"; return; }
+	ip route show default 2>/dev/null | awk '/default/{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+host_enx() { # the RNDIS iface on the host (enx<mac>), if any
+	ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^enx/ {print $2; exit}'
+}
+
+net_usb_up() {
+	# 1) reach the device (any path) to flip its gadget to a composite that
+	#    includes RNDIS, and stop the service that would swap it back to ACM.
+	local h; h="$(pick_host wifi || pick_host usb || true)"
+	[ -n "$h" ] || die "net-usb up needs an existing path (WiFi/USB) to flip the gadget; none reachable. Use 'nqctl serial' to do it by hand."
+	say "[net-usb] flipping gadget via $h ..."
+	ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" '
+		set -e
+		# Stop the ACM-console swapper so it does not revert our RNDIS gadget.
+		systemctl stop nexusq-usb-acm-console.service 2>/dev/null || true
+		G=/sys/kernel/config/usb_gadget/g1
+		echo "" > $G/UDC 2>/dev/null || true
+		[ -e $G/configs/c.1/rndis.usb0 ] || ln -s $G/functions/rndis.usb0 $G/configs/c.1/rndis.usb0
+		echo $(ls /sys/class/udc | head -1) > $G/UDC
+		sleep 1
+		ip addr flush dev usb0 2>/dev/null || true
+		ip addr add 172.16.42.1/24 dev usb0
+		ip link set usb0 up
+	' || die "gadget flip failed"
+
+	# 2) configure the host side: claim the enx iface from NetworkManager,
+	#    assign the peer IP, and NAT so the device gets stable internet.
+	sleep 2
+	local enx; enx="$(host_enx)"
+	[ -n "$enx" ] || die "no enx* iface appeared on the host — is the USB cable in the data port?"
+	local up; up="$(detect_uplink)"
+	say "[net-usb] host iface=$enx uplink=$up; configuring (needs sudo) ..."
+	sudo sh -c "
+		command -v nmcli >/dev/null 2>&1 && nmcli dev set '$enx' managed no 2>/dev/null || true
+		ip addr flush dev '$enx'
+		ip addr add '$NQ_USB_HOST_IP/$NQ_USB_CIDR' dev '$enx'
+		ip link set '$enx' up
+		sysctl -wq net.ipv4.ip_forward=1
+		iptables -t nat -C POSTROUTING -s 172.16.42.0/24 -o '$up' -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 172.16.42.0/24 -o '$up' -j MASQUERADE
+		iptables -C FORWARD -i '$enx' -o '$up' -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i '$enx' -o '$up' -j ACCEPT
+		iptables -C FORWARD -i '$up' -o '$enx' -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -i '$up' -o '$enx' -m state --state RELATED,ESTABLISHED -j ACCEPT
+	" || die "host NAT setup failed"
+
+	# 3) give the device a default route over USB (stable internet for apk etc.)
+	ssh "${SSH_OPTS[@]}" "$NQ_USER@$NQ_USB_HOST" "
+		ip route del default via $NQ_USB_HOST_IP 2>/dev/null || true
+		ip route add default via $NQ_USB_HOST_IP metric 50
+	" 2>/dev/null || true
+
+	if reachable "$NQ_USB_HOST"; then
+		say "[net-usb] up — ssh $NQ_USER@$NQ_USB_HOST is live (stable)."
+	else
+		die "USB-net configured but $NQ_USB_HOST not answering ssh"
+	fi
+}
+
+net_usb_down() {
+	local enx up; enx="$(host_enx)"; up="$(detect_uplink)"
+	say "[net-usb] tearing down host NAT/iface ..."
+	[ -n "$enx" ] && sudo sh -c "
+		iptables -t nat -D POSTROUTING -s 172.16.42.0/24 -o '$up' -j MASQUERADE 2>/dev/null || true
+		iptables -D FORWARD -i '$enx' -o '$up' -j ACCEPT 2>/dev/null || true
+		iptables -D FORWARD -i '$up' -o '$enx' -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+		ip addr flush dev '$enx' 2>/dev/null || true
+	"
+	# Best-effort: restore the device's ACM-console gadget on next reboot anyway;
+	# here we just re-enable the swapper service if we can still reach the device.
+	local h; h="$(pick_host || true)"
+	[ -n "$h" ] && ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" \
+		'systemctl start nexusq-usb-acm-console.service 2>/dev/null || true' 2>/dev/null || true
+	say "[net-usb] down."
+}
+
+# --- main --------------------------------------------------------------------
+cmd="${1:-status}"; shift || true
+path="auto"
+if [ "${1:-}" = "--path" ]; then path="$2"; shift 2; fi
+
+case "$cmd" in
+	status)
+		printf 'USB-net  %-15s ' "$NQ_USB_HOST";  reachable "$NQ_USB_HOST"  && echo "UP" || echo "down"
+		printf 'WiFi     %-15s ' "$NQ_WIFI_HOST"; reachable "$NQ_WIFI_HOST" && echo "UP" || echo "down"
+		printf 'Serial   %-15s ' "$NQ_SERIAL";    [ -e "$NQ_SERIAL" ] && echo "present" || echo "absent"
+		;;
+	run)
+		h="$(pick_host "$path")" || die "no reachable path (try: nqctl net-usb up)"
+		ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" "$@"
+		;;
+	ssh)
+		h="$(pick_host "$path")" || die "no reachable path"
+		exec ssh "${SSH_OPTS[@]}" "$NQ_USER@$h"
+		;;
+	push)
+		[ $# -eq 2 ] || die "usage: nqctl push LOCAL REMOTE"
+		h="$(pick_host "$path")" || die "no reachable path"
+		scp "${SSH_OPTS[@]}" "$1" "$NQ_USER@$h:$2"
+		;;
+	pull)
+		[ $# -eq 2 ] || die "usage: nqctl pull REMOTE LOCAL"
+		h="$(pick_host "$path")" || die "no reachable path"
+		scp "${SSH_OPTS[@]}" "$NQ_USER@$h:$1" "$2"
+		;;
+	net-usb)
+		case "${1:-status}" in
+			up)   net_usb_up ;;
+			down) net_usb_down ;;
+			status)
+				enx="$(host_enx)"
+				printf 'host enx iface : %s\n' "${enx:-<none>}"
+				printf 'device USB ssh : '; reachable "$NQ_USB_HOST" && echo UP || echo down
+				;;
+			*) die "usage: nqctl net-usb up|down|status" ;;
+		esac
+		;;
+	logs)
+		h="$(pick_host "$path")" || die "no reachable path"
+		if [ "${1:-}" = "--follow" ]; then
+			ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" 'tail -f /var/log/nq-health/health.jsonl'
+		else
+			ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" 'cat /var/log/nq-health/health.jsonl /var/log/nq-health/events.jsonl 2>/dev/null'
+		fi
+		;;
+	snapshot)
+		out="${1:-./nq-snapshots}"; mkdir -p "$out"
+		h="$(pick_host "$path")" || die "no reachable path"
+		ssh "${SSH_OPTS[@]}" "$NQ_USER@$h" 'nq-diag-snapshot 2>/dev/null || /tmp/nq-diag-snapshot' > "$out/snapshot-$(date +%Y%m%d-%H%M%S).txt"
+		say "saved to $out/"
+		;;
+	serial)
+		[ -e "$NQ_SERIAL" ] || die "$NQ_SERIAL not present"
+		command -v picocom >/dev/null 2>&1 && exec picocom -b 115200 "$NQ_SERIAL"
+		command -v screen  >/dev/null 2>&1 && exec screen "$NQ_SERIAL" 115200
+		die "install picocom or screen to use the serial console"
+		;;
+	*)
+		grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'
+		;;
+esac
