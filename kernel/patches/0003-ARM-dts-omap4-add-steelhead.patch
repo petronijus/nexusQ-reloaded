@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 786 +
- 2 files changed, 787 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 799 +
+ 2 files changed, 800 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,786 @@
+@@ -0,0 +1,799 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -126,17 +126,18 @@ index 0000000..abcdef1
 +	 * VDD_MPU cpu-supply for cpufreq. The TPS62361 lives on the write-only PRM
 +	 * VC SR-i2c (no Linux i2c regulator), so this VC-bridge regulator
 +	 * (steelhead-vc-mpu-regulator.c) translates regulator_set_voltage() into a
-+	 * scale on the mpu voltage domain via the OMAP voltage layer (VP force-update).
-+	 * Range covers OPP50..OPP-Turbo (1025..1317 mV, 350/700/920 MHz); Stage 4
-+	 * widens max to 1380 mV (1.2 GHz, +ABB/FBB).
++	 * scale on the mpu voltage domain via the OMAP voltage layer (VP force-update),
++	 * and engages Forward Body Bias via vbb-supply (abb_mpu) at OPP-Nitro. Range
++	 * covers OPP50..OPP-Nitro (1025..1380 mV, 350/700/920/1200 MHz).
 +	 */
 +	vc_mpu_supply: regulator-vc-mpu {
 +		compatible = "steelhead,vc-mpu-supply";
 +		regulator-name = "vdd_mpu";
 +		regulator-min-microvolt = <1025000>;
-+		regulator-max-microvolt = <1317000>;
++		regulator-max-microvolt = <1380000>;
 +		regulator-boot-on;
 +		regulator-always-on;
++		vbb-supply = <&abb_mpu>;
 +	};
 +
 +	/* HDMI level converter: TPD12S015A */
@@ -735,11 +736,11 @@ index 0000000..abcdef1
 +
 +/*
 + * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
-+ * Voltage Controller, VP force-update). OPP table = OPP50/100/Turbo
-+ * (350 / 700 / 920 MHz); the cpu-supply scales VDD_MPU 1025..1317 mV with the
-+ * frequency (stock-measured nominals; voltdm_scale snaps to the opp4xxx table).
-+ * OPP-Nitro (1.2 GHz) comes in Stage 4 (needs max 1380 mV + ABB/FBB on VDD_MPU
-+ * + the Nitro DPLL-trim eFuse gate).
++ * Voltage Controller, VP force-update). OPP table = OPP50/100/Turbo/Nitro
++ * (350 / 700 / 920 / 1200 MHz); the cpu-supply scales VDD_MPU 1025..1380 mV with
++ * the frequency (stock-measured nominals; voltdm_scale snaps to the opp4xxx
++ * table). At OPP-Nitro the cpu-supply also engages Forward Body Bias via abb_mpu
++ * (required for stable 1.2 GHz).
 + */
 +&cpu0 {
 +	cpu-supply = <&vc_mpu_supply>;
@@ -748,7 +749,19 @@ index 0000000..abcdef1
 +		350000  1025000
 +		700000  1203000
 +		920000  1317000
++		1200000 1380000
 +	>;
++};
++
++/*
++ * Let the abb_mpu (ti,abb-v2) regulator be set across its ti,abb_info range so the
++ * VC-bridge cpu-supply can select Forward Body Bias (1375000) at OPP-Nitro and
++ * bypass (1025000) below. The node itself comes from omap4460.dtsi; it has no
++ * min/max constraints there, which would otherwise block regulator_set_voltage().
++ */
++&abb_mpu {
++	regulator-min-microvolt = <1025000>;
++	regulator-max-microvolt = <1389000>;
 +};
 +
 +/* TWL6030 regulator overrides for steelhead */

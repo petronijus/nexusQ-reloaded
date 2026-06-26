@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000017 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 11:00:00 +0200
+Subject: [PATCH] ARM: OMAP4460: steelhead: Forward Body Bias for OPP-Nitro (1.2 GHz)
+
+Stage 4 of MPU DVFS. OPP-Nitro (1.2 GHz / 1380 mV) on OMAP4460 requires Forward
+Body Bias on VDD_MPU -- the 1380 mV nominal is specified with FBB active; without
+it the 1.2 GHz timing paths are marginal. Stock engages FBB (abb_type=1) only at
+this OPP; 350/700/920 MHz run with ABB bypassed (decoded from vmlinux:
+volt_data+0x18 = 0/0/0/1).
+
+Teach the VC-bridge cpu-supply regulator to drive the body bias: it grabs the
+abb_mpu regulator (vbb-supply) and, in set_voltage(), selects FBB at OPP-Nitro
+(>= 1380 mV) / bypass below by setting the abb regulator's voltage to the
+ti,abb_info entry for that mode (1375000 -> FBB, 1025000 -> bypass; the
+ti-abb-regulator driver does the LDO/TRANXDONE work). It is sequenced like stock's
+omap_abb_pre/post_scale: on scale-UP the rail rises THEN FBB engages; on scale-DOWN
+FBB clears THEN the rail drops (the higher voltage must be present before forward-
+biasing). The abb regulator is optional (devm_regulator_get_optional) -- without it
+ABB stays disabled and the OPP table simply must not include OPP-Nitro.
+
+The abb_mpu node (ti,abb-v2) is already in omap4460.dtsi and CONFIG_REGULATOR_TI_ABB
+is set; this patch + the DTS (vbb-supply, abb_mpu min/max, the 1.2 GHz OPP) wire it.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 10:46:42.153390766 +0200
++++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 10:48:48.867350524 +0200
+@@ -13,22 +13,49 @@
+  * DVFS; this ultimately programs the TPS62361 SET1 register over the PRM VC.
+  * SmartReflex is off, so the OPP voltages are the stock-measured open-loop
+  * nominals and the VP commands them open-loop; this regulator never undervolts.
++ * At OPP-Nitro (1.2 GHz) it also engages Forward Body Bias on VDD_MPU via the
++ * abb_mpu regulator (required for stable 1.2 GHz), sequenced around the voltage
++ * step the way stock does (FBB after the rise, cleared before the drop).
+  */
+ 
+ #include <linux/err.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
+ #include <linux/regulator/driver.h>
+ #include <linux/regulator/of_regulator.h>
+ 
+ #include "voltage.h"
+ 
++/*
++ * OPP-Nitro (1.2 GHz) needs Forward Body Bias on VDD_MPU; lower OPPs run with ABB
++ * bypassed. abb_mpu's ti,abb_info maps MPU OPP voltages to the ABB mode -- 1375000
++ * -> ABB=1 (FBB), 1025000 -> ABB=0 (bypass) -- so we select the mode by driving
++ * the abb regulator to one of those voltages.
++ */
++#define VC_MPU_NITRO_UV		1380000		/* OPP-Nitro VDD_MPU (1.2 GHz)     */
++#define VC_MPU_ABB_FBB_UV	1375000		/* abb_info entry selecting FBB    */
++#define VC_MPU_ABB_BYPASS_UV	1025000		/* abb_info entry selecting bypass */
++
+ struct vc_mpu_reg {
+ 	struct voltagedomain	*voltdm;
++	struct regulator	*vbb;	/* body bias (abb_mpu); NULL if absent */
+ 	int			cur_uV;
+ };
+ 
++/* Engage FBB at OPP-Nitro, bypass below. No-op when there is no abb regulator. */
++static int vc_mpu_set_abb(struct vc_mpu_reg *vr, int target_uV)
++{
++	int abb_uV;
++
++	if (!vr->vbb)
++		return 0;
++	abb_uV = (target_uV >= VC_MPU_NITRO_UV) ? VC_MPU_ABB_FBB_UV
++						: VC_MPU_ABB_BYPASS_UV;
++	return regulator_set_voltage(vr->vbb, abb_uV, abb_uV);
++}
++
+ static int vc_mpu_set_voltage(struct regulator_dev *rdev, int min_uV,
+ 			      int max_uV, unsigned int *selector)
+ {
+@@ -36,13 +63,24 @@
+ 	int ret;
+ 
+ 	/*
+-	 * Scale through the OMAP voltage layer, which uses omap_vp_forceupdate_scale
+-	 * (VP force-update with ramp/timeout supervision) for the mpu domain -- the
+-	 * same path stock uses for runtime DVFS. This programs the TPS62361 (slave
+-	 * 0x60 / SET1) over the PRM VC. (Raw omap_vc_bypass_scale is faithful only for
+-	 * the one-time Stage-1b hand-over, not per-OPP scaling.)
++	 * Scale through the OMAP voltage layer (omap_vp_forceupdate_scale -- VP
++	 * force-update, the same path stock uses for runtime DVFS; programs the
++	 * TPS62361 SET1 over the PRM VC). Body bias is sequenced around the voltage
++	 * step the way stock does: on scale-UP raise the rail THEN forward-bias; on
++	 * scale-DOWN clear the bias THEN lower the rail (the higher voltage must be
++	 * present before FBB is engaged).
+ 	 */
+-	ret = omap_voltage_scale_voltage(vr->voltdm, min_uV);
++	if (min_uV > vr->cur_uV) {
++		ret = omap_voltage_scale_voltage(vr->voltdm, min_uV);
++		if (ret)
++			return ret;
++		ret = vc_mpu_set_abb(vr, min_uV);
++	} else {
++		ret = vc_mpu_set_abb(vr, min_uV);
++		if (ret)
++			return ret;
++		ret = omap_voltage_scale_voltage(vr->voltdm, min_uV);
++	}
+ 	if (!ret)
+ 		vr->cur_uV = min_uV;
+ 	return ret;
+@@ -74,6 +112,7 @@
+ 	struct regulator_config cfg = { };
+ 	struct regulator_dev *rdev;
+ 	struct vc_mpu_reg *vr;
++	int ret;
+ 
+ 	vr = devm_kzalloc(dev, sizeof(*vr), GFP_KERNEL);
+ 	if (!vr)
+@@ -84,6 +123,16 @@
+ 		return -EPROBE_DEFER;	/* omap_voltage layer not up yet */
+ 	vr->cur_uV = 1025000;		/* 350 MHz boot OPP (current rail) */
+ 
++	/* Body-bias regulator (abb_mpu) for OPP-Nitro FBB; optional. */
++	vr->vbb = devm_regulator_get_optional(dev, "vbb");
++	if (IS_ERR(vr->vbb)) {
++		ret = PTR_ERR(vr->vbb);
++		if (ret == -EPROBE_DEFER)
++			return ret;
++		vr->vbb = NULL;		/* no ABB -> no FBB (cap at OPP-Turbo) */
++		dev_info(dev, "steelhead: no vbb-supply; ABB/FBB disabled\n");
++	}
++
+ 	cfg.dev = dev;
+ 	cfg.of_node = dev->of_node;
+ 	cfg.init_data = of_get_regulator_init_data(dev, dev->of_node, &vc_mpu_desc);

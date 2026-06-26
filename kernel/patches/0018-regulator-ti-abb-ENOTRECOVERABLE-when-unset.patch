@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000018 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 12:00:00 +0200
+Subject: [PATCH] regulator: ti-abb: report -ENOTRECOVERABLE before first set
+
+ti_abb_get_voltage_sel() returns abb->current_info_idx, which is -EINVAL until
+the first ti_abb_set_voltage_sel() (the ABB LDO bias is unknown at probe). When
+the abb node carries regulator-min/max constraints -- needed so a consumer can
+drive the body bias via regulator_set_voltage() -- the regulator core reads the
+voltage during registration (machine_constraints_voltage, apply_uV path) and gets
+that negative selector, so the regulator fails to register with -EINVAL.
+
+The core already handles this case for "regulators that can't be read and must be
+initialized": if get_voltage returns -ENOTRECOVERABLE it applies the constraint
+voltage instead of failing. So report -ENOTRECOVERABLE while current_info_idx is
+unset, letting the core initialise the ABB to the constraint voltage (bypass).
+Needed on OMAP4460 (Nexus Q) where the cpu-supply drives FBB at OPP-Nitro.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/regulator/ti-abb-regulator.c	2026-06-26 11:18:30.706290548 +0200
++++ b/drivers/regulator/ti-abb-regulator.c	2026-06-26 11:18:51.537971560 +0200
+@@ -396,6 +396,19 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * Until the first ti_abb_set_voltage_sel(), current_info_idx is -EINVAL --
++	 * the ABB LDO bias is unknown, not yet selected. Report that as
++	 * -ENOTRECOVERABLE so the regulator core initialises us (applies the
++	 * constraint voltage) rather than failing registration. This matters when a
++	 * consumer drives the body bias and the abb node therefore carries
++	 * regulator-min/max constraints (which makes the core read the voltage at
++	 * registration); without it ti_abb returns a negative selector and the
++	 * regulator fails to register.
++	 */
++	if (abb->current_info_idx < 0)
++		return -ENOTRECOVERABLE;
++
+ 	return abb->current_info_idx;
+ }
+ 
