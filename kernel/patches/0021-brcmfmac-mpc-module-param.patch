@@ -1,0 +1,47 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] brcmfmac: expose "mpc" as a module parameter
+
+brcmf_c_preinit_dcmds() unconditionally forces the firmware "mpc"
+(Minimum Power Consumption) iovar to 1, which lets the firmware power the
+radio down whenever the interface is idle. The per-scan mpc toggling
+(brcmf_scan_config_mpc) only runs for chips with the NEED_MPC quirk
+(BCM4329), so on the BCM4330 -- and with P2P disabled -- mpc stays 1 for
+the entire uptime.
+
+On a mains-powered, always-on device (Google Nexus Q) that radio
+power-down is pure harm: when traffic resumes the radio has to wake, so
+bulk transfers stall and pings to the AP see 270-530 ms latency with
+~30% loss, even though the signal is strong. The stock Android bcmdhd
+vendor driver sets mpc=0 for exactly this reason.
+
+Expose mpc as a module parameter (default 1, so behaviour is unchanged)
+so it can be pinned to 0 via /etc/modprobe.d on mains-powered devices.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ .../broadcom/brcm80211/brcmfmac/common.c          | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
+@@ -61,6 +61,11 @@ static int brcmf_roamoff;
+ module_param_named(roamoff, brcmf_roamoff, int, 0400);
+ MODULE_PARM_DESC(roamoff, "Do not use internal roaming engine");
+
++static int brcmf_mpc = 1;
++module_param_named(mpc, brcmf_mpc, int, 0400);
++MODULE_PARM_DESC(mpc,
++		 "Minimum Power Consumption: 1=radio powers down when idle (default), 0=radio always on (for mains-powered devices)");
++
+ static int brcmf_iapp_enable;
+ module_param_named(iapp, brcmf_iapp_enable, int, 0);
+ MODULE_PARM_DESC(iapp, "Enable partial support for the obsoleted Inter-Access Point Protocol");
+@@ -404,7 +409,7 @@ int brcmf_c_preinit_dcmds(struct brcmf_if *ifp)
+ 	}
+
+ 	/* set mpc */
+-	err = brcmf_fil_iovar_int_set(ifp, "mpc", 1);
++	err = brcmf_fil_iovar_int_set(ifp, "mpc", brcmf_mpc);
+ 	if (err) {
+ 		bphy_err(drvr, "failed setting mpc\n");
+ 		goto done;

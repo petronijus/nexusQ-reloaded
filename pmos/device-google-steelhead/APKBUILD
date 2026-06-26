@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=3
+pkgrel=4
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -32,6 +32,7 @@ source="
 	nexusq-wayland.sh
 	wifi-powersave-off.conf
 	brcmfmac-no-p2p.conf
+	brcmfmac-mpc-off.conf
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
 	$pkgname.post-install
@@ -73,6 +74,12 @@ package() {
 	install -Dm644 "$srcdir"/brcmfmac-no-p2p.conf \
 		"$pkgdir"/etc/modprobe.d/brcmfmac-no-p2p.conf
 
+	# Keep the BCM4330 radio always on (mpc=0): fixes bulk stalls + ~30% packet
+	# loss caused by the firmware's idle radio power-down. Needs kernel patch 0021
+	# (the brcmfmac "mpc" module param). Matches stock bcmdhd, which sets mpc=0.
+	install -Dm644 "$srcdir"/brcmfmac-mpc-off.conf \
+		"$pkgdir"/etc/modprobe.d/brcmfmac-mpc-off.conf
+
 	# USB gadget = ACM serial debug console instead of the RNDIS network gadget
 	# (networking is on the on-board ethernet since v1.3.0). The service swaps the
 	# pmOS-created RNDIS gadget to ACM when the usb0 net device appears; statically
@@ -103,6 +110,7 @@ SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
 SKIP  brcmfmac-no-p2p.conf
+SKIP  brcmfmac-mpc-off.conf
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  device-google-steelhead.post-install
