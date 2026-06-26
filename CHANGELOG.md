@@ -6,13 +6,44 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Known issues / in progress
-- **CPU is stuck at 350 MHz (OPP50).** `cpufreq-dt` is built as a module and
-  never loads, so there is no frequency scaling — the OMAP4460 runs at its
-  low-power boot OPP instead of up to 1.2 GHz, which makes the system feel slow
-  and caps ssh / USB-ethernet throughput (CPU-bound). Enabling OMAP4 cpufreq
-  (cpufreq-dt built-in + a `cpu-supply` regulator for voltage scaling) is the
-  next task.
+### In progress
+- Restore the on-board ethernet on the cpufreq builds (see 1.4.0 known issues) —
+  targeted for 1.4.1.
+
+## [1.4.0] - 2026-06-26
+
+### Added
+- **MPU CPU frequency scaling — on-demand up to 1.2 GHz (3.4× the old floor).** 🚀
+  The OMAP4460 was pinned at its 350 MHz boot OPP; it now scales across
+  350 / 700 / 920 / 1200 MHz under the `ondemand` governor. Built up in small,
+  hardware-validated stages, each cross-checked against this unit's
+  reverse-engineered stock kernel:
+  - VDD_MPU is handed from the TWL6030 VCORE1 SMPS to the external **TPS62361**
+    regulator over the PRM Voltage-Controller SR-i2c — the same hand-over stock does.
+  - A thin "VC-bridge" `cpu-supply` regulator lets `cpufreq-dt` scale the rail
+    through the OMAP voltage layer (VP force-update), at the stock-measured nominal
+    voltages (1025 / 1203 / 1317 / 1380 mV).
+  - At the 1.2 GHz OPP, **Forward Body Bias** is engaged on VDD_MPU via the on-chip
+    ABB LDO — required for stable 1.2 GHz operation.
+  - **Thermal throttling**: at the 100 °C trip the CPU cooling drops the frequency
+    and ramps it back as it cools, so sustained full load stays safe.
+- **USB serial debug console.** The USB gadget is now an ACM serial console
+  (`/dev/ttyACM0` on the host, with a `steelhead login:` prompt) that survives
+  reboots and leaves fastboot untouched.
+
+### Changed
+- The USB gadget no longer exposes a host-side network interface — it was swapped
+  from the RNDIS network gadget to the serial console above. Use the on-board
+  ethernet / WiFi for networking.
+
+### Known issues
+- **On-board LAN9500A USB-Ethernet is down — a regression from 1.3.0.** 🌐 The
+  Ethernet that 1.3.0 fixed no longer enumerates on these cpufreq builds: the
+  LAN9500A fails to connect (the EHCI port's `PORTSC` connect-status stays 0). It
+  is a boot-timing side-effect of the voltage/cpufreq changes, which tipped the
+  formerly-marginal connect timing into consistent failure. WiFi works in the
+  meantime; a fix (a settle delay in the ethernet bring-up, or reordering the
+  voltage init) is tracked for 1.4.1.
 
 ## [1.3.0] - 2026-06-24
 
