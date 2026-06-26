@@ -4,11 +4,43 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.5.0] - 2026-06-26
 
-### In progress
-- Restore the on-board ethernet on the cpufreq builds (see 1.4.0 known issues) —
-  targeted for 1.4.1.
+### Added
+- **NFC: the PN544 stack is built into the kernel** (NFC / HCI / PN544 / PN544_I2C
+  `=y`) with stock-faithful tweaks — a 20 ms VEN settle and a level-triggered IRQ.
+  The chip is proven alive (it ACKs i2c when powered); full NFC functionality is a
+  follow-up.
+
+### Changed
+- **DTS regulators now point at the real board rails** — DSS `vdda_video`→vcxio,
+  tmp101 `vs`→v1v8, the Bluetooth `vbat`/`vddio`, and the TAS5713 amp `AVDD`/`DVDD`→a
+  3V3 rail replace placeholder dummies. The spurious "supplying voltage" warnings
+  drop from 10 to 5.
+- **Default cpufreq governor → `conservative`** — idle now settles at 350 MHz (vs
+  `ondemand`'s 920 MHz), ~66 °C, instead of holding a high clock.
+- **Ethernet (LAN9500A) is reliable again** — it came up on every boot tested in
+  v1.5.0 (the v1.4.0 cpufreq-build bring-up intermittency was not reproducible),
+  sustaining full ~100 Mbit/s line-rate throughput.
+
+### Fixed
+- **WiFi: the BCM4330 radio no longer sleeps when idle.** brcmfmac forced the
+  firmware `mpc` (Minimum Power Consumption) iovar on, powering the radio down
+  between packets — ~30 % packet loss and 270–530 ms latency. A new brcmfmac `mpc`
+  module parameter plus a device modprobe.d conf (`mpc=0`) keep it awake (the
+  Nexus Q is mains-powered): loss 30 %→0 %, latency 270–530 ms→4–59 ms. Stock-proven
+  to be a driver gap — the same firmware + nvram works under the vendor `bcmdhd`.
+- **WiFi: disabled brcmfmac P2P** on the BCM4330 — the firmware advertises P2P but
+  cannot create the P2P_DEVICE interface, which spammed the log with failed p2p-dev
+  creations and orphaned "event handler failed (72)" errors.
+- **boot: silenced the benign ti-sysc active-timer `-EBUSY`** probe error for
+  GPTIMER1 (an always-on system clockevent owned by the timer core).
+
+### Known issues
+- **WiFi 2.4 GHz bulk throughput** is limited by Bluetooth coexistence (the BCM4330
+  combo shares one 2.4 GHz antenna) on a g-only AP — **use 5 GHz for full speed**
+  (~26–30 Mbit/s, 802.11n). See
+  `docs/2026-06-26-wifi-mpc-fix-and-bulk-bufferbloat.md`.
 
 ## [1.4.0] - 2026-06-26
 
