@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=18
+pkgrel=22
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -50,6 +50,7 @@ source="
 	0017-ARM-OMAP4460-steelhead-vc-mpu-abb-fbb-nitro.patch
 	0018-regulator-ti-abb-ENOTRECOVERABLE-when-unset.patch
 	0019-bus-ti-sysc-silence-active-timer-ebusy.patch
+	0020-nfc-pn544-i2c-longer-ven-settle-steelhead.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -106,4 +107,5 @@ SKIP  0016-ARM-OMAP4460-steelhead-mpu-opp-stock-voltages.patch
 SKIP  0017-ARM-OMAP4460-steelhead-vc-mpu-abb-fbb-nitro.patch
 SKIP  0018-regulator-ti-abb-ENOTRECOVERABLE-when-unset.patch
 SKIP  0019-bus-ti-sysc-silence-active-timer-ebusy.patch
+SKIP  0020-nfc-pn544-i2c-longer-ven-settle-steelhead.patch
 "

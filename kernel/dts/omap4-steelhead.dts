@@ -486,7 +486,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&nfc_pins>;
 		interrupt-parent = <&gpio6>;
-		interrupts = <4 IRQ_TYPE_EDGE_RISING>; /* gpio_164 */
+		interrupts = <4 IRQ_TYPE_LEVEL_HIGH>; /* gpio_164 (stock IRQF_TRIGGER_HIGH) */
 		enable-gpios = <&gpio6 3 GPIO_ACTIVE_HIGH>; /* gpio_163 */
 		firmware-gpios = <&gpio6 2 GPIO_ACTIVE_HIGH>; /* gpio_162 */
 	};

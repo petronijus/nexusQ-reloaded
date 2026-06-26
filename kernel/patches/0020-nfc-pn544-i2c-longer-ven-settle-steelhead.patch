@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000020 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 26 Jun 2026 17:00:00 +0200
+Subject: [PATCH] nfc: pn544: i2c: wait 20ms after VEN for the chip to answer
+
+Stock powers the PN544 on with msleep(20) after raising VEN; the mainline driver
+waits only 10ms. The PN544's internal LDO needs ~20ms after VEN goes active
+before its i2c target responds, so the polarity auto-detect can NAK on too-short
+a settle. Wait the stock 20ms after raising VEN, in both the polarity-detect and
+the runtime enable paths, to match stock timing.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/nfc/pn544/i2c.c	2026-06-26 14:38:00.394446930 +0200
++++ b/drivers/nfc/pn544/i2c.c	2026-06-26 15:48:33.029428658 +0200
+@@ -204,7 +204,14 @@
+ 
+ 			/* power on */
+ 			gpiod_set_value_cansleep(phy->gpiod_en, phy->en_polarity);
+-			usleep_range(10000, 15000);
++			/*
++			 * The PN544's internal LDO needs ~20 ms after VEN goes
++			 * active before its I2C target answers (stock powers it on
++			 * with msleep(20)). The original 10 ms is too short, so the
++			 * reset command below gets no ACK and polarity autodetect
++			 * fails ("Could not detect nfc_en polarity"). Wait 20 ms.
++			 */
++			usleep_range(20000, 25000);
+ 
+ 			/* send reset */
+ 			dev_dbg(&phy->i2c_dev->dev, "Sending reset cmd\n");
+@@ -230,7 +237,7 @@
+ {
+ 	gpiod_set_value_cansleep(phy->gpiod_fw, run_mode == PN544_FW_MODE ? 1 : 0);
+ 	gpiod_set_value_cansleep(phy->gpiod_en, phy->en_polarity);
+-	usleep_range(10000, 15000);
++	usleep_range(20000, 25000);	/* PN544 LDO settle, stock msleep(20) */
+ 
+ 	phy->run_mode = run_mode;
+ }
