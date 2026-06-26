@@ -85,6 +85,15 @@
 		regulator-always-on;
 	};
 
+	/* Board 3.3 V rail for the TAS5713 amp AVDD/DVDD (analog + digital). */
+	vdd_3v3: vdd-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
 	/*
 	 * VDD_MPU cpu-supply for cpufreq. The TPS62361 lives on the write-only PRM
 	 * VC SR-i2c (no Linux i2c regulator), so this VC-bridge regulator
@@ -461,6 +470,7 @@
 	tmp101@48 {
 		compatible = "ti,tmp101";
 		reg = <0x48>;
+		vs-supply = <&v1v8>;	/* sensor I/O rail = 1.8 V */
 	};
 };
 
@@ -496,6 +506,12 @@
 
 		reset-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>; /* gpio_42 */
 		pdn-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>; /* gpio_44 */
+
+		/* Board 3.3 V analog + digital supplies (the driver only enables
+		 * these, never programs a voltage). PVDD_A..D (speaker power rail)
+		 * still TODO -- board voltage unverified, not in the stock binary. */
+		AVDD-supply = <&vdd_3v3>;
+		DVDD-supply = <&vdd_3v3>;
 
 		/* MCLK 12.288 MHz (256 x 48 kHz) on fref_clk1_out:
 		 * dpll_per_m3x2 -> 61.44 MHz, auxclk1 divides by 5
@@ -578,6 +594,8 @@
 		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
 		clocks = <&twl 1>; /* clk32kaudio, dle board-steelhead-wifi.c */
 		clock-names = "ext_clock";
+		vbat-supply = <&bcm4330_vmmc>;	/* BCM4330 VBAT 3.3 V (shared rail) */
+		vddio-supply = <&v1v8>;		/* BCM4330 I/O 1.8 V */
 	};
 };
 
@@ -684,6 +702,7 @@
 /* HDMI output */
 &dss {
 	status = "okay";
+	vdda_video-supply = <&vcxio>;	/* DSS DPLL analog rail = VCXIO 1.8 V (stock) */
 };
 
 &hdmi {

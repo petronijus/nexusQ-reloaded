@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 799 +
- 2 files changed, 800 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 818 +
+ 2 files changed, 819 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -34,7 +34,7 @@ new file mode 100644
 index 0000000..abcdef1
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,799 @@
+@@ -0,0 +1,818 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -117,6 +117,15 @@ index 0000000..abcdef1
 +	bcm4330_vmmc: bcm4330-vmmc {
 +		compatible = "regulator-fixed";
 +		regulator-name = "vbcm4330";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++
++	/* Board 3.3 V rail for the TAS5713 amp AVDD/DVDD (analog + digital). */
++	vdd_3v3: vdd-3v3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vdd_3v3";
 +		regulator-min-microvolt = <3300000>;
 +		regulator-max-microvolt = <3300000>;
 +		regulator-always-on;
@@ -498,6 +507,7 @@ index 0000000..abcdef1
 +	tmp101@48 {
 +		compatible = "ti,tmp101";
 +		reg = <0x48>;
++		vs-supply = <&v1v8>;	/* sensor I/O rail = 1.8 V */
 +	};
 +};
 +
@@ -533,6 +543,12 @@ index 0000000..abcdef1
 +
 +		reset-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>; /* gpio_42 */
 +		pdn-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>; /* gpio_44 */
++
++		/* Board 3.3 V analog + digital supplies (the driver only enables
++		 * these, never programs a voltage). PVDD_A..D (speaker power rail)
++		 * still TODO -- board voltage unverified, not in the stock binary. */
++		AVDD-supply = <&vdd_3v3>;
++		DVDD-supply = <&vdd_3v3>;
 +
 +		/* MCLK 12.288 MHz (256 x 48 kHz) on fref_clk1_out:
 +		 * dpll_per_m3x2 -> 61.44 MHz, auxclk1 divides by 5
@@ -615,6 +631,8 @@ index 0000000..abcdef1
 +		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
 +		clocks = <&twl 1>; /* clk32kaudio, dle board-steelhead-wifi.c */
 +		clock-names = "ext_clock";
++		vbat-supply = <&bcm4330_vmmc>;	/* BCM4330 VBAT 3.3 V (shared rail) */
++		vddio-supply = <&v1v8>;		/* BCM4330 I/O 1.8 V */
 +	};
 +};
 +
@@ -721,6 +739,7 @@ index 0000000..abcdef1
 +/* HDMI output */
 +&dss {
 +	status = "okay";
++	vdda_video-supply = <&vcxio>;	/* DSS DPLL analog rail = VCXIO 1.8 V (stock) */
 +};
 +
 +&hdmi {
