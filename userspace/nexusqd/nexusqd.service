@@ -5,7 +5,13 @@ After=multi-user.target
 Requires=systemd-modules-load.service
 
 [Service]
+# Type=notify: nexusqd sends READY=1 once the AVR + control socket are up, and
+# then pings WATCHDOG=1 from its render loop. If those pings stop for WatchdogSec
+# (a *hang* — wedged AVR i2c, stuck poll, runaway effect — which Restart= alone
+# can't see because the process never exits), systemd SIGABRTs and restarts it.
+Type=notify
 ExecStart=/usr/bin/nexusqd
+WatchdogSec=15s
 Restart=on-failure
 RestartSec=2
 

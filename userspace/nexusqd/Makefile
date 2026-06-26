@@ -3,7 +3,8 @@ CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Iinclude
 SRC      = src/frame.c src/themes.c src/avr.c src/compositor.c src/keys.c src/control.c \
            src/reaction.c src/screensaver.c src/audio.c src/audiocap.c src/themecolor.c \
            src/jrandom.c src/ledcfg.c src/fx_waveform.c src/fx_waveformsolid.c \
-           src/fx_circles.c src/fx_pointmorph.c src/fx_starfield.c src/music.c
+           src/fx_circles.c src/fx_pointmorph.c src/fx_starfield.c src/music.c \
+           src/sdnotify.c
 DAEMON   = src/nexusqd.c $(SRC)
 CLI      = src/nexusled.c src/avr.c src/frame.c
 TESTS    = $(wildcard tests/test_*.c)

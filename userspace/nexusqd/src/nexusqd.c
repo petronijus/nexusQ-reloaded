@@ -11,6 +11,7 @@
 #include "audio.h"
 #include "audiocap.h"
 #include "music.h"
+#include "sdnotify.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +115,14 @@ int main(void) {
     uint8_t lastpk[RING*3] = {0}, pk[RING*3];
     double next_frame = now_s();   /* monotonic render deadline (decouples fps from audio) */
     double afd_retry = 0.0;        /* next time to re-spawn arecord after it died */
+
+    /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
+     * ready, then ping WATCHDOG=1 from the render loop below. A *hang* in that
+     * loop (a wedged AVR i2c write, a stuck poll, an effect that never returns)
+     * stops the pings and systemd restarts us — the crash path was already
+     * covered by Restart=, the hang path was not. No-op outside systemd. */
+    sdnotify_send("READY=1");
+    double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
     for (;;) {
         /* arecord exits immediately if hw:Loopback,1 is absent (snd-aloop not
          * loaded) or the device is busy; the loop below then closes afd. Re-spawn
@@ -267,5 +276,10 @@ int main(void) {
 
         struct frame f; comp_render(&comp, now, &f); frame_pack(&f, pk);
         if (memcmp(pk, lastpk, sizeof(pk)) != 0) { avr_write_frame(pk, 0); memcpy(lastpk, pk, sizeof(pk)); }
+
+        /* Heartbeat: reached the end of a frame tick, so the render path is
+         * alive (this runs even when the frame is unchanged / the ring is idle).
+         * Rate-limited to once a second; WatchdogSec in the unit is far larger. */
+        if (now - last_wd >= 1.0) { sdnotify_send("WATCHDOG=1"); last_wd = now; }
     }
 }
