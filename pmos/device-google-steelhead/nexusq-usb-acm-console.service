@@ -10,7 +10,7 @@ After=sys-subsystem-net-devices-usb0.device
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/nexusq-usb-acm-console.sh
+ExecStart=/usr/bin/nexusq-usb-acm-console.sh
 # Offer a login on the freshly created gadget serial port.
 ExecStartPost=-/bin/systemctl start serial-getty@ttyGS0.service
 RemainAfterExit=yes

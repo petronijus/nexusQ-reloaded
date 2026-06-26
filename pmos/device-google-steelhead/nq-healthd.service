@@ -1,12 +1,12 @@
 [Unit]
 Description=Nexus Q runtime health monitor (cpufreq/power/thermal/LED ring/nexusqd)
-Documentation=file:///usr/local/bin/nq-healthd
+Documentation=file:///usr/bin/nq-healthd
 # Start late; nexusqd/librespot are part of what we watch.
 After=multi-user.target nexusqd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nq-healthd
+ExecStart=/usr/bin/nq-healthd
 # Self-heal: the monitor itself must never be the thing that dies silently.
 Restart=always
 RestartSec=5

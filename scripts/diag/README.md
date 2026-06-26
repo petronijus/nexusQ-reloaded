@@ -81,7 +81,7 @@ print the per-sample timeline around it.
 ## Packaging
 
 The device package (`pmos/device-google-steelhead/APKBUILD`) installs
-`nq-healthd` + `nq-diag-snapshot` to `/usr/local/bin` and enables
+`nq-healthd` + `nq-diag-snapshot` to `/usr/bin` and enables
 `nq-healthd.service` by default, so a freshly built image is already recording
 health and a capture needs no bootstrap. The existing boot script
 `scripts/device-nexus-diag.sh` now calls `nq-diag-snapshot` for its log (with an

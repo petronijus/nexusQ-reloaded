@@ -92,7 +92,7 @@ package() {
 	# enable it via that device's .wants so it fires every boot. fastboot is
 	# unaffected (bootloader-level).
 	install -Dm755 "$srcdir"/nexusq-usb-acm-console.sh \
-		"$pkgdir"/usr/local/bin/nexusq-usb-acm-console.sh
+		"$pkgdir"/usr/bin/nexusq-usb-acm-console.sh
 	install -Dm644 "$srcdir"/nexusq-usb-acm-console.service \
 		"$pkgdir"/etc/systemd/system/nexusq-usb-acm-console.service
 	install -dm755 \
@@ -106,9 +106,9 @@ package() {
 	# thermal throttle, kernel errors) and logs to /var/log/nq-health. Enabled
 	# by default so a fault is already recorded by the time we go looking.
 	install -Dm755 "$srcdir"/nq-diag-snapshot \
-		"$pkgdir"/usr/local/bin/nq-diag-snapshot
+		"$pkgdir"/usr/bin/nq-diag-snapshot
 	install -Dm755 "$srcdir"/nq-healthd \
-		"$pkgdir"/usr/local/bin/nq-healthd
+		"$pkgdir"/usr/bin/nq-healthd
 	install -Dm644 "$srcdir"/nq-healthd.service \
 		"$pkgdir"/etc/systemd/system/nq-healthd.service
 	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
