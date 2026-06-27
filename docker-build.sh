@@ -264,7 +264,13 @@ locale = en_US.UTF-8
 qemu_redir_stdio = False
 ssh_keys = False
 sudo_timer = False
-systemd = default
+systemd = always
+# Switching `systemd` flips the apk channel (edge -> systemd-edge). A warm
+# nexusq-workdir volume left over from an older `edge` (OpenRC) build then holds
+# misconfigured chroots, and pmbootstrap aborts ("Chroot is for the 'edge'
+# channel, but you are on 'systemd-edge'"). Let it auto-delete those stale
+# chroots and rebuild clean on the correct channel instead of failing.
+auto_zap_misconfigured_chroots = silently
 timezone = GMT
 ui_extras = False
 user = user
@@ -427,7 +433,29 @@ if [ $BUILD_RC -eq 0 ]; then
         sudo mkdir -p /tmp/output
         sudo chown pmos:pmos /tmp/output
 
-        cp "$ROOTFS/boot/boot.img" /tmp/output/ 2>/dev/null && echo "  Exported: boot.img"
+        # pmbootstrap bundles a ~7.6 MB pmOS initramfs into boot/boot.img and points
+        # its cmdline at the root by UUID. But the Nexus Q boots RAMDISK-LESS: the
+        # kernel mounts the ext4 rootfs directly via its built-in CONFIG_CMDLINE
+        # (root=/dev/mmcblk0p13, forced by CONFIG_CMDLINE_FORCE=y), so the initramfs is
+        # dead weight -- and a 12.6 MB boot.img does NOT fit the 8 MB boot partition
+        # (fastboot: "Writing 'boot' FAILED! error=-27"). Re-pack the SAME kernel
+        # (zImage + appended DTB, lifted verbatim out of pmbootstrap's boot.img so it is
+        # byte-for-byte the kernel that was just built) into a ramdisk-less Android boot
+        # image with the authoritative defconfig cmdline, via the project's own
+        # make-bootimg.py (which also hard-guards the 8 MB ceiling).
+        PM_BOOTIMG="$ROOTFS/boot/boot.img"
+        BOOT_CMDLINE=$(sed -n 's/^CONFIG_CMDLINE="\(.*\)"$/\1/p' "$SRC/kernel/configs/steelhead_defconfig")
+        python3 - "$PM_BOOTIMG" /tmp/zImage-dtb <<'PYEOF'
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+if d[:8] != b'ANDROID!':
+    sys.exit(f"ERROR: {sys.argv[1]} is not an Android boot image (magic={d[:8]!r})")
+ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack('<8I', d[8:40])
+open(sys.argv[2], 'wb').write(d[ps:ps + ks])   # kernel = zImage+DTB, starts at page 1
+print(f"  pmOS boot.img: kernel={ks} B, ramdisk={rs} B (initramfs dropped for ramdisk-less boot)")
+PYEOF
+        python3 "$SRC/make-bootimg.py" /tmp/zImage-dtb /tmp/output/boot.img - "$BOOT_CMDLINE" \
+            && echo "  Exported: boot.img (ramdisk-less, fits 8 MB boot partition)"
 
         echo "  Extracting rootfs partition from disk image..."
         ROOTFS_INFO=$(sfdisk -J "$DISK_IMG" 2>/dev/null | python3 -c "
@@ -448,6 +476,39 @@ print(f\"{p['start']} {p['size']} {ss}\")
             bs="$SECTOR_SIZE" skip="$ROOTFS_START" count="$ROOTFS_SECTORS" \
             status=progress
         echo "  Exported: google-steelhead.img (rootfs partition extracted)"
+
+        # The Nexus Q boots RAMDISK-LESS from a single flashed partition
+        # (root=/dev/mmcblk0p13) — we flash ONLY this rootfs partition to userdata,
+        # never pmbootstrap's two-partition disk. But pmbootstrap still generates an
+        # /etc/fstab with a `/boot` entry (the disk's boot partition, by UUID) that
+        # does NOT exist on the device. systemd then times out on
+        # /dev/disk/by-uuid/<boot> → "Dependency failed for /boot" →
+        # "Dependency failed for Local File Systems" → it drops to emergency.target,
+        # and because root is locked, "Cannot open access to console". (OpenRC just
+        # logged the failed mount and continued — that's why it "booted" before.)
+        # Fix: strip the /boot line from fstab; also unlock root with the same
+        # password as `user` so the ACM serial console + emergency mode are usable.
+        echo "  Post-processing rootfs (strip /boot fstab entry, unlock root)..."
+        RP_LOOP=$(losetup -f --show /tmp/output/google-steelhead.img)
+        RP_MNT=$(mktemp -d)
+        mount "$RP_LOOP" "$RP_MNT"
+        sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
+        python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+uhash = next(l.split(":")[1] for l in lines if l.startswith("user:"))
+out = []
+for l in lines:
+    f = l.split(":")
+    if f and f[0] == "root":
+        f[1] = uhash            # unlock root, same password as `user` (147147)
+        l = ":".join(f)
+    out.append(l)
+open(sys.argv[1], "w").write("\n".join(out) + "\n")
+PYEOF
+        sync
+        umount "$RP_MNT"; losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
+        echo "  Rootfs post-processed: /boot fstab entry dropped, root unlocked"
 
         echo ""
         echo "=== Build artifacts ==="
