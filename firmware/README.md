@@ -4,13 +4,30 @@ The Broadcom BCM4330 WiFi/Bluetooth chip needs proprietary firmware to operate.
 
 ## What ships where
 
-- **WiFi base firmware** (`fw_bcmdhd.bin`, `fw_bcmdhd_apsta.bin`, NVRAM) comes
-  from the **`firmware-aosp-broadcom-wlan`** postmarketOS package — it is *not*
-  in this repo and is pulled in automatically by the build.
-- **WiFi calibration** (`bcmdhd.cal`) and the **Bluetooth patchram**
-  (`bcm4330.hcd`) are device-specific blobs recovered from the Nexus Q's
-  Android vendor partition. They are **proprietary and not redistributable**, so
-  they are **not committed to this public repo**. You provide them yourself.
+The mainline kernel drives the BCM4330 with **`brcmfmac`** (WiFi) and
+**`hci_uart_bcm`** (Bluetooth) — NOT the Android `bcmdhd` driver. Those two want
+firmware under `/lib/firmware/brcm/` with very specific names (verified live from
+`dmesg` on the device):
+
+| File (in `/lib/firmware/brcm/`) | What | Source | In git? |
+|---|---|---|---|
+| `brcmfmac4330-sdio.bin` | brcmfmac WiFi base firmware | upstream **linux-firmware** (redistributable) | no — cached in `./firmware`, else fetched at build time |
+| `brcmfmac4330-sdio.txt` | brcmfmac WiFi NVRAM / calibration | the device's `bcmdhd.cal` (already key=value NVRAM) | no — proprietary |
+| `BCM4330B1.hcd` | Bluetooth patchram for the BCM4330B1 | the device's vendor BT firmware | no — proprietary |
+
+Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware load
+... failed ... -2` and there is **no WiFi**; without `BCM4330B1.hcd` it logs
+`BCM: firmware Patch file not found` and there is **no Bluetooth**.
+
+> ⚠️ `firmware-aosp-broadcom-wlan` (a build dependency) ships the *bcmdhd*-style
+> `fw_bcm4330_*.bin` images. **brcmfmac cannot use those** — they are kept only for
+> parity. The WiFi firmware that actually loads is `brcmfmac4330-sdio.bin` above.
+
+`bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
+redistributable**, so they are **not committed** (gitignored). You provide them
+yourself (see below). `brcmfmac4330-sdio.bin` is redistributable; it is gitignored
+too but `docker-build.sh` will fetch it from upstream linux-firmware if it is not
+already cached in `./firmware`.
 
 ## Getting the blobs
 
@@ -36,6 +53,13 @@ may be sub-optimal); without the `.hcd`, Bluetooth won't come up.
 
 ## Packaging
 
-`pmos/firmware-google-steelhead/APKBUILD` installs the calibration into the
-rootfs. Its `source=`/`package()` blocks are commented until you've staged the
-blob (the package must not carry the proprietary file in a public tree).
+`docker-build.sh` (Phase 6) stages the three blobs into the
+`firmware-google-steelhead` aport under the exact driver-requested names
+(`BCM4330B1.hcd`, `brcmfmac4330-sdio.txt` from `bcmdhd.cal`, and
+`brcmfmac4330-sdio.bin` from the local cache or upstream linux-firmware), and the
+APKBUILD installs them to `/lib/firmware/brcm/`. So you only need to place
+`firmware/bcmdhd.cal` and `firmware/bcm4330.hcd` — the build does the rest.
+
+If the proprietary blobs are **absent** (a public clone without the overlay),
+`docker-build.sh` automatically swaps in an **empty** `firmware-google-steelhead`
+package so the build still succeeds; WiFi/BT simply come up with no firmware.

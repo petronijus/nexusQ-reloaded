@@ -14,6 +14,8 @@ fb_out.txt
 /private/
 firmware/bcm4330.hcd
 firmware/bcmdhd.cal
+# Redistributable (upstream linux-firmware) -- cached locally, else fetched at build time
+firmware/brcmfmac4330-sdio.bin
 
 # Build/session scratch logs
 build-*.log

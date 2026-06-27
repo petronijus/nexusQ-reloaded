@@ -126,6 +126,53 @@ for patch in "$SRC/kernel/patches/"*.patch; do
     echo "  Installed: $(basename "$patch")"
 done
 
+# BCM4330 WiFi (brcmfmac) + Bluetooth firmware. The mainline kernel drives this
+# chip with brcmfmac + hci_uart_bcm, which request these EXACT names under
+# /lib/firmware/brcm (verified live on the device):
+#   brcm/brcmfmac4330-sdio.bin  WiFi base fw  (redistributable, upstream linux-firmware)
+#   brcm/brcmfmac4330-sdio.txt  WiFi NVRAM    (the device's bcmdhd.cal -- key=value NVRAM)
+#   brcm/BCM4330B1.hcd          BT patchram   (proprietary, from the device)
+# Without them: "brcmfmac ... Direct firmware load ... -2" (no WiFi) and
+# "BCM: firmware Patch file not found" (no BT). The two proprietary blobs live in
+# ./firmware (gitignored, maintainer/private-overlay provided); the brcmfmac base
+# fw is redistributable and cached in ./firmware (or fetched on demand). Stage all
+# three into the firmware aport so firmware-google-steelhead installs them.
+FW_APORT="$PMAPORTS/device/testing/firmware-google-steelhead"
+BRCMFMAC_URL="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/brcm/brcmfmac4330-sdio.bin"
+if [ -f "$SRC/firmware/bcm4330.hcd" ] && [ -f "$SRC/firmware/bcmdhd.cal" ]; then
+    cp "$SRC/firmware/bcm4330.hcd" "$FW_APORT/BCM4330B1.hcd"
+    cp "$SRC/firmware/bcmdhd.cal"  "$FW_APORT/brcmfmac4330-sdio.txt"
+    if [ -f "$SRC/firmware/brcmfmac4330-sdio.bin" ]; then
+        cp "$SRC/firmware/brcmfmac4330-sdio.bin" "$FW_APORT/brcmfmac4330-sdio.bin"
+        echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (local cache)"
+    else
+        echo "  Fetching redistributable brcmfmac4330-sdio.bin from upstream linux-firmware..."
+        curl -fsSL "$BRCMFMAC_URL" -o "$FW_APORT/brcmfmac4330-sdio.bin" \
+            && echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (downloaded)" \
+            || { echo "  ERROR: could not fetch brcmfmac4330-sdio.bin -- WiFi firmware will be missing"; rm -f "$FW_APORT/brcmfmac4330-sdio.bin"; }
+    fi
+fi
+if [ ! -f "$FW_APORT/BCM4330B1.hcd" ] || [ ! -f "$FW_APORT/brcmfmac4330-sdio.bin" ]; then
+    # Public clone without the firmware overlay (or a failed fetch): fall back to an
+    # EMPTY firmware package so the build still succeeds (WiFi/BT just get no firmware).
+    echo "  WARNING: BCM4330 firmware blobs incomplete -> building EMPTY firmware-google-steelhead"
+    rm -f "$FW_APORT"/brcmfmac4330-sdio.* "$FW_APORT"/BCM4330B1.hcd
+    cat > "$FW_APORT/APKBUILD" <<'FWEMPTY'
+pkgname=firmware-google-steelhead
+pkgver=1
+pkgrel=1
+pkgdesc="Google Nexus Q BCM4330 firmware (blobs not provided -- empty)"
+url="https://postmarketos.org"
+arch="armv7"
+license="proprietary"
+depends="firmware-aosp-broadcom-wlan"
+options="!strip !check !archcheck !spdx !tracedeps"
+build() { true; }
+package() { mkdir -p "$pkgdir"; }
+sha512sums=""
+FWEMPTY
+fi
+
 # nexusqd LED daemon: stage the aport + the flat C sources (from userspace/nexusqd)
 # next to its APKBUILD; the APKBUILD's prepare() restores the include/ + src/ tree.
 NEXUSQD_DIR="$PMAPORTS/main/nexusqd"
@@ -148,6 +195,7 @@ echo "=== Phase 6b: Patch pmbootstrap for Docker compatibility ==="
 APK_PY="/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
 PART_PY="/usr/lib/python3.12/site-packages/pmb/install/partition.py"
 LOSETUP_PY="/usr/lib/python3.12/site-packages/pmb/install/losetup.py"
+BACKEND_PY="/usr/lib/python3.12/site-packages/pmb/build/backend.py"
 
 sudo python3 << 'PATCH_APK'
 path = "/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
@@ -223,9 +271,74 @@ else:
     print("  partition.py: already patched or pattern changed")
 PATCH_PARTITION
 
+sudo python3 << 'PATCH_BACKEND'
+# THE fakeroot fix. ROOT CAUSE of the build hanging forever at
+# ">>> <pkg>: Entering fakeroot..." (device-google-steelhead reliably; any
+# package whose package() actually runs): abuild wraps package()+create_apks in
+# fakeroot, whose `faked` daemon — run through qemu-arm because we build armv7 in
+# emulation — busy-loops at ~100% CPU under qemu and never makes progress, so the
+# package step never returns. This is NOT the SysV-IPC issue an earlier revision
+# tried to dodge with fakeroot-tcp: the installed faked is ALREADY the TCP variant
+# (verified: 0 sysv syscalls, 7 socket syscalls) and it spins just the same. The
+# qemu emulation of faked's daemon loop is the problem, regardless of sysv/tcp.
+#
+# abuild itself gives the clean way out (abuild source ~line 2992):
+#     if [ $(id -u) -eq 0 ] && [ -z "$FAKEROOTKEY" ]; then FAKEROOT= ; fi
+# i.e. when abuild runs AS ROOT it sets FAKEROOT empty and skips fakeroot/faked
+# entirely — and because it is really root, package() creates real root:root files,
+# so the resulting .apk has correct ownership (NOT a shortcut — ownership is right).
+#
+# pmbootstrap runs abuild as the unprivileged `pmos` user (pmb/build/backend.py:
+# `pmb.chroot.user(cmd, ...)`), which forces the fakeroot path. We flip that one
+# call to run as root and pass abuild `-F` (required: abuild refuses to run as root
+# without it). We must ALSO pin HOME=/home/pmos in the env, or root would look for
+# the package-signing key in /root/.abuild (where pmbootstrap never put it) and
+# create_apks would fail to sign. This eliminates faked for EVERY package (kernel,
+# nexusqd, device, firmware) — no qemu busy-loop, reliably.
+path = "/usr/lib/python3.12/site-packages/pmb/build/backend.py"
+with open(path) as f:
+    content = f.read()
+
+reps = [
+    # 1) run abuild as root, not as the pmos user (root => abuild drops fakeroot)
+    (
+        'pmb.chroot.user(cmd, buildchroot, Path("/home/pmos/build"), env=env)',
+        'pmb.chroot.root(cmd, buildchroot, Path("/home/pmos/build"), env=env)',
+    ),
+    # 2) -F: let abuild run as root; without it abuild aborts ("don't run as root")
+    (
+        'cmd = ["abuild", "-d", "-D", "postmarketOS"]',
+        'cmd = ["abuild", "-F", "-d", "-D", "postmarketOS"]',
+    ),
+    # 3) HOME=/home/pmos so root finds the .abuild signing key + abuild.conf
+    (
+        'env: Env = {"SUDO_APK": "abuild-apk --no-progress"}',
+        'env: Env = {"SUDO_APK": "abuild-apk --no-progress", "HOME": "/home/pmos"}',
+    ),
+]
+
+applied = 0
+for old, new in reps:
+    if new in content:
+        applied += 1  # already patched (idempotent re-run)
+    elif old in content:
+        content = content.replace(old, new)
+        applied += 1
+    else:
+        print(f"  backend.py: PATTERN NOT FOUND -> {old!r} (pmbootstrap changed?)")
+
+if applied == len(reps):
+    with open(path, "w") as f:
+        f.write(content)
+    print(f"  Patched backend.py: abuild runs as root (-F, HOME=/home/pmos) -> no fakeroot/faked, no qemu hang")
+else:
+    print(f"  backend.py: only {applied}/{len(reps)} patterns matched -- NOT writing (fakeroot hang risk!)")
+PATCH_BACKEND
+
 echo "  Compiling patched files..."
 sudo python3 -c "import py_compile; py_compile.compile('$APK_PY', doraise=True)" && echo "    apk.py: OK"
 sudo python3 -c "import py_compile; py_compile.compile('$PART_PY', doraise=True)" && echo "    partition.py: OK"
+sudo python3 -c "import py_compile; py_compile.compile('$BACKEND_PY', doraise=True)" && echo "    backend.py: OK"
 
 echo ""
 echo "=== Phase 7: Initialize pmbootstrap config ==="
@@ -247,7 +360,7 @@ device = google-steelhead
 # NOTE: postmarketos-ui-lxqt is X11-by-default (drags in xorg-server, unused
 # under our Wayland session); the device package adds lxqt-wayland-session +
 # labwc and makes the LXQt-Wayland session the tinydm default. A future cleanup
-# could switch to `ui = none` + an explicit Wayland-only LXQt depends to drop X11.
+# could switch to 'ui = none' + an explicit Wayland-only LXQt depends to drop X11.
 # Replaced the bare weston desktop (2026-06-20). See memory: nexusq-desktop-lxqt.
 ui = lxqt
 build_pkgs_on_install = True
@@ -265,8 +378,8 @@ qemu_redir_stdio = False
 ssh_keys = False
 sudo_timer = False
 systemd = always
-# Switching `systemd` flips the apk channel (edge -> systemd-edge). A warm
-# nexusq-workdir volume left over from an older `edge` (OpenRC) build then holds
+# Switching the 'systemd' option flips the apk channel (edge -> systemd-edge). A warm
+# nexusq-workdir volume left over from an older 'edge' (OpenRC) build then holds
 # misconfigured chroots, and pmbootstrap aborts ("Chroot is for the 'edge'
 # channel, but you are on 'systemd-edge'"). Let it auto-delete those stale
 # chroots and rebuild clean on the correct channel instead of failing.
@@ -336,6 +449,37 @@ sudo mkdir -p "$WORK/cache_ccache_armv7"
 sudo chown -R 12345:12345 "$WORK/cache_ccache_armv7"
 echo "  $WORK/cache_ccache_armv7 now owned by uid 12345 (chroot abuild user)"
 
+# Same EACCES root cause, third spot: the abuild *package-signing key*.
+# pmbootstrap (pmb/build/init.py) generates the key by running `abuild-keygen`
+# INSIDE the chroot as the chroot's pmos user (uid 12345), writing it into
+# $WORK/config_abuild (bind-mounted at the chroot's /home/pmos/.abuild). The
+# private key lands as `pmos@local-<id>.rsa`, mode 0600, owner uid 12345 — and
+# abuild later reads it (still as uid 12345) to sign control.tar.gz in
+# create_apks. But the broad `sudo chown -R pmos:pmos /home/pmos` in Phase 5
+# (re)sets config_abuild to uid 1000, so the in-chroot uid 12345 can no longer
+# read its own 0600 key -> openssl BIO_new_file "Permission denied" ->
+# "failed to sign .../control.tar.gz" -> create_apks/rootpkg fail, even though
+# the package itself built fine. (Only bites when the device package actually
+# needs a *rebuild*; a cached .apk skips signing.) Re-assert uid 12345 on the
+# whole key dir, exactly as for packages/ccache above. mkdir -p covers a fresh
+# volume (keys are then generated as 12345 during the build and need no fixup).
+sudo mkdir -p "$WORK/config_abuild"
+sudo chown -R 12345:12345 "$WORK/config_abuild"
+echo "  $WORK/config_abuild now owned by uid 12345 (chroot abuild signing key)"
+
+# Same EACCES root cause, fourth spot: the shared distfiles cache. abuild-fetch
+# (run inside the buildroot chroot as uid 12345) creates a `<tarball>.lock` file
+# in /var/cache/distfiles (bind-mounted from $WORK/cache_distfiles) before it
+# fetches/checksums a source tarball (e.g. the 148 MB linux-6.12.12.tar.xz). The
+# broad `sudo chown -R pmos:pmos /home/pmos` in Phase 5 (re)sets that dir to uid
+# 1000 (mode 0755), so uid 12345 cannot create the .lock -> "abuild-fetch:
+# .../linux-6.12.12.tar.xz.lock: Permission denied" -> "checksum failed" then
+# "fetch failed" -> the kernel package fails to build (exit 3), even though the
+# tarball itself is already present in the cache. Hand the dir to uid 12345 too.
+sudo mkdir -p "$WORK/cache_distfiles"
+sudo chown -R 12345:12345 "$WORK/cache_distfiles"
+echo "  $WORK/cache_distfiles now owned by uid 12345 (chroot abuild-fetch lock)"
+
 echo ""
 echo "=== Phase 7b: Generate checksums ==="
 echo "Generating checksums for kernel package..."
@@ -347,6 +491,15 @@ pmbootstrap checksum device-google-steelhead 2>&1 || true
 echo "Generating checksums for firmware package..."
 pmbootstrap checksum firmware-google-steelhead 2>&1 || true
 
+# NOTE: there is intentionally no fakeroot workaround here anymore. A previous
+# revision installed `fakeroot-tcp` into the armv7 buildroot believing the build
+# hung on fakeroot's *SysV-IPC* daemon under qemu. That diagnosis was wrong: the
+# faked binary was already the TCP variant and it busy-looped at 100% CPU under
+# qemu-arm just the same. The real fix lives in Phase 6b — we patch pmbootstrap to
+# run abuild AS ROOT (-F), so abuild sets FAKEROOT="" and skips fakeroot/faked
+# entirely for every package. No qemu fakeroot daemon ever runs, so nothing to
+# work around here.
+
 echo ""
 echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
@@ -356,7 +509,12 @@ set +e
 # "<file> is missing in checksums". Regenerate the per-file checksums against the
 # just-staged sources before building (same step the kernel/device/firmware get).
 pmbootstrap checksum nexusqd 2>&1 || true
-pmbootstrap build nexusqd --arch armv7 2>&1
+# --no-cross (qemu-only), matching Phase 8: crossdirect (the default cross-compile
+# accelerator) is broken in this image -- it cannot exec cc1 ("cc: fatal error:
+# cannot execute 'cc1': posix_spawnp: No such file or directory") and the build
+# fails (exit 3). Forcing qemu-only sidesteps the broken crossdirect toolchain and
+# builds nexusqd reliably, exactly as the real Phase 8 build already does.
+pmbootstrap --no-cross build nexusqd --arch armv7 2>&1
 NEXUSQD_RC=$?
 set -e
 echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
@@ -400,6 +558,31 @@ if [ $BUILD_RC -eq 0 ]; then
     echo ""
     echo "=== Phase 9: Install image ==="
     set +e
+    # Start the rootfs install from a CLEAN chroot. ROOT CAUSE of the
+    # "etc/apk/commit_hooks.d/postmarketos-base-systemd: can't create
+    # /var/lib/systemd-apk/installed.units: Permission denied" install failure:
+    #
+    # pmbootstrap builds chroot_rootfs_google-steelhead as a real root filesystem
+    # — apk (run via sudo, as root) extracts packages preserving their intended
+    # per-file ownership (root + a handful of system uids). The systemd base
+    # package's apk pre-commit hook then runs (as root) and writes the unit list
+    # to /var/lib/systemd-apk/installed.units. On a FRESH chroot that all works.
+    #
+    # But on a *reused* nexusq-workdir volume a stale rootfs chroot from a prior
+    # run persists, and the broad `sudo chown -R pmos:pmos /home/pmos` in Phase 5
+    # has flattened every file in it to uid 1000 (mode 0644). The hook can no
+    # longer truncate the pre-existing uid-1000 installed.units -> "Permission
+    # denied" -> the hook exits 1 -> apk add postmarketos-base-systemd fails (99)
+    # -> install aborts. (A blanket chown back to root is NOT correct — a real
+    # rootfs legitimately has non-root system uids — so the only clean fix is to
+    # let pmbootstrap rebuild the rootfs from scratch.) Cold builds never hit this
+    # because no stale rootfs chroot exists; this only bites warm-volume rebuilds,
+    # and only since the systemd switch (the old OpenRC postmarketos-base shipped
+    # no such commit hook). Remove the stale rootfs chroot so `install` recreates
+    # it clean with correct ownership; packages live in $WORK/packages, so nothing
+    # is recompiled.
+    sudo rm -rf /home/pmos/.local/var/pmbootstrap/chroot_rootfs_google-steelhead
+    echo "  Removed stale rootfs chroot (forces a clean, root-owned rebuild)"
     # pmbootstrap-in-Docker uid drift: the native chroot's `pmos` user is uid 12345
     # (pmbootstrap's sandbox uid) while its /home/pmos is owned by 1000, so the install
     # step `mkdir -p /home/pmos/rootfs` (run as pmos) fails with EPERM. The chroot is
@@ -488,12 +671,17 @@ print(f\"{p['start']} {p['size']} {ss}\")
         # logged the failed mount and continued — that's why it "booted" before.)
         # Fix: strip the /boot line from fstab; also unlock root with the same
         # password as `user` so the ACM serial console + emergency mode are usable.
+        # NOTE: this whole block runs as the unprivileged `pmos` user, but losetup,
+        # mount, and editing the root-owned /etc/fstab + /etc/shadow all need root —
+        # so each privileged step is run via sudo (passwordless in this image). This
+        # was a latent bug: every prior build failed earlier (at the fakeroot hang),
+        # so Phase 10 post-processing never actually ran until that was fixed.
         echo "  Post-processing rootfs (strip /boot fstab entry, unlock root)..."
-        RP_LOOP=$(losetup -f --show /tmp/output/google-steelhead.img)
+        RP_LOOP=$(sudo losetup -f --show /tmp/output/google-steelhead.img)
         RP_MNT=$(mktemp -d)
-        mount "$RP_LOOP" "$RP_MNT"
-        sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
-        python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
+        sudo mount "$RP_LOOP" "$RP_MNT"
+        sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
+        sudo python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
 import sys
 lines = open(sys.argv[1]).read().splitlines()
 uhash = next(l.split(":")[1] for l in lines if l.startswith("user:"))
@@ -507,7 +695,7 @@ for l in lines:
 open(sys.argv[1], "w").write("\n".join(out) + "\n")
 PYEOF
         sync
-        umount "$RP_MNT"; losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
+        sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
         echo "  Rootfs post-processed: /boot fstab entry dropped, root unlocked"
 
         echo ""
