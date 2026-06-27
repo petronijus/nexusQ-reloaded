@@ -4,7 +4,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [1.5.0] - 2026-06-26
+## [1.5.0] - 2026-06-27
 
 ### Added
 - **NFC: the PN544 stack is built into the kernel** (NFC / HCI / PN544 / PN544_I2C
@@ -20,6 +20,13 @@ All notable changes to Nexus Q Reloaded. Format follows
 - **nexusqd** now signals systemd readiness + watchdog via `sd_notify`
   (self-contained, no libsystemd dependency), so the LED-ring daemon runs as a
   proper `Type=notify` unit.
+- **SSH out of the box** — the device image now ships `openssh` (server + client),
+  so the Nexus Q is reachable over the network and the USB gadget without any
+  manual install.
+- **Composite USB gadget** — a deterministic RNDIS network (`172.16.42.1`) **plus**
+  an ACM serial console, bound every boot from configfs. This is the reliable
+  fallback link when the on-board ethernet is down, and replaces the old, fragile
+  RNDIS→ACM swap that could leave the gadget unbound (no net and no console).
 
 ### Changed
 - **DTS regulators now point at the real board rails** — DSS `vdda_video`→vcxio,
@@ -46,6 +53,15 @@ All notable changes to Nexus Q Reloaded. Format follows
   creations and orphaned "event handler failed (72)" errors.
 - **boot: silenced the benign ti-sysc active-timer `-EBUSY`** probe error for
   GPTIMER1 (an always-on system clockevent owned by the timer core).
+- **boot: the systemd rootfs no longer drops to emergency mode.** pmbootstrap
+  generated an `/etc/fstab` with a `/boot` entry for a separate boot partition that
+  this single-partition (root-only) flash layout does not have; systemd failed that
+  mount → `emergency.target`, and `root` was locked so the console was unusable. The
+  image build now strips the `/boot` fstab line and unlocks `root`.
+- **the device image now actually ships systemd** (explicit
+  `deviceinfo_systemd="always"`). Without the opt-in pmbootstrap defaulted to
+  OpenRC, silently dropping the entire systemd device integration — nexusqd,
+  nq-healthd and the USB-gadget units never ran.
 
 ### Known issues
 - **WiFi 2.4 GHz bulk throughput** is limited by Bluetooth coexistence (the BCM4330

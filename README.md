@@ -72,11 +72,12 @@ partition is never overwritten.
 ### Flash Commands
 
 ```bash
-# Flash kernel to boot partition (RECOMMENDED -- reliable boot path):
-fastboot flash boot output/boot-atag-embedded.img
+# Flash kernel to boot partition (ramdisk-less, must fit the 8 MB boot partition):
+fastboot flash boot output/nexusq-boot-v1.5.0.img
 
-# Flash rootfs to userdata partition:
-fastboot flash userdata output/google-steelhead-sparse.img
+# Flash rootfs to userdata partition. The -S 100M chunking is REQUIRED: the 2012
+# U-Boot has a ~150 MB download buffer and fails SILENTLY on a larger blob.
+fastboot -S 100M flash userdata output/nexusq-rootfs-v1.5.0-sparse.img
 
 # Then power-cycle WITHOUT holding mute sensor to boot normally.
 ```
@@ -92,8 +93,8 @@ fastboot flash userdata output/google-steelhead-sparse.img
 2. `pmbootstrap kconfig check` -- validate kernel config
 3. `pmbootstrap build` -- cross-compile
 4. `pmbootstrap qemu` -- QEMU boot test (vexpress-a9)
-5. `fastboot boot boot.img` -- temporary boot on real hardware
-6. `fastboot flash userdata google-steelhead.img` -- permanent flash rootfs
+5. `fastboot flash boot nexusq-boot-v*.img` -- flash kernel (ramdisk-less, <=8 MB)
+6. `fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img` -- flash rootfs
 
 ## Releases
 

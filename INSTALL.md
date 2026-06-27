@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v0.1.0)
+# Nexus Q Reloaded -- Install Guide (v1.5.0)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,7 +12,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v0.1.0.img`, `nexusq-rootfs-v0.1.0-sparse.img`
+- release artifacts: `nexusq-boot-v1.5.0.img`, `nexusq-rootfs-v1.5.0-sparse.img`
 
 ## 1. Enter fastboot mode
 
@@ -25,12 +25,13 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ## 2. Flash
 
 ```bash
-# Boot image (kernel + DTB) -> 8 MB boot partition
-fastboot flash boot nexusq-boot-v0.1.0.img
+# Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
+# It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
+fastboot flash boot nexusq-boot-v1.5.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
-fastboot -S 100M flash userdata nexusq-rootfs-v0.1.0-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.5.0-sparse.img
 ```
 
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
