@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=5
+pkgrel=6
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -22,6 +22,9 @@ depends="
 	nm-tray
 	blueman
 	breeze-icons
+	nexusqd
+	openssh-server
+	openssh-client
 "
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"
@@ -38,6 +41,8 @@ source="
 	brcmfmac-mpc-off.conf
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
+	nexusq-usb-gadget.sh
+	nexusq-usb-gadget.service
 	nq-healthd
 	nq-diag-snapshot
 	nq-healthd.service
@@ -86,19 +91,25 @@ package() {
 	install -Dm644 "$srcdir"/brcmfmac-mpc-off.conf \
 		"$pkgdir"/etc/modprobe.d/brcmfmac-mpc-off.conf
 
-	# USB gadget = ACM serial debug console instead of the RNDIS network gadget
-	# (networking is on the on-board ethernet since v1.3.0). The service swaps the
-	# pmOS-created RNDIS gadget to ACM when the usb0 net device appears; statically
-	# enable it via that device's .wants so it fires every boot. fastboot is
-	# unaffected (bootloader-level).
+	# USB gadget: own it deterministically as a COMPOSITE RNDIS net
+	# (172.16.42.1 + ssh) + ACM console, every boot, from configfs. This replaces
+	# the old pmOS-RNDIS + RNDIS->ACM-swap chain, which on the full-rootfs image
+	# left the gadget *unbound* (host saw nothing — no net, no console, no way in).
+	# Since the on-board ethernet regressed (v1.4.0), the USB net is the reliable
+	# fallback path, so we expose RNDIS again (plus ACM for a serial login). The
+	# script logs its result to /dev/tty1 so it is visible on HDMI with no channel.
+	install -Dm755 "$srcdir"/nexusq-usb-gadget.sh \
+		"$pkgdir"/usr/bin/nexusq-usb-gadget.sh
+	install -Dm644 "$srcdir"/nexusq-usb-gadget.service \
+		"$pkgdir"/etc/systemd/system/nexusq-usb-gadget.service
+	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-usb-gadget.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-usb-gadget.service
+	# Keep the old ACM-swap script/unit available but NOT enabled (superseded).
 	install -Dm755 "$srcdir"/nexusq-usb-acm-console.sh \
 		"$pkgdir"/usr/bin/nexusq-usb-acm-console.sh
 	install -Dm644 "$srcdir"/nexusq-usb-acm-console.service \
 		"$pkgdir"/etc/systemd/system/nexusq-usb-acm-console.service
-	install -dm755 \
-		"$pkgdir"/etc/systemd/system/sys-subsystem-net-devices-usb0.device.wants
-	ln -sf ../nexusq-usb-acm-console.service \
-		"$pkgdir"/etc/systemd/system/sys-subsystem-net-devices-usb0.device.wants/nexusq-usb-acm-console.service
 
 	# Diagnostics: the comprehensive one-shot snapshot collector and the
 	# continuous runtime health monitor. nq-healthd watches the things that
@@ -134,6 +145,8 @@ SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
+SKIP  nexusq-usb-gadget.sh
+SKIP  nexusq-usb-gadget.service
 SKIP  nq-healthd
 SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service

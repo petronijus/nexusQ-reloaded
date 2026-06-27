@@ -10,6 +10,12 @@ deviceinfo_dtb="omap4-steelhead"
 deviceinfo_append_dtb="true"
 deviceinfo_arch="armv7"
 
+# This port is systemd-based: nexusqd, nq-healthd and the USB-ACM-console
+# integration all ship as systemd units, and the boot was validated against
+# systemd. Without this opt-in pmbootstrap defaults to OpenRC, which silently
+# drops the entire systemd device integration (the units never run).
+deviceinfo_systemd="always"
+
 # Device
 deviceinfo_chassis="embedded"
 deviceinfo_keyboard="false"
