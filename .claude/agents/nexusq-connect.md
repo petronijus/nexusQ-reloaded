@@ -84,7 +84,7 @@ to get a shell" and stop. Otherwise probe the transports below.
   `opnsense-api GET /api/dhcpv4/leases/searchLease` (ISC) — if that 404s, try the
   Kea/dnsmasq equivalent (`/api/kea/leases4/search`, `/api/dnsmasq/leases/search`).
   Match on hostname `steelhead` or MAC `f8:8f:ca:20:48:e1` to get the current IP.
-- Then `ping` + `ssh root@<ip>`. NB this host (`192.168.0.150`) may not route into
+- Then `ping` + `ssh root@<ip>`. NB this host's own LAN subnet may not route into
   vlan20 — if ping/ssh time out despite a valid lease, say so and prefer A/B.
 
 ## Verify before reporting
