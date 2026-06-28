@@ -6,6 +6,16 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-28
+
+First release with a **working `python3` on the device**, hardware-verified from a
+clean flash. Over 1.5.0: a working armv7 python3 — the actual fix was the
+`raw2simg.py` byte-exact (all-RAW) flash; the on-device SIGSEGV was a flash bug, not
+a build bug (a local `python3` rebuild supersedes Alpine's broken `-r2`, with a
+build-integrity gate + ship gate kept as a safety net) — plus zram compressed swap,
+user namespaces, on-device `gdb`/`python3-dbg`, and a live re-confirmation of
+dual-core SMP + cpufreq-to-1.2 GHz power/thermal.
+
 ### Added
 - **zram compressed swap.** Kernel `CONFIG_ZRAM=m` plus
   `deviceinfo_zram_swap_algo="lzo-rle"` brings up `postmarketos-zram-swap`. The
@@ -31,11 +41,12 @@ All notable changes to Nexus Q Reloaded. Format follows
   (`pmbootstrap --no-cross build python3 --arch armv7`, Phase 7d) so a higher pkgrel
   (now r5) supersedes Alpine's broken `python3-3.14.5-r2` in the rootfs. The override
   drops `--with-lto` + `--enable-optimizations` and the `!gettext-dev` makedepends
-  token (pmbootstrap's apk wrapper rejects `!` entries), keeps stock `-O2`, and links
-  libpython with **gold `-Wl,--no-mmap-output-file`** (the fix — see Fixed below).
-  Phase 7d gates every built libpython with `scripts/verify-libpython-clean.py` and
-  rebuilds on residual corruption (pkgrel-exact apk selection, no stale-apk glob);
-  Phase 10 re-gates the installed rootfs libpython before emitting an image.
+  token (pmbootstrap's apk wrapper rejects `!` entries), keeps stock `-O2` and the
+  **default linker (bfd)**. Phase 7d gates every built libpython with
+  `scripts/verify-libpython-clean.py` and rebuilds on residual corruption (pkgrel-exact
+  apk selection, no stale-apk glob); Phase 10 re-gates the installed rootfs libpython
+  before emitting an image — a build-integrity safety net (the on-device crash was a
+  flash bug, see Fixed; this only guarantees the build feeding the flash is clean).
 - **`device-google-steelhead` no longer masks `sleep-inhibitor.service`; adds
   on-device debug tools.** The `/dev/null` mask was removed in favour of fixing the
   root cause (the python crash, now fixed below); the image also ships `gdb` (16.3) +
@@ -43,39 +54,62 @@ All notable changes to Nexus Q Reloaded. Format follows
   so it works once python links a clean libpython). (device APKBUILD pkgrel 6→10.)
 
 ### Fixed
-- **armv7 `python3` SIGSEGV — root-caused and fixed (hardware-verified).** Alpine's
-  `python3-3.14.5-r2` SIGSEGVed deterministically on the Cortex-A9 (`python3 -S -c ''`
-  → rc 139 during `Py_Initialize`), taking down `onboard`, `blueman-applet`,
-  `sleep-inhibitor.service` and `gdb` (it links `libpython`). **Root cause:** NOT a
-  compiler or CPython-source bug, but a **build-time qemu-user corruption** — the
-  armv7 toolchain runs under qemu (`--no-cross`) and qemu's mmap zero-fill of the
-  **linker's output file** non-deterministically (≈50 % per build) leaves stale
-  garbage in libpython's should-be-zero `.PyRuntime` / `.data.rel.ro`, landing on
-  `interp->types.builtins.num_initialized` (read back as `0xf0012b00`) → wild
-  type-index deref → SIGSEGV on real HW (qemu keeps the wild address mapped → FALSE
-  PASS). Forensic proof: a clean and a crashing build are byte-identical except those
-  two zero-regions (clean all-zero; crashing page-aligned garbage that even
-  disassembles to ARM code absent from python — stale qemu build memory). Earlier
-  suspects **disproven**: LTO/PGO, LDREXD alignment, gnu2/TLSDESC, and optimization
-  level (two `-O0` builds with byte-identical `.text` behaved oppositely on the same
-  device). **Fix:** the r5 override links libpython with **gold
-  `-fuse-ld=gold -Wl,--no-mmap-output-file`** (gold `write()`s its output instead of
-  `mmap()`-ing it, so qemu can't mis-zero-fill it; flags kept out of DIST LDFLAGS so
-  on-device pip builds keep the stock linker), backed by a deterministic build gate
-  `scripts/verify-libpython-clean.py` (flags long non-zero runs in those zero-regions;
-  clean ≤52 B, corrupt ≥22000 B, threshold 256) run in a Phase-7d gate+retry loop and
-  again as a Phase-10 ship gate. Verified: 4 independent gold rebuilds all gate-clean;
-  on the live device the stock python → rc 139 while the gold r5 python → `HWOK`
-  rc 0. Affects **any** qemu-built armv7 binary, not just python. See
+- **Flash: the rootfs sparse image is now byte-exact (all-RAW, no `DONT_CARE`).**
+  `raw2simg.py` (raw ext4 → Android sparse for the 2012 U-Boot fastboot, which lacks
+  FILL-chunk support) used to emit every all-zero 4 KiB block as a `DONT_CARE` chunk to
+  shrink the image — but fastboot **skips** `DONT_CARE` blocks, which is only correct
+  on a **pre-erased** partition. The Nexus Q's U-Boot does **not** erase `userdata`, so
+  each skipped block kept STALE data from the previous flash, re-corrupting on-device
+  file zero-regions — specifically libpython's `.PyRuntime` / `.data.rel.ro` (PROGBITS,
+  read during `Py_Initialize`) — which was **the actual and only root cause of the
+  on-device armv7 python SIGSEGV (rc 139)**, even though the flashed (and built) image
+  was provably clean. Forensic signature distinguishing flash- from build-corruption:
+  the on-device libpython differed from the (gate-CLEAN) flashed image in **exactly 47**
+  4 KiB blocks, **all** "image-zero → device-garbage", 0 other
+  (`.PyRuntime longest_run 30652`); the image gated CLEAN, the device gated CORRUPT, and
+  `scp`-ing the clean image libpython over the device's → `python3 -S -c ''` rc 0
+  instantly — proof it was the flash, not the build. **Fix:** `raw2simg.py` now encodes
+  **every** block as RAW (no `DONT_CARE`), so the flash is byte-exact regardless of prior
+  eMMC content (sparse ≈ raw size; correctness over compression). Verified by a de-sparse
+  round-trip (md5 of de-sparsed == raw image) **and** on hardware: a fresh flash (no
+  live-patch) of a default-linker (bfd) build gives `/usr/lib/libpython3.14.so.1.0` md5
+  `79a0d4ace1358bb2d94c8a4d72479da9`, `SYSPY_OK 3.14.5 … [GCC 15.2.0]`, `SYS_PY_RC=0`.
+  Lesson: integrity-verify what the **device** runs, not just the built artifact. See
   `docs/2026-06-28-session-findings.md`.
-- **Build-pipeline: rootfs python ≠ the verified apk — fixed.** Phase 7d had exported
-  a clean `python3-3.14.5-r4` apk while the rootfs install pulled a *different* r4
-  build (md5 `30e88d28`, crashes vs `d43b6509`, runs) — partly the qemu coin-flip
-  above, partly a stale-artifact bug where a bare `python3-3.14.5-r*.apk` glob matched
-  an older apk in the persistent work-volume repo. Fixed by selecting the
-  **exact `pkgver-pkgrel`** apk, gating that file, and re-gating the **installed**
-  rootfs libpython at ship time (the version-only check that green-lit a mismatch is
-  gone).
+- **armv7 `python3` works on the device — the on-device SIGSEGV was the FLASH bug
+  above, not a build bug.** Alpine's `python3-3.14.5-r2` SIGSEGVed deterministically on
+  the Cortex-A9 (`python3 -S -c ''` → rc 139 during `Py_Initialize`), taking down
+  `onboard`, `blueman-applet`, `sleep-inhibitor.service` and `gdb` (it links
+  `libpython`). The **single root cause** was the `raw2simg.py` `DONT_CARE` flash bug
+  (above): a re-flash over non-erased eMMC left stale garbage in libpython's
+  should-be-zero `.PyRuntime` / `.data.rel.ro`, landing on
+  `interp->types.builtins.num_initialized` (read back as `0xf0012b00`) → wild
+  type-index deref → SIGSEGV. v1.6.0 ships a local `pmos/python3/` override (same 3.14.5
+  at a higher pkgrel, **r5**, **default linker / bfd**) so it supersedes Alpine's `-r2`;
+  the override drops `--with-lto` + `--enable-optimizations` and the `!gettext-dev`
+  makedepends token, keeps stock `-O2`. **A qemu-user "linker mmap zero-fill corrupts
+  the build" theory and a gold-linker workaround (`-fuse-ld=gold
+  -Wl,--no-mmap-output-file`, `binutils-gold` makedep) were investigated and DROPPED as
+  unnecessary** — the build was never reproducibly corrupt: 6 independent default-linker
+  builds were all integrity-gate-clean, and a bfd build (gold-note absent, libpython md5
+  `79a0d4ace1358bb2d94c8a4d72479da9`), flashed via the corrected all-RAW `raw2simg`, ran
+  `python3 -S -c ''` rc 0 on the real device (6/6 clean would be ~1.6 % if a real 50 %
+  build coin-flip existed). Retained — **not** as a "gold fix" but as a cheap
+  **build-integrity safety net** that catches zero-region corruption from any source:
+  `scripts/verify-libpython-clean.py` (flags long non-zero runs in those zero-regions;
+  clean ≤52 B, corrupt ≥22000 B, threshold 256), run in a Phase-7d gate+retry loop and
+  again as a Phase-10 ship gate, with pkgrel-exact apk selection. Other early suspects
+  also disproven: LTO/PGO, LDREXD alignment, gnu2/TLSDESC, optimization level. The
+  all-RAW flash fix above is what actually fixed the device; the gate only guarantees the
+  build feeding it is clean. See `docs/2026-06-28-session-findings.md`.
+- **Build-pipeline: rootfs python ≠ the verified apk — fixed.** Phase 7d's old bare
+  `python3-3.14.5-r*.apk` glob could match a *stale* apk in the persistent work-volume
+  repo rather than the one just built, so the rootfs could install a different build than
+  the one gated. Fixed by selecting the **exact `pkgver-pkgrel`** apk, gating that file,
+  and re-gating the **installed** rootfs libpython at ship time (the version-only check
+  that green-lit a mismatch is gone). _(The apparent "two r4 builds, one crashes / one
+  runs" that first surfaced this was almost certainly a post-flash device pull — the
+  flash bug above — misread as build corruption, not a real build coin-flip.)_
 
 ### Known issues / in progress
 - **On-board LAN9500A Ethernet still down** — the v1.4.0 cpufreq boot-timing

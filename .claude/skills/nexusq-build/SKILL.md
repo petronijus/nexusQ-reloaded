@@ -32,16 +32,22 @@ it reports back, relay the verification result and the flash commands to the use
 flash only on explicit go-ahead, and follow the
 [[always-preserve-working-image]] rule — snapshot any image that boots.
 
-The build also stages + builds a local **`python3` override** (Phase 6/7d, now **r5**)
-to fix Alpine's broken armv7 python3-3.14.5-r2. ✅ **FIXED 2026-06-28
-(hardware-verified).** Root cause was **not** a compiler/CPython-source bug but a
-build-time **qemu-user corruption**: qemu's mmap zero-fill of the linker's output
-non-deterministically left garbage in libpython's should-be-zero regions →
-`Py_Initialize` SIGSEGV on real HW (qemu false-passes). r5 links libpython with
-**gold `-Wl,--no-mmap-output-file`**; Phase 7d gates every build with
+The build also stages + builds a local **`python3` override** (Phase 6/7d, now **r5**,
+**default linker / bfd**) — a plain rebuild whose higher pkgrel supersedes Alpine's
+broken armv7 python3-3.14.5-r2. ✅ **FIXED 2026-06-28 (hardware-verified).** The
+on-device `Py_Initialize` SIGSEGV was a **FLASH bug, not a build/compiler/CPython bug**:
+the old `DONT_CARE`-chunked `raw2simg.py` left stale eMMC bytes in libpython's
+should-be-zero regions on re-flash — fixed by the **all-RAW (byte-exact) `raw2simg.py`**.
+(A qemu-user build-corruption theory + a gold-linker workaround were investigated and
+**DROPPED as unnecessary** — 6/6 default-linker builds were gate-clean, one ran rc 0 on
+device.) Kept as a **safety net** (not "the gold fix"): Phase 7d gates every build with
 `scripts/verify-libpython-clean.py` (rebuild-on-corruption) and Phase 10 re-gates the
 installed rootfs libpython (ship gate), with pkgrel-exact apk selection — so a corrupt
-python can't reach a flashable image. The agent's verification gate confirms the
-rootfs ships the gate-clean r5. qemu's own `python3 -S -c ''` build check is still a
-false pass; trust the integrity gate (build-side) and `python3 -S -c ''` **on device**.
-See `docs/2026-06-28-session-findings.md`.
+python can't reach a flashable image. The agent's verification gate confirms the rootfs
+ships the gate-clean r5. qemu's own `python3 -S -c ''` build check is still a false pass;
+trust the integrity gate (build-side) and `python3 -S -c ''` **on device**. ⚠️ A clean
+build is **necessary but not sufficient** — the FLASH must also be byte-exact: never
+re-introduce `DONT_CARE` in `raw2simg.py`, or the Nexus Q's non-erasing U-Boot leaves
+stale eMMC bytes in libpython and re-corrupts the (clean) image on-device. Shipped in
+**v1.6.0** (python works from a clean flash). See
+`docs/2026-06-28-session-findings.md`.

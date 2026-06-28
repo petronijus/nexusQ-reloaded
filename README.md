@@ -34,15 +34,19 @@ overturned:
 - The shipping kernel is built with **GCC 15.2** (Alpine, via pmbootstrap) and
   boots — the historical "GCC 13.3.Rel1 only" constraint applied to an early
   hand-cross-compiled build, not this path.
-- **armv7 python3-3.14.5 SIGSEGV — root-caused and fixed (hardware-verified).** The
+- **armv7 python3 works on the device (v1.6.0, flash-verified).** The long-standing
   crash (`python3 -S -c ''` → rc 139 in `Py_Initialize`, taking down `onboard` /
-  `blueman` / `sleep-inhibitor` / `gdb`) was **not** a compiler or CPython bug but a
-  build-time **qemu-user corruption**: qemu's mmap zero-fill of the linker's output
-  non-deterministically left garbage in libpython's should-be-zero regions. Fixed by
-  linking libpython with **gold `-Wl,--no-mmap-output-file`** plus a deterministic
-  build-integrity gate (`scripts/verify-libpython-clean.py`) and a ship gate; verified
-  on the live device (stock python rc 139 → gold build rc 0). The next built image
-  carries it. See `CHANGELOG.md` and `docs/2026-06-28-session-findings.md`.
+  `blueman` / `sleep-inhibitor` / `gdb`) was a **flash bug, not a build bug**:
+  `raw2simg.py` emitted all-zero blocks as `DONT_CARE`, which the Nexus Q's non-erasing
+  U-Boot left as **stale eMMC data**, re-corrupting libpython's should-be-zero regions
+  on-device — fixed by writing a **byte-exact all-RAW sparse**. v1.6.0 ships a plain
+  default-linker (bfd) `python3` rebuild that supersedes Alpine's broken `-r2`, with a
+  build-integrity gate (`scripts/verify-libpython-clean.py`) + ship gate kept as a
+  safety net. (A qemu-user build-corruption theory and a gold-linker workaround were
+  tried and **dropped as unnecessary** — 6/6 default-linker builds were gate-clean.)
+  Verified on a fresh flash (no live-patch): `libpython3.14.so.1.0` md5
+  `79a0d4ace1358bb2d94c8a4d72479da9`, `python3` rc 0. See `CHANGELOG.md` and
+  `docs/2026-06-28-session-findings.md`.
 
 See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
 notes and root-cause analysis.
@@ -93,11 +97,13 @@ partition is never overwritten.
 
 ```bash
 # Flash kernel to boot partition (ramdisk-less, must fit the 8 MB boot partition):
-fastboot flash boot output/nexusq-boot-v1.5.0.img
+fastboot flash boot output/nexusq-boot-v1.6.0.img
 
 # Flash rootfs to userdata partition. The -S 100M chunking is REQUIRED: the 2012
 # U-Boot has a ~150 MB download buffer and fails SILENTLY on a larger blob.
-fastboot -S 100M flash userdata output/nexusq-rootfs-v1.5.0-sparse.img
+# The v1.6.0 sparse is all-RAW (byte-exact) -- U-Boot never erases userdata, so the
+# image must write every block (zeros included), not skip them as DONT_CARE.
+fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.0-sparse.img
 
 # Then power-cycle WITHOUT holding mute sensor to boot normally.
 ```

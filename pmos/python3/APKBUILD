@@ -2,41 +2,38 @@
 # Maintainer: Natanael Copa <ncopa@alpinelinux.org>
 #
 # --- Nexus Q (steelhead) local override of Alpine's main/python3 --------------
-# Alpine's stock python3-3.14.5-r2 SIGSEGVs deterministically on armv7 (Cortex-A9)
-# on the very first bytecode -- even `python3 -S -c ''` crashes (rc 139). That
-# takes down every python consumer on the device (sleep-inhibitor.service, onboard,
-# blueman-applet).
+# Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 (Cortex-A9) ON THE DEVICE --
+# `python3 -S -c ''` returns rc 139 -- taking down every python consumer
+# (sleep-inhibitor.service, onboard, blueman-applet).
 #
 # This rebuild (r5) drops LTO + PGO at a higher pkgrel so it supersedes Alpine's
 # -r2 in the rootfs. (PGO also cannot run in our qemu armv7 build at all -- it would
-# execute an instrumented interpreter under qemu.)
+# execute an instrumented interpreter under qemu.) It keeps stock -O2.
 #
-# !!! ROOT CAUSE (2026-06-28): the crash is a BUILD-TIME corruption, NOT a compiler
-# or CPython-source bug. The armv7 toolchain runs under qemu-user (pmbootstrap
-# --no-cross) and qemu's mmap zero-fill of the LINKER's output file is buggy: it
-# non-deterministically leaves stale garbage in regions the C standard guarantees are
-# zero -- specifically libpython's .PyRuntime (holds _PyRuntime) and .data.rel.ro.
-# That garbage lands on interp->types.builtins.num_initialized, so the first
-# _PyStaticType_InitBuiltin reads a wild type-index (e.g. 0xf0012b00) and derefs an
-# UNMAPPED address -> SIGSEGV on real hardware (qemu-user keeps it mapped -> FALSE
-# PASS). It is a per-build coin-flip and affects ANY qemu-built armv7 binary.
-# Forensic proof: a clean (d43b6509) and a crashing build are byte-identical except
-# those zero-regions -- clean = all-zero, crashing = page-aligned garbage that even
-# disassembles to ARM code absent from python (stale qemu build memory).
-# DISPROVEN earlier (do NOT re-tread): LTO/PGO (r3 dropped both, still crashed),
-# LDREXD alignment (faulting addr is 8-byte aligned but UNMAPPED -> SIGSEGV not
-# SIGBUS), TLSDESC (traditional TLS, 0 R_ARM_TLS_DESC), and optimization level itself
-# (two -O0 builds with byte-identical .text behaved oppositely on the same device ->
-# data-region corruption, not codegen).
+# !!! ROOT CAUSE (settled 2026-06-28): the on-device SIGSEGV was NOT a build, compiler,
+# or CPython bug -- it was a DEPLOYMENT bug in the FLASH step. raw2simg.py used to mark
+# all-zero blocks as fastboot DONT_CARE chunks (skipped on write); the device's U-Boot
+# does not pre-erase userdata, so those skipped blocks kept STALE prior-flash garbage,
+# which showed through libpython's should-be-zero .PyRuntime/.data.rel.ro and made
+# Py_Initialize deref a wild type-index -> SIGSEGV. The BUILT apk was always clean; the
+# corruption appeared only AFTER flashing. Fixed in raw2simg.py (now writes every block
+# RAW -> byte-exact flash). Verified on hardware: a clean bfd build, flashed correctly,
+# gives `python3 -S -c ''` rc 0.
 #
-# THE FIX (build() below): link with gold and -Wl,--no-mmap-output-file so the linker
-# write()s its output instead of mmap()-ing it -- qemu never gets to mis-zero-fill the
-# output, so libpython's zero-regions come out actually zero. Belt-and-suspenders, the
-# build pipeline (docker-build.sh Phase 7d) gates every built libpython with
-# scripts/verify-libpython-clean.py and rebuilds on any residual corruption, so a
-# corrupt apk can never reach the rootfs. -O0 is reverted to the stock -O2 (codegen
-# was never the problem). ALWAYS still validate `python3 -S -c ''` ON THE DEVICE.
-# See docs/2026-06-28-session-findings.md and the qemu-user-corrupts-armv7-binaries note.
+# A qemu-user "linker mmap zero-fill corrupts the build" theory was investigated and
+# DID NOT REPRODUCE: 6 independent default-linker (bfd) builds were all integrity-clean
+# and one ran rc 0 on-device. The gold-linker workaround (-fuse-ld=gold
+# -Wl,--no-mmap-output-file) was therefore found UNNECESSARY and DROPPED. The
+# deterministic build-integrity gate + rebuild loop in docker-build.sh Phase 7d stays
+# as the safety net -- it catches zero-region corruption from ANY source before an apk
+# can ship -- and the Phase 10 ship gate re-checks the installed rootfs. ALWAYS still
+# validate `python3 -S -c ''` ON THE DEVICE.
+# See docs/2026-06-28-session-findings.md, the sparse-dontcare-stale-emmc-corrupts-flash
+# and qemu-user-corrupts-armv7-binaries notes.
+#
+# DISPROVEN along the way (do NOT re-tread): LTO/PGO (r3 dropped both, still crashed),
+# LDREXD alignment, TLSDESC, optimization level, and the gold/qemu build theory -- none
+# were the cause; the cause was the flash step above.
 #
 # One further deviation from Alpine's stock APKBUILD: the makedepends no longer
 # carries the `!gettext-dev` conflict token. abuild understands `!pkg` (ensure it
@@ -70,7 +67,6 @@ subpackages="
 	"
 depends="libssl3>=3.3.0"
 makedepends="
-	binutils-gold
 	bluez-headers
 	bzip2-dev
 	expat-dev
@@ -170,18 +166,17 @@ build() {
 	# sometimes, but not recursion
 	local stacksize=0x200000
 
-	# steelhead: keep stock -O2 (the crash was never codegen -- see header). The real
-	# bug is qemu-user mis-zero-filling the linker's mmap'd output, corrupting
-	# libpython's .PyRuntime/.data.rel.ro. We dodge it by forcing gold to write() its
-	# output instead of mmap()-ing it: -fuse-ld=gold -Wl,--no-mmap-output-file. gold
-	# (binutils-gold) is in makedepends; the flags ride in LDFLAGS_NODIST, which is
-	# what links libpython + the python binary (PY_CORE_LDFLAGS). docker-build.sh
-	# Phase 7d additionally gates the result and rebuilds on any residual corruption.
-	# NB: gold stays OUT of the propagated (DIST) LDFLAGS on purpose, so it is not
-	# baked into sysconfig -- on-device pip extension builds keep using the stock ld.
+	# steelhead: keep stock -O2 (codegen was never the cause -- see header). The
+	# on-device crash was a FLASH bug (raw2simg DONT_CARE on a non-erased eMMC, fixed in
+	# raw2simg.py), not the build: the built libpython is clean with the default linker.
+	# docker-build.sh Phase 7d still gates every built libpython and rebuilds on any
+	# residual corruption (belt-and-suspenders against any qemu-build flakiness), and
+	# Phase 10 re-gates the installed rootfs. (A gold -Wl,--no-mmap-output-file link was
+	# tried and found UNNECESSARY -- 6/6 default-linker builds clean + rc 0 on device --
+	# so it was dropped.)
 	export CFLAGS_NODIST="$CFLAGS -DTHREAD_STACK_SIZE=$stacksize"
 	export CXXFLAGS_NODIST="$CXXFLAGS -O2"
-	export LDFLAGS_NODIST="$LDFLAGS -Wl,-z,stack-size=$stacksize -fuse-ld=gold -Wl,--no-mmap-output-file"
+	export LDFLAGS_NODIST="$LDFLAGS -Wl,-z,stack-size=$stacksize"
 
 	case "$CARCH" in
 	ppc64le)
@@ -202,9 +197,9 @@ build() {
 	unset LDFLAGS CFLAGS CXXFLAGS CPPFLAGS
 
 	# steelhead: deliberately NO --enable-optimizations (PGO) and NO --with-lto.
-	# (PGO cannot run under our qemu armv7 build; LTO/PGO were early -- now disproven
-	# -- suspects. The real cause is the qemu-user linker-output corruption fixed via
-	# gold above, not LTO/PGO. See the header + docs/2026-06-28-session-findings.md.)
+	# (PGO cannot run under our qemu armv7 build; LTO/PGO were early -- now disproven --
+	# suspects. The actual cause was the raw2simg flash bug, not LTO/PGO/codegen. See the
+	# header + docs/2026-06-28-session-findings.md.)
 	# Keep --with-computed-gotos for dispatch speed.
 	./configure \
 		--build=$CBUILD \

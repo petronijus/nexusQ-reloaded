@@ -2,13 +2,18 @@
 """
 Deterministic build-integrity gate for libpython3.14.so.1.0 (and any armv7 lib).
 
-ROOT CAUSE this guards against: the armv7 toolchain runs under qemu-user during the
-build (pmbootstrap --no-cross). qemu's mmap zero-fill of the linker's output file is
-buggy and NON-DETERMINISTICALLY leaves stale garbage in regions that the C standard
-guarantees are zero -- specifically inside the PROGBITS sections .PyRuntime (holds
-_PyRuntime / the main PyInterpreterState) and .data.rel.ro. When that garbage lands on
+WHAT THIS GUARDS: the BUILT libpython having garbage in regions the C standard
+guarantees are zero -- specifically the PROGBITS sections .PyRuntime (holds _PyRuntime /
+the main PyInterpreterState) and .data.rel.ro. If garbage lands on
 interp->types.builtins.num_initialized, CPython reads a wild type-index at the first
-_PyStaticType_InitBuiltin and SIGSEGVs on real hardware (qemu false-passes it).
+_PyStaticType_InitBuiltin and SIGSEGVs on real hardware.
+
+HISTORY: written to guard a hypothesized qemu-user mmap-zero-fill BUILD corruption.
+That theory did NOT reproduce (6/6 default-linker builds were integrity-clean); the
+actual on-device SIGSEGV turned out to be a FLASH bug (raw2simg DONT_CARE on a
+non-erased eMMC, fixed in raw2simg.py). This gate stays as a cheap, deterministic
+build-integrity safety net -- it catches zero-region corruption from ANY source before
+an apk ships, with no device needed.
 
 A CLEAN build has those "should be zero" regions actually zero; a CORRUPT build has
 large contiguous non-zero garbage runs there. This check is OPTIMISATION-INDEPENDENT
@@ -103,7 +108,7 @@ for nm, size, nz, gb, lr, fl in report:
 
 if verdict_bad > 0:
     print(f"RESULT: CORRUPT ({verdict_bad} garbage bytes in long non-zero runs outside "
-          f"relocations) -- qemu-user mmap zero-fill failure; rebuild.")
+          f"relocations) -- zero-region corruption in the built libpython; rebuild.")
     sys.exit(1)
 print("RESULT: CLEAN")
 sys.exit(0)

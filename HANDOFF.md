@@ -4,7 +4,7 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-28 (latest): zram + userns + power health; the ARMv7 python crash ROOT-CAUSED + FIXED
+## Session 2026-06-28 (latest): zram + userns + power health; ARMv7 python crash FIXED (flash bug; gold dropped) → v1.6.0
 
 Full detail in `docs/2026-06-28-session-findings.md`. Diag capture
 `nq-captures/20260628-124159/` (verdict CRIT — dark-but-responsive LED ring + the
@@ -28,40 +28,54 @@ then-failed python unit, **not** a true hang).
   "13.3.Rel1 only / GCC 15 silently does not boot" finding below (2026-06-10)
   applied to the early hand-cross-compiled build and is **superseded** for the
   pmbootstrap path.
-- **FIXED — armv7 python3-3.14.5 SIGSEGV (root-caused + hardware-verified).** Alpine's
-  `python3-3.14.5-r2` SIGSEGVed deterministically (`python3 -S -c ''` → rc 139 in
-  `Py_Initialize`), crashing onboard/blueman/sleep-inhibitor and `gdb` (it links
-  libpython). **Root cause: NOT a compiler or CPython-source bug** but a **build-time
-  qemu-user corruption** — the armv7 toolchain runs under qemu (`--no-cross`) and
-  qemu's mmap zero-fill of the **linker's output file** non-deterministically (≈50 %
-  per build — a coin-flip) leaves garbage in libpython's should-be-zero `.PyRuntime` /
-  `.data.rel.ro`. That garbage lands on `interp->types.builtins.num_initialized`
-  (read back `0xf0012b00`), so `_PyStaticType_InitBuiltin` derefs a wild address —
-  **unmapped on hardware (SIGSEGV) but mapped under qemu (FALSE PASS)**. Forensic
-  proof: a clean and a crashing build are byte-identical except those two zero-regions
-  (clean all-zero, crashing page-aligned garbage that even disassembles to ARM code
-  absent from python — stale qemu build memory). **DISPROVEN earlier (do not
-  re-tread):** LTO/PGO; LDREXD misalignment (faulting addr 8-byte aligned but
-  **UNMAPPED** → SIGSEGV not SIGBUS); gnu2/TLSDESC (traditional TLS, 0
-  `R_ARM_TLS_DESC`); optimization level (two `-O0` builds with **byte-identical
-  `.text`** behaved oppositely on the same device → data-region, not codegen).
-  **Fix:** `pmos/python3/` → **r5** links libpython with gold
-  `-fuse-ld=gold -Wl,--no-mmap-output-file` (gold `write()`s its output instead of
-  `mmap()`-ing it, so qemu can't mis-zero-fill it; flags kept OUT of DIST LDFLAGS so
-  on-device pip builds keep the stock ld), reverting the r4 `-O0` experiment to stock
-  `-O2`. Backed by a deterministic build-integrity gate
-  `scripts/verify-libpython-clean.py` (long non-zero runs in those zero-regions; clean
-  ≤52 B, corrupt ≥22000 B, threshold 256), run as a Phase-7d gate+retry loop (rebuild
-  ≤4× on residual corruption, abort if never clean; pkgrel-exact apk selection) and a
-  Phase-10 **ship gate** on the installed rootfs libpython. This also fixed the
-  earlier "rootfs ships a *different* r4 than the exported apk" bug (qemu coin-flip +
-  a stale-`r*.apk`-glob selection bug). **Verified:** 4 independent gold rebuilds all
-  gate-clean; on the live device stock python → rc 139 while gold r5 python → `HWOK`
-  rc 0. ⚠️ qemu's `python3 -S -c ''` build gate is still a false pass — always
-  validate **on the device** (or trust the integrity gate, which doesn't run the
-  binary). Affects **any** qemu-built armv7 binary, not just python. The
-  currently-flashed image predates the fix and still runs the crashing python until a
-  fresh (gated) image is flashed. `device-google-steelhead` pkgrel 6→10 **removed**
+- **FIXED — armv7 python3-3.14.5 SIGSEGV: the on-device crash was a FLASH bug, not a
+  build bug.** Alpine's `python3-3.14.5-r2` SIGSEGVed deterministically
+  (`python3 -S -c ''` → rc 139 in `Py_Initialize`), crashing
+  onboard/blueman/sleep-inhibitor and `gdb` (it links libpython). The **single root
+  cause** was the `raw2simg.py` `DONT_CARE` deployment bug (next bullet): a re-flash over
+  non-erased eMMC left stale garbage in libpython's should-be-zero `.PyRuntime` /
+  `.data.rel.ro`, landing on `interp->types.builtins.num_initialized` (read back
+  `0xf0012b00`), so `_PyStaticType_InitBuiltin` derefs a wild address → SIGSEGV. v1.6.0
+  ships a local `pmos/python3/` override (same 3.14.5, **r5**, **default linker / bfd**)
+  so its higher pkgrel supersedes Alpine's `-r2`; it drops `--with-lto` +
+  `--enable-optimizations` and the `!gettext-dev` token, keeps stock `-O2`.
+  **The session HYPOTHESISED a build-time qemu-user mmap-corruption and tried a
+  gold-linker workaround (`-fuse-ld=gold -Wl,--no-mmap-output-file`, `binutils-gold`) —
+  both INVESTIGATED then DROPPED as unnecessary:** the build was never reproducibly
+  corrupt — 6 independent default-linker builds were all integrity-gate-clean, and a bfd
+  build (gold-note absent, libpython md5 `79a0d4ace1358bb2d94c8a4d72479da9`) flashed via
+  the corrected all-RAW `raw2simg` ran `python3 -S -c ''` rc 0 on the real device. (The
+  earlier "byte-identical `.text`, opposite outcome" / "two r4 builds" coin-flip evidence
+  was almost certainly a post-flash device pull misread as build corruption.) The
+  deterministic build-integrity gate `scripts/verify-libpython-clean.py` (long non-zero
+  runs in those zero-regions; clean ≤52 B, corrupt ≥22000 B, threshold 256) is **kept as
+  a cheap safety net** — Phase-7d gate+retry (rebuild ≤4×, pkgrel-exact apk selection) +
+  a Phase-10 **ship gate** on the installed rootfs libpython — catching zero-region
+  corruption from any source, **not** as "the gold fix". **DISPROVEN (do not re-tread):**
+  LTO/PGO; LDREXD misalignment (faulting addr 8-byte aligned but **UNMAPPED** → SIGSEGV
+  not SIGBUS); gnu2/TLSDESC; optimization level; and the qemu-build / gold theory above.
+  A clean build is necessary-but-not-sufficient — the flash must also be **byte-exact**;
+  always validate `python3 -S -c ''` **on the device**.
+- **FIXED — the DEPLOYMENT (flash) bug that corrupted python on-device → v1.6.0.** The
+  gate-CLEAN rootfs SIGSEGVed `python3` (rc 139) on-device: the build was clean, the
+  **flash** was not — `raw2simg.py` emitted all-zero blocks as `DONT_CARE`, which
+  fastboot SKIPS, correct only on a pre-erased partition; the Nexus Q's U-Boot does
+  **not** erase `userdata`, so each skipped block kept STALE eMMC data from the prior
+  flash, corrupting libpython's `.PyRuntime`/`.data.rel.ro` zero-regions. Forensics:
+  on-device libpython differed from the (clean) image in **exactly 47** 4 KiB blocks,
+  **all** image-zero→device-garbage (`.PyRuntime longest_run 30652`); `scp`-ing the
+  clean image libpython over the device's → `python3 -S -c ''` rc 0 instantly (proof:
+  flash, not build). **Fix:** `raw2simg.py` now writes **every** block as RAW (no
+  `DONT_CARE`) → byte-exact flash regardless of prior eMMC content (sparse ≈ raw size).
+  Verified by de-sparse round-trip (md5 matches raw) **and** on hardware: a **fresh
+  flash, no live-patch** (no `.flashcorrupt` backup) of a default-linker (bfd) build
+  gives `libpython3.14.so.1.0` md5 `79a0d4ace1358bb2d94c8a4d72479da9`,
+  `SYSPY_OK 3.14.5 … [GCC 15.2.0]`, `SYS_PY_RC=0`. **The all-RAW flash fix → shipped
+  v1.6.0**, the first release with a working system python from a clean flash. Lesson:
+  integrity-verify what the **device** runs, not just the artifact (do NOT use DONT_CARE
+  on a non-erasing target).
+- The currently-flashed image is now **v1.6.0** (bfd r5 python + all-RAW flash).
+  `device-google-steelhead` pkgrel 6→10 **removed**
   the `sleep-inhibitor.service` `/dev/null` mask and added `gdb` + `python3-dbg`. WiFi
   creds added live are wiped by reflash — to persist they need a **private overlay**
   (PSK is a secret), not the public repo.
@@ -341,7 +355,10 @@ These drivers were changed from `=m` (module) to `=y` (built-in) in `kernel/conf
 - `CONFIG_ARM_APPENDED_DTB=y` in defconfig (DTB concatenated after zImage)
 - `CONFIG_ARM_ATAG_DTB_COMPAT=y` in defconfig (REQUIRED for boot, see Investigation Log)
 - Rootfs flashes to `userdata` partition (13 GB) since `system` is only 1 GB
-- Custom `raw2simg.py` for sparse image conversion (U-Boot only supports RAW+DONT_CARE chunks)
+- Custom `raw2simg.py` for sparse image conversion. U-Boot supports only RAW +
+  DONT_CARE chunks (no FILL/CRC32), but as of 2026-06-28 we emit **all-RAW** (no
+  DONT_CARE): U-Boot does NOT erase userdata, so a skipped DONT_CARE block keeps stale
+  eMMC data → corrupts the flash (it re-broke libpython; see the 2026-06-28 session).
 
 ## Investigation Log & Key Findings
 
@@ -442,7 +459,10 @@ userdata     13.17 GB   ext4    (rootfs target)
 - Bootloader: `steelheadB4H0J` (U-Boot 2011.09-rc1, Apr 2012)
 
 ### U-Boot Quirks
-- Only supports sparse image chunk types `RAW` and `DONT_CARE` (not `CRC32` or `FILL`)
+- Only supports sparse image chunk types `RAW` and `DONT_CARE` (not `CRC32` or `FILL`).
+  NB: U-Boot does **not** pre-erase the partition, so `DONT_CARE` (which fastboot skips)
+  leaves stale eMMC data behind — `raw2simg.py` therefore emits **all-RAW**, byte-exact
+  (see the 2026-06-28 session: DONT_CARE re-corrupted libpython on re-flash).
 - `fastboot boot` accepts images up to ~150 MB (download buffer)
 - `fastboot flash boot` limited to 8 MB partition
 - USB connection can be flaky -- always power-cycle between flash operations

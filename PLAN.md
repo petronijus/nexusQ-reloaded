@@ -3,6 +3,14 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **Current release: v1.6.0 (2026-06-28).** Adds a **working armv7 `python3`** on the
+> device — flash-verified from a clean flash. The fix was the byte-exact all-RAW
+> `raw2simg.py` flash (the on-device SIGSEGV was a flash bug, not a build bug); v1.6.0
+> ships a plain default-linker (bfd) `python3` rebuild with a build-integrity gate as a
+> safety net (a gold-linker workaround was tried and dropped as unnecessary).
+> `onboard`/`blueman`/`sleep-inhibitor`/`gdb` are no longer down. Plus zram swap and
+> user namespaces. See `CHANGELOG.md` and `docs/2026-06-28-session-findings.md`.
+
 ## Hardware Map
 
 | Subsystem | Status | Detail |

@@ -1,6 +1,22 @@
-"""Convert a raw ext4 image to Android sparse format using only RAW and DONT_CARE
-chunks (compatible with old U-Boot fastboot implementations that don't support
-FILL chunks)."""
+"""Convert a raw ext4 image to Android sparse format using ONLY RAW chunks
+(compatible with old U-Boot fastboot implementations that don't support FILL chunks).
+
+WHY EVERY BLOCK IS WRITTEN (no DONT_CARE) — learned the hard way 2026-06-28:
+An earlier version emitted all-zero blocks as DONT_CARE chunks to shrink the image.
+fastboot SKIPS DONT_CARE blocks (it does not write them), which is only correct if the
+target partition was zeroed first. The Nexus Q's 2012 U-Boot does NOT pre-erase
+userdata, so every DONT_CARE block kept whatever STALE data the eMMC already held from
+the previous flash. That silently re-corrupted file regions that are supposed to be
+zero — most visibly libpython's `.PyRuntime`/`.data.rel.ro`, whose zero-regions came
+out full of garbage on-device, re-introducing the exact armv7 python SIGSEGV the gold
+build had just fixed. Forensics: the on-device libpython differed from the (clean)
+flashed image in exactly 47 4 KiB blocks, ALL of them image-zero -> device-garbage.
+
+So a raw filesystem image flashed to a NON-erased partition MUST be written in full:
+every block becomes a RAW chunk (zeros included), making the on-eMMC bytes identical to
+the source image regardless of prior content. The cost is no compression (the sparse is
+~the raw size); correctness is non-negotiable. DONT_CARE is intentionally NOT used.
+"""
 
 import struct
 import sys
@@ -8,13 +24,16 @@ import os
 
 SPARSE_HEADER_MAGIC = 0xED26FF3A
 CHUNK_TYPE_RAW = 0xCAC1
-CHUNK_TYPE_DONT_CARE = 0xCAC3
 
 FILE_HDR_SZ = 28
 CHUNK_HDR_SZ = 12
 BLK_SZ = 4096
 
-ZERO_BLOCK = b'\x00' * BLK_SZ
+# Cap each RAW chunk so no single chunk is enormous; 16384 blocks = 64 MiB, well within
+# what the device's U-Boot fastboot handled before (it streamed ~95 MiB sends fine).
+# (`fastboot -S <size>` re-splits the transfer anyway; this just keeps the chunk table
+# tidy and avoids any single oversized-chunk edge case.)
+CHUNK_MAX_BLKS = 16384
 
 
 def convert(raw_path, sparse_path):
@@ -22,78 +41,46 @@ def convert(raw_path, sparse_path):
     total_blks = raw_size // BLK_SZ
     if raw_size % BLK_SZ != 0:
         print(f"WARNING: image size {raw_size} not aligned to {BLK_SZ}, truncating")
-        total_blks = raw_size // BLK_SZ
 
+    n_chunks = (total_blks + CHUNK_MAX_BLKS - 1) // CHUNK_MAX_BLKS
     print(f"Input:  {raw_path} ({raw_size / 1024 / 1024:.1f} MB, {total_blks} blocks)")
+    print(f"Encoding ALL blocks as RAW (no DONT_CARE) -> {n_chunks} chunks; "
+          f"every block written so the flash is byte-exact on a non-erased partition.")
 
-    chunks = []
-    with open(raw_path, 'rb') as f:
-        current_type = None
-        current_start = 0
-        current_count = 0
-        raw_data_ranges = []
-
-        for i in range(total_blks):
-            block = f.read(BLK_SZ)
-            is_zero = (block == ZERO_BLOCK)
-            block_type = CHUNK_TYPE_DONT_CARE if is_zero else CHUNK_TYPE_RAW
-
-            if block_type == current_type:
-                current_count += 1
-            else:
-                if current_type is not None:
-                    chunks.append((current_type, current_start, current_count))
-                current_type = block_type
-                current_start = i
-                current_count = 1
-
-            if i % 10000 == 0 and i > 0:
-                pct = i * 100 // total_blks
-                print(f"  Scanning: {pct}% ({i}/{total_blks} blocks, {len(chunks)} chunks so far)")
-
-        if current_type is not None:
-            chunks.append((current_type, current_start, current_count))
-
-    raw_chunks = sum(1 for t, _, _ in chunks if t == CHUNK_TYPE_RAW)
-    dc_chunks = sum(1 for t, _, _ in chunks if t == CHUNK_TYPE_DONT_CARE)
-    raw_blocks = sum(c for t, _, c in chunks if t == CHUNK_TYPE_RAW)
-    dc_blocks = sum(c for t, _, c in chunks if t == CHUNK_TYPE_DONT_CARE)
-
-    sparse_size = FILE_HDR_SZ + len(chunks) * CHUNK_HDR_SZ + raw_blocks * BLK_SZ
-    print(f"Chunks: {len(chunks)} total ({raw_chunks} RAW, {dc_chunks} DONT_CARE)")
-    print(f"Blocks: {raw_blocks} data + {dc_blocks} empty = {total_blks} total")
-    print(f"Output: {sparse_path} ({sparse_size / 1024 / 1024:.1f} MB, "
-          f"{100 - raw_blocks * 100 / total_blks:.0f}% compression)")
-
-    with open(sparse_path, 'wb') as out:
+    with open(sparse_path, 'wb') as out, open(raw_path, 'rb') as inp:
         header = struct.pack('<IHHHHIIII',
                              SPARSE_HEADER_MAGIC,
-                             1, 0,
+                             1, 0,                 # major/minor version
                              FILE_HDR_SZ,
                              CHUNK_HDR_SZ,
                              BLK_SZ,
                              total_blks,
-                             len(chunks),
-                             0)
+                             n_chunks,
+                             0)                    # image checksum (unused)
         out.write(header)
 
-        with open(raw_path, 'rb') as inp:
-            for chunk_type, start, count in chunks:
-                if chunk_type == CHUNK_TYPE_RAW:
-                    total_sz = CHUNK_HDR_SZ + count * BLK_SZ
-                    chunk_hdr = struct.pack('<HHII', chunk_type, 0, count, total_sz)
-                    out.write(chunk_hdr)
-                    inp.seek(start * BLK_SZ)
-                    remaining = count * BLK_SZ
-                    while remaining > 0:
-                        read_sz = min(remaining, 1024 * 1024)
-                        out.write(inp.read(read_sz))
-                        remaining -= read_sz
-                else:
-                    chunk_hdr = struct.pack('<HHII', chunk_type, 0, count, CHUNK_HDR_SZ)
-                    out.write(chunk_hdr)
+        blks_left = total_blks
+        chunk_i = 0
+        while blks_left > 0:
+            count = min(blks_left, CHUNK_MAX_BLKS)
+            total_sz = CHUNK_HDR_SZ + count * BLK_SZ
+            out.write(struct.pack('<HHII', CHUNK_TYPE_RAW, 0, count, total_sz))
+            remaining = count * BLK_SZ
+            while remaining > 0:
+                buf = inp.read(min(remaining, 8 * 1024 * 1024))
+                if not buf:
+                    raise IOError(f"unexpected EOF in {raw_path} with {remaining} bytes left")
+                out.write(buf)
+                remaining -= len(buf)
+            blks_left -= count
+            chunk_i += 1
+            if chunk_i % 50 == 0 or blks_left == 0:
+                pct = (total_blks - blks_left) * 100 // total_blks
+                print(f"  Writing: {pct}% ({chunk_i}/{n_chunks} chunks)")
 
     actual_size = os.path.getsize(sparse_path)
+    print(f"Output: {sparse_path} ({actual_size / 1024 / 1024:.1f} MB, "
+          f"{n_chunks} RAW chunks, {total_blks} blocks — all written)")
     print(f"Done: {actual_size / 1024 / 1024:.1f} MB written")
 
 

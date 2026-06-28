@@ -97,17 +97,22 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   (Idle is NOT 350 MHz — it hovers ~920 MHz, nexusqd LED polling keeps it up.)
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
-- **python ON DEVICE** (armv7 SIGSEGV, **fixed 2026-06-28**): `python3 -S -c ''; echo
-  rc=$?`. rc **0** = the gold r5 build is healthy; rc **139** = a **pre-fix / corrupt**
-  build is still installed (a fresh gated image hasn't been flashed). Root cause was a
-  build-time **qemu-user mmap corruption** of the linker's output (garbage in
-  libpython's `.PyRuntime`/`.data.rel.ro` → wild type-index deref in `Py_Initialize`),
-  **NOT** LTO/PGO, LDREXD alignment, TLSDESC, or a compiler/CPython-source bug (all
-  disproven). Fixed by linking libpython with gold `-Wl,--no-mmap-output-file` + a
-  build-integrity gate. This on-device check is still the runtime authority (qemu
-  false-passes the bug). If rc 139, the device needs the gated rebuild flashed; also
-  check `gdb` (it links `libpython`, so it tracks python's state). See
-  `docs/2026-06-28-session-findings.md`.
+- **python ON DEVICE** (armv7 SIGSEGV, **fixed 2026-06-28, v1.6.0**): `python3 -S -c '';
+  echo rc=$?`. rc **0** = healthy (the v1.6.0 default-linker r5 build, clean-flashed);
+  rc **139** = a corrupt libpython is installed. **ONE documented root cause:** a
+  **FLASH** corruption — the old `DONT_CARE`-chunked `raw2simg` sparse skipped zero
+  blocks on the non-erasing U-Boot, leaving STALE eMMC garbage in libpython's
+  `.PyRuntime`/`.data.rel.ro` (→ wild type-index deref in `Py_Initialize`) — fixed by the
+  **all-RAW (byte-exact) `raw2simg.py`**. (**NOT** a build/compiler/CPython-source bug:
+  LTO/PGO, LDREXD alignment, TLSDESC, optimization level, and a qemu-user mmap
+  build-corruption theory + gold-linker workaround were **all disproven/dropped** — 6/6
+  default-linker builds were gate-clean.) So rc 139 means the device is running a
+  **pre-v1.6.0** image (flashed with a `DONT_CARE` sparse). Confirm by comparing the
+  on-device `libpython3.14.so.1.0` md5 against the known-clean v1.6.0
+  (`79a0d4ace1358bb2d94c8a4d72479da9`) — a mismatch in only the zero-regions is the flash
+  re-corruption. This on-device check is the runtime authority (qemu false-passes). Fix =
+  flash a v1.6.0 (all-RAW) image; also check `gdb` (it links `libpython`, so it tracks
+  python's state). See `docs/2026-06-28-session-findings.md`.
 
 ## 4. Interpret the findings
 
@@ -122,10 +127,11 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   CRIT on 2026-06-28).
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
-  `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a build-time qemu-mmap
-  corruption, **fixed** in the gold r5 build (see §python above), not a daemon-specific
-  fault. If these units fail, confirm with `python3 -S -c ''` (rc 139 = old/corrupt
-  python still flashed → needs the gated rebuild); if python is rc 0, look elsewhere.
+  `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old
+  `DONT_CARE` `raw2simg` on the non-erasing U-Boot), **fixed** in v1.6.0 by the all-RAW
+  flash (see §python above), not a daemon-specific fault. If these units fail, confirm
+  with `python3 -S -c ''` (rc 139 = a pre-v1.6.0 corrupt python is flashed via a
+  `DONT_CARE` sparse; needs a v1.6.0 all-RAW image); if python is rc 0, look elsewhere.
 - **vdd_mismatch** — `vdd_mpu` off the OPP target (350→1025, 700→1203, 920→1317,
   1200→1380 mV). A few samples = a DVFS transition; persistent = VC-bridge/TPS62361
   power-path. Cross-check `POWER_REGULATORS`/`omap_voltage`/`ti-abb`/`tps`.

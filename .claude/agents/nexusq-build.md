@@ -89,43 +89,45 @@ r2): **Phase 6** stages it into `$PMAPORTS/main/python3`; **Phase 7d** builds it
 `pmbootstrap --no-cross build python3 --arch armv7 --force` (full CPython compile
 under qemu — slow).
 
-⚠️ **Root cause (FIXED 2026-06-28) — qemu-user corrupts the linker's output, it is
-NOT a compiler/CPython bug.** The armv7 toolchain runs under qemu (`--no-cross`) and
-qemu's mmap zero-fill of the **linker's output file** non-deterministically (≈50 %
-per build) leaves garbage in libpython's should-be-zero `.PyRuntime`/`.data.rel.ro`,
-landing on `interp->types.builtins.num_initialized` → wild type-index deref in
-`Py_Initialize` → SIGSEGV on real HW (qemu keeps the wild address mapped → FALSE
-PASS). **DISPROVEN, do not re-tread:** LTO/PGO, LDREXD misalignment (faulting addr
-8-byte aligned but UNMAPPED), gnu2/TLSDESC, and optimization level (two `-O0` builds
-with byte-identical `.text` behaved oppositely on the same device). This affects
-**any** qemu-built armv7 binary, not just python.
+⚠️ **Root cause (settled 2026-06-28) — the on-device crash was a FLASH bug, not a
+build/compiler/CPython bug.** The `raw2simg.py` `DONT_CARE` deployment bug (see the
+raw2simg warning below) left stale eMMC garbage in libpython's should-be-zero
+`.PyRuntime`/`.data.rel.ro` on re-flash → `interp->types.builtins.num_initialized`
+reads `0xf0012b00` → wild type-index deref in `Py_Initialize` → SIGSEGV. The override
+is therefore just a **plain default-linker (bfd) rebuild** that supersedes Alpine's r2.
+**DISPROVEN, do not re-tread:** LTO/PGO; LDREXD misalignment; gnu2/TLSDESC; optimization
+level; **and a qemu-user "mmap zero-fill corrupts the build" theory + a gold-linker
+workaround (`-fuse-ld=gold -Wl,--no-mmap-output-file`) — both tried and DROPPED as
+unnecessary** (6 independent bfd builds all gate-clean, and a bfd build — md5
+`79a0d4ace1358bb2d94c8a4d72479da9` — ran `python3 -S -c ''` rc 0 on device). The old
+"byte-identical `.text`, opposite outcome" coin-flip evidence was almost certainly a
+post-flash device pull misread as build corruption.
 
-**The fix, three layers (all in tree):**
-1. **r5 links libpython with gold** — `-fuse-ld=gold -Wl,--no-mmap-output-file` in
-   `LDFLAGS_NODIST` (gold `write()`s its output instead of `mmap()`-ing it, so qemu
-   can't mis-zero-fill it; kept OUT of DIST LDFLAGS so on-device pip builds keep the
-   stock ld), `-O0` reverted to stock `-O2`, `binutils-gold` makedep.
+**What ships, and the kept safety net (all in tree):**
+1. **r5 is a plain bfd build** — drops `--with-lto` + `--enable-optimizations`, keeps
+   stock `-O2`, **default linker** (no gold; `binutils-gold` removed from makedepends).
 2. **`scripts/verify-libpython-clean.py`** — a deterministic build-integrity gate
    (flags long non-zero runs in `.PyRuntime`/`.data.rel.ro`; clean ≤52 B, corrupt
    ≥22000 B, threshold 256). It does NOT run the binary, so it is optimisation- and
-   qemu-independent.
+   qemu-independent. Kept as a cheap **safety net** that catches zero-region corruption
+   from ANY source — not as "the gold fix" (there is no gold).
 3. **Phase 7d gate+retry + Phase 10 ship gate** — Phase 7d extracts each freshly-built
    libpython and runs the gate, rebuilding (`--force`, up to 4×) on any residual
    corruption and **aborting** if never clean; it selects the apk by its **exact
    `pkgver-pkgrel`** name (`python3-3.14.5-r5`), not a bare `r*.apk` glob (which could
    gate/export a stale r3/r4 from the persistent work-volume repo). Phase 10 re-gates
-   the **installed** rootfs libpython before emitting an image. So a corrupt python can
-   no longer reach a flashable image — this also fixed the old "rootfs ships a
-   *different* r4 than the exported apk" bug.
+   the **installed** rootfs libpython before emitting an image. This also fixed the old
+   "rootfs ships a *different* r4 than the exported apk" stale-glob selection bug.
 
-Watch Phase 7d's `=== python3 build result: rc=N ===` and the per-attempt
-`CLEAN`/`CORRUPT` gate lines; a non-clean exit aborts the build (good — don't flash a
-fallback-r2 rootfs). A green build is still not on its own proof of *runtime* health —
-when you have a device, prefer to **validate `python3 -S -c ''` over ssh**; the
-integrity gate is the build-side authority (qemu's own `-S -c ''` check is a false
-pass). To prove gold beats the coin-flip, run with `PYTHON3_VALIDATE_RUNS=N` (forces N
-gold rebuilds + gates each; this session: 4/4 clean, and on-device stock python rc 139
-→ gold r5 rc 0). See `docs/2026-06-28-session-findings.md`.
+**Clean build is necessary but NOT sufficient — the flash must be byte-exact (all-RAW),
+which is what actually fixed the device.** Watch Phase 7d's
+`=== python3 build result: rc=N ===` and the per-attempt `CLEAN`/`CORRUPT` gate lines;
+a non-clean exit aborts the build (good — don't flash a fallback-r2 rootfs). A green
+build is still not on its own proof of *runtime* health — when you have a device, prefer
+to **validate `python3 -S -c ''` over ssh** (qemu's own `-S -c ''` check is a false
+pass; the integrity gate is the build-side authority). `PYTHON3_VALIDATE_RUNS=N` forces
+N rebuilds + gates each (this session: 6/6 clean). See
+`docs/2026-06-28-session-findings.md`.
 
 ## Artifacts
 
@@ -143,6 +145,15 @@ the kernel out of pmbootstrap's initramfs-bundled boot.img and repacks via
 `make-bootimg.py`, so it fits the 8 MB boot partition). Sparse-convert the rootfs
 for fastboot with `python3 raw2simg.py <raw> <sparse>`.
 
+⚠️ **`raw2simg.py` MUST stay all-RAW (byte-exact); never re-introduce `DONT_CARE`.**
+The Nexus Q's 2012 U-Boot does **not** erase `userdata`, and fastboot SKIPS `DONT_CARE`
+blocks — so any zero-block encoded as `DONT_CARE` keeps STALE eMMC data from the prior
+flash, silently re-corrupting on-device file zero-regions. On 2026-06-28 this re-broke
+a gate-CLEAN libpython (`.PyRuntime`/`.data.rel.ro` → python SIGSEGV rc 139) on
+re-flash. `raw2simg.py` now writes every block as RAW (sparse ≈ raw size); the
+`fastboot -S 100M flash userdata` command is unchanged. A de-sparse round-trip md5 of
+the output must equal the raw image. See `docs/2026-06-28-session-findings.md` §7.
+
 ## Known failure modes → fixes (work this list)
 
 | Symptom in log | Cause | Fix |
@@ -157,10 +168,11 @@ for fastboot with `python3 raw2simg.py <raw> <sparse>`.
 | `losetup: ...: failed to set up loop device: Permission denied` (Phase 10 post-process) | the rootfs post-process (strip /boot fstab, unlock root) ran without sudo as the `pmos` user | FIXED — Phase 10 runs losetup/mount/sed/python3/umount via `sudo` |
 | `cc: fatal error: cannot execute 'cc1': posix_spawnp` (Phase 7c nexusqd, exit 3) | crossdirect (cross-compile accelerator) is broken in this image | FIXED — Phase 7c builds nexusqd with `--no-cross` (qemu-only), matching Phase 8 |
 | `Writing 'boot' FAILED! error=-27` (at flash time) | boot.img > 8 MB (initramfs bundled) | Phase 10 ramdisk-less repack; verify boot.img ≤ 8 MB |
-| Phase 7d `python3 build result: rc=N` (N≠0) / `no clean python3 apk after N attempt(s)` — build ABORTS | python3 override build failed or never gated clean | a compile error won't fix on retry — read the log; if it's gate-CORRUPT every attempt, the gold link regressed (check `LDFLAGS_NODIST` has `-fuse-ld=gold -Wl,--no-mmap-output-file` and `binutils-gold` is in makedepends). Do NOT flash a fallback-r2 rootfs |
-| Phase 7d attempt logs `CORRUPT: ... FAILED the gate (qemu mmap zero-fill hit despite gold)` then rebuilds | the per-build qemu mmap coin-flip occasionally beats gold | EXPECTED-rare; the gate+retry loop re-rolls it (`--force`). Only a problem if all 4 attempts are CORRUPT (see row above) |
-| Phase 10 `SHIP GATE FAILED: the rootfs libpython is qemu-corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). If persistent, check the pkgrel-exact apk selection in Phase 7d |
-| python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) | qemu-user mis-zero-filled the linker output → garbage in libpython's `.PyRuntime`/`.data.rel.ro` (NOT a compiler/LTO/alignment/CPython-source bug — all disproven) | FIXED 2026-06-28 via gold `-Wl,--no-mmap-output-file` + the integrity gate. If a built image still crashes, the gold flags or gate were bypassed — verify `python3 -S -c ''` **on device** (qemu is a false pass) |
+| Phase 7d `python3 build result: rc=N` (N≠0) / `no clean python3 apk after N attempt(s)` — build ABORTS | python3 override build failed or never gated clean | a compile error won't fix on retry — read the log. Gate-CORRUPT every attempt is unexpected (6/6 bfd builds were clean this session) — inspect the libpython before assuming a build defect; the gate is a safety net for rare residual corruption. Do NOT flash a fallback-r2 rootfs |
+| Phase 7d attempt logs `CORRUPT: ... FAILED the gate` then rebuilds | a rare residual zero-region corruption in a built libpython | EXPECTED-rare; the gate+retry loop re-rolls it (`--force`). Only a problem if all 4 attempts are CORRUPT (see row above) |
+| Phase 10 `SHIP GATE FAILED: the rootfs libpython is corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). If persistent, check the pkgrel-exact apk selection in Phase 7d |
+| python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) | the **flash** re-corrupted libpython's `.PyRuntime`/`.data.rel.ro` (NOT a compiler/LTO/alignment/CPython-source/qemu-build bug — all disproven) | FIXED 2026-06-28 by the **all-RAW `raw2simg.py`** (byte-exact flash) + the integrity gate ensuring a clean build feeds it. Verify `python3 -S -c ''` **on device** (qemu is a false pass); confirm on-device `libpython` md5 == the clean image's |
+| python crashes on device **even though the built image gates CLEAN** | the FLASH re-corrupted it: a `DONT_CARE`-chunked sparse skipped zero blocks on the non-erasing U-Boot, leaving STALE eMMC garbage in libpython's zero-regions (this was the **actual** root cause; a clean build is necessary but not sufficient) | `raw2simg.py` must be **all-RAW** (byte-exact) — never `DONT_CARE`. Re-encode + reflash; confirm on-device `libpython` md5 == the clean image's and `python3 -S -c ''` rc 0. See §7 / the raw2simg warning above |
 | rc 128, git error | building from a `git worktree` | build from the main repo |
 
 When a fix means editing `docker-build.sh` / an APKBUILD / `deviceinfo`, make the
@@ -208,13 +220,17 @@ Check and REPORT each (PASS/FAIL + evidence):
   be `root:root` (uid 0), and there must be **zero** files owned by uid 12345 in the
   rootfs — `find usr etc lib -uid 12345` returns nothing. uid-12345-owned files would
   mean abuild ran unprivileged and faked was bypassed wrongly.
-- **python is the gold r5 build AND gate-clean** (Phase 10 already runs this ship
-  gate; re-confirm on the mounted rootfs): `usr/lib/libpython3.14.so.1.0` exists, the
-  installed package is `python3-3.14.5-r5` (not Alpine's r2), and
+- **python is the r5 (default-linker / bfd) build AND gate-clean** (Phase 10 already
+  runs this ship gate; re-confirm on the mounted rootfs): `usr/lib/libpython3.14.so.1.0`
+  exists, the installed package is `python3-3.14.5-r5` (not Alpine's r2), and
   `python3 scripts/verify-libpython-clean.py <mnt>/usr/lib/libpython3.14.so.1.0`
-  reports CLEAN. A CORRUPT result means a qemu-mis-zero-filled libpython slipped
-  through — that rootfs will SIGSEGV `onboard`/`blueman`/`sleep-inhibitor`/`gdb` on
-  device. Rebuild; do not ship it.
+  reports CLEAN. A CORRUPT result means a corrupt libpython slipped through — that rootfs
+  will SIGSEGV `onboard`/`blueman`/`sleep-inhibitor`/`gdb` on device. Rebuild; do not
+  ship it. **A gate-clean rootfs is necessary but NOT sufficient on its own:** it must
+  also be flashed **byte-exact** — sparse-convert with the all-RAW `raw2simg.py` (never
+  `DONT_CARE`), or the non-erasing U-Boot leaves stale eMMC bytes in this same libpython
+  and re-introduces the crash on a clean image (the 2026-06-28 deployment bug — the
+  **actual** root cause of the on-device SIGSEGV, §7 of the session findings).
 
 Unmount when done. If any check FAILS, that is a build defect — diagnose, fix the
 source (most often: `deviceinfo_systemd="always"` missing, `systemd = default`
