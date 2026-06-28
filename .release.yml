@@ -10,7 +10,7 @@ artifacts:
   # matching the v0.1.0 assets:
   local_upload:
     - nexusq-boot-v*.img
-    - nexusq-rootfs-v*-sparse.img
+    - nexusq-rootfs-v*-sparse.img.zst   # rootfs is zstd-compressed (all-RAW sparse > 2 GiB GitHub asset limit)
 registry:
   images: []
 preflight_extra: []

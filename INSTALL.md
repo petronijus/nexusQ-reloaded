@@ -12,7 +12,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.0.img`, `nexusq-rootfs-v1.6.0-sparse.img`
+- release artifacts: `nexusq-boot-v1.6.0.img`, `nexusq-rootfs-v1.6.0-sparse.img.zst`
+  (the rootfs is zstd-compressed for distribution; install `zstd` to decompress it -- see step 2)
 
 ## 1. Enter fastboot mode
 
@@ -35,7 +36,8 @@ fastboot flash boot nexusq-boot-v1.6.0.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The command itself is unchanged.
+# The rootfs ships zstd-compressed (~448 MiB; ~2.1 GiB raw) -- decompress it first:
+zstd -d nexusq-rootfs-v1.6.0-sparse.img.zst   # -> nexusq-rootfs-v1.6.0-sparse.img
 fastboot -S 100M flash userdata nexusq-rootfs-v1.6.0-sparse.img
 ```
 
