@@ -4,7 +4,55 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-23 (latest): device hardening — AVR keys, HDMI desktop, WiFi; ethernet still open
+## Session 2026-06-28 (latest): zram + userns + power health; an OPEN ARMv7 python crash
+
+Full detail in `docs/2026-06-28-session-findings.md`. Diag capture
+`nq-captures/20260628-124159/` (verdict CRIT — dark-but-responsive LED ring + a
+failed python unit, **not** a true hang).
+
+- **zram swap fixed** — `CONFIG_ZRAM=m` + `deviceinfo_zram_swap_algo="lzo-rle"`
+  (the kernel module only has the lzo backend; the service's default zstd failed
+  `Invalid argument`). Live: `/dev/zram0` lzo-rle 1.4 G `[SWAP]`. linux pkgrel 23→24.
+- **`CONFIG_USER_NS=y`** — `max_user_namespaces=7716`, `unshare --user` works.
+- **SMP re-confirmed** — `nproc=2`, `cpu/online=0-1`. Corrects any stale "CPU1 not
+  brought up / SMP groundwork" framing; SMP is done (v1.2.0).
+- **CPU power/thermal health confirmed** — 350/700/920/1200 MHz, reaches 1.2 GHz,
+  VDD_MPU tracks OPP exactly, abb_mpu FBB@Nitro 1375 mV, governor `conservative`,
+  idle ~70 °C / peak 95 °C (no throttle). `CONFIG_CPU_FREQ_STAT` is off (no
+  `time_in_state`) — a diagnostic gap.
+- **CORRECTION (idle freq):** the v1.5.0 CHANGELOG "idle settles at 350 MHz" is
+  wrong on hardware — idle hovers **~920 MHz** (nexusqd LED polling keeps the clock
+  up), dipping to 350 only briefly.
+- **CORRECTION (GCC):** the **current shipping kernel is built with GCC 15.2.0**
+  (`/proc/version`: `cc (Alpine 15.2.0) 15.2.0`) and boots fine. The old
+  "13.3.Rel1 only / GCC 15 silently does not boot" finding below (2026-06-10)
+  applied to the early hand-cross-compiled build and is **superseded** for the
+  pmbootstrap path.
+- **OPEN — python3-3.14.5 SIGSEGVs on real ARMv7 (NOT fixed).** Even
+  `python3 -S -c ''` → rc 139 during `Py_Initialize`, crashing
+  onboard/blueman/sleep-inhibitor and `gdb` (gdb links libpython). The
+  `pmos/python3/` override (r3→r4) **PASSED under qemu-user but FAILED on device** —
+  qemu gives a FALSE PASS; on-device is the only authority. **Root cause (narrowed
+  2026-06-28):** a **CPython 3.14 source-level use-before-init / garbage-pointer
+  read** — `_PyStaticType_InitBuiltin` reads a garbage type-index (`0xf0012b00`) and
+  derefs a wild address that is **unmapped on hardware (SIGSEGV) but mapped under
+  qemu**. **DISPROVEN, with evidence:** LTO/PGO (r3 dropped, still crashes); LDREXD
+  misalignment (faulting addr is 8-byte aligned but **UNMAPPED** → SIGSEGV not
+  SIGBUS); gnu2/TLSDESC (traditional TLS, 0 `R_ARM_TLS_DESC`); optimization level
+  (two `-O0` r4 builds with **byte-identical `.text`**, differing only in ~139 KB of
+  data, behave oppositely on the same device). No `-O`/`-f` flag fixes it — needs a
+  source/upstream fix (candidate 3.14.6). **Plus a build-pipeline bug (OPEN):** the
+  Phase 9 rootfs ships a *different* r4 (libpython md5 `30e88d28`, crashes) than the
+  Phase 7d-exported apk (`d43b6509`, runs); the version-only check missed it →
+  byte-verify by md5. (The device currently runs the crashing python.)
+  `docker-build.sh` gained Phase 6 staging + Phase 7d to build the override;
+  `device-google-steelhead` pkgrel 6→10 **removed** the `sleep-inhibitor.service`
+  `/dev/null` mask and added `gdb` + `python3-dbg` for on-device debugging (gdb
+  blocked until python is fixed). WiFi creds added live are wiped by reflash — to
+  persist they need a **private overlay** (PSK is a secret), not the public repo.
+- **Ethernet still down** (v1.4.0 cpufreq boot-timing regression, unchanged).
+
+## Session 2026-06-23: device hardening — AVR keys, HDMI desktop, WiFi; ethernet still open
 
 Released **v1.2.0**. Built on the dual-core SMP win. Full detail in
 `docs/2026-06-23-session-findings.md`; ethernet next steps in

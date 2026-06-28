@@ -31,3 +31,13 @@ commands. It does **not** flash (that is a separate device-in-fastboot step). Wh
 it reports back, relay the verification result and the flash commands to the user;
 flash only on explicit go-ahead, and follow the
 [[always-preserve-working-image]] rule — snapshot any image that boots.
+
+The build now also stages + builds a local **`python3` override** (Phase 6/7d, now
+r4) to dodge Alpine's broken armv7 python3-3.14.5-r2. ⚠️ As of 2026-06-28 that
+override is NOT confirmed working and the bug is **OPEN**: narrowed to a **CPython
+3.14 source-level use-before-init / garbage-pointer read** in `Py_Initialize` (NOT
+LTO/PGO, NOT LDREXD alignment, NOT a compiler/`-O` bug — all disproven), which
+**qemu does not reproduce (false pass)**. So a green build does not prove python
+works — validate `python3 -S -c ''` **on the device**. Also beware the pipeline can
+ship a *different* r4 than the exported apk (md5 `30e88d28` vs `d43b6509`) — verify
+by libpython md5, not just version. See `docs/2026-06-28-session-findings.md`.

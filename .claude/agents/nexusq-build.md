@@ -79,6 +79,36 @@ hangs), the Phase 6b patch failed to apply — check the build log for
 `only N/3 patterns matched` (pmbootstrap changed its `run_abuild`/`backend.py`; the
 three string replacements need re-targeting). That, not fakeroot-tcp, is the fix.
 
+### The python3 override (Phase 6 stage + Phase 7d build)
+
+Alpine's stock **python3-3.14.5-r2 SIGSEGVs deterministically on real ARMv7**
+(`python3 -S -c ''` → rc 139), which kills every python consumer on the device
+(`onboard`, `blueman-applet`, `sleep-inhibitor.service`, and `gdb`). So the build
+ships a local override `pmos/python3/` (same version, now **r4**, higher pkgrel is
+meant to supersede Alpine's r2): **Phase 6** stages it into `$PMAPORTS/main/python3`;
+**Phase 7d** builds it with `pmbootstrap --no-cross build python3 --arch armv7` (a
+full CPython compile under qemu — slow). Watch Phase 7d's
+`=== python3 build exit code: N ===`; a non-zero rc (or a missing
+`python3-3.14.5-r*.apk` under `$WORK/packages`) means the rootfs would **fall back
+to Alpine's broken r2** — do not flash.
+
+⚠️ **It is NOT a compiler bug, and qemu gives a FALSE PASS for it.** Narrowed
+2026-06-28 to a **CPython 3.14 source-level use-before-init / garbage-pointer read**
+in `_PyStaticType_InitBuiltin` during `Py_Initialize` (it reads a garbage type-index
+`0xf0012b00` and derefs a wild address; unmapped on hardware → SIGSEGV, mapped under
+qemu → false pass). **DISPROVEN:** LTO/PGO, LDREXD misalignment (faulting addr is
+8-byte aligned but UNMAPPED), gnu2/TLSDESC, and optimization level itself — two
+`-O0` r4 builds with **byte-identical `.text`** differing only in data behave
+oppositely on the same device. No compiler flag fixes it; the fix is source/upstream
+(candidate 3.14.6). **OPEN.** A green Phase 7d does **NOT** prove python works —
+**validate `python3 -S -c ''` ON THE DEVICE over ssh**, never on the qemu chroot.
+
+⚠️ **Pipeline pitfall (OPEN):** Phase 7d exports a *running* r4 apk to `output/`
+(libpython md5 `d43b6509`) but the Phase 9 rootfs has shipped a *different* r4 build
+(md5 `30e88d28`, crashes). The version check (`r4` present) is not enough —
+**byte-verify the rootfs libpython md5 against the exported apk.** See
+`docs/2026-06-28-session-findings.md`.
+
 ## Artifacts
 
 The build writes into the `nexusq-output` docker volume at `/tmp/output`:
@@ -109,6 +139,9 @@ for fastboot with `python3 raw2simg.py <raw> <sparse>`.
 | `losetup: ...: failed to set up loop device: Permission denied` (Phase 10 post-process) | the rootfs post-process (strip /boot fstab, unlock root) ran without sudo as the `pmos` user | FIXED — Phase 10 runs losetup/mount/sed/python3/umount via `sudo` |
 | `cc: fatal error: cannot execute 'cc1': posix_spawnp` (Phase 7c nexusqd, exit 3) | crossdirect (cross-compile accelerator) is broken in this image | FIXED — Phase 7c builds nexusqd with `--no-cross` (qemu-only), matching Phase 8 |
 | `Writing 'boot' FAILED! error=-27` (at flash time) | boot.img > 8 MB (initramfs bundled) | Phase 10 ramdisk-less repack; verify boot.img ≤ 8 MB |
+| Phase 7d `python3 build exit code: N` (N≠0) or `the python3-3.14.5-r*.apk was not found` | python3 override build failed → rootfs falls back to Alpine's broken r2 | fix `pmos/python3/` (sha512sums / makedepends) + rebuild; do NOT flash a fallback-r2 rootfs |
+| python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) but Phase 7d was green | CPython 3.14 source-level use-before-init / garbage-pointer read in `Py_Initialize` (qemu FALSE PASS); NOT a compiler/LTO/alignment bug | OPEN (2026-06-28); needs a source/upstream fix (3.14.6?), no `-O`/`-f` flag helps. Validate `python3 -S -c ''` **on device**, not qemu |
+| device python crashes but Phase 7d exported a *running* apk | Phase 9 rootfs shipped a **different** r4 build than the verified/exported apk (libpython md5 `30e88d28` vs `d43b6509`); version-only check missed it | OPEN; byte-verify rootfs libpython md5 vs `output/`'s apk; reconcile why two r4 builds exist |
 | rc 128, git error | building from a `git worktree` | build from the main repo |
 
 When a fix means editing `docker-build.sh` / an APKBUILD / `deviceinfo`, make the

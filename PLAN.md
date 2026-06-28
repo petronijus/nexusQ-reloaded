@@ -7,7 +7,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 | Subsystem | Status | Detail |
 |-----------|--------|--------|
-| Kernel + boot | ✅ works | mainline 6.12.12, GCC 13.3 only, ≤6.5 MB image; flaky boot ~1 in 3 (retry helps) |
+| Kernel + boot | ✅ works | mainline 6.12.12, ≤8 MB image; flaky boot ~1 in 3 (retry helps). _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ |
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | ✅ works | ALSA `card0 HDMI` registers; needs a quick `speaker-test` |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
@@ -19,8 +19,8 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | NFC (PN544) | 🟡 detected | i2c device `2-0028` present, driver not loaded |
 | TMP101 temp sensor | 🟡 detected | i2c device `1-0048`, needs `modprobe lm75` |
 | LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`) |
-| Ethernet (LAN9500A) | 🔴 dead hardware | enable pad clamped low; verified down to ULPI/PORTSC level -- do not revisit |
-| SMP (2nd core) | 🔴 disabled | U-Boot leaves CPU1 undefined; needs custom holding-pen / CPU1 reset |
+| Ethernet (LAN9500A) | 🟠 sw bug, not dead HW | _(Updated 2026-06-28)_ the "dead hardware" verdict was **wrong** — fixed in v1.1.0/v1.3.0 (patches 0006/0012); **regressed** in v1.4.0 by the cpufreq boot-timing change (down on current builds, fix tracked 1.4.1) |
+| SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 
 ## Plan (by priority)
 
@@ -140,6 +140,9 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `docs/2026-06-20-session-handoff.md`); scene auto-cycling (FadeTransition not ported);
       ship the musl apk (currently a static binary deployed over USB).
 
-### 10. SMP / second core (long-term, risky)
-- [ ] custom CPU1 holding-pen or reset before online; doubles performance
-      but risks boot regressions -- do last, with UART console available
+### 10. SMP / second core  ✅ DONE 2026-06-22 (v1.2.0)
+- [x] root cause was **not** a U-Boot CPU1-state problem but two mainline gaps:
+      a missing `dsb_sev()` in `omap4_smp_prepare_cpus` (patch 0009) + a secondary
+      cpuidle panic (boot `cpuidle.off=1`). Both Cortex-A9 online, `nproc=2`,
+      `taint=0`; re-confirmed live 2026-06-28. Full writeup `docs/SMP-second-core.md`.
+- [ ] follow-on: proper OMAP4 coupled cpuidle for the secondary (low priority).

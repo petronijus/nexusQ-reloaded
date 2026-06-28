@@ -20,6 +20,12 @@ deviceinfo_systemd="always"
 deviceinfo_chassis="embedded"
 deviceinfo_keyboard="false"
 deviceinfo_external_storage="false"
+
+# zram swap: the kernel (CONFIG_ZRAM=m) only has the lzo/lzo-rle backend, but
+# postmarketos-zram-swap's zramstart defaults to zstd -> "zramctl: failed to set
+# algorithm: Invalid argument" and swap never comes up. lzo-rle is also the right
+# pick for this slow Cortex-A9 (CPU-cheap). Pin it so the service succeeds.
+deviceinfo_zram_swap_algo="lzo-rle"
 deviceinfo_screen_width="1920"
 deviceinfo_screen_height="1080"
 

@@ -1,8 +1,13 @@
 # Nexus Q — bringing up the second CPU core (OMAP4460 HS SMP)
 
-**Status: WORKING & validated (2026-06-22).** Both Cortex-A9 cores online and
-stable on mainline Linux 6.12. This document is the authoritative writeup of how
-it was solved and what the key components are.
+**Status: WORKING & validated (2026-06-22; re-confirmed 2026-06-28).** Both
+Cortex-A9 cores online and stable on mainline Linux 6.12. This document is the
+authoritative writeup of how it was solved and what the key components are.
+
+> **Re-confirmed live 2026-06-28** on the current full-rootfs image (built with
+> Alpine GCC 15.2): `nproc=2`, `/sys/devices/system/cpu/online=0-1`, `cpu1/online=1`,
+> two Cortex-A9 in `/proc/cpuinfo`. Any lingering "CPU1 not brought up / SMP is
+> groundwork" framing elsewhere is **stale** — dual-core is shipped and working.
 
 ---
 

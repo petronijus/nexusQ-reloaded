@@ -20,12 +20,28 @@ mainline Linux 6.12 LTS kernel.
 
 ## Status
 
-**Userspace boots, WiFi works!** (as of 2026-06-10) -- postmarketOS (systemd)
-boots from the userdata partition, SSH access over USB gadget and WiFi
-(BCM4330 with original calibration). Still single-core (SMP disabled due to
-U-Boot bug). Ethernet confirmed dead hardware on this unit.
+**postmarketOS (systemd) boots; the device is daily-usable.** SSH over USB gadget
+and WiFi (BCM4330), HDMI desktop, TAS5713 amp, LED ring + rotary keys, and a full
+host-built rootfs. Since the 2026-06-10 snapshot below, several "dead" verdicts were
+overturned:
 
-See `HANDOFF.md` for detailed technical notes and root cause analysis.
+- **Dual-core SMP works** (since v1.2.0; re-confirmed `nproc=2` on 2026-06-28) —
+  the old "single-core, SMP disabled" status is obsolete.
+- **CPU frequency scaling 350→1200 MHz** (v1.4.0), governor `conservative`.
+- **On-board Ethernet (LAN9500A) is NOT dead hardware** — fixed in v1.1.0/v1.3.0;
+  currently **down again** on cpufreq builds (a v1.4.0 boot-timing regression, fix
+  tracked for 1.4.1), not a hardware fault.
+- The shipping kernel is built with **GCC 15.2** (Alpine, via pmbootstrap) and
+  boots — the historical "GCC 13.3.Rel1 only" constraint applied to an early
+  hand-cross-compiled build, not this path.
+- **OPEN: python3-3.14.5 SIGSEGVs on real ARMv7** — `python3 -S -c ''` crashes in
+  `Py_Initialize` (a CPython source-level init bug, not a compiler/alignment issue;
+  qemu gives a false pass), taking down `onboard` / `blueman` / `sleep-inhibitor` /
+  `gdb`. Needs a source/upstream fix. See `CHANGELOG.md` and
+  `docs/2026-06-28-session-findings.md`.
+
+See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
+notes and root-cause analysis.
 See `PLAN.md` for the hardware status map and the prioritized roadmap
 (TAS5713 amplifier first).
 

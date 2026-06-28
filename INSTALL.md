@@ -81,21 +81,28 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
 | NFC (PN544) | 🟠 driver binds, chip untested |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
-| Ethernet | 🔴 dead hardware on the reference unit |
+| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, currently down on cpufreq builds (v1.4.0 boot-timing regression, fix tracked 1.4.1) |
 | TWL6040 codec (headset) | 🔴 dead hardware on the reference unit |
-| SMP (2nd CPU core) | 🔴 disabled (U-Boot leaves CPU1 undefined) |
+| SMP (2nd CPU core) | ✅ dual-core works (v1.2.0; `nproc=2`) |
 
-(The two 🔴 hardware items are specific to the project's reference device --
-your unit may be healthier. See `PLAN.md` and `HANDOFF.md`.)
+(The remaining 🔴 item is specific to the project's reference device -- your unit
+may be healthier. The table above predates the current release; see `CHANGELOG.md`,
+`PLAN.md` and `HANDOFF.md` for the up-to-date status.)
 
 ## Building from source
 
 Hard requirements discovered the painful way (details in `HANDOFF.md`):
 
-- **Toolchain:** Arm GNU Toolchain **13.3.Rel1** (`arm-none-linux-gnueabihf-`).
-  Kernels built with newer GCC (15.x tested) do not boot -- silently.
-- **Size ceiling:** zImage + DTB must stay **<= 6.5 MB** or U-Boot will not
-  load it from the boot partition.
+- **Toolchain:** the shipping kernel is now built with **Alpine GCC 15.2** via the
+  pmbootstrap pipeline (`docker-build.sh`) and **boots fine** (verified on device
+  2026-06-28: `/proc/version` = `cc (Alpine 15.2.0) 15.2.0`). The earlier
+  "Arm GNU Toolchain 13.3.Rel1 only; GCC 15.x silently does not boot" rule applied
+  to a hand-cross-compiled out-of-tree build and is **superseded** for this path.
+  If you hand-build out of tree and hit a black screen, the 13.3 toolchain
+  (`arm-none-linux-gnueabihf-`) is still a known-good fallback.
+- **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
+  rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
+  SMP image comfortably under it.
 - Kernel: mainline 6.12.12 + the four patches in `kernel/patches/`,
   config `kernel/configs/steelhead_defconfig`.
 

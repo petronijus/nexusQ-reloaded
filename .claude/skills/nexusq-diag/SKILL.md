@@ -60,6 +60,15 @@ Findings are tagged by `kind`; interpret them like this:
   fires. Confirm with **led_frozen** (frame unchanged ≥6 samples) and
   **nexusqd_no_progress** (no CPU time). Real fix lives in `pmos/nexusqd/`
   (add an sd_notify watchdog / `WatchdogSec=`) — note it, don't hack around it.
+  ⚠️ **A dark ring is NOT a hang if the socket still answers** (`nq_resp=1`) — that
+  is idle-off (the ring blanks on the idle timeout), not a hang (false CRIT seen
+  2026-06-28).
+- **failed_unit** — a systemd unit failed. On the current image the usual cause is
+  **python**: `python3` SIGSEGVs on ARMv7 (an OPEN **CPython source-level init bug**
+  — NOT alignment/compiler, all disproven — that qemu does NOT reproduce), taking
+  down `onboard` / `blueman-applet` / `sleep-inhibitor.service` / `gdb`. Confirm on
+  device with `python3 -S -c ''; echo rc=$?` (rc 139). See
+  `docs/2026-06-28-session-findings.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
 - **vdd_mismatch** (warn/crit) — `vdd_mpu` is off the expected voltage for the

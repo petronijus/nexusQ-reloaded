@@ -185,8 +185,26 @@ cp "$SRC/userspace/nexusqd/nexusqd.service" "$NEXUSQD_DIR/"
 cp "$SRC/userspace/nexusqd/default.json"   "$NEXUSQD_DIR/"
 echo "  Installed: nexusqd (aport + C sources -> main/nexusqd)"
 
+# python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
+# deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
+# That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
+# Stage our rebuilt aport (now pkgrel r4) into main/python3 so the higher pkgrel is
+# meant to supersede Alpine's -r2 in the rootfs. Built below in Phase 7d. See
+# pmos/python3/APKBUILD.
+# CORRECTION (2026-06-28): the crash is NOT a compiler bug. DISPROVEN: LTO/PGO (r3
+# dropped both, still crashes), LDREXD alignment (faulting addr is 8-byte aligned but
+# UNMAPPED -> SIGSEGV not SIGBUS), TLSDESC, and optimization level (two -O0 r4 builds
+# with byte-identical .text behave oppositely on the same device). It is a CPython
+# SOURCE-level use-before-init / garbage-pointer read in Py_Initialize -- qemu-user
+# keeps the wild address mapped (FALSE PASS). OPEN; fix is source/upstream (3.14.6?).
+# docs/2026-06-28-session-findings.md.
+PYTHON3_DIR="$PMAPORTS/main/python3"
+mkdir -p "$PYTHON3_DIR"
+cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
+echo "  Installed: python3 override (LTO/PGO dropped -> main/python3)"
+
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -528,6 +546,49 @@ if [ $NEXUSQD_RC -eq 0 ]; then
 else
     echo "  WARNING: nexusqd build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7d: Build python3 override (armv7/musl, LTO+PGO dropped) ==="
+# Alpine's python3-3.14.5-r2 SIGSEGVs on armv7 (see the Phase 6 note +
+# pmos/python3/APKBUILD): the stock interpreter crashes on the first bytecode. We
+# rebuild the SAME version as r3 with LTO + PGO dropped (so this full CPython compile
+# under qemu no longer runs an instrumented interpreter mid-build, and it completes).
+# The higher pkgrel (r3 > Alpine r2) makes the Phase 9 rootfs install pull OUR python3
+# (and all subpackages) instead of Alpine's.
+# CORRECTION (2026-06-28): dropping LTO/PGO does NOT fix the crash on hardware. The
+# bug is a CPython SOURCE-level use-before-init / garbage-pointer read in Py_Initialize
+# (NOT compiler/LTO/alignment/optimization -- all disproven), which qemu-user does not
+# reproduce -- so a green Phase 7d is NOT proof. Validate `python3 -S -c ''` ON DEVICE.
+# Also byte-verify the rootfs libpython md5 vs the apk exported below: they have
+# diverged (rootfs 30e88d28 crashes, exported d43b6509 runs). OPEN; needs an upstream
+# fix (3.14.6?). docs/2026-06-28-session-findings.md.
+set +e
+# The vendored sha512sums are already correct; regenerate to absorb any dos2unix drift
+# in the companion files (idle.desktop, *.patch) before building.
+pmbootstrap checksum python3 2>&1 || true
+# --no-cross (qemu-only): crossdirect cannot exec cc1 in this image (see Phase 7c).
+pmbootstrap --no-cross build python3 --arch armv7 2>&1
+PYTHON3_RC=$?
+set -e
+echo "=== python3 build exit code: $PYTHON3_RC ==="
+if [ $PYTHON3_RC -eq 0 ]; then
+    # pkgrel-agnostic: match whatever r<N> the staged aport produced (currently r4),
+    # so this never breaks again on a pkgrel bump. $WORK/packages only holds our
+    # locally-built repo, so there is exactly one python3-3.14.5-r*.apk here.
+    PYTHON3_APK=$(find "$WORK/packages" -name 'python3-3.14.5-r*.apk' -print -quit 2>/dev/null)
+    if [ -n "$PYTHON3_APK" ]; then
+        cp "$PYTHON3_APK" /tmp/output/ 2>/dev/null && echo "  Exported: $(basename "$PYTHON3_APK")"
+        echo "  $(basename "$PYTHON3_APK" .apk) built -> local repo will supersede Alpine's broken -r2"
+    else
+        echo "  ERROR: python3 build returned 0 but the python3-3.14.5-r*.apk was not found under"
+        echo "         $WORK/packages -- the rootfs would FALL BACK to the broken r2."
+        PYTHON3_RC=1
+    fi
+else
+    echo "  ERROR: python3 override build FAILED (exit $PYTHON3_RC) -- the rootfs would"
+    echo "         ship Alpine's broken r2. Do NOT flash until this is fixed. Key log:"
+    grep -niE "ERROR|error:|FAILED|segmentation|segfault|configure: error" "$WORK/log.txt" 2>/dev/null | tail -30
 fi
 
 echo ""

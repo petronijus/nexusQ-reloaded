@@ -45,8 +45,10 @@ All sources were verified against the live device + the kernel/DTS, not guessed.
 
 **Compute / governor** — `…/cpu0/cpufreq/{scaling_governor,scaling_cur_freq,…}`,
 `nproc`, `/sys/kernel/debug/clk/dpll_mpu_ck/clk_rate`. OPPs: 350/700/920/1200 MHz.
-cpufreq stats are off in the kernel, so residency is built by sampling
-`scaling_cur_freq` over time.
+cpufreq stats are off in the kernel (`CONFIG_CPU_FREQ_STAT` not set → no
+`cpufreq/stats/time_in_state`; candidate to enable), so residency is built by
+sampling `scaling_cur_freq` over time. Note idle is **not** 350 MHz here — it
+hovers ~920 MHz because nexusqd's LED polling keeps the clock up.
 
 **Power delivery** — every `/sys/class/regulator/regulator.*` (resolved by the
 `name` attribute, not the opaque index). `vdd_mpu` is checked against the
@@ -63,6 +65,12 @@ path (path B).
 MCU on i2c (IRQ line `steelhead-avr`). nexusqd has **no systemd watchdog**, so a
 *hang* (vs a crash) is invisible to systemd — we detect it via socket
 unresponsiveness + a frozen LED frame + no daemon CPU progress.
+
+> **A dark ring is NOT a hang by itself.** If the ring is dark **but the control
+> socket answers** (`nexusled status` returns, `nq_resp=1`), that is **idle-off**
+> (the ring blanks after the idle timeout), not a `nexusqd_hang`. A hang requires
+> the socket to be **dead**. Observed 2026-06-28: a dark-but-responsive ring tripped
+> a CRIT verdict that was not an actual daemon hang.
 
 **Crashes / kernel** — new error lines in `dmesg`
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and

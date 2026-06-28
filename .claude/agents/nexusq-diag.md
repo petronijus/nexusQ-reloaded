@@ -94,6 +94,16 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   (expect `350000 700000 920000 1200000`), `scaling_governor`, `scaling_max_freq`.
   Put load on (`yes >/dev/null &`), read `cpuinfo_cur_freq`/`scaling_cur_freq`, kill
   it → confirm it reaches 1200000. Thermal: `cat /sys/class/thermal/thermal_zone*/temp`.
+  (Idle is NOT 350 MHz — it hovers ~920 MHz, nexusqd LED polling keeps it up.)
+- **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
+  dual-core works since v1.2.0; flag any single-core boot as a regression.
+- **python ON DEVICE** (OPEN ARMv7 bug, 2026-06-28): `python3 -S -c ''; echo rc=$?`.
+  rc **139** = the known SIGSEGV (a **CPython 3.14 source-level use-before-init /
+  garbage-pointer read** in `Py_Initialize` — NOT LTO/PGO, NOT LDREXD alignment, NOT
+  a compiler bug, all disproven — that **qemu does not reproduce**, so a clean build
+  does NOT prove it fixed). This is the authoritative test — always check it here,
+  never trust the qemu build gate. `gdb` is also down on the current image (it links
+  the broken `libpython`). See `docs/2026-06-28-session-findings.md`.
 
 ## 4. Interpret the findings
 
@@ -102,6 +112,15 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   classic ring-froze-and-never-came-back (a hang, so `Restart=on-failure` never
   fires). Confirm with **led_frozen** + **nexusqd_no_progress**. Real fix is an
   sd_notify watchdog/`WatchdogSec=` in `pmos/nexusqd/` — name it, don't hack around.
+  ⚠️ **A dark ring is NOT a hang if the socket still answers** (`nq_resp=1`,
+  `nexusled status` returns) — that is **idle-off** (the ring blanks on the idle
+  timeout). Don't report a dark-but-responsive ring as a hang (it tripped a false
+  CRIT on 2026-06-28).
+- **failed_unit** (warn/crit) — a systemd unit is failed. On the current image the
+  usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
+  `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — an OPEN bug (a CPython
+  source-level init crash, NOT alignment/compiler; see §python above), not a
+  daemon-specific fault.
 - **vdd_mismatch** — `vdd_mpu` off the OPP target (350→1025, 700→1203, 920→1317,
   1200→1380 mV). A few samples = a DVFS transition; persistent = VC-bridge/TPS62361
   power-path. Cross-check `POWER_REGULATORS`/`omap_voltage`/`ti-abb`/`tps`.

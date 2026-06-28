@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=6
+pkgrel=10
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -25,6 +25,8 @@ depends="
 	nexusqd
 	openssh-server
 	openssh-client
+	gdb
+	python3-dbg
 "
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"

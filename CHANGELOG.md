@@ -4,6 +4,72 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+### Added
+- **zram compressed swap.** Kernel `CONFIG_ZRAM=m` plus
+  `deviceinfo_zram_swap_algo="lzo-rle"` brings up `postmarketos-zram-swap`. The
+  mainline ZRAM module here only carries the lzo/lzo-rle backend, so the service's
+  default **zstd** failed (`zramctl: failed to set algorithm: Invalid argument`)
+  and swap never came up; lzo-rle is also the CPU-cheap pick for this Cortex-A9.
+  Verified live: `/dev/zram0` lzo-rle, 1.4 G, active `[SWAP]`. (linux APKBUILD
+  pkgrel 23→24.)
+- **User namespaces** — `CONFIG_USER_NS=y`. Verified live:
+  `max_user_namespaces=7716`, `unshare --user` works.
+- **Dual-core SMP re-confirmed on the full-rootfs image** — `nproc=2`,
+  `cpu/online=0-1`, both Cortex-A9 in `/proc/cpuinfo`. (SMP shipped in 1.2.0; this
+  corrects any stale "CPU1 not brought up / SMP is groundwork" framing — it is done
+  and working on the current image.)
+- **CPU power/thermal health confirmed live** — scales 350/700/920/1200 MHz,
+  reaches 1.2 GHz under load, VDD_MPU tracks the OPP exactly (1200→1380, 920→1317,
+  350→1025 mV; abb_mpu FBB@Nitro 1375 mV). Idle ~70 °C, peak 95 °C under sustained
+  2-core load (no throttle; 100 °C passive trip not reached).
+
+### Changed
+- **Build infra: local `python3` override aport + Phase 7d.** `docker-build.sh`
+  now stages `pmos/python3/` → `main/python3` (Phase 6) and builds it
+  (`pmbootstrap --no-cross build python3 --arch armv7`, Phase 7d) so a higher
+  pkgrel (now r4) is meant to supersede Alpine's broken `python3-3.14.5-r2` in the
+  rootfs (see Known issues — the supersede currently misfires). The override drops
+  `--with-lto` + `--enable-optimizations` and the `!gettext-dev` makedepends token
+  (pmbootstrap's apk wrapper rejects `!` entries); r4 also builds the core at `-O0`
+  (an experiment, since shown not to matter).
+- **`device-google-steelhead` no longer masks `sleep-inhibitor.service`; adds
+  on-device debug tools.** The `/dev/null` mask was removed in favour of fixing the
+  root cause (the python crash below); the image now also ships `gdb` (16.3) +
+  `python3-dbg` to debug it on hardware (gdb itself is blocked until python is fixed
+  — it links `libpython`). (device APKBUILD pkgrel 6→10.)
+
+### Known issues / in progress
+- **python3-3.14.5 SIGSEGVs deterministically on real ARMv7 — OPEN.** Even
+  `python3 -S -c ''` returns rc 139 before any user bytecode, during
+  `Py_Initialize`, crashing `onboard`, `blueman-applet`, `sleep-inhibitor.service`
+  — and `gdb` (it links `libpython`). **Root cause (narrowed 2026-06-28):** a
+  **CPython 3.14 source-level use-before-init / garbage-pointer read**, NOT a
+  compiler issue. `_PyStaticType_InitBuiltin` reads a garbage type-index
+  (`interp->types.builtins.num_initialized` = `0xf0012b00`) and dereferences
+  `_PyRuntime.types.managed_static.types[idx]`; the wild address is unmapped on real
+  hardware (SIGSEGV) but mapped under qemu (false pass). **DISPROVEN:** LTO/PGO (r3
+  dropped them, still crashes); LDREXD misalignment (faulting addr is 8-byte aligned
+  but UNMAPPED → SIGSEGV not SIGBUS); gnu2/TLSDESC (binary uses traditional TLS, zero
+  `R_ARM_TLS_DESC` relocs); and optimization level itself — two `-O0` r4 builds with
+  **byte-identical `.text`** (3,528,976 bytes, `cmp`-equal) differing only in ~139 KB
+  of data behave oppositely on the same device. Fix must come from source/upstream
+  (candidate 3.14.6), not a `-O`/`-f` flag — **under investigation, not done.** The
+  qemu-user build gate (`python3 -S -c ''` rc 0) is a **FALSE PASS** — validate armv7
+  python **on-device only**. See `docs/2026-06-28-session-findings.md`.
+- **Build-pipeline: rootfs python ≠ the verified apk — OPEN.** `docker-build.sh`
+  Phase 7d builds and exports one `python3-3.14.5-r4` apk (libpython md5
+  `d43b6509`, runs), but the Phase 9 rootfs install pulls a **different** r4 build
+  (md5 `30e88d28`, crashes). Verification only checked the apk DB **version**
+  (`r4`), not the libpython md5, so it green-lit a rootfs whose python differs from
+  the verified/exported apk. To fix: byte-verify the rootfs libpython against the
+  exported apk, and reconcile why two r4 builds exist / why Phase 9 doesn't install
+  the Phase 7d apk. (This is why the device currently runs the crashing python.)
+- **On-board LAN9500A Ethernet still down** — the v1.4.0 cpufreq boot-timing
+  regression is unchanged: `smsc95xx` registers but the device never enumerates, no
+  `eth0`. Use WiFi / the USB gadget. (Fix tracked for 1.4.1.)
+
 ## [1.5.0] - 2026-06-27
 
 ### Added
@@ -33,8 +99,11 @@ All notable changes to Nexus Q Reloaded. Format follows
   tmp101 `vs`→v1v8, the Bluetooth `vbat`/`vddio`, and the TAS5713 amp `AVDD`/`DVDD`→a
   3V3 rail replace placeholder dummies. The spurious "supplying voltage" warnings
   drop from 10 to 5.
-- **Default cpufreq governor → `conservative`** — idle now settles at 350 MHz (vs
-  `ondemand`'s 920 MHz), ~66 °C, instead of holding a high clock.
+- **Default cpufreq governor → `conservative`** (vs `ondemand`). _(Correction
+  2026-06-28: this entry's claim that idle "settles at 350 MHz" is not what the
+  live device does — idle actually hovers ~920 MHz because `nexusqd`'s LED-ring
+  polling keeps the CPU busy, dipping to 350 MHz only briefly. ~70 °C idle. See
+  `docs/2026-06-28-session-findings.md`.)_
 - **Ethernet (LAN9500A) is reliable again** — it came up on every boot tested in
   v1.5.0 (the v1.4.0 cpufreq-build bring-up intermittency was not reproducible),
   sustaining full ~100 Mbit/s line-rate throughput.
