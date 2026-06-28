@@ -32,12 +32,16 @@ it reports back, relay the verification result and the flash commands to the use
 flash only on explicit go-ahead, and follow the
 [[always-preserve-working-image]] rule — snapshot any image that boots.
 
-The build now also stages + builds a local **`python3` override** (Phase 6/7d, now
-r4) to dodge Alpine's broken armv7 python3-3.14.5-r2. ⚠️ As of 2026-06-28 that
-override is NOT confirmed working and the bug is **OPEN**: narrowed to a **CPython
-3.14 source-level use-before-init / garbage-pointer read** in `Py_Initialize` (NOT
-LTO/PGO, NOT LDREXD alignment, NOT a compiler/`-O` bug — all disproven), which
-**qemu does not reproduce (false pass)**. So a green build does not prove python
-works — validate `python3 -S -c ''` **on the device**. Also beware the pipeline can
-ship a *different* r4 than the exported apk (md5 `30e88d28` vs `d43b6509`) — verify
-by libpython md5, not just version. See `docs/2026-06-28-session-findings.md`.
+The build also stages + builds a local **`python3` override** (Phase 6/7d, now **r5**)
+to fix Alpine's broken armv7 python3-3.14.5-r2. ✅ **FIXED 2026-06-28
+(hardware-verified).** Root cause was **not** a compiler/CPython-source bug but a
+build-time **qemu-user corruption**: qemu's mmap zero-fill of the linker's output
+non-deterministically left garbage in libpython's should-be-zero regions →
+`Py_Initialize` SIGSEGV on real HW (qemu false-passes). r5 links libpython with
+**gold `-Wl,--no-mmap-output-file`**; Phase 7d gates every build with
+`scripts/verify-libpython-clean.py` (rebuild-on-corruption) and Phase 10 re-gates the
+installed rootfs libpython (ship gate), with pkgrel-exact apk selection — so a corrupt
+python can't reach a flashable image. The agent's verification gate confirms the
+rootfs ships the gate-clean r5. qemu's own `python3 -S -c ''` build check is still a
+false pass; trust the integrity gate (build-side) and `python3 -S -c ''` **on device**.
+See `docs/2026-06-28-session-findings.md`.

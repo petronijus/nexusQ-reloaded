@@ -1,12 +1,19 @@
 # Session findings — 2026-06-28
 
 Full-rootfs image hardening: zram swap, user namespaces, a dual-core re-confirm
-on the live device, a CPU power/thermal health pass — and a hard, still-**open**
-ARMv7 python SIGSEGV run to ground (now narrowed from "miscompile" to a CPython
-source-level init bug — see §4). Several long-standing doc claims turned out
-to be stale and are corrected here (GCC-13.3-only, SMP "groundwork", idle settling
-at 350 MHz). Diag capture: `nq-captures/20260628-124159/` (verdict CRIT — driven
-by the dark-but-responsive LED ring + the failed python unit, **not** a true hang).
+on the live device, a CPU power/thermal health pass — and the hard ARMv7 python
+SIGSEGV **finally root-caused AND fixed** (see §4). The breakthrough: it is **not**
+a compiler or CPython-source bug at all but a **build-time qemu-user corruption** —
+qemu's mmap zero-fill of the linker's output non-deterministically leaves garbage in
+libpython's should-be-zero regions; **fixed** by linking with gold
+(`-Wl,--no-mmap-output-file`) plus a deterministic build-integrity gate, and
+**hardware-verified** on the live device. (This supersedes the earlier same-session
+"CPython source-level init bug / OPEN" theory below — that framing was wrong about
+the *cause*; the disproven-hypotheses record stands.) Several long-standing doc
+claims also turned out stale and are corrected here (GCC-13.3-only, SMP "groundwork",
+idle settling at 350 MHz). Diag capture: `nq-captures/20260628-124159/` (verdict
+CRIT — driven by the dark-but-responsive LED ring + the then-failed python unit,
+**not** a true hang).
 
 ---
 
@@ -76,12 +83,18 @@ not deleted.)
 
 ### 3.1 New local override aport `pmos/python3/`
 Alpine's stock **python3-3.14.5-r2 is broken on armv7** (see §4). The override is
-the SAME version rebuilt (started **r3**, now **r4**) so its higher pkgrel
-supersedes Alpine's -r2 in the rootfs:
-- drops `--with-lto` and `--enable-optimizations` (PGO); r4 additionally builds the
-  interpreter core at `-O0` (`CFLAGS_NODIST`). NB: §4.4 since proved the crash is
-  **independent of optimization level**, so `-O0` is now just the current
-  experiment state, not the fix — keeps `--with-computed-gotos`;
+the SAME version rebuilt (started **r3**, now **r5** — the working fix) so its
+higher pkgrel supersedes Alpine's -r2 in the rootfs:
+- drops `--with-lto` and `--enable-optimizations` (PGO) and keeps
+  `--with-computed-gotos`; r5 **reverts the r4 `-O0` experiment back to stock
+  `-O2`** — §4 proved codegen was never the cause.
+- **THE FIX (r5): links libpython with gold** — `binutils-gold` added to
+  makedepends, `-fuse-ld=gold -Wl,--no-mmap-output-file` added to `LDFLAGS_NODIST`.
+  gold `write()`s its output file instead of `mmap()`-ing it, so qemu-user never
+  gets to mis-zero-fill it and the should-be-zero regions come out actually zero
+  (see §4.5/§4.7). The gold flags are deliberately kept **out of the propagated
+  (DIST) LDFLAGS**, so they are not baked into `sysconfig` — on-device pip extension
+  builds keep using the stock linker.
 - removes the `!gettext-dev` makedepends token — abuild understands `!pkg`, but
   pmbootstrap pre-installs makedepends with its own apk wrapper which rejects any
   `!`-prefixed entry (`packages with '!' are not supported!`). It is a no-op guard
@@ -90,37 +103,63 @@ supersedes Alpine's -r2 in the rootfs:
   `musl-find_library.patch`, `s390x-c-stack-size.patch`).
 - `options="net !check"` — the upstream test suite is too slow / hangs under qemu;
   correctness is gated on `python3 -S -c ''` (rc 0) instead. **NB: that qemu gate
-  gives a FALSE PASS for this bug — see §4.**
+  gives a FALSE PASS for this bug — see §4.2.** The authoritative build gate is now
+  `scripts/verify-libpython-clean.py` (§4.7), which is deterministic and does not
+  rely on running the binary under qemu at all.
 
-### 3.2 `docker-build.sh` — stage + build the override
+### 3.2 `docker-build.sh` — stage, gate-build, and ship-gate the override
 - **Phase 6** stages `pmos/python3/*` → `$PMAPORTS/main/python3` (+ dos2unix),
   mirroring the nexusqd Phase 6 pattern.
-- New **Phase 7d** builds it: `pmbootstrap --no-cross build python3 --arch armv7`
-  (full CPython compile under qemu; `--no-cross` because crossdirect cannot exec
-  `cc1` in this image — same reason as the nexusqd Phase 7c). With PGO dropped it
-  no longer runs the miscompiled instrumented interpreter mid-build, so it
-  completes; the r4 apk is exported and is meant to supersede Alpine's r2 at rootfs
-  assembly. **But §4.6 found the rootfs ships a DIFFERENT r4 than the exported apk**
-  — the export/install pipeline still needs reconciling and md5-verifying.
+- **Phase 7d** now builds it in a **GATE + RETRY loop**:
+  `pmbootstrap --no-cross build python3 --arch armv7 --force`, then extract the
+  freshly-built `libpython3.14.so.1.0` from the apk and run it through
+  `scripts/verify-libpython-clean.py` (§4.7). On any residual corruption it discards
+  the apk and rebuilds (up to 4×, re-rolling the qemu mmap coin-flip via `--force`);
+  if it never comes out clean it **ABORTS the build**. (`--no-cross` because
+  crossdirect cannot exec `cc1` in this image — same reason as the nexusqd Phase 7c.)
+- The apk is selected by its **exact `pkgver-pkgrel` filename** (`python3-3.14.5-r5`),
+  not a bare `r*.apk` glob — this FIXES the §4.6 stale-artifact bug where the
+  persistent work-volume repo's older apks (r3/r4) could be gated/exported instead of
+  the one just built.
+- **Phase 10 SHIP GATE:** before emitting a flashable image, the gate is re-run on
+  the **actually-installed** rootfs `libpython` (not just the Phase 7d apk). If that
+  is corrupt the build refuses to produce an image — implementing the
+  "integrity-verify-before-flash" lesson and closing the §4.6 hole for good.
+- An opt-in `PYTHON3_VALIDATE_RUNS=N` harness forces N independent gold rebuilds +
+  gates each, to prove gold reliably defeats the coin-flip (used this session, §4.8).
 
 ### 3.3 `device-google-steelhead/APKBUILD` pkgrel 6 → 10 — un-mask + add debug tools
 The earlier `sleep-inhibitor.service` → `/dev/null` **mask was REMOVED** (r9): we
-fix the root cause (python) instead of masking the symptom. r10 additionally adds
-**`gdb` (16.3)** + **`python3-dbg`** to the device image to debug the crash on
-hardware. ⚠️ gdb itself links `libpython`, so **gdb only works once python is fixed**
-— on the current image it SIGSEGVs on launch for the same reason. (The bump also
+fix the root cause (python) instead of masking the symptom — and the root cause is
+now actually fixed (§4). r10 additionally adds **`gdb` (16.3)** + **`python3-dbg`**
+to the device image (used this session to coredump-debug the crash on hardware).
+gdb itself links `libpython`, so it SIGSEGVed for the same reason on the broken-python
+image; with the gold r5 python it links a clean libpython and works. (The bump also
 picks up the deviceinfo zram algo + the un-mask.)
 
 ---
 
-## 4. OPEN problem (NOT fixed) — python3-3.14.5 SIGSEGVs on real ARMv7
+## 4. ROOT-CAUSED + FIXED — python3-3.14.5 SIGSEGV on real ARMv7 was a qemu build-time corruption
 
-> **Status: OPEN / in progress.** Do not treat python as working. Neither override
-> **r3** (LTO/PGO dropped) nor **r4** (-O0) fixes it on hardware. As of late
-> 2026-06-28 the crash is understood to be a **CPython 3.14 source-level
-> use-before-init / garbage-pointer read**, NOT a compiler problem. A focused
-> investigation is running to pinpoint the exact init ordering and find the upstream
-> fix (candidate: 3.14.6).
+> **Status: ROOT-CAUSED and FIXED, hardware-verified (2026-06-28).** The crash is
+> **not** a compiler or CPython-source bug. The armv7 toolchain runs under
+> **qemu-user** (`pmbootstrap --no-cross`) and qemu's **mmap zero-fill of the
+> LINKER's output file is buggy**: it non-deterministically (≈50 % per build — a
+> coin-flip) leaves stale garbage in regions the C standard guarantees are zero,
+> specifically libpython's `.PyRuntime` (which holds `_PyRuntime`) and
+> `.data.rel.ro`. That garbage lands on `interp->types.builtins.num_initialized`, so
+> the wild type-index deref in `Py_Initialize` (§4.5) is just the *symptom*. **Fixed**
+> by linking libpython with **gold + `-Wl,--no-mmap-output-file`** (§4.7) — gold
+> `write()`s its output instead of `mmap()`-ing it, so qemu never mis-zero-fills it —
+> backed by a deterministic build-integrity gate (§4.7) + a Phase-10 ship gate, and
+> **hardware-verified on the live device** (§4.8). Affects **any** qemu-built armv7
+> binary, not just python (nexusqd etc. are theoretically at risk).
+>
+> _(The §4 sub-sections below were written across the session as the cause was
+> narrowed. The earlier "CPython 3.14 source-level use-before-init bug / fix from
+> upstream 3.14.6" interpretation in §4.5 was **wrong about the cause** and is
+> superseded by §4.5'/§4.7; the symptom description and the §4.3 disproven-hypotheses
+> record remain accurate.)_
 
 ### 4.1 Symptom
 Alpine **python3-3.14.5 SIGSEGVs deterministically on real ARMv7** (Cortex-A9):
@@ -160,7 +199,7 @@ of DATA sections**. Identical code, different data, opposite outcome ⇒ the cra
 optimization level**. This retires the "compiler miscompiled the eval loop / -O2
 codegen bug" framing for good.
 
-### 4.5 Root-cause understanding (current)
+### 4.5 The symptom (where it faults)
 During `Py_Initialize`, `_PyStaticType_InitBuiltin` /
 `managed_static_type_state_init` reads a **garbage type-index**:
 `interp->types.builtins.num_initialized` comes back as **`0xf0012b00`**, far
@@ -168,32 +207,83 @@ outside the valid `0..~tens` range. It then indexes
 `_PyRuntime.types.managed_static.types[idx].interp_count` and issues a 64-bit
 `LDREXD` against that wild address. The deref faults **only where the garbage
 address is unmapped** (real hardware); qemu-user keeps it mapped, hence the false
-pass. This is a **CPython 3.14 source-level uninitialized / use-before-init /
-wrong-pointer read** (CPython, or CPython × musl) — **not** a compiler-flag issue.
-The fix must come from **source / upstream** (candidate: 3.14.6), not a `-O`/`-f`
-flag. **OPEN** — a focused investigation is pinning down the exact init ordering /
-struct member and the upstream fix.
+pass. But `num_initialized` lives inside `.PyRuntime`, and it is **zero-initialised
+data** — it should be 0 at process start. The question "why is it garbage?" is
+answered in §4.5'.
 
-(Was framed earlier in this same note as an "LDREXD 8-byte-alignment fault", then as
-a "GCC-15.2 `-O2` codegen bug"; both superseded 2026-06-28 by the
-byte-identical-`.text` experiment in §4.4.)
+### 4.5' DECISIVE root cause — qemu-user mis-zero-fills the linker's mmap'd output
+The garbage is not written by CPython; it is **baked into the binary at link time**,
+and the corruptor is **qemu-user**. The armv7 linker runs under qemu (`--no-cross`),
+and qemu's `mmap()` zero-fill of the linker's **output file** is buggy: it
+non-deterministically leaves **stale page-aligned garbage** in regions the C standard
+guarantees are zero — libpython's `.PyRuntime` (the `_PyRuntime` global) and
+`.data.rel.ro`. Whichever build "loses the coin-flip" ships a libpython whose
+`num_initialized` slot is pre-loaded with `0xf0012b00`, and SIGSEGVs on real HW.
 
-### 4.6 BUILD-PIPELINE bug — the rootfs python ≠ the verified apk
-Separate from the crash itself: the build shipped the **wrong** python.
-- the **rootfs** ended up with a `python3-3.14.5-r4` whose `libpython` md5 is
-  **`30e88d28…`** — the **crashing** one;
-- while the apk **Phase 7d built and exported** to `output/` for verification has
-  md5 **`d43b6509…`** — a **running** one.
+**Forensic proof (do NOT re-tread):**
+- A **clean** build (`d43b6509…`) and a **crashing** build are **byte-identical
+  except those two zero-regions** — clean = all-zero, crashing = page-aligned garbage.
+- The garbage even **disassembles to ARM Thumb-2 code that is absent from python** —
+  i.e. it is **stale qemu build-process memory** bled into the output file, conclusive
+  that the source is the emulator's mmap, not CPython.
+- This is consistent with §4.3 (alignment/TLS/LTO all wrong) and §4.4 (byte-identical
+  `.text`, opposite outcomes ⇒ data-region, not codegen). It also explains the
+  ≈50 % per-build incidence and why it threatens **any** qemu-built armv7 binary.
 
-So `docker-build.sh` builds/exports one python3 apk in Phase 7d but the **Phase 9
-rootfs install pulls a different r4 build**. The build's verification only checked
-the apk DB **version** (`python3-3.14.5-r4` present) — **not** the libpython md5 —
-so it green-lit a rootfs whose python differs from the verified/exported apk.
-**Action items (both OPEN, under investigation):**
-1. Byte-verify the rootfs `libpython` (md5/sha) against the **exported** apk, not
-   just the version string.
-2. Determine **why two r4 builds exist** / why Phase 9 does not install the exact
-   Phase 7d apk.
+(Was framed earlier in this same note as an "LDREXD 8-byte-alignment fault", then a
+"GCC-15.2 `-O2` codegen bug", then a "CPython 3.14 source-level use-before-init bug /
+upstream 3.14.6"; **all three superseded 2026-06-28** — the first two by the
+byte-identical-`.text` experiment (§4.4), the third by the forensic proof above.)
+
+### 4.6 BUILD-PIPELINE bug (FIXED) — the rootfs python ≠ the verified apk
+Separate from the crash itself, the build had shipped the **wrong** python: the
+rootfs ended up with a `python3-3.14.5-r4` (`libpython` md5 `30e88d28…`, **crashing**)
+while the apk Phase 7d exported for verification was md5 `d43b6509…` (**running**).
+Two root causes, **both now fixed:**
+1. **The qemu coin-flip itself** (§4.5') — "two r4 builds" were simply two rolls of
+   the same dice. Fixed at source by gold (§4.7).
+2. **A stale-artifact SELECTION bug** — the persistent work-volume repo
+   (`$WORK/packages`) accumulates apks from prior runs, and Phase 7d's old
+   `find python3-3.14.5-r*.apk -print -quit` glob could match a **stale r3/r4**
+   instead of the apk it just built. This very bug initially produced a bogus
+   "3/3 clean" reading against a stale r4 before an md5 sanity-check caught it (same
+   stale-artifact class as the earlier stale-flash incident). Fixed by selecting the
+   **exact `pkgver-pkgrel`** apk name (`python3-3.14.5-r5`), gating *that* file, and
+   re-running the gate on the **installed** rootfs libpython at ship time (§3.2 /
+   §4.7). The version-only check that green-lit a mismatched rootfs is gone.
+
+### 4.7 THE FIX
+Three layers, all in tree (code done; this note is the prose record):
+1. **`pmos/python3/APKBUILD` → r5:** revert the `-O0` experiment to stock `-O2`, add
+   `binutils-gold` to makedepends, and link libpython via
+   `-fuse-ld=gold -Wl,--no-mmap-output-file` in `LDFLAGS_NODIST`. gold `write()`s its
+   output file instead of `mmap()`-ing it, so qemu never gets the chance to
+   mis-zero-fill it → `.PyRuntime`/`.data.rel.ro` come out genuinely zero. The gold
+   flags are kept **out of the propagated (DIST) LDFLAGS** so they are not baked into
+   `sysconfig` — on-device pip extension builds keep the stock linker.
+2. **`scripts/verify-libpython-clean.py`** (committed in `ba4e467`): a deterministic,
+   optimisation-independent build-integrity gate. It flags long contiguous non-zero
+   runs in `.PyRuntime`/`.data.rel.ro` outside reloc slots / the static head
+   (`RUN_THRESHOLD = 256` bytes). Clean builds score `longest_run ≤ 52` B; corrupt
+   builds `≥ 22000` B — the threshold sits safely between. It does **not** run the
+   binary, so it works regardless of optimisation and never relies on qemu.
+3. **`docker-build.sh`** Phase 7d gates every built libpython and rebuilds (`--force`,
+   up to 4×) on any residual corruption, aborting if never clean; Phase 10 re-gates
+   the **installed** rootfs libpython as a ship gate. So a corrupt apk can never reach
+   a flashable image (§3.2).
+
+### 4.8 VERIFICATION (this session)
+- The gate **passes** the gold r5 libpython (`.PyRuntime longest_run=4`,
+  `.data.rel.ro=52` → CLEAN) and **catches** a known-corrupt sample
+  (`longest_run ≥ 22368` → CORRUPT).
+- **FOUR independent gold rebuilds all gate-CLEAN** (3 via the
+  `PYTHON3_VALIDATE_RUNS` harness + 1 standalone). Their md5s differ only because
+  CPython embeds a build timestamp (benign, not corruption) — the integrity-critical
+  zero-regions are clean in every one.
+- **HARDWARE-VERIFIED on the live device (USB gadget):** the device's **stock**
+  python3 → `Segmentation fault (core dumped)` rc=139, while the **gold r5**
+  python3.14 + gold libpython → `HWOK 3.14.5 … [GCC 15.2.0]` rc=0 — same device, same
+  moment. gold defeats the qemu mmap coin-flip in practice, not just in theory.
 
 ---
 
@@ -213,12 +303,15 @@ hang. The diag report.json verdict was **CRIT** only because the dark-but-
 responsive ring + the failed python unit tripped the heuristics, not because the
 daemon wedged.
 
-### 5.3 Currently-flashed image ships the CRASHING python; WiFi creds wiped by flash
-- The image **on the device right now** carries the **crashing** python (`libpython`
-  md5 `30e88d28`), so `onboard` / `blueman-applet` / `sleep-inhibitor.service` /
-  `gdb` are all down (gdb via the libpython link). Working on this device regardless:
-  **SMP dual-core**, **cpufreq to 1.2 GHz** with correct VDD_MPU, **BT** (BCM4330
-  patchram), the **WiFi radio** (firmware OK), **zram** (lzo-rle), **USER_NS**.
+### 5.3 The python fix is proven; the flashed image still needs a rebuild+reflash to carry it
+- The **fix is hardware-verified** (§4.8): the gold r5 python3.14 runs `rc=0` on this
+  exact device. But the verification ran the gold build deployed alongside the stock
+  one — the image **installed on the device right now** is the pre-fix one and still
+  carries the **crashing** python (`libpython` md5 `30e88d28`), so `onboard` /
+  `blueman-applet` / `sleep-inhibitor.service` / `gdb` stay down on it until a fresh
+  image (built through the gated Phase 7d, §4.7) is flashed. Working on this device
+  regardless: **SMP dual-core**, **cpufreq to 1.2 GHz** with correct VDD_MPU, **BT**
+  (BCM4330 patchram), the **WiFi radio** (firmware OK), **zram** (lzo-rle), **USER_NS**.
 - **WiFi is unconfigured after a clean flash.** The radio + firmware are fine, but
   WiFi creds added **live** are **wiped by the next reflash** (access config lives in
   the rootfs). To persist them they must go in a **PRIVATE overlay** — the PSK is a
@@ -232,5 +325,10 @@ daemon wedged.
 - `pmos/device-google-steelhead/deviceinfo` — `deviceinfo_zram_swap_algo="lzo-rle"`.
 - `pmos/device-google-steelhead/APKBUILD` — pkgrel 6 → 10 (sleep-inhibitor mask
   removed; +gdb +python3-dbg for on-device debugging).
-- `pmos/python3/` — new override aport (APKBUILD now r4 + 4 companion files).
-- `docker-build.sh` — Phase 6 stage python3 + Phase 7d build python3.
+- `pmos/python3/` — new override aport (APKBUILD now **r5**, gold-linked
+  `-fuse-ld=gold -Wl,--no-mmap-output-file` + `binutils-gold` makedep, `-O0` reverted
+  to `-O2`; + 4 companion files).
+- `scripts/verify-libpython-clean.py` — deterministic build-integrity gate
+  (committed `ba4e467`).
+- `docker-build.sh` — Phase 6 stage python3; Phase 7d gate+retry build with
+  pkgrel-exact apk selection; Phase 10 ship gate on the installed rootfs libpython.

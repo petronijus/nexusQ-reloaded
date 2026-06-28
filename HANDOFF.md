@@ -4,11 +4,11 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-28 (latest): zram + userns + power health; an OPEN ARMv7 python crash
+## Session 2026-06-28 (latest): zram + userns + power health; the ARMv7 python crash ROOT-CAUSED + FIXED
 
 Full detail in `docs/2026-06-28-session-findings.md`. Diag capture
-`nq-captures/20260628-124159/` (verdict CRIT — dark-but-responsive LED ring + a
-failed python unit, **not** a true hang).
+`nq-captures/20260628-124159/` (verdict CRIT — dark-but-responsive LED ring + the
+then-failed python unit, **not** a true hang).
 
 - **zram swap fixed** — `CONFIG_ZRAM=m` + `deviceinfo_zram_swap_algo="lzo-rle"`
   (the kernel module only has the lzo backend; the service's default zstd failed
@@ -28,28 +28,43 @@ failed python unit, **not** a true hang).
   "13.3.Rel1 only / GCC 15 silently does not boot" finding below (2026-06-10)
   applied to the early hand-cross-compiled build and is **superseded** for the
   pmbootstrap path.
-- **OPEN — python3-3.14.5 SIGSEGVs on real ARMv7 (NOT fixed).** Even
-  `python3 -S -c ''` → rc 139 during `Py_Initialize`, crashing
-  onboard/blueman/sleep-inhibitor and `gdb` (gdb links libpython). The
-  `pmos/python3/` override (r3→r4) **PASSED under qemu-user but FAILED on device** —
-  qemu gives a FALSE PASS; on-device is the only authority. **Root cause (narrowed
-  2026-06-28):** a **CPython 3.14 source-level use-before-init / garbage-pointer
-  read** — `_PyStaticType_InitBuiltin` reads a garbage type-index (`0xf0012b00`) and
-  derefs a wild address that is **unmapped on hardware (SIGSEGV) but mapped under
-  qemu**. **DISPROVEN, with evidence:** LTO/PGO (r3 dropped, still crashes); LDREXD
-  misalignment (faulting addr is 8-byte aligned but **UNMAPPED** → SIGSEGV not
-  SIGBUS); gnu2/TLSDESC (traditional TLS, 0 `R_ARM_TLS_DESC`); optimization level
-  (two `-O0` r4 builds with **byte-identical `.text`**, differing only in ~139 KB of
-  data, behave oppositely on the same device). No `-O`/`-f` flag fixes it — needs a
-  source/upstream fix (candidate 3.14.6). **Plus a build-pipeline bug (OPEN):** the
-  Phase 9 rootfs ships a *different* r4 (libpython md5 `30e88d28`, crashes) than the
-  Phase 7d-exported apk (`d43b6509`, runs); the version-only check missed it →
-  byte-verify by md5. (The device currently runs the crashing python.)
-  `docker-build.sh` gained Phase 6 staging + Phase 7d to build the override;
-  `device-google-steelhead` pkgrel 6→10 **removed** the `sleep-inhibitor.service`
-  `/dev/null` mask and added `gdb` + `python3-dbg` for on-device debugging (gdb
-  blocked until python is fixed). WiFi creds added live are wiped by reflash — to
-  persist they need a **private overlay** (PSK is a secret), not the public repo.
+- **FIXED — armv7 python3-3.14.5 SIGSEGV (root-caused + hardware-verified).** Alpine's
+  `python3-3.14.5-r2` SIGSEGVed deterministically (`python3 -S -c ''` → rc 139 in
+  `Py_Initialize`), crashing onboard/blueman/sleep-inhibitor and `gdb` (it links
+  libpython). **Root cause: NOT a compiler or CPython-source bug** but a **build-time
+  qemu-user corruption** — the armv7 toolchain runs under qemu (`--no-cross`) and
+  qemu's mmap zero-fill of the **linker's output file** non-deterministically (≈50 %
+  per build — a coin-flip) leaves garbage in libpython's should-be-zero `.PyRuntime` /
+  `.data.rel.ro`. That garbage lands on `interp->types.builtins.num_initialized`
+  (read back `0xf0012b00`), so `_PyStaticType_InitBuiltin` derefs a wild address —
+  **unmapped on hardware (SIGSEGV) but mapped under qemu (FALSE PASS)**. Forensic
+  proof: a clean and a crashing build are byte-identical except those two zero-regions
+  (clean all-zero, crashing page-aligned garbage that even disassembles to ARM code
+  absent from python — stale qemu build memory). **DISPROVEN earlier (do not
+  re-tread):** LTO/PGO; LDREXD misalignment (faulting addr 8-byte aligned but
+  **UNMAPPED** → SIGSEGV not SIGBUS); gnu2/TLSDESC (traditional TLS, 0
+  `R_ARM_TLS_DESC`); optimization level (two `-O0` builds with **byte-identical
+  `.text`** behaved oppositely on the same device → data-region, not codegen).
+  **Fix:** `pmos/python3/` → **r5** links libpython with gold
+  `-fuse-ld=gold -Wl,--no-mmap-output-file` (gold `write()`s its output instead of
+  `mmap()`-ing it, so qemu can't mis-zero-fill it; flags kept OUT of DIST LDFLAGS so
+  on-device pip builds keep the stock ld), reverting the r4 `-O0` experiment to stock
+  `-O2`. Backed by a deterministic build-integrity gate
+  `scripts/verify-libpython-clean.py` (long non-zero runs in those zero-regions; clean
+  ≤52 B, corrupt ≥22000 B, threshold 256), run as a Phase-7d gate+retry loop (rebuild
+  ≤4× on residual corruption, abort if never clean; pkgrel-exact apk selection) and a
+  Phase-10 **ship gate** on the installed rootfs libpython. This also fixed the
+  earlier "rootfs ships a *different* r4 than the exported apk" bug (qemu coin-flip +
+  a stale-`r*.apk`-glob selection bug). **Verified:** 4 independent gold rebuilds all
+  gate-clean; on the live device stock python → rc 139 while gold r5 python → `HWOK`
+  rc 0. ⚠️ qemu's `python3 -S -c ''` build gate is still a false pass — always
+  validate **on the device** (or trust the integrity gate, which doesn't run the
+  binary). Affects **any** qemu-built armv7 binary, not just python. The
+  currently-flashed image predates the fix and still runs the crashing python until a
+  fresh (gated) image is flashed. `device-google-steelhead` pkgrel 6→10 **removed**
+  the `sleep-inhibitor.service` `/dev/null` mask and added `gdb` + `python3-dbg`. WiFi
+  creds added live are wiped by reflash — to persist they need a **private overlay**
+  (PSK is a secret), not the public repo.
 - **Ethernet still down** (v1.4.0 cpufreq boot-timing regression, unchanged).
 
 ## Session 2026-06-23: device hardening — AVR keys, HDMI desktop, WiFi; ethernet still open

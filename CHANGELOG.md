@@ -26,46 +26,58 @@ All notable changes to Nexus Q Reloaded. Format follows
   2-core load (no throttle; 100 °C passive trip not reached).
 
 ### Changed
-- **Build infra: local `python3` override aport + Phase 7d.** `docker-build.sh`
-  now stages `pmos/python3/` → `main/python3` (Phase 6) and builds it
-  (`pmbootstrap --no-cross build python3 --arch armv7`, Phase 7d) so a higher
-  pkgrel (now r4) is meant to supersede Alpine's broken `python3-3.14.5-r2` in the
-  rootfs (see Known issues — the supersede currently misfires). The override drops
-  `--with-lto` + `--enable-optimizations` and the `!gettext-dev` makedepends token
-  (pmbootstrap's apk wrapper rejects `!` entries); r4 also builds the core at `-O0`
-  (an experiment, since shown not to matter).
+- **Build infra: local `python3` override aport + gated Phase 7d.**
+  `docker-build.sh` stages `pmos/python3/` → `main/python3` (Phase 6) and builds it
+  (`pmbootstrap --no-cross build python3 --arch armv7`, Phase 7d) so a higher pkgrel
+  (now r5) supersedes Alpine's broken `python3-3.14.5-r2` in the rootfs. The override
+  drops `--with-lto` + `--enable-optimizations` and the `!gettext-dev` makedepends
+  token (pmbootstrap's apk wrapper rejects `!` entries), keeps stock `-O2`, and links
+  libpython with **gold `-Wl,--no-mmap-output-file`** (the fix — see Fixed below).
+  Phase 7d gates every built libpython with `scripts/verify-libpython-clean.py` and
+  rebuilds on residual corruption (pkgrel-exact apk selection, no stale-apk glob);
+  Phase 10 re-gates the installed rootfs libpython before emitting an image.
 - **`device-google-steelhead` no longer masks `sleep-inhibitor.service`; adds
   on-device debug tools.** The `/dev/null` mask was removed in favour of fixing the
-  root cause (the python crash below); the image now also ships `gdb` (16.3) +
-  `python3-dbg` to debug it on hardware (gdb itself is blocked until python is fixed
-  — it links `libpython`). (device APKBUILD pkgrel 6→10.)
+  root cause (the python crash, now fixed below); the image also ships `gdb` (16.3) +
+  `python3-dbg` (used to coredump-debug the crash on hardware; gdb links `libpython`,
+  so it works once python links a clean libpython). (device APKBUILD pkgrel 6→10.)
+
+### Fixed
+- **armv7 `python3` SIGSEGV — root-caused and fixed (hardware-verified).** Alpine's
+  `python3-3.14.5-r2` SIGSEGVed deterministically on the Cortex-A9 (`python3 -S -c ''`
+  → rc 139 during `Py_Initialize`), taking down `onboard`, `blueman-applet`,
+  `sleep-inhibitor.service` and `gdb` (it links `libpython`). **Root cause:** NOT a
+  compiler or CPython-source bug, but a **build-time qemu-user corruption** — the
+  armv7 toolchain runs under qemu (`--no-cross`) and qemu's mmap zero-fill of the
+  **linker's output file** non-deterministically (≈50 % per build) leaves stale
+  garbage in libpython's should-be-zero `.PyRuntime` / `.data.rel.ro`, landing on
+  `interp->types.builtins.num_initialized` (read back as `0xf0012b00`) → wild
+  type-index deref → SIGSEGV on real HW (qemu keeps the wild address mapped → FALSE
+  PASS). Forensic proof: a clean and a crashing build are byte-identical except those
+  two zero-regions (clean all-zero; crashing page-aligned garbage that even
+  disassembles to ARM code absent from python — stale qemu build memory). Earlier
+  suspects **disproven**: LTO/PGO, LDREXD alignment, gnu2/TLSDESC, and optimization
+  level (two `-O0` builds with byte-identical `.text` behaved oppositely on the same
+  device). **Fix:** the r5 override links libpython with **gold
+  `-fuse-ld=gold -Wl,--no-mmap-output-file`** (gold `write()`s its output instead of
+  `mmap()`-ing it, so qemu can't mis-zero-fill it; flags kept out of DIST LDFLAGS so
+  on-device pip builds keep the stock linker), backed by a deterministic build gate
+  `scripts/verify-libpython-clean.py` (flags long non-zero runs in those zero-regions;
+  clean ≤52 B, corrupt ≥22000 B, threshold 256) run in a Phase-7d gate+retry loop and
+  again as a Phase-10 ship gate. Verified: 4 independent gold rebuilds all gate-clean;
+  on the live device the stock python → rc 139 while the gold r5 python → `HWOK`
+  rc 0. Affects **any** qemu-built armv7 binary, not just python. See
+  `docs/2026-06-28-session-findings.md`.
+- **Build-pipeline: rootfs python ≠ the verified apk — fixed.** Phase 7d had exported
+  a clean `python3-3.14.5-r4` apk while the rootfs install pulled a *different* r4
+  build (md5 `30e88d28`, crashes vs `d43b6509`, runs) — partly the qemu coin-flip
+  above, partly a stale-artifact bug where a bare `python3-3.14.5-r*.apk` glob matched
+  an older apk in the persistent work-volume repo. Fixed by selecting the
+  **exact `pkgver-pkgrel`** apk, gating that file, and re-gating the **installed**
+  rootfs libpython at ship time (the version-only check that green-lit a mismatch is
+  gone).
 
 ### Known issues / in progress
-- **python3-3.14.5 SIGSEGVs deterministically on real ARMv7 — OPEN.** Even
-  `python3 -S -c ''` returns rc 139 before any user bytecode, during
-  `Py_Initialize`, crashing `onboard`, `blueman-applet`, `sleep-inhibitor.service`
-  — and `gdb` (it links `libpython`). **Root cause (narrowed 2026-06-28):** a
-  **CPython 3.14 source-level use-before-init / garbage-pointer read**, NOT a
-  compiler issue. `_PyStaticType_InitBuiltin` reads a garbage type-index
-  (`interp->types.builtins.num_initialized` = `0xf0012b00`) and dereferences
-  `_PyRuntime.types.managed_static.types[idx]`; the wild address is unmapped on real
-  hardware (SIGSEGV) but mapped under qemu (false pass). **DISPROVEN:** LTO/PGO (r3
-  dropped them, still crashes); LDREXD misalignment (faulting addr is 8-byte aligned
-  but UNMAPPED → SIGSEGV not SIGBUS); gnu2/TLSDESC (binary uses traditional TLS, zero
-  `R_ARM_TLS_DESC` relocs); and optimization level itself — two `-O0` r4 builds with
-  **byte-identical `.text`** (3,528,976 bytes, `cmp`-equal) differing only in ~139 KB
-  of data behave oppositely on the same device. Fix must come from source/upstream
-  (candidate 3.14.6), not a `-O`/`-f` flag — **under investigation, not done.** The
-  qemu-user build gate (`python3 -S -c ''` rc 0) is a **FALSE PASS** — validate armv7
-  python **on-device only**. See `docs/2026-06-28-session-findings.md`.
-- **Build-pipeline: rootfs python ≠ the verified apk — OPEN.** `docker-build.sh`
-  Phase 7d builds and exports one `python3-3.14.5-r4` apk (libpython md5
-  `d43b6509`, runs), but the Phase 9 rootfs install pulls a **different** r4 build
-  (md5 `30e88d28`, crashes). Verification only checked the apk DB **version**
-  (`r4`), not the libpython md5, so it green-lit a rootfs whose python differs from
-  the verified/exported apk. To fix: byte-verify the rootfs libpython against the
-  exported apk, and reconcile why two r4 builds exist / why Phase 9 doesn't install
-  the Phase 7d apk. (This is why the device currently runs the crashing python.)
 - **On-board LAN9500A Ethernet still down** — the v1.4.0 cpufreq boot-timing
   regression is unchanged: `smsc95xx` registers but the device never enumerates, no
   `eth0`. Use WiFi / the USB gadget. (Fix tracked for 1.4.1.)

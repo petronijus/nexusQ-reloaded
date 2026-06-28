@@ -7,29 +7,36 @@
 # takes down every python consumer on the device (sleep-inhibitor.service, onboard,
 # blueman-applet).
 #
-# This rebuild (started r3, now r4) drops LTO + PGO at a higher pkgrel so it is meant
-# to supersede Alpine's -r2 in the rootfs. (PGO also cannot run in our qemu armv7
-# build at all -- it would execute an instrumented interpreter under qemu.)
+# This rebuild (r5) drops LTO + PGO at a higher pkgrel so it supersedes Alpine's
+# -r2 in the rootfs. (PGO also cannot run in our qemu armv7 build at all -- it would
+# execute an instrumented interpreter under qemu.)
 #
-# !!! STATUS 2026-06-28: NOT YET A WORKING FIX -- OPEN. Narrowed to a CPython 3.14
-# SOURCE-level use-before-init / garbage-pointer read, NOT a compiler problem. During
-# Py_Initialize, _PyStaticType_InitBuiltin reads a garbage type-index
-# (interp->types.builtins.num_initialized = 0xf0012b00) and derefs a wild address
-# (_PyRuntime.types.managed_static.types[idx]); that address is UNMAPPED on real
-# hardware (SIGSEGV) but mapped under qemu-user (FALSE PASS).
-# DISPROVEN, with evidence -- do NOT re-tread:
-#   - LTO/PGO: r3 dropped both, still crashes.
-#   - LDREXD misalignment: coredump faulting addr is 8-byte aligned but UNMAPPED
-#     (SIGSEGV, not SIGBUS) -- the bad ADDRESS, not its alignment.
-#   - gnu2/TLSDESC: binary uses traditional TLS (__tls_get_addr, 0 R_ARM_TLS_DESC).
-#   - optimization level itself: two -O0 r4 builds with BYTE-IDENTICAL .text
-#     (3,528,976 bytes, cmp-equal) differing only in ~139 KB of data behave
-#     oppositely on the same device -> data/layout-dependent, not codegen.
-# So no -O/-f flag fixes this; the fix is source/upstream (candidate 3.14.6). The -O0
-# in build() below is the current experiment state, NOT the fix. ALWAYS validate
-# `python3 -S -c ''` ON THE DEVICE, never on the qemu chroot. Drop this override once
-# Alpine (or upstream CPython) ships a working armv7 python.
-# See docs/2026-06-28-session-findings.md.
+# !!! ROOT CAUSE (2026-06-28): the crash is a BUILD-TIME corruption, NOT a compiler
+# or CPython-source bug. The armv7 toolchain runs under qemu-user (pmbootstrap
+# --no-cross) and qemu's mmap zero-fill of the LINKER's output file is buggy: it
+# non-deterministically leaves stale garbage in regions the C standard guarantees are
+# zero -- specifically libpython's .PyRuntime (holds _PyRuntime) and .data.rel.ro.
+# That garbage lands on interp->types.builtins.num_initialized, so the first
+# _PyStaticType_InitBuiltin reads a wild type-index (e.g. 0xf0012b00) and derefs an
+# UNMAPPED address -> SIGSEGV on real hardware (qemu-user keeps it mapped -> FALSE
+# PASS). It is a per-build coin-flip and affects ANY qemu-built armv7 binary.
+# Forensic proof: a clean (d43b6509) and a crashing build are byte-identical except
+# those zero-regions -- clean = all-zero, crashing = page-aligned garbage that even
+# disassembles to ARM code absent from python (stale qemu build memory).
+# DISPROVEN earlier (do NOT re-tread): LTO/PGO (r3 dropped both, still crashed),
+# LDREXD alignment (faulting addr is 8-byte aligned but UNMAPPED -> SIGSEGV not
+# SIGBUS), TLSDESC (traditional TLS, 0 R_ARM_TLS_DESC), and optimization level itself
+# (two -O0 builds with byte-identical .text behaved oppositely on the same device ->
+# data-region corruption, not codegen).
+#
+# THE FIX (build() below): link with gold and -Wl,--no-mmap-output-file so the linker
+# write()s its output instead of mmap()-ing it -- qemu never gets to mis-zero-fill the
+# output, so libpython's zero-regions come out actually zero. Belt-and-suspenders, the
+# build pipeline (docker-build.sh Phase 7d) gates every built libpython with
+# scripts/verify-libpython-clean.py and rebuilds on any residual corruption, so a
+# corrupt apk can never reach the rootfs. -O0 is reverted to the stock -O2 (codegen
+# was never the problem). ALWAYS still validate `python3 -S -c ''` ON THE DEVICE.
+# See docs/2026-06-28-session-findings.md and the qemu-user-corrupts-armv7-binaries note.
 #
 # One further deviation from Alpine's stock APKBUILD: the makedepends no longer
 # carries the `!gettext-dev` conflict token. abuild understands `!pkg` (ensure it
@@ -43,7 +50,7 @@ pkgname=python3
 # python3-extra's pkgver needs to be synchronized with this.
 pkgver=3.14.5
 _basever="${pkgver%.*}"
-pkgrel=4
+pkgrel=5
 pkgdesc="High-level scripting language"
 url="https://www.python.org/"
 arch="all"
@@ -63,6 +70,7 @@ subpackages="
 	"
 depends="libssl3>=3.3.0"
 makedepends="
+	binutils-gold
 	bluez-headers
 	bzip2-dev
 	expat-dev
@@ -162,17 +170,18 @@ build() {
 	# sometimes, but not recursion
 	local stacksize=0x200000
 
-	# steelhead r4 experiment: build the interpreter core at -O0 instead of -O2.
-	# The build SIGSEGVs on the real armv7 Cortex-A9 during Py_Initialize -- a GARBAGE
-	# type-index (0xf0012b00) read in _PyStaticType_InitBuiltin -> wild (UNMAPPED)
-	# deref. This is NOT optimization-level-dependent: two -O0 builds with
-	# byte-identical .text (3,528,976 bytes, cmp-equal) differing only in data behave
-	# oppositely on the SAME device -> a CPython SOURCE-level use-before-init bug, not
-	# codegen (header has the full disproof list). -O0 is kept as the current
-	# experiment state; it is NOT expected to be the fix. OPEN.
-	export CFLAGS_NODIST="$CFLAGS -O0 -DTHREAD_STACK_SIZE=$stacksize"
+	# steelhead: keep stock -O2 (the crash was never codegen -- see header). The real
+	# bug is qemu-user mis-zero-filling the linker's mmap'd output, corrupting
+	# libpython's .PyRuntime/.data.rel.ro. We dodge it by forcing gold to write() its
+	# output instead of mmap()-ing it: -fuse-ld=gold -Wl,--no-mmap-output-file. gold
+	# (binutils-gold) is in makedepends; the flags ride in LDFLAGS_NODIST, which is
+	# what links libpython + the python binary (PY_CORE_LDFLAGS). docker-build.sh
+	# Phase 7d additionally gates the result and rebuilds on any residual corruption.
+	# NB: gold stays OUT of the propagated (DIST) LDFLAGS on purpose, so it is not
+	# baked into sysconfig -- on-device pip extension builds keep using the stock ld.
+	export CFLAGS_NODIST="$CFLAGS -DTHREAD_STACK_SIZE=$stacksize"
 	export CXXFLAGS_NODIST="$CXXFLAGS -O2"
-	export LDFLAGS_NODIST="$LDFLAGS -Wl,-z,stack-size=$stacksize"
+	export LDFLAGS_NODIST="$LDFLAGS -Wl,-z,stack-size=$stacksize -fuse-ld=gold -Wl,--no-mmap-output-file"
 
 	case "$CARCH" in
 	ppc64le)
@@ -193,11 +202,9 @@ build() {
 	unset LDFLAGS CFLAGS CXXFLAGS CPPFLAGS
 
 	# steelhead: deliberately NO --enable-optimizations (PGO) and NO --with-lto.
-	# (PGO cannot run under our qemu armv7 build; LTO/PGO were the original -- now
-	# DISPROVEN -- suspects, along with LDREXD alignment, TLSDESC, and optimization
-	# level itself: two -O0 r4 builds with byte-identical .text behave oppositely on
-	# the same device, so this is a CPython SOURCE-level use-before-init bug, not
-	# codegen. See the header + docs/2026-06-28-session-findings.md. OPEN.)
+	# (PGO cannot run under our qemu armv7 build; LTO/PGO were early -- now disproven
+	# -- suspects. The real cause is the qemu-user linker-output corruption fixed via
+	# gold above, not LTO/PGO. See the header + docs/2026-06-28-session-findings.md.)
 	# Keep --with-computed-gotos for dispatch speed.
 	./configure \
 		--build=$CBUILD \

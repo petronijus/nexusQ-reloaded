@@ -34,11 +34,15 @@ overturned:
 - The shipping kernel is built with **GCC 15.2** (Alpine, via pmbootstrap) and
   boots — the historical "GCC 13.3.Rel1 only" constraint applied to an early
   hand-cross-compiled build, not this path.
-- **OPEN: python3-3.14.5 SIGSEGVs on real ARMv7** — `python3 -S -c ''` crashes in
-  `Py_Initialize` (a CPython source-level init bug, not a compiler/alignment issue;
-  qemu gives a false pass), taking down `onboard` / `blueman` / `sleep-inhibitor` /
-  `gdb`. Needs a source/upstream fix. See `CHANGELOG.md` and
-  `docs/2026-06-28-session-findings.md`.
+- **armv7 python3-3.14.5 SIGSEGV — root-caused and fixed (hardware-verified).** The
+  crash (`python3 -S -c ''` → rc 139 in `Py_Initialize`, taking down `onboard` /
+  `blueman` / `sleep-inhibitor` / `gdb`) was **not** a compiler or CPython bug but a
+  build-time **qemu-user corruption**: qemu's mmap zero-fill of the linker's output
+  non-deterministically left garbage in libpython's should-be-zero regions. Fixed by
+  linking libpython with **gold `-Wl,--no-mmap-output-file`** plus a deterministic
+  build-integrity gate (`scripts/verify-libpython-clean.py`) and a ship gate; verified
+  on the live device (stock python rc 139 → gold build rc 0). The next built image
+  carries it. See `CHANGELOG.md` and `docs/2026-06-28-session-findings.md`.
 
 See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
 notes and root-cause analysis.

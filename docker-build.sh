@@ -188,20 +188,18 @@ echo "  Installed: nexusqd (aport + C sources -> main/nexusqd)"
 # python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
 # deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
 # That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
-# Stage our rebuilt aport (now pkgrel r4) into main/python3 so the higher pkgrel is
-# meant to supersede Alpine's -r2 in the rootfs. Built below in Phase 7d. See
-# pmos/python3/APKBUILD.
-# CORRECTION (2026-06-28): the crash is NOT a compiler bug. DISPROVEN: LTO/PGO (r3
-# dropped both, still crashes), LDREXD alignment (faulting addr is 8-byte aligned but
-# UNMAPPED -> SIGSEGV not SIGBUS), TLSDESC, and optimization level (two -O0 r4 builds
-# with byte-identical .text behave oppositely on the same device). It is a CPython
-# SOURCE-level use-before-init / garbage-pointer read in Py_Initialize -- qemu-user
-# keeps the wild address mapped (FALSE PASS). OPEN; fix is source/upstream (3.14.6?).
-# docs/2026-06-28-session-findings.md.
+# Stage our rebuilt aport (pkgrel r5) into main/python3 so the higher pkgrel supersedes
+# Alpine's -r2 in the rootfs. Built + gated below in Phase 7d. See pmos/python3/APKBUILD.
+# ROOT CAUSE (2026-06-28): NOT a compiler/CPython bug. The armv7 toolchain runs under
+# qemu-user (--no-cross) and qemu's mmap zero-fill of the LINKER output is buggy,
+# non-deterministically corrupting libpython's .PyRuntime/.data.rel.ro (should-be-zero
+# regions) -> wild type-index deref -> SIGSEGV on real HW (qemu false-passes). The r5
+# aport links libpython with gold -Wl,--no-mmap-output-file to dodge it; Phase 7d also
+# gates every build + rebuilds on residual corruption. docs/2026-06-28-session-findings.md.
 PYTHON3_DIR="$PMAPORTS/main/python3"
 mkdir -p "$PYTHON3_DIR"
 cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
-echo "  Installed: python3 override (LTO/PGO dropped -> main/python3)"
+echo "  Installed: python3 override (gold-linked, gated -> main/python3)"
 
 echo "  Converting line endings (CRLF -> LF)..."
 find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" \) -exec dos2unix -q {} +
@@ -549,46 +547,125 @@ else
 fi
 
 echo ""
-echo "=== Phase 7d: Build python3 override (armv7/musl, LTO+PGO dropped) ==="
-# Alpine's python3-3.14.5-r2 SIGSEGVs on armv7 (see the Phase 6 note +
-# pmos/python3/APKBUILD): the stock interpreter crashes on the first bytecode. We
-# rebuild the SAME version as r3 with LTO + PGO dropped (so this full CPython compile
-# under qemu no longer runs an instrumented interpreter mid-build, and it completes).
-# The higher pkgrel (r3 > Alpine r2) makes the Phase 9 rootfs install pull OUR python3
-# (and all subpackages) instead of Alpine's.
-# CORRECTION (2026-06-28): dropping LTO/PGO does NOT fix the crash on hardware. The
-# bug is a CPython SOURCE-level use-before-init / garbage-pointer read in Py_Initialize
-# (NOT compiler/LTO/alignment/optimization -- all disproven), which qemu-user does not
-# reproduce -- so a green Phase 7d is NOT proof. Validate `python3 -S -c ''` ON DEVICE.
-# Also byte-verify the rootfs libpython md5 vs the apk exported below: they have
-# diverged (rootfs 30e88d28 crashes, exported d43b6509 runs). OPEN; needs an upstream
-# fix (3.14.6?). docs/2026-06-28-session-findings.md.
-set +e
-# The vendored sha512sums are already correct; regenerate to absorb any dos2unix drift
-# in the companion files (idle.desktop, *.patch) before building.
-pmbootstrap checksum python3 2>&1 || true
-# --no-cross (qemu-only): crossdirect cannot exec cc1 in this image (see Phase 7c).
-pmbootstrap --no-cross build python3 --arch armv7 2>&1
-PYTHON3_RC=$?
-set -e
-echo "=== python3 build exit code: $PYTHON3_RC ==="
-if [ $PYTHON3_RC -eq 0 ]; then
-    # pkgrel-agnostic: match whatever r<N> the staged aport produced (currently r4),
-    # so this never breaks again on a pkgrel bump. $WORK/packages only holds our
-    # locally-built repo, so there is exactly one python3-3.14.5-r*.apk here.
-    PYTHON3_APK=$(find "$WORK/packages" -name 'python3-3.14.5-r*.apk' -print -quit 2>/dev/null)
-    if [ -n "$PYTHON3_APK" ]; then
-        cp "$PYTHON3_APK" /tmp/output/ 2>/dev/null && echo "  Exported: $(basename "$PYTHON3_APK")"
-        echo "  $(basename "$PYTHON3_APK" .apk) built -> local repo will supersede Alpine's broken -r2"
+# Resolve the EXACT apk filename from the staged aport's pkgver/pkgrel. A bare
+# python3-3.14.5-r*.apk glob is UNSAFE: $WORK/packages is the persistent work-volume
+# repo and accumulates stale apks from earlier runs (r3, r4, r5, ...), so
+# `find ... -print -quit` can return an OLD pkgrel instead of the one we just built --
+# this exact stale-artifact bug silently gated the wrong apk. Match the precise
+# r<pkgrel> so the gate always checks what this build actually produced.
+_py3_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/python3/APKBUILD" | head -1)
+_py3_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/python3/APKBUILD" | head -1)
+PY3_APK_NAME="python3-${_py3_pv}-r${_py3_pr}.apk"
+echo "  python3 target apk (pkgrel-exact): $PY3_APK_NAME"
+
+# --- Optional gold-fix validation harness (opt-in via PYTHON3_VALIDATE_RUNS) --------
+# Set PYTHON3_VALIDATE_RUNS=N to force N independent python3 rebuilds and gate each,
+# proving gold reliably defeats the per-build qemu mmap coin-flip (corruption was
+# ~50/50 without it). Runs ONLY python3 (no kernel/rootfs -- those are Phase 8+) and
+# exits. Production builds leave this unset. See scripts/verify-libpython-clean.py.
+if [ -n "${PYTHON3_VALIDATE_RUNS:-}" ]; then
+    echo "=== Phase 7d-validate: $PYTHON3_VALIDATE_RUNS forced gold rebuilds + gate ==="
+    GATE="$SRC/scripts/verify-libpython-clean.py"
+    _vclean=0; _vcorrupt=0
+    for _v in $(seq 1 "$PYTHON3_VALIDATE_RUNS"); do
+        pmbootstrap checksum python3 >/dev/null 2>&1 || true
+        set +e
+        pmbootstrap --no-cross build python3 --arch armv7 --force >"/tmp/validate-$_v.log" 2>&1
+        _vrc=$?
+        set -e
+        if [ $_vrc -ne 0 ]; then
+            echo "  run $_v/$PYTHON3_VALIDATE_RUNS: BUILD FAILED (rc=$_vrc) -- tail /tmp/validate-$_v.log:"
+            tail -15 "/tmp/validate-$_v.log" 2>/dev/null | sed 's/^/      /'
+            _vcorrupt=$((_vcorrupt + 1)); continue
+        fi
+        _vapk=$(find "$WORK/packages" -name "$PY3_APK_NAME" -print -quit 2>/dev/null)
+        tar -xzOf "$_vapk" usr/lib/libpython3.14.so.1.0 > "/tmp/validate-$_v.so" 2>/dev/null
+        if python3 "$GATE" "/tmp/validate-$_v.so" > "/tmp/validate-$_v.gate" 2>&1; then
+            _vverdict="CLEAN  "; _vclean=$((_vclean + 1))
+        else
+            _vverdict="CORRUPT"; _vcorrupt=$((_vcorrupt + 1))
+        fi
+        _vmd5=$(md5sum "/tmp/validate-$_v.so" | awk '{print $1}')
+        _vlr=$(grep -oE 'longest_run=[ ]*[0-9]+' "/tmp/validate-$_v.gate" | grep -oE '[0-9]+' | sort -n | tail -1)
+        echo "  run $_v/$PYTHON3_VALIDATE_RUNS: $_vverdict  md5=$_vmd5  max_longest_run=${_vlr:-?}"
+    done
+    echo "=== VALIDATION SUMMARY: $_vclean CLEAN / $_vcorrupt CORRUPT of $PYTHON3_VALIDATE_RUNS ==="
+    if [ $_vcorrupt -eq 0 ]; then
+        echo "  PASS: gold (-Wl,--no-mmap-output-file) produced a clean libpython on EVERY run."
     else
-        echo "  ERROR: python3 build returned 0 but the python3-3.14.5-r*.apk was not found under"
-        echo "         $WORK/packages -- the rootfs would FALL BACK to the broken r2."
-        PYTHON3_RC=1
+        echo "  FAIL: gold did NOT fully defeat the qemu mmap corruption -- investigate."
     fi
+    exit 0
+fi
+
+echo "=== Phase 7d: Build python3 override (armv7/musl, gold-linked, gated) ==="
+# Alpine's python3-3.14.5-r2 SIGSEGVs on armv7 (see pmos/python3/APKBUILD header):
+# the stock interpreter crashes on the first bytecode (rc 139), taking down every
+# python consumer on the device. ROOT CAUSE (2026-06-28): NOT a compiler/CPython bug
+# but a BUILD-TIME corruption -- qemu-user's mmap zero-fill of the LINKER's output
+# file non-deterministically leaves garbage in libpython's .PyRuntime/.data.rel.ro
+# (regions the C standard guarantees are zero) -> wild type-index deref -> SIGSEGV on
+# real HW (qemu false-passes it). Our r5 aport dodges it by linking libpython with
+# gold -Wl,--no-mmap-output-file (write() instead of mmap()). Because the corruption
+# is a per-build coin-flip that affects ANY qemu-built armv7 binary, we ALSO gate
+# every built libpython here with scripts/verify-libpython-clean.py and rebuild on
+# any residual corruption -- so a corrupt apk can NEVER reach the rootfs. The higher
+# pkgrel (r5 > Alpine r2) makes the Phase 9 rootfs install pull OUR python3 (+ all
+# subpackages) instead of Alpine's. A green build is still not on its own proof of
+# runtime health -- validate `python3 -S -c ''` ON THE DEVICE.
+# docs/2026-06-28-session-findings.md + the qemu-user-corrupts-armv7-binaries note.
+GATE="$SRC/scripts/verify-libpython-clean.py"
+PYTHON3_MAX_TRIES=4
+PYTHON3_RC=1
+PYTHON3_APK=""
+for _try in $(seq 1 "$PYTHON3_MAX_TRIES"); do
+    echo "--- python3 build attempt $_try/$PYTHON3_MAX_TRIES ---"
+    set +e
+    # regenerate checksums (absorb any dos2unix drift in companion files) then build.
+    pmbootstrap checksum python3 2>&1 || true
+    # --no-cross (qemu-only): crossdirect cannot exec cc1 in this image (see Phase 7c).
+    # --force: every (re)build must actually re-compile + re-LINK, both to apply the
+    # current aport and -- on a retry -- to re-roll the qemu mmap coin-flip.
+    pmbootstrap --no-cross build python3 --arch armv7 --force 2>&1
+    _brc=$?
+    set -e
+    if [ $_brc -ne 0 ]; then
+        echo "  ERROR: python3 build FAILED (exit $_brc). A rebuild will not fix a compile"
+        echo "         error, so not retrying. Key log:"
+        grep -niE "ERROR|error:|FAILED|segmentation|configure: error" "$WORK/log.txt" 2>/dev/null | tail -30
+        PYTHON3_RC=$_brc
+        break
+    fi
+    # pkgrel-EXACT (see PY3_APK_NAME above): the work-volume repo accumulates stale
+    # python3 apks from prior runs, so a bare r*.apk glob could gate/export the wrong
+    # one. Match only the apk this build produced.
+    _apk=$(find "$WORK/packages" -name "$PY3_APK_NAME" -print -quit 2>/dev/null)
+    if [ -z "$_apk" ]; then
+        echo "  ERROR: build returned 0 but no $PY3_APK_NAME under $WORK/packages."
+        PYTHON3_RC=1
+        break
+    fi
+    # INTEGRITY GATE: extract the libpython from the freshly-built apk (busybox tar
+    # reads apk's concatenated gzip members fine) and check it for the qemu mmap
+    # corruption before we let it anywhere near the rootfs.
+    tar -xzOf "$_apk" usr/lib/libpython3.14.so.1.0 > /tmp/libpython-check.so 2>/dev/null
+    if python3 "$GATE" /tmp/libpython-check.so; then
+        echo "  CLEAN: $(basename "$_apk") passed the integrity gate on attempt $_try."
+        PYTHON3_APK="$_apk"
+        PYTHON3_RC=0
+        break
+    fi
+    echo "  CORRUPT: $(basename "$_apk") FAILED the gate (qemu mmap zero-fill hit"
+    echo "           despite gold) -- discarding and rebuilding (--force re-links)."
+done
+echo "=== python3 build result: rc=$PYTHON3_RC ==="
+if [ $PYTHON3_RC -eq 0 ] && [ -n "$PYTHON3_APK" ]; then
+    cp "$PYTHON3_APK" /tmp/output/ 2>/dev/null && echo "  Exported: $(basename "$PYTHON3_APK")"
+    echo "  $(basename "$PYTHON3_APK" .apk) is gate-verified clean -> supersedes Alpine's -r2"
 else
-    echo "  ERROR: python3 override build FAILED (exit $PYTHON3_RC) -- the rootfs would"
-    echo "         ship Alpine's broken r2. Do NOT flash until this is fixed. Key log:"
-    grep -niE "ERROR|error:|FAILED|segmentation|segfault|configure: error" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo "  ERROR: no clean python3 apk after $PYTHON3_MAX_TRIES attempt(s) -- the rootfs"
+    echo "         would ship a broken python. Do NOT flash. ABORTING the build."
+    exit 1
 fi
 
 echo ""
@@ -741,6 +818,24 @@ print(f\"{p['start']} {p['size']} {ss}\")
         RP_LOOP=$(sudo losetup -f --show /tmp/output/google-steelhead.img)
         RP_MNT=$(mktemp -d)
         sudo mount "$RP_LOOP" "$RP_MNT"
+        # SHIP GATE: the definitive integrity check. Gate the ACTUAL libpython that
+        # will ship in this rootfs (not just the Phase 7d apk) -- this catches a stale
+        # or raced apk slipping into the install, the exact failure that flashed a
+        # crashing python earlier. If it is qemu-corrupted, refuse to emit a flashable
+        # image. See scripts/verify-libpython-clean.py + the qemu-user-corrupts note.
+        SHIP_LIBPY="$RP_MNT/usr/lib/libpython3.14.so.1.0"
+        if [ -f "$SHIP_LIBPY" ]; then
+            if python3 "$SRC/scripts/verify-libpython-clean.py" "$SHIP_LIBPY"; then
+                echo "  SHIP GATE: installed libpython is clean."
+            else
+                echo "  SHIP GATE FAILED: the rootfs libpython is qemu-corrupted --"
+                echo "  refusing to emit a flashable image. Re-run the build."
+                sync; sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
+                exit 1
+            fi
+        else
+            echo "  WARNING: no $SHIP_LIBPY in the rootfs to gate (python3 not installed?)."
+        fi
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
         sudo python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
 import sys

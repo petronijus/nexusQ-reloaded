@@ -79,35 +79,53 @@ hangs), the Phase 6b patch failed to apply — check the build log for
 `only N/3 patterns matched` (pmbootstrap changed its `run_abuild`/`backend.py`; the
 three string replacements need re-targeting). That, not fakeroot-tcp, is the fix.
 
-### The python3 override (Phase 6 stage + Phase 7d build)
+### The python3 override (Phase 6 stage + gated Phase 7d build + Phase 10 ship gate)
 
-Alpine's stock **python3-3.14.5-r2 SIGSEGVs deterministically on real ARMv7**
-(`python3 -S -c ''` → rc 139), which kills every python consumer on the device
-(`onboard`, `blueman-applet`, `sleep-inhibitor.service`, and `gdb`). So the build
-ships a local override `pmos/python3/` (same version, now **r4**, higher pkgrel is
-meant to supersede Alpine's r2): **Phase 6** stages it into `$PMAPORTS/main/python3`;
-**Phase 7d** builds it with `pmbootstrap --no-cross build python3 --arch armv7` (a
-full CPython compile under qemu — slow). Watch Phase 7d's
-`=== python3 build exit code: N ===`; a non-zero rc (or a missing
-`python3-3.14.5-r*.apk` under `$WORK/packages`) means the rootfs would **fall back
-to Alpine's broken r2** — do not flash.
+Alpine's stock **python3-3.14.5-r2 SIGSEGVs on real ARMv7** (`python3 -S -c ''` →
+rc 139), which kills every python consumer on the device (`onboard`,
+`blueman-applet`, `sleep-inhibitor.service`, and `gdb`). The build ships a local
+override `pmos/python3/` (same version, now **r5**, higher pkgrel supersedes Alpine's
+r2): **Phase 6** stages it into `$PMAPORTS/main/python3`; **Phase 7d** builds it with
+`pmbootstrap --no-cross build python3 --arch armv7 --force` (full CPython compile
+under qemu — slow).
 
-⚠️ **It is NOT a compiler bug, and qemu gives a FALSE PASS for it.** Narrowed
-2026-06-28 to a **CPython 3.14 source-level use-before-init / garbage-pointer read**
-in `_PyStaticType_InitBuiltin` during `Py_Initialize` (it reads a garbage type-index
-`0xf0012b00` and derefs a wild address; unmapped on hardware → SIGSEGV, mapped under
-qemu → false pass). **DISPROVEN:** LTO/PGO, LDREXD misalignment (faulting addr is
-8-byte aligned but UNMAPPED), gnu2/TLSDESC, and optimization level itself — two
-`-O0` r4 builds with **byte-identical `.text`** differing only in data behave
-oppositely on the same device. No compiler flag fixes it; the fix is source/upstream
-(candidate 3.14.6). **OPEN.** A green Phase 7d does **NOT** prove python works —
-**validate `python3 -S -c ''` ON THE DEVICE over ssh**, never on the qemu chroot.
+⚠️ **Root cause (FIXED 2026-06-28) — qemu-user corrupts the linker's output, it is
+NOT a compiler/CPython bug.** The armv7 toolchain runs under qemu (`--no-cross`) and
+qemu's mmap zero-fill of the **linker's output file** non-deterministically (≈50 %
+per build) leaves garbage in libpython's should-be-zero `.PyRuntime`/`.data.rel.ro`,
+landing on `interp->types.builtins.num_initialized` → wild type-index deref in
+`Py_Initialize` → SIGSEGV on real HW (qemu keeps the wild address mapped → FALSE
+PASS). **DISPROVEN, do not re-tread:** LTO/PGO, LDREXD misalignment (faulting addr
+8-byte aligned but UNMAPPED), gnu2/TLSDESC, and optimization level (two `-O0` builds
+with byte-identical `.text` behaved oppositely on the same device). This affects
+**any** qemu-built armv7 binary, not just python.
 
-⚠️ **Pipeline pitfall (OPEN):** Phase 7d exports a *running* r4 apk to `output/`
-(libpython md5 `d43b6509`) but the Phase 9 rootfs has shipped a *different* r4 build
-(md5 `30e88d28`, crashes). The version check (`r4` present) is not enough —
-**byte-verify the rootfs libpython md5 against the exported apk.** See
-`docs/2026-06-28-session-findings.md`.
+**The fix, three layers (all in tree):**
+1. **r5 links libpython with gold** — `-fuse-ld=gold -Wl,--no-mmap-output-file` in
+   `LDFLAGS_NODIST` (gold `write()`s its output instead of `mmap()`-ing it, so qemu
+   can't mis-zero-fill it; kept OUT of DIST LDFLAGS so on-device pip builds keep the
+   stock ld), `-O0` reverted to stock `-O2`, `binutils-gold` makedep.
+2. **`scripts/verify-libpython-clean.py`** — a deterministic build-integrity gate
+   (flags long non-zero runs in `.PyRuntime`/`.data.rel.ro`; clean ≤52 B, corrupt
+   ≥22000 B, threshold 256). It does NOT run the binary, so it is optimisation- and
+   qemu-independent.
+3. **Phase 7d gate+retry + Phase 10 ship gate** — Phase 7d extracts each freshly-built
+   libpython and runs the gate, rebuilding (`--force`, up to 4×) on any residual
+   corruption and **aborting** if never clean; it selects the apk by its **exact
+   `pkgver-pkgrel`** name (`python3-3.14.5-r5`), not a bare `r*.apk` glob (which could
+   gate/export a stale r3/r4 from the persistent work-volume repo). Phase 10 re-gates
+   the **installed** rootfs libpython before emitting an image. So a corrupt python can
+   no longer reach a flashable image — this also fixed the old "rootfs ships a
+   *different* r4 than the exported apk" bug.
+
+Watch Phase 7d's `=== python3 build result: rc=N ===` and the per-attempt
+`CLEAN`/`CORRUPT` gate lines; a non-clean exit aborts the build (good — don't flash a
+fallback-r2 rootfs). A green build is still not on its own proof of *runtime* health —
+when you have a device, prefer to **validate `python3 -S -c ''` over ssh**; the
+integrity gate is the build-side authority (qemu's own `-S -c ''` check is a false
+pass). To prove gold beats the coin-flip, run with `PYTHON3_VALIDATE_RUNS=N` (forces N
+gold rebuilds + gates each; this session: 4/4 clean, and on-device stock python rc 139
+→ gold r5 rc 0). See `docs/2026-06-28-session-findings.md`.
 
 ## Artifacts
 
@@ -139,9 +157,10 @@ for fastboot with `python3 raw2simg.py <raw> <sparse>`.
 | `losetup: ...: failed to set up loop device: Permission denied` (Phase 10 post-process) | the rootfs post-process (strip /boot fstab, unlock root) ran without sudo as the `pmos` user | FIXED — Phase 10 runs losetup/mount/sed/python3/umount via `sudo` |
 | `cc: fatal error: cannot execute 'cc1': posix_spawnp` (Phase 7c nexusqd, exit 3) | crossdirect (cross-compile accelerator) is broken in this image | FIXED — Phase 7c builds nexusqd with `--no-cross` (qemu-only), matching Phase 8 |
 | `Writing 'boot' FAILED! error=-27` (at flash time) | boot.img > 8 MB (initramfs bundled) | Phase 10 ramdisk-less repack; verify boot.img ≤ 8 MB |
-| Phase 7d `python3 build exit code: N` (N≠0) or `the python3-3.14.5-r*.apk was not found` | python3 override build failed → rootfs falls back to Alpine's broken r2 | fix `pmos/python3/` (sha512sums / makedepends) + rebuild; do NOT flash a fallback-r2 rootfs |
-| python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) but Phase 7d was green | CPython 3.14 source-level use-before-init / garbage-pointer read in `Py_Initialize` (qemu FALSE PASS); NOT a compiler/LTO/alignment bug | OPEN (2026-06-28); needs a source/upstream fix (3.14.6?), no `-O`/`-f` flag helps. Validate `python3 -S -c ''` **on device**, not qemu |
-| device python crashes but Phase 7d exported a *running* apk | Phase 9 rootfs shipped a **different** r4 build than the verified/exported apk (libpython md5 `30e88d28` vs `d43b6509`); version-only check missed it | OPEN; byte-verify rootfs libpython md5 vs `output/`'s apk; reconcile why two r4 builds exist |
+| Phase 7d `python3 build result: rc=N` (N≠0) / `no clean python3 apk after N attempt(s)` — build ABORTS | python3 override build failed or never gated clean | a compile error won't fix on retry — read the log; if it's gate-CORRUPT every attempt, the gold link regressed (check `LDFLAGS_NODIST` has `-fuse-ld=gold -Wl,--no-mmap-output-file` and `binutils-gold` is in makedepends). Do NOT flash a fallback-r2 rootfs |
+| Phase 7d attempt logs `CORRUPT: ... FAILED the gate (qemu mmap zero-fill hit despite gold)` then rebuilds | the per-build qemu mmap coin-flip occasionally beats gold | EXPECTED-rare; the gate+retry loop re-rolls it (`--force`). Only a problem if all 4 attempts are CORRUPT (see row above) |
+| Phase 10 `SHIP GATE FAILED: the rootfs libpython is qemu-corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). If persistent, check the pkgrel-exact apk selection in Phase 7d |
+| python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) | qemu-user mis-zero-filled the linker output → garbage in libpython's `.PyRuntime`/`.data.rel.ro` (NOT a compiler/LTO/alignment/CPython-source bug — all disproven) | FIXED 2026-06-28 via gold `-Wl,--no-mmap-output-file` + the integrity gate. If a built image still crashes, the gold flags or gate were bypassed — verify `python3 -S -c ''` **on device** (qemu is a false pass) |
 | rc 128, git error | building from a `git worktree` | build from the main repo |
 
 When a fix means editing `docker-build.sh` / an APKBUILD / `deviceinfo`, make the
@@ -189,6 +208,13 @@ Check and REPORT each (PASS/FAIL + evidence):
   be `root:root` (uid 0), and there must be **zero** files owned by uid 12345 in the
   rootfs — `find usr etc lib -uid 12345` returns nothing. uid-12345-owned files would
   mean abuild ran unprivileged and faked was bypassed wrongly.
+- **python is the gold r5 build AND gate-clean** (Phase 10 already runs this ship
+  gate; re-confirm on the mounted rootfs): `usr/lib/libpython3.14.so.1.0` exists, the
+  installed package is `python3-3.14.5-r5` (not Alpine's r2), and
+  `python3 scripts/verify-libpython-clean.py <mnt>/usr/lib/libpython3.14.so.1.0`
+  reports CLEAN. A CORRUPT result means a qemu-mis-zero-filled libpython slipped
+  through — that rootfs will SIGSEGV `onboard`/`blueman`/`sleep-inhibitor`/`gdb` on
+  device. Rebuild; do not ship it.
 
 Unmount when done. If any check FAILS, that is a build defect — diagnose, fix the
 source (most often: `deviceinfo_systemd="always"` missing, `systemd = default`
