@@ -30,7 +30,7 @@ class NexusQApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Nexus Q',
+      title: 'nexusQ-reloaded',
       debugShowCheckedModeBanner: false,
       theme: buildNexusQTheme(),
       home: ConnectGate(initialClient: initialClient),

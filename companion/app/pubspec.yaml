@@ -1,5 +1,8 @@
 name: nexusq_companion
-description: "A new Flutter project."
+# Display name is "nexusQ-reloaded" (set per-platform: Android label, iOS/macOS
+# CFBundleName/DisplayName, web title/manifest). The Dart package id stays
+# nexusq_companion — Dart package names can't contain hyphens or uppercase.
+description: "nexusQ-reloaded — companion app for the postmarketOS Nexus Q."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

@@ -1,5 +1,6 @@
-# nexusq_companion — Flutter companion app
+# nexusQ-reloaded — Flutter companion app
 
+(Dart package id `nexusq_companion`; user-facing name **nexusQ-reloaded**.)
 Cross-platform (Android / iOS / macOS / web) companion for the postmarketOS Nexus Q,
 reproducing the original Holo-dark / glowing-ring look (see
 `../../docs/2026-06-30-companion-design-language.md`) and speaking the v1 control protocol
