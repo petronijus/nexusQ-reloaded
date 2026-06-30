@@ -8,7 +8,7 @@
 [![kernel](https://img.shields.io/badge/kernel-Linux%206.12%20LTS-orange)](kernel/)
 [![postmarketOS](https://img.shields.io/badge/OS-postmarketOS%20·%20systemd-008b8b)](https://postmarketos.org)
 [![arch](https://img.shields.io/badge/SoC-OMAP4460%20·%20armv7%20·%20dual%20Cortex--A9-informational)](#-hardware)
-[![unbrickable](https://img.shields.io/badge/unbrickable-✓-brightgreen)](#-flashing--unbrickable-by-design)
+[![unbrickable](https://img.shields.io/badge/unbrickable-✓-brightgreen)](INSTALL.md)
 [![license](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
 
 A discontinued Android curio with no apps, no recovery, and a sealed bootloader —
@@ -105,62 +105,6 @@ fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img   # -S chunking is R
 
 Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthrough in
 **[INSTALL.md](INSTALL.md)**.
-
----
-
-## 🔬 Engineering highlights
-
-The fun lives in the details. A few of the harder problems solved here:
-
-<details>
-<summary><b>🔊 The amp played everything exactly 2× too fast</b></summary>
-
-<br>
-
-`simple-audio-card` drove the McBSP2 → TAS5713 I²S link as bit/frame master but never
-set the sample-rate-generator divider, so the McBSP left `CLKGDV = 0` (bit clock = the
-*undivided* 24.576 MHz functional clock) and sized the frame as `in_freq/rate = 256`
-BCLK → **FSYNC = 96 kHz for a 48 kHz stream**. Tracks ended in half their time, so
-Spotify auto-skipped ~40 s in. **Kernel patch 0022** derives `CLKGDV` from the real
-func-clock rate and uses a minimal I²S frame — reproducing the factory registers
-exactly. Verified on hardware: 60 s of audio now plays in **60.00 s** (was ~30 s).
-</details>
-
-<details>
-<summary><b>💾 A "build bug" that was really a flash bug</b></summary>
-
-<br>
-
-`python3 -S -c ''` crashed in `Py_Initialize` on-device but was clean in every build.
-Root cause: `raw2simg.py` emitted all-zero blocks as Android-sparse `DONT_CARE`
-chunks; the Nexus Q's 2012 U-Boot **never erases `userdata`**, so those skipped blocks
-kept **stale prior-flash garbage** — which showed through libpython's should-be-zero
-regions and corrupted CPython's interpreter state. Fix: write a **byte-exact all-RAW
-sparse** (every block, zeros included). The lesson — *verify what the device runs, not
-just the artifact* — is baked into the build's ship-gate.
-</details>
-
-<details>
-<summary><b>🧠 Waking the second CPU core on a locked SoC</b></summary>
-
-<br>
-
-The OMAP4460 ships HS-fused; CPU1 bring-up goes through a secure SMC monitor call. The
-port extracts ground truth from the **reverse-engineered factory `vmlinux.bin`** and
-reproduces the secure wake sequence — dual-core SMP, then DVFS to 1.2 GHz via the
-TPS62361 rail over the PRM voltage controller, FBB-at-Nitro through `ti-abb`.
-</details>
-
-<details>
-<summary><b>🧱 Unbrickable by design</b></summary>
-
-<br>
-
-Every partition is reflashable **except** `bootloader`/`xloader`, which the flash
-procedure never touches. A bad kernel or rootfs is always a power-cycle-into-fastboot
-away from a re-flash. The boot image is **ramdisk-less** (kernel + appended DTB,
-booting `root=/dev/mmcblk0p13` directly) to stay under the 8 MB boot partition.
-</details>
 
 ---
 
