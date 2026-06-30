@@ -4,6 +4,13 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- mDNS discovery of the device bridge (_nexusq._tcp) over the local network. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Nexus Q uses the local network to find and control your device.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_nexusq._tcp</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

@@ -35,6 +35,9 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # mDNS / DNS-SD browsing to auto-discover the device's _nexusq._tcp bridge.
+  multicast_dns: ^0.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -8,14 +8,24 @@ reproducing the original Holo-dark / glowing-ring look (see
 ## Run
 
 ```sh
-# Local dev with the in-process mock device (no hardware needed):
-flutter run                      # pick a device; macOS/Chrome are easiest
+# Default: auto-discover the device on the LAN via mDNS (_nexusq._tcp), with a
+# manual-host / "Demo" fallback screen if none is found:
+flutter run
 
-# Against a real device bridge on the LAN:
+# In-process demo device (no hardware, no network) — straight to the UI:
+flutter run --dart-define=NEXUSQ_MOCK=true
+
+# Connect to a specific bridge directly (skips discovery):
 flutter run --dart-define=NEXUSQ_HOST=192.168.x.y
 ```
 
 `flutter test` runs the protocol/controller smoke test; `flutter analyze` is clean.
+
+**mDNS notes:** discovery works on Android/iOS/desktop on the same subnet (perms are
+configured: Android multicast, iOS/macOS Bonjour + local-network usage). On **web** there are no
+raw sockets, so discovery is skipped — use the manual host field or `NEXUSQ_MOCK`. On **sandboxed
+macOS** mDNS also needs Apple's `com.apple.developer.networking.multicast` entitlement (a
+provisioning-profile add-on); without it, use the manual host field (direct TCP works).
 
 ## Layout (`lib/`)
 
