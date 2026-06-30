@@ -39,7 +39,13 @@ Our docs:
   (no version string in source). Add bullets under the right `### Added/Changed/Fixed`
   of the current/next milestone. This is the FIRST place a success or fix is recorded.
 - **README.md** — project overview, current feature/status table, build one-liner.
-  Update if capabilities or the build/flow changed.
+  **MANDATORY stop — always review it, and on ANY release or capability/status
+  change you MUST update it:** bump every version reference (latest release tag,
+  artifact names like `nexusq-*-vX.Y.Z*`, the "what works"/status rows) to the
+  shipped state and reconcile the feature/status table with reality. Never leave
+  the README advertising an older version or a superseded status. If after a real
+  review nothing genuinely changed, say so explicitly in your ledger with the reason
+  — README is never silently skipped.
 - **INSTALL.md** — the flash guide (fastboot steps, partition names, size limits,
   the "never touch xloader/bootloader" warning, boot quirks). Update if the image,
   boot.img constraints, or flash procedure changed.
