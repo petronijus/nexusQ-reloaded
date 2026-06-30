@@ -551,7 +551,16 @@ NEXUSQD_RC=$?
 set -e
 echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
 if [ $NEXUSQD_RC -eq 0 ]; then
-    NEXUSQD_APK=$(find "$WORK/packages" -name 'nexusqd-*.apk' -print -quit 2>/dev/null)
+    # pkgrel-EXACT (mirrors the python3 PY3_APK_NAME logic): $WORK/packages is the
+    # persistent work-volume repo and accumulates stale apks from earlier runs
+    # (nexusqd-...-r1, -r2, ...), so a bare nexusqd-*.apk glob with -print -quit can
+    # export an OLD pkgrel instead of the one this build produced (observed: it
+    # exported r1 while the rootfs correctly installed r2). Match the precise
+    # pkgver-r<pkgrel> from the staged APKBUILD so the exported standalone apk is
+    # always the freshly-built one.
+    _nqd_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusqd/APKBUILD" | head -1)
+    _nqd_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusqd/APKBUILD" | head -1)
+    NEXUSQD_APK=$(find "$WORK/packages" -name "nexusqd-${_nqd_pv}-r${_nqd_pr}.apk" -print -quit 2>/dev/null)
     if [ -n "$NEXUSQD_APK" ]; then
         cp "$NEXUSQD_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQD_APK")"
     else
@@ -573,7 +582,11 @@ NEXUSQCTL_RC=$?
 set -e
 echo "=== nexusq-control build exit code: $NEXUSQCTL_RC ==="
 if [ $NEXUSQCTL_RC -eq 0 ]; then
-    NEXUSQCTL_APK=$(find "$WORK/packages" -name 'nexusq-control-*.apk' -print -quit 2>/dev/null)
+    # pkgrel-EXACT (see the nexusqd note above): avoid exporting a stale
+    # nexusq-control-...-rN.apk from the persistent work-volume repo.
+    _nqc_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusq-control/APKBUILD" | head -1)
+    _nqc_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusq-control/APKBUILD" | head -1)
+    NEXUSQCTL_APK=$(find "$WORK/packages" -name "nexusq-control-${_nqc_pv}-r${_nqc_pr}.apk" -print -quit 2>/dev/null)
     if [ -n "$NEXUSQCTL_APK" ]; then
         cp "$NEXUSQCTL_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQCTL_APK")"
     else
