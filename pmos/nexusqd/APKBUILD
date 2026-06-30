@@ -2,7 +2,7 @@
 # kernel frame channel. Built for the target by pmbootstrap (armv7/musl).
 pkgname=nexusqd
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Nexus Q LED ring daemon (steelhead-avr)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="armv7"
