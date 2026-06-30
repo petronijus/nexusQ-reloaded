@@ -23,6 +23,7 @@ depends="
 	blueman
 	breeze-icons
 	nexusqd
+	nexusq-control
 	librespot
 	openssh-server
 	openssh-client

@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""nexusq-control — LAN control bridge for the postmarketOS Nexus Q.
+
+Implements the v1 companion protocol (companion/PROTOCOL.md): newline-delimited
+JSON over TCP. It is the single LAN endpoint the Flutter companion talks to, and
+it fans the work out to the device subsystems that already exist:
+
+  - volume / mute        -> ALSA mixer control  (amixer; librespot is bound to
+                            the same control via --mixer alsa, so Spotify-Connect
+                            volume and companion volume are one knob)
+  - LED theme / brightness -> nexusqd control socket  (/run/nexusqd.sock)
+  - now-playing            -> librespot --onevent hook pushes metadata + volume
+                            in over a local unix socket (read-only metadata,
+                            faithful to the original app)
+
+Stdlib only (the device ships python3 via pmos/python3). Threaded: a TCP accept
+loop, a unix accept loop for the librespot hook, and one handler thread per
+client. State is shared under a lock; device events are broadcast to all clients.
+
+Config via env:
+  NEXUSQ_BIND_HOST   (default 0.0.0.0)
+  NEXUSQ_BIND_PORT   (default 45015)
+  NEXUSQ_MIXER_CARD  (default NexusQSpeaker)
+  NEXUSQ_MIXER_CTRL  (default NexusQ)        # the softvol control (see asound.conf)
+  NEXUSQD_SOCK       (default /run/nexusqd.sock)
+  NEXUSQ_HOOK_SOCK   (default /run/nexusq-control.sock)
+  NEXUSQ_NAME        (default "Nexus Q")
+"""
+import json
+import os
+import re
+import socket
+import subprocess
+import threading
+
+HOST = os.environ.get("NEXUSQ_BIND_HOST", "0.0.0.0")
+PORT = int(os.environ.get("NEXUSQ_BIND_PORT", "45015"))
+MIXER_CARD = os.environ.get("NEXUSQ_MIXER_CARD", "NexusQSpeaker")
+MIXER_CTRL = os.environ.get("NEXUSQ_MIXER_CTRL", "NexusQ")
+NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
+HOOK_SOCK = os.environ.get("NEXUSQ_HOOK_SOCK", "/run/nexusq-control.sock")
+DEVICE_NAME = os.environ.get("NEXUSQ_NAME", "Nexus Q")
+
+THEMES = [
+    {"name": "spectrum", "label": "Spectrum"},
+    {"name": "warm", "label": "Warm"},
+    {"name": "cool", "label": "Cool"},
+    {"name": "blue", "label": "Blue"},
+    {"name": "smoke", "label": "Smoke"},
+    {"name": "off", "label": "Off"},
+    {"name": "trackinfo", "label": "Track Info"},
+]
+
+
+def log(*a):
+    print("[nexusq-control]", *a, flush=True)
+
+
+class Mixer:
+    """Thin amixer wrapper over the configured ALSA control (0..100 + mute)."""
+
+    _pct = re.compile(r"\[(\d{1,3})%\]")
+    _onoff = re.compile(r"\[(on|off)\]")
+
+    def _run(self, *args):
+        return subprocess.run(
+            ["amixer", "-M", "-c", MIXER_CARD, *args],
+            capture_output=True, text=True, timeout=4,
+        )
+
+    def get(self):
+        """Return (volume 0..100, muted) or (None, None) if the control is absent."""
+        try:
+            r = self._run("sget", MIXER_CTRL)
+            if r.returncode != 0:
+                return None, None
+            vol = self._pct.search(r.stdout)
+            off = self._onoff.search(r.stdout)
+            return (int(vol.group(1)) if vol else None,
+                    (off.group(1) == "off") if off else False)
+        except Exception as e:  # noqa: BLE001 - never let a mixer hiccup kill the bridge
+            log("amixer get failed:", e)
+            return None, None
+
+    def set_volume(self, pct):
+        pct = max(0, min(100, int(pct)))
+        self._run("sset", MIXER_CTRL, f"{pct}%", "unmute")
+
+    def set_muted(self, muted):
+        self._run("sset", MIXER_CTRL, "mute" if muted else "unmute")
+
+
+def nexusqd_send(line):
+    """Send one command line to nexusqd's control socket; return True on 'ok'."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(NEXUSQD_SOCK)
+            s.sendall((line + "\n").encode())
+            return s.recv(64).startswith(b"ok")
+    except OSError as e:
+        log("nexusqd send failed:", e)
+        return False
+
+
+class Bridge:
+    def __init__(self):
+        self.mixer = Mixer()
+        self.lock = threading.Lock()
+        self.clients = {}          # id -> socket
+        self._next_id = 0
+        vol, muted = self.mixer.get()
+        self.state = {
+            "volume": vol if vol is not None else 50,
+            "muted": bool(muted),
+            "brightness": 255,
+            "theme": "blue",
+            "nowPlaying": {"playing": False, "artist": "", "track": "",
+                           "album": "", "artUrl": "", "source": ""},
+            "name": DEVICE_NAME,
+        }
+
+    # --- client registry / broadcast ------------------------------------
+    def add_client(self, sock):
+        with self.lock:
+            cid = self._next_id
+            self._next_id += 1
+            self.clients[cid] = sock
+        return cid
+
+    def remove_client(self, cid):
+        with self.lock:
+            self.clients.pop(cid, None)
+
+    def broadcast(self, event, data):
+        msg = (json.dumps({"event": event, "data": data}) + "\n").encode()
+        with self.lock:
+            dead = []
+            for cid, sock in self.clients.items():
+                try:
+                    sock.sendall(msg)
+                except OSError:
+                    dead.append(cid)
+            for cid in dead:
+                self.clients.pop(cid, None)
+
+    # --- request dispatch ------------------------------------------------
+    def handle(self, method, params):
+        """Return (result, events) where events is a list of (name, data) to
+        broadcast *after* the response is sent (ack precedes async events)."""
+        p = params or {}
+        if method == "subscribe":
+            return {"subscribed": ["*"]}, []
+        if method == "getState":
+            with self.lock:
+                return dict(self.state), []
+        if method == "getDeviceInfo":
+            return {"name": DEVICE_NAME, "model": "steelhead",
+                    "serial": _serial(), "swVersion": _sw_version()}, []
+        if method in ("setVolume", "adjustVolume", "setMuted", "toggleMute"):
+            return self._volume_cmd(method, p)
+        if method == "setTheme":
+            name = str(p.get("theme", ""))
+            if not nexusqd_send(f"theme {name}"):
+                raise Err("unavailable", "nexusqd rejected theme")
+            with self.lock:
+                self.state["theme"] = name
+            return {"theme": name}, [("themeChanged", {"theme": name})]
+        if method == "listThemes":
+            return {"themes": THEMES}, []
+        if method == "setBrightness":
+            b = max(0, min(255, int(p.get("brightness", 255))))
+            if not nexusqd_send(f"brightness {b}"):
+                raise Err("unavailable", "nexusqd rejected brightness")
+            with self.lock:
+                self.state["brightness"] = b
+            return {"brightness": b}, [("brightnessChanged", {"brightness": b})]
+        if method == "getPlayState":
+            with self.lock:
+                return dict(self.state["nowPlaying"]), []
+        if method in ("playPause", "next", "previous"):
+            # v1: librespot is a Spotify-Connect receiver with no local transport
+            # API — control happens from the Spotify app. Reserved for a future
+            # backend (e.g. go-librespot's HTTP API). See PROTOCOL.md §5.
+            raise Err("unavailable", "transport control not available in v1")
+        raise Err("unknown_method", method)
+
+    def _volume_cmd(self, method, p):
+        with self.lock:
+            vol = self.state["volume"]
+            muted = self.state["muted"]
+        if method == "setVolume":
+            vol = max(0, min(100, int(p.get("volume", vol))))
+            muted = False
+            self.mixer.set_volume(vol)
+            self.mixer.set_muted(False)
+        elif method == "adjustVolume":
+            vol = max(0, min(100, vol + int(p.get("steps", 0))))
+            self.mixer.set_volume(vol)
+        elif method == "setMuted":
+            muted = bool(p.get("muted", False))
+            self.mixer.set_muted(muted)
+        elif method == "toggleMute":
+            muted = not muted
+            self.mixer.set_muted(muted)
+        with self.lock:
+            self.state["volume"] = vol
+            self.state["muted"] = muted
+        return {"volume": vol, "muted": muted}, [("volumeChanged", {"volume": vol, "muted": muted})]
+
+    # --- librespot hook (internal, over the unix socket) ----------------
+    def on_hook(self, obj):
+        kind = obj.get("kind", "")
+        np = None
+        with self.lock:
+            cur = dict(self.state["nowPlaying"])
+        if kind == "track_changed":
+            cur.update({
+                "track": obj.get("name", ""),
+                "artist": obj.get("artists", ""),
+                "album": obj.get("album", ""),
+                "artUrl": obj.get("cover", ""),
+                "source": "spotify",
+                "playing": True,
+            })
+            np = cur
+        elif kind in ("playing", "paused", "stopped"):
+            cur["playing"] = (kind == "playing")
+            np = cur
+        elif kind == "volume":
+            # librespot volume is 0..65535; convert to 0..100
+            raw = int(obj.get("volume", 0))
+            vol = round(raw * 100 / 65535)
+            with self.lock:
+                self.state["volume"] = vol
+            self.broadcast("volumeChanged",
+                           {"volume": vol, "muted": self.state["muted"]})
+            return
+        if np is not None:
+            with self.lock:
+                self.state["nowPlaying"] = np
+            self.broadcast("nowPlayingChanged", np)
+
+
+class Err(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _serial():
+    for path in ("/sys/firmware/devicetree/base/serial-number",
+                 "/proc/device-tree/serial-number"):
+        try:
+            with open(path, "rb") as f:
+                return f.read().rstrip(b"\x00").decode(errors="replace")
+        except OSError:
+            pass
+    return "unknown"
+
+
+def _sw_version():
+    try:
+        with open("/etc/os-release") as f:
+            for ln in f:
+                if ln.startswith("VERSION="):
+                    return ln.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "unknown"
+
+
+def read_json_lines(sock, on_obj):
+    """Block reading newline-JSON objects from sock, calling on_obj(dict) for
+    each, until the peer closes the connection."""
+    buf = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line.decode())
+            except (ValueError, UnicodeDecodeError):
+                continue
+            on_obj(obj)
+
+
+def client_thread(bridge, sock, addr):
+    cid = bridge.add_client(sock)
+    log("client connected:", addr)
+
+    def handle_obj(obj):
+        method = obj.get("method")
+        rid = obj.get("id")
+        if not isinstance(method, str):
+            return
+        events = []
+        try:
+            result, events = bridge.handle(method, obj.get("params"))
+            if rid is not None:
+                sock.sendall((json.dumps({"id": rid, "ok": True, "result": result}) + "\n").encode())
+        except Err as e:
+            if rid is not None:
+                sock.sendall((json.dumps({"id": rid, "ok": False,
+                                          "error": {"code": e.code, "message": e.message}}) + "\n").encode())
+        except Exception as e:  # noqa: BLE001
+            log("handler error:", method, e)
+            if rid is not None:
+                sock.sendall((json.dumps({"id": rid, "ok": False,
+                                          "error": {"code": "internal", "message": str(e)}}) + "\n").encode())
+        # broadcast side-effect events only after the ack has been written
+        for name, data in events:
+            bridge.broadcast(name, data)
+
+    try:
+        read_json_lines(sock, handle_obj)
+    except OSError:
+        pass
+    finally:
+        bridge.remove_client(cid)
+        sock.close()
+        log("client disconnected:", addr)
+
+
+def hook_thread(bridge, sock):
+    """Short-lived: a librespot onevent invocation pushes one event line."""
+    try:
+        read_json_lines(sock, bridge.on_hook)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+
+def serve_unix(bridge):
+    try:
+        os.unlink(HOOK_SOCK)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(HOOK_SOCK)
+    os.chmod(HOOK_SOCK, 0o660)
+    srv.listen(8)
+    log("hook socket:", HOOK_SOCK)
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=hook_thread, args=(bridge, conn), daemon=True).start()
+
+
+def publish_mdns():
+    """Best-effort _nexusq._tcp advertisement via avahi (if present)."""
+    try:
+        return subprocess.Popen(
+            ["avahi-publish-service", DEVICE_NAME, "_nexusq._tcp", str(PORT),
+             "proto=1", f"name={DEVICE_NAME}", "model=steelhead"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        log("avahi-publish-service not found; mDNS disabled (connect by host:port)")
+        return None
+
+
+def main():
+    bridge = Bridge()
+    threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
+    mdns = publish_mdns()
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((HOST, PORT))
+    srv.listen(8)
+    log(f"listening on {HOST}:{PORT}  (mixer {MIXER_CARD}:{MIXER_CTRL}, nexusqd {NEXUSQD_SOCK})")
+    try:
+        while True:
+            conn, addr = srv.accept()
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            threading.Thread(target=client_thread, args=(bridge, conn, addr), daemon=True).start()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if mdns:
+            mdns.terminate()
+        srv.close()
+
+
+if __name__ == "__main__":
+    main()

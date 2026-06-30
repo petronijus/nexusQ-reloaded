@@ -1,0 +1,21 @@
+# userspace/nexusq-control/nexusq-control.service
+# LAN control bridge for the companion app. Talks to nexusqd (LED) over its
+# unix socket, to the ALSA softvol "NexusQ" control (volume), and to librespot
+# (now-playing, via the --onevent hook). See companion/PROTOCOL.md.
+[Unit]
+Description=Nexus Q companion control bridge
+After=network-online.target nexusqd.service sound.target
+Wants=network-online.target
+# nexusqd provides /run/nexusqd.sock; librespot provides now-playing. Both are
+# soft deps — the bridge degrades gracefully if either is down.
+Wants=nexusqd.service
+
+[Service]
+ExecStart=/usr/bin/nexusq-control
+Restart=on-failure
+RestartSec=3
+# the librespot --onevent hook writes to /run/nexusq-control.sock
+RuntimeDirectory=nexusq-control
+
+[Install]
+WantedBy=multi-user.target

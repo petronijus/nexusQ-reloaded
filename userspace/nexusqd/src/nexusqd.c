@@ -79,6 +79,8 @@ int main(void) {
     struct manual_ctx manual = { { 0, 0, 0 } };
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
+    int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
+                                 * (companion `brightness N` over the control socket) */
 
     /* Plan 3b audio: spawn arecord on the ALSA loopback, feed PCM segments to the
      * AudioCapture port (volume/FFT/beat); the music scene reacts and the
@@ -185,6 +187,10 @@ int main(void) {
                         reaction_on_volume(&rx, volume, now);
                         avr_set_mute(0, 0, 0);
                     }
+                    else if (cmd.kind == CTL_BRIGHTNESS) {
+                        brightness = cmd.value;
+                        memset(lastpk, 0xFF, sizeof(lastpk));   /* force a re-push at the new brightness */
+                    }
                     else if (cmd.kind == CTL_THEME) {
                         char path[256]; snprintf(path, sizeof(path), "%s/theme_%s", THEMES_DIR, cmd.name);
                         FILE *fp = fopen(path, "r");
@@ -275,6 +281,10 @@ int main(void) {
         prev_overlay = cur_overlay;
 
         struct frame f; comp_render(&comp, now, &f); frame_pack(&f, pk);
+        /* global ring brightness: scale the packed frame (255 = unchanged). The
+         * dedicated mute LED is written separately and is not dimmed here. */
+        if (brightness < 255)
+            for (int i = 0; i < RING*3; i++) pk[i] = (uint8_t)(pk[i] * brightness / 255);
         if (memcmp(pk, lastpk, sizeof(pk)) != 0) { avr_write_frame(pk, 0); memcpy(lastpk, pk, sizeof(pk)); }
 
         /* Heartbeat: reached the end of a frame tick, so the render path is
