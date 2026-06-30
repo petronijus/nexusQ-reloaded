@@ -40,10 +40,7 @@ class HomeScreen extends StatelessWidget {
                 Center(
                   child: DeviceSphere(
                     on: !s.muted && s.theme != 'off',
-                    // multi-color themes (spectrum/track info) glow Holo-Blue,
-                    // the device's own ring identity; single-color themes glow
-                    // their color.
-                    glow: theme.colors.length > 2 ? NexusQColors.accent : theme.primary,
+                    colors: theme.colors, // base glow reflects the LED theme palette
                     size: 184,
                   ),
                 ),
