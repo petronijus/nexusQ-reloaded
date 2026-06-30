@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=11
+pkgrel=12
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -52,6 +52,7 @@ source="
 	librespot.service
 	60_spotify.nft
 	asound.conf
+	snd-aloop.conf
 	$pkgname.post-install
 "
 
@@ -149,6 +150,12 @@ package() {
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
 		"$pkgdir"/etc/nftables.d/60_spotify.nft
+	# Load snd-aloop so the "nexusq" tee's loopback slave (hw:Loopback,0) exists.
+	# librespot's audio is duplicated to the speaker AND the loopback; nexusqd's
+	# tap (arecord on hw:Loopback,1, see userspace/nexusqd) reads it for the LED
+	# music visualizer.
+	install -Dm644 "$srcdir"/snd-aloop.conf \
+		"$pkgdir"/etc/modules-load.d/snd-aloop.conf
 }
 
 nonfree_firmware() {
@@ -177,5 +184,6 @@ SKIP  nq-healthd.service
 SKIP  librespot.service
 SKIP  60_spotify.nft
 SKIP  asound.conf
+SKIP  snd-aloop.conf
 SKIP  device-google-steelhead.post-install
 "

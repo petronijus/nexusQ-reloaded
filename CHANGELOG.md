@@ -4,6 +4,33 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.6.2] - 2026-06-30
+
+The **LED music visualizer** now reacts to Spotify playback. v1.6.1 routed
+librespot straight to the speaker, so nexusqd's audio tap (the snd-aloop loopback)
+got nothing and the ring stayed idle while music played.
+
+### Fixed
+- **LED visualizer is fed from playback (audio TEE).** The `nexusq` ALSA PCM is now
+  a tee (`multi` + `route`) that duplicates librespot's stereo to BOTH the TAS5713
+  speaker AND the snd-aloop loopback (`hw:Loopback,0`), all at 48 kHz. nexusqd's
+  existing tap (`arecord` on `hw:Loopback,1` @ 48 kHz, `userspace/nexusqd`) drives
+  the FFT/beat visualizer while the speaker plays. The speaker is the timing
+  master; the loopback slave is `plughw`, so it adapts to whatever rate the cable
+  is at (nexusqd's arecord may have set it) and never blocks playback — verified:
+  the tee opens whether the tone-playback or nexusqd's arecord grabs the loopback
+  first, and the tone reaches `hw:Loopback,1` at 48 kHz.
+
+### Added
+- **snd-aloop auto-loaded.** New `/etc/modules-load.d/snd-aloop.conf` (the kernel
+  ships `CONFIG_SND_ALOOP=m`); without it the `Loopback` card doesn't exist and the
+  visualizer tap can't open. `device-google-steelhead` pkgrel 12.
+
+### Known issues
+- The Spotify Connect session can briefly go "inactive" on the first play and
+  reconnect (librespot "context is not available" — a single-track-vs-playlist
+  context quirk; no ALSA error); playback is stable afterwards.
+
 ## [1.6.1] - 2026-06-29
 
 Working **TAS5713 speaker audio** and **Spotify Connect**, baked into the build. The
