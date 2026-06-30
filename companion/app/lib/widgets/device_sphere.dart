@@ -3,11 +3,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../theme/nexusq_theme.dart';
 
-/// The device as the original app showed it: the black Nexus Q sphere with the
-/// equatorial LED ring. The ring is drawn procedurally over the (dim) sphere so
-/// it takes the **current LED theme palette** and **animates** — a rotating
-/// rainbow for multi-color themes, a colored ring with an orbiting bright spot
-/// for solid ones — like the device's real ring. Off / muted → dark ring.
+/// The device as the original app showed it: the black Nexus Q sphere. The
+/// animated LED ring is drawn *behind* the sphere PNG (assets/device/sphere.png),
+/// whose ring band is transparent — so the ring shows through the cutout exactly
+/// where the real ring is, and the opaque sphere body hides the middle (the front
+/// and back rim show, like the real device). The ring color tracks the LED theme
+/// palette and rotates. Off / muted → no ring (dark band).
 class DeviceSphere extends StatefulWidget {
   const DeviceSphere({
     super.key,
@@ -46,17 +47,17 @@ class _DeviceSphereState extends State<DeviceSphere> with SingleTickerProviderSt
         builder: (context, _) => Stack(
           alignment: Alignment.center,
           children: [
-            // soft theme-colored bloom under the base
+            // soft theme-colored bloom spilling below the base
             if (widget.on)
               Positioned(
-                bottom: s * 0.10,
+                bottom: s * 0.06,
                 child: ImageFiltered(
                   imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                   child: Opacity(
-                    opacity: 0.55,
+                    opacity: 0.5,
                     child: Container(
                       width: s * 0.66,
-                      height: s * 0.18,
+                      height: s * 0.16,
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(s),
                         gradient: palette.length > 1 ? LinearGradient(colors: palette) : null,
@@ -66,15 +67,17 @@ class _DeviceSphereState extends State<DeviceSphere> with SingleTickerProviderSt
                   ),
                 ),
               ),
-            // the dim sphere (its baked-in ring stays dark; we light our own)
-            Image.asset('assets/device/sphere_off.png',
-                width: s, height: s, filterQuality: FilterQuality.medium),
-            // the procedural, animated, theme-colored LED ring
+            // the animated LED ring — drawn BEHIND the sphere; the transparent
+            // ring band in the PNG masks it to the exact rim shape.
             if (widget.on)
               CustomPaint(
                 size: Size(s, s),
                 painter: _RingPainter(palette: palette, phase: _c.value),
               ),
+            // the sphere on top: opaque body hides the ring's middle, the
+            // transparent band lets the rim show through.
+            Image.asset('assets/device/sphere.png',
+                width: s, height: s, filterQuality: FilterQuality.medium),
           ],
         ),
       ),
@@ -88,7 +91,6 @@ class _RingPainter extends CustomPainter {
   final double phase;
 
   Color _sample(double t) {
-    // t in [0,1) around the ring -> color from the palette (wraps).
     t -= t.floorToDouble();
     if (palette.length == 1) return palette.first;
     final scaled = t * palette.length;
@@ -100,12 +102,11 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    // Geometry measured from the original lit-ring pixels (drop_ball_activated):
-    // the ring sits on the base rim at ~80% height, half-width 0.215, and is a
-    // very flat ellipse (b≈0.045) — a near-edge-on view of the base ring.
-    final cx = w * 0.505, cy = h * 0.80;
-    final a = w * 0.215, b = h * 0.045;
-    const n = 72;
+    // Ellipse measured from the transparent ring band in sphere.png; the band
+    // masks it, so draw it a touch generous and thick to fully fill the cutout.
+    final cx = w * 0.517, cy = h * 0.733;
+    final a = w * 0.405, b = h * 0.120;
+    const n = 96;
     final single = palette.length == 1;
 
     void pass(double width, double sigma, double alphaScale) {
@@ -119,19 +120,17 @@ class _RingPainter extends CustomPainter {
         final ang0 = t0 * 2 * math.pi, ang1 = t1 * 2 * math.pi;
         final p0 = Offset(cx + a * math.cos(ang0), cy + b * math.sin(ang0));
         final p1 = Offset(cx + a * math.cos(ang1), cy + b * math.sin(ang1));
-        // far half (top of the ellipse, sin<0) reads as the ring's back: still
-        // clearly visible, just a touch dimmer than the near (front) half.
-        final depth = math.sin(ang0) < 0 ? 0.6 : 1.0;
+        // far half (top, sin<0) is the back rim — slightly dimmer than the front.
+        final depth = math.sin(ang0) < 0 ? 0.7 : 1.0;
         double intensity;
         Color base;
         if (single) {
           base = palette.first;
-          // an orbiting bright spot
           double d = (t0 - phase).abs();
           d = math.min(d, 1 - d);
-          intensity = 0.35 + 0.65 * math.exp(-math.pow(d / 0.13, 2).toDouble());
+          intensity = 0.4 + 0.6 * math.exp(-math.pow(d / 0.14, 2).toDouble());
         } else {
-          base = _sample(t0 + phase);   // rotating palette
+          base = _sample(t0 + phase);
           intensity = 1.0;
         }
         p.color = base.withValues(alpha: (intensity * depth * alphaScale).clamp(0.0, 1.0));
@@ -139,8 +138,8 @@ class _RingPainter extends CustomPainter {
       }
     }
 
-    pass(size.width * 0.034, size.width * 0.018, 0.55); // glow
-    pass(size.width * 0.013, 0, 1.0);                   // crisp ring
+    pass(w * 0.075, w * 0.02, 0.6);  // glow / fill
+    pass(w * 0.05, 0, 1.0);          // bright core (fills the band)
   }
 
   @override
