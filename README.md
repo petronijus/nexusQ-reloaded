@@ -2,7 +2,7 @@
 
 # 🛸 Nexus Q&nbsp;Reloaded
 
-### Google's glowing $299 orb from 2012 — reborn on **mainline Linux**.
+### Google's glowing orb from 2012 — reborn on **mainline Linux**.
 
 [![release](https://img.shields.io/github/v/release/petronijus/nexusQ-reloaded?sort=semver&color=8957e5&label=release)](https://github.com/petronijus/nexusQ-reloaded/releases)
 [![kernel](https://img.shields.io/badge/kernel-Linux%206.12%20LTS-orange)](kernel/)
