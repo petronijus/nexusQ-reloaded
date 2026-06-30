@@ -4,6 +4,43 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.6.3] - 2026-06-30
+
+A **companion app** and its on-device control bridge — a phone/desktop remote for the
+Q (volume, LED theme + brightness, now-playing), replacing the dead 2012 Google
+companion app. See `companion/` and `docs/2026-06-30-companion-app-RE.md`.
+
+### Added
+- **`nexusq-control` — a LAN control bridge** (new noarch aport `pmos/nexusq-control`).
+  A pure-Python3 daemon on TCP **45015**, advertised over mDNS **`_nexusq._tcp`**,
+  speaking a v1 JSON protocol (`companion/PROTOCOL.md`). It fans out to: ALSA softvol
+  (volume/mute), `nexusqd` over `/run/nexusqd.sock` (LED theme + brightness), and a
+  `librespot --onevent` hook (now-playing metadata). Enabled via the device package.
+- **Software master volume.** `asound.conf` gains a `nexusq_soft` **softvol** PCM with a
+  single ALSA control **`NexusQ`**, layered on top of the v1.6.2 audio tee
+  (`nexusq_soft` → `nexusq` tee → TAS5713 speaker **and** the visualizer loopback). One
+  knob is shared by librespot (`--mixer alsa --alsa-mixer-control NexusQ`) and the
+  companion, so Spotify-Connect volume and companion volume stay in lockstep — and the
+  LED visualizer still tracks the (post-volume) output.
+- **`nexusqd brightness <0-255>`** control command + a software ring-brightness scalar
+  (no firmware change).
+- **Companion app** (`companion/app`) — a cross-platform Flutter remote (sphere UI,
+  animated LED ring, mDNS auto-discovery; volume + LED theme/brightness + now-playing).
+  Built and installed separately on the phone — **not** part of the device image.
+- Reverse-engineering of the original Google Nexus Q companion app
+  (`com.google.android.setupwarlock`) — its control-RPC vocabulary informed the v1
+  protocol (`docs/2026-06-30-companion-app-RE.md`).
+
+### Changed
+- `librespot.service` now plays via `--device nexusq_soft --mixer alsa
+  --alsa-mixer-control NexusQ --onevent /usr/bin/nexusq-onevent`.
+- `device-google-steelhead` pkgrel 13 (`depends nexusq-control`).
+
+### Known issues
+- **Transport (play/pause/next) is `unavailable` in v1** — librespot is a
+  Spotify-Connect receiver with no local transport API; control happens from the
+  Spotify app.
+
 ## [1.6.2] - 2026-06-30
 
 The **LED music visualizer** now reacts to Spotify playback. v1.6.1 routed
