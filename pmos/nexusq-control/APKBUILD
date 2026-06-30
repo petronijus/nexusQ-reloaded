@@ -1,0 +1,35 @@
+# Nexus Q companion control bridge — pure-Python (stdlib only) LAN daemon that
+# implements the v1 companion protocol (companion/PROTOCOL.md). Bridges the
+# companion app to nexusqd (LED), the ALSA softvol control (volume), and
+# librespot (now-playing). Built for the target by pmbootstrap.
+pkgname=nexusq-control
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Nexus Q companion control bridge (LAN ↔ nexusqd/ALSA/librespot)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# python3: the daemon + onevent hook. alsa-utils: amixer (volume).
+# avahi-tools: avahi-publish-service for mDNS discovery (optional but enables
+# zero-config discovery by the companion).
+depends="python3 alsa-utils avahi-tools"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-control/.
+source="
+	nexusq-control nexusq-onevent nexusq-control.service
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nexusq-control "$pkgdir"/usr/bin/nexusq-control
+	install -Dm755 nexusq-onevent "$pkgdir"/usr/bin/nexusq-onevent
+	install -Dm644 nexusq-control.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-control.service
+
+	# Enable autostart declaratively (mirrors the nexusqd aport).
+	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-control.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-control.service
+}
+
+sha512sums="SKIP"

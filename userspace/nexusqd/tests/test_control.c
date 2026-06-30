@@ -16,6 +16,9 @@ static void test_ok(void) {
     CHECK(ctl_parse("vol 55", &c) == 0 && c.kind == CTL_VOL && c.value == 55);
     CHECK(ctl_parse("scene 0", &c) == 0 && c.kind == CTL_SCENE && c.value == 0);
     CHECK(ctl_parse("scene 4", &c) == 0 && c.kind == CTL_SCENE && c.value == 4);
+    CHECK(ctl_parse("brightness 0", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 0);
+    CHECK(ctl_parse("brightness 255", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 255);
+    CHECK(ctl_parse("brightness 128", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 128);
 }
 static void test_bad(void) {
     struct ctl_cmd c;

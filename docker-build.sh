@@ -21,7 +21,8 @@ for apkbuild in \
     "$SRC/pmos/device-google-steelhead/APKBUILD" \
     "$SRC/pmos/linux-google-steelhead/APKBUILD" \
     "$SRC/pmos/firmware-google-steelhead/APKBUILD" \
-    "$SRC/pmos/nexusqd/APKBUILD"; do
+    "$SRC/pmos/nexusqd/APKBUILD" \
+    "$SRC/pmos/nexusq-control/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -185,6 +186,16 @@ cp "$SRC/userspace/nexusqd/nexusqd.service" "$NEXUSQD_DIR/"
 cp "$SRC/userspace/nexusqd/default.json"   "$NEXUSQD_DIR/"
 echo "  Installed: nexusqd (aport + C sources -> main/nexusqd)"
 
+# nexusq-control: the companion LAN control bridge (pure-Python). Stage the
+# aport + the two python scripts + the systemd unit next to its APKBUILD.
+NEXUSQCTL_DIR="$PMAPORTS/main/nexusq-control"
+mkdir -p "$NEXUSQCTL_DIR"
+cp "$SRC/pmos/nexusq-control/APKBUILD"             "$NEXUSQCTL_DIR/"
+cp "$SRC/userspace/nexusq-control/nexusq-control"  "$NEXUSQCTL_DIR/"
+cp "$SRC/userspace/nexusq-control/nexusq-onevent"  "$NEXUSQCTL_DIR/"
+cp "$SRC/userspace/nexusq-control/nexusq-control.service" "$NEXUSQCTL_DIR/"
+echo "  Installed: nexusq-control (aport + bridge -> main/nexusq-control)"
+
 # python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
 # deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
 # That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
@@ -204,7 +215,7 @@ cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
 echo "  Installed: python3 override (gated -> main/python3)"
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -548,6 +559,28 @@ if [ $NEXUSQD_RC -eq 0 ]; then
     fi
 else
     echo "  WARNING: nexusqd build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7c2: Build nexusq-control package (noarch) ==="
+set +e
+# Pure-Python (stdlib) bridge; noarch, no compiler/qemu needed. SKIP checksums
+# placeholder -> regenerate against the staged scripts before building.
+pmbootstrap checksum nexusq-control 2>&1 || true
+pmbootstrap --no-cross build nexusq-control --arch armv7 2>&1
+NEXUSQCTL_RC=$?
+set -e
+echo "=== nexusq-control build exit code: $NEXUSQCTL_RC ==="
+if [ $NEXUSQCTL_RC -eq 0 ]; then
+    NEXUSQCTL_APK=$(find "$WORK/packages" -name 'nexusq-control-*.apk' -print -quit 2>/dev/null)
+    if [ -n "$NEXUSQCTL_APK" ]; then
+        cp "$NEXUSQCTL_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQCTL_APK")"
+    else
+        echo "  WARNING: nexusq-control apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  WARNING: nexusq-control build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
 fi
 

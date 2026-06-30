@@ -27,3 +27,7 @@ gadget-install.log
 # Reverse-engineering scratch (extracted Google factory image — non-redistributable, large)
 reverse-eng/
 scripts/ulpiread
+
+# Python bytecode
+__pycache__/
+*.pyc
