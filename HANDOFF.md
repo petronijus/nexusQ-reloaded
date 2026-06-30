@@ -4,6 +4,56 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
+## HANDOVER 2026-06-30 → Linux (petronijus-PC): build the companion-bridge image
+
+Companion app + its device-side bridge are done on branch **`feat/companion-app`** (pushed,
+14 commits, NOT merged to main). The **device-side build must be done on Linux** (the dockerized
+pmbootstrap pipeline). The Flutter app itself runs on the phone and is built separately — it is
+NOT in the device image.
+
+**What this branch adds to the device image (all needs to land in the build):**
+- `pmos/nexusq-control/` — new noarch aport: the `nexusq-control` LAN bridge (port 45015, mDNS
+  `_nexusq._tcp`) + `nexusq-onevent` hook + systemd unit. (`userspace/nexusq-control/`.)
+- `userspace/nexusqd/` — new **`brightness <0-255>`** control command + software ring-brightness
+  scalar (control.h/control.c/nexusqd.c).
+- `pmos/device-google-steelhead/` — `APKBUILD` now `depends nexusq-control`; **`asound.conf`**
+  adds the `nexusq_soft` softvol PCM + `NexusQ` control; **`librespot.service`** now uses
+  `--device nexusq_soft --mixer alsa --alsa-mixer-control NexusQ --onevent /usr/bin/nexusq-onevent`.
+- `docker-build.sh` — Phase 2 validates the aport, Phase 6 stages `nexusq-control` into
+  `$PMAPORTS/main/nexusq-control`, Phase 7c2 builds it (noarch).
+
+**Build steps (on petronijus-PC / Ubuntu):**
+1. `cd ~/Documents/Dev/nexusQ-reloaded && git fetch && git checkout feat/companion-app && git pull`
+   (or merge the branch to main first, your call — building the branch directly is fine).
+2. Ensure the **private overlay** is present (non-redistributable BT/WiFi firmware blobs):
+   `private/` must hold `firmware/bcm4330.hcd` + `firmware/bcmdhd.cal` (clone
+   `nexusQ-reloaded-private` into `private/`, see `private/README.md`). Run
+   `scripts/setup-firmware.sh` if the build expects staged blobs.
+3. Build the full image via the dockerized pipeline (`docker-build.sh`, or the **nexusq-build**
+   skill). Watch for the two new build lines: `Installed: nexusq-control (...)` (Phase 6) and
+   `nexusq-control build exit code: 0` (Phase 7c2). The build should also still build `nexusqd`.
+4. **Flash** boot.img + rootfs in fastboot (INSTALL.md).
+
+**Verify on the device after flash** (full checklist: `docs/2026-06-30-companion-hardware-bringup.md`):
+```sh
+systemctl status nexusqd nexusq-control librespot
+amixer -c NexusQSpeaker scontrols | grep -i nexusq    # softvol control 'NexusQ' exists
+ss -ltnp | grep 45015                                  # bridge listening
+```
+Then on the phone: `adb install -r companion/app/build/app/outputs/flutter-apk/app-debug.apk`
+(non-mock build, auto-discovers via mDNS) — or `flutter run --dart-define=NEXUSQ_HOST=<ip>`.
+
+**Confirm against real values** (likely needs a tweak once on hardware): the softvol control
+name/card (defaults `NexusQ`/`NexusQSpeaker` — override via `NEXUSQ_MIXER_CTRL`/`NEXUSQ_MIXER_CARD`
+in the unit), and the librespot `--onevent` env field names in `nexusq-onevent` (NAME/ARTISTS/
+ALBUM/COVERS/VOLUME) against the installed librespot version. Transport (play/pause/next) is
+`unavailable` in v1 by design.
+
+Refs: `companion/PROTOCOL.md`, `docs/2026-06-30-companion-app-RE.md`,
+`docs/2026-06-30-companion-design-language.md`, `docs/2026-06-30-companion-hardware-bringup.md`.
+
+---
+
 ## Session 2026-06-29 (late, latest): v1.6.1 shipped — TAS5713 2× bug FIXED + Spotify Connect BAKED IN
 
 Both the audio bug and the live Spotify Connect install from the earlier 2026-06-29
