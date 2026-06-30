@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=13
+pkgrel=14
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -157,6 +157,15 @@ package() {
 	# music visualizer.
 	install -Dm644 "$srcdir"/snd-aloop.conf \
 		"$pkgdir"/etc/modules-load.d/snd-aloop.conf
+
+	# Force-enable the companion control bridge the SAME proven way the other
+	# device services are (an /etc/systemd/system/multi-user.target.wants symlink).
+	# The nexusq-control aport ships the unit + a /usr/lib vendor .wants symlink,
+	# but that vendor enablement did NOT auto-start on the image (a systemd-preset
+	# quirk — verified disabled/inactive on a clean v1.6.3 flash). The unit lives
+	# in /usr/lib (owned by the nexusq-control dependency), so point there.
+	ln -sf /usr/lib/systemd/system/nexusq-control.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-control.service
 }
 
 nonfree_firmware() {
