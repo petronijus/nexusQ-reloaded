@@ -97,6 +97,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   (Idle is NOT 350 MHz — it hovers ~920 MHz, nexusqd LED polling keeps it up.)
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
+- **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
+  the card; the path **plays at correct pitch/speed** since **v1.6.1** (kernel patch
+  0022 — derives McBSP2 `CLKGDV` from the real fclk). librespot/Spotify output via the
+  48 kHz `nexusq` ALSA PCM. To sanity-check: time a fixed-length clip/silence to the
+  `nexusq` PCM — should match wall-clock (~1.000×).
+  ℹ️ **Historical (FIXED in v1.6.1):** the v1.6.0 path played **2× too fast** (FSYNC at
+  2× rate; 60 s drained in ~30 s), which made a librespot/Spotify track **auto-skip
+  ~40 s in** — that was the audio-clock bug, **not** a librespot crash (the service
+  stayed up; `librespot_restart` is a real restart). If the ~40 s auto-skip ever
+  returns it's an audio-clock regression. See
+  `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
 - **python ON DEVICE** (armv7 SIGSEGV, **fixed 2026-06-28, v1.6.0**): `python3 -S -c '';
   echo rc=$?`. rc **0** = healthy (the v1.6.0 default-linker r5 build, clean-flashed);
   rc **139** = a corrupt libpython is installed. **ONE documented root cause:** a

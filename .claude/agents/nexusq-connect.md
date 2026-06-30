@@ -87,6 +87,20 @@ to get a shell" and stop. Otherwise probe the transports below.
 - Then `ping` + `ssh root@<ip>`. NB this host's own LAN subnet may not route into
   vlan20 — if ping/ssh time out despite a valid lease, say so and prefer A/B.
 
+### Joining WiFi after a fresh flash (wlan0 disconnected, no saved profile)
+A clean rootfs flash wipes the saved WiFi, so a freshly-flashed device has NO WiFi
+connection. To rejoin (reach the device over the USB gadget first to run these):
+- **SSID:** `Svatovitske-Internety-5g` — **always the 5 GHz one** (2.4 GHz suffers the
+  BCM4330 BT-coexist bulk stall; 5 GHz is clear of BT, ~26–30 Mbit/s reliable). Prefer the
+  base SSID over the `_EXT` repeater variant.
+- **PSK:** 1Password item `Wifi-Router Svatovitska`, field `wireless network password`
+  (not the default `password` field). Never print it — pipe it straight in:
+  `PSK=$(op-cache "Wifi-Router Svatovitska" "wireless network password")` then on the device
+  `sudo nmcli dev wifi connect "Svatovitske-Internety-5g" password "$PSK"` (creates a saved,
+  autoconnect profile → persists until the next flash). DHCP yields `192.168.20.x`.
+- If you set a USB-NAT default route to install packages, delete it afterwards so traffic
+  uses WiFi: `sudo ip route del default via 172.16.42.2 dev usb0`.
+
 ## Verify before reporting
 Confirm the winner with a real probe, e.g.
 `ssh -o ConnectTimeout=6 -o StrictHostKeyChecking=no root@<ip> 'hostname; uptime'`.

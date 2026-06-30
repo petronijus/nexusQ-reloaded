@@ -1,0 +1,10 @@
+#!/usr/sbin/nft -f
+# Spotify Connect (librespot) zeroconf discovery on the WiFi LAN.
+# The phone (Spotify controller) finds "Nexus Q" via mDNS and hands off
+# credentials over the librespot zeroconf HTTP port.
+table inet filter {
+	chain input {
+		iifname "wlan*" udp dport 5353 accept comment "mDNS for Spotify Connect (librespot zeroconf)"
+		iifname "wlan*" tcp dport 37879 accept comment "librespot zeroconf HTTP (Spotify Connect credential handoff)"
+	}
+}

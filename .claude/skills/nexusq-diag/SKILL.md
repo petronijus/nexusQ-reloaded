@@ -76,6 +76,12 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-06-28-session-findings.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
+  ℹ️ **Historical (FIXED in v1.6.1):** on v1.6.0 a Spotify track that played then
+  **auto-skipped ~40 s in** was NOT a restart — it was the **TAS5713 2× speed bug**
+  (McBSP2 FSYNC at 2× rate, tracks ended in half time; librespot stayed up), fixed by
+  kernel patch 0022. `librespot_restart` is a real *service* restart. If the ~40 s
+  auto-skip ever returns it's an audio-clock regression, not this finding.
+  See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
 - **vdd_mismatch** (warn/crit) — `vdd_mpu` is off the expected voltage for the
   current OPP (350→1025, 700→1203, 920→1317, 1200→1380 mV). A few samples = a
   DVFS transition; persistent = a VC-bridge / TPS62361 power-path problem

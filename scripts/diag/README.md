@@ -86,6 +86,16 @@ unresponsiveness + a frozen LED frame + no daemon CPU progress.
 (crit/warn/info) and, where meaningful, the `t_mono` uptime so the report can
 print the per-sample timeline around it.
 
+> **`librespot_restart` ≠ the "Spotify skips" symptom.** `librespot_restart` is a
+> real *service* flap (the unit's `NRestarts` grew). **Historical (FIXED in v1.6.1):**
+> on v1.6.0 a librespot/Spotify track that **played then auto-skipped ~40 s in** was
+> instead the **TAS5713 2× speed bug** — card `NexusQSpeaker` (McBSP2 → TAS5713) emitted
+> FSYNC at 2× the requested rate, so audio drained in half wall-clock and the player
+> advanced to the next track (librespot staying up). Fixed by kernel patch 0022 (derive
+> McBSP2 `CLKGDV` from the real fclk); the speaker now plays at 1.000×. If that ~40 s
+> auto-skip ever returns it's an audio-clock regression, not `librespot_restart`. See
+> `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+
 ## Packaging
 
 The device package (`pmos/device-google-steelhead/APKBUILD`) installs

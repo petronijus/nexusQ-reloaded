@@ -4,7 +4,55 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.1] - 2026-06-29
+
+Working **TAS5713 speaker audio** and **Spotify Connect**, baked into the build. The
+v1.6.0 speaker path played exactly 2× too fast (root-caused and fixed here);
+`librespot` is now part of the image, so the Spotify "Nexus Q" target survives a
+flash. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+
+### Fixed
+- **TAS5713 amplifier played EXACTLY 2× too fast — fixed (kernel patch 0022).**
+  Root cause: with `simple-audio-card` driving the McBSP2 → TAS5713 I2S link in
+  bit/frame-master mode, the generic card only sets `mclk-fs` and never calls
+  `snd_soc_dai_set_clkdiv()`, so `omap-mcbsp` left `CLKGDV = 0` (bit clock = the
+  *undivided* 24.576 MHz functional clock) and sized the frame as `in_freq/rate =
+  256` BCLK → **FSYNC = 96 kHz for a 48 kHz stream = 2× too fast**. Tracks reached
+  their end in half the real time, so librespot auto-skipped ~40 s in. Fix:
+  `kernel/patches/0022-ASoC-omap-mcbsp-derive-CLKGDV-from-fclk-simple-card.patch`
+  derives `CLKGDV` from the real functional-clock rate (`mcbsp->fclk`) and uses a
+  minimal `wlen*channels` I2S frame when the machine driver supplied no explicit
+  divider — reproducing the factory kernel's registers exactly (CLKGDV = 15, BCLK
+  1.536 MHz, 32-BCLK frame, FSYNC 48 kHz). **Verified on hardware:** 60 s of audio
+  to the speaker now plays in **60.00 s (ratio 1.000×)** — was ~30 s (0.50×). Method
+  was pure timing (no speaker needed). Cross-checked against `reverse-eng/vmlinux.bin`
+  (stock-parity audit). The earlier "B7 TAS5713 MCLK 16 vs 12.288 MHz" concern is a
+  red herring for this bug — the mainline `tas571x` codec has no `.set_sysclk`, so
+  MCLK never gates FSYNC.
+
+### Added
+- **Spotify Connect (librespot) baked into the build.** `device-google-steelhead`
+  now `depends` on `librespot` (Alpine edge/testing, 0.8.0, `libmdns` zeroconf
+  backend — coexists with `avahi-daemon` on UDP 5353 via `SO_REUSEPORT`) and ships:
+  - `/etc/systemd/system/librespot.service` (enabled) — `librespot --name "Nexus Q"
+    --device nexusq --bitrate 320 --format S16 --ap-port 443 --zeroconf-port 37879
+    --cache /var/cache/librespot`.
+  - `/etc/asound.conf` — defines the `nexusq` PCM (`plug` → `hw:CARD=NexusQSpeaker,0`
+    forced to **48000 Hz**). The McBSP2/TAS5713 link only clocks the 48 kHz family
+    cleanly, so 44.1 kHz Spotify is resampled to 48 k; with patch 0022 that is an
+    exact 48 kHz (correct pitch).
+  - `/etc/nftables.d/60_spotify.nft` — opens `wlan*` UDP 5353 (mDNS) + TCP 37879
+    (zeroconf HTTP) so the phone can discover "Nexus Q".
+  Discovery + auth + streaming verified over 5 GHz WiFi; `--ap-port 443` dodges
+  VLAN20 blocking librespot's default AP port 4070.
+
+### Changed
+- **Audio is addressed by card NAME, not number.** The TAS5713 speaker and HDMI race
+  for card 0/1 across boots, so `asound.conf`/librespot use `hw:CARD=NexusQSpeaker,0`
+  (via the `nexusq` PCM) — a hardcoded `plughw:1,0` would have played into HDMI after
+  an unlucky reboot.
+- **TAS5713 25 W speaker amp: now working** (was "software-verified, listening test
+  pending"). First fully verified speaker playback.
 
 ## [1.6.0] - 2026-06-28
 

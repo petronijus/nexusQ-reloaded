@@ -328,10 +328,13 @@ reps = [
         'cmd = ["abuild", "-d", "-D", "postmarketOS"]',
         'cmd = ["abuild", "-F", "-d", "-D", "postmarketOS"]',
     ),
-    # 3) HOME=/home/pmos so root finds the .abuild signing key + abuild.conf
+    # 3) HOME=/home/pmos so root finds the .abuild signing key + abuild.conf.
+    # Match only the SUDO_APK prefix and inject HOME right after it, so this stays
+    # robust to pmbootstrap adding further keys to the env dict (3.10.1 appended
+    # `, "PMB_CROSS": str(cross)}` -- which broke an exact full-literal match).
     (
-        'env: Env = {"SUDO_APK": "abuild-apk --no-progress"}',
-        'env: Env = {"SUDO_APK": "abuild-apk --no-progress", "HOME": "/home/pmos"}',
+        'env: Env = {"SUDO_APK": "abuild-apk --no-progress"',
+        'env: Env = {"SUDO_APK": "abuild-apk --no-progress", "HOME": "/home/pmos"',
     ),
 ]
 
@@ -671,13 +674,21 @@ fi
 
 echo ""
 echo "=== Phase 8: Build all packages ==="
-echo "Running: pmbootstrap --no-cross build device-google-steelhead (triggers all deps)"
+echo "Running: pmbootstrap --no-cross build firmware-google-steelhead device-google-steelhead"
+# firmware-google-steelhead must be built EXPLICITLY. It is a SEPARATE aport that
+# nothing build-depends on: it is only a *runtime* depend of the
+# device-google-steelhead-nonfree-firmware SUBPACKAGE. So `build device-google-steelhead`
+# builds the device pkg + its subpackages (incl. ...-nonfree-firmware) but never
+# compiles firmware-google-steelhead itself. On a WARM nexusq-workdir it was already
+# cached from an earlier run, hiding this; a COLD build (fresh volume) then fails at
+# Phase 9 install with "firmware-google-steelhead (no such package): required by
+# device-google-steelhead-nonfree-firmware". Build it here so cold builds work too.
 # --force: defeat the persistent nexusq-workdir cache. pkgver/pkgrel may collide
 # with a previously-built apk in the work volume; without --force pmbootstrap can
 # skip the rebuild and reuse a stale kernel/DTB (this is exactly how build #1
 # shipped the pre-fix DTB). Force a rebuild so the current patches always apply.
 set +e
-pmbootstrap --no-cross build --force device-google-steelhead 2>&1
+pmbootstrap --no-cross build --force firmware-google-steelhead device-google-steelhead 2>&1
 BUILD_RC=$?
 set -e
 echo ""

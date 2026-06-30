@@ -3,7 +3,16 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **Current release: v1.6.0 (2026-06-28).** Adds a **working armv7 `python3`** on the
+> **Current release: v1.6.1 (2026-06-29).** **TAS5713 speaker audio works** and
+> **Spotify Connect (librespot) is baked into the build.** The v1.6.0 speaker path
+> played exactly 2× too fast — fixed by kernel patch 0022 (derives McBSP2 `CLKGDV`
+> from the real fclk + a minimal I2S frame); on-device a 60 s clip now plays in
+> **60.00 s** (was ~30 s). `device-google-steelhead` (pkgrel 11) now ships the enabled
+> `librespot.service`, the `nexusq` ALSA PCM (`asound.conf`, by card NAME) and the
+> `60_spotify.nft` drop-in, so the Spotify "Nexus Q" target survives a flash. See
+> `CHANGELOG.md` and `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+>
+> **v1.6.0 (2026-06-28).** Added a **working armv7 `python3`** on the
 > device — flash-verified from a clean flash. The fix was the byte-exact all-RAW
 > `raw2simg.py` flash (the on-device SIGSEGV was a flash bug, not a build bug); v1.6.0
 > ships a plain default-linker (bfd) `python3` rebuild with a build-integrity gate as a
@@ -21,7 +30,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
 | WiFi (BCM4330) | 🟡 connects, bulk flaky | assoc + small packets fine, but **can't sustain bulk transfers** (driver/firmware, not signal −33dBm/channel/regdomain; stuck 54Mb/s, no 11n, clm_blob missing). Deploy over the USB gadget net. NEEDS INVESTIGATION — see `docs/2026-06-20-session-handoff.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
-| **TAS5713 amplifier** | 🟡 chip alive, no audio path | I2C driver bound (`3-001b`), reset/pdn GPIOs OK; missing: sound card node (McBSP2 I2S → TAS5713) + 12.288 MHz MCLK |
+| **TAS5713 amplifier** | ✅ works | _(Updated 2026-06-29, v1.6.1)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed**. The v1.6.0 2× too-fast bug (McBSP2 `CLKGDV=0` + 256-BCLK frame → FSYNC at 2× rate) is **fixed by kernel patch 0022** (CLKGDV derived from the real fclk); on-device 60 s now plays in 60.00 s. librespot/Spotify outputs here via the 48 kHz `nexusq` PCM. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` |
 | Bluetooth (BCM4330) | 🟡 almost | `hci0` registers, wants firmware named `BCM.hcd` -- we have it (staged via `scripts/setup-firmware.sh`, not in repo) |
 | TWL6040 codec | 🟡 deferred | driver never binds; `omap-abe-twl6040` card loops on -EPROBE_DEFER |
 | NFC (PN544) | 🟡 detected | i2c device `2-0028` present, driver not loaded |
@@ -32,14 +41,31 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 ## Plan (by priority)
 
-### 1. TAS5713 amplifier  ← TOP PRIORITY
-The reason this device exists. **🟠 SW path verified 2026-06-10, speaker output untested.**
+### 1. TAS5713 amplifier  ✅ DONE 2026-06-29 (v1.6.1)
+The reason this device exists. **✅ speaker audio works at correct pitch/speed — the
+v1.6.0 2× too-fast bug was root-caused and fixed (kernel patch 0022).**
 - [x] DTS: `simple-audio-card` "NexusQ-Speaker" wiring McBSP2 → TAS5713
 - [x] DTS: MCLK 12.288 MHz (dpll_per_m3x2 61.44 MHz → auxclk1 /5 → fref_clk1_out
       pad 0x19a); McBSP2 master (clkx/fsx pads OUTPUT), SRG from abe_24m_fclk
 - [x] `snd-soc-omap-mcbsp` module enabled (=m) and probing
 - [x] `speaker-test -D plughw:NexusQSpeaker` runs clean (rc=0, no dmesg errors)
-- [ ] 🟠 physical listening test once speakers are attached to the rear terminals
+- [x] **listening/timing test done 2026-06-29 — REVEALED A 2× SPEED BUG.** 10 s of
+      `S16_LE` silence to `hw:1,0` plays in **5.00 s** (0.50× = 2× too fast, all
+      rates). librespot/Spotify tracks therefore end in half real time and the player
+      auto-skips ~40 s in. `func_mcbsp2_gfclk` reads 24.576 MHz (=512×48k, correct),
+      so the ×2 is **downstream** (SRG divider / I2S frame width / TAS5713 MCLK
+      16 vs 12.288 MHz — B7 family, `docs/2026-06-19-boot-warnings-followup.md`).
+- [x] ✅ **FIXED the FSYNC 2× clock bug (kernel patch 0022, v1.6.1).** Root cause: with
+      `simple-audio-card` mastering McBSP2, the generic card sets only `mclk-fs` and
+      never calls `snd_soc_dai_set_clkdiv()`, so `omap-mcbsp` left `CLKGDV=0` (bit clock
+      = the undivided 24.576 MHz fclk) and sized the frame as `in_freq/rate = 256` BCLK
+      → **FSYNC = 96 kHz = 2× too fast**. The patch derives `CLKGDV` from the real fclk
+      (`mcbsp->fclk`) + a minimal `wlen*channels` I2S frame, reproducing the factory
+      registers (CLKGDV=15, BCLK 1.536 MHz, 32-BCLK frame, FSYNC 48 kHz). **Verified on
+      hardware:** 60 s of audio plays in **60.00 s** (1.000×; was ~30 s = 0.50×). The
+      "B7 TAS5713 MCLK 16 vs 12.288" lead was a **red herring** (mainline `tas571x` has
+      no `.set_sysclk`, so MCLK never gates FSYNC). Cross-checked vs
+      `reverse-eng/vmlinux.bin`. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
 
 ### 2. Bluetooth  ✅ DONE 2026-06-10
 - [x] firmware installed (BCM.hcd + BCM4330B1.hcd); loads automatically at boot
@@ -143,9 +169,17 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       the decompiled `Visualizer.apk` and wired into `nexusqd` (audio tap = arecord on the
       snd-aloop loopback). Verified live: a track played into the loopback drives the ring.
       RE: `docs/2026-06-19-music-effects-RE.md`. Audio source for now is the loopback (local
-      WAV or, once the WiFi bulk issue is fixed, librespot/Spotify Connect "Nexus Q").
-- [ ] LED follow-ons: Spotify-driven (blocked by the WiFi bulk issue, see §WiFi /
-      `docs/2026-06-20-session-handoff.md`); scene auto-cycling (FadeTransition not ported);
+      WAV or librespot/Spotify Connect "Nexus Q").
+- [x] **Spotify Connect (librespot) baked into the build 2026-06-29 (v1.6.1)** —
+      `librespot 0.8.0` (libmdns backend) advertises "Nexus Q"; phone discovers,
+      authenticates and streams over **5 GHz** WiFi (the 2.4 GHz bulk stall no longer
+      blocks it). `device-google-steelhead` (pkgrel 11) `depends librespot` and ships
+      the enabled `librespot.service`, the `nexusq` ALSA PCM (`asound.conf`, forced
+      48 kHz, by card NAME) and `60_spotify.nft` (wlan UDP 5353 + TCP 37879) — survives
+      a flash. Audio is now at correct pitch (the §1 2× bug is fixed).
+      See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+- [ ] LED follow-ons: drive the music-reactive scenes off the live Spotify stream
+      (now unblocked — §1 audio fixed); scene auto-cycling (FadeTransition not ported);
       ship the musl apk (currently a static binary deployed over USB).
 
 ### 10. SMP / second core  ✅ DONE 2026-06-22 (v1.2.0)

@@ -21,8 +21,8 @@ mainline Linux 6.12 LTS kernel.
 ## Status
 
 **postmarketOS (systemd) boots; the device is daily-usable.** SSH over USB gadget
-and WiFi (BCM4330), HDMI desktop, TAS5713 amp, LED ring + rotary keys, and a full
-host-built rootfs. Since the 2026-06-10 snapshot below, several "dead" verdicts were
+and WiFi (BCM4330), HDMI desktop, LED ring + rotary keys, and a full host-built
+rootfs. Since the 2026-06-10 snapshot below, several "dead" verdicts were
 overturned:
 
 - **Dual-core SMP works** (since v1.2.0; re-confirmed `nproc=2` on 2026-06-28) —
@@ -47,11 +47,24 @@ overturned:
   Verified on a fresh flash (no live-patch): `libpython3.14.so.1.0` md5
   `79a0d4ace1358bb2d94c8a4d72479da9`, `python3` rc 0. See `CHANGELOG.md` and
   `docs/2026-06-28-session-findings.md`.
+- **Spotify Connect (librespot) ships in the build** (`librespot 0.8.0`, libmdns
+  zeroconf; advertises "Nexus Q", discovery + auth + streaming verified over 5 GHz
+  WiFi). Baked into `device-google-steelhead` (pkgrel 11) as of **v1.6.1** — the
+  systemd unit, the `nexusq` ALSA PCM (`asound.conf`) and the nftables drop-in now
+  survive a flash.
+- **TAS5713 25 W amp works** (correct pitch/speed). The v1.6.0 speaker path played
+  exactly 2× too fast (McBSP2 left `CLKGDV=0` + a 256-BCLK frame → FSYNC at 2× the
+  rate); **fixed in v1.6.1 by kernel patch 0022** (derive `CLKGDV` from the real
+  fclk + a minimal I2S frame). Verified on hardware: 60 s of audio now plays in
+  **60.00 s** (ratio 1.000×; was ~30 s). The old "B7 TAS5713 MCLK 16 vs 12.288"
+  concern was a red herring. See
+  `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
 
 See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
 notes and root-cause analysis.
 See `PLAN.md` for the hardware status map and the prioritized roadmap
-(TAS5713 amplifier first).
+(TAS5713 amplifier + Spotify Connect now done; TOSLINK/SPDIF + the ethernet 1.4.1
+regression next).
 
 ## Quick Start
 
@@ -97,13 +110,13 @@ partition is never overwritten.
 
 ```bash
 # Flash kernel to boot partition (ramdisk-less, must fit the 8 MB boot partition):
-fastboot flash boot output/nexusq-boot-v1.6.0.img
+fastboot flash boot output/nexusq-boot-v1.6.1.img
 
 # Flash rootfs to userdata partition. The -S 100M chunking is REQUIRED: the 2012
 # U-Boot has a ~150 MB download buffer and fails SILENTLY on a larger blob.
-# The v1.6.0 sparse is all-RAW (byte-exact) -- U-Boot never erases userdata, so the
-# image must write every block (zeros included), not skip them as DONT_CARE.
-fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.0-sparse.img
+# The sparse is all-RAW (byte-exact, since v1.6.0) -- U-Boot never erases userdata, so
+# the image must write every block (zeros included), not skip them as DONT_CARE.
+fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.1-sparse.img
 
 # Then power-cycle WITHOUT holding mute sensor to boot normally.
 ```

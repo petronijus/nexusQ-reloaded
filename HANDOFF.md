@@ -4,7 +4,70 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-28 (latest): zram + userns + power health; ARMv7 python crash FIXED (flash bug; gold dropped) → v1.6.0
+## Session 2026-06-29 (late, latest): v1.6.1 shipped — TAS5713 2× bug FIXED + Spotify Connect BAKED IN
+
+Both the audio bug and the live Spotify Connect install from the earlier 2026-06-29
+entry below are now **resolved and in the build** — released **v1.6.1**, verified on a
+**fresh flash**. Full detail in `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+
+- **TAS5713 2× speed bug FIXED — kernel patch 0022** (`linux-google-steelhead`
+  pkgrel 25). Root cause was the `simple-audio-card`↔`omap-mcbsp` master-mode gap: the
+  generic card sets only `mclk-fs` and never `snd_soc_dai_set_clkdiv()`, so McBSP2 left
+  `CLKGDV=0` (bit clock = the undivided 24.576 MHz fclk) and sized the frame as
+  `in_freq/rate = 256` BCLK → **FSYNC = 96 kHz = 2× too fast**. Patch 0022 derives
+  `CLKGDV` from the real `mcbsp->fclk` + a minimal `wlen*channels` I2S frame,
+  reproducing the factory registers (CLKGDV=15, BCLK 1.536 MHz, 32-BCLK frame, FSYNC
+  48 kHz). **Verified on hardware:** 60 s of audio now plays in **60.00 s** (1.000×; was
+  ~30 s / 0.50×). The "B7 TAS5713 MCLK 16 vs 12.288 MHz" lead from the entry below was a
+  **red herring** — mainline `tas571x` has no `.set_sysclk`, so MCLK never gates FSYNC.
+  Cross-checked vs `reverse-eng/vmlinux.bin` (stock-parity audit).
+- **Spotify Connect (librespot) BAKED INTO THE BUILD** — `device-google-steelhead`
+  pkgrel 11 now `depends librespot` (Alpine edge/testing **0.8.0**, libmdns zeroconf)
+  and ships: the enabled `/etc/systemd/system/librespot.service` (`librespot --name
+  "Nexus Q" --device nexusq …`), `/etc/asound.conf` (the **`nexusq`** PCM = `plug` →
+  `hw:CARD=NexusQSpeaker,0` forced to **48000 Hz** — addressed by **NAME** because the
+  TAS5713/HDMI cards race for card 0/1 across boots), and `/etc/nftables.d/60_spotify.nft`
+  (`wlan*` UDP 5353 + TCP 37879). Discovery + auth + streaming verified over 5 GHz WiFi
+  at correct pitch (44.1 k Spotify resampled to the clean 48 k). All of it now **survives
+  a flash**. (The device-side install + nftables/`--ap-port 443` rationale are in the
+  entry below.)
+
+## Session 2026-06-29: Spotify Connect streams; TAS5713 plays 2× too fast (NEW bug) → both RESOLVED in v1.6.1 (see above)
+
+Full detail in `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`. Both
+results below are on the v1.6.0 image and were open when written; **both are now
+shipped in v1.6.1 — see the session above.**
+
+- **Spotify Connect (librespot) installed + streaming VERIFIED** — `apk add
+  librespot` (Alpine edge/testing, **0.8.0-r0**, **libmdns-only** zeroconf backend so
+  it coexists with `avahi-daemon` on UDP 5353 via `SO_REUSEPORT`). Unit
+  `/etc/systemd/system/librespot.service`: `librespot --name "Nexus Q" --backend alsa
+  --device plughw:1,0 --bitrate 320 --format S16 --initial-volume 60 --ap-port 443
+  --zeroconf-port 37879 --cache /var/cache/librespot`. nftables drop-in
+  `/etc/nftables.d/60_spotify.nft` opens `wlan*` UDP 5353 (mDNS) + TCP 37879
+  (zeroconf HTTP). `--ap-port 443` dodges VLAN20 blocking librespot's default AP port
+  4070. Phone sees "Nexus Q", authenticates, tracks load + play over 5 GHz WiFi.
+  **NOT baked into the build** (a flash wipes it) — bake-in deferred until the audio
+  bug below is fixed.
+- **NEW HARDWARE BUG — TAS5713 plays EXACTLY 2× too fast.** First real timing test of
+  the speaker path (was "software-verified, listening test pending"): 10.0 s of
+  `S16_LE` stereo silence to `hw:1,0` (card 1 `NexusQ-Speaker` = McBSP2 → TAS5713)
+  plays in **5.00 s** = **0.50× = 2× too fast** at 48000 Hz, 2× at all rates. So
+  librespot/Spotify tracks end in half real time and the player **auto-skips ~40 s
+  in** (the "plays ~40 s then skips" symptom — **not** a librespot crash). Root cause:
+  **McBSP2/ABE SRG emits FSYNC (LRCLK) at 2× the requested rate** — a kernel/DTS clock
+  bug in the **B7 TAS5713-MCLK family** (`docs/2026-06-19-boot-warnings-followup.md`
+  §B7). `func_mcbsp2_gfclk` reads 24.576 MHz (=512×48k, correct), so the ×2 is
+  **downstream** (SRG divider / I2S frame width / TAS5713 MCLK 16 vs 12.288 MHz). A
+  stock-parity audit vs `reverse-eng/vmlinux.bin` (the factory kernel that drove this
+  amp correctly) + the precise kernel fix are **IN PROGRESS** — open, newly
+  root-caused; fix + verification to follow.
+- **WiFi join after a fresh flash documented** (SSID `Svatovitske-Internety-5g`,
+  5 GHz/vlan20, PSK in 1Password — never in-repo) in `.claude/agents/nexusq-connect.md`
+  + the `nexusq-wifi-join` memory. 5 GHz ~26–30 Mbit/s carries the Spotify stream;
+  2.4 GHz still has the BT-coexist bulk stall.
+
+## Session 2026-06-28: zram + userns + power health; ARMv7 python crash FIXED (flash bug; gold dropped) → v1.6.0
 
 Full detail in `docs/2026-06-28-session-findings.md`. Diag capture
 `nq-captures/20260628-124159/` (verdict CRIT — dark-but-responsive LED ring + the

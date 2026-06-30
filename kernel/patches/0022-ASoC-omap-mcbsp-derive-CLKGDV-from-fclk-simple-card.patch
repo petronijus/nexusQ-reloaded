@@ -1,0 +1,73 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Mon, 29 Jun 2026 23:10:00 +0200
+Subject: [PATCH] ASoC: omap-mcbsp: derive CLKGDV from fclk for simple-audio-card
+
+When the McBSP is the bit/frame-clock master and the machine driver only
+describes the codec MCLK ratio (e.g. simple-audio-card's mclk-fs) without
+ever calling snd_soc_dai_set_clkdiv(), the driver left CLKGDV at 0 -- so the
+bit clock was the *undivided* functional clock -- and sized the I2S frame as
+in_freq/rate BCLKs.  On the Google Nexus Q (steelhead) McBSP2 -> TAS5713 link
+(fclk = 24.576 MHz) that produced BCLK = 24.576 MHz and a 256-BCLK frame,
+i.e. FSYNC = 96 kHz for a 48 kHz stream -- audio played back exactly twice
+too fast (a 207 s track drained in ~100 s, so librespot auto-skipped ~40 s in).
+
+The factory kernel's dedicated machine driver set both set_sysclk(fclk) and
+set_clkdiv(CLKGDV = fclk / (32 * rate)).  Reproduce that without requiring
+every simple-audio-card board to grow a set_clkdiv() call: when the McBSP is
+master and no explicit clk_div was supplied, derive CLKGDV from the real
+functional-clock rate and use a minimal wlen*channels I2S frame.  This yields
+CLKGDV = 15 (BCLK 1.536 MHz), a 32-BCLK frame and FSYNC = 48 kHz -- bit
+identical to stock.  Boards that do call set_clkdiv keep their behaviour.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ sound/soc/ti/omap-mcbsp.c | 36 +++++++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/sound/soc/ti/omap-mcbsp.c b/sound/soc/ti/omap-mcbsp.c
+--- a/sound/soc/ti/omap-mcbsp.c
++++ b/sound/soc/ti/omap-mcbsp.c
+@@ -1029,13 +1029,37 @@
+ 	 * by _counting_ BCLKs. Calculate frame size in BCLKs */
+ 	master = mcbsp->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK;
+ 	if (master == SND_SOC_DAIFMT_BP_FP) {
+-		div = mcbsp->clk_div ? mcbsp->clk_div : 1;
+-		framesize = (mcbsp->in_freq / div) / params_rate(params);
++		unsigned int fclk_rate = mcbsp->clk_div ?
++					 0 : clk_get_rate(mcbsp->fclk);
+ 
+-		if (framesize < wlen * channels) {
+-			printk(KERN_ERR "%s: not enough bandwidth for desired rate and "
+-					"channels\n", __func__);
+-			return -EINVAL;
++		if (fclk_rate) {
++			/*
++			 * The machine driver only described the MCLK ratio
++			 * (e.g. simple-audio-card's mclk-fs) and never called
++			 * set_clkdiv(), so clk_div is unset.  The SRG is sourced
++			 * from the McBSP functional clock, so derive the bit
++			 * clock divider (CLKGDV) from the *real* fclk and use a
++			 * minimal I2S frame (wlen * channels).  Without this the
++			 * bit clock would be the undivided fclk and the frame
++			 * would be in_freq/rate BCLKs long, so FSYNC would come
++			 * out at the wrong rate (2x on steelhead's 24.576 MHz
++			 * McBSP2 -> TAS5713 link).
++			 */
++			framesize = wlen * channels;
++			div = fclk_rate / (framesize * params_rate(params));
++			if (!div)
++				div = 1;
++			regs->srgr1	&= ~CLKGDV(0xff);
++			regs->srgr1	|= CLKGDV(div - 1);
++		} else {
++			div = mcbsp->clk_div ? mcbsp->clk_div : 1;
++			framesize = (mcbsp->in_freq / div) / params_rate(params);
++
++			if (framesize < wlen * channels) {
++				printk(KERN_ERR "%s: not enough bandwidth for desired rate and "
++						"channels\n", __func__);
++				return -EINVAL;
++			}
+ 		}
+ 	} else
+ 		framesize = wlen * channels;

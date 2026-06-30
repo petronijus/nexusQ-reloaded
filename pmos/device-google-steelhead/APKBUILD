@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=10
+pkgrel=11
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -23,6 +23,7 @@ depends="
 	blueman
 	breeze-icons
 	nexusqd
+	librespot
 	openssh-server
 	openssh-client
 	gdb
@@ -48,6 +49,9 @@ source="
 	nq-healthd
 	nq-diag-snapshot
 	nq-healthd.service
+	librespot.service
+	60_spotify.nft
+	asound.conf
 	$pkgname.post-install
 "
 
@@ -127,6 +131,24 @@ package() {
 	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
 	ln -sf ../nq-healthd.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nq-healthd.service
+
+	# Spotify Connect (librespot) — the audio source. It outputs via the "nexusq"
+	# ALSA PCM (asound.conf), which addresses the speaker by NAME (card numbers
+	# race between TAS5713 and HDMI across boots) and resamples everything to
+	# 48 kHz: the McBSP2->TAS5713 link only clocks the 48 kHz family cleanly, and
+	# with kernel patch 0022 (the CLKGDV fix) that yields an exact 48 kHz FSYNC
+	# (correct pitch/speed; before 0022 audio ran exactly 2x too fast). librespot
+	# 0.8.0 ships only the libmdns zeroconf backend, which coexists with avahi.
+	install -Dm644 "$srcdir"/asound.conf \
+		"$pkgdir"/etc/asound.conf
+	install -Dm644 "$srcdir"/librespot.service \
+		"$pkgdir"/etc/systemd/system/librespot.service
+	ln -sf ../librespot.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/librespot.service
+	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
+	# phone (Spotify controller) can discover "Nexus Q".
+	install -Dm644 "$srcdir"/60_spotify.nft \
+		"$pkgdir"/etc/nftables.d/60_spotify.nft
 }
 
 nonfree_firmware() {
@@ -152,5 +174,8 @@ SKIP  nexusq-usb-gadget.service
 SKIP  nq-healthd
 SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
+SKIP  librespot.service
+SKIP  60_spotify.nft
+SKIP  asound.conf
 SKIP  device-google-steelhead.post-install
 "
