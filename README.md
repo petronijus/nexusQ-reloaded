@@ -13,7 +13,8 @@
 
 A discontinued Android curio with no apps, no recovery, and a sealed bootloader —
 turned into a **dual-core postmarketOS media player** with Spotify&nbsp;Connect,
-a beat-reactive **32-LED ring**, a Wayland desktop, and a 1.2&nbsp;GHz CPU.
+a beat-reactive **32-LED ring**, a Wayland desktop, a 1.2&nbsp;GHz CPU, and a
+**phone/desktop companion remote**.
 
 [**Install**](INSTALL.md) · [**Releases**](https://github.com/petronijus/nexusQ-reloaded/releases) · [**Changelog**](CHANGELOG.md) · [**The story**](#-first-light)
 
@@ -46,6 +47,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 |
 | 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 |
+| 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · LED theme/brightness · now-playing · v1.6.3 |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager |
 | 🔵 **Bluetooth** (BCM4330) | ✅ | |
@@ -84,6 +86,12 @@ The same stream is **teed** to the amplifier and to a virtual loopback; the daem
 that drives the LEDs reads the loopback, runs an FFT, and animates the ring — so the
 orb glows in time with whatever you're playing. The speaker is the timing master, so
 the lights never stall the music.
+
+Since **v1.6.3** a phone/desktop **companion app** auto-discovers the Q over mDNS and
+controls **volume** (one ALSA softvol shared with Spotify-Connect), **LED theme +
+brightness**, and shows **now-playing** — talking to the on-device `nexusq-control`
+LAN bridge (TCP 45015, line-delimited JSON). The Flutter app is installed on the phone,
+**not** in the device image.
 
 ---
 
@@ -161,7 +169,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.5.0 ── first full host-built rootfs                               2026-06-27
 1.6.0 ── ✦ python3 on-device (the flash-bug saga)                   2026-06-28
 1.6.1 ── ✦ TAS5713 audio fixed + Spotify Connect baked in           2026-06-29
-1.6.2 ── ✦ LED music visualizer reacts to playback        ← latest  2026-06-30
+1.6.2 ── ✦ LED music visualizer reacts to playback                 2026-06-30
+1.6.3 ── ✦ companion app + LAN control bridge             ← latest  2026-06-30
 ```
 
 ---

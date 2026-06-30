@@ -38,8 +38,18 @@ Config via env: `NEXUSQ_BIND_HOST/PORT` (0.0.0.0:45015), `NEXUSQ_MIXER_CARD` (Ne
 - The softvol `NexusQ` control is created when librespot first opens `nexusq_soft`; until then
   `amixer` reads fail and the bridge reports a default volume, reconciling on the first event.
 
-## Device verification (pending hardware)
-Not yet run on the device. To verify end-to-end once the Q is booted:
-`systemctl status nexusq-control`, `amixer -c NexusQSpeaker sget NexusQ`, then point the app at
-the device (`flutter run --dart-define=NEXUSQ_HOST=<ip>`) and check volume/theme/brightness +
-now-playing.
+## Device verification (verified live — v1.6.3, 2026-07-01)
+Verified on hardware from a clean v1.6.3 flash: the bridge auto-starts (`active`, no boot
+ordering cycle), answers every protocol method, volume works (the `nexusq_soft` softvol over
+the v1.6.2 tee, shared with librespot), and the LED visualizer still tracks playback.
+
+Boot enablement gotcha (now fixed): the unit must carry **no `After=`** — an
+`After=nexusqd.service` formed a boot ordering cycle (`nexusq-control` → `nexusqd` →
+`multi-user.target` → `nexusq-control`) that systemd broke by **deleting the bridge's start
+job**, so it was enabled but never auto-started (manual `systemctl start` masked it). It is
+enabled durably via the `95-nexusq.preset` systemd preset (a `/usr/lib` vendor wants and a bare
+`/etc` symlink were both stripped by the image build's `preset-all` + pmOS's `disable *`).
+
+Re-verify after a reflash: `systemctl status nexusq-control`, `amixer -c NexusQSpeaker sget
+NexusQ`, then point the app at the device (`flutter run --dart-define=NEXUSQ_HOST=<ip>`) and
+check volume/theme/brightness + now-playing.

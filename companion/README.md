@@ -1,4 +1,4 @@
-# companion/ — modern Nexus Q companion app (WIP)
+# companion/ — modern Nexus Q companion app
 
 A new, modern companion app for the **postmarketOS / `nexusqd`** Nexus Q. The original Google
 "Nexus Q" Android app (`com.google.android.setupwarlock`) is dead — its entire setup/control flow
@@ -9,18 +9,24 @@ This app replaces it for a Q we now fully control on the local network.
 
 ## Status
 
-**Design phase — nothing implemented yet.** The original app has been reverse-engineered; the full
-feature catalog, the three local wire protocols (discovery / pairing / control RPC), and a
-keep/modernize/drop/add triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
+**Shipped — v1.6.3 (2026-06-30), verified live on hardware.** The Flutter companion (`app/`) and
+its device-side LAN bridge (`nexusq-control`, `../userspace/nexusq-control/`, aport
+`../pmos/nexusq-control/`) are done: the app auto-discovers the Q over mDNS and controls **volume**
+(one ALSA softvol shared with Spotify-Connect), **LED theme + brightness**, and shows
+**now-playing**. The original app was reverse-engineered first — the full feature catalog, the
+three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
+triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 
 Decompiled originals (non-redistributable Google code) are kept out of this public repo, under
 `private/nexusq-original/companion/` (gitignored).
 
-## Scope (to be confirmed)
+## What v1 ships
 
-The worthwhile, reimplementable control surface distilled from the RE (see the triage):
-LED theme + brightness, master volume/mute, output routing (HDMI/analog/S-PDIF), fixed-volume
-line-out, A/V sync delay, now-playing, device/health info — talking to `nexusqd` over the LAN.
+The control surface distilled from the RE: **master volume/mute**, **LED theme + brightness**,
+**now-playing**, and device/state readback — over the v1 protocol ([`PROTOCOL.md`](PROTOCOL.md),
+line-delimited JSON on TCP 45015, mDNS `_nexusq._tcp`), bridged to `nexusqd` + ALSA softvol +
+`librespot --onevent` by `nexusq-control`.
 
-Open decisions (platform, v1 scope, device-side control protocol, discovery, pairing/auth) are
-listed at the end of the RE doc.
+**Transport (play/pause/next) is `unavailable` in v1** (librespot has no local transport API —
+control happens from the Spotify app). Deferred to a future protocol revision (PROTOCOL.md §5):
+output routing (HDMI/analog/S-PDIF), fixed-volume line-out, A/V sync delay, pairing/auth.

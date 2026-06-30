@@ -3,7 +3,28 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **Current release: v1.6.2 (2026-06-30).** **The LED music visualizer now reacts to
+> **Current release: v1.6.3 (2026-06-30).** **A companion app and its on-device
+> `nexusq-control` LAN bridge now ship** — a phone/desktop remote for the Q (volume,
+> LED theme + brightness, now-playing), replacing the dead 2012 Google companion app.
+> `nexusq-control` is a pure-Python3 daemon (new noarch aport `pmos/nexusq-control`,
+> `userspace/nexusq-control/`) on **TCP 45015**, advertised over mDNS **`_nexusq._tcp`**,
+> speaking a line-delimited JSON v1 protocol (`companion/PROTOCOL.md`). It fans out to:
+> an ALSA **`nexusq_soft` softvol** (control `NexusQ`, layered on the v1.6.2 tee) for
+> volume — the **same knob librespot uses** (`--mixer alsa --alsa-mixer-control NexusQ`),
+> so Spotify-Connect and companion volume stay in lockstep — `nexusqd` over
+> `/run/nexusqd.sock` for LED **theme + brightness** (new `nexusqd brightness <0-255>`),
+> and a `librespot --onevent` hook for **now-playing**. The companion (`companion/app`)
+> is a cross-platform **Flutter** app (sphere UI, animated ring, mDNS auto-discovery),
+> built on the phone — **not** in the device image. The bridge is enabled at boot via a
+> systemd preset (`95-nexusq.preset`) and its unit carries **no `After=`** ordering (an
+> `After=nexusqd.service` formed a boot ordering cycle that systemd broke by **deleting
+> the bridge's start job**, so it never auto-started — fixed by dropping `After=`).
+> **Verified live:** the bridge auto-starts (`active`), answers every protocol method,
+> volume works, and the LED visualizer still tracks playback. Transport
+> (play/pause/next) is `unavailable` in v1 by design (librespot has no local transport
+> API). See `CHANGELOG.md` ([1.6.3]) and `docs/2026-06-30-companion-app-RE.md`.
+>
+> **v1.6.2 (2026-06-30).** **The LED music visualizer now reacts to
 > Spotify playback.** v1.6.1 sent librespot straight to the speaker, so nexusqd's
 > snd-aloop audio tap got nothing and the ring stayed idle; v1.6.2 makes the `nexusq`
 > ALSA PCM a TEE (`multi` + `route`) that duplicates the 48 kHz stereo to BOTH the
@@ -204,3 +225,40 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       cpuidle panic (boot `cpuidle.off=1`). Both Cortex-A9 online, `nproc=2`,
       `taint=0`; re-confirmed live 2026-06-28. Full writeup `docs/SMP-second-core.md`.
 - [ ] follow-on: proper OMAP4 coupled cpuidle for the secondary (low priority).
+
+### 11. Companion app + LAN control bridge  ✅ DONE 2026-06-30 (v1.6.3)
+A modern phone/desktop remote for the Q + the on-device bridge it talks to — replacing
+the dead 2012 Google "Nexus Q" companion (its Android@Home cloud was killed in 2013).
+- [x] **RE'd the original Google companion app** to recover the control-RPC vocabulary
+      (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPlayState`) →
+      drove the v1 protocol. `docs/2026-06-30-companion-app-RE.md`.
+- [x] **v1 protocol** (`companion/PROTOCOL.md`) — line-delimited JSON over **TCP 45015**,
+      mDNS **`_nexusq._tcp`**; methods getState, setVolume/adjustVolume/setMuted/
+      toggleMute, setTheme/listThemes/**setBrightness**, getPlayState, getDeviceInfo;
+      events on change. Trusted-LAN, no auth in v1.
+- [x] **`nexusq-control` device bridge** (new noarch aport `pmos/nexusq-control`,
+      `userspace/nexusq-control/`, pure Python3 stdlib). Fans out to: ALSA `nexusq_soft`
+      softvol (volume), `nexusqd` `/run/nexusqd.sock` (theme/brightness), `librespot
+      --onevent` hook (now-playing). Degrades gracefully when a backend is down.
+- [x] **Software master volume** — `asound.conf` `nexusq_soft` softvol (control `NexusQ`)
+      over the v1.6.2 tee; `librespot.service` uses `--device nexusq_soft --mixer alsa
+      --alsa-mixer-control NexusQ --onevent` so Spotify-Connect + companion share one knob.
+- [x] **`nexusqd brightness <0-255>`** — software ring-brightness scalar (no firmware change).
+- [x] **Companion Flutter app** (`companion/app`) — sphere UI, animated LED ring, mDNS
+      auto-discovery; volume + LED theme/brightness + now-playing. Built on the phone,
+      **not** in the device image.
+- [x] **Boot enablement (the hard part).** The bridge is enabled durably via a systemd
+      **preset** `95-nexusq.preset` (an aport `/usr/lib` vendor wants and a bare `/etc`
+      symlink were both stripped by the image build's `systemctl preset-all` +
+      postmarketOS's `disable *` catch-all). Its unit carries **no `After=`** — an
+      `After=nexusqd.service` formed a boot ordering cycle (`nexusq-control` → `nexusqd`
+      → `multi-user.target` → `nexusq-control`) that systemd resolved by **deleting the
+      bridge's start job**, so it was enabled but never auto-started; manual
+      `systemctl start` took a different path and masked it. `device-google-steelhead`
+      pkgrel 15; `nexusq-control` aport pkgrel 2; `nexusqd` pkgrel 2. Full finding +
+      journal evidence: `docs/2026-07-01-companion-bridge-boot-enablement.md`.
+- [x] **Verified live on hardware** (clean v1.6.3 flash): bridge `active`, answers all
+      methods, volume works, LED visualizer still tracks playback, `systemctl
+      is-system-running` = running.
+- [ ] follow-on: transport (play/pause/next) — `unavailable` in v1 (librespot has no
+      local transport API); a future backend (e.g. go-librespot HTTP) could fill it in.

@@ -4,7 +4,55 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-30 (latest): v1.6.2 shipped — LED music visualizer wired up (audio tee + snd-aloop)
+## Session 2026-07-01 (latest): v1.6.3 shipped — companion app + nexusq-control LAN bridge
+
+A **companion app** and its on-device **`nexusq-control` LAN bridge** now ship and are
+**verified working on hardware** — released **v1.6.3** (CHANGELOG dated 2026-06-30; the
+device-side build, flash and live verification, which surfaced + fixed the boot-ordering
+cycle below, were done 2026-07-01). Branch `feat/companion-app` is **merged to main**
+(`1844d98`). This **resolves the "HANDOVER 2026-06-30 → Linux: build the companion-bridge
+image"** below. Full detail in `CHANGELOG.md` ([1.6.3]),
+`docs/2026-06-30-companion-app-RE.md`, `companion/PROTOCOL.md`, and the boot-enablement
+finding in `docs/2026-07-01-companion-bridge-boot-enablement.md`.
+
+- **`nexusq-control`** — new noarch aport (`pmos/nexusq-control`, daemon
+  `userspace/nexusq-control/`, pure Python3 stdlib). TCP **45015**, mDNS
+  **`_nexusq._tcp`**, line-delimited JSON v1 protocol. Fans out to: ALSA softvol
+  (volume), `nexusqd` `/run/nexusqd.sock` (LED theme/brightness), a `librespot
+  --onevent` hook (now-playing). Methods: getState, setVolume/adjustVolume/setMuted/
+  toggleMute, setTheme/listThemes/**setBrightness**, getPlayState, getDeviceInfo.
+- **Software master volume** — `asound.conf` `nexusq_soft` softvol (control `NexusQ`)
+  over the v1.6.2 tee; `librespot.service` now `--device nexusq_soft --mixer alsa
+  --alsa-mixer-control NexusQ --onevent /usr/bin/nexusq-onevent` → one volume knob
+  shared by Spotify-Connect + the companion, and the visualizer still tracks the output.
+- **`nexusqd brightness <0-255>`** — new control command + software ring-brightness
+  scalar (`nexusqd` pkgrel 2).
+- **Companion app** (`companion/app`) — cross-platform **Flutter** remote (sphere UI,
+  animated LED ring, mDNS auto-discovery; volume + LED theme/brightness + now-playing).
+  Built on the phone, **not** in the device image.
+- **The enablement fix (3 layers tried; the 3rd stuck) + the boot-cycle fix.** On a clean
+  flash the image build kept stripping the unit's enable symlink:
+  1. the aport's **`/usr/lib` vendor wants** → wiped by the build's `systemctl preset-all`;
+  2. a **bare `/etc` wants symlink** (pkgrel 14) → wiped by postmarketOS's `disable *`
+     catch-all;
+  3. a **systemd preset `95-nexusq.preset`** (pkgrel 15) → **stuck** (preset-all enables it).
+  But then it was *enabled yet never auto-started*: the unit's
+  `After=network-online.target nexusqd.service sound.target` formed a boot ordering cycle
+  (`nexusq-control` → `nexusqd` → `multi-user.target` → `nexusq-control`); systemd breaks
+  cycles by **deleting a start job** and dropped `nexusq-control`. (Manual `systemctl
+  start` took a different path, which masked the bug.) **Fix (r2):** the bridge degrades
+  gracefully (binds `0.0.0.0`, lazy-reconnects to the sockets), so nexusqd/librespot are
+  soft `Wants` only and the unit needs **no `After=`** — removed it. `nexusq-control`
+  aport pkgrel 2, `device-google-steelhead` pkgrel 15.
+- **Verified live** (clean v1.6.3 flash): `nexusq-control` auto-starts (`active`, no
+  cycle), answers every protocol method, volume works (the `nexusq_soft` softvol over the
+  tee), the LED visualizer still reacts to playback, `systemctl is-system-running` =
+  running. **Transport (play/pause/next) is `unavailable` in v1 by design** (librespot has
+  no local transport API).
+
+---
+
+## Session 2026-06-30: v1.6.2 shipped — LED music visualizer wired up (audio tee + snd-aloop)
 
 The **LED music visualizer now reacts to Spotify playback** — released **v1.6.2**,
 verified live on the device. v1.6.1 routed librespot straight to the TAS5713 speaker,
@@ -29,12 +77,18 @@ played. Full detail in `CHANGELOG.md` ([1.6.2]).
 
 ---
 
-## HANDOVER 2026-06-30 → Linux (petronijus-PC): build the companion-bridge image
+## HANDOVER 2026-06-30 → Linux (petronijus-PC): build the companion-bridge image  ✅ RESOLVED 2026-07-01
+
+> **DONE — built, flashed and verified live; shipped as v1.6.3** (see the 2026-07-01
+> session above). Branch `feat/companion-app` is **now merged to main** (`1844d98`).
+> The build surfaced + fixed the boot-ordering cycle (unit `After=` deleted its start job)
+> and the enablement-symlink stripping (resolved via the `95-nexusq.preset` systemd preset).
+> Kept below as the original handover record.
 
 Companion app + its device-side bridge are done on branch **`feat/companion-app`** (pushed,
-14 commits, NOT merged to main). The **device-side build must be done on Linux** (the dockerized
-pmbootstrap pipeline). The Flutter app itself runs on the phone and is built separately — it is
-NOT in the device image.
+14 commits, ~~NOT merged to main~~ **now merged — `1844d98`**). The **device-side build must be
+done on Linux** (the dockerized pmbootstrap pipeline). The Flutter app itself runs on the phone
+and is built separately — it is NOT in the device image.
 
 **What this branch adds to the device image (all needs to land in the build):**
 - `pmos/nexusq-control/` — new noarch aport: the `nexusq-control` LAN bridge (port 45015, mDNS

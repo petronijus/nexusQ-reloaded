@@ -93,8 +93,8 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 | Method | params | result | Event |
 |---|---|---|---|
 | `getPlayState` | — | `nowPlaying` object | `nowPlayingChanged` (pushed on every librespot track/state change) |
-| `playPause` | — | `{ playing }` | `nowPlayingChanged` — transport control via librespot |
-| `next` / `previous` | — | `{ }` | `nowPlayingChanged` |
+| `playPause` | — | `{ playing }` | **`unavailable` in v1** — librespot is a Spotify-Connect receiver with no local transport API; control from the Spotify app. Reserved (§5) |
+| `next` / `previous` | — | `{ }` | **`unavailable` in v1** — see `playPause`. Reserved (§5) |
 
 ### Device info
 | Method | params | result |
@@ -113,7 +113,8 @@ this same envelope (new `method`/`event` names) without breaking v1 clients.
 - **LED theme** → write `theme <name>` to `/run/nexusqd.sock` (already supported).
 - **LED brightness** → **new** nexusqd command + a software brightness scalar in `frame_pack`.
 - **now-playing** → `librespot --onevent <hook>` publishes track/artist/album/art + play state to
-  the bridge; transport via librespot.
+  the bridge (read-only metadata). **Transport (playPause/next/previous) is `unavailable` in v1** —
+  librespot exposes no local transport API; control happens from the Spotify app.
 - **state readback** → the bridge owns current state (nexusqd's `status` is unimplemented); it
   caches what it sets + what librespot/ALSA report.
 
