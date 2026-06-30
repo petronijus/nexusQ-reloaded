@@ -4,10 +4,14 @@
 # (now-playing, via the --onevent hook). See companion/PROTOCOL.md.
 [Unit]
 Description=Nexus Q companion control bridge
-After=network-online.target nexusqd.service sound.target
-Wants=network-online.target
 # nexusqd provides /run/nexusqd.sock; librespot provides now-playing. Both are
-# soft deps — the bridge degrades gracefully if either is down.
+# soft deps — the bridge degrades gracefully if either is down, binds 0.0.0.0 and
+# reconnects to the sockets lazily, so it needs NO start ordering.
+# IMPORTANT: do NOT add `After=nexusqd.service` (or network-online/sound). Once the
+# unit is enabled (via 95-nexusq.preset), `After=nexusqd.service` forms a boot
+# ordering cycle — nexusq-control → nexusqd → multi-user.target → nexusq-control —
+# and systemd breaks it by DELETING nexusq-control's start job, so the bridge never
+# auto-starts (verified: removing the After= line makes it auto-start cleanly).
 Wants=nexusqd.service
 
 [Service]
