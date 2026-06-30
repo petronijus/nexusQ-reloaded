@@ -100,8 +100,11 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    final cx = w / 2, cy = h * 0.705;     // the sphere's base rim
-    final a = w * 0.305, b = h * 0.082;   // ellipse half-axes (perspective)
+    // Geometry measured from the original lit-ring pixels (drop_ball_activated):
+    // the ring sits on the base rim at ~80% height, half-width 0.215, and is a
+    // very flat ellipse (b≈0.045) — a near-edge-on view of the base ring.
+    final cx = w * 0.505, cy = h * 0.80;
+    final a = w * 0.215, b = h * 0.045;
     const n = 72;
     final single = palette.length == 1;
 
@@ -116,8 +119,9 @@ class _RingPainter extends CustomPainter {
         final ang0 = t0 * 2 * math.pi, ang1 = t1 * 2 * math.pi;
         final p0 = Offset(cx + a * math.cos(ang0), cy + b * math.sin(ang0));
         final p1 = Offset(cx + a * math.cos(ang1), cy + b * math.sin(ang1));
-        // far half (top of the ellipse, sin<0) is partly behind the sphere -> dimmer
-        final depth = math.sin(ang0) < 0 ? 0.45 : 1.0;
+        // far half (top of the ellipse, sin<0) reads as the ring's back: still
+        // clearly visible, just a touch dimmer than the near (front) half.
+        final depth = math.sin(ang0) < 0 ? 0.6 : 1.0;
         double intensity;
         Color base;
         if (single) {
@@ -135,8 +139,8 @@ class _RingPainter extends CustomPainter {
       }
     }
 
-    pass(size.width * 0.045, size.width * 0.02, 0.55); // glow
-    pass(size.width * 0.018, 0, 1.0);                  // crisp ring
+    pass(size.width * 0.034, size.width * 0.018, 0.55); // glow
+    pass(size.width * 0.013, 0, 1.0);                   // crisp ring
   }
 
   @override
