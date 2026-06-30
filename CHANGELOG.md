@@ -34,9 +34,10 @@ companion app. See `companion/` and `docs/2026-06-30-companion-app-RE.md`.
 ### Changed
 - `librespot.service` now plays via `--device nexusq_soft --mixer alsa
   --alsa-mixer-control NexusQ --onevent /usr/bin/nexusq-onevent`.
-- `device-google-steelhead` pkgrel 14 (`depends nexusq-control`; the bridge is
-  force-enabled via an `/etc` wants symlink — the aport's `/usr/lib` vendor wants
-  did not auto-start on the image).
+- `device-google-steelhead` pkgrel 15 (`depends nexusq-control`; the bridge is
+  enabled durably via a systemd **preset** `95-nexusq.preset` — the aport's
+  `/usr/lib` vendor wants and a bare `/etc` symlink were both stripped by the
+  image build's `systemctl preset-all` + postmarketOS's `disable *` catch-all).
 
 ### Known issues
 - **Transport (play/pause/next) is `unavailable` in v1** — librespot is a

@@ -1,0 +1,25 @@
+# Nexus Q device-service enablement (systemd preset).
+#
+# postmarketOS ships a `disable *` catch-all (99-default.preset), and the image
+# build runs `systemctl preset-all`. That command STRIPS the enable symlinks of
+# any VENDOR unit (one whose unit file lives in /usr/lib/systemd/system) that is
+# not explicitly enabled by a higher-priority preset. nexusq-control.service and
+# nexusqd.service are vendor units (shipped in /usr/lib by the nexusq-control /
+# nexusqd packages), so a hand-placed /etc/systemd/system/multi-user.target.wants
+# symlink for them does NOT survive preset-all — it gets disabled again. The
+# durable, idiomatic fix (exactly what postmarketos-base does for its own
+# services in 90-base.preset) is to declare them enabled here; preset-all then
+# (re)creates the enable symlink on every run.
+#
+# librespot/nq-healthd/nexusq-usb-gadget are "local" units (their unit files
+# live in /etc), which preset-all leaves alone, but we list them too so all
+# device autostart is declarative and robust against future preset changes.
+#
+# Priority 95 sorts after postmarketos-base's 90-* presets (no nexusq entries
+# there, so no conflict) and BEFORE 99-default's `disable *`, so these enable
+# lines win.
+enable nexusq-control.service
+enable nexusqd.service
+enable librespot.service
+enable nq-healthd.service
+enable nexusq-usb-gadget.service

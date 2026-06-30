@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=14
+pkgrel=15
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -54,6 +54,7 @@ source="
 	60_spotify.nft
 	asound.conf
 	snd-aloop.conf
+	nexusq.preset
 	$pkgname.post-install
 "
 
@@ -158,12 +159,23 @@ package() {
 	install -Dm644 "$srcdir"/snd-aloop.conf \
 		"$pkgdir"/etc/modules-load.d/snd-aloop.conf
 
-	# Force-enable the companion control bridge the SAME proven way the other
-	# device services are (an /etc/systemd/system/multi-user.target.wants symlink).
-	# The nexusq-control aport ships the unit + a /usr/lib vendor .wants symlink,
-	# but that vendor enablement did NOT auto-start on the image (a systemd-preset
-	# quirk — verified disabled/inactive on a clean v1.6.3 flash). The unit lives
-	# in /usr/lib (owned by the nexusq-control dependency), so point there.
+	# Force-enable the companion control bridge. nexusq-control.service is a
+	# VENDOR unit (the nexusq-control aport ships it in /usr/lib/systemd/system),
+	# so unlike the device's own /etc units above it is subject to systemd-preset
+	# management: the image build runs `systemctl preset-all`, postmarketOS ships
+	# a `disable *` catch-all (99-default.preset), and there is no preset entry
+	# enabling nexusq-control -> preset-all DISABLES it, stripping any hand-placed
+	# /etc/.../multi-user.target.wants symlink (this is exactly why pkgrel 14's
+	# bare symlink did not stick, AND why the aport's /usr/lib vendor wants did
+	# not auto-start). The DURABLE fix is a preset that declares it enabled
+	# (mirrors how postmarketos-base enables its services in 90-base.preset);
+	# preset-all then (re)creates the enable symlink on every run. Priority 95
+	# wins over 99-default's `disable *` and does not collide with the 90-* files.
+	install -Dm644 "$srcdir"/nexusq.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/95-nexusq.preset
+	# Belt-and-suspenders: also drop the /etc enable symlink directly, so the
+	# unit is enabled even on any path where preset-all is not (re)run. preset-all
+	# is idempotent with an already-correct symlink; `systemctl enable` keeps it.
 	ln -sf /usr/lib/systemd/system/nexusq-control.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-control.service
 }
@@ -195,5 +207,6 @@ SKIP  librespot.service
 SKIP  60_spotify.nft
 SKIP  asound.conf
 SKIP  snd-aloop.conf
+SKIP  nexusq.preset
 SKIP  device-google-steelhead.post-install
 "
