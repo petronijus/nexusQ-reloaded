@@ -15,6 +15,9 @@ RE docs: `docs/2026-06-19-particle-screensaver-RE.md`, `docs/2026-06-19-music-ef
 confirmed by hand (`nexusled scene 0-4`). 15/15 host tests, 0 warnings (host + cross ARM 13.3).
 
 ### What's left for the lights (when wanted)
+> **→ RESOLVED in v1.6.2 (2026-06-30):** the Spotify-driven visualizer is live — WiFi works on
+> 5 GHz, librespot ships, snd-aloop auto-loads, and the `nexusq` PCM tees the audio to the
+> loopback so nexusqd's tap drives the ring. See `CHANGELOG.md` ([1.6.2]).
 - **Spotify-driven visualizer** — librespot is installed (below) but streaming is blocked by the
   WiFi issue (below). Once WiFi is fixed, Spotify audio → loopback → the effects react with no
   extra work.

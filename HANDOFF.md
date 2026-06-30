@@ -4,7 +4,30 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-06-29 (late, latest): v1.6.1 shipped — TAS5713 2× bug FIXED + Spotify Connect BAKED IN
+## Session 2026-06-30 (latest): v1.6.2 shipped — LED music visualizer wired up (audio tee + snd-aloop)
+
+The **LED music visualizer now reacts to Spotify playback** — released **v1.6.2**,
+verified live on the device. v1.6.1 routed librespot straight to the TAS5713 speaker,
+so nexusqd's snd-aloop audio tap got nothing and the ring stayed idle while music
+played. Full detail in `CHANGELOG.md` ([1.6.2]).
+
+- **Audio TEE feeds the visualizer.** The `nexusq` ALSA PCM (`asound.conf`) is now a
+  tee (`type multi` + `type route`) that duplicates librespot's 48 kHz stereo to BOTH
+  the TAS5713 speaker AND the snd-aloop loopback (`hw:Loopback,0`). nexusqd's existing
+  `arecord` tap on `hw:Loopback,1` (48 kHz) drives the FFT/beat visualizer while the
+  speaker plays. The **speaker is the timing master**; the loopback slave is `plughw`
+  so it adapts to the cable rate and **never blocks playback** — the tee opens
+  regardless of which side grabs the loopback first.
+- **snd-aloop auto-loaded.** New `/etc/modules-load.d/snd-aloop.conf` loads the
+  loopback (`CONFIG_SND_ALOOP=m`); without it the `Loopback` card doesn't exist and
+  the tap can't open. `device-google-steelhead` pkgrel 12.
+- **Verified live:** the LED ring pulses/animates to the music; no ALSA/xrun errors,
+  no failed units, nexusqd/librespot `NRestarts=0`. This closes the long-standing
+  "Spotify-driven visualizer blocked by WiFi + the snd-aloop B11 gap" item from
+  `docs/2026-06-20-session-handoff.md`: WiFi works on 5 GHz, librespot ships,
+  snd-aloop auto-loads, and the audio is teed to the loopback.
+
+## Session 2026-06-29 (late): v1.6.1 shipped — TAS5713 2× bug FIXED + Spotify Connect BAKED IN
 
 Both the audio bug and the live Spotify Connect install from the earlier 2026-06-29
 entry below are now **resolved and in the build** — released **v1.6.1**, verified on a

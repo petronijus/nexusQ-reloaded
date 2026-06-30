@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.1)
+# Nexus Q Reloaded -- Install Guide (v1.6.2)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,7 +12,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.1.img`, `nexusq-rootfs-v1.6.1-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.6.2.img`, `nexusq-rootfs-v1.6.2-sparse.img.zst`
   (the rootfs is zstd-compressed for distribution; install `zstd` to decompress it -- see step 2)
 
 ## 1. Enter fastboot mode
@@ -28,7 +28,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-fastboot flash boot nexusq-boot-v1.6.1.img
+fastboot flash boot nexusq-boot-v1.6.2.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -37,8 +37,8 @@ fastboot flash boot nexusq-boot-v1.6.1.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~448 MiB; ~2.1 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.1-sparse.img.zst   # -> nexusq-rootfs-v1.6.1-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.1-sparse.img
+zstd -d nexusq-rootfs-v1.6.2-sparse.img.zst   # -> nexusq-rootfs-v1.6.2-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.6.2-sparse.img
 ```
 
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
@@ -86,6 +86,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | TMP101 temperature sensor | ✅ |
 | TAS5713 25 W speaker amp | ✅ working (24/48 kHz; 44.1 k is resampled to 48 k via the `nexusq` ALSA PCM) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022) |
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
+| LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat |
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
 | NFC (PN544) | 🟠 driver binds, chip untested |
 | TOSLINK / SPDIF | ⬜ not wired up yet |

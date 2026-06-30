@@ -3,7 +3,17 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **Current release: v1.6.1 (2026-06-29).** **TAS5713 speaker audio works** and
+> **Current release: v1.6.2 (2026-06-30).** **The LED music visualizer now reacts to
+> Spotify playback.** v1.6.1 sent librespot straight to the speaker, so nexusqd's
+> snd-aloop audio tap got nothing and the ring stayed idle; v1.6.2 makes the `nexusq`
+> ALSA PCM a TEE (`multi` + `route`) that duplicates the 48 kHz stereo to BOTH the
+> TAS5713 speaker AND `hw:Loopback,0`, and adds `/etc/modules-load.d/snd-aloop.conf`
+> to auto-load the loopback. nexusqd's existing `arecord` on `hw:Loopback,1` drives
+> the FFT/beat ring while the speaker plays (speaker = timing master, loopback slave
+> is `plughw` so it never blocks playback). `device-google-steelhead` pkgrel 12;
+> verified live (ring pulses to music, no ALSA/xrun, NRestarts=0). See `CHANGELOG.md`.
+>
+> **v1.6.1 (2026-06-29).** **TAS5713 speaker audio works** and
 > **Spotify Connect (librespot) is baked into the build.** The v1.6.0 speaker path
 > played exactly 2× too fast — fixed by kernel patch 0022 (derives McBSP2 `CLKGDV`
 > from the real fclk + a minimal I2S frame); on-device a 60 s clip now plays in
@@ -178,8 +188,14 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       48 kHz, by card NAME) and `60_spotify.nft` (wlan UDP 5353 + TCP 37879) — survives
       a flash. Audio is now at correct pitch (the §1 2× bug is fixed).
       See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
-- [ ] LED follow-ons: drive the music-reactive scenes off the live Spotify stream
-      (now unblocked — §1 audio fixed); scene auto-cycling (FadeTransition not ported);
+- [x] **LED follow-on: drive the music-reactive scenes off the live Spotify stream
+      ✅ DONE 2026-06-30 (v1.6.2).** Was blocked on WiFi + the audio tap; resolved by
+      teeing the `nexusq` PCM to BOTH the speaker and the snd-aloop loopback (`multi` +
+      `route`) and auto-loading snd-aloop (`/etc/modules-load.d/snd-aloop.conf`).
+      nexusqd's `arecord` on `hw:Loopback,1` now sees the playback and the ring reacts.
+      Verified live (ring pulses to Spotify, no ALSA/xrun, NRestarts=0).
+      `device-google-steelhead` pkgrel 12. See `CHANGELOG.md`.
+- [ ] LED follow-ons (remaining): scene auto-cycling (FadeTransition not ported);
       ship the musl apk (currently a static binary deployed over USB).
 
 ### 10. SMP / second core  ✅ DONE 2026-06-22 (v1.2.0)

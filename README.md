@@ -59,6 +59,14 @@ overturned:
   **60.00 s** (ratio 1.000×; was ~30 s). The old "B7 TAS5713 MCLK 16 vs 12.288"
   concern was a red herring. See
   `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+- **LED music visualizer reacts to playback** (v1.6.2). The `nexusq` ALSA PCM is now
+  a TEE (`multi` + `route`) that duplicates librespot's 48 kHz stereo to BOTH the
+  TAS5713 speaker AND the snd-aloop loopback (`hw:Loopback,0`); nexusqd's existing
+  `arecord` tap on `hw:Loopback,1` drives the FFT/beat LED ring while the speaker
+  plays. New `/etc/modules-load.d/snd-aloop.conf` auto-loads the loopback. The
+  speaker is the timing master; the loopback slave is `plughw`, so it never blocks
+  playback. Verified live: the ring pulses to Spotify, no ALSA/xrun errors,
+  nexusqd/librespot NRestarts=0. `device-google-steelhead` pkgrel 12. See `CHANGELOG.md`.
 
 See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
 notes and root-cause analysis.
@@ -110,13 +118,13 @@ partition is never overwritten.
 
 ```bash
 # Flash kernel to boot partition (ramdisk-less, must fit the 8 MB boot partition):
-fastboot flash boot output/nexusq-boot-v1.6.1.img
+fastboot flash boot output/nexusq-boot-v1.6.2.img
 
 # Flash rootfs to userdata partition. The -S 100M chunking is REQUIRED: the 2012
 # U-Boot has a ~150 MB download buffer and fails SILENTLY on a larger blob.
 # The sparse is all-RAW (byte-exact, since v1.6.0) -- U-Boot never erases userdata, so
 # the image must write every block (zeros included), not skip them as DONT_CARE.
-fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.1-sparse.img
+fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.2-sparse.img
 
 # Then power-cycle WITHOUT holding mute sensor to boot normally.
 ```
