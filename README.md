@@ -1,160 +1,244 @@
-# Nexus Q Reloaded -- postmarketOS Port
+<div align="center">
 
-Port of the Google Nexus Q (codename **steelhead**) to postmarketOS using a
-mainline Linux 6.12 LTS kernel.
+# 🛸 Nexus Q&nbsp;Reloaded
 
-## Hardware
+### Google's glowing $299 orb from 2012 — reborn on **mainline Linux**.
+
+[![release](https://img.shields.io/github/v/release/petronijus/nexusQ-reloaded?sort=semver&color=8957e5&label=release)](https://github.com/petronijus/nexusQ-reloaded/releases)
+[![kernel](https://img.shields.io/badge/kernel-Linux%206.12%20LTS-orange)](kernel/)
+[![postmarketOS](https://img.shields.io/badge/OS-postmarketOS%20·%20systemd-008b8b)](https://postmarketos.org)
+[![arch](https://img.shields.io/badge/SoC-OMAP4460%20·%20armv7%20·%20dual%20Cortex--A9-informational)](#-hardware)
+[![unbrickable](https://img.shields.io/badge/unbrickable-✓-brightgreen)](#-flashing--unbrickable-by-design)
+[![license](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
+
+A discontinued Android curio with no apps, no recovery, and a sealed bootloader —
+turned into a **dual-core postmarketOS media player** with Spotify&nbsp;Connect,
+a beat-reactive **32-LED ring**, a Wayland desktop, and a 1.2&nbsp;GHz CPU.
+
+[**Install**](INSTALL.md) · [**Releases**](https://github.com/petronijus/nexusQ-reloaded/releases) · [**Changelog**](CHANGELOG.md) · [**The story**](#-first-light)
+
+</div>
+
+---
+
+## ✨ What it is
+
+The **Nexus Q** (codename `steelhead`) was Google's mysterious 2012 media sphere:
+a TI OMAP4460, a 25&nbsp;W amplifier, a ring of 32 RGB LEDs, and an Android build
+that did almost nothing. Google cancelled it before it ever really shipped.
+
+**Nexus Q Reloaded** throws away the Android stack and boots a **mainline Linux
+6.12 LTS** kernel under **postmarketOS** — reverse-engineering the factory kernel
+where mainline fell short, and bringing the orb back as something genuinely useful.
+
+> It plays music. It glows in time. It runs `python3`, `ssh`, and a desktop. On a
+> phone from before the original was even released.
+
+---
+
+## 🎯 What works
+
+| Subsystem | Status | Notes |
+|---|:---:|---|
+| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash |
+| ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
+| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS, `conservative` governor · v1.4.0 |
+| 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
+| 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 |
+| 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 |
+| 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager |
+| 🔵 **Bluetooth** (BCM4330) | ✅ | |
+| 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console |
+| 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
+| 🌡 **TMP101 temperature sensor** | ✅ | |
+| 📡 **NFC** (PN544) | 🟠 | driver binds, chip untested |
+| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
+| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down on cpufreq builds (v1.4.1 regression) |
+| 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
+| 🎧 **TWL6040 headset codec** | 🔴 | dead hardware on the reference unit |
+
+<sub>Full per-milestone detail in [CHANGELOG.md](CHANGELOG.md) · hardware map &amp; roadmap in [PLAN.md](PLAN.md).</sub>
+
+---
+
+## 🎵 The signal path
+
+How a tap on your phone becomes sound **and** light — the heart of the v1.6.x work:
+
+```mermaid
+flowchart LR
+    P([📱 Phone<br/>Spotify app]) -->|mDNS · Spotify Connect| L[librespot<br/>“Nexus Q”]
+    L -->|48 kHz S16| T{{ALSA tee<br/>multi + route}}
+    T -->|McBSP2 · CLKGDV fix| S([🔊 TAS5713<br/>25 W speaker])
+    T -->|snd-aloop| LB[(Loopback)]
+    LB -->|arecord| N[nexusqd<br/>FFT · beat detect]
+    N -->|I²C → AVR| R(((🔴 32-LED ring)))
+
+    style S fill:#1f6feb,stroke:#1f6feb,color:#fff
+    style R fill:#b62324,stroke:#b62324,color:#fff
+    style L fill:#1db954,stroke:#1db954,color:#fff
+```
+
+The same stream is **teed** to the amplifier and to a virtual loopback; the daemon
+that drives the LEDs reads the loopback, runs an FFT, and animates the ring — so the
+orb glows in time with whatever you're playing. The speaker is the timing master, so
+the lights never stall the music.
+
+---
+
+## 🚀 Quick start
+
+Grab the [latest release](https://github.com/petronijus/nexusQ-reloaded/releases/latest), then:
+
+```bash
+# 1. Enter fastboot: unplug power, cover the top mute-LED sensor with your palm,
+#    plug power back in. The ring turns solid red.
+
+# 2. Decompress the rootfs and flash
+zstd -d nexusq-rootfs-v*-sparse.img.zst
+fastboot flash boot      nexusq-boot-v*.img
+fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img   # -S chunking is REQUIRED
+
+# 3. Power-cycle without covering the sensor. Tux → kernel → desktop.
+```
+
+Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthrough in
+**[INSTALL.md](INSTALL.md)**.
+
+---
+
+## 🔬 Engineering highlights
+
+The fun lives in the details. A few of the harder problems solved here:
+
+<details>
+<summary><b>🔊 The amp played everything exactly 2× too fast</b></summary>
+
+<br>
+
+`simple-audio-card` drove the McBSP2 → TAS5713 I²S link as bit/frame master but never
+set the sample-rate-generator divider, so the McBSP left `CLKGDV = 0` (bit clock = the
+*undivided* 24.576 MHz functional clock) and sized the frame as `in_freq/rate = 256`
+BCLK → **FSYNC = 96 kHz for a 48 kHz stream**. Tracks ended in half their time, so
+Spotify auto-skipped ~40 s in. **Kernel patch 0022** derives `CLKGDV` from the real
+func-clock rate and uses a minimal I²S frame — reproducing the factory registers
+exactly. Verified on hardware: 60 s of audio now plays in **60.00 s** (was ~30 s).
+</details>
+
+<details>
+<summary><b>💾 A "build bug" that was really a flash bug</b></summary>
+
+<br>
+
+`python3 -S -c ''` crashed in `Py_Initialize` on-device but was clean in every build.
+Root cause: `raw2simg.py` emitted all-zero blocks as Android-sparse `DONT_CARE`
+chunks; the Nexus Q's 2012 U-Boot **never erases `userdata`**, so those skipped blocks
+kept **stale prior-flash garbage** — which showed through libpython's should-be-zero
+regions and corrupted CPython's interpreter state. Fix: write a **byte-exact all-RAW
+sparse** (every block, zeros included). The lesson — *verify what the device runs, not
+just the artifact* — is baked into the build's ship-gate.
+</details>
+
+<details>
+<summary><b>🧠 Waking the second CPU core on a locked SoC</b></summary>
+
+<br>
+
+The OMAP4460 ships HS-fused; CPU1 bring-up goes through a secure SMC monitor call. The
+port extracts ground truth from the **reverse-engineered factory `vmlinux.bin`** and
+reproduces the secure wake sequence — dual-core SMP, then DVFS to 1.2 GHz via the
+TPS62361 rail over the PRM voltage controller, FBB-at-Nitro through `ti-abb`.
+</details>
+
+<details>
+<summary><b>🧱 Unbrickable by design</b></summary>
+
+<br>
+
+Every partition is reflashable **except** `bootloader`/`xloader`, which the flash
+procedure never touches. A bad kernel or rootfs is always a power-cycle-into-fastboot
+away from a re-flash. The boot image is **ramdisk-less** (kernel + appended DTB,
+booting `root=/dev/mmcblk0p13` directly) to stay under the 8 MB boot partition.
+</details>
+
+---
+
+## 🧩 Hardware
 
 | Component | Chip | Driver | Bus |
-|-----------|------|--------|-----|
-| SoC | TI OMAP4460 (Cortex-A9 x2) | omap4 | - |
-| Audio Codec | TI TWL6040 | snd-soc-omap-abe-twl6040 | McPDM (I2C1) |
-| Audio Amp | TI TAS5713 25W Class-D | snd-soc-tas571x | McBSP2 (I2C4) |
-| WiFi | Broadcom BCM4330 | brcmfmac | SDIO (MMC5) |
-| Bluetooth | Broadcom BCM4330 | hci_bcm | UART2 |
-| NFC | NXP PN544 | pn544_i2c | I2C3 |
-| Ethernet | SMSC LAN9500A | smsc95xx | USB EHCI |
-| HDMI | OMAP4 DSS + TPD12S015A | omapdrm | DSS |
-| LEDs | AVR MCU + LP5523 | leds-lp5523 | I2C2 |
-| PMIC | TI TWL6030 | twl-core | I2C1 |
+|---|---|---|---|
+| SoC | TI **OMAP4460** (Cortex-A9 ×2) | `omap4` | — |
+| Audio amp | TI **TAS5713** 25 W Class-D | `snd-soc-tas571x` | McBSP2 / I²C4 |
+| Audio codec | TI TWL6040 | `snd-soc-omap-abe-twl6040` | McPDM / I²C1 |
+| WiFi | Broadcom **BCM4330** | `brcmfmac` | SDIO / MMC5 |
+| Bluetooth | Broadcom BCM4330 | `hci_bcm` | UART2 |
+| NFC | NXP PN544 | `pn544_i2c` | I²C3 |
+| Ethernet | SMSC LAN9500A | `smsc95xx` | USB EHCI |
+| HDMI | OMAP4 DSS + TPD12S015A | `omapdrm` | DSS |
+| LED ring | AVR MCU (32 RGB) | `leds-steelhead-avr` | I²C2 |
+| PMIC | TI TWL6030 | `twl-core` | I²C1 |
 
-## Status
+---
 
-**postmarketOS (systemd) boots; the device is daily-usable.** SSH over USB gadget
-and WiFi (BCM4330), HDMI desktop, LED ring + rotary keys, and a full host-built
-rootfs. Since the 2026-06-10 snapshot below, several "dead" verdicts were
-overturned:
+## 🛠 Build from source
 
-- **Dual-core SMP works** (since v1.2.0; re-confirmed `nproc=2` on 2026-06-28) —
-  the old "single-core, SMP disabled" status is obsolete.
-- **CPU frequency scaling 350→1200 MHz** (v1.4.0), governor `conservative`.
-- **On-board Ethernet (LAN9500A) is NOT dead hardware** — fixed in v1.1.0/v1.3.0;
-  currently **down again** on cpufreq builds (a v1.4.0 boot-timing regression, fix
-  tracked for 1.4.1), not a hardware fault.
-- The shipping kernel is built with **GCC 15.2** (Alpine, via pmbootstrap) and
-  boots — the historical "GCC 13.3.Rel1 only" constraint applied to an early
-  hand-cross-compiled build, not this path.
-- **armv7 python3 works on the device (v1.6.0, flash-verified).** The long-standing
-  crash (`python3 -S -c ''` → rc 139 in `Py_Initialize`, taking down `onboard` /
-  `blueman` / `sleep-inhibitor` / `gdb`) was a **flash bug, not a build bug**:
-  `raw2simg.py` emitted all-zero blocks as `DONT_CARE`, which the Nexus Q's non-erasing
-  U-Boot left as **stale eMMC data**, re-corrupting libpython's should-be-zero regions
-  on-device — fixed by writing a **byte-exact all-RAW sparse**. v1.6.0 ships a plain
-  default-linker (bfd) `python3` rebuild that supersedes Alpine's broken `-r2`, with a
-  build-integrity gate (`scripts/verify-libpython-clean.py`) + ship gate kept as a
-  safety net. (A qemu-user build-corruption theory and a gold-linker workaround were
-  tried and **dropped as unnecessary** — 6/6 default-linker builds were gate-clean.)
-  Verified on a fresh flash (no live-patch): `libpython3.14.so.1.0` md5
-  `79a0d4ace1358bb2d94c8a4d72479da9`, `python3` rc 0. See `CHANGELOG.md` and
-  `docs/2026-06-28-session-findings.md`.
-- **Spotify Connect (librespot) ships in the build** (`librespot 0.8.0`, libmdns
-  zeroconf; advertises "Nexus Q", discovery + auth + streaming verified over 5 GHz
-  WiFi). Baked into `device-google-steelhead` (pkgrel 11) as of **v1.6.1** — the
-  systemd unit, the `nexusq` ALSA PCM (`asound.conf`) and the nftables drop-in now
-  survive a flash.
-- **TAS5713 25 W amp works** (correct pitch/speed). The v1.6.0 speaker path played
-  exactly 2× too fast (McBSP2 left `CLKGDV=0` + a 256-BCLK frame → FSYNC at 2× the
-  rate); **fixed in v1.6.1 by kernel patch 0022** (derive `CLKGDV` from the real
-  fclk + a minimal I2S frame). Verified on hardware: 60 s of audio now plays in
-  **60.00 s** (ratio 1.000×; was ~30 s). The old "B7 TAS5713 MCLK 16 vs 12.288"
-  concern was a red herring. See
-  `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
-- **LED music visualizer reacts to playback** (v1.6.2). The `nexusq` ALSA PCM is now
-  a TEE (`multi` + `route`) that duplicates librespot's 48 kHz stereo to BOTH the
-  TAS5713 speaker AND the snd-aloop loopback (`hw:Loopback,0`); nexusqd's existing
-  `arecord` tap on `hw:Loopback,1` drives the FFT/beat LED ring while the speaker
-  plays. New `/etc/modules-load.d/snd-aloop.conf` auto-loads the loopback. The
-  speaker is the timing master; the loopback slave is `plughw`, so it never blocks
-  playback. Verified live: the ring pulses to Spotify, no ALSA/xrun errors,
-  nexusqd/librespot NRestarts=0. `device-google-steelhead` pkgrel 12. See `CHANGELOG.md`.
-
-See `CHANGELOG.md` for the per-milestone record and `HANDOFF.md` for technical
-notes and root-cause analysis.
-See `PLAN.md` for the hardware status map and the prioritized roadmap
-(TAS5713 amplifier + Spotify Connect now done; TOSLINK/SPDIF + the ethernet 1.4.1
-regression next).
-
-## Quick Start
+One command, fully dockerized (pmbootstrap under the hood):
 
 ```bash
-# Build inside Docker
-./docker-build.sh
-
-# Or: build boot image manually (requires arm-none-eabi-gcc cross compiler)
-# See docker-build.sh for the full build procedure
+./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-## Project Structure
+It builds the kernel (mainline 6.12.12 + **22 patches** in `kernel/patches/`), the
+local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
+ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
+the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/
-  dts/omap4-steelhead.dts          Device tree source
-  configs/steelhead_defconfig      Kernel configuration
-  patches/0001-*.patch             TAS5713 driver support
-  patches/0002-*.patch             TAS5713 DT binding
-  patches/0003-*.patch             Steelhead DTS in kernel tree
-pmos/
-  device-google-steelhead/         postmarketOS device package
-  linux-google-steelhead/          postmarketOS kernel package
-  firmware-google-steelhead/       BCM4330 firmware package
-build-and-flash.sh                 Automated build and flash script
+kernel/      dts · defconfig · 22 mainline patches
+pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
+userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
+reverse-eng/ ground truth extracted from the factory kernel
+scripts/     diagnostics (nq-healthd, nq-collect, …)
+docs/        dated engineering record
+raw2simg.py  byte-exact all-RAW Android-sparse converter
 ```
 
-## Flashing
+---
 
-The Nexus Q has hardware-triggered fastboot mode (cover mute LED during
-power-on). The device is **unbrickable** as long as the `bootloader`
-partition is never overwritten.
+## 🗺 Milestones
 
-### Partition Layout
-
-| Partition | Size | Usage |
-|-----------|------|-------|
-| boot | 8 MB | Kernel + embedded initramfs + DTB (6.7 MB fits) |
-| system | 1 GB | Not used (too small for rootfs) |
-| userdata | 13 GB | **Rootfs target** |
-
-### Flash Commands
-
-```bash
-# Flash kernel to boot partition (ramdisk-less, must fit the 8 MB boot partition):
-fastboot flash boot output/nexusq-boot-v1.6.2.img
-
-# Flash rootfs to userdata partition. The -S 100M chunking is REQUIRED: the 2012
-# U-Boot has a ~150 MB download buffer and fails SILENTLY on a larger blob.
-# The sparse is all-RAW (byte-exact, since v1.6.0) -- U-Boot never erases userdata, so
-# the image must write every block (zeros included), not skip them as DONT_CARE.
-fastboot -S 100M flash userdata output/nexusq-rootfs-v1.6.2-sparse.img
-
-# Then power-cycle WITHOUT holding mute sensor to boot normally.
+```
+0.1.0 ── first full boot, HDMI, WiFi, LED ring                       2026-06-10
+1.1.0 ── ethernet alive                                              2026-06-22
+1.2.0 ── ✦ dual-core SMP                                             2026-06-23
+1.3.0 ── ethernet hardened                                          2026-06-24
+1.4.0 ── ✦ cpufreq DVFS → 1.2 GHz                                    2026-06-26
+1.5.0 ── first full host-built rootfs                               2026-06-27
+1.6.0 ── ✦ python3 on-device (the flash-bug saga)                   2026-06-28
+1.6.1 ── ✦ TAS5713 audio fixed + Spotify Connect baked in           2026-06-29
+1.6.2 ── ✦ LED music visualizer reacts to playback        ← latest  2026-06-30
 ```
 
-**IMPORTANT:**
-- Always do a **full power cycle** (unplug power) between flash operations
-- **Do NOT use `fastboot boot`** (RAM boot) -- it is unreliable on this U-Boot
-- NEVER flash the `bootloader` partition
+---
 
-## Testing Pipeline
+## 📸 First light
 
-1. `make dtbs_check` -- validate device tree
-2. `pmbootstrap kconfig check` -- validate kernel config
-3. `pmbootstrap build` -- cross-compile
-4. `pmbootstrap qemu` -- QEMU boot test (vexpress-a9)
-5. `fastboot flash boot nexusq-boot-v*.img` -- flash kernel (ramdisk-less, <=8 MB)
-6. `fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img` -- flash rootfs
+<div align="center">
 
-## Releases
+<img src="assets/first-light.jpg" alt="Mainline Linux 6.12 booting on the Nexus Q via HDMI — Tux, the OMAP4 banner, and the eMMC partition table" width="560">
 
-Versioning is tag-only (milestone-based). Images are built locally (the kernel
-and rootfs aren't built in GitHub CI) and attached to the GitHub release:
+<sub><i>Where it started: Tux and a mainline 6.12 kernel reaching the Nexus Q's HDMI output<br>(an early 2026 milestone — the root filesystem came a few commits later).</i></sub>
 
-- `nexusq-boot-vX.Y.Z.img` -- kernel + initramfs boot image
-- `nexusq-rootfs-vX.Y.Z-sparse.img` -- postmarketOS rootfs (Android sparse)
+</div>
 
-End-user flashing is in [INSTALL.md](INSTALL.md); build steps in `HANDOFF.md`;
-version history in [CHANGELOG.md](CHANGELOG.md).
+---
 
-## License
+## 📜 License
 
-[GPL-2.0](LICENSE) -- this repository carries Linux kernel patches, a device
-tree and a defconfig, which are derivative works of the Linux kernel (GPLv2).
+[**GPL-2.0**](LICENSE) — this repository carries Linux kernel patches, a device tree,
+and a defconfig, all derivative works of the Linux kernel (GPLv2).
+
+<div align="center">
+<sub>Built with stubbornness for a sphere that deserved better. 🛸</sub>
+</div>
