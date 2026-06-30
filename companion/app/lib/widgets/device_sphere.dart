@@ -1,14 +1,14 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../theme/nexusq_theme.dart';
 
 /// The device as the original app showed it: the black Nexus Q sphere with the
-/// equatorial LED ring (the "drop ball" graphic). The ring glow under the sphere
-/// takes the **current LED theme palette** — a single color for solid themes, a
-/// blended multi-color bloom for Spectrum / Warm / Cool / Track Info — so the
-/// sphere reacts to the theme exactly like the device's real ring. Off/muted →
-/// no glow.
-class DeviceSphere extends StatelessWidget {
+/// equatorial LED ring. The ring is drawn procedurally over the (dim) sphere so
+/// it takes the **current LED theme palette** and **animates** — a rotating
+/// rainbow for multi-color themes, a colored ring with an orbiting bright spot
+/// for solid ones — like the device's real ring. Off / muted → dark ring.
+class DeviceSphere extends StatefulWidget {
   const DeviceSphere({
     super.key,
     required this.on,
@@ -21,45 +21,124 @@ class DeviceSphere extends StatelessWidget {
   final double size;
 
   @override
+  State<DeviceSphere> createState() => _DeviceSphereState();
+}
+
+class _DeviceSphereState extends State<DeviceSphere> with SingleTickerProviderStateMixin {
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(seconds: 6))..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final palette = colors.isEmpty ? const [NexusQColors.accent] : colors;
+    final palette = widget.colors.isEmpty ? const [NexusQColors.accent] : widget.colors;
+    final s = widget.size;
     return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (on)
-            // theme-colored bloom at the base, blurred — single color or a
-            // gradient across the palette for multi-color themes.
-            Positioned(
-              bottom: size * 0.10,
-              child: ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: Opacity(
-                  opacity: 0.7,
-                  child: Container(
-                    width: size * 0.72,
-                    height: size * 0.20,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(size),
-                      gradient: palette.length > 1
-                          ? LinearGradient(colors: palette)
-                          : null,
-                      color: palette.length == 1 ? palette.first : null,
+      width: s,
+      height: s,
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) => Stack(
+          alignment: Alignment.center,
+          children: [
+            // soft theme-colored bloom under the base
+            if (widget.on)
+              Positioned(
+                bottom: s * 0.10,
+                child: ImageFiltered(
+                  imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                  child: Opacity(
+                    opacity: 0.55,
+                    child: Container(
+                      width: s * 0.66,
+                      height: s * 0.18,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(s),
+                        gradient: palette.length > 1 ? LinearGradient(colors: palette) : null,
+                        color: palette.length == 1 ? palette.first : null,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          Image.asset(
-            on ? 'assets/device/sphere_on.png' : 'assets/device/sphere_off.png',
-            width: size,
-            height: size,
-            filterQuality: FilterQuality.medium,
-          ),
-        ],
+            // the dim sphere (its baked-in ring stays dark; we light our own)
+            Image.asset('assets/device/sphere_off.png',
+                width: s, height: s, filterQuality: FilterQuality.medium),
+            // the procedural, animated, theme-colored LED ring
+            if (widget.on)
+              CustomPaint(
+                size: Size(s, s),
+                painter: _RingPainter(palette: palette, phase: _c.value),
+              ),
+          ],
+        ),
       ),
     );
   }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.palette, required this.phase});
+  final List<Color> palette;
+  final double phase;
+
+  Color _sample(double t) {
+    // t in [0,1) around the ring -> color from the palette (wraps).
+    t -= t.floorToDouble();
+    if (palette.length == 1) return palette.first;
+    final scaled = t * palette.length;
+    final i = scaled.floor() % palette.length;
+    final j = (i + 1) % palette.length;
+    return Color.lerp(palette[i], palette[j], scaled - scaled.floor())!;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    final cx = w / 2, cy = h * 0.705;     // the sphere's base rim
+    final a = w * 0.305, b = h * 0.082;   // ellipse half-axes (perspective)
+    const n = 72;
+    final single = palette.length == 1;
+
+    void pass(double width, double sigma, double alphaScale) {
+      final p = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = width;
+      if (sigma > 0) p.maskFilter = MaskFilter.blur(BlurStyle.normal, sigma);
+      for (int i = 0; i < n; i++) {
+        final t0 = i / n, t1 = (i + 1) / n;
+        final ang0 = t0 * 2 * math.pi, ang1 = t1 * 2 * math.pi;
+        final p0 = Offset(cx + a * math.cos(ang0), cy + b * math.sin(ang0));
+        final p1 = Offset(cx + a * math.cos(ang1), cy + b * math.sin(ang1));
+        // far half (top of the ellipse, sin<0) is partly behind the sphere -> dimmer
+        final depth = math.sin(ang0) < 0 ? 0.45 : 1.0;
+        double intensity;
+        Color base;
+        if (single) {
+          base = palette.first;
+          // an orbiting bright spot
+          double d = (t0 - phase).abs();
+          d = math.min(d, 1 - d);
+          intensity = 0.35 + 0.65 * math.exp(-math.pow(d / 0.13, 2).toDouble());
+        } else {
+          base = _sample(t0 + phase);   // rotating palette
+          intensity = 1.0;
+        }
+        p.color = base.withValues(alpha: (intensity * depth * alphaScale).clamp(0.0, 1.0));
+        canvas.drawLine(p0, p1, p);
+      }
+    }
+
+    pass(size.width * 0.045, size.width * 0.02, 0.55); // glow
+    pass(size.width * 0.018, 0, 1.0);                  // crisp ring
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) => old.phase != phase || old.palette != palette;
 }
