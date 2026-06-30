@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import '../protocol/models.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
-import '../widgets/glowing_ring.dart';
+import '../widgets/device_sphere.dart';
 
+/// Faithful to the original Nexus Q app: the black "drop ball" sphere as the
+/// device, over a Holo-dark settings list (volume, brightness, light theme),
+/// plus a now-playing block (our addition, from librespot).
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.controller});
   final DeviceController controller;
@@ -28,35 +31,151 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
           body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: NexusQSpace.standardMargin),
-              child: Column(
-                children: [
-                  const SizedBox(height: 8),
-                  // --- hero: glowing ring with now-playing inside -----------
-                  Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin, 8,
+                  NexusQSpace.standardMargin, 24),
+              children: [
+                // --- the device, as the original showed it ----------------
+                const SizedBox(height: 12),
+                Center(
+                  child: DeviceSphere(
+                    on: !s.muted && s.theme != 'off',
+                    // multi-color themes (spectrum/track info) glow Holo-Blue,
+                    // the device's own ring identity; single-color themes glow
+                    // their color.
+                    glow: theme.colors.length > 2 ? NexusQColors.accent : theme.primary,
+                    size: 184,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Center(
+                  child: Text(s.deviceName,
+                      style: const TextStyle(
+                          color: NexusQColors.white, fontSize: 20, fontWeight: FontWeight.w300)),
+                ),
+                if (!np.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
                     child: Center(
-                      child: GlowingRing(
-                        volume: s.muted ? 0 : s.volume / 100,
-                        color: theme.primary,
-                        muted: s.muted,
-                        child: _NowPlayingCore(np: np),
-                      ),
+                      child: Text('${np.track} · ${np.artist}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
                     ),
                   ),
-                  // --- transport -------------------------------------------
-                  _Transport(controller: controller, np: np),
-                  const SizedBox(height: 8),
-                  // --- volume row ------------------------------------------
-                  _VolumeRow(controller: controller, state: s),
-                  const SizedBox(height: 4),
-                  // --- theme picker ----------------------------------------
-                  _ThemePicker(controller: controller, current: s.theme),
-                  // --- brightness ------------------------------------------
-                  _BrightnessRow(controller: controller, brightness: s.brightness),
-                  const SizedBox(height: 8),
-                ],
-              ),
+                const SizedBox(height: 20),
+
+                // --- VOLUME ----------------------------------------------
+                const _SectionHeader('VOLUME'),
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: controller.toggleMute,
+                      icon: Icon(s.muted ? Icons.volume_off : Icons.volume_up),
+                      color: s.muted ? NexusQColors.dim : NexusQColors.accent,
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: s.volume.toDouble(),
+                        max: 100,
+                        onChanged: (v) => controller.setVolume(v.round()),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 36,
+                      child: Text('${s.volume}',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(color: NexusQColors.dim)),
+                    ),
+                  ],
+                ),
+
+                // --- BRIGHTNESS ------------------------------------------
+                const _SectionHeader('BRIGHTNESS'),
+                Row(
+                  children: [
+                    const Icon(Icons.brightness_low, color: NexusQColors.dim, size: 20),
+                    Expanded(
+                      child: Slider(
+                        value: s.brightness.toDouble(),
+                        max: 255,
+                        onChanged: (v) => controller.setBrightness(v.round()),
+                      ),
+                    ),
+                    const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
+                  ],
+                ),
+
+                // --- LIGHT THEME -----------------------------------------
+                const _SectionHeader('LIGHT THEME'),
+                SizedBox(
+                  height: 66,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: kLedThemes.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 12),
+                    itemBuilder: (context, i) {
+                      final t = kLedThemes[i];
+                      final selected = t.name == s.theme;
+                      return GestureDetector(
+                        onTap: () => controller.setTheme(t.name),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: t.colors.length > 1
+                                    ? SweepGradient(colors: [...t.colors, t.colors.first])
+                                    : null,
+                                color: t.colors.length == 1 ? t.colors.first : null,
+                                border: Border.all(
+                                  color: selected ? NexusQColors.accent : NexusQColors.divider,
+                                  width: selected ? 3 : 1,
+                                ),
+                                boxShadow: selected
+                                    ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(t.label,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                // --- NOW PLAYING -----------------------------------------
+                const _SectionHeader('NOW PLAYING'),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                        onPressed: controller.previous,
+                        icon: const Icon(Icons.skip_previous),
+                        color: NexusQColors.white),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      iconSize: 40,
+                      onPressed: controller.playPause,
+                      icon: Icon(np.playing ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                      color: NexusQColors.accent,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                        onPressed: controller.next,
+                        icon: const Icon(Icons.skip_next),
+                        color: NexusQColors.white),
+                  ],
+                ),
+              ],
             ),
           ),
         );
@@ -65,150 +184,28 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-class _NowPlayingCore extends StatelessWidget {
-  const _NowPlayingCore({required this.np});
-  final NowPlaying np;
+/// A Holo-style section header: a Holo-Blue label over a thin divider — matching
+/// the original device-settings screens.
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(this.label);
+  final String label;
   @override
   Widget build(BuildContext context) {
-    if (np.isEmpty) {
-      return const Text('Nothing playing',
-          style: TextStyle(color: NexusQColors.dim, fontWeight: FontWeight.w300));
-    }
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48),
+      padding: const EdgeInsets.only(top: 20, bottom: 4),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(np.track,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: NexusQColors.white, fontSize: 18, fontWeight: FontWeight.w400)),
+          Text(label,
+              style: const TextStyle(
+                  color: NexusQColors.accent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 1.2)),
           const SizedBox(height: 4),
-          Text(np.artist,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
+          Container(height: 1, color: NexusQColors.divider),
         ],
       ),
-    );
-  }
-}
-
-class _Transport extends StatelessWidget {
-  const _Transport({required this.controller, required this.np});
-  final DeviceController controller;
-  final NowPlaying np;
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        IconButton(onPressed: controller.previous, icon: const Icon(Icons.skip_previous), color: NexusQColors.white),
-        const SizedBox(width: 8),
-        IconButton(
-          iconSize: 44,
-          onPressed: controller.playPause,
-          icon: Icon(np.playing ? Icons.pause_circle_filled : Icons.play_circle_filled),
-          color: NexusQColors.accent,
-        ),
-        const SizedBox(width: 8),
-        IconButton(onPressed: controller.next, icon: const Icon(Icons.skip_next), color: NexusQColors.white),
-      ],
-    );
-  }
-}
-
-class _VolumeRow extends StatelessWidget {
-  const _VolumeRow({required this.controller, required this.state});
-  final DeviceController controller;
-  final DeviceState state;
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: controller.toggleMute,
-          icon: Icon(state.muted ? Icons.volume_off : Icons.volume_up),
-          color: state.muted ? NexusQColors.dim : NexusQColors.accent,
-        ),
-        Expanded(
-          child: Slider(
-            value: state.volume.toDouble(),
-            max: 100,
-            onChanged: (v) => controller.setVolume(v.round()),
-          ),
-        ),
-        SizedBox(
-          width: 34,
-          child: Text('${state.volume}',
-              textAlign: TextAlign.right, style: const TextStyle(color: NexusQColors.dim)),
-        ),
-      ],
-    );
-  }
-}
-
-class _ThemePicker extends StatelessWidget {
-  const _ThemePicker({required this.controller, required this.current});
-  final DeviceController controller;
-  final String current;
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 56,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: kLedThemes.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, i) {
-          final t = kLedThemes[i];
-          final selected = t.name == current;
-          return GestureDetector(
-            onTap: () => controller.setTheme(t.name),
-            child: Container(
-              width: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: t.colors.length > 1
-                    ? SweepGradient(colors: [...t.colors, t.colors.first])
-                    : null,
-                color: t.colors.length == 1 ? t.colors.first : null,
-                border: Border.all(
-                  color: selected ? NexusQColors.accent : NexusQColors.divider,
-                  width: selected ? 3 : 1,
-                ),
-                boxShadow: selected
-                    ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 10)]
-                    : null,
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _BrightnessRow extends StatelessWidget {
-  const _BrightnessRow({required this.controller, required this.brightness});
-  final DeviceController controller;
-  final int brightness;
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Icon(Icons.brightness_low, color: NexusQColors.dim, size: 20),
-        Expanded(
-          child: Slider(
-            value: brightness.toDouble(),
-            max: 255,
-            onChanged: (v) => controller.setBrightness(v.round()),
-          ),
-        ),
-        const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
-      ],
     );
   }
 }
