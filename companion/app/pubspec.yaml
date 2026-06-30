@@ -52,6 +52,28 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Generates the launcher icons for every platform from assets/icon/ (our own
+  # glowing-ring mark — see tool/make_icon.py). Run: dart run flutter_launcher_icons
+  flutter_launcher_icons: ^0.14.4
+
+# Launcher-icon generation config (our original Nexus Q ring, not the Google "Q").
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+  android: "ic_launcher"
+  min_sdk_android: 21
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    background_color: "#000000"
+    theme_color: "#33B5E5"
+  macos:
+    generate: true
+    image_path: "assets/icon/icon.png"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
