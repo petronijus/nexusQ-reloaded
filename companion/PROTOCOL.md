@@ -69,25 +69,27 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 ```json
 { "volume": 42, "muted": false,
   "brightness": 200,
-  "theme": "spectrum",
+  "theme": "blue", "scene": "waveform",
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
                   "artUrl": "...", "source": "spotify" } }
 ```
 
-### Volume / mute  (→ real ALSA mixer, see §6)
+### Volume / mute  (→ real ALSA mixer + nexusqd mute LED, see §6)
 | Method | params | result | Event emitted |
 |---|---|---|---|
 | `setVolume` | `{ "volume": 0..100 }` | `{ volume, muted }` | `volumeChanged` |
 | `adjustVolume` | `{ "steps": int }` | `{ volume, muted }` | `volumeChanged` |
-| `setMuted` | `{ "muted": bool }` | `{ volume, muted }` | `volumeChanged` |
-| `toggleMute` | — | `{ volume, muted }` | `volumeChanged` |
+| `setMuted` | `{ "muted": bool }` | `{ volume, muted }` | `volumeChanged` — also drives the device mute LED via nexusqd `muted 0\|1` |
+| `toggleMute` | — | `{ volume, muted }` | `volumeChanged` — also drives the device mute LED |
 
 ### LED ring  (→ nexusqd Unix socket `/run/nexusqd.sock`)
 | Method | params | result | Event |
 |---|---|---|---|
-| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — names from §3.2 of the RE doc (spectrum/warm/cool/blue/smoke/off/trackinfo) |
-| `listThemes` | — | `{ "themes": [ {name, colors[], display, led, mode} ] }` | — |
-| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` — **new**: a software scalar applied in nexusqd `frame_pack` |
+| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring |
+| `listThemes` | — | `{ "themes": [ {name, label} ] }` | — |
+| `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — **new**: picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `auto`+`scene 0..4`; shown while audio plays |
+| `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
+| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` — a software scalar applied in nexusqd |
 
 ### Now-playing  (→ librespot `--onevent`, see §6)
 | Method | params | result | Event |
@@ -107,11 +109,17 @@ fixed-volume line-out, sync delay, calibration, the stock UDP beacon for cross-c
 this same envelope (new `method`/`event` names) without breaking v1 clients.
 
 ## 6. Device-side wiring (informative — see the gap analysis in the RE doc §9)
-- **Volume/mute** → an ALSA control. v1 plan: add an ALSA `softvol` (or use the TAS5713 hw mixer
-  control if usable), bind `librespot --mixer alsa --alsa-mixer-control <name>` so Spotify-Connect
-  volume and companion volume are the *same* knob, and read/write it via `amixer`/libasound.
-- **LED theme** → write `theme <name>` to `/run/nexusqd.sock` (already supported).
-- **LED brightness** → **new** nexusqd command + a software brightness scalar in `frame_pack`.
+- **Volume/mute** → an ALSA control. Add an ALSA `softvol` (the `NexusQ` control on `nexusq_soft`),
+  bind `librespot --mixer alsa --alsa-mixer-control NexusQ` so Spotify-Connect volume and companion
+  volume are the *same* knob, read/write it via `amixer`/libasound. Mute also sends nexusqd
+  `muted 0|1` so the device **mute LED** matches the app (the same LED the hardware mute key lights).
+- **LED theme** → a color theme is a **breathing override**: the bridge sends `breathe R G B`
+  to `/run/nexusqd.sock`; nexusqd pulses the compositor manual layer (priority 8) in that hue with
+  the idle-screensaver throb, **always visible** (over the music visualizer / a blanked screensaver);
+  `off` blanks. _(An earlier idle-screensaver-retint design was reverted — invisible once blanked / while music played.)_
+- **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 7,
+  shown while audio plays — below the breathing override).
+- **LED brightness** → a nexusqd `brightness` command + a software brightness scalar.
 - **now-playing** → `librespot --onevent <hook>` publishes track/artist/album/art + play state to
   the bridge (read-only metadata). **Transport (playPause/next/previous) is `unavailable` in v1** —
   librespot exposes no local transport API; control happens from the Spotify app.

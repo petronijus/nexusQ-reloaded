@@ -4,7 +4,99 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-01 (latest): v1.6.3 shipped — companion app + nexusq-control LAN bridge
+## Session 2026-07-01 (latest): v1.6.5 shipped — LED keepalive + breathing themes + 5 visualisations + app-mute LED + librespot softvol fix + companion-over-WiFi
+
+A batch of device-side fixes and companion features on the v1.6.3 image — released as a
+single **v1.6.5**. (An interim **v1.6.4** was built + flashed internally to test the LED
+keepalive but **never published**; it was folded into v1.6.5 along with the other items.
+The 1.6.3 → 1.6.5 gap is intentional.) `boot.img` is **byte-identical** to
+v1.6.2/v1.6.3 (kernel unchanged; md5 `36a3dec2c4a493710dffa18c4d796236`), so an
+already-current device only needs the userdata reflash. Final pkgrels: `nexusqd` **r5**,
+`nexusq-control` **r4**, `device-google-steelhead` **r17**. The companion APK is rebuilt +
+reinstalled separately (not part of the device image). Full detail:
+`docs/2026-07-01-led-ring-avr-starvation-keepalive.md` +
+`docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.
+
+- **librespot crash-loops on a fresh boot — FIXED (`device-google-steelhead` pkgrel 17).**
+  The ALSA `NexusQ` **softvol** control (`asound.conf`) does not exist until the
+  `nexusq_soft` PCM is first opened, and it is recreated empty each boot, but librespot
+  opens its ALSA mixer control **before** the sink → exits `Could not find Alsa mixer
+  control` and `Restart=on-failure` respawns it into the same state forever (a reboot never
+  helps). Fix: `librespot.service` gained
+  `ExecStartPre=-/bin/sh -c 'timeout 5 aplay -q -D nexusq_soft -f cd -d 1 /dev/zero'`, which
+  opens `nexusq_soft` once (1 s silence) to create the control before librespot's mixer
+  opens. Also fixes companion **volume** (the bridge's `amixer NexusQ set` needs that
+  control to exist).
+- **Color themes are now a BREATHING OVERRIDE, not a solid fill (`nexusqd` pkgrel 5,
+  `nexusq-control` pkgrel 4).** New `nexusqd` control command **`breathe R G B`**
+  (`CTL_BREATHE`, control.c/.h) drives the **compositor manual layer (priority 8)** via a
+  new `breathe` flag (`struct manual_ctx`): `manual_render` pulses the ring in the theme hue
+  with the **same throb envelope as the idle screensaver** (`screensaver_throb`,
+  `A = 0.1 + 0.35*(1 - throb)`) but at priority 8 it is **always visible** — over the music
+  visualizer and over a blanked/idle screensaver. This was the fix for "pick a color, ring
+  stays dark". _(The earlier screensaver-retint approach — a `br/bg/bb` base color +
+  `screensaver_set_color` — was **REVERTED**: it was invisible once the screensaver blanked
+  or while music played. `screensaver.c/.h` no longer carry those.)_ A companion color theme
+  maps (in the bridge) to **just** `breathe R G B` (no `auto`). Hues: blue (`#0099CC`) /
+  warm (`#FF5A0A`) / cool (`#00C88C`) / rose (`#FF285A`) / smoke (`#6E7387`) / off;
+  `spectrum`/`trackinfo` dropped.
+- **5 music visualisations selectable from the app (`nexusq-control` pkgrel 4 + companion
+  app).** `nexusqd` already had `scene 0..4` (waveform/waveformsolid/circles/pointmorph/
+  starfield); the bridge gained `setScene`/`listScenes` (maps a name → `auto` + `scene N`)
+  + a `scene` field in `getState`, and the Flutter app gained a separate **VISUALIZATION**
+  picker (models.dart `kVisualizations`, device_controller.dart `setScene`, home_screen.dart
+  section, mock_client.dart). A color theme (breathing override, priority 8) and a
+  visualisation (music-reactive effect, priority 7) are now two **independent** controls.
+- **App-mute now lights the device mute LED (`nexusqd` pkgrel 5, `nexusq-control`
+  pkgrel 4).** New `nexusqd` command **`muted 0|1`** (`CTL_SETMUTED`) sets the mute state
+  and calls the same `apply_mute_led()` (dim-teal `#001E28`/`#006B8E` AVR mute LED) the
+  hardware mute key drives. The bridge's `setVolume`/`adjustVolume`/`setMuted`/`toggleMute`
+  path now also sends `muted 0|1`, so a companion mute has a device-side ring indicator.
+- **LED ring goes dark after long idle — root-caused + fixed (AVR keepalive, `nexusqd`
+  pkgrel 5; the keepalive landed at r3, later rels add `breathe`/`muted`).** The
+  `steelhead-avr` MCU firmware (fw `0x00`) **starves**: it stops lighting
+  the ring if the host sends no frame *commit* for too long (a host-frame watchdog). The
+  kernel driver `frame_write` (`kernel/drivers/leds-steelhead-avr.c`, sysfs
+  `/sys/bus/i2c/devices/1-0020/frame`) sends `SET_RANGE` + `COMMIT` on **every** write, but
+  `nexusqd` only wrote a frame when it **changed** (a `memcmp(pk, lastpk)` gate). The idle
+  screensaver locks to a **static** frame at `SS_LOCK_S=300 s` (`ledAlpha` constant `0.1`,
+  breathing stops) and blanks at `SS_BLANK_S=600 s` → frame stops changing → `memcmp`
+  identical → no more commits → AVR starves → ring dark until `nexusqd` restarts
+  (~20 h to manifest). **Not** HW (a direct sysfs write lights the ring), **not** a
+  commit-mode issue (both `AVR_COMMIT_IMMEDIATE=0` and `AVR_COMMIT_INTERPOLATE=1` display
+  fine at 1 write / 4 s), **not** a regression. Fix: re-commit the current frame every
+  `AVR_KEEPALIVE_S=1.0 s` even when unchanged (`last_avr_push` var + `|| now-last_avr_push
+  >= AVR_KEEPALIVE_S` in the write-gate). Zero cost during animation; idle adds ~1 cheap
+  96-byte-payload i2c frame write/s. **Caveat:** mechanically deployed + running, but the
+  "never wedges again" proof needs an **overnight idle soak** (the wedge took ~20 h).
+- **Companion bridge reachable over WiFi** — new nftables drop-in
+  `pmos/device-google-steelhead/55_nexusq-control.nft` opens **TCP 45015 on `wlan*`**
+  (mDNS discovery reuses the UDP 5353 rule in `60_spotify.nft`). Previously the bridge was
+  only reachable over the USB-gadget net; it had been live-patched but not baked.
+  `device-google-steelhead` pkgrel 17.
+- **Verified live** (clean flash of the internal v1.6.4 keepalive build): boots;
+  `nexusqd 0.1.0-r3` (correct musl binary), `device-google-steelhead 1.0-r16` at that point;
+  the bridge answers `getState` (returns the "Nexus Q" state) over WiFi on 45015; WiFi
+  rejoined (`192.168.20.x`). The released **v1.6.5** ships `nexusqd 0.1.0-r5` +
+  `nexusq-control 0.1.0-r4` + `device-google-steelhead 1.0-r17` with the other items above;
+  the softvol/breathe/scene/mute-LED work is verified in the build (device flash-verification
+  of those was still pending when this was written).
+
+### Known limitation — deferred to v1.6.6: app/hardware/desktop/Spotify volume+mute are not unified
+The companion volume + mute act on the ALSA **`NexusQ` softvol** (the Spotify/librespot
+stream) and now the **mute LED** (via `nexusqd muted 0|1`), but do **not** mirror to the
+**LXQt desktop taskbar** volume/mute icon. The physical mute/volume keys emit
+`KEY_MUTE` / `KEY_VOLUME*` input events that the **desktop** catches (→ taskbar + desktop
+audio) and `nexusqd` reads (→ mute LED); the **app** path goes straight to the softvol, so
+the app and the desktop can **diverge**. Unifying app + hardware + desktop + Spotify onto
+one canonical volume/mute control is a focused **v1.6.6** task — investigate whether the
+desktop drives ALSA `Master` vs PulseAudio/PipeWire, and whether emitting `uinput` KEY
+events or driving the canonical control is the cleaner approach. **Not done — do not claim
+it is.**
+
+---
+
+## Session 2026-07-01: v1.6.3 shipped — companion app + nexusq-control LAN bridge
 
 A **companion app** and its on-device **`nexusq-control` LAN bridge** now ship and are
 **verified working on hardware** — released **v1.6.3** (CHANGELOG dated 2026-06-30; the

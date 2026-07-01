@@ -15,6 +15,15 @@ Wants=network-online.target
 # through the ALSA softvol control (asound.conf), the same knob the companion
 # bridge reads/writes — so Spotify and the companion share one volume.
 # --onevent feeds now-playing + volume changes to nexusq-control.
+# Bootstrap the softvol control BEFORE librespot's ALSA mixer opens it. The
+# "NexusQ" softvol control (asound.conf) does not exist until the nexusq_soft
+# PCM is first opened by *something*, but librespot opens the mixer control
+# BEFORE the sink and exits with "Could not find Alsa mixer control" on a fresh
+# boot -> crash-loops forever (the control is recreated empty every boot, so a
+# reboot never helps). Open nexusq_soft once (1 s of digital silence) to create
+# the control. The leading `-` ignores a transient failure (audio not ready
+# yet); Restart=on-failure then retries until sound.target settles.
+ExecStartPre=-/bin/sh -c 'timeout 5 aplay -q -D nexusq_soft -f cd -d 1 /dev/zero'
 ExecStart=/usr/bin/librespot \
     --name "Nexus Q" \
     --backend alsa \

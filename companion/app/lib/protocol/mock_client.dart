@@ -12,7 +12,8 @@ class MockClient implements NexusQClient {
   int _volume = 42;
   bool _muted = false;
   int _brightness = 200;
-  String _theme = 'spectrum';
+  String _theme = 'blue';
+  String _scene = 'waveform';
   bool _playing = true;
   int _trackIdx = 0;
 
@@ -53,6 +54,7 @@ class MockClient implements NexusQClient {
         'muted': _muted,
         'brightness': _brightness,
         'theme': _theme,
+        'scene': _scene,
         'nowPlaying': _nowPlaying,
         'name': 'Nexus Q (mock)',
       };
@@ -91,6 +93,10 @@ class MockClient implements NexusQClient {
         _theme = p['theme'] as String;
         _events.add(NexusQEvent('themeChanged', {'theme': _theme}));
         return {'theme': _theme};
+      case 'setScene':
+        _scene = p['scene'] as String;
+        _events.add(NexusQEvent('sceneChanged', {'scene': _scene}));
+        return {'scene': _scene};
       case 'setBrightness':
         _brightness = (p['brightness'] as num).round().clamp(0, 255);
         _events.add(NexusQEvent('brightnessChanged', {'brightness': _brightness}));

@@ -46,8 +46,8 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS, `conservative` governor · v1.4.0 |
 | 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 |
-| 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 |
-| 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · LED theme/brightness · now-playing · v1.6.3 |
+| 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 |
+| 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager |
 | 🔵 **Bluetooth** (BCM4330) | ✅ | |
@@ -88,10 +88,13 @@ orb glows in time with whatever you're playing. The speaker is the timing master
 the lights never stall the music.
 
 Since **v1.6.3** a phone/desktop **companion app** auto-discovers the Q over mDNS and
-controls **volume** (one ALSA softvol shared with Spotify-Connect), **LED theme +
-brightness**, and shows **now-playing** — talking to the on-device `nexusq-control`
-LAN bridge (TCP 45015, line-delimited JSON). The Flutter app is installed on the phone,
-**not** in the device image.
+controls **volume** (one ALSA softvol shared with Spotify-Connect), the **LED color theme +
+brightness**, the **music visualisation**, **mute** (with a device-side mute-LED indicator),
+and shows **now-playing** — talking to the on-device `nexusq-control` LAN bridge (TCP 45015,
+line-delimited JSON — reachable over WiFi since **v1.6.5**). Since **v1.6.5** a color theme
+is a *breathing override* (the ring gently pulses in the theme's hue, always visible) while a
+separate picker chooses one of the **5 music-reactive visualisations** shown while audio
+plays. The Flutter app is installed on the phone, **not** in the device image.
 
 ---
 
@@ -170,7 +173,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.0 ── ✦ python3 on-device (the flash-bug saga)                   2026-06-28
 1.6.1 ── ✦ TAS5713 audio fixed + Spotify Connect baked in           2026-06-29
 1.6.2 ── ✦ LED music visualizer reacts to playback                 2026-06-30
-1.6.3 ── ✦ companion app + LAN control bridge             ← latest  2026-06-30
+1.6.3 ── ✦ companion app + LAN control bridge                       2026-06-30
+1.6.5 ── ✦ breathing themes + 5 visualisations · LED keepalive · companion/WiFi  ← latest  2026-07-01
 ```
 
 ---

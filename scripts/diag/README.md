@@ -67,10 +67,23 @@ MCU on i2c (IRQ line `steelhead-avr`). nexusqd has **no systemd watchdog**, so a
 unresponsiveness + a frozen LED frame + no daemon CPU progress.
 
 > **A dark ring is NOT a hang by itself.** If the ring is dark **but the control
-> socket answers** (`nexusled status` returns, `nq_resp=1`), that is **idle-off**
-> (the ring blanks after the idle timeout), not a `nexusqd_hang`. A hang requires
-> the socket to be **dead**. Observed 2026-06-28: a dark-but-responsive ring tripped
-> a CRIT verdict that was not an actual daemon hang.
+> socket answers** (`nexusled status` returns, `nq_resp=1`), that is **not** a
+> `nexusqd_hang` (a hang requires the socket to be **dead**). It is one of two
+> non-hang states:
+> - **idle-off / blank** — by design, after the screensaver blank timeout
+>   (`SS_BLANK_S=600 s`) the daemon renders a black frame. Observed 2026-06-28: a
+>   dark-but-responsive ring tripped a false CRIT that was not a daemon hang.
+> - **AVR starvation** (FIXED in v1.6.5) — a dark ring after a **long** idle/uptime
+>   (~20 h observed) with the socket alive was **not** benign idle-off: the
+>   `steelhead-avr` MCU firmware (fw `0x00`) **starves** — its host-frame watchdog
+>   stops lighting the ring if the host sends no frame *commit* for too long. Once the
+>   screensaver locked to a **static** frame (`SS_LOCK_S=300 s`, `ledAlpha` constant
+>   `0.1`) / blanked, `nexusqd`'s per-frame `memcmp(pk,lastpk)` write-gate suppressed all
+>   commits, so the AVR received none and went dark until a daemon restart. **Fix:**
+>   `nexusqd` (pkgrel 5) now re-commits the current frame every `AVR_KEEPALIVE_S=1.0 s`
+>   even when unchanged. If a dark-after-long-idle ring recurs on a **≥ v1.6.5** image,
+>   suspect the keepalive stopped (check `nexusqd` is up and the render loop is ticking)
+>   rather than a design blank. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
 
 **Crashes / kernel** — new error lines in `dmesg`
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and

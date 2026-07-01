@@ -28,6 +28,16 @@
 #define THEMES_DIR "/etc/nexusqd/themes"
 #define VOL_STEP 2          /* master-volume % per rotary detent (the ring emits many events/turn) */
 
+/* AVR keepalive: the AVR firmware stops lighting the ring if the host stops
+ * sending frame commits for too long. That happens once the idle screensaver
+ * locks (SS_LOCK_S) / blanks (SS_BLANK_S) to a *static* frame and the per-frame
+ * memcmp gate in the render loop suppresses all further AVR writes — the AVR
+ * then starves and the ring goes dark until nexusqd restarts. Re-commit the
+ * current frame at this cadence even when unchanged so the AVR never starves.
+ * Cheap: one 96-byte i2c write per interval, and only while the ring is idle
+ * (an actively animating frame already writes on every tick via the memcmp). */
+#define AVR_KEEPALIVE_S 1.0
+
 /* Compositor layers, by priority (matches the original arbitration):
  *   10  reaction   — volume overlay (Plan 2b), active only during the overlay
  *    8  manual     — CLI/socket override (set/theme/off), off until used (our feature)
@@ -37,10 +47,19 @@
  * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
 
 /* --- manual override layer (priority 8) ----------------------------------- */
-struct manual_ctx { int rgb[3]; };
+struct manual_ctx { int rgb[3]; int breathe; };
 static int manual_render(void *c, double t, struct frame *out) {
-    (void)t; struct manual_ctx *m = c;
-    frame_fill(out, m->rgb[0], m->rgb[1], m->rgb[2]); return 0;
+    struct manual_ctx *m = c;
+    if (m->breathe) {
+        /* companion color theme: pulse in the hue using the SAME throb envelope
+         * as the idle screensaver breathe (A in 0.1..0.8), but at priority 8 it is
+         * always visible — even when music plays or the screensaver has blanked. */
+        double A = 0.1 + 0.35 * (1.0 - screensaver_throb(t));
+        frame_fill(out, (int)(m->rgb[0]*A + 0.5), (int)(m->rgb[1]*A + 0.5), (int)(m->rgb[2]*A + 0.5));
+    } else {
+        frame_fill(out, m->rgb[0], m->rgb[1], m->rgb[2]);
+    }
+    return 0;
 }
 
 /* --- music layer (priority 7): the audio-reactive scene ------------------- */
@@ -76,7 +95,7 @@ int main(void) {
     double start = now_s();
     struct reaction rx = {0};
     struct screensaver ss; screensaver_init(&ss, start);
-    struct manual_ctx manual = { { 0, 0, 0 } };
+    struct manual_ctx manual = { { 0, 0, 0 }, 0 };
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
@@ -125,6 +144,7 @@ int main(void) {
      * covered by Restart=, the hang path was not. No-op outside systemd. */
     sdnotify_send("READY=1");
     double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
+    double last_avr_push = 0.0;    /* last AVR frame commit — drives the keepalive re-push */
     for (;;) {
         /* arecord exits immediately if hw:Loopback,1 is absent (snd-aloop not
          * loaded) or the device is busy; the loop below then closes afd. Re-spawn
@@ -174,12 +194,13 @@ int main(void) {
                 char line[128] = {0}; int r = (int)read(c, line, sizeof(line)-1);
                 struct ctl_cmd cmd;
                 if (r > 0 && ctl_parse(line, &cmd) == 0) {
-                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); comp.layers[manual_idx].active = 1; }
-                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; comp.layers[manual_idx].active = 1; }
+                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; comp.layers[manual_idx].active = 1; }
+                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_AUTO) { comp.layers[manual_idx].active = 0; }   /* resume screensaver/music */
                     else if (cmd.kind == CTL_SCENE) { music_set_scene(&music, cmd.value); }
                     else if (cmd.kind == CTL_MUTE) avr_set_mute(cmd.rgb[0],cmd.rgb[1],cmd.rgb[2]);
                     else if (cmd.kind == CTL_MTOGGLE) { muted = !muted; apply_mute_led(muted); screensaver_on_activity(&ss, now_s()); }
+                    else if (cmd.kind == CTL_SETMUTED) { muted = cmd.value; apply_mute_led(muted); screensaver_on_activity(&ss, now_s()); }
                     else if (cmd.kind == CTL_VOL) {
                         double now = now_s();
                         volume = cmd.value;
@@ -191,11 +212,19 @@ int main(void) {
                         brightness = cmd.value;
                         memset(lastpk, 0xFF, sizeof(lastpk));   /* force a re-push at the new brightness */
                     }
+                    else if (cmd.kind == CTL_BREATHE) {
+                        /* companion color theme: a BREATHING solid-color override at
+                         * priority 8 — pulses gently in the hue and is ALWAYS visible
+                         * (over the visualizer, over a blanked/idle screensaver), so
+                         * picking a color always lights the ring. `auto` clears it. */
+                        memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
+                        manual.breathe = 1; comp.layers[manual_idx].active = 1;
+                    }
                     else if (cmd.kind == CTL_THEME) {
                         char path[256]; snprintf(path, sizeof(path), "%s/theme_%s", THEMES_DIR, cmd.name);
                         FILE *fp = fopen(path, "r");
                         if (fp) { char js[1024]; int m=(int)fread(js,1,sizeof(js)-1,fp); js[m]=0; fclose(fp);
-                                  struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); comp.layers[manual_idx].active = 1; } }
+                                  struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); manual.breathe = 0; comp.layers[manual_idx].active = 1; } }
                     }
                     if (write(c, "ok\n", 3) < 0) { /* client gone */ }
                 } else { if (write(c, "err\n", 4) < 0) { /* client gone */ } }
@@ -285,7 +314,12 @@ int main(void) {
          * dedicated mute LED is written separately and is not dimmed here. */
         if (brightness < 255)
             for (int i = 0; i < RING*3; i++) pk[i] = (uint8_t)(pk[i] * brightness / 255);
-        if (memcmp(pk, lastpk, sizeof(pk)) != 0) { avr_write_frame(pk, 0); memcpy(lastpk, pk, sizeof(pk)); }
+        /* Push to the AVR on any change, and additionally re-push the unchanged
+         * frame every AVR_KEEPALIVE_S so the AVR never starves once the ring goes
+         * idle/static (screensaver lock/blank) — see AVR_KEEPALIVE_S above. */
+        if (memcmp(pk, lastpk, sizeof(pk)) != 0 || now - last_avr_push >= AVR_KEEPALIVE_S) {
+            avr_write_frame(pk, 0); memcpy(lastpk, pk, sizeof(pk)); last_avr_push = now;
+        }
 
         /* Heartbeat: reached the end of a frame tick, so the render path is
          * alive (this runs even when the frame is unchanged / the ring is idle).

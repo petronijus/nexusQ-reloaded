@@ -23,10 +23,16 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
         out->kind = CTL_THEME; snprintf(out->name, sizeof(out->name), "%s", tok[1]); return 0;
     }
     if (!strcmp(tok[0], "set") && n == 4)  { out->kind = CTL_SET;  return rgb3(tok[1],tok[2],tok[3], out->rgb); }
+    if (!strcmp(tok[0], "breathe") && n == 4) { out->kind = CTL_BREATHE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "mute") && n == 4) { out->kind = CTL_MUTE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "off") && n == 1)    { out->kind = CTL_OFF; return 0; }
     if (!strcmp(tok[0], "status") && n == 1) { out->kind = CTL_STATUS; return 0; }
     if (!strcmp(tok[0], "mtoggle") && n == 1){ out->kind = CTL_MTOGGLE; return 0; }
+    if (!strcmp(tok[0], "muted") && n == 2) {
+        char *e; long v = strtol(tok[1], &e, 10);
+        if (*e != 0 || v < 0 || v > 1) return -1;
+        out->kind = CTL_SETMUTED; out->value = (int)v; return 0;
+    }
     if (!strcmp(tok[0], "auto") && n == 1)   { out->kind = CTL_AUTO; return 0; }
     if (!strcmp(tok[0], "vol") && n == 2) {
         char *e; long v = strtol(tok[1], &e, 10);

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=15
+pkgrel=17
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -52,6 +52,7 @@ source="
 	nq-healthd.service
 	librespot.service
 	60_spotify.nft
+	55_nexusq-control.nft
 	asound.conf
 	snd-aloop.conf
 	nexusq.preset
@@ -152,6 +153,12 @@ package() {
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
 		"$pkgdir"/etc/nftables.d/60_spotify.nft
+	# Open TCP 45015 on WiFi so the companion app can reach the nexusq-control
+	# bridge (mDNS _nexusq._tcp discovery reuses the 5353 rule above). Without
+	# this the phone app connects on the USB-gadget net but is firewalled off
+	# over WiFi (the normal path).
+	install -Dm644 "$srcdir"/55_nexusq-control.nft \
+		"$pkgdir"/etc/nftables.d/55_nexusq-control.nft
 	# Load snd-aloop so the "nexusq" tee's loopback slave (hw:Loopback,0) exists.
 	# librespot's audio is duplicated to the speaker AND the loopback; nexusqd's
 	# tap (arecord on hw:Loopback,1, see userspace/nexusqd) reads it for the LED
@@ -205,6 +212,7 @@ SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
 SKIP  librespot.service
 SKIP  60_spotify.nft
+SKIP  55_nexusq-control.nft
 SKIP  asound.conf
 SKIP  snd-aloop.conf
 SKIP  nexusq.preset

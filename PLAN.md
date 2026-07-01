@@ -3,7 +3,37 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **Current release: v1.6.3 (2026-06-30).** **A companion app and its on-device
+> **Current release: v1.6.5 (2026-07-01).** A batch of device-side fixes + companion
+> features on the v1.6.3 image (an interim **v1.6.4** was flashed internally to test the LED
+> keepalive but never published — folded into v1.6.5; the 1.6.3 → 1.6.5 gap is intentional).
+> Final pkgrels: `nexusqd` **r5**, `nexusq-control` **r4**, `device-google-steelhead` **r17**;
+> `boot.img` byte-identical to v1.6.2/v1.6.3 (kernel unchanged). (1) **librespot no longer
+> crash-loops on a fresh boot** — the ALSA `NexusQ` softvol control didn't exist yet when
+> librespot opened its mixer (control created lazily on first PCM open, recreated empty each
+> boot); `librespot.service` now bootstraps it with an `ExecStartPre` (`aplay … nexusq_soft`)
+> — also fixes companion volume. (2) **color themes are now a BREATHING OVERRIDE** — new
+> `nexusqd breathe R G B` (`CTL_BREATHE`) pulses the compositor manual layer (priority 8) in
+> the theme hue with the same throb as the idle screensaver, **always visible** (over the
+> music visualizer / a blanked screensaver); a companion theme maps to **just** `breathe R G B`
+> (blue/warm/cool/rose/smoke/off). (The earlier screensaver-retint approach was reverted —
+> it was invisible once the screensaver blanked / while music played.) (3) **the 5 music
+> visualisations are selectable from the app** — bridge `setScene`/`listScenes`
+> (→ `auto` + `scene 0..4`) + a separate app picker; color theme (breathing override, prio 8)
+> and visualisation (music, prio 7) are independent. (4) **app-mute now lights the device
+> mute LED** — new `nexusqd muted 0|1` (`CTL_SETMUTED`) calls the same `apply_mute_led()` the
+> hardware key drives; the bridge's volume/mute path sends it. (5) **the LED ring no longer
+> goes dark after a long idle** — the `steelhead-avr` fw starves without periodic frame
+> *commits* once the screensaver locked/blanked and `nexusqd`'s `memcmp` write-gate went
+> silent; fixed with a 1 Hz keepalive (`AVR_KEEPALIVE_S=1.0`). _(Deployed; "never wedges
+> again" still needs an overnight idle soak — the wedge took ~20 h.)_ (6) **the companion
+> bridge is reachable over WiFi** — new nftables drop-in `55_nexusq-control.nft` opens TCP
+> 45015 on `wlan*`. _(Deferred to **v1.6.6**: companion volume/mute act on the ALSA softvol +
+> mute LED but do NOT mirror to the LXQt desktop taskbar — app vs desktop can diverge; see
+> HANDOFF.md.)_ See `CHANGELOG.md` ([1.6.5]),
+> `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` and
+> `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.
+>
+> **v1.6.3 (2026-06-30).** **A companion app and its on-device
 > `nexusq-control` LAN bridge now ship** — a phone/desktop remote for the Q (volume,
 > LED theme + brightness, now-playing), replacing the dead 2012 Google companion app.
 > `nexusq-control` is a pure-Python3 daemon (new noarch aport `pmos/nexusq-control`,
@@ -66,7 +96,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | TWL6040 codec | 🟡 deferred | driver never binds; `omap-abe-twl6040` card loops on -EPROBE_DEFER |
 | NFC (PN544) | 🟡 detected | i2c device `2-0028` present, driver not loaded |
 | TMP101 temp sensor | 🟡 detected | i2c device `1-0048`, needs `modprobe lm75` |
-| LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`) |
+| LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | 🟠 sw bug, not dead HW | _(Updated 2026-06-28)_ the "dead hardware" verdict was **wrong** — fixed in v1.1.0/v1.3.0 (patches 0006/0012); **regressed** in v1.4.0 by the cpufreq boot-timing change (down on current builds, fix tracked 1.4.1) |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 
@@ -216,8 +246,33 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       nexusqd's `arecord` on `hw:Loopback,1` now sees the playback and the ring reacts.
       Verified live (ring pulses to Spotify, no ALSA/xrun, NRestarts=0).
       `device-google-steelhead` pkgrel 12. See `CHANGELOG.md`.
+- [x] **Idle AVR keepalive ✅ DONE 2026-07-01 (v1.6.5).** The ring went dark after a long
+      idle (~20 h): the `steelhead-avr` fw starves without periodic frame *commits*, and
+      `nexusqd`'s `memcmp(pk,lastpk)` write-gate suppressed all commits once the idle
+      screensaver locked (`SS_LOCK_S=300 s`, `ledAlpha` constant `0.1`) / blanked
+      (`SS_BLANK_S=600 s`) to a static frame. Fix: re-commit the current frame every
+      `AVR_KEEPALIVE_S=1.0 s` even when unchanged (`nexusqd` pkgrel 5; keepalive landed at
+      r3). Not HW / not a commit-mode / not a regression. _(Deployed + running; overnight
+      idle soak still pending to prove it never re-wedges.)_ See
+      `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
+- [x] **Breathing color themes + app-selectable visualisations + app-mute LED ✅ DONE
+      2026-07-01 (v1.6.5).** New `nexusqd breathe R G B` (`CTL_BREATHE`) drives the
+      compositor **manual layer (priority 8)** with a `breathe` flag — pulsing the ring in
+      the theme hue with the same throb as the idle screensaver, **always visible** (over the
+      music visualizer / a blanked screensaver); a companion color theme maps to **just**
+      `breathe R G B` (blue/warm/cool/rose/smoke/off). _(The earlier screensaver-retint
+      approach — a `br/bg/bb` base color + `screensaver_set_color` — was reverted as invisible
+      once the screensaver blanked / while music played.)_ Separately, the bridge exposes the
+      existing 5 `scene 0..4` RenderEngine effects (waveform/waveformsolid/circles/pointmorph/
+      starfield) via `setScene`/`listScenes` (→ `auto` + `scene N`) and the app gained a
+      VISUALIZATION picker — breathing override (prio 8) and music visualisation (prio 7) are
+      independent. And new `nexusqd muted 0|1` (`CTL_SETMUTED`) lights the same
+      `apply_mute_led()` mute LED as the hardware key, driven from the bridge's volume/mute
+      path. `nexusqd` pkgrel 5, `nexusq-control` pkgrel 4. See
+      `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.
 - [ ] LED follow-ons (remaining): scene auto-cycling (FadeTransition not ported);
-      ship the musl apk (currently a static binary deployed over USB).
+      ship the musl apk (currently a static binary deployed over USB); overnight idle
+      soak to confirm the AVR-keepalive fix holds.
 
 ### 10. SMP / second core  ✅ DONE 2026-06-22 (v1.2.0)
 - [x] root cause was **not** a U-Boot CPU1-state problem but two mainline gaps:
@@ -260,5 +315,32 @@ the dead 2012 Google "Nexus Q" companion (its Android@Home cloud was killed in 2
 - [x] **Verified live on hardware** (clean v1.6.3 flash): bridge `active`, answers all
       methods, volume works, LED visualizer still tracks playback, `systemctl
       is-system-running` = running.
+- [x] **Reachable over WiFi ✅ DONE 2026-07-01 (v1.6.5).** The bridge was only reachable
+      over the USB-gadget net — over WiFi (the app's normal path) it was firewalled off.
+      New nftables drop-in `55_nexusq-control.nft` opens TCP 45015 on `wlan*` (mDNS reuses
+      the UDP 5353 rule in `60_spotify.nft`); `device-google-steelhead` pkgrel 17. Verified
+      live: `getState` answers over WiFi.
+- [x] **`setScene`/`listScenes` + breathing themes + app-mute LED ✅ DONE 2026-07-01
+      (v1.6.5).** `setTheme` now maps to **just** `breathe R G B` (a breathing override on the
+      compositor manual layer, priority 8, always visible) instead of a solid fill; new
+      `setScene`/`listScenes` picks one of the 5 music visualisations (`auto` + `scene 0..4`);
+      `getState` gained a `scene` field; and the volume/mute path also sends `nexusqd muted
+      0|1` so a companion mute lights the device mute LED. `nexusq-control` pkgrel 4,
+      `nexusqd` pkgrel 5. The app gained a VISUALIZATION picker. See
+      `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.
+- [x] **librespot softvol bootstrap ✅ DONE 2026-07-01 (v1.6.5).** librespot crash-looped on
+      a fresh boot (`Could not find Alsa mixer control`) because the `NexusQ` softvol control
+      is created lazily on first `nexusq_soft` PCM open (and recreated empty each boot) but
+      librespot opens its mixer before the sink; `librespot.service` now bootstraps the
+      control with `ExecStartPre=-… aplay -D nexusq_soft …` — also fixes companion volume.
+      `device-google-steelhead` pkgrel 17.
+- [ ] **follow-on (v1.6.6): unify app + hardware + desktop + Spotify volume/mute.** The
+      companion volume/mute act on the ALSA `NexusQ` softvol (the Spotify/librespot stream) +
+      the mute LED (`nexusqd muted 0|1`), but do **not** mirror to the **LXQt desktop taskbar**
+      volume/mute icon. The physical keys emit `KEY_MUTE`/`KEY_VOLUME*` events the desktop
+      catches (→ taskbar + desktop audio) and nexusqd reads (→ mute LED); the app path goes
+      straight to the softvol, so app vs desktop can diverge. Investigate whether the desktop
+      drives ALSA `Master` vs PulseAudio/PipeWire, and whether emitting `uinput` KEY events or
+      driving the canonical control is cleaner. **Not done.**
 - [ ] follow-on: transport (play/pause/next) — `unavailable` in v1 (librespot has no
       local transport API); a future backend (e.g. go-librespot HTTP) could fill it in.

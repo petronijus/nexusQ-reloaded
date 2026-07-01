@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.3)
+# Nexus Q Reloaded -- Install Guide (v1.6.5)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,8 +12,12 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.3.img`, `nexusq-rootfs-v1.6.3-sparse.img.zst`
-  (the rootfs is zstd-compressed for distribution; install `zstd` to decompress it -- see step 2)
+- release artifacts: `nexusq-boot-v1.6.5.img` (5.0 MiB), `nexusq-rootfs-v1.6.5-sparse.img.zst`
+  (~2.08 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
+  decompress it, see step 2), `nexusq-v1.6.5.sha256`
+  - **`nexusq-boot-v1.6.5.img` is byte-identical to v1.6.2/v1.6.3's boot** (the kernel is
+    unchanged; md5 `36a3dec2c4a493710dffa18c4d796236`). If one of those boots is already on
+    the device you can **flash only userdata** and skip the boot step below.
 
 ## 1. Enter fastboot mode
 
@@ -28,7 +32,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-fastboot flash boot nexusq-boot-v1.6.3.img
+# (Identical to v1.6.2/v1.6.3's boot -- skip this line if one is already flashed.)
+fastboot flash boot nexusq-boot-v1.6.5.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -36,9 +41,9 @@ fastboot flash boot nexusq-boot-v1.6.3.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The rootfs ships zstd-compressed (~448 MiB; ~2.1 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.3-sparse.img.zst   # -> nexusq-rootfs-v1.6.3-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.3-sparse.img
+# The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
+zstd -d nexusq-rootfs-v1.6.5-sparse.img.zst   # -> nexusq-rootfs-v1.6.5-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.6.5-sparse.img
 ```
 
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
@@ -86,8 +91,8 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | TMP101 temperature sensor | ✅ |
 | TAS5713 25 W speaker amp | ✅ working (24/48 kHz; 44.1 k is resampled to 48 k via the `nexusq` ALSA PCM) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022) |
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
-| LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat |
-| Companion app / remote control | ✅ working (v1.6.3) — volume, LED theme + brightness, now-playing; via the on-device `nexusq-control` LAN bridge (TCP 45015, mDNS `_nexusq._tcp`) + a Flutter phone/desktop app (built separately, **not** in the image) |
+| LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
+| Companion app / remote control | ✅ working (v1.6.3) — volume, LED theme + brightness, now-playing; via the on-device `nexusq-control` LAN bridge (TCP 45015, mDNS `_nexusq._tcp`, reachable over WiFi since v1.6.5) + a Flutter phone/desktop app (built separately, **not** in the image) |
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
 | NFC (PN544) | 🟠 driver binds, chip untested |
 | TOSLINK / SPDIF | ⬜ not wired up yet |

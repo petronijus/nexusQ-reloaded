@@ -149,6 +149,52 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ),
 
+                // --- VISUALIZATION (music-reactive scenes) ---------------
+                const _SectionHeader('VISUALIZATION'),
+                SizedBox(
+                  height: 66,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: kVisualizations.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 12),
+                    itemBuilder: (context, i) {
+                      final v = kVisualizations[i];
+                      final selected = v.name == s.scene;
+                      return GestureDetector(
+                        onTap: () => controller.setScene(v.name),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: selected ? NexusQColors.accent : NexusQColors.divider,
+                                  width: selected ? 3 : 1,
+                                ),
+                                boxShadow: selected
+                                    ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                                    : null,
+                              ),
+                              child: Icon(v.icon,
+                                  size: 20,
+                                  color: selected ? NexusQColors.accent : NexusQColors.dim),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(v.label,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
                 // --- NOW PLAYING -----------------------------------------
                 const _SectionHeader('NOW PLAYING'),
                 Row(

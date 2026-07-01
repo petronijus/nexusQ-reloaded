@@ -60,9 +60,14 @@ Findings are tagged by `kind`; interpret them like this:
   fires. Confirm with **led_frozen** (frame unchanged ≥6 samples) and
   **nexusqd_no_progress** (no CPU time). Real fix lives in `pmos/nexusqd/`
   (add an sd_notify watchdog / `WatchdogSec=`) — note it, don't hack around it.
-  ⚠️ **A dark ring is NOT a hang if the socket still answers** (`nq_resp=1`) — that
-  is idle-off (the ring blanks on the idle timeout), not a hang (false CRIT seen
-  2026-06-28).
+  ⚠️ **A dark ring is NOT a hang if the socket still answers** (`nq_resp=1`) — either
+  (a) idle-off (the ring blanks on the idle timeout; false CRIT seen 2026-06-28), or
+  (b) **AVR starvation** (FIXED v1.6.5) — a dark ring after a **long** idle (~20 h) was the
+  `steelhead-avr` fw's host-frame watchdog starving once `nexusqd`'s `memcmp` write-gate
+  stopped committing a static screensaver-locked/blanked frame; `nexusqd` (pkgrel 5) now
+  re-commits every `AVR_KEEPALIVE_S=1.0 s`. On **≥ v1.6.5** a dark-after-long-idle ring
+  means the keepalive stopped, not a design blank. See
+  `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is
   **python**: `python3` SIGSEGVs on ARMv7 — a **FLASH** corruption (NOT a
   build/alignment/compiler/CPython-source/qemu-build bug, all disproven) taking down

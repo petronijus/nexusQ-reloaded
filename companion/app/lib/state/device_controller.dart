@@ -43,6 +43,8 @@ class DeviceController extends ChangeNotifier {
         if (e.data['muted'] is bool) state.muted = e.data['muted'] as bool;
       case 'themeChanged':
         if (e.data['theme'] is String) state.theme = e.data['theme'] as String;
+      case 'sceneChanged':
+        if (e.data['scene'] is String) state.scene = e.data['scene'] as String;
       case 'brightnessChanged':
         if (e.data['brightness'] is num) state.brightness = (e.data['brightness'] as num).round();
       case 'nowPlayingChanged':
@@ -69,6 +71,12 @@ class DeviceController extends ChangeNotifier {
     state.theme = name;
     notifyListeners();
     _client.notify('setTheme', {'theme': name});
+  }
+
+  void setScene(String name) {
+    state.scene = name;
+    notifyListeners();
+    _client.notify('setScene', {'scene': name});
   }
 
   void setBrightness(int b) {

@@ -42,14 +42,41 @@ HOOK_SOCK = os.environ.get("NEXUSQ_HOOK_SOCK", "/run/nexusq-control.sock")
 DEVICE_NAME = os.environ.get("NEXUSQ_NAME", "Nexus Q")
 
 THEMES = [
-    {"name": "spectrum", "label": "Spectrum"},
+    {"name": "blue", "label": "Blue"},
     {"name": "warm", "label": "Warm"},
     {"name": "cool", "label": "Cool"},
-    {"name": "blue", "label": "Blue"},
+    {"name": "rose", "label": "Rose"},
     {"name": "smoke", "label": "Smoke"},
     {"name": "off", "label": "Off"},
-    {"name": "trackinfo", "label": "Track Info"},
 ]
+
+# A color theme is a *breathing* override: nexusqd's `breathe R G B` pulses the ring
+# gently in the theme's hue (same throb as the idle screensaver breathe) at
+# compositor priority 8, so it is ALWAYS visible — even while music plays or after
+# the idle screensaver has blanked. Picking a visualisation (SCENES) sends `auto`,
+# which clears this override so the audio-reactive scene shows. "off" blanks the ring.
+THEME_CMDS = {
+    "blue":  ["breathe 0 153 204"],   # the original #0099CC breathe hue
+    "warm":  ["breathe 255 90 10"],
+    "cool":  ["breathe 0 200 140"],
+    "rose":  ["breathe 255 40 90"],
+    "smoke": ["breathe 110 115 135"],
+    "off":   ["off"],
+}
+
+# The 5 audio-reactive music visualisations, in nexusqd's RenderEngine order
+# (userspace/nexusqd music.c: scene 0..4). setScene selects which effect the ring
+# shows while audio plays. It also sends `auto` first so any solid color-theme
+# override (a `set R G B` from setTheme, compositor priority 8) is cleared and the
+# visualiser (priority 7) is actually visible.
+SCENES = [
+    {"name": "waveform",      "label": "Waveform",   "index": 0},
+    {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
+    {"name": "circles",       "label": "Circles",    "index": 2},
+    {"name": "pointmorph",    "label": "Morph",      "index": 3},
+    {"name": "starfield",     "label": "Starfield",  "index": 4},
+]
+SCENE_INDEX = {s["name"]: s["index"] for s in SCENES}
 
 
 def log(*a):
@@ -115,6 +142,7 @@ class Bridge:
             "muted": bool(muted),
             "brightness": 255,
             "theme": "blue",
+            "scene": "waveform",
             "nowPlaying": {"playing": False, "artist": "", "track": "",
                            "album": "", "artUrl": "", "source": ""},
             "name": DEVICE_NAME,
@@ -161,13 +189,30 @@ class Bridge:
             return self._volume_cmd(method, p)
         if method == "setTheme":
             name = str(p.get("theme", ""))
-            if not nexusqd_send(f"theme {name}"):
-                raise Err("unavailable", "nexusqd rejected theme")
+            cmds = THEME_CMDS.get(name)
+            if cmds is None:
+                raise Err("bad_request", f"unknown theme {name}")
+            for c in cmds:
+                if not nexusqd_send(c):
+                    raise Err("unavailable", "nexusqd rejected theme")
             with self.lock:
                 self.state["theme"] = name
             return {"theme": name}, [("themeChanged", {"theme": name})]
         if method == "listThemes":
             return {"themes": THEMES}, []
+        if method == "listScenes":
+            return {"scenes": SCENES}, []
+        if method == "setScene":
+            name = str(p.get("scene", ""))
+            idx = SCENE_INDEX.get(name)
+            if idx is None:
+                raise Err("bad_request", f"unknown scene {name}")
+            # drop any solid override so the audio visualiser is visible, then select it
+            if not nexusqd_send("auto") or not nexusqd_send(f"scene {idx}"):
+                raise Err("unavailable", "nexusqd rejected scene")
+            with self.lock:
+                self.state["scene"] = name
+            return {"scene": name}, [("sceneChanged", {"scene": name})]
         if method == "setBrightness":
             b = max(0, min(255, int(p.get("brightness", 255))))
             if not nexusqd_send(f"brightness {b}"):
@@ -206,6 +251,9 @@ class Bridge:
         with self.lock:
             self.state["volume"] = vol
             self.state["muted"] = muted
+        # drive nexusqd's dedicated mute LED so app mute has a device-side indicator
+        # (idempotent set, same LED the hardware mute key lights)
+        nexusqd_send(f"muted {1 if muted else 0}")
         return {"volume": vol, "muted": muted}, [("volumeChanged", {"volume": vol, "muted": muted})]
 
     # --- librespot hook (internal, over the unix socket) ----------------

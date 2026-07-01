@@ -1,0 +1,9 @@
+#!/usr/sbin/nft -f
+# Companion control bridge (nexusq-control) — allow the phone/desktop companion to
+# reach the LAN daemon on TCP 45015. mDNS discovery (_nexusq._tcp) uses UDP 5353,
+# already opened by 60_spotify.nft.
+table inet filter {
+	chain input {
+		iifname "wlan*" tcp dport 45015 accept comment "nexusq-control companion bridge (LAN)"
+	}
+}
