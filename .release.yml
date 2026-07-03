@@ -13,4 +13,8 @@ artifacts:
     - nexusq-rootfs-v*-sparse.img.zst   # rootfs is zstd-compressed (all-RAW sparse > 2 GiB GitHub asset limit)
 registry:
   images: []
-preflight_extra: []
+preflight_extra:
+  # Refuse to publish a rootfs with baked-in personal access (WiFi PSK /
+  # ssh authorized_keys) — release artifacts must come from
+  # PUBLIC_RELEASE=1 ./docker-build.sh, this verifies it.
+  - scripts/release-preflight-no-secrets.sh

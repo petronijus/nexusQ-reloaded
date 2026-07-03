@@ -138,6 +138,40 @@ done
 # ./firmware (gitignored, maintainer/private-overlay provided); the brcmfmac base
 # fw is redistributable and cached in ./firmware (or fetched on demand). Stage all
 # three into the firmware aport so firmware-google-steelhead installs them.
+# Baked-in device access (ssh authorized_keys + the WiFi connection profile).
+# The WiFi PSK is a secret and the ssh pubkeys are personal, so both live in
+# the PRIVATE overlay (./private/access) — never in the public tree. Stage them
+# into the device aport (the APKBUILD installs non-empty files to
+# /root/.ssh + /etc/skel/.ssh and /etc/NetworkManager/system-connections).
+# A public clone gets EMPTY placeholders: the build still succeeds, the image
+# just bakes no access (configure ssh/WiFi by hand after flashing). This is
+# what makes a clean reflash come up reachable — access config lives in the
+# rootfs, which every flash wipes (bitten 2026-06-28 and 2026-07-02).
+# PUBLIC_RELEASE=1 forces a CLEAN image (nothing personal baked) even when the
+# private overlay is present — releases publish the rootfs on GitHub, and a
+# personally-built image would ship the WiFi PSK + authorized_keys to the
+# world. scripts/release-preflight-no-secrets.sh additionally hard-fails the
+# release if a candidate image contains either file.
+DEV_APORT="$PMAPORTS/device/testing/device-google-steelhead"
+if [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
+    : > "$DEV_APORT/ssh-authorized-keys"
+    : > "$DEV_APORT/wifi.nmconnection"
+    echo "  PUBLIC_RELEASE=1 -> access staging SKIPPED (clean release image)"
+elif [ -f "$SRC/private/access/authorized_keys" ]; then
+    cp "$SRC/private/access/authorized_keys" "$DEV_APORT/ssh-authorized-keys"
+    echo "  Staged ssh-authorized-keys (private overlay)"
+else
+    : > "$DEV_APORT/ssh-authorized-keys"
+    echo "  WARNING: private/access/authorized_keys absent -> no ssh keys baked"
+fi
+if [ -f "$SRC/private/access/wifi.nmconnection" ]; then
+    cp "$SRC/private/access/wifi.nmconnection" "$DEV_APORT/wifi.nmconnection"
+    echo "  Staged wifi.nmconnection (private overlay)"
+else
+    : > "$DEV_APORT/wifi.nmconnection"
+    echo "  WARNING: private/access/wifi.nmconnection absent -> WiFi not preconfigured"
+fi
+
 FW_APORT="$PMAPORTS/device/testing/firmware-google-steelhead"
 BRCMFMAC_URL="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/brcm/brcmfmac4330-sdio.bin"
 if [ -f "$SRC/firmware/bcm4330.hcd" ] && [ -f "$SRC/firmware/bcmdhd.cal" ]; then
