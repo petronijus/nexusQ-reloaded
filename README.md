@@ -43,22 +43,22 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 |---|:---:|---|
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
-| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS, `conservative` governor · v1.4.0 |
+| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 |
 | 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
-| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager. On v1.6.5 the DHCP IP wanders (NM randomized-MAC → fresh lease per boot — that was the 2026-07-02 "dead WiFi" scare); **fixed + verified on device 2026-07-03** (stable MAC/IP, ships in v1.6.6 — which also pins the **factory MAC** at the NM layer, since brcmfmac ignores the nvram `macaddr=`) |
 | 🔵 **Bluetooth** (BCM4330) | ✅ | |
-| 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console |
+| 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
-| 📡 **NFC** (PN544) | 🟠 | driver binds, chip untested |
+| 📡 **NFC** (PN544) | 🟠 | under investigation — no i2c ACK on the reference unit, but software parity with the stock kernel is complete, so the cause is unexplained (the 2026-07-02 "dead hardware" verdict was retracted 2026-07-03); DTS node disabled meanwhile |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
-| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down on cpufreq builds (v1.4.1 regression) |
+| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down on cpufreq builds (v1.4.0 regression, fix tracked; still down 2026-07-03: no enumeration, PORTSC CCS=0) |
 | 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
-| 🎧 **TWL6040 headset codec** | 🔴 | dead hardware on the reference unit |
+| 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
 
 <sub>Full per-milestone detail in [CHANGELOG.md](CHANGELOG.md) · hardware map &amp; roadmap in [PLAN.md](PLAN.md).</sub>
 
@@ -125,7 +125,7 @@ Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthro
 |---|---|---|---|
 | SoC | TI **OMAP4460** (Cortex-A9 ×2) | `omap4` | — |
 | Audio amp | TI **TAS5713** 25 W Class-D | `snd-soc-tas571x` | McBSP2 / I²C4 |
-| Audio codec | TI TWL6040 | `snd-soc-omap-abe-twl6040` | McPDM / I²C1 |
+| Audio codec | — (TWL6040 pad unpopulated/unused; stock never drove it) | none — removed from DTS/defconfig | — |
 | WiFi | Broadcom **BCM4330** | `brcmfmac` | SDIO / MMC5 |
 | Bluetooth | Broadcom BCM4330 | `hci_bcm` | UART2 |
 | NFC | NXP PN544 | `pn544_i2c` | I²C3 |
@@ -144,13 +144,13 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **22 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **31 patches** in `kernel/patches/`), the
 local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/      dts · defconfig · 22 mainline patches
+kernel/      dts · defconfig · 31 mainline patches
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
 userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
 reverse-eng/ ground truth extracted from the factory kernel

@@ -23,6 +23,24 @@ Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware lo
 > `fw_bcm4330_*.bin` images. **brcmfmac cannot use those** — they are kept only for
 > parity. The WiFi firmware that actually loads is `brcmfmac4330-sdio.bin` above.
 
+brcmfmac also probes three optional names we do **not** ship (each logs a
+`Direct firmware load ... failed with error -2` at boot, then WiFi proceeds on
+the generic firmware — inventory item B4 in
+`../docs/2026-07-02-boot-error-inventory.md`):
+`brcmfmac4330-sdio.google,steelhead.bin` (a board-specific firmware override,
+probed before the generic `.bin` — a symlink/copy under that name would silence
+it), `brcmfmac4330-sdio.clm_blob` (regulatory/channel data) and the txcap blob
+(no upstream blob exists for this FWID `01-cafa6b3e`; the regulatory data is
+baked into the firmware).
+
+> ℹ️ **The nvram `macaddr=` is IGNORED by brcmfmac/the firmware** (proven by a
+> live driver-reload test 2026-07-03): the chip's OTP MAC
+> (`14:7d:c5:3a:35:b5` on the reference unit) always wins, and the `macaddr=`
+> in `bcmdhd.cal` is a Broadcom placeholder anyway (stock injected the factory
+> `f8:8f:ca:20:48:e1` outside the firmware path). Do NOT try to set the MAC
+> here — the WiFi identity is pinned at the **NetworkManager layer**
+> (`cloned-mac-address` in the baked profile, `scripts/gen-wifi-profile.sh`).
+
 `bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
 redistributable**, so they are **not committed** (gitignored). You provide them
 yourself (see below). `brcmfmac4330-sdio.bin` is redistributable; it is gitignored

@@ -4,6 +4,202 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+> The whole 2026-07-02 boot-error fix batch below was **flashed 2026-07-03 and
+> the acceptance run PASSED** — uname `#27-postmarketOS`, zero failed units,
+> **9/10 targeted dmesg error classes gone** (only the `twl: not initialized`
+> line survived, mutated into the new B22 burst). Kernel
+> `linux-google-steelhead` pkgrel **26** (patches 0023–0028),
+> `device-google-steelhead` pkgrel **19**. This batch ships as **v1.6.6** at
+> release time. Inventory + per-item verification:
+> `docs/2026-07-02-boot-error-inventory.md` ("FLASH-VERIFIED 2026-07-03");
+> stock-parity evidence: `docs/2026-07-02-stock-parity-voltage-wifi-idle.md`.
+>
+> **Batch 2 (2026-07-03) is BUILT but NOT YET FLASHED** — kernel
+> `linux-google-steelhead` pkgrel **27** (patches **0029–0031**; all 31 patches
+> apply GNU-patch-clean on pristine; next boot = uname `#28-postmarketOS`),
+> `device-google-steelhead` pkgrel **20**; all build gates green (incl. the
+> pinned-factory-MAC `wifi.nmconnection` verified by exact-string grep and the
+> sparse all-RAW round-trip). The device waits for a manual fastboot
+> power-cycle. Acceptance expectations: B22/B23 lines gone, a clean nq-healthd
+> capture (no false `led_frozen`/`vdd_mismatch`), the factory WiFi MAC on air
+> (new DHCP lease — the IP changes one final time from `.175`), ring
+> fingerprint via the readable `frame` attr, and everything from batch 1 still
+> holding. Also scheduled for the same power-cycle: the **stock RAM-boot NFC
+> discrimination test** (see the NFC retraction under Changed).
+
+### Fixed
+- **twl6030 `OUT OF RANGE! non mapped vsel for 1375000` ×4 + `twl: not
+  initialized` ×4 (B12)** — two stock-parity kernel patches: **0023** stops
+  latching a failed early SMPS_OFFSET efuse read as valid (and seeds steelhead
+  with the efuse value read live over i2c: `SMPS_OFFSET=0x7f`, `SMPS_MULT=0x52`);
+  **0027** replaces mainline's blanket 1 375 000 µV VC ON/ONLP with the stock
+  per-domain voltages (MPU 1 375 000 / IVA 1 188 000 / CORE 1 200 000 µV — the
+  ×4 was the IVA+CORE VC channels ×(on,onlp)) and retargets the 4460 core VC
+  channel VCORE3→VCORE1 (`0x55`/`0x56`; stock unmaps VCORE3).
+- **`failed to register cpuidle driver` (B13)** — patch **0024** registers a
+  C1-only (WFI) cpuidle driver on steelhead and `cpuidle.off=1` is dropped from
+  `CONFIG_CMDLINE`. (Stock has C1–C4; C2+ needs the HS secure dispatcher
+  services 0x1c/0x1d/0x21 — a future project.)
+- **clkctrl `device ID is greater than 24` ×3 (B14)** — patch **0025**: ti-sysc
+  child named clocks registered via `clkdev_add()` (no 24-char device-ID limit).
+- **hsusb1-phy `dummy supplies not allowed for exclusive requests (id=vbus)`
+  (B20)** — patch **0026**: usb_phy_generic gets its optional vbus supply with
+  `devm_regulator_get_optional()`.
+- **bcm4330-pwrseq ~25 s deferred probe (B17)** — `CONFIG_CLK_TWL=m`→`y` (the
+  module deferred the pwrseq's 32k clock provider; WiFi only came up ~31 s) +
+  the **CLK32KG naming-trap fix**: WiFi pwrseq + BT clocks `<&twl 1>`→`<&twl 0>`
+  (stock enables TWL6030 **CLK32KG** 0x8C under the misleading consumer name
+  "clk32kaudio" — our old CLK32KAUDIO value gated the wrong pin, so the BCM4330
+  LPO never ran) + `clk-settle-delay-ms = <300>` (patch **0028**, new optional
+  `mmc-pwrseq-simple` property) matching stock's clk→300 ms→WLAN_EN→200 ms.
+  Parity correctness — 5 GHz WiFi already worked; no throughput claims.
+  Verified 2026-07-03: pwrseq probes @4.31 s, mmc pwrseq allocated @6.10 s
+  (was ~27 s).
+- **`40132000.target-module` permanent deferred probe (B18)** — the
+  `omap4-mcpdm.dtsi` include is dropped: McPDM's pdmclk provider is the dead
+  TWL6040, and McPDM is unusable without the codec. _(2026-07-03: "dead"
+  corrected to "absent" — the TWL6040 is unpopulated/unused on steelhead, see
+  under Changed; the fix stands either way.)_
+- **tas571x `PVDD_A..D not found, using dummy regulator` ×4 (B19)** — new
+  `amp_pvdd` fixed regulator wired to the four PVDD supplies (deliberately no
+  voltage props: rail unmeasured, TAS5713 spec 8–26 V, driver only enables).
+- **PulseAudio-vs-PipeWire session conflict (U4)** — config-topology fix:
+  PulseAudio is the pmOS backend and pipewire is only a library dep, but its XDG
+  autostart double-started a second sound server and `pipewire-pulse.socket` had
+  no service package behind it. Now: `Hidden=true` autostart overrides in
+  `/etc/xdg/nexusq/` (via an `XDG_CONFIG_DIRS` prepend in `nexusq-wayland.sh`)
+  + the orphaned user socket masked. (The PA HDMI-audio profile failure is a
+  separate open item.) `device-google-steelhead` pkgrel 19 (was written up at
+  18; the flashed apk is r19). Verified on device 2026-07-03: only pulseaudio
+  in `ps`, no pipewire/wireplumber, no socket error.
+- **Wandering WiFi IP** — the device's WiFi IP changed every boot because
+  NetworkManager used a randomized locally-administered MAC (fresh DHCP lease
+  per boot; this masqueraded as "WiFi dead" on 2026-07-02). New
+  `wifi-stable-mac.conf` pins `cloned-mac-address=permanent` + disables scan
+  MAC randomization. Verified 2026-07-03: WiFi auto-joins the baked profile,
+  **stable IP `192.168.20.175`**. Note the on-air MAC is now the chip's OTP
+  `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` (brcmfmac never
+  reads the factory-cal MAC) — boot-stable; optionally bake `macaddr=` into
+  the nvram to restore the factory identity (open decision).
+- **Access regression (root ssh unreachable after a flash)** — `docker-build.sh`
+  Phase 6 now stages `private/access/authorized_keys` → `/root/.ssh` +
+  `/etc/skel/.ssh` (0600) and `private/access/wifi.nmconnection` →
+  `/etc/NetworkManager/system-connections/` (0600, skipped when empty), so a
+  clean reflash comes up reachable. The WiFi profile is generated per machine by
+  the new `scripts/gen-wifi-profile.sh` (PSK from 1Password at run time; output
+  gitignored even in the private overlay). Verified 2026-07-03: key-based
+  `ssh root@` works over both the USB gadget (`172.16.42.1`) and WiFi after a
+  clean flash. (A reflash regenerates the device ssh host key — `ssh-keygen -R`
+  the stale entries.)
+- **`twl: not initialized` ×22 burst @0.78 s (B22)** — patch **0030** _(batch 2,
+  built 2026-07-03, awaiting flash)_: `mfd: twl-core` exports a
+  **`twl_is_ready()`** predicate; OMAP4 `omap_twl.c` gates the SMPS_OFFSET
+  efuse read attempt AND the patch-0014 retask poll on it, and the retask work
+  latches the real efuse the moment twl is up. Full call-site accounting of the
+  ×22: per domain (IVA, CORE) 3 nonzero VC voltages ×2 read attempts (the
+  `uv_to_vsel` path reads once directly and once via its `vsel_to_uv` range
+  check) + the zero off-voltage ×1 + 2 VP limits ×2 = 11, × 2 domains = 22;
+  the +2 poll repeats came from the 0014 retask probe.
+- **`Skipping twl internal clock init and using bootloader value (unknown osc
+  rate)` (B23)** — patch **0031** _(batch 2, awaiting flash)_: twl-core
+  `clocks_init()` gated to the **twl4030 class**. The originally planned DTS fix
+  (twl `fck = <&sys_clkin_ck>`) was investigated and **REJECTED as actively
+  harmful**: on twl6030 the CFG_BOOT/PROTECT_KEY offsets resolve to unrelated
+  Phoenix PM registers (absolute `0x24`/`0x2D`, next to PHOENIX_DEV_ON); no
+  mainline twl6030 board wires an fck; stock printed the same line.
+- **nq-healthd `led_frozen` permanent false CRIT** — patch **0029** _(batch 2,
+  awaiting flash)_ makes the `leds-steelhead-avr` `frame` bin_attr **readable
+  (0644)** — the system previously had NO readable ring-state source (nexusqd
+  renders exclusively through the write-only `frame`, so the classdev
+  `brightness` files stay 0) — and `nq-healthd` (r20) fingerprints the frame
+  attr (md5 + byte sum), keeping the brightness loop only as a pre-0029
+  fallback.
+- **nq-healthd `vdd_mismatch` false warnings** (`device-google-steelhead` r20,
+  _batch 2, awaiting flash_) — freq/vdd were sampled non-atomically, so a DVFS
+  transition between the reads fabricated adjacent-OPP mismatches (17/71
+  samples in the 2026-07-03 acceptance capture, healthy power path);
+  `vdd_mismatch` is now evaluated only when `scaling_cur_freq` holds across the
+  vdd read.
+- **WiFi factory-MAC identity restored** _(batch 2, awaiting flash — closes the
+  "open decision" from the acceptance run)_ — a live driver-reload test proved
+  **brcmfmac/firmware IGNORES the nvram `macaddr=`** (the chip's OTP
+  `14:7d:c5:3a:35:b5` always wins), so the fix is at the **NM layer**: the
+  baked profile + `scripts/gen-wifi-profile.sh` now pin
+  `cloned-mac-address=F8:8F:CA:20:48:E1`. After the flash the device appears
+  under the factory MAC — new DHCP lease, the IP changes one final time from
+  `192.168.20.175`.
+
+### Changed
+- **Default cpufreq governor back to `ondemand`** (+`CONFIG_CPU_FREQ_STAT=y` for
+  `time_in_state`) — the v1.5.0 switch to `conservative` was deliberate but its
+  rationale was disproven 2026-06-28. Verified on device 2026-07-03: governor
+  `ondemand`, `time_in_state` present, 1200 MHz @ 1 380 000 µV under load /
+  920 MHz @ 1 317 000 µV idle (exact OPP tracking).
+- **NFC (PN544) node disabled in the DTS** — the chip was proven **electrically
+  dead** on the reference unit (no i2c ACK at 0x28 with VEN high/low/fw-download,
+  core-reset frame NAKed; pins/polarity/timing stock-verified MATCH first). Same
+  dead-HW category as the TWL6040. Was "driver binds, chip untested".
+  **RETRACTED 2026-07-03** (was "dead hardware", now **under investigation** —
+  never conclude dead hardware): the stock-parity regulator audit closed the
+  last software suspicion — stock has **NO software power path** for the PN544
+  (pdata = 3 gpios only, `pn544_probe` makes zero regulator calls; VBAT/PVDD
+  ride hardwired rails) and the full stock `steelhead_twldata` regulator array
+  matches our live mainline regulator state bit-for-bit, so software parity is
+  COMPLETE and the no-ACK is **unexplained**, not explained-as-dead. Next
+  discriminator: NFC test on this unit under the stock RAM boot
+  (`output/stock-adb-boot.img`), scheduled for the imminent flash cycle. Node
+  stays disabled meanwhile; the DTS comment is rewritten accordingly. Evidence:
+  `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §4/§6.
+- **TWL6040 was NEVER a "dead codec" — the chip is unused/unpopulated on
+  steelhead** _(batch 2, awaiting flash)_: the stock 3.0.8 kernel contains
+  **ZERO** twl6040/AUDPWRON code (whole-image string+symbol sweep over
+  `reverse-eng/vmlinux.bin`), the twldata codec pdata slot is NULL
+  (`steelhead_twldata+0x24` @ `0xc0719b30`), and stock's i2c1 board info
+  registers only `twl6030@0x48` — the missing ACK at `0x4b` (the 2026-06-10
+  "dead chip" verdict) is **stock-correct behaviour**. The twl6040 node, the
+  ABE sound card and `twl6040_pins` are **DELETED** from the DTS (explanatory
+  comment left in place; the removed node's `ti,audpwron-gpio` gpio_127 had no
+  stock evidence either), and the defconfig drops `TWL6040_CORE` /
+  `SND_SOC_TWL6040` / `SND_SOC_OMAP_ABE_TWL6040` / `CLK_TWL6040`. DTB compiled
+  with zero twl6040 refs (verified in the binary).
+- **i2c1–4 scl/sda pads `PIN_INPUT_PULLUP` → `PIN_INPUT`** _(batch 2, awaiting
+  flash)_ — stock-exact (mux `0x100`; the board has external pulls).
+- `device-google-steelhead` depends + `i2c-tools`, `gptfdisk` (both needed for
+  live diagnostics/GPT work).
+
+### Known issues
+- **2026-07-02 last-boot error inventory + 2026-07-03 acceptance**
+  (`docs/2026-07-02-boot-error-inventory.md`): the dmesg/`journalctl -p err`
+  sweep of the v1.6.5-era boot (`6.12.12 #26`) opened **B12–B21 / U4–U7**; the
+  fix batch above was flash-verified 2026-07-03 on `#27`
+  (B12/B13/B14/B15/B17/B18/B19/B20/U4 + B8 all confirmed gone). Opened by the
+  acceptance run and **already fixed in tree by batch 2 (built 2026-07-03,
+  AWAITING FLASH + re-acceptance)**: **B22** `twl: not initialized` ×22 burst
+  @0.78 s (patch 0030), **B23** `Skipping twl internal clock init…` (patch
+  0031 — NOT the originally planned twl-fck DTS wiring, which proved harmful),
+  the two **nq-healthd tooling bugs** (`led_frozen` false CRIT — patch 0029 +
+  healthd r20 frame fingerprint; `vdd_mismatch` non-atomic sampling — healthd
+  r20), and the **WiFi factory-MAC** identity (NM `cloned-mac-address` pin;
+  brcmfmac ignores nvram `macaddr=`). Until the `#28` image is flashed the
+  device still shows all four. Still genuinely open: **U5** bluetoothd
+  config error (did not reproduce on `#27` — watching), BT BD_ADDR is the
+  default-pattern `43:30:A0:00:00:00` (no per-device address); the PulseAudio
+  **HDMI-audio UCM profile**, **U6** gkr-pam ssh-session noise, **U7**
+  nsresourced bpf-lsm, **B16** ramoops invalid-buffer error (cold boot), **B21**
+  minor L2C/gpmc/pmu/journald batch, **B4** (clm/txcap blobs + the
+  `brcmfmac4330-sdio.google,steelhead.bin` probe miss), **B10** hw-breakpoint,
+  deep cpuidle C2+ (HS secure dispatcher). **B8** (Alternate GPT invalid) is
+  **FIXED on-device 2026-07-03** (p13 shrunk 33 sectors + backup GPT relocated,
+  atomic `sgdisk`; survived the reboot — no "Alternate GPT" line on `#27`).
+  **Ethernet still dead** (LAN9500A never enumerates, PORTSC CCS=0 — the v1.4.0
+  regression, task #17). Thermal headroom is thin under sustained dual-core
+  load: peak **91.8 °C** vs the 100 °C passive trip (~8 °C) — genuine but
+  expected; watch it.
+  _(The morning claim "WiFi dead on the live unit" was **wrong** — the IP had
+  moved due to the randomized-MAC DHCP lease; corrected same day.)_
+
 ## [1.6.5] - 2026-07-01
 
 > The whole batch below ships as a single release **v1.6.5**. An interim **v1.6.4** was

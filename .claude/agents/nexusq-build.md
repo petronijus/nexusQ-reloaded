@@ -19,6 +19,22 @@ seen, and **prove the rootfs is correct before reporting success**. The build is
 long and the failure modes are well-catalogued below — work the catalog, don't
 re-derive.
 
+## Pre-build: the private access overlay (since 2026-07-02)
+
+Phase 6 stages **baked-in device access** from `private/access/` into the device
+aport: `authorized_keys` (→ `/root/.ssh` + `/etc/skel/.ssh`; tracked in the
+private repo) and `wifi.nmconnection` (→ NM system-connections; **gitignored
+even in the private repo** — contains the PSK). Before a build meant for
+flashing, check both exist; generate the WiFi profile with
+`./scripts/gen-wifi-profile.sh` (pulls the PSK from 1Password at run time —
+needs an interactive `op` auth, so it CANNOT run inside the container; run it on
+the host first). Missing files do NOT fail the build — Phase 6 logs a
+`WARNING: ... absent` and bakes an image without that access (it comes up
+unreachable over WiFi / without root ssh after a clean flash). Grep the build
+log for `Staged ssh-authorized-keys` + `Staged wifi.nmconnection`.
+_Pipeline proven end-to-end 2026-07-03: the flashed image auto-joined WiFi
+(stable `192.168.20.175`) and key-based `root@` ssh worked over gadget + WiFi._
+
 ## The ONE correct way to run it
 
 `docker-build.sh` is the **in-container** script (it references `/src`,

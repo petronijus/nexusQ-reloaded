@@ -39,17 +39,27 @@ sudo ip addr add 172.16.42.2/24 dev "$enx"; sudo ip link set "$enx" up
 ping -c1 -W2 172.16.42.1
 ```
 
-- SSH as **`user` / `147147`** (NOT root — `root@` ssh is denied on this image;
-  escalate with `echo 147147 | sudo -S <cmd>`):
+- SSH: since the 2026-07-03 flash (v1.6.6-candidate) **key-based `ssh
+  root@172.16.42.1` works** (baked authorized_keys) — use it. Fallback / older
+  v1.6.5 image: **`user` / `147147`** (root denied there; escalate with
+  `echo 147147 | sudo -S <cmd>`):
   `sshpass -p 147147 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@172.16.42.1`
+  A reflash regenerates the device host key — `ssh-keygen -R` stale entries.
 - Host-side sudo on THIS PC: try plain `sudo`; if it prompts,
   `op-cache "sudo petronijus-PC" password`.
 - Prefer the repo's own `scripts/diag/nqctl` if it already knows the link
   (`nqctl status`, `nqctl run '<cmd>'`).
 - Fallbacks: **serial** `/dev/ttyACM0` @115200 (`steelhead login:`, user/147147) —
-  works even with no net; **WiFi** vlan20 DHCP — find the lease in OPNsense Kea
-  (`opnsense-api GET /api/kea/leases4/search`, device MAC `f8:8f:ca:20:48:e1`); this
-  host may not route into vlan20.
+  works even with no net; **WiFi** vlan20 — stable **`192.168.20.175`** since
+  2026-07-03 (stable-MAC image; on the `#27` boot the on-air MAC is the chip's
+  OTP `14:7d:c5:3a:35:b5`, NOT the factory `f8:8f:ca:20:48:e1`). ⚠️ **After the
+  pending batch-2 flash (`#28`, built 2026-07-03) the device pins the factory
+  MAC `f8:8f:ca:20:48:e1` (NM cloned-mac) → new lease, `.175` goes stale.**
+  If it moved, find the lease in OPNsense Kea
+  (`opnsense-api GET /api/kea/leases4/search`) by hostname `steelhead` or the
+  MAC per the image (OTP on `#27`, factory on `#28`+; on the older v1.6.5
+  image the MAC is per-boot randomized and the IP wanders — hostname-match
+  only). This host may not route into vlan20.
 - If NOTHING answers on any transport after a few minutes, STOP and report that
   (likely the black-screen boot quirk → needs a re-reboot). Don't loop forever.
 
@@ -91,10 +101,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`. Known
   regression: on-board eth went down (carrier=0) in the cpufreq patch series.
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
-  (expect `350000 700000 920000 1200000`), `scaling_governor`, `scaling_max_freq`.
+  (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
+  **`ondemand`** since the 2026-07-03 flash — verified, with
+  `CPU_FREQ_STAT`/`time_in_state` present; `conservative` on the older v1.6.5
+  image), `scaling_max_freq`.
   Put load on (`yes >/dev/null &`), read `cpuinfo_cur_freq`/`scaling_cur_freq`, kill
   it → confirm it reaches 1200000. Thermal: `cat /sys/class/thermal/thermal_zone*/temp`.
   (Idle is NOT 350 MHz — it hovers ~920 MHz, nexusqd LED polling keeps it up.)
+  2026-07-03 reference: 1200 MHz @ 1 380 000 µV load / 920 MHz @ 1 317 000 µV
+  idle (exact OPP tracking); idle 66–78 °C, peak **91.8 °C** under dual-core
+  load — only ~8 °C headroom to the 100 °C trip, so a sustained-load diag
+  SHOULD report the peak temp (expected-hot, but watch it).
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
 - **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
@@ -142,6 +159,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `AVR_KEEPALIVE_S=1.0 s`. On a **≥ v1.6.5** image a dark-after-long-idle ring means the
   keepalive stopped (nexusqd/render loop), not a design blank. See
   `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
+  ⚠️ **`led_frozen` false-CRIT — depends on the flashed image.** On images up
+  to `#27` / device r19 it is a **PERMANENT FALSE CRIT on nexusqd r5+** (found
+  by the 2026-07-03 acceptance run): nq-healthd fingerprints the led_classdev
+  `brightness` attributes, but nexusqd commits frames via the **write-only
+  `frame` bin_attr**, so the sampled `led_sum` is structurally 0 and the frozen
+  heuristic always trips — there, **ignore `led_frozen`** and judge the ring by
+  `nq_resp`/`nexusled status` (+ eyes); do NOT re-diagnose it as a hang.
+  **FIXED in batch 2 (built 2026-07-03, awaiting flash):** kernel patch 0029
+  makes `frame` readable (0644) and nq-healthd r20 fingerprints it (md5 + byte
+  sum) — on `#28`/r20 and later the LED fingerprint is real and `led_frozen`
+  is trustworthy again.
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old
@@ -152,6 +180,11 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
 - **vdd_mismatch** — `vdd_mpu` off the OPP target (350→1025, 700→1203, 920→1317,
   1200→1380 mV). A few samples = a DVFS transition; persistent = VC-bridge/TPS62361
   power-path. Cross-check `POWER_REGULATORS`/`omap_voltage`/`ti-abb`/`tps`.
+  ⚠️ Known tooling bug (2026-07-03, on images up to r19): healthd samples freq
+  and vdd **non-atomically**, so a DVFS transition between the two reads
+  fabricates a mismatch — re-read freq after vdd before believing a warning.
+  **Fixed in nq-healthd r20** (batch 2, awaiting flash): the sample is only
+  judged when `scaling_cur_freq` holds across the vdd read.
 - **thermal_throttle / thermal_crit** — at/over 100 °C passive / 125 °C critical.
 - **governor_not_scaling** — load was high but freq stuck at 350 MHz (cpufreq stall);
   see `CPU` + `CLOCKS` (`dpll_mpu`).

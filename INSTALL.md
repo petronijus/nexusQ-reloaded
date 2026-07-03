@@ -46,6 +46,13 @@ zstd -d nexusq-rootfs-v1.6.5-sparse.img.zst   # -> nexusq-rootfs-v1.6.5-sparse.i
 fastboot -S 100M flash userdata nexusq-rootfs-v1.6.5-sparse.img
 ```
 
+Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
+is ~23 chunks, each reporting OKAY — measured 2026-07-03).
+
+**After any reflash:** the device regenerates its SSH host key on first boot,
+so your next `ssh` will warn about a changed key. Clear the stale entries
+first: `ssh-keygen -R 172.16.42.1` (and the device's WiFi IP).
+
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
 only way to brick the device.
 
@@ -73,19 +80,40 @@ The Q runs an RNDIS network gadget on its micro-USB port:
 ## 5. WiFi
 
 ```bash
-ssh root@172.16.42.1
-nmcli dev wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
+ssh user@172.16.42.1
+sudo nmcli dev wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
 ```
+
+> Note (2026-07-02, updated 2026-07-03): on the **v1.6.5 release image** connect
+> as `user@`, not `root@` — `ssh root@172.16.42.1` fails (root's authorized key
+> is not baked in; escalate with `sudo`). The fix — the build bakes
+> `private/access/authorized_keys` into `/root/.ssh` + `/etc/skel/.ssh` — is
+> **verified on device 2026-07-03** (key-based `root@` works over gadget AND
+> WiFi) and ships in v1.6.6. Public builds without the private overlay still
+> have no baked key.
 
 The connection persists across reboots. From then on the USB cable is
 optional -- find the device on your LAN as hostname `steelhead`.
+
+> Note (2026-07-02, updated 2026-07-03): on the v1.6.5 image the WiFi **IP
+> changes every boot** — NetworkManager uses a randomized locally-administered
+> MAC, so each boot pulls a fresh DHCP lease. Find the current IP in your
+> router's leases by hostname `steelhead`. **Fixed + verified on device
+> 2026-07-03** (`wifi-stable-mac.conf`, `cloned-mac-address=permanent`) — ships
+> in v1.6.6; the stable on-air MAC is the WiFi chip's **OTP MAC** (on the
+> reference unit `14:7d:c5:3a:35:b5`), not the factory-label MAC — brcmfmac
+> never reads the factory calibration MAC (a live driver-reload test proved it
+> ignores the nvram `macaddr=` too). The v1.6.6 image therefore pins the
+> **factory MAC** at the NM layer instead
+> (`cloned-mac-address=F8:8F:CA:20:48:E1` in the baked profile /
+> `scripts/gen-wifi-profile.sh`).
 
 ## What works in v0.1.0
 
 | Subsystem | Status |
 |-----------|--------|
 | HDMI video + XFCE4 desktop | ✅ |
-| WiFi (BCM4330, original calibration) | ✅ |
+| WiFi (BCM4330, original calibration) | ✅ working — the 2026-07-02 "dead" verdict was wrong: the DHCP **IP had moved** (NM randomized MAC → fresh lease per boot; see the note in §5). Stable-MAC fix **verified on device 2026-07-03** (ships in v1.6.6) |
 | Bluetooth | ✅ |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |
@@ -94,13 +122,13 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
 | Companion app / remote control | ✅ working (v1.6.3) — volume, LED theme + brightness, now-playing; via the on-device `nexusq-control` LAN bridge (TCP 45015, mDNS `_nexusq._tcp`, reachable over WiFi since v1.6.5) + a Flutter phone/desktop app (built separately, **not** in the image) |
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
-| NFC (PN544) | 🟠 driver binds, chip untested |
+| NFC (PN544) | 🟠 under investigation — no i2c ACK on the reference unit (2026-07-02), but the "dead hardware" verdict was **retracted 2026-07-03** (software parity with stock is complete, cause unexplained); DTS node disabled meanwhile |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
-| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, currently down on cpufreq builds (v1.4.0 boot-timing regression, fix tracked 1.4.1) |
-| TWL6040 codec (headset) | 🔴 dead hardware on the reference unit |
+| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, currently down on cpufreq builds (v1.4.0 boot-timing regression, fix tracked 1.4.1; re-confirmed still down 2026-07-03) |
+| TWL6040 codec (headset) | ⚪ not populated/unused on steelhead (corrected 2026-07-03 — the stock kernel never drove it; no headset path by design, was wrongly "dead hardware") |
 | SMP (2nd CPU core) | ✅ dual-core works (v1.2.0; `nproc=2`) |
 
-(The remaining 🔴 item is specific to the project's reference device -- your unit
+(The 🔴 items are specific to the project's reference device -- your unit
 may be healthier. The table above predates the current release; see `CHANGELOG.md`,
 `PLAN.md` and `HANDOFF.md` for the up-to-date status.)
 
@@ -118,7 +146,7 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
 - **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
-- Kernel: mainline 6.12.12 + the four patches in `kernel/patches/`,
+- Kernel: mainline 6.12.12 + the 31 patches in `kernel/patches/`,
   config `kernel/configs/steelhead_defconfig`.
 
 ```bash

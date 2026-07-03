@@ -129,6 +129,16 @@ the equivalent via `cpuidle44xx.disallow_smp_idle`. CPU1 then just does plain
 `WFI` and stays up. (Trade-off: no deep CPU power-saving; acceptable — see
 hardening notes.)
 
+> **Superseded 2026-07-02, flashed + verified 2026-07-03:** `cpuidle.off=1` is
+> replaced by kernel patch **0024** — a **C1-only (WFI)** cpuidle driver on
+> steelhead (the blanket switch also made `cpuidle_register()` log "failed to
+> register cpuidle driver" every boot, inventory item B13, and lost residency
+> accounting). Verified on `#27`: `cpuidle/state0` = "C1 - CPUx ON, MPUSS ON",
+> governor `menu`, no registration error, dual-core stable. C2+ still stays
+> off: stock has C1–C4 but the deep states trap into the HS secure dispatcher
+> (services 0x1c/0x1d/0x21) — a future project.
+> See `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §3.
+
 ---
 
 ## 6. Key components (what makes dual-core work)
@@ -185,9 +195,10 @@ device has a separate ~1-in-3 intermittent black-screen boot flake) and re-confi
 the ≤6.6 MB boot-image ceiling.
 
 Open items (tracked as tasks; see `docs/2026-06-22-smp-session-findings.md`):
-- **cpuidle:** currently disabled (`cpuidle.off=1`, stock parity). Proper fix =
-  make OMAP4 coupled cpuidle work for the secondary (needs correct SAR/secure
-  setup). Low priority — the device meets its purpose without deep CPU idle.
+- **cpuidle:** ~~currently disabled (`cpuidle.off=1`, stock parity)~~ — as of
+  2026-07-02 (in tree): **C1 (WFI) registered via patch 0024**, `cpuidle.off=1`
+  dropped. Remaining: deep C2+ needs the HS secure dispatcher (0x1c/0x1d/0x21).
+  Low priority — the device meets its purpose without deep CPU idle.
 - **Ethernet** LAN9500A enumerates only intermittently; an in-driver reset
   (unbind/bind ehci-omap) is NOT enough (PORTSC CCS stays 0) — only a full cold
   power-off re-enumerates. Independent of SMP.

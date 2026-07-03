@@ -32,7 +32,9 @@ re-checking before the physical listening test.
   rate so the `/x2` can't reach 61.44 MHz.
 - Check whether `abe-clkctrl:0030:24` (an ABE leaf) is being asked to reparent
   to `abe_24m_fclk` by a node that shouldn't (leftover from the disabled
-  TWL6040/`omap-abe-twl6040` card?). Since that card is disabled (dead codec),
+  TWL6040/`omap-abe-twl6040` card?). Since that card is disabled (dead codec
+  — _2026-07-03 correction: the TWL6040 is in fact unused/unpopulated on
+  steelhead, not dead; nodes removed entirely in batch 2_),
   a stale ABE clock consumer may be the source of the `-22`.
 - Confirm with `cat /sys/kernel/debug/clk/clk_summary | grep -E 'dpll_per|abe|auxclk1|fref_clk1'` what the actual tree/rates are at runtime.
 
@@ -309,3 +311,67 @@ boot.img needs reflashing, not the rootfs).
 - **Device-side (over SSH):** B8 (sgdisk), B9 (mask unit), B5 (NM/module cfg).
 - **Userspace:** U1 deploy.
 - **Investigate:** B10.
+
+---
+
+## STATUS UPDATE 2026-07-02 — re-swept on kernel `6.12.12 #26` (v1.6.5 era)
+
+Full re-inventory (verbatim log lines, new IDs **B12–B21**, **U4–U7**, device-state
+observations): **`docs/2026-07-02-boot-error-inventory.md`**. Summary against the
+table above:
+
+| ID | Status 2026-07-02 |
+|----|-------------------|
+| B1 (GPTIMER1 `-EBUSY`) | ✅ RESOLVED (v1.5.0 ti-sysc active-timer silencing) |
+| B2 (cpu-map WARN) | ✅ RESOLVED (`cpu@1` restored with SMP, v1.2.0) |
+| B3 (SRAM I688 pool) | ✅ RESOLVED (dram barrier maps at boot) |
+| B4 (clm/txcap blob) | ❌ OPEN — plus a new miss of the device-specific `brcmfmac4330-sdio.google,steelhead.bin` probe |
+| B5 (brcmfmac P2P) | ✅ RESOLVED (P2P disabled, v1.5.0) |
+| B6 (EDID timeout) | ✅ RESOLVED (absent this boot; v1.2.0 DDC/mode_valid) |
+| B7 (`dpll_per_m3x2` / TAS5713 clocks) | ✅ RESOLVED (patch 0007 + patch 0022, v1.6.1 — audio at 1.000×) |
+| B8 (Alternate GPT invalid) | ⛔ BLOCKED — `sgdisk -e` refused: p13 ends at the literal last sector (30777343), the 33-sector backup GPT can't fit; needs a p13 shrink (explicit approval) |
+| B9 (vconsole-setup fail) | ✅ RESOLVED (0 failed units this boot) |
+| B10 (hw-breakpoint monitor mode) | ❌ OPEN (investigate secure-side gating) |
+| B11 (snd-aloop) | ✅ RESOLVED (`CONFIG_SND_ALOOP=m` + modules-load, v1.6.2) |
+
+New in the 2026-07-02 sweep: **B12** twl6030 vsel OUT-OF-RANGE ×4, **B13**
+cpuidle driver fails to register, **B14** clkctrl "device ID is greater than 24"
+(mpu/pmu/iva fck), **B15** pn544 nfc_en polarity fallback, **B16** ramoops
+invalid-buffer error, **B17** bcm4330-pwrseq deferred (external clock), **B18**
+`40132000.target-module` deferred, **B19** tas571x PVDD dummy regulators, **B20**
+hsusb1-phy exclusive-vbus dummy refusal, **B21** minor batch; userspace **U4**
+PulseAudio/PipeWire conflict, **U5** bluetoothd hci0 default config, **U6**
+gkr-pam session noise, **U7** nsresourced bpf-lsm.
+
+**Same-day outcome:** B12/B13/B14/B17/B18/B19/B20/U4 were root-caused and
+**fixed in tree** (kernel patches 0023–0028 + defconfig + DTS, pkgrel 26/18 —
+built, not flashed); B15's chip was proven **dead hardware** (node disabled);
+and the sweep's "WiFi currently DEAD" claim under B17 was **wrong** — the DHCP
+IP had moved (NM randomized MAC), the link was up the whole time. Full fix map +
+corrections: `docs/2026-07-02-boot-error-inventory.md`; stock-parity evidence:
+`docs/2026-07-02-stock-parity-voltage-wifi-idle.md`.
+
+## STATUS UPDATE 2026-07-03 — the fix batch is FLASHED and VERIFIED (`#27`)
+
+The 2026-07-02 batch was flashed 2026-07-03 and the acceptance run passed:
+**B12/B13/B14/B15/B17/B18/B19/B20 + U4 confirmed GONE** on
+`6.12.12 #27-postmarketOS`, and **B8 is FIXED on-device** (p13 shrunk 33
+sectors + backup GPT relocated 2026-07-03; the fix survived the reboot — no
+"Alternate GPT" line). Still open: B4, B10, B16, B21, U5 (did not reproduce on
+`#27` — watching), U6, U7, plus two NEW items **B22** (`twl: not initialized`
+×22 burst @0.78 s from the 0013/0014 vdd_mpu init path) and **B23**
+(`Skipping twl internal clock init … (unknown osc rate)`, surfaced by
+`CLK_TWL=y`). Authoritative per-item table:
+`docs/2026-07-02-boot-error-inventory.md` §"FLASH-VERIFIED 2026-07-03".
+
+## STATUS UPDATE 2026-07-03 (later) — batch 2 BUILT (`#28`), awaiting flash
+
+**B22 and B23 are fixed in tree** (kernel patches **0030** — `twl_is_ready()`
+gating of the pre-probe vdd_mpu/VC accesses — and **0031** — `clocks_init()`
+gated to twl4030 class; the planned twl-fck DTS wiring was investigated and
+REJECTED as harmful), plus patch **0029** (readable `frame` bin_attr for the
+LED-ring health fingerprint). Kernel pkgrel 27 (next boot = `#28`), device
+r20 — **built, not flashed**. Two verdict corrections landed with it: B15's
+chip is **NOT concluded dead** anymore (retracted — under investigation) and
+the TWL6040 was **never a dead codec** (unused/unpopulated on steelhead).
+Authoritative: `docs/2026-07-02-boot-error-inventory.md` §"BATCH 2".

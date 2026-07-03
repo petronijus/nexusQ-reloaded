@@ -45,9 +45,12 @@ All sources were verified against the live device + the kernel/DTS, not guessed.
 
 **Compute / governor** — `…/cpu0/cpufreq/{scaling_governor,scaling_cur_freq,…}`,
 `nproc`, `/sys/kernel/debug/clk/dpll_mpu_ck/clk_rate`. OPPs: 350/700/920/1200 MHz.
-cpufreq stats are off in the kernel (`CONFIG_CPU_FREQ_STAT` not set → no
-`cpufreq/stats/time_in_state`; candidate to enable), so residency is built by
-sampling `scaling_cur_freq` over time. Note idle is **not** 350 MHz here — it
+cpufreq stats are off in the kernel on images up to v1.6.5 (`CONFIG_CPU_FREQ_STAT`
+not set → no `cpufreq/stats/time_in_state`), so residency is built by sampling
+`scaling_cur_freq` over time. _(Since the 2026-07-03 flash — verified on device:
+the defconfig enables `CPU_FREQ_STAT` and defaults the governor back to
+`ondemand`, so `time_in_state` exists and the sampling fallback is just a
+cross-check.)_ Note idle is **not** 350 MHz here — it
 hovers ~920 MHz because nexusqd's LED polling keeps the clock up.
 
 **Power delivery** — every `/sys/class/regulator/regulator.*` (resolved by the
@@ -64,7 +67,11 @@ path (path B).
 `/run/nexusqd.sock`, queried via `nexusled status`) through an on-board **AVR**
 MCU on i2c (IRQ line `steelhead-avr`). nexusqd has **no systemd watchdog**, so a
 *hang* (vs a crash) is invisible to systemd — we detect it via socket
-unresponsiveness + a frozen LED frame + no daemon CPU progress.
+unresponsiveness + a frozen LED frame + no daemon CPU progress. The frame
+fingerprint reads the AVR driver's **`frame` bin_attr** (readable since kernel
+patch 0029 / healthd r20 — md5 + byte sum of the committed frame), falling back
+to the classdev `brightness` sample spread on pre-0029 kernels (where it is
+blind to nexusqd's writes — see the bug note below).
 
 > **A dark ring is NOT a hang by itself.** If the ring is dark **but the control
 > socket answers** (`nexusled status` returns, `nq_resp=1`), that is **not** a
@@ -98,6 +105,23 @@ unresponsiveness + a frozen LED frame + no daemon CPU progress.
 `pstore`, `snapshot_truncated`, `failed_unit`. Each carries severity
 (crit/warn/info) and, where meaningful, the `t_mono` uptime so the report can
 print the per-sample timeline around it.
+
+> **Known nq-healthd bugs (found by the 2026-07-03 acceptance run; FIXED in
+> tree 2026-07-03 — kernel patch 0029 + `device-google-steelhead` r20, built,
+> awaiting flash — but still live on any `#27`/r19-or-older device):**
+> - **`led_frozen` is a permanent FALSE CRIT on nexusqd r5+ (≤ r19)** — healthd
+>   fingerprints the led_classdev `brightness` attributes, but nexusqd commits
+>   frames via the **write-only `frame` bin_attr**, so the sampled `led_sum` is
+>   structurally 0 and the frozen heuristic always trips. On those images ignore
+>   `led_frozen`; judge the ring by `nq_resp`/`nexusled status`. **Fix (r20):**
+>   patch 0029 makes `frame` readable (0644) — the system previously had NO
+>   readable ring-state source — and healthd fingerprints it (md5 + byte sum),
+>   keeping the brightness loop only as a pre-0029 fallback.
+> - **`vdd_mismatch` can be fabricated by non-atomic sampling (≤ r19)** — freq
+>   and vdd are read at different instants, so a DVFS transition between the
+>   reads looks like a mismatch (17/71 samples in the acceptance capture).
+>   **Fix (r20):** the sample is judged only when `scaling_cur_freq` holds
+>   across the vdd read.
 
 > **`librespot_restart` ≠ the "Spotify skips" symptom.** `librespot_restart` is a
 > real *service* flap (the unit's `NRestarts` grew). **Historical (FIXED in v1.6.1):**

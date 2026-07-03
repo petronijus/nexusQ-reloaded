@@ -21,8 +21,13 @@ The agent owns: checking fastboot/adb state, then probing **eth-direct** (carrie
 host IP `10.42.0.1`, known device IPs, IPv6 link-local, mDNS `steelhead.local`),
 **USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
 changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
-serial console as a fallback), and **WiFi** (look the lease up in OPNsense via the
-`opnsense-api` helper, matching hostname `steelhead` / MAC `f8:8f:ca:20:48:e1`). It
+serial console as a fallback), and **WiFi** (stable `192.168.20.175` since the
+2026-07-03 stable-MAC flash — try it directly; else look the lease up in OPNsense
+via the `opnsense-api` helper, matching hostname `steelhead` or the MAC per the
+flashed image: the chip's OTP `14:7d:c5:3a:35:b5` on `#27`, the **factory
+`f8:8f:ca:20:48:e1` after the pending batch-2/`#28` flash** (NM-pinned; new
+lease → `.175` goes stale then); on the older v1.6.5 image the lease MAC is
+randomized per boot and the IP wanders, hostname-match only). It
 verifies the winner with a real `ssh` probe and returns the single best connect
 command + fallbacks. It does NOT change anything on the device.
 

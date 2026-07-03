@@ -68,6 +68,15 @@ Findings are tagged by `kind`; interpret them like this:
   re-commits every `AVR_KEEPALIVE_S=1.0 s`. On **≥ v1.6.5** a dark-after-long-idle ring
   means the keepalive stopped, not a design blank. See
   `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
+  ⚠️ **`led_frozen` is a PERMANENT FALSE CRIT on nexusqd r5+ with images up to
+  `#27`/r19** (2026-07-03 finding): healthd fingerprints led_classdev
+  `brightness`, but nexusqd commits via the write-only `frame` bin_attr →
+  `led_sum` is structurally 0. There, ignore `led_frozen`; judge the ring by
+  `nq_resp`/`nexusled status`. **Fixed in batch 2 (awaiting flash):** kernel
+  patch 0029 makes `frame` readable and nq-healthd r20 fingerprints it — on
+  `#28`/r20+ the fingerprint (and `led_frozen`) is real. Similarly,
+  `vdd_mismatch` warnings on ≤r19 can be non-atomic freq/vdd sampling
+  artifacts (fixed in r20 by re-checking freq across the vdd read).
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is
   **python**: `python3` SIGSEGVs on ARMv7 — a **FLASH** corruption (NOT a
   build/alignment/compiler/CPython-source/qemu-build bug, all disproven) taking down
@@ -92,6 +101,10 @@ Findings are tagged by `kind`; interpret them like this:
   DVFS transition; persistent = a VC-bridge / TPS62361 power-path problem
   (path B). Cross-check the `POWER_REGULATORS` + `omap_voltage/ti-abb/tps`
   sections of `snapshot.txt`.
+  ⚠️ Known tooling bug (2026-07-03): freq and vdd are sampled non-atomically, so
+  a DVFS transition between the reads fabricates a mismatch — re-read freq after
+  vdd before believing a warning. Fix pending in
+  `pmos/device-google-steelhead/nq-healthd`.
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
 - **governor_not_scaling** — load was high but freq never left 350 MHz; the

@@ -19,7 +19,12 @@ tools: Bash, Read, Grep, Glob
 Your one job: discover a working path to the **booted** Nexus Q and return
 "connect like this: `<cmd>`". The links are individually flaky — eth comes and
 goes (a kernel regression), the USB gadget renames its iface + changes MAC every
-reboot, WiFi works but the DHCP IP moves. Do not modify the device.
+reboot; WiFi is stable at `192.168.20.175` since the 2026-07-03 stable-MAC image
+(on older v1.6.5 flashes the DHCP IP moves per boot). ⚠️ **After the pending
+batch-2 flash (`#28`, built 2026-07-03) the IP changes ONE FINAL time**: the
+image pins the **factory MAC `f8:8f:ca:20:48:e1`** (NM `cloned-mac-address`),
+so the device pulls a new lease — `.175` goes stale; re-discover by hostname
+`steelhead` or that factory MAC. Do not modify the device.
 
 ## SPEED IS THE POINT — return on the FIRST verified connect
 The device gets rebooted constantly, so the caller wants a usable connect ASAP,
@@ -36,18 +41,42 @@ Run these near-instant checks; the moment one `ssh` works, that is the answer:
 1. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
    (Most reliable since the composite RNDIS+ACM gadget; try this first.)
 2. **eth-direct** `10.42.0.2` (and `10.0.0.2`) — instant if `enp7s0` carrier=1.
-3. **last-known / caller-supplied WiFi IP** — instant ping+ssh.
+3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Current stable
+   IP (since 2026-07-03): `192.168.20.175` (`ssh root@192.168.20.175`).
+   (Stale after the pending batch-2/`#28` flash — factory-MAC pin → new lease;
+   then fall through to the lease lookup.)
 If any of those ssh-verifies → report it and STOP. Only if ALL fail do you drop to
 the slow discovery in the per-transport sections below (host-IP setup, IPv6
 link-local, mDNS, OPNsense lease lookup).
 
 ## Device facts
 - Hostname: **`steelhead`** (→ try `steelhead.local` via mDNS).
-- WiFi MAC: `f8:8f:ca:20:48:e1`. WiFi lives on **vlan20** (`192.168.20.x`, DHCP).
-- Root login on a freshly-built image: user `root` / password `147147` (also user
-  `user`/`147147`) — baked into the image, not a secret. WiFi is usually key-based.
+- WiFi lives on **vlan20** (`192.168.20.x`, DHCP). Since the 2026-07-03 flash
+  (v1.6.6-candidate) the IP is **stable: `192.168.20.175`** — try it directly.
+- **WiFi on-air MAC — depends on the flashed image** (which one is on the
+  device: check `uname -r`/`#N` or just match both MACs in leases):
+  - **currently flashed (`#27`)**: the chip's **OTP `14:7d:c5:3a:35:b5`**
+    (`wifi-stable-mac.conf` `cloned-mac-address=permanent`; brcmfmac never
+    reads the factory-cal MAC, and a live driver-reload test proved it ignores
+    the nvram `macaddr=` too) — the factory `f8:8f:ca:20:48:e1` is NOT on air.
+  - **after the pending batch-2 flash (`#28`, built 2026-07-03, r20)**: the
+    **factory `f8:8f:ca:20:48:e1`** — the baked profile pins
+    `cloned-mac-address=F8:8F:CA:20:48:E1` at the NM layer. New lease → the IP
+    changes one final time from `.175`.
+  - OPNsense lease matching: hostname `steelhead`, or the MAC per the image
+    above.
+- **`root@` key-based ssh WORKS again** (verified 2026-07-03 over both the
+  gadget and WiFi — the image bakes `private/access/authorized_keys` into
+  `/root/.ssh`). Fallback login: user **`user` / `147147`** (baked in, not a
+  secret) → escalate with `echo 147147 | sudo -S <cmd>`. (On the older v1.6.5
+  release image `root@` still fails — probe `user@` there.)
+- _(Historical, v1.6.5 only:)_ the WiFi IP **wandered** every boot —
+  NM randomized locally-administered MAC → fresh DHCP lease (was `.179`, then
+  `.142`); on that image match OPNsense leases by hostname only.
 - A **fresh rootfs flash wipes** device-side static IPs (the old eth-direct
-  `10.42.0.2`, saved WiFi). So don't assume a fixed device IP — discover it.
+  `10.42.0.2`); ssh keys + the WiFi profile are baked since 2026-07-03. A
+  reflash also **regenerates the ssh host key** — `ssh-keygen -R 172.16.42.1;
+  ssh-keygen -R 192.168.20.175` before the first post-flash ssh.
 - sudo on this host: `SUDO_PASS=$(op-cache "sudo petronijus-PC" password); echo "$SUDO_PASS" | sudo -S <cmd>`.
 - Prefer **IPv4**: this host has had a dead IPv6 default route make ssh hang
   ("Connection failed"); if a name resolves to v6 and it stalls, use the v4 literal.
@@ -78,18 +107,24 @@ to get a shell" and stop. Otherwise probe the transports below.
   fallback (the caller can `screen /dev/ttyACM0 115200`).
 
 ## Transport C — WiFi (vlan20, DHCP)
-- Try the last-known IP first if the caller gives one. Otherwise **find the lease
-  in OPNsense** with the `opnsense-api` helper (`~/.local/bin/opnsense-api`,
-  caches creds):
+- Try `192.168.20.175` first (stable since the 2026-07-03 stable-MAC image), or
+  the caller-supplied IP. Otherwise **find the lease in OPNsense** with the
+  `opnsense-api` helper (`~/.local/bin/opnsense-api`, caches creds):
   `opnsense-api GET /api/dhcpv4/leases/searchLease` (ISC) — if that 404s, try the
   Kea/dnsmasq equivalent (`/api/kea/leases4/search`, `/api/dnsmasq/leases/search`).
-  Match on hostname `steelhead` or MAC `f8:8f:ca:20:48:e1` to get the current IP.
+  Match on hostname `steelhead`, or by MAC per the flashed image: OTP
+  `14:7d:c5:3a:35:b5` on `#27`, **factory `f8:8f:ca:20:48:e1` after the
+  batch-2/`#28` flash** (NM-pinned; on the older v1.6.5 image the MAC was
+  per-boot randomized — hostname-match only).
 - Then `ping` + `ssh root@<ip>`. NB this host's own LAN subnet may not route into
   vlan20 — if ping/ssh time out despite a valid lease, say so and prefer A/B.
 
 ### Joining WiFi after a fresh flash (wlan0 disconnected, no saved profile)
-A clean rootfs flash wipes the saved WiFi, so a freshly-flashed device has NO WiFi
-connection. To rejoin (reach the device over the USB gadget first to run these):
+Since 2026-07-03 the image **bakes the WiFi profile** (generated by
+`scripts/gen-wifi-profile.sh` from the private overlay) — a freshly-flashed
+device auto-joins (verified: came up on `192.168.20.175`). Manual rejoin is only
+needed if the build was made WITHOUT the generated profile (public build /
+profile not generated). Then (reach the device over the USB gadget first):
 - **SSID:** `Svatovitske-Internety-5g` — **always the 5 GHz one** (2.4 GHz suffers the
   BCM4330 BT-coexist bulk stall; 5 GHz is clear of BT, ~26–30 Mbit/s reliable). Prefer the
   base SSID over the `_EXT` repeater variant.
