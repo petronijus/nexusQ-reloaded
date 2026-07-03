@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000028 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 00:25:00 +0200
+Subject: [PATCH] mmc: pwrseq_simple: optional settle delay after enabling the
+ external clock
+
+Some SDIO radios need their external LPO clock ticking for a defined
+time before reset/enable may rise: the BCM4330 on the Nexus Q is
+powered by stock as clk32k on -> 300 ms -> WLAN_EN high -> 200 ms
+(steelhead_wifi_power), but mmc-pwrseq-simple enables the clock and
+releases reset with no delay in between. Add an optional
+clk-settle-delay-ms property, slept right after the first
+clk_prepare_enable() so the guaranteed LPO settle time elapses before
+post_power_on deasserts reset. Boards without the property are
+unaffected.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/mmc/core/pwrseq_simple.c
++++ b/drivers/mmc/core/pwrseq_simple.c
+@@ -25,6 +25,7 @@
+ struct mmc_pwrseq_simple {
+ 	struct mmc_pwrseq pwrseq;
+ 	bool clk_enabled;
++	u32 clk_settle_delay_ms;
+ 	u32 post_power_on_delay_ms;
+ 	u32 power_off_delay_us;
+ 	struct clk *ext_clk;
+@@ -65,6 +66,18 @@
+ 	if (!IS_ERR(pwrseq->ext_clk) && !pwrseq->clk_enabled) {
+ 		clk_prepare_enable(pwrseq->ext_clk);
+ 		pwrseq->clk_enabled = true;
++
++		/*
++		 * Some chips need their external (32 kHz LPO) clock ticking
++		 * for a while before reset may be released - e.g. the
++		 * BCM4330 on the Nexus Q, whose stock power-on is
++		 * clk32k -> 300 ms -> WLAN_EN. Sleeping here (before the
++		 * reset assert and the host's power ramp) guarantees at
++		 * least this settle time before post_power_on deasserts
++		 * reset.
++		 */
++		if (pwrseq->clk_settle_delay_ms)
++			msleep(pwrseq->clk_settle_delay_ms);
+ 	}
+ 
+ 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
+@@ -129,6 +142,8 @@
+ 		return dev_err_probe(dev, PTR_ERR(pwrseq->reset_gpios), "reset GPIOs not ready\n");
+ 	}
+ 
++	device_property_read_u32(dev, "clk-settle-delay-ms",
++				 &pwrseq->clk_settle_delay_ms);
+ 	device_property_read_u32(dev, "post-power-on-delay-ms",
+ 				 &pwrseq->post_power_on_delay_ms);
+ 	device_property_read_u32(dev, "power-off-delay-us",

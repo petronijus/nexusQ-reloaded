@@ -12,7 +12,8 @@
  *   RAM:       1 GB LPDDR2 (Elpida ECB240ABACN)
  *   Storage:   16 GB eMMC (Samsung KLMAG4FEJA-A002)
  *   WiFi/BT:   Broadcom BCM4330 (SDIO + UART2)
- *   Audio:     TWL6040 codec (McPDM) + TAS5713 25W amp (I2C4 + McBSP2)
+ *   Audio:     TAS5713 25W amp (I2C4 + McBSP2) + HDMI; no codec (the
+ *              TWL6040 is unused/unpopulated on steelhead per the stock kernel)
  *   NFC:       NXP PN544 (I2C3)
  *   Ethernet:  SMSC LAN9500A (USB EHCI)
  *   HDMI:      OMAP4 DSS via TPD12S015A (micro-HDMI)
@@ -27,7 +28,12 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include "omap4460.dtsi"
 #include "elpida_ecb240abacn.dtsi"
-#include "omap4-mcpdm.dtsi"
+/* omap4-mcpdm.dtsi deliberately NOT included: it enables the McPDM
+ * target-module (0x40132000) with a TWL6040 as its pdmclk provider, but
+ * steelhead has no TWL6040 at all (see the sound-card note below), so the
+ * ti-sysc ext-opt-clock quirk deferred the module forever ("deferred probe
+ * pending: (reason unknown)" every boot). Without the include McPDM stays at
+ * its upstream disabled default — correct, since McPDM needs the codec. */
 
 / {
 	model = "Google Nexus Q";
@@ -63,15 +69,26 @@
 		#phy-cells = <0>;
 	};
 
-	/* BCM4330 WiFi power sequencing: clk32kaudio + WLAN_EN (gpio_43),
-	 * mirrors steelhead_wifi_power() in board-steelhead-wifi.c */
+	/* BCM4330 WiFi power sequencing: 32k LPO + WLAN_EN (gpio_43),
+	 * mirrors steelhead_wifi_power() in board-steelhead-wifi.c:
+	 * clk32k on -> 300 ms settle -> WLAN_EN high -> 200 ms.
+	 *
+	 * The 32k source is the TWL6030 CLK32KG output (<&twl 0>, CFG_TRANS
+	 * 0x8C). Stock's consumer string "clk32kaudio" is MISLEADING: its
+	 * board data wires that name to the CLK32KG regulator (id 48,
+	 * steelhead_twldata+0x8c), the real CLK32KAUDIO slot is NULL. Our
+	 * earlier <&twl 1> (CLK32KAUDIO, 0x8F) gated the WRONG pin, so the
+	 * chip's LPO never ran — prime suspect for the flaky WiFi/BT
+	 * (stock-parity audit 2026-07-02, steelhead_wifi_power @ 0xc0077884).
+	 * clk-settle-delay-ms is our pwrseq-simple extension (patch 0028). */
 	bcm4330_pwrseq: bcm4330-pwrseq {
 		compatible = "mmc-pwrseq-simple";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wlan_en_pins>;
 		reset-gpios = <&gpio2 11 GPIO_ACTIVE_LOW>; /* gpio_43 WLAN_EN */
+		clk-settle-delay-ms = <300>;
 		post-power-on-delay-ms = <200>;
-		clocks = <&twl 1>; /* clk32kaudio */
+		clocks = <&twl 0>; /* TWL6030 CLK32KG */
 		clock-names = "ext_clock";
 	};
 
@@ -83,6 +100,16 @@
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 		regulator-always-on;
+	};
+
+	/* TAS5713 speaker power rail (PVDD_A..D). Hardwired on the board;
+	 * voltage NOT asserted here (unmeasured — TAS5713 spec 8-26 V) since
+	 * the tas571x driver only enable()s its supplies. */
+	amp_pvdd: amp-pvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "amp_pvdd";
+		regulator-always-on;
+		regulator-boot-on;
 	};
 
 	/* Board 3.3 V rail for the TAS5713 amp AVDD/DVDD (analog + digital). */
@@ -159,28 +186,17 @@
 	};
 
 	/*
-	 * ASoC sound card: TWL6040 codec via McPDM
-	 * TAS5713 is on a separate I2S bus (McBSP2) and managed independently.
+	 * NO TWL6040 codec / ABE sound card on steelhead. The earlier
+	 * "dead chip on this unit" verdict (2026-06-10, no I2C ACK on 0x4b)
+	 * was wrong in kind: the stock 3.0.8 kernel contains ZERO twl6040 /
+	 * AUDPWRON code (whole-image string+symbol sweep), the twldata codec
+	 * pdata slot is NULL (steelhead_twldata+0x24), and stock's i2c1 board
+	 * info registers only the twl6030@0x48 — the chip is simply not used
+	 * (and almost certainly not populated) on this board, so the missing
+	 * ACK is the stock-correct behaviour. Audit 2026-07-03, evidence in
+	 * docs/2026-07-02-stock-parity-voltage-wifi-idle.md. Audio is the
+	 * TAS5713 below + HDMI; there is no headset/aux path by design.
 	 */
-	/* DISABLED 2026-06-10: TWL6040 codec is dead hardware on this unit
-	 * (no I2C ACK on 0x4b with all rails/clk32k/AUDPWRON verified live).
-	 * Headset jack unavailable; TAS5713 speaker path is independent. */
-	sound: sound {
-		status = "disabled";
-		compatible = "ti,abe-twl6040";
-		ti,model = "Nexus Q";
-		ti,mclk-freq = <38400000>;
-		ti,mcpdm = <&mcpdm>;
-		ti,twl6040 = <&twl6040>;
-
-		ti,audio-routing =
-			"Headset Stereophone", "HSOL",
-			"Headset Stereophone", "HSOR",
-			"Ext Spk", "HFL",
-			"Ext Spk", "HFR",
-			"Line Out", "AUXL",
-			"Line Out", "AUXR";
-	};
 
 	/* Speaker amp: McBSP2 I2S -> TAS5713 (25 W class-D) */
 	sound_tas5713: sound-tas5713 {
@@ -210,38 +226,31 @@
 		&ethernet_gpios
 	>;
 
-	twl6040_pins: twl6040-pins {
-		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x120, PIN_OUTPUT | MUX_MODE3)		/* hdq_sio.gpio_127 AUDPWRON */
-			OMAP4_IOPAD(0x1a0, PIN_INPUT | MUX_MODE0)		/* sys_nirq2 */
-		>;
-	};
-
 	i2c1_pins: i2c1-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x122, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_scl */
-			OMAP4_IOPAD(0x124, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c1_sda */
+			OMAP4_IOPAD(0x122, PIN_INPUT | MUX_MODE0)	/* i2c1_scl */
+			OMAP4_IOPAD(0x124, PIN_INPUT | MUX_MODE0)	/* i2c1_sda */
 		>;
 	};
 
 	i2c2_pins: i2c2-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x126, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_scl */
-			OMAP4_IOPAD(0x128, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c2_sda */
+			OMAP4_IOPAD(0x126, PIN_INPUT | MUX_MODE0)	/* i2c2_scl */
+			OMAP4_IOPAD(0x128, PIN_INPUT | MUX_MODE0)	/* i2c2_sda */
 		>;
 	};
 
 	i2c3_pins: i2c3-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x12a, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_scl */
-			OMAP4_IOPAD(0x12c, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c3_sda */
+			OMAP4_IOPAD(0x12a, PIN_INPUT | MUX_MODE0)	/* i2c3_scl */
+			OMAP4_IOPAD(0x12c, PIN_INPUT | MUX_MODE0)	/* i2c3_sda */
 		>;
 	};
 
 	i2c4_pins: i2c4-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x12e, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_scl */
-			OMAP4_IOPAD(0x130, PIN_INPUT_PULLUP | MUX_MODE0)	/* i2c4_sda */
+			OMAP4_IOPAD(0x12e, PIN_INPUT | MUX_MODE0)	/* i2c4_scl */
+			OMAP4_IOPAD(0x130, PIN_INPUT | MUX_MODE0)	/* i2c4_sda */
 		>;
 	};
 
@@ -331,11 +340,20 @@
 		>;
 	};
 
+	/* NFC pads. THE 2026-07-03 ROOT CAUSE of the "chip never ACKs" saga:
+	 * these were 0x1b4/0x1b6/0x1b8 — the dpm_emu3/4/5 debug pads — so the
+	 * REAL NFC pads (usbb2_ulpitll_dat1/2/3) stayed in their bootloader
+	 * state and VEN/FW/IRQ never reached the chip; the PN544 looked dead
+	 * from mainline while being perfectly alive (stock RAM boot: ACK at
+	 * 0x28 with VEN high, core-reset frame accepted). Correct offsets +
+	 * values read live from the WORKING stock kernel's omap_mux debugfs
+	 * (reverse-eng/stock-omap-mux-full.txt): 0x16a/0x16c = 0x0003,
+	 * 0x16e = 0x011b. */
 	nfc_pins: nfc-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x1b4, PIN_OUTPUT | MUX_MODE3)		/* gpio_162 FW */
-			OMAP4_IOPAD(0x1b6, PIN_OUTPUT | MUX_MODE3)		/* gpio_163 EN */
-			OMAP4_IOPAD(0x1b8, PIN_INPUT_PULLUP | MUX_MODE3)	/* gpio_164 IRQ */
+			OMAP4_IOPAD(0x16a, PIN_OUTPUT | MUX_MODE3)		/* usbb2_ulpitll_dat1.gpio_162 FW */
+			OMAP4_IOPAD(0x16c, PIN_OUTPUT | MUX_MODE3)		/* usbb2_ulpitll_dat2.gpio_163 EN */
+			OMAP4_IOPAD(0x16e, PIN_INPUT_PULLUP | MUX_MODE3)	/* usbb2_ulpitll_dat3.gpio_164 IRQ */
 		>;
 	};
 
@@ -430,22 +448,9 @@
 		system-power-controller;
 	};
 
-	twl6040: twl@4b {
-		status = "disabled"; /* dead chip, see sound node note */
-		compatible = "ti,twl6040";
-		#clock-cells = <0>;
-		reg = <0x4b>;
-
-		pinctrl-names = "default";
-		pinctrl-0 = <&twl6040_pins>;
-
-		interrupts = <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>;
-		ti,audpwron-gpio = <&gpio4 31 GPIO_ACTIVE_HIGH>; /* gpio_127 */
-
-		vio-supply = <&v1v8>;
-		v2v1-supply = <&v2v1>;
-		enable-active-high;
-	};
+	/* No twl6040@4b node: the codec does not exist on steelhead (see the
+	 * sound-card note above; the removed node's ti,audpwron-gpio gpio_127
+	 * had no stock evidence either — stock uses hdq_sio for nothing). */
 };
 
 #include "twl6030.dtsi"
@@ -480,6 +485,13 @@
 	pinctrl-0 = <&i2c3_pins>;
 	clock-frequency = <400000>;
 
+	/* RESOLVED 2026-07-03: the chip was never dead — the nfc_pins pinmux
+	 * pointed at the dpm_emu debug pads instead of usbb2_ulpitll_dat1/2/3
+	 * (see the nfc_pins comment), so VEN/FW/IRQ never reached it. Verified
+	 * alive under the stock RAM boot: ACK at 0x28 with VEN high, 6-byte
+	 * core-reset frame accepted, silent with VEN low — pins, polarity and
+	 * timing all stock-parity MATCH (and patch 0020 keeps the stock VEN
+	 * settle). Node re-enabled together with the pad fix. */
 	pn544@28 {
 		compatible = "nxp,pn544-i2c";
 		reg = <0x28>;
@@ -508,10 +520,18 @@
 		pdn-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>; /* gpio_44 */
 
 		/* Board 3.3 V analog + digital supplies (the driver only enables
-		 * these, never programs a voltage). PVDD_A..D (speaker power rail)
-		 * still TODO -- board voltage unverified, not in the stock binary. */
+		 * these, never programs a voltage). PVDD_A..D = the speaker power
+		 * rail (amp_pvdd below): hardwired-on, exact voltage unmeasured
+		 * (TAS5713 spec allows 8-26 V), so the regulator node deliberately
+		 * carries no voltage properties — enabling is all the driver does,
+		 * and this replaces the four "using dummy regulator" boot warnings
+		 * with the real topology. */
 		AVDD-supply = <&vdd_3v3>;
 		DVDD-supply = <&vdd_3v3>;
+		PVDD_A-supply = <&amp_pvdd>;
+		PVDD_B-supply = <&amp_pvdd>;
+		PVDD_C-supply = <&amp_pvdd>;
+		PVDD_D-supply = <&amp_pvdd>;
 
 		/* MCLK 12.288 MHz (256 x 48 kHz) on fref_clk1_out:
 		 * dpll_per_m3x2 -> 61.44 MHz, auxclk1 divides by 5
@@ -592,7 +612,10 @@
 		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
 		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */
 		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
-		clocks = <&twl 1>; /* clk32kaudio, dle board-steelhead-wifi.c */
+		/* TWL6030 CLK32KG — same pin as WiFi (stock BT rfkill enables the
+		 * identical "clk32kaudio"-named CLK32KG regulator; see the pwrseq
+		 * node comment for the naming trap). */
+		clocks = <&twl 0>;
 		clock-names = "ext_clock";
 		vbat-supply = <&bcm4330_vmmc>;	/* BCM4330 VBAT 3.3 V (shared rail) */
 		vddio-supply = <&v1v8>;		/* BCM4330 I/O 1.8 V */

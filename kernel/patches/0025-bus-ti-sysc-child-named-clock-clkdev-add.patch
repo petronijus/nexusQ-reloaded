@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000025 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 00:00:00 +0200
+Subject: [PATCH] bus: ti-sysc: add child named clocks with clkdev_add() to
+ beat MAX_DEV_ID
+
+sysc_child_add_named_clock() aliases the module fck/opt clocks to the
+child device with clkdev_create(), whose vclkdev_alloc() rejects device
+names longer than MAX_DEV_ID (24 chars), poisons the alias with "bad"
+and logs e.g.
+
+  ocp:target-module@48210000:mpu:fck: device ID is greater than 24
+
+for the mpu, pmu and iva target modules on every OMAP4 boot (their
+composed child names are 26-30 chars). The same file already solves
+this exact problem in sysc_add_named_clock_from_child() by allocating
+a struct clk_lookup and calling clkdev_add() directly, "to avoid the
+MAX_DEV_ID limit" -- do the same here. Besides silencing the error this
+makes the alias actually usable by a child driver calling
+clk_get(dev, "fck").
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/bus/ti-sysc.c
++++ b/drivers/bus/ti-sysc.c
+@@ -2376,9 +2376,25 @@
+ 	if (IS_ERR(clk))
+ 		return -ENODEV;
+ 
+-	l = clkdev_create(clk, name, dev_name(child));
+-	if (!l)
++	/*
++	 * Use clkdev_add() instead of clkdev_create() to avoid the MAX_DEV_ID
++	 * limit for clk_get(), exactly like sysc_add_named_clock_from_child()
++	 * above: ti-sysc child device names such as
++	 * "ocp:target-module@48210000:mpu" exceed 24 characters, so
++	 * vclkdev_alloc() logged "device ID is greater than 24" for the mpu,
++	 * pmu and iva target modules on every OMAP4 boot and poisoned the
++	 * alias with "bad".
++	 */
++	l = kzalloc(sizeof(*l), GFP_KERNEL);
++	if (!l) {
+ 		error = -ENOMEM;
++		goto put_clk;
++	}
++
++	l->con_id = name;
++	l->dev_id = dev_name(child);
++	l->clk = clk;
++	clkdev_add(l);
+ put_clk:
+ 	clk_put(clk);
+ 

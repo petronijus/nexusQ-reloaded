@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000024 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 2 Jul 2026 23:55:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: register C1 (WFI) only on steelhead
+
+The SMP bring-up (patch 0009) disabled cpuidle wholesale with
+cpuidle.off=1 on the cmdline, because the C2/C3 MPUSS power transitions
+trap into the HS secure monitor and fault with the second core online
+(stock 3.0.8 guards the same paths with cpuidle44xx.disallow_smp_idle).
+The blanket switch made cpuidle_register() fail, logging
+
+  failed to register cpuidle driver
+
+on every boot, and left the CPUs idling via the bare arch_cpu_idle WFI
+fallback with no residency accounting.
+
+Do what stock actually does instead: keep the cpuidle driver but limit
+steelhead to C1 -- omap_enter_idle_simple() is a plain WFI with no
+MPUSS power transition and no secure SMC, so it is exactly as safe as
+the fallback while restoring a registered driver, per-state residency
+stats and governor behaviour. The cpuidle.off=1 cmdline switch is
+dropped from the defconfig in the same batch.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -11,6 +11,7 @@
+ #include <linux/cpuidle.h>
+ #include <linux/cpu_pm.h>
+ #include <linux/export.h>
++#include <linux/of.h>
+ #include <linux/tick.h>
+ 
+ #include <asm/cpuidle.h>
+@@ -326,5 +327,20 @@
+ 	if (!cpu_clkdm[0] || !cpu_clkdm[1])
+ 		return -ENODEV;
+ 
++	/*
++	 * steelhead (HS OMAP4460): deep C-states fault - the MPUSS power
++	 * transitions of C2/C3 trap into the secure monitor, which the HS
++	 * secure side rejects with SMP online (the stock 3.0.8 kernel guarded
++	 * the same paths with its cpuidle44xx.disallow_smp_idle parameter).
++	 * Register C1 only: omap_enter_idle_simple() is a plain WFI with no
++	 * MPUSS power transition and no secure SMC. This replaces the earlier
++	 * blanket cpuidle.off=1 cmdline (which made cpuidle_register() fail
++	 * with "failed to register cpuidle driver" every boot), restoring a
++	 * real cpuidle driver - proper idle residency accounting and governor
++	 * behaviour - at identical safety.
++	 */
++	if (of_machine_is_compatible("google,steelhead"))
++		idle_driver->state_count = 1;
++
+ 	return cpuidle_register(idle_driver, cpu_online_mask);
+ }

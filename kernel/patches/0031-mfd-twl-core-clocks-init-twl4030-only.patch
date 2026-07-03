@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000031 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 02:15:00 +0200
+Subject: [PATCH] mfd: twl-core: run clocks_init() only on twl4030
+
+clocks_init() programs CFG_BOOT.HFCLK_FREQ + HIGH_PERF_SQ behind the
+PM_MASTER protect key - a twl4030 procedure. On twl6030 the HFCLK rate
+is strapped by the BOOT pins/OTP, the PM_MASTER offsets 0x05/0x0E
+resolve to unrelated Phoenix PM registers, and no twl6030 DT wires an
+"fck" clock - so every OMAP4 board just logs
+
+  Skipping twl internal clock init and using bootloader value (unknown osc rate)
+
+on every boot (the stock steelhead 3.0.8 kernel printed the same line).
+Wiring an fck to silence it would be actively harmful: the writes would
+blind-poke Phoenix PM state next to PHOENIX_DEV_ON. Gate the whole
+procedure by class instead; the only CFG_BOOT consumer
+(twl_get_hfclk_rate) serves the twl4030 USB PHY, which keeps working.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/mfd/twl-core.c
++++ b/drivers/mfd/twl-core.c
+@@ -650,6 +650,19 @@
+ 	u32 rate;
+ 	u8 ctrl = HFCLK_FREQ_26_MHZ;
+ 
++	/*
++	 * CFG_BOOT.HFCLK_FREQ / HIGH_PERF_SQ programming is twl4030-only.
++	 * On twl6030 (Phoenix) the HFCLK rate comes from the BOOT pins/OTP,
++	 * and PM_MASTER+0x05 / +0x0E computed against TWL6030_BASEADD_PM_MASTER
++	 * are unrelated Phoenix PM registers (absolute 0x24/0x2D, next to
++	 * PHOENIX_DEV_ON) - writing the twl4030 key/ctrl values there would
++	 * be a blind poke at power-management state. There is nothing to
++	 * init on 6030 - and nothing to warn about ("Skipping twl internal
++	 * clock init..." fired on every OMAP4 boot).
++	 */
++	if (!twl_class_is_4030())
++		return;
++
+ 	osc = clk_get(dev, "fck");
+ 	if (IS_ERR(osc)) {
+ 		printk(KERN_WARNING "Skipping twl internal clock init and "

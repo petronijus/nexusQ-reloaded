@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=25
+pkgrel=28
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -53,6 +53,15 @@ source="
 	0020-nfc-pn544-i2c-longer-ven-settle-steelhead.patch
 	0021-brcmfmac-mpc-module-param.patch
 	0022-ASoC-omap-mcbsp-derive-CLKGDV-from-fclk-simple-card.patch
+	0023-ARM-OMAP4-twl-smps-offset-no-latch-on-fail-steelhead-seed.patch
+	0024-ARM-OMAP4-cpuidle-steelhead-C1-only.patch
+	0025-bus-ti-sysc-child-named-clock-clkdev-add.patch
+	0026-usb-phy-generic-vbus-optional-getter.patch
+	0027-ARM-OMAP4-stock-parity-vc-on-voltages-4460-core-vcore1.patch
+	0028-mmc-pwrseq-simple-clk-settle-delay.patch
+	0029-leds-steelhead-avr-readable-frame.patch
+	0030-twl-gate-pre-probe-access-twl-is-ready.patch
+	0031-mfd-twl-core-clocks-init-twl4030-only.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -112,4 +121,13 @@ SKIP  0019-bus-ti-sysc-silence-active-timer-ebusy.patch
 SKIP  0020-nfc-pn544-i2c-longer-ven-settle-steelhead.patch
 SKIP  0021-brcmfmac-mpc-module-param.patch
 SKIP  0022-ASoC-omap-mcbsp-derive-CLKGDV-from-fclk-simple-card.patch
+SKIP  0023-ARM-OMAP4-twl-smps-offset-no-latch-on-fail-steelhead-seed.patch
+SKIP  0024-ARM-OMAP4-cpuidle-steelhead-C1-only.patch
+SKIP  0025-bus-ti-sysc-child-named-clock-clkdev-add.patch
+SKIP  0026-usb-phy-generic-vbus-optional-getter.patch
+SKIP  0027-ARM-OMAP4-stock-parity-vc-on-voltages-4460-core-vcore1.patch
+SKIP  0028-mmc-pwrseq-simple-clk-settle-delay.patch
+SKIP  0029-leds-steelhead-avr-readable-frame.patch
+SKIP  0030-twl-gate-pre-probe-access-twl-is-ready.patch
+SKIP  0031-mfd-twl-core-clocks-init-twl4030-only.patch
 "

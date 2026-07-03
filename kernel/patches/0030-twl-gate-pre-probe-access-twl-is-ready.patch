@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000030 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 02:10:00 +0200
+Subject: [PATCH] mfd: twl-core: export twl_is_ready(); OMAP4: stop pre-probe
+ twl i2c attempts
+
+After 0023 stopped latching a failed SMPS_OFFSET efuse read (so the
+real efuse gets picked up once twl-core probes), every twl6030 vsel/uv
+conversion issued before the DT-probed twl i2c device binds retried
+the read - and each doomed attempt logged "twl: not initialized" from
+twl_get_regmap(). The VC+VP channel init for the IVA and CORE domains
+(omap_voltage_late_init, a late_initcall at ~0.78 s vs twl probe at
+~3.6 s) makes exactly 22 such attempts per boot: per domain 3 nonzero
+VC voltages (on/onlp/ret) x2 attempts (uv_to_vsel reads once itself
+and once via its vsel_to_uv range check) + the zero off-voltage x1 +
+2 VP limits x2 = 11, times two domains. The patch-0014 retask poll
+added 2 more by probing readiness with a raw register read.
+
+Fix the ordering instead of the symptom: export a twl_is_ready()
+predicate from twl-core (true once all regmaps exist and twl_priv is
+ready - the exact condition for usable transfers), gate the efuse read
+attempt on it (the steelhead seed still covers pre-probe conversions),
+switch the retask poll to the predicate (its twl6030_pm_modify calls
+still verify real bus transactions), and latch the real efuse in the
+retask work as soon as twl is up. Zero prints, identical behaviour.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/mfd/twl-core.c
++++ b/drivers/mfd/twl-core.c
+@@ -413,6 +413,20 @@
+ EXPORT_SYMBOL(twl_rev);
+ 
+ /**
++ * twl_is_ready - can twl_i2c_read/write actually reach the chip yet?
++ *
++ * Lets early platform code (e.g. the OMAP4 voltage layer, which runs from a
++ * late_initcall long before the DT-probed twl i2c device binds) check for
++ * readiness instead of issuing doomed transfers that each log
++ * "twl: not initialized".
++ */
++bool twl_is_ready(void)
++{
++	return twl_priv && twl_priv->ready;
++}
++EXPORT_SYMBOL_GPL(twl_is_ready);
++
++/**
+  * twl_get_regmap - Get the regmap associated with the given module
+  * @mod_no: module number
+  *
+--- a/include/linux/mfd/twl.h
++++ b/include/linux/mfd/twl.h
+@@ -152,6 +152,7 @@
+ #define TWL4030_CLASS_ID 		0x4030
+ #define TWL6030_CLASS_ID 		0x6030
+ unsigned int twl_rev(void);
++bool twl_is_ready(void);
+ #define GET_TWL_REV (twl_rev())
+ #define TWL_CLASS_IS(class, id)			\
+ static inline int twl_class_is_ ##class(void)	\
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -61,7 +61,15 @@
+ 	if (is_offset_valid)
+ 		return;
+ 
+-	if (!twl_i2c_read_u8(TWL6030_MODULE_ID0, &smps_offset,
++	/*
++	 * Don't even attempt the i2c read until twl-core is ready: the
++	 * conversions below run from omap_voltage_late_init() well before the
++	 * DT-probed twl i2c device binds, and with the no-latch-on-failure
++	 * behaviour every doomed attempt logged "twl: not initialized" - a
++	 * x22 burst per boot (VC+VP channel init for IVA and CORE).
++	 */
++	if (twl_is_ready() &&
++	    !twl_i2c_read_u8(TWL6030_MODULE_ID0, &smps_offset,
+ 			     REG_SMPS_OFFSET)) {
+ 		is_offset_valid = true;
+ 		return;
+@@ -443,10 +451,12 @@
+ static void omap4460_vdd_mpu_retask_work(struct work_struct *work)
+ {
+ 	static int attempts;
+-	u8 tmp;
+ 
+-	/* TWL6030 control i2c (slave 0x48) initialized yet? */
+-	if (twl_i2c_read_u8(TWL6030_MODULE_ID0, &tmp, 0x00)) {
++	/* TWL6030 control i2c (slave 0x48) initialized yet? Ask twl-core
++	 * instead of probing with a read - each failed probe read logged
++	 * "twl: not initialized". The retask's own twl6030_pm_modify calls
++	 * still verify real bus transactions and abort on error. */
++	if (!twl_is_ready()) {
+ 		if (++attempts < 60) {
+ 			schedule_delayed_work(to_delayed_work(work),
+ 					      msecs_to_jiffies(500));
+@@ -457,6 +467,10 @@
+ 		return;
+ 	}
+ 
++	/* twl is up: latch the real SMPS_OFFSET efuse (replaces the boot-time
++	 * steelhead seed; idempotent once valid). */
++	twl6030_read_smps_offset();
++
+ 	omap4460_vdd_mpu_do_retask();
+ }
+ static DECLARE_DELAYED_WORK(omap4460_mpu_retask_dwork,

@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000026 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 00:05:00 +0200
+Subject: [PATCH] usb: phy: generic: get the optional vbus supply with the
+ optional getter
+
+usb_phy_generic asks for its vbus supply (a charging current sink used
+only in OTG b-peripheral mode) with devm_regulator_get_exclusive() and
+then maps -ENODEV to "no vbus". The regulator core refuses to hand out
+dummy supplies for exclusive requests, warning
+
+  usb_phy_generic hsusb1-phy: dummy supplies not allowed for exclusive requests (id=vbus)
+
+on every boot of any board that simply has no vbus supply (e.g. the
+Nexus Q host-only hsusb1 PHY). Use devm_regulator_get_optional(): it
+returns -ENODEV silently for an absent supply, which the existing
+NULL-mapping already handles, and still returns a real, exclusively
+usable regulator when one is wired in the DT.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/usb/phy/phy-generic.c
++++ b/drivers/usb/phy/phy-generic.c
+@@ -256,7 +256,15 @@
+ 		return dev_err_probe(dev, PTR_ERR(nop->vcc),
+ 				     "could not get vcc regulator\n");
+ 
+-	nop->vbus_draw = devm_regulator_get_exclusive(dev, "vbus");
++	/*
++	 * vbus is genuinely optional (a charging current sink used only in
++	 * OTG b-peripheral mode). The exclusive getter made the regulator
++	 * core warn "dummy supplies not allowed for exclusive requests
++	 * (id=vbus)" on every boot of a board without a vbus supply; the
++	 * optional getter returns -ENODEV silently, which the existing
++	 * NULL-mapping below already handles.
++	 */
++	nop->vbus_draw = devm_regulator_get_optional(dev, "vbus");
+ 	if (PTR_ERR(nop->vbus_draw) == -ENODEV)
+ 		nop->vbus_draw = NULL;
+ 	if (IS_ERR(nop->vbus_draw))

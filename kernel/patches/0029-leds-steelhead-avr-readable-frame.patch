@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000029 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 01:40:00 +0200
+Subject: [PATCH] leds: steelhead-avr: make the frame bin_attr readable
+
+nexusqd renders the LED ring exclusively through the frame bin_attr,
+which was write-only — so the system had NO readable source of the ring
+state: the per-LED multicolor classdev brightness files only reflect
+what was set through the classdev API and stay 0 under nexusqd. The
+nq-healthd monitor fingerprinted those brightness files and therefore
+reported a permanently frozen ring (led_sum=0/led_stall CRIT on every
+capture; root-caused 2026-07-03).
+
+Add a read callback returning the last committed frame from the
+driver's own state under io_lock, and open the attr up to 0644. The
+health monitor fingerprints this (with a brightness fallback for older
+kernels); reading is also generally useful for debugging the ring.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/leds/leds-steelhead-avr.c
++++ b/drivers/leds/leds-steelhead-avr.c
+@@ -260,7 +260,39 @@
+ 	mutex_unlock(&a->io_lock);
+ 	return ret ? ret : (ssize_t)count;
+ }
+-static BIN_ATTR(frame, 0200, NULL, frame_write, AVR_RING_LEDS * 3);
++static ssize_t frame_read(struct file *fp, struct kobject *kobj,
++			  struct bin_attribute *attr, char *buf,
++			  loff_t off, size_t count)
++{
++	struct device *dev = kobj_to_dev(kobj);
++	struct avr_dev *a = i2c_get_clientdata(to_i2c_client(dev));
++	u8 fbuf[AVR_RING_LEDS * 3];
++	int i;
++
++	/*
++	 * Expose the last committed frame. nexusqd renders exclusively through
++	 * this bin_attr, so with it write-only there was NO readable source of
++	 * ring state at all — the per-LED classdev brightness files only track
++	 * what was set through the classdev API and stay 0 under nexusqd,
++	 * which made nq-healthd's frame fingerprint report a permanently
++	 * frozen ring (false CRIT on every capture, found 2026-07-03).
++	 */
++	mutex_lock(&a->io_lock);
++	for (i = 0; i < AVR_RING_LEDS; i++) {
++		fbuf[i*3 + 0] = a->ring[i].r;
++		fbuf[i*3 + 1] = a->ring[i].g;
++		fbuf[i*3 + 2] = a->ring[i].b;
++	}
++	mutex_unlock(&a->io_lock);
++
++	if (off >= sizeof(fbuf))
++		return 0;
++	if (count > sizeof(fbuf) - off)
++		count = sizeof(fbuf) - off;
++	memcpy(buf, fbuf + off, count);
++	return count;
++}
++static BIN_ATTR(frame, 0644, frame_read, frame_write, AVR_RING_LEDS * 3);
+ 
+ static ssize_t commit_mode_show(struct device *dev,
+ 				struct device_attribute *attr, char *buf)

@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000027 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 3 Jul 2026 00:20:00 +0200
+Subject: [PATCH] ARM: OMAP4: per-domain VC ON voltages + 4460 core channel on
+ VCORE1 (stock parity)
+
+Mainline vc44xx_data.c programs the SAME 1 375 000 uV ON/ONLP voltage
+into all three VC channels. Per the stock steelhead 3.0.8 kernel
+(omap4_mpu_pmic/omap4_iva_pmic/omap446x_core_pmic descriptors,
+reverse-eng audit 2026-07-02) only VDD_MPU runs at 1.375 V -- and on the
+4460 that rail is the external TPS62361; the TWL6030 rails use
+1 188 000 uV (IVA, VCORE2) and 1 200 000 uV (CORE). The blanket value
+made omap_vc_init_channel() push 1.375 V through twl6030_uv_to_vsel()
+for IVA and CORE, logging
+
+  twl6030_uv_to_vsel:OUT OF RANGE! non mapped vsel for 1375000 Vs max 1316660
+
+four times per boot (2 domains x on/onlp) and silently programming the
+1.35 V fallback vsel -- an over-volted wake target for both TWL rails.
+Use the stock per-domain voltages.
+
+Also retarget the 4460 VC core channel to VCORE1 (volt/cmd 0x55/0x56):
+VCORE3, which the OMAP4430 defaults point at, is unused on the 4460 and
+stock explicitly unmaps it (twl_set_4460vcore, "unmap APE VCORE3").
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/vc44xx_data.c
++++ b/arch/arm/mach-omap2/vc44xx_data.c
+@@ -86,30 +86,40 @@
+ };
+ 
+ /*
+- * Voltage levels for different operating modes: on, sleep, retention and off
++ * Voltage levels for different operating modes: on, sleep, retention and off.
++ *
++ * ON/ONLP are per-domain, matching the stock OMAP4460 (steelhead 3.0.8)
++ * pmic descriptors (omap4_mpu_pmic/.on=1375000, omap4_iva_pmic/.on=1188000,
++ * omap446x_core_pmic/.on=1200000): only VDD_MPU runs at 1.375 V (and on the
++ * 4460 that rail is the external TPS62361, not the TWL). The old blanket
++ * 1375000 for all three channels made omap_vc_init_channel() push 1.375 V
++ * through twl6030_uv_to_vsel() for IVA and CORE, logging "OUT OF RANGE!"
++ * four times per boot and silently programming vsel 0x3A (1.35 V) - an
++ * over-volted wake target for both TWL rails.
+  */
+-#define OMAP4_ON_VOLTAGE_UV			1375000
+-#define OMAP4_ONLP_VOLTAGE_UV			1375000
++#define OMAP4_MPU_ON_VOLTAGE_UV			1375000
++#define OMAP4_IVA_ON_VOLTAGE_UV			1188000
++#define OMAP4_CORE_ON_VOLTAGE_UV		1200000
+ #define OMAP4_RET_VOLTAGE_UV			837500
+ #define OMAP4_OFF_VOLTAGE_UV			0
+ 
+ struct omap_vc_param omap4_mpu_vc_data = {
+-	.on			= OMAP4_ON_VOLTAGE_UV,
+-	.onlp			= OMAP4_ONLP_VOLTAGE_UV,
++	.on			= OMAP4_MPU_ON_VOLTAGE_UV,
++	.onlp			= OMAP4_MPU_ON_VOLTAGE_UV,
+ 	.ret			= OMAP4_RET_VOLTAGE_UV,
+ 	.off			= OMAP4_OFF_VOLTAGE_UV,
+ };
+ 
+ struct omap_vc_param omap4_iva_vc_data = {
+-	.on			= OMAP4_ON_VOLTAGE_UV,
+-	.onlp			= OMAP4_ONLP_VOLTAGE_UV,
++	.on			= OMAP4_IVA_ON_VOLTAGE_UV,
++	.onlp			= OMAP4_IVA_ON_VOLTAGE_UV,
+ 	.ret			= OMAP4_RET_VOLTAGE_UV,
+ 	.off			= OMAP4_OFF_VOLTAGE_UV,
+ };
+ 
+ struct omap_vc_param omap4_core_vc_data = {
+-	.on			= OMAP4_ON_VOLTAGE_UV,
+-	.onlp			= OMAP4_ONLP_VOLTAGE_UV,
++	.on			= OMAP4_CORE_ON_VOLTAGE_UV,
++	.onlp			= OMAP4_CORE_ON_VOLTAGE_UV,
+ 	.ret			= OMAP4_RET_VOLTAGE_UV,
+ 	.off			= OMAP4_OFF_VOLTAGE_UV,
+ };
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -310,6 +310,18 @@
+ 	voltdm = voltdm_lookup("iva");
+ 	omap_voltage_register_pmic(voltdm, &omap4_iva_pmic);
+ 
++	/*
++	 * OMAP4460: VDD_CORE sits on TWL6030 VCORE1 (volt/cmd 0x55/0x56) -
++	 * VCORE3, the OMAP4430 core SMPS these defaults point at, is unused
++	 * and the stock kernel explicitly unmaps it ("unmap APE VCORE3",
++	 * twl_set_4460vcore). Retarget the VC core channel accordingly, or
++	 * any future VC-driven core transition would program a phantom SMPS.
++	 */
++	if (soc_is_omap446x()) {
++		omap4_core_pmic.volt_reg_addr = OMAP4_VDD_MPU_SR_VOLT_REG;
++		omap4_core_pmic.cmd_reg_addr = OMAP4_VDD_MPU_SR_CMD_REG;
++	}
++
+ 	voltdm = voltdm_lookup("core");
+ 	omap_voltage_register_pmic(voltdm, &omap4_core_pmic);
+ 

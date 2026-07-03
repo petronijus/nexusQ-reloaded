@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000023 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 2 Jul 2026 23:50:00 +0200
+Subject: [PATCH] ARM: OMAP4: omap_twl: don't latch a failed SMPS_OFFSET efuse
+ read; seed steelhead
+
+The TWL6030 SMPS_OFFSET efuse is read lazily on the first vsel/uv
+conversion. That first conversion happens in omap_vc_init_channel()
+(a late_initcall, ~0.77 s) -- long before the DT-probed twl-core i2c
+device is up (~3.9 s) -- so the read fails ("twl: not initialized"),
+yet the code latched is_offset_valid anyway. The efuse was then treated
+as all-zero forever: ES1.0 voltage scale, ceiling 1 316 660 uV. The VC
+channel init for VDD_IVA/VDD_CORE converts the OMAP4 blanket ON/ONLP
+voltage of 1 375 000 uV, which then logs
+
+  twl6030_uv_to_vsel:OUT OF RANGE! non mapped vsel for 1375000 Vs max 1316660
+
+four times per boot (2 domains x on/onlp) and falls back to vsel 0x3A
+(1.35 V) -- a latent under-volt on any future VC-driven wake.
+
+Fix the latch: only mark the cached value valid when the i2c read
+succeeded, so the real efuse is picked up once twl-core has probed.
+For the interim window on steelhead (Nexus Q), seed the value read
+live from this unit's efuse (0x7f -- bit3 set, i.e. the ES1.1+
+0.7-1.4 V scale with ceiling 1 417 960 uV), which maps 1 375 000 uV to
+a valid vsel and makes the init-time PRM_VC_VAL_CMD programming
+correct.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -14,6 +14,7 @@
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/mfd/twl.h>
++#include <linux/of.h>
+ #include <linux/workqueue.h>
+ 
+ #include "soc.h"
+@@ -55,6 +56,35 @@
+ 
+ #define REG_SMPS_OFFSET         0xE0
+ 
++static void twl6030_read_smps_offset(void)
++{
++	if (is_offset_valid)
++		return;
++
++	if (!twl_i2c_read_u8(TWL6030_MODULE_ID0, &smps_offset,
++			     REG_SMPS_OFFSET)) {
++		is_offset_valid = true;
++		return;
++	}
++
++	/*
++	 * The efuse is read lazily, and the first conversions run from
++	 * omap_vc_init_channel() (late_initcall) long before the DT-probed
++	 * twl-core i2c device is up, so the read above fails there ("twl:
++	 * not initialized"). Mainline latched is_offset_valid even then,
++	 * permanently treating the efuse as all-zero (ES1.0 scale, max
++	 * 1 316 660 uV) - the 1 375 000 uV ON/ONLP voltages of the IVA/CORE
++	 * VC channels then logged "OUT OF RANGE!" and mis-mapped to vsel
++	 * 0x3A (1.35 V). Do NOT latch on failure, so the real efuse is read
++	 * once twl-core has probed; until then, on steelhead, seed the
++	 * conversions with this unit's real efuse value (0x7f, read live
++	 * over i2c 2026-07-02: bit3 set => 0.7-1.4 V scale, max
++	 * 1 417 960 uV, so 1 375 000 uV maps to a valid vsel).
++	 */
++	if (of_machine_is_compatible("google,steelhead"))
++		smps_offset = 0x7f;
++}
++
+ static unsigned long twl4030_vsel_to_uv(const u8 vsel)
+ {
+ 	return (((vsel * 125) + 6000)) * 100;
+@@ -75,11 +105,7 @@
+ 	 * is programmed to all 0's where as starting from
+ 	 * TWL6030 ES1.1 the efuse is programmed to 1
+ 	 */
+-	if (!is_offset_valid) {
+-		twl_i2c_read_u8(TWL6030_MODULE_ID0, &smps_offset,
+-				REG_SMPS_OFFSET);
+-		is_offset_valid = true;
+-	}
++	twl6030_read_smps_offset();
+ 
+ 	if (!vsel)
+ 		return 0;
+@@ -109,11 +135,7 @@
+ 	 * is programmed to all 0's where as starting from
+ 	 * TWL6030 ES1.1 the efuse is programmed to 1
+ 	 */
+-	if (!is_offset_valid) {
+-		twl_i2c_read_u8(TWL6030_MODULE_ID0, &smps_offset,
+-				REG_SMPS_OFFSET);
+-		is_offset_valid = true;
+-	}
++	twl6030_read_smps_offset();
+ 
+ 	if (!uv)
+ 		return 0x00;
