@@ -6,3 +6,9 @@
 # /etc/profile.d snippet) before launching the session, so labwc inherits it.
 export WLR_RENDERER=pixman
 export WLR_NO_HARDWARE_CURSORS=1
+
+# Prepend the device XDG config dir. /etc/xdg/nexusq/autostart holds
+# Hidden=true overrides that keep the LXQt session from autostarting a second
+# sound server (pipewire/wireplumber) next to PulseAudio — per the autostart
+# spec the same-named .desktop in the most-important config dir wins.
+export XDG_CONFIG_DIRS="/etc/xdg/nexusq:${XDG_CONFIG_DIRS:-/etc/xdg}"

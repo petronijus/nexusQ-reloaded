@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=17
+pkgrel=20
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -29,6 +29,8 @@ depends="
 	openssh-client
 	gdb
 	python3-dbg
+	i2c-tools
+	gptfdisk
 "
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"
@@ -41,8 +43,13 @@ source="
 	lxqt-session.conf
 	nexusq-wayland.sh
 	wifi-powersave-off.conf
+	wifi-stable-mac.conf
 	brcmfmac-no-p2p.conf
 	brcmfmac-mpc-off.conf
+	pipewire-autostart-off.desktop
+	wireplumber-autostart-off.desktop
+	ssh-authorized-keys
+	wifi.nmconnection
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
 	nexusq-usb-gadget.sh
@@ -87,6 +94,49 @@ package() {
 	# Disable WiFi power-save (BCM4330): fixes severe latency jitter (~175->~15 ms).
 	install -Dm644 "$srcdir"/wifi-powersave-off.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-powersave-off.conf
+
+	# Pin WiFi to the hardware MAC: NM's randomized locally-administered MAC
+	# pulled a fresh DHCP lease every boot, so the device's IP wandered and the
+	# documented ssh path broke (2026-07-02).
+	install -Dm644 "$srcdir"/wifi-stable-mac.conf \
+		"$pkgdir"/etc/NetworkManager/conf.d/wifi-stable-mac.conf
+
+	# Audio: PulseAudio is the sound server (the pmOS audio backend). The
+	# pipewire package is present only as a library dependency, but its XDG
+	# autostart started a SECOND sound server next to PA in every LXQt session,
+	# and the pipewire-systemd package enables a pipewire-pulse.socket whose
+	# service/binary (the pipewire-pulse package) is not installed at all ->
+	# "Socket service pipewire-pulse.service not loaded, refusing." every boot.
+	# Suppress the autostarts via the device XDG config dir (see the
+	# XDG_CONFIG_DIRS prepend in nexusq-wayland.sh) and mask the orphaned user
+	# socket. If the image ever switches its backend to PipeWire, drop all three.
+	install -Dm644 "$srcdir"/pipewire-autostart-off.desktop \
+		"$pkgdir"/etc/xdg/nexusq/autostart/pipewire.desktop
+	install -Dm644 "$srcdir"/wireplumber-autostart-off.desktop \
+		"$pkgdir"/etc/xdg/nexusq/autostart/wireplumber.desktop
+	install -dm755 "$pkgdir"/etc/systemd/user
+	ln -sf /dev/null "$pkgdir"/etc/systemd/user/pipewire-pulse.socket
+
+	# Baked-in device access. Both files are staged into this aport by
+	# docker-build.sh (Phase 6) from the PRIVATE overlay (private/access/) —
+	# the WiFi PSK is a secret and the ssh pubkeys are personal, so neither
+	# lives in the public tree. On a public build the staged files are EMPTY
+	# placeholders and the [ -s ] guards skip them (no access baked; configure
+	# by hand after flashing). This is what makes a clean reflash come up
+	# reachable: root+user ssh keys and the WiFi profile live in the rootfs,
+	# which a flash wipes (bitten 2026-06-28 and again 2026-07-02).
+	if [ -s "$srcdir"/ssh-authorized-keys ]; then
+		install -dm700 "$pkgdir"/root/.ssh
+		install -Dm600 "$srcdir"/ssh-authorized-keys \
+			"$pkgdir"/root/.ssh/authorized_keys
+		install -dm700 "$pkgdir"/etc/skel/.ssh
+		install -Dm600 "$srcdir"/ssh-authorized-keys \
+			"$pkgdir"/etc/skel/.ssh/authorized_keys
+	fi
+	if [ -s "$srcdir"/wifi.nmconnection ]; then
+		install -Dm600 "$srcdir"/wifi.nmconnection \
+			"$pkgdir"/etc/NetworkManager/system-connections/wifi.nmconnection
+	fi
 
 	# Disable brcmfmac P2P: the BCM4330 firmware advertises "p2p" but cannot create
 	# the P2P_DEVICE interface (p2p_disc handshake times out), so wpa_supplicant/NM
@@ -201,8 +251,13 @@ SKIP  weston-nexusq.desktop
 SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
+SKIP  wifi-stable-mac.conf
 SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
+SKIP  pipewire-autostart-off.desktop
+SKIP  wireplumber-autostart-off.desktop
+SKIP  ssh-authorized-keys
+SKIP  wifi.nmconnection
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  nexusq-usb-gadget.sh

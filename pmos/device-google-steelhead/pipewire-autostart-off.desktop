@@ -1,0 +1,11 @@
+# Suppress the PipeWire XDG autostart on the Nexus Q. PulseAudio is the sound
+# server (postmarketos-base-ui-audio-backend-pulseaudio); the pipewire package
+# is only present as a library dependency (gst-plugin-pipewire), but its
+# /etc/xdg/autostart entry started a SECOND sound server next to PA every LXQt
+# session. Installed as /etc/xdg/nexusq/autostart/pipewire.desktop — the
+# XDG_CONFIG_DIRS prepend in nexusq-wayland.sh makes this file mask the
+# packaged one (autostart spec: the most-important dir's Hidden key wins).
+[Desktop Entry]
+Type=Application
+Name=PipeWire Media System
+Hidden=true

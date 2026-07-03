@@ -66,7 +66,19 @@ VDD_DIR="$(reg_dir vdd_mpu || true)"
 ABB_DIR="$(reg_dir abb_mpu || true)"
 # steelhead-avr IRQ line (GPIO edge); match by the "steelhead-avr" name column.
 AVR_IRQ_RE='steelhead-avr'
-# A representative spread of ring LEDs to fingerprint frame activity cheaply.
+# LED frame source. nexusqd renders exclusively through the AVR driver's
+# `frame` bin_attr, so the per-LED classdev brightness files stay 0 under it —
+# fingerprinting those reported a permanently frozen ring (false CRIT, found
+# 2026-07-03). Kernel patch 0029 makes `frame` readable; prefer it, keep the
+# brightness loop only as a fallback for pre-0029 kernels (where led_frozen
+# is then structurally unreliable under nexusqd r5+).
+FRAME_ATTR=""
+for f in /sys/bus/i2c/devices/*/frame; do
+	[ -e "$f" ] || continue
+	if head -c 96 "$f" >/dev/null 2>&1; then FRAME_ATTR="$f"; fi
+	break
+done
+# A representative spread of ring LEDs for the brightness FALLBACK fingerprint.
 LED_SAMPLE="0 4 8 12 16 20 24 28"
 
 # rolling state for delta/changed detection
@@ -110,9 +122,16 @@ sample() {
 	vdd=0; abb=0
 	[ -n "$VDD_DIR" ] && vdd=$(rd "$VDD_DIR/microvolts"); : "${vdd:=0}"
 	[ -n "$ABB_DIR" ] && abb=$(rd "$ABB_DIR/microvolts"); : "${abb:=0}"
+	# Re-read the frequency AFTER the voltage: freq and vdd are sampled
+	# non-atomically, and ondemand can retarget the OPP between the two reads
+	# — that produced adjacent-OPP "vdd_mismatch" warnings on every load ramp
+	# (17/71 samples in the 2026-07-03 acceptance capture) with a perfectly
+	# healthy power path. Only judge a sample whose OPP held still across
+	# both reads.
+	freq2=$(rd "$CPUFREQ/scaling_cur_freq"); : "${freq2:=0}"
 	vexp=$(opp_voltage "$freq")
 	vmismatch=0
-	if [ "$vexp" -gt 0 ] && [ "$vdd" -gt 0 ]; then
+	if [ "$freq2" = "$freq" ] && [ "$vexp" -gt 0 ] && [ "$vdd" -gt 0 ]; then
 		d=$(( vdd - vexp )); [ "$d" -lt 0 ] && d=$(( -d ))
 		[ "$d" -gt 20000 ] && vmismatch=1
 	fi
@@ -155,11 +174,21 @@ sample() {
 
 	# --- LED frame activity fingerprint ---
 	led_sum=0; led_fp=""
-	for i in $LED_SAMPLE; do
-		b=$(rd "/sys/class/leds/steelhead:rgb:ring-$i/brightness"); : "${b:=0}"
-		led_sum=$(( led_sum + b ))
-		led_fp="$led_fp:$b"
-	done
+	if [ -n "$FRAME_ATTR" ]; then
+		# Authoritative: the driver's committed frame (kernel patch 0029).
+		led_fp=$(md5sum "$FRAME_ATTR" 2>/dev/null | cut -d' ' -f1)
+		led_sum=$(od -An -tu1 "$FRAME_ATTR" 2>/dev/null \
+			| awk '{for(i=1;i<=NF;i++)s+=$i} END{print s+0}')
+		: "${led_sum:=0}"
+	else
+		# Fallback (pre-0029 kernel): classdev brightness — blind to
+		# nexusqd's frame writes, so led_frozen is unreliable here.
+		for i in $LED_SAMPLE; do
+			b=$(rd "/sys/class/leds/steelhead:rgb:ring-$i/brightness"); : "${b:=0}"
+			led_sum=$(( led_sum + b ))
+			led_fp="$led_fp:$b"
+		done
+	fi
 	led_changed=1
 	[ -n "$PREV_LED_FP" ] && [ "$led_fp" = "$PREV_LED_FP" ] && led_changed=0
 	PREV_LED_FP="$led_fp"

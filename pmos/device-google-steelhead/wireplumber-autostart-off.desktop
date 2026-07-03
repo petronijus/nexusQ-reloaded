@@ -1,0 +1,8 @@
+# Suppress the WirePlumber XDG autostart on the Nexus Q — companion to
+# pipewire-autostart-off.desktop (PulseAudio is the sound server; WirePlumber
+# is PipeWire's session manager and must not run without it). Harmless if the
+# wireplumber package ships no autostart entry.
+[Desktop Entry]
+Type=Application
+Name=WirePlumber
+Hidden=true
