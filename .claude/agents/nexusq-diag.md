@@ -99,23 +99,32 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `brcm/brcmfmac4330-sdio.bin` + nvram `brcm/brcmfmac4330-sdio.txt` (NOT the bcmdhd
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
-  ✅ **RESOLVED 2026-07-04 (task #17 closed)** — the link is healthy
-  (100Mbps/Full, 0 errors, stable carrier); the historical "flap" was NM's
-  auto-generated-profile DHCP retry loop (fixed by baked eth0 profiles, device
-  r21 — hot-deployed on the current unit). Healthy picture now: eth0 sits
-  quietly at NM "disconnected" (or "connected" if `eth-direct` was activated /
-  a real LAN gave a lease), carrier stable, and
-  **`NetworkManager-wait-online` PASSES** (`nm-online -s` rc=0) — a wait-online
-  failure is a REAL fault again, report it. A recurring ~47 s
+  🟠 **Enumeration is INTERMITTENT (task #17, reopened-narrowed 2026-07-05):**
+  on some boots the chip never enumerates — no `usb 1-1`, no `eth0`, USB
+  CCS=0 (0/3 on the v1.6.7 acceptance vs 3/3 on 2026-07-03/04, byte-identical
+  kernel; a kernel/ehci bring-up race, patches 0006/0008/0012 area — NOT
+  cpufreq, NOT the NM profiles). **A missing `eth0` is the known intermittency
+  — report it as "#17 enumeration race, this boot", not as a new regression**
+  (a reboot may bring it back). ✅ The **NM layer is resolved** (2026-07-04,
+  baked eth0 profiles in device r21, in the flashed image since v1.6.7): when
+  `eth0` exists the link is healthy (100Mbps/Full, 0 errors, stable carrier) —
+  eth0 sits quietly at NM "disconnected" (or "connected" if `eth-direct` was
+  activated / a real LAN gave a lease). **`NetworkManager-wait-online` PASSES
+  even with the chip absent** (graceful degradation, verified ×3 boots) — a
+  wait-online failure is a REAL fault, report it. A recurring ~47 s
   activate/deactivate loop in the journal = the r21 profiles are missing
-  (pre-r21 image). NB eth0's hw MAC is random per boot (no MAC EEPROM) — a
+  (pre-v1.6.7 image). NB eth0's hw MAC is random per boot (no MAC EEPROM) — a
   changing LAN lease is expected, not a fault.
 - **NFC** (NXP PN544, i2c 2-0028) — **works since `#29` (2026-07-03**, the
   pinmux fix; on older kernels the node is disabled/mis-muxed):
   `ls /sys/class/nfc/` → `nfc0` present; dmesg should show
   `NFC: nfc_en polarity : active high` **without** a "Could not detect …
-  fallback" line (the fallback line = the pre-fix symptom). Tag-read
-  (`nfc-list`) still untested — RF path not yet exercised.
+  fallback" line (the fallback line = the pre-fix symptom). RF path exercised
+  2026-07-04 (netlink poller: repeated `NFC_EVENT_TARGETS_FOUND` + card data
+  frames in dmesg). ⚠️ Do NOT kill an active NFC poll session mid-poll
+  (`timeout`/harness kills) — it wedges the pn544 HCI state until reboot
+  (known fragility; the follow-up is a long-lived NFC userspace). See
+  `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
   **`ondemand`** since the 2026-07-03 flash — verified, with
@@ -185,7 +194,9 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   **On `#29`/r20+ (flashed 2026-07-03)** patch 0029 makes `frame` readable
   (0644) and nq-healthd r20 fingerprints it (md5 + byte sum) — the LED
   fingerprint is real. ✅ **Static-by-design guard LIVE since 2026-07-04**
-  (healthd r21, hot-deployed + `scripts/diag/nq-health-report`): the
+  (healthd r21 + `scripts/diag/nq-health-report`; **baked in the flashed image
+  since v1.6.7, 2026-07-05** — verified live: 33× info `led_static`, zero
+  false CRIT in 91 samples): the
   screensaver intentionally locks a **static** frame after ~300 s idle and the
   keepalive re-commits identical bytes, so a healthy idle device's fingerprint
   legitimately stops changing — that now emits **info `led_static`**, NOT a
@@ -209,7 +220,10 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   fabricates a mismatch — re-read freq after vdd before believing a warning.
   **Fixed in nq-healthd r20** (flashed 2026-07-03 with `#29`; clean in the
   acceptance capture): the sample is only
-  judged when `scaling_cur_freq` holds across the vdd read.
+  judged when `scaling_cur_freq` holds across the vdd read. Residual race
+  (2026-07-05): the guard is not fully atomic — 1/91 samples slipped past it
+  on the v1.6.7 acceptance; a single isolated warn is still noise, only a
+  persistent run is a real power-path fault.
 - **thermal_throttle / thermal_crit** — at/over 100 °C passive / 125 °C critical.
 - **governor_not_scaling** — load was high but freq stuck at 350 MHz (cpufreq stall);
   see `CPU` + `CLOCKS` (`dpll_mpu`).

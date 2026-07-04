@@ -18,11 +18,16 @@ of the main context. Pass any hint the user gave (a last-known IP, "use USB",
 "it's on wifi").
 
 The agent owns: checking fastboot/adb state, then probing **eth-direct**
-(RESOLVED 2026-07-04, first-class again: host has the persistent
-`eth-direct-host` profile on `enp7s0`, the device bakes an `eth-direct` static
-profile 10.42.0.2/24 — `autoconnect=no` by design, so if ssh fails over the
-cable but another path works, `nmcli c up eth-direct` on the device, then
-`ssh root@10.42.0.2`; device eth0's hw MAC is random per boot — no MAC EEPROM),
+(NM layer resolved 2026-07-04 and baked since v1.6.7 — flashed 2026-07-05:
+host has the persistent `eth-direct-host` profile on `enp7s0`, the device
+bakes an `eth-direct` static profile 10.42.0.2/24 — `autoconnect=no` by
+design, so if ssh fails over the cable but another path works, `nmcli c up
+eth-direct` on the device, then `ssh root@10.42.0.2`. ⚠️ BUT it works ONLY on
+boots where the LAN9500A **enumerated** — the enumeration intermittency is
+back as of 2026-07-05 (task #17 kernel/ehci race; 0/3 acceptance boots had
+`eth0`): check `ls /sys/class/net` for `eth0` first and treat its absence as
+the known kernel race, not a profile fault; device eth0's hw MAC is random
+per boot — no MAC EEPROM),
 **USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
 changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
 serial console as a fallback), and **WiFi** (stable FINAL IP **`192.168.20.195`**

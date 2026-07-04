@@ -1,4 +1,11 @@
-# 2026-07-04 — Ethernet RESOLVED (task #17 closed) + led_frozen static-by-design guard
+# 2026-07-04 — Ethernet NM layer RESOLVED (task #17 narrowed) + led_frozen static-by-design guard
+
+> **Title correction 2026-07-05:** this doc originally said "task #17 CLOSED" —
+> that over-claimed. The **NM retry-loop half of #17 IS fixed** (everything in
+> §1 stands and shipped in v1.6.7), but the **LAN9500A enumeration
+> intermittency came back** on the v1.6.7 acceptance boots — see the
+> **Addendum 2026-07-05** at the bottom. #17 continues for the enumeration
+> race only.
 
 Follow-up session to the v1.6.6 acceptance: both open items from
 `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` are closed. All
@@ -9,7 +16,7 @@ to the running unit per the bake-successes rule. **No kernel change.**
 
 ---
 
-## 1. Ethernet — the "#29 flap" was NetworkManager, not the link. RESOLVED.
+## 1. Ethernet — the "#29 flap" was NetworkManager, not the link. NM LAYER RESOLVED.
 
 ### 1a. The hardware/driver layer is FULLY healthy (batch 2b revived it)
 
@@ -100,7 +107,7 @@ idle device → permanent false CRIT).
 
 ---
 
-## Deployment state
+## Deployment state _(as of 2026-07-04 — superseded by the Addendum 2026-07-05 below: r21 released as v1.6.7 and flashed)_
 
 - Tree: `device-google-steelhead` **r21** (eth NM files + healthd guard) +
   `scripts/diag/nq-health-report` — uncommitted at time of writing.
@@ -138,3 +145,53 @@ against `include/uapi/linux/nfc.h`, script kept in the session record):
   port or a small resident NFC service) never does this — the follow-up
   item is that userspace, not a driver fix; the clean NFCID readout demo
   waits for it.
+
+---
+
+## Addendum 2026-07-05 — v1.6.7 RELEASED + FLASHED; enumeration intermittency REOPENS #17 (narrowed)
+
+### v1.6.7 release record
+
+Everything above (device pkg **r21**: baked eth NM profiles + the `led_static`
+healthd guard) shipped as **v1.6.7**
+(<https://github.com/petronijus/nexusQ-reloaded/releases/tag/v1.6.7>). Kernel
+**unchanged**: `6.12.12-r28`, uname `#29-postmarketOS` —
+`nexusq-boot-v1.6.7.img` is byte-identical to v1.6.6's boot (md5
+`12fba8987364226b2c60aaaf94650557`). Assets: `nexusq-boot-v1.6.7.img` +
+`nexusq-rootfs-v1.6.7-sparse.img.zst` + `nexusq-v1.6.7.sha256`
+(post-verified). Clean `PUBLIC_RELEASE` build; the no-secrets preflight ran
+**rc=0** — the 958bc0a guard held, no `Staged` lines.
+
+### Flashed + ACCEPTED 2026-07-05 (the device now runs the r21 image)
+
+- **3 clean boots, zero failed units every time** — including
+  `NetworkManager-wait-online` **green** on all 3 (see the degradation note
+  below).
+- **`led_static` guard verified live**: 33× info `led_static`, **zero false
+  CRIT in 91 samples**.
+- NFC clean probe, WiFi factory MAC / `192.168.20.195`, CPU/power nominal
+  (1200 MHz @ 1380 mV exact, cpuidle C1).
+- The 2026-07-04 hot-deploy is superseded — r21 is **baked and flashed**, no
+  regression window.
+
+### The reopen — LAN9500A enumeration intermittency is BACK (task #17 continues, narrowed)
+
+- **0/3 acceptance boots enumerated the chip**: USB `CCS=0`; the patch-0006
+  `LAN9500A power-on-reset sequenced` init runs, but the port never shows
+  connect — vs **3/3 enumerated boots on 2026-07-03/04 with the
+  byte-identical kernel**.
+- **NOT cpufreq**: `ondemand` ran on the good boots too. **NOT r21**: r21
+  changed only NM config (userspace, post-enumeration). It is a **kernel/ehci
+  bring-up race** — the patches 0006/0008/0012 area — and that is the ONLY
+  remaining half of task #17. The NM half above stands fixed.
+- The `eth-direct` workflow (§1c/§1d) is unaffected **on boots where the chip
+  enumerates** — it was verified end-to-end 2026-07-04 on an enumerated boot.
+- **Graceful-degradation win**: with the chip absent, the baked profiles keep
+  the boot clean — no auto-generated profile, no retry loop, **no failed
+  units, wait-online green** — verified across all 3 acceptance boots.
+
+### Housekeeping
+
+- One residual `vdd_mismatch` sampling race: **1/91 samples slipped past the
+  r20 freq-hold guard** in the acceptance capture — minor, warn-only; noted in
+  `scripts/diag/README.md` known-issues.

@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.5)
+# Nexus Q Reloaded -- Install Guide (v1.6.7)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,12 +12,14 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.5.img` (5.0 MiB), `nexusq-rootfs-v1.6.5-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.6.7.img` (5.0 MiB), `nexusq-rootfs-v1.6.7-sparse.img.zst`
   (~2.08 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.6.5.sha256`
-  - **`nexusq-boot-v1.6.5.img` is byte-identical to v1.6.2/v1.6.3's boot** (the kernel is
-    unchanged; md5 `36a3dec2c4a493710dffa18c4d796236`). If one of those boots is already on
-    the device you can **flash only userdata** and skip the boot step below.
+  decompress it, see step 2), `nexusq-v1.6.7.sha256`
+  - **`nexusq-boot-v1.6.7.img` is byte-identical to v1.6.6's boot** (the kernel is
+    unchanged since v1.6.6; md5 `12fba8987364226b2c60aaaf94650557`). If v1.6.6's boot is
+    already on the device you can **flash only userdata** and skip the boot step below.
+    (The older v1.6.2/v1.6.3/v1.6.5 boot, md5 `36a3dec2c4a493710dffa18c4d796236`, is a
+    DIFFERENT kernel -- flash both images when coming from those.)
 
 ## 1. Enter fastboot mode
 
@@ -32,8 +34,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# (Identical to v1.6.2/v1.6.3's boot -- skip this line if one is already flashed.)
-fastboot flash boot nexusq-boot-v1.6.5.img
+# (Identical to v1.6.6's boot -- skip this line if that one is already flashed.)
+fastboot flash boot nexusq-boot-v1.6.7.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -42,8 +44,8 @@ fastboot flash boot nexusq-boot-v1.6.5.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.5-sparse.img.zst   # -> nexusq-rootfs-v1.6.5-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.5-sparse.img
+zstd -d nexusq-rootfs-v1.6.7-sparse.img.zst   # -> nexusq-rootfs-v1.6.7-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.6.7-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -125,7 +127,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
 | NFC (PN544) | ✅ **fixed 2026-07-03, ships in v1.6.6** — the chip was never dead: the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), found via a stock RAM-boot probe; clean `nfc_en` polarity detect + `nfc0` registers on the v1.6.6-candidate kernel. On v1.6.5 the node is still disabled |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
-| Ethernet (LAN9500A) | ✅ **resolved 2026-07-04** — carrier came back with the v1.6.6 kernel, and the remaining "flap" was NetworkManager's serverless-DHCP retry loop (not the link): fixed by baked eth0 NM profiles (`eth-lan` DHCP + `eth-direct` static `10.42.0.2` for a direct PC↔Q cable). Note: the chip has no MAC EEPROM, so the hw MAC (and a LAN DHCP lease) is random per boot |
+| Ethernet (LAN9500A) | 🟠 **NM layer resolved 2026-07-04, enumeration intermittent again 2026-07-05** — the old "flap" was NetworkManager's serverless-DHCP retry loop (not the link): fixed by baked eth0 NM profiles in v1.6.7 (`eth-lan` DHCP + `eth-direct` static `10.42.0.2` for a direct PC↔Q cable). BUT on some boots the chip never enumerates at all (USB CCS=0; 0/3 boots on the v1.6.7 acceptance vs 3/3 the day before, same kernel — a kernel/ehci bring-up race, task #17). The boot stays clean either way (no failed units); if `eth0` is missing, power-cycle or use the USB gadget/WiFi. Note: the chip has no MAC EEPROM, so the hw MAC (and a LAN DHCP lease) is random per boot |
 | TWL6040 codec (headset) | ⚪ not populated/unused on steelhead (corrected 2026-07-03 — the stock kernel never drove it; no headset path by design, was wrongly "dead hardware") |
 | SMP (2nd CPU core) | ✅ dual-core works (v1.2.0; `nproc=2`) |
 

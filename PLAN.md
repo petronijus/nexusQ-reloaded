@@ -3,6 +3,19 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-05 — v1.6.7 RELEASED + FLASHED (tag `v1.6.7` = kernel `#29`
+> unchanged + device pkg r21: baked eth NM profiles + `led_static` healthd
+> guard).** Accepted on device 2026-07-05: 3 clean boots, zero failed units,
+> wait-online green, `led_static` guard live (33× info / 0 false CRIT in 91
+> samples), NFC clean probe, factory WiFi MAC/.195, CPU/power nominal.
+> **Task #17 NARROWED, not closed** (correcting the note below): the NM
+> retry-loop half IS fixed and shipped, but the **LAN9500A enumeration
+> intermittency is back** — 0/3 acceptance boots enumerated (USB CCS=0) vs 3/3
+> on 2026-07-03/04 with the byte-identical kernel; a kernel/ehci bring-up race
+> (patches 0006/0008/0012 area), not cpufreq, not r21. With the chip absent
+> the boot stays clean (graceful degradation, verified ×3). See the 2026-07-05
+> addendum in `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+>
 > **2026-07-04 — v1.6.6 RELEASED (tag `v1.6.6` = the accepted `#29`/r20 image),
 > and both post-acceptance open items CLOSED the same day:** (1) **ETHERNET
 > RESOLVED, task #17 closed** — the `#29` "carrier flap" was NetworkManager's
@@ -144,7 +157,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
-| Ethernet (LAN9500A) | ✅ works | _(RESOLVED 2026-07-04 — task #17 CLOSED; was "🟠 sw bug" and before that a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), and the remaining "flap" was root-caused 2026-07-04 as **NM's auto-generated-profile serverless-DHCP retry loop** (MAC reset on deactivate bounced the carrier and re-armed autoconnect), not the link — NM detached, carrier held 90+ s / zero transitions / 100Mbps/Full / 0 errors. Fixed by baked eth0 NM profiles (device r21, hot-deployed): `no-auto-default=eth0` + `eth-lan` (DHCP, permanent MAC, one retry) + `eth-direct` (static 10.42.0.2, manual) + host `eth-direct-host`; `nm-online -s` rc=0, `ssh root@10.42.0.2` works. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-04-ethernet-resolved-and-led-guard.md` |
+| Ethernet (LAN9500A) | 🟠 enumeration intermittent | _(2026-07-05: NM layer ✅ resolved, enumeration race ACTIVE — task #17 narrowed, was briefly "CLOSED" 2026-07-04; before that "🟠 sw bug" and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), and the "flap" was root-caused 2026-07-04 as **NM's auto-generated-profile serverless-DHCP retry loop** (MAC reset on deactivate bounced the carrier and re-armed autoconnect), not the link — NM detached, carrier held 90+ s / zero transitions / 100Mbps/Full / 0 errors. Fixed by baked eth0 NM profiles (device r21, **shipped in v1.6.7**): `no-auto-default=eth0` + `eth-lan` (DHCP, permanent MAC, one retry) + `eth-direct` (static 10.42.0.2, manual) + host `eth-direct-host`; `nm-online -s` rc=0, `ssh root@10.42.0.2` works. **BUT enumeration is intermittent again**: 0/3 v1.6.7 acceptance boots enumerated (USB CCS=0) vs 3/3 on 2026-07-03/04, byte-identical kernel — a kernel/ehci bring-up race (0006/0008/0012 area); boot stays clean with the chip absent. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (+ 2026-07-05 addendum) |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 
 ## Plan (by priority)

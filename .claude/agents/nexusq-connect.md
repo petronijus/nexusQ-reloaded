@@ -18,9 +18,13 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". Since 2026-07-04 **eth-direct is a first-class
-transport again** (task #17 closed — the link is healthy; the old "flap" was an
-NM config loop, fixed by baked profiles; see Transport A). The USB gadget
+"connect like this: `<cmd>`". The device runs **v1.6.7** (flashed 2026-07-05;
+device pkg r21 with the eth profiles BAKED). **eth-direct works, but ONLY on
+boots where the LAN9500A enumerated** — the enumeration intermittency is back
+as of 2026-07-05 (0/3 acceptance boots had `eth0` at all; task #17, a
+kernel/ehci race). The old "flap" was an NM config loop, fixed by the baked
+profiles — if `eth0` exists, the link is healthy (see Transport A); if `eth0`
+is absent, that is the known kernel race, NOT a profile fault. The USB gadget
 renames its iface + changes MAC every reboot; WiFi is stable at
 **`192.168.20.195`** — the FINAL IP since the
 2026-07-03 batch-2b flash (`#29`), which pins the **factory MAC
@@ -84,9 +88,8 @@ link-local, mDNS, OPNsense lease lookup).
   `.142`); on that image match OPNsense leases by hostname only.
 - A **fresh rootfs flash wipes** anything not baked; ssh keys + the WiFi
   profile are baked since 2026-07-03, and the **eth0 profiles
-  (`eth-lan`/`eth-direct`/`no-auto-default`) are baked since device pkg r21**
-  (2026-07-04 — hot-deployed on the current r20 image, in the image from the
-  next rebuild). A
+  (`eth-lan`/`eth-direct`/`no-auto-default`) are baked since device pkg r21 —
+  in the flashed image since v1.6.7 (2026-07-05)**. A
   reflash also **regenerates the ssh host key** — `ssh-keygen -R 172.16.42.1;
   ssh-keygen -R 192.168.20.195; ssh-keygen -R 10.42.0.2` before the first
   post-flash ssh.
@@ -100,16 +103,23 @@ there is NO network path — report "device is in fastboot, not booted; reboot i
 to get a shell" and stop. Otherwise probe the transports below.
 
 ## Transport A — eth-direct cable (host `enp7s0` ↔ device eth0)
-- ✅ **RESOLVED 2026-07-04 (task #17 closed):** the LAN9500A link is healthy and
-  carrier is **stable** (the old "flap" was NM's auto-generated-profile DHCP
-  retry loop bouncing the carrier via MAC rewrites — fixed by baked eth0
-  profiles in device pkg r21, hot-deployed on the current unit). Both ends now
-  carry persistent profiles: **host `eth-direct-host`** on `enp7s0`
+- ⚠️ **Works ONLY on boots where the chip enumerated (task #17, 2026-07-05):**
+  the LAN9500A enumeration is **intermittent** — on some boots there is no
+  `usb 1-1`/`eth0` at all (USB CCS=0; 0/3 on the v1.6.7 acceptance, 3/3 the
+  day before, same kernel — a kernel/ehci bring-up race). If another path is
+  up, `ssh <other-path> 'ls /sys/class/net'` — **no `eth0` = the known kernel
+  race**, do NOT diagnose the NM profiles; skip to B/C (a reboot may bring the
+  chip back).
+- ✅ **NM layer resolved 2026-07-04:** when `eth0` exists, the link is healthy
+  and carrier is **stable** (the old "flap" was NM's auto-generated-profile
+  DHCP retry loop bouncing the carrier via MAC rewrites — fixed by baked eth0
+  profiles in device pkg r21, **in the flashed image since v1.6.7**). Both
+  ends carry persistent profiles: **host `eth-direct-host`** on `enp7s0`
   (10.42.0.1/24 + 10.0.0.1/24, autoconnect — no manual `ip addr add` needed)
   and **device `eth-direct`** (static 10.42.0.2/24 + 10.0.0.2/24,
   **`autoconnect=no` by design** so it never fights DHCP on a real LAN).
-- `cat /sys/class/net/enp7s0/carrier`. `0` = cable out / device eth0 down →
-  skip to B/C. `1` = link up:
+- `cat /sys/class/net/enp7s0/carrier`. `0` = cable out / device eth0 down /
+  chip did not enumerate this boot → skip to B/C. `1` = link up:
   - try `ssh root@10.42.0.2` (then `10.0.0.2`) directly.
   - ssh fails but B/C works? The device profile isn't active — run
     `nmcli c up eth-direct` on the device over that path, then

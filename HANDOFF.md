@@ -4,17 +4,60 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-04 (latest): **ETHERNET RESOLVED — task #17 CLOSED** + led_frozen guard shipped (device r21, hot-deployed; v1.6.6 released)
+## Session 2026-07-05 (latest): **v1.6.7 RELEASED + FLASHED** — #17 NARROWED (NM half fixed & shipped; LAN9500A enumeration intermittency is BACK)
+
+**v1.6.7 was released and flashed 2026-07-05**
+(<https://github.com/petronijus/nexusQ-reloaded/releases/tag/v1.6.7>; assets
+`nexusq-boot-v1.6.7.img` + `nexusq-rootfs-v1.6.7-sparse.img.zst` +
+`nexusq-v1.6.7.sha256`, post-verified). Clean `PUBLIC_RELEASE` build,
+no-secrets preflight **rc=0** (the 958bc0a guard held — no `Staged` lines).
+Content: device pkg **r21** (baked eth NM profiles + the `led_static` healthd
+guard); kernel **unchanged** `6.12.12-r28` `#29` (boot.img byte-identical to
+v1.6.6, md5 `12fba8987364226b2c60aaaf94650557`). **The device now runs the r21
+image** — the 2026-07-04 hot-deploy is superseded, no regression window. Full
+record: the 2026-07-05 addendum in
+`docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+
+- **Acceptance PASSED (3 boots):** zero failed units **every** boot,
+  `NetworkManager-wait-online` green, `led_static` guard verified live (**33×
+  info, zero false CRIT in 91 samples**), NFC clean probe, WiFi factory
+  MAC / `192.168.20.195`, CPU/power nominal (1200 MHz @ 1380 mV exact, C1).
+- **Task #17 NARROWED, not closed** (the 2026-07-04 "CLOSED" below
+  over-claimed): the **NM retry-loop half IS fixed and shipped** — but the
+  **LAN9500A enumeration intermittency is back**: **0/3 acceptance boots
+  enumerated** (USB CCS=0; the 0006 `LAN9500A power-on-reset sequenced` init
+  runs but the port never shows connect) vs **3/3 enumerated boots
+  2026-07-03/04 on the byte-identical kernel**. NOT cpufreq (`ondemand` ran on
+  the good boots too), NOT r21 (NM config only). #17 continues for the
+  **kernel/ehci bring-up race** (patches 0006/0008/0012 area) only.
+- **Graceful-degradation win:** with the chip absent, the baked profiles keep
+  the boot clean — no auto-generated profile, no retry loop, no failed units —
+  verified across all 3 boots. (`eth-direct` still works end-to-end on boots
+  where the chip enumerates — verified 2026-07-04.)
+- **Minor:** one residual `vdd_mismatch` sampling race — 1/91 samples slipped
+  past the r20 freq-hold guard (warn-only; noted in `scripts/diag/README.md`).
+- **Next steps:** the ehci **enumeration-race investigation** (task #17,
+  patches 0006/0008/0012 area); NFC long-lived userspace (the session-kill
+  fragility follow-up); PA HDMI-audio UCM; U6 gkr-pam; B4; B10; deep cpuidle
+  C2+.
+
+---
+
+## Session 2026-07-04: **ETHERNET NM-LAYER RESOLVED** _(header originally said "task #17 CLOSED" — over-claim corrected 2026-07-05, see above: the enumeration half reopened)_ + led_frozen guard shipped (device r21, hot-deployed; v1.6.6 released)
 
 **v1.6.6 was released 2026-07-04** (tag `v1.6.6` = the accepted `#29`/r20
 image). This follow-up session closed both open items from the `#29`
 acceptance. Everything verified on the live device; the tree carries device
 pkg **r21 uncommitted** — the device still runs the r20 image with the r21
 files **hot-deployed** (already in the APKBUILD, so the next rebuild+reflash
-bakes them; no kernel change). Full record:
+bakes them; no kernel change) _(as written 2026-07-04 — superseded: r21
+committed, released as v1.6.7 and flashed 2026-07-05, see the session
+above)_. Full record:
 `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
 
-- **ETHERNET RESOLVED.** The `#29` "partial comeback / carrier flap" is fully
+- **ETHERNET RESOLVED** _(2026-07-05: the NM half of this stands; the
+  enumeration half reopened — see the session above)_**.** The `#29` "partial
+  comeback / carrier flap" is fully
   explained: the **LAN9500A/driver is fully healthy** (batch 2b revived it —
   NM detached: carrier held 90+ s with ZERO transitions, 100Mbps/Full, 0 rx/tx
   errors, under `ondemand`, which rules out the cpufreq-timing theory;
@@ -48,7 +91,8 @@ bakes them; no kernel change). Full record:
   (summary split into `led_frozen_events`/`led_static_events`).
   Regression-tested on the `nq-captures/20260703-144228/` capture: verdict
   **CRIT → OK**, `led_static … 25 occasion(s)`.
-- **Next steps:** commit + rebuild/reflash to bake r21; NFC tag-read test;
+- **Next steps:** commit + rebuild/reflash to bake r21 _(done 2026-07-05 —
+  released as v1.6.7 and flashed, see the session above)_; NFC tag-read test;
   then the standing B4/B10/B16/B21, U5 (watch), U6, U7, PA HDMI-audio UCM,
   deep cpuidle C2+.
 

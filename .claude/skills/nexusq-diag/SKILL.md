@@ -74,8 +74,10 @@ Findings are tagged by `kind`; interpret them like this:
   `led_sum` is structurally 0. There, ignore `led_frozen`; judge the ring by
   `nq_resp`/`nexusled status`. **On `#29`/r20+ (flashed 2026-07-03)** kernel
   patch 0029 makes `frame` readable and nq-healthd r20 fingerprints it — the
-  fingerprint is real. ✅ **Since 2026-07-04 (healthd r21, hot-deployed, +
-  nq-health-report) the static-by-design guard is LIVE**: a static frame with
+  fingerprint is real. ✅ **Since 2026-07-04 (healthd r21 + nq-health-report;
+  baked in the flashed image since v1.6.7, 2026-07-05) the static-by-design
+  guard is LIVE** (verified: 33× info `led_static`, zero false CRIT in 91
+  acceptance samples): a static frame with
   a healthy daemon (the screensaver locks a static frame after ~300 s and the
   keepalive re-commits identical bytes) emits **info `led_static`** — expected
   on idle captures, not a fault — while `led_frozen` CRIT fires only with a
@@ -83,7 +85,14 @@ Findings are tagged by `kind`; interpret them like this:
   believable as a real hang. (On healthd r20 exactly, the idle false CRIT
   still applies — believe it only with the distress co-signal.) Similarly,
   `vdd_mismatch` warnings on ≤r19 can be non-atomic freq/vdd sampling
-  artifacts (fixed in r20 by re-checking freq across the vdd read).
+  artifacts (fixed in r20 by re-checking freq across the vdd read; a residual
+  race remains — 1/91 samples slipped past the guard on the 2026-07-05 v1.6.7
+  acceptance — so a single isolated warn is still noise). Ethernet: a missing
+  `eth0` on a boot is the **known #17 enumeration intermittency**
+  (reopened-narrowed 2026-07-05; 0/3 v1.6.7 acceptance boots enumerated, USB
+  CCS=0) — report it as that, not a new regression; the NM layer is fixed
+  (baked r21 profiles) and `NetworkManager-wait-online` stays green even with
+  the chip absent, so a wait-online failure IS a real fault.
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is
   **python**: `python3` SIGSEGVs on ARMv7 — a **FLASH** corruption (NOT a
   build/alignment/compiler/CPython-source/qemu-build bug, all disproven) taking down

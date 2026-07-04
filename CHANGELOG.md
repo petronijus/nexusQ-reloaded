@@ -60,9 +60,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   `nq-captures/20260703-144228/` capture: verdict **CRIT → OK** with
   `led_static … 25 occasion(s)`.
 
-> Deployment note: the tree carries device pkg **r21**; the device still runs
-> the r20 image with these files **hot-deployed** (verified) — the next
-> rebuild+reflash bakes them. No kernel change in this batch.
+> Deployment note: device pkg **r21** is baked in this image; the 2026-07-04
+> hot-deploy is superseded — the device runs the flashed v1.6.7 image since
+> 2026-07-05 (no regression window). No kernel change in this batch.
 
 ## [1.6.6] - 2026-07-04
 

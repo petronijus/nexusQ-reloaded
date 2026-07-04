@@ -122,8 +122,9 @@ co-fires; a static frame with a healthy daemon is info **`led_static`**
 >   patch 0029 makes `frame` readable (0644) — the system previously had NO
 >   readable ring-state source — and healthd fingerprints it (md5 + byte sum),
 >   keeping the brightness loop only as a pre-0029 fallback.
->   ✅ **Static-by-design guard SHIPPED 2026-07-04 (healthd r21, hot-deployed
->   on the device + `nq-health-report`).** The screensaver intentionally locks
+>   ✅ **Static-by-design guard SHIPPED 2026-07-04 (healthd r21 +
+>   `nq-health-report`; baked + flashed since v1.6.7, 2026-07-05).** The
+>   screensaver intentionally locks
 >   a **static** frame after ~300 s idle and the v1.6.5 keepalive re-commits
 >   identical bytes, so the (now real) fingerprint legitimately stops changing
 >   on a healthy idle device — that used to end verdict=CRIT (the `#29`
@@ -131,14 +132,21 @@ co-fires; a static frame with a healthy daemon is info **`led_static`**
 >   `led_frozen` is CRIT **only** when `nq_resp=0` or `nq_progress=0` co-fires
 >   in the stalled samples; a healthy static frame emits **info `led_static`**.
 >   Regression-tested on `nq-captures/20260703-144228/`: verdict CRIT → OK,
->   `led_static … 25 occasion(s)`. (On a device still running healthd ≤ r20,
->   the idle false CRIT persists until the r21 files are deployed.)
+>   `led_static … 25 occasion(s)`. **Verified live on the flashed v1.6.7
+>   acceptance (2026-07-05): 33× info `led_static`, zero false CRIT in 91
+>   samples.** (On a device still running healthd ≤ r20, the idle false CRIT
+>   persists until the r21 image is flashed.)
 > - **`vdd_mismatch` can be fabricated by non-atomic sampling (≤ r19)** — freq
 >   and vdd are read at different instants, so a DVFS transition between the
 >   reads looks like a mismatch (17/71 samples in the acceptance capture).
 >   **Fix (r20):** the sample is judged only when `scaling_cur_freq` holds
 >   across the vdd read. Verified clean in the `#29` acceptance capture
->   (2026-07-03, `nq-captures/20260703-144228/`).
+>   (2026-07-03, `nq-captures/20260703-144228/`). **Residual race (2026-07-05,
+>   minor/warn-only):** the freq-hold guard is not fully atomic — the v1.6.7
+>   acceptance saw **1/91 samples** slip past it (a DVFS transition landing
+>   between the two matching freq reads and the vdd read). A single isolated
+>   `vdd_mismatch` warn is still noise; only a persistent run means a real
+>   power-path fault.
 
 > **`librespot_restart` ≠ the "Spotify skips" symptom.** `librespot_restart` is a
 > real *service* flap (the unit's `NRestarts` grew). **Historical (FIXED in v1.6.1):**

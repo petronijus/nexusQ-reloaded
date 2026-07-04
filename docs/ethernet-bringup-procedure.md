@@ -6,7 +6,27 @@ other kernel work (e.g. SMP second-core) is in flight. First made to work in
 change, work the **Regression triage** at the bottom — it tells you *which layer*
 broke.
 
-> **Status 2026-07-04 — RESOLVED. Task #17 CLOSED.**
+> **Status 2026-07-05 — NM layer RESOLVED; enumeration intermittency ACTIVE
+> again (task #17 continues, narrowed to the kernel/ehci bring-up race).**
+> On the v1.6.7 acceptance (flashed 2026-07-05) the LAN9500A **did not
+> enumerate on any of the 3 boots** (USB CCS=0; the patch-0006
+> `LAN9500A power-on-reset sequenced` init runs but the port never shows
+> connect) — while the 2026-07-03/04 boots enumerated **3/3 with the
+> byte-identical kernel** (`6.12.12-r28`/`#29`). So enumeration is
+> **intermittent**, not deterministically dead. It is NOT cpufreq (`ondemand`
+> ran on the good boots too) and NOT the r21 device pkg (it changed only NM
+> config, which is post-enumeration userspace) — the suspect is the
+> **kernel/ehci bring-up race** in the patches 0006/0008/0012 area. Everything
+> in the 2026-07-04 note below (the NM retry-loop fix, the zero-touch §4
+> workflow) **stands and is baked+flashed since v1.6.7** — but it only applies
+> on boots where the chip enumerates. Graceful degradation is verified: with
+> the chip absent, the baked profiles keep the boot clean (no auto-generated
+> profile, no retry loop, zero failed units, wait-online green — all 3
+> acceptance boots). See the 2026-07-05 addendum in
+> `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+>
+> _(Superseded status 2026-07-04 — "RESOLVED, task #17 CLOSED" — kept below;
+> its NM-layer half remains true, the closure over-claimed.)_
 > The v1.4.0 regression (no enumeration, PORTSC CCS=0) ended with batch 2b
 > (`#29`, 2026-07-03) — likely one of the batch-2 clock changes revived
 > enumeration — and the remaining "carrier flap" was root-caused 2026-07-04 as
@@ -143,9 +163,12 @@ ssh root@172.16.42.1 'systemctl reboot'
 The Nexus RJ45 is cabled directly to `petronijus-PC` NIC **`enp7s0`** (Intel I225-V,
 100 Mbps). A direct cable has **no DHCP server** — this is exactly the topology that
 armed the old NM retry loop (see the Status note). Since `device-google-steelhead`
-**r21** (hot-deployed 2026-07-04; baked in the next image) eth0 is owned by three
-shipped config files, and the host has a persistent profile too — no ad-hoc setup
-on either end:
+**r21** (hot-deployed 2026-07-04; **baked + flashed since v1.6.7, 2026-07-05**)
+eth0 is owned by three shipped config files, and the host has a persistent
+profile too — no ad-hoc setup on either end. ⚠️ All of this presupposes the
+chip **enumerated this boot** (`ls /sys/class/net` shows `eth0`) — if there is
+no `eth0`, that's the #17 enumeration race (Status note), not a profile
+problem; reboot or use the gadget/WiFi instead:
 
 - **Device (baked):** `eth-no-auto-default.conf` (`no-auto-default=eth0` — NM never
   generates "Wired connection 1"), `eth-lan.nmconnection` (DHCP, `dhcp-timeout=30`,
@@ -214,7 +237,13 @@ Work top-down; each step says which layer is at fault.
      baked `eth-no-auto-default.conf` + `eth-lan` profile prevent it; on older images use
      the §4 manual static profile. Confirm by detaching NM
      (`nmcli dev set eth0 managed no`) — a healthy link holds carrier indefinitely.
-   - **No `eth0` / no `usb 1-1` device** → kernel/HW layer, go on.
+   - **No `eth0` / no `usb 1-1` device** → kernel/HW layer. **First check: is it
+     the KNOWN enumeration intermittency?** (Active again as of 2026-07-05 —
+     0/3 v1.6.7 acceptance boots enumerated, CCS=0, on the same kernel that
+     enumerated 3/3 on 2026-07-03/04.) Reboot once or twice: if the chip
+     appears on another boot, it's the #17 ehci bring-up race, not your
+     change. If it never appears across several boots on a kernel that used
+     to enumerate, go on.
 
 2. **Did the build actually contain the fix?** Re-check the build log for
    `patching file drivers/usb/host/ehci-omap.c` and `.../mfd/omap-usb-host.c` with **no
