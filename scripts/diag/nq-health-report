@@ -64,11 +64,25 @@ def analyze(rows, events, snap_text):
             hang[0].get("t_mono"))
 
     # ---- LED frame frozen while daemon up ----
+    # A static frame alone is NOT a hang: the screensaver locks a static frame
+    # after ~300 s idle by design (the keepalive re-commits identical bytes).
+    # CRIT only when a distress co-signal (unresponsive socket / no CPU
+    # progress) fires in the same stalled samples; otherwise it is
+    # static-by-design and merely noted. (False CRIT on every idle capture
+    # before this guard, 2026-07-03.)
     frozen = [r for r in rows if r.get("led_stall", 0) and r["led_stall"] >= 6]
-    if frozen:
+    distressed = [r for r in frozen
+                  if r.get("nq_resp") == 0 or r.get("nq_progress") == 0]
+    if distressed:
         add("crit", "led_frozen",
-            f"LED frame unchanged >=6 samples on {len(frozen)} occasion(s) "
-            f"(first @ uptime {frozen[0].get('t_mono')}s)", frozen[0].get("t_mono"))
+            f"LED frame unchanged >=6 samples WITH distressed nexusqd "
+            f"(resp=0/no-progress) on {len(distressed)} occasion(s) "
+            f"(first @ uptime {distressed[0].get('t_mono')}s)",
+            distressed[0].get("t_mono"))
+    elif frozen:
+        add("info", "led_static",
+            f"LED frame static >=6 samples on {len(frozen)} occasion(s) with a "
+            f"responsive nexusqd — screensaver/static-by-design, not a fault")
 
     # ---- nexusqd no forward progress while alive (softer hang signal) ----
     stuck = 0
@@ -171,7 +185,8 @@ def analyze(rows, events, snap_text):
         "interval_s": interval,
         "temp_peak_C": (max(temps) / 1000 if temps else None),
         "nexusqd_hang_samples": len(hang),
-        "led_frozen_events": len(frozen),
+        "led_frozen_events": len(distressed),
+        "led_static_events": len(frozen) - len(distressed),
         "vdd_mismatch_samples": len(mism),
         "worst_severity": ("crit" if any(f["sev"] == "crit" for f in findings)
                            else "warn" if any(f["sev"] == "warn" for f in findings)

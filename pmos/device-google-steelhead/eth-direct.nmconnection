@@ -1,0 +1,27 @@
+# The documented direct PC<->Nexus cable workflow (host side: 10.42.0.1/24
+# or 10.0.0.1/24 on enp7s0). Manual activation only: nmcli c up eth-direct
+# — it must not fight eth-lan's DHCP on a real LAN.
+[connection]
+id=eth-direct
+uuid=5f69d9bc-836d-5705-af21-61e11fac0a74
+type=ethernet
+interface-name=eth0
+autoconnect=false
+
+[ipv4]
+method=manual
+address1=10.42.0.2/24
+address2=10.0.0.2/24
+never-default=true
+
+[ipv6]
+method=link-local
+
+[ethernet]
+# permanent = never touch the MAC. NM's default cloned "stable" MAC made
+# every (de)activation reset the LAN9500A MAC, which bounces the carrier,
+# and the carrier event resets the autoconnect-retries counter -> the
+# retry loop re-armed itself forever (observed 2026-07-04: ~34 s period
+# even with autoconnect-retries=1). With the hw MAC untouched the failed
+# activation settles quietly and nm-online completes.
+cloned-mac-address=permanent

@@ -232,7 +232,17 @@ sample() {
 			emit_event "$mono" crit nexusqd_hang "nexusqd PID $nq_pid alive but control socket unresponsive (state=$nq_state, progress=$nq_progress)"
 		fi
 		if [ "$LED_STALL" = 6 ]; then
-			emit_event "$mono" crit led_frozen "LED frame unchanged for 6 samples while nexusqd up (likely ring/AVR/nexusqd hang)"
+			# A static frame alone is NOT a hang: the screensaver locks a
+			# static frame after ~300 s idle BY DESIGN (the v1.6.5 keepalive
+			# re-commits identical bytes, so content never changes). Only
+			# escalate when a distress co-signal fires in the same sample;
+			# a later responsiveness drop is covered by nexusqd_hang above.
+			# (False CRIT on every idle capture before this guard, 2026-07-03.)
+			if [ "$nq_resp" = 0 ] || [ "$nq_progress" = 0 ]; then
+				emit_event "$mono" crit led_frozen "LED frame unchanged for 6 samples with distressed nexusqd (resp=$nq_resp progress=$nq_progress) - ring/AVR/nexusqd hang"
+			else
+				emit_event "$mono" info led_static "LED frame static for 6 samples with healthy nexusqd (resp=1) - screensaver/static-by-design, not a fault"
+			fi
 		fi
 		if [ "$PREV_NEXUSQD_RESTARTS" -ge 0 ] 2>/dev/null && [ "$nq_restarts" -gt "$PREV_NEXUSQD_RESTARTS" ]; then
 			emit_event "$mono" warn nexusqd_restart "nexusqd restarted (NRestarts $PREV_NEXUSQD_RESTARTS -> $nq_restarts)"

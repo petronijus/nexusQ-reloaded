@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=20
+pkgrel=21
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -44,6 +44,9 @@ source="
 	nexusq-wayland.sh
 	wifi-powersave-off.conf
 	wifi-stable-mac.conf
+	eth-lan.nmconnection
+	eth-direct.nmconnection
+	eth-no-auto-default.conf
 	brcmfmac-no-p2p.conf
 	brcmfmac-mpc-off.conf
 	pipewire-autostart-off.desktop
@@ -100,6 +103,20 @@ package() {
 	# documented ssh path broke (2026-07-02).
 	install -Dm644 "$srcdir"/wifi-stable-mac.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-stable-mac.conf
+
+	# eth0 is OWNED by the baked profiles (see the file comments): eth-lan
+	# (DHCP, one attempt per carrier event) + eth-direct (the static
+	# PC<->Nexus cable workflow, manual activation) + no-auto-default so NM
+	# never generates the "Wired connection 1" whose endless serverless-DHCP
+	# retry loop bounced the carrier every ~47 s and failed
+	# NetworkManager-wait-online (root-caused 2026-07-04; the LAN9500A
+	# itself is fully healthy again since batch 2b — task #17 closed).
+	install -Dm600 "$srcdir"/eth-lan.nmconnection \
+		"$pkgdir"/etc/NetworkManager/system-connections/eth-lan.nmconnection
+	install -Dm600 "$srcdir"/eth-direct.nmconnection \
+		"$pkgdir"/etc/NetworkManager/system-connections/eth-direct.nmconnection
+	install -Dm644 "$srcdir"/eth-no-auto-default.conf \
+		"$pkgdir"/etc/NetworkManager/conf.d/eth-no-auto-default.conf
 
 	# Audio: PulseAudio is the sound server (the pmOS audio backend). The
 	# pipewire package is present only as a library dependency, but its XDG
@@ -252,6 +269,9 @@ SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
 SKIP  wifi-stable-mac.conf
+SKIP  eth-lan.nmconnection
+SKIP  eth-direct.nmconnection
+SKIP  eth-no-auto-default.conf
 SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
 SKIP  pipewire-autostart-off.desktop
