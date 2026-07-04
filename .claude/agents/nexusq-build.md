@@ -33,7 +33,8 @@ the host first). Missing files do NOT fail the build — Phase 6 logs a
 unreachable over WiFi / without root ssh after a clean flash). Grep the build
 log for `Staged ssh-authorized-keys` + `Staged wifi.nmconnection`.
 _Pipeline proven end-to-end 2026-07-03: the flashed image auto-joined WiFi
-(stable `192.168.20.175`) and key-based `root@` ssh worked over gadget + WiFi._
+(final IP `192.168.20.195` on the factory-MAC `#29` image; `.175` on the
+interim `#27`) and key-based `root@` ssh worked over gadget + WiFi._
 
 ## The ONE correct way to run it
 

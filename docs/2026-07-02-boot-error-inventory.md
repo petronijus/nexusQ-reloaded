@@ -26,6 +26,16 @@ the WiFi factory-MAC, and carries two MAJOR CORRECTIONS (TWL6040 was never a
 dead codec; the NFC "dead hardware" verdict is RETRACTED). See the **"BATCH 2"**
 section at the very bottom, which is now the authoritative status.
 
+**FINAL UPDATE 2026-07-03: batch 2 shipped as batch "2b" — kernel pkgrel 28
+(uname `#29`) + device r20 — FLASHED AND ACCEPTED.** During the flash cycle the
+stock RAM-boot NFC discrimination test found the real B15 bug (**wrong pinmux
+pads**) → patch 0003 regenerated once more, NFC re-enabled and **WORKING**.
+B22/B23 verified gone, all batch-1 wins holding, factory MAC on air (final IP
+`192.168.20.195`). One NEW finding: **ethernet partial comeback** (carrier=1,
+flapping). See the **"BATCH 2b FLASHED + ACCEPTED"** section at the very
+bottom — now the authoritative status — and
+`docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
+
 ---
 
 ## RESOLVED since the 2026-06-20 inventory — no longer present in this boot
@@ -299,6 +309,10 @@ Raw capture: `postflash-dmesg.txt` (session scratchpad) +
 
 ## BATCH 2 — built 2026-07-03 (kernel pkgrel 27 → uname `#28`, device r20), NOT YET FLASHED
 
+_(Superseded the same day: `#28` was never flashed — the NFC pinmux fix bumped
+the kernel to pkgrel 28 and the image shipped as **batch 2b / uname `#29`**,
+flashed + accepted; see the final section below.)_
+
 Everything from the "Status after 2026-07-03" priority list except ethernet is
 now **fixed in tree and built** — kernel `linux-google-steelhead` pkgrel
 26→**27** (patches **0029–0031** added to `source=`+sha512sums; all 31 patches
@@ -357,3 +371,69 @@ for a manual fastboot power-cycle.** Evidence for the corrections:
    IP; `.175` is stale after this), and **everything from batch 1 still
    holding** (9/10 classes gone, ondemand @ exact OPP voltages, root ssh,
    zero failed units).
+
+---
+
+## BATCH 2b — FLASHED + ACCEPTED 2026-07-03: kernel pkgrel 28 (uname `#29`) + device r20 — **NFC FIXED**
+
+The pending checklist above was executed 2026-07-03, with one twist that became
+the day's headline: step ② (the **stock RAM-boot NFC discrimination test**)
+found the real B15 bug **before** the flash, so patch 0003 was regenerated once
+more and the kernel shipped at pkgrel **28** (`#29-postmarketOS`, all 31
+patches) instead of the built-but-never-flashed pkgrel 27/`#28`. Device pkg
+stayed r20. Full NFC story:
+`docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
+
+### B15 / NFC — FIXED AND WORKING (the pinmux was wrong, the chip is healthy)
+
+- **Root cause:** `nfc_pins` muxed IOPAD **`0x1b4`/`0x1b6`/`0x1b8`** — the
+  **dpm_emu3/4/5 debug pads** — instead of the real PN544 pads
+  **`usbb2_ulpitll_dat1/2/3` at `0x16a`/`0x16c`/`0x16e`** (gpio162 FW /
+  gpio163 VEN / gpio164 IRQ). The gpio controller was driven correctly but the
+  pads never carried the signals → the chip looked electrically dead from
+  every mainline probe. Both prior verdicts ("dead hardware" 2026-07-02;
+  "software parity complete, suspect board-level") are retracted — the
+  2026-07-02 "pins MATCH stock" audit had compared **logical pins**, not the
+  IOPAD offsets the DTS actually muxed.
+- **Discrimination evidence (stock RAM boot, `output/stock-adb-boot.img` +
+  musl i2c-tools over adb):** i2cdetect ACKs at **0x28 with VEN high**, silent
+  with VEN low, ACKs in fw-mode; the exact 6-byte core-reset frame **accepted,
+  rc=0**. The live stock `omap_mux` debugfs dump gave the pad truth
+  (`0x16a`/`0x16c` = `0x0003` OUTPUT|MODE3, `0x16e` = `0x011b`
+  INPUT_PULLUP|MODE3) — full dump preserved at
+  `reverse-eng/stock-omap-mux-full.txt` (gitignored local artifact).
+- **Fix:** `nfc_pins` corrected + `pn544@28` re-enabled (patch 0003, kernel
+  pkgrel 28). **Verified on `#29`:** `pn544_hci_i2c 2-0028: NFC: Detecting
+  nfc_en polarity` → `NFC: nfc_en polarity : active high` — **clean, no
+  fallback** — and `/sys/class/nfc/nfc0` exists. Tag-read test pending.
+
+### Acceptance results `#29` (capture `nq-captures/20260703-144228/`)
+
+- uname `#29`, `nproc=2`; **B22 `twl: not initialized` count = 0** (patch 0030
+  verified); **B23 "Skipping twl internal clock init" gone** (0031).
+- **All batch-1 wins holding:** no OUT-OF-RANGE / cpuidle error / clkctrl
+  ID>24 / deferred McPDM / PVDD dummies / vbus / Alternate-GPT lines.
+- **WiFi: factory MAC `f8:8f:ca:20:48:e1` on air** (the NM pin works) —
+  **NEW AND FINAL IP `192.168.20.195`**; pwrseq @4.5 s.
+- **CPU/power nominal:** `ondemand`, 1200 MHz @ **1 380 000 µV exact**,
+  cpuidle C1 state0; 69.8 °C idle / 91.8 °C peak under load.
+- **LED:** frame bin_attr readable (0029), fingerprint changes while
+  animating, `nq-healthd --once` `led_sum=4416`.
+- **Audio:** only pulseaudio; `Loopback` + `NexusQSpeaker` cards present.
+- **Remaining err/warn = exactly the known-open residue:** B4, B10, B16
+  (cold-boot ramoops), B21 (journald BPF/ACL, L2C, gpmc cs0, pmu affinity).
+
+### NEW findings (open after batch 2b)
+
+| Item | Evidence / analysis |
+|------|---------------------|
+| **Ethernet PARTIAL COMEBACK** (task #17, new lead) | `eth0` has **carrier=1 / operstate up for the first time since the v1.4.0 regression**: `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but it **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP never completes → `NetworkManager-wait-online.service` is the ONE failed unit this boot. Likely one of the batch clock changes revived enumeration. Follow-ups: root-cause the flap; ship an eth0 NM profile with **may-fail semantics** so wait-online tolerates a flapping/cable-less port. |
+| **`led_frozen` static-by-design guard** | The r20 fingerprint works, but the screensaver **intentionally locks a static frame after ~300 s idle** and the keepalive re-commits identical bytes → `led_frozen` CRIT fires on a healthy idle device (this capture's verdict=CRIT was exactly that: `led_sum=1120` static, `led_stall` climbing, `nq_resp=1` throughout). Fix: only CRIT when `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` + `scripts/diag/nq-health-report`). Until fixed, diagnostics must expect this false positive on idle devices. |
+
+### Status after batch 2b (end of 2026-07-03)
+
+The flashed image (kernel r28 `#29` + device r20) is the **v1.6.6 release
+candidate** — release pending Petr's go. Open, in priority order: the **eth0
+flap** root-cause + may-fail NM profile (task #17, now with a live lead), the
+**`led_frozen` guard**, then the standing B4/B10/B16/B21, U5 (watch), U6, U7,
+PA HDMI-audio UCM profile, deep cpuidle C2+, NFC tag-read test.

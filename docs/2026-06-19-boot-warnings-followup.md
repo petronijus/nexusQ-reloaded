@@ -375,3 +375,19 @@ r20 — **built, not flashed**. Two verdict corrections landed with it: B15's
 chip is **NOT concluded dead** anymore (retracted — under investigation) and
 the TWL6040 was **never a dead codec** (unused/unpopulated on steelhead).
 Authoritative: `docs/2026-07-02-boot-error-inventory.md` §"BATCH 2".
+
+## STATUS UPDATE 2026-07-03 (final) — batch 2b FLASHED + ACCEPTED (`#29`): B15/NFC FIXED
+
+Batch 2 shipped as **batch 2b** (kernel pkgrel 28 → `#29-postmarketOS`, device
+r20 — the built-but-never-flashed `#28` was superseded): during the flash cycle
+the stock RAM-boot test proved the PN544 healthy and exposed the real **B15**
+bug — `nfc_pins` muxed the **dpm_emu debug pads** (`0x1b4/0x1b6/0x1b8`) instead
+of `usbb2_ulpitll_dat1/2/3` (`0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached
+the chip. Fixed in patch 0003, node re-enabled: **NFC works** on `#29` (clean
+`nfc_en polarity : active high`, `nfc0` registered). **B22/B23 verified GONE**
+(`twl: not initialized` count = 0). NEW: **ethernet partial comeback** —
+carrier up for the first time since v1.4.0 but flapping, DHCP incomplete
+(task #17 lead). Remaining open set: B4, B10, B16 (cold boot), B21, U5
+(watching), U6, U7. Authoritative:
+`docs/2026-07-02-boot-error-inventory.md` §"BATCH 2b" +
+`docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.

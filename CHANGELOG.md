@@ -16,20 +16,41 @@ All notable changes to Nexus Q Reloaded. Format follows
 > `docs/2026-07-02-boot-error-inventory.md` ("FLASH-VERIFIED 2026-07-03");
 > stock-parity evidence: `docs/2026-07-02-stock-parity-voltage-wifi-idle.md`.
 >
-> **Batch 2 (2026-07-03) is BUILT but NOT YET FLASHED** — kernel
-> `linux-google-steelhead` pkgrel **27** (patches **0029–0031**; all 31 patches
-> apply GNU-patch-clean on pristine; next boot = uname `#28-postmarketOS`),
-> `device-google-steelhead` pkgrel **20**; all build gates green (incl. the
-> pinned-factory-MAC `wifi.nmconnection` verified by exact-string grep and the
-> sparse all-RAW round-trip). The device waits for a manual fastboot
-> power-cycle. Acceptance expectations: B22/B23 lines gone, a clean nq-healthd
-> capture (no false `led_frozen`/`vdd_mismatch`), the factory WiFi MAC on air
-> (new DHCP lease — the IP changes one final time from `.175`), ring
-> fingerprint via the readable `frame` attr, and everything from batch 1 still
-> holding. Also scheduled for the same power-cycle: the **stock RAM-boot NFC
-> discrimination test** (see the NFC retraction under Changed).
+> **Batch 2 shipped as batch "2b" — FLASHED AND ACCEPTED 2026-07-03**: during
+> the flash cycle the scheduled **stock RAM-boot NFC discrimination test** found
+> the real NFC bug (**wrong pinmux pads** — see the headline Fixed entry), so
+> patch 0003 was regenerated once more and the kernel went out at pkgrel **28**
+> (uname **`#29-postmarketOS`**, patches 0029–0031 + the NFC pinmux fix; all 31
+> patches apply GNU-patch-clean) with `device-google-steelhead` pkgrel **20**.
+> Acceptance on `#29` PASSED: **NFC detects cleanly**, B22/B23 lines gone
+> (`twl: not initialized` count = 0), all batch-1 wins holding, the **factory
+> WiFi MAC `f8:8f:ca:20:48:e1` on air** — final IP **`192.168.20.195`** — ring
+> fingerprint via the readable `frame` attr, CPU/power nominal (ondemand,
+> 1200 MHz @ 1 380 mV exact). One new finding: **ethernet partial comeback**
+> (see Known issues). Capture `nq-captures/20260703-144228/`; full story:
+> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`. This image is the
+> **v1.6.6 release candidate** (release pending).
 
 ### Fixed
+- **NFC (PN544) IS FIXED AND WORKING — the DTS muxed the WRONG PADS (B15,
+  closed for real 2026-07-03).** `nfc_pins` used IOPAD `0x1b4`/`0x1b6`/`0x1b8`
+  — the **dpm_emu3/4/5 debug pads** — while the real PN544 pads for
+  gpio162/163/164 are **`usbb2_ulpitll_dat1/2/3` at `0x16a`/`0x16c`/`0x16e`**:
+  the GPIO controller drove the right lines but the pads were never muxed to
+  GPIO, so VEN/FW/IRQ never reached the chip and it looked electrically dead
+  from every mainline probe (both prior verdicts — "dead hardware" 2026-07-02
+  and "software parity complete, suspect board-level" — retracted). Found by
+  the **stock RAM-boot discrimination test** (`fastboot boot
+  output/stock-adb-boot.img` + musl i2c-tools over adb: chip ACKs at 0x28 with
+  VEN high, exact 6-byte core-reset frame accepted rc=0, silent with VEN low)
+  and the live **`omap_mux` debugfs dump from the working stock kernel**
+  (`0x16a`/`0x16c` = `0x0003` OUTPUT|MODE3, `0x16e` = `0x011b`
+  INPUT_PULLUP|MODE3; full dump preserved locally at
+  `reverse-eng/stock-omap-mux-full.txt`). Fix: `nfc_pins` corrected + the
+  `pn544@28` node re-enabled (patch 0003 regenerated, kernel pkgrel **28**).
+  Verified on `#29`: `NFC: nfc_en polarity : active high` — **clean, no
+  fallback** — and `/sys/class/nfc/nfc0` exists. Tag-read test pending.
+  `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
 - **twl6030 `OUT OF RANGE! non mapped vsel for 1375000` ×4 + `twl: not
   initialized` ×4 (B12)** — two stock-parity kernel patches: **0023** stops
   latching a failed early SMPS_OFFSET efuse read as valid (and seeds steelhead
@@ -93,8 +114,8 @@ All notable changes to Nexus Q Reloaded. Format follows
   `ssh root@` works over both the USB gadget (`172.16.42.1`) and WiFi after a
   clean flash. (A reflash regenerates the device ssh host key — `ssh-keygen -R`
   the stale entries.)
-- **`twl: not initialized` ×22 burst @0.78 s (B22)** — patch **0030** _(batch 2,
-  built 2026-07-03, awaiting flash)_: `mfd: twl-core` exports a
+- **`twl: not initialized` ×22 burst @0.78 s (B22)** — patch **0030** _(verified
+  GONE on `#29` 2026-07-03 — zero occurrences in the whole boot)_: `mfd: twl-core` exports a
   **`twl_is_ready()`** predicate; OMAP4 `omap_twl.c` gates the SMPS_OFFSET
   efuse read attempt AND the patch-0014 retask poll on it, and the retask work
   latches the real efuse the moment twl is up. Full call-site accounting of the
@@ -103,26 +124,30 @@ All notable changes to Nexus Q Reloaded. Format follows
   check) + the zero off-voltage ×1 + 2 VP limits ×2 = 11, × 2 domains = 22;
   the +2 poll repeats came from the 0014 retask probe.
 - **`Skipping twl internal clock init and using bootloader value (unknown osc
-  rate)` (B23)** — patch **0031** _(batch 2, awaiting flash)_: twl-core
+  rate)` (B23)** — patch **0031** _(verified GONE on `#29` 2026-07-03)_: twl-core
   `clocks_init()` gated to the **twl4030 class**. The originally planned DTS fix
   (twl `fck = <&sys_clkin_ck>`) was investigated and **REJECTED as actively
   harmful**: on twl6030 the CFG_BOOT/PROTECT_KEY offsets resolve to unrelated
   Phoenix PM registers (absolute `0x24`/`0x2D`, next to PHOENIX_DEV_ON); no
   mainline twl6030 board wires an fck; stock printed the same line.
-- **nq-healthd `led_frozen` permanent false CRIT** — patch **0029** _(batch 2,
-  awaiting flash)_ makes the `leds-steelhead-avr` `frame` bin_attr **readable
+- **nq-healthd `led_frozen` permanent false CRIT** — patch **0029** _(verified on
+  `#29` 2026-07-03: frame attr readable, fingerprint changes while animating,
+  `led_sum=4416` sampled — but see the NEW static-by-design guard item under
+  Known issues)_ makes the `leds-steelhead-avr` `frame` bin_attr **readable
   (0644)** — the system previously had NO readable ring-state source (nexusqd
   renders exclusively through the write-only `frame`, so the classdev
   `brightness` files stay 0) — and `nq-healthd` (r20) fingerprints the frame
   attr (md5 + byte sum), keeping the brightness loop only as a pre-0029
   fallback.
 - **nq-healthd `vdd_mismatch` false warnings** (`device-google-steelhead` r20,
-  _batch 2, awaiting flash_) — freq/vdd were sampled non-atomically, so a DVFS
+  _verified on `#29` 2026-07-03: no false vdd warnings in the acceptance
+  capture_) — freq/vdd were sampled non-atomically, so a DVFS
   transition between the reads fabricated adjacent-OPP mismatches (17/71
   samples in the 2026-07-03 acceptance capture, healthy power path);
   `vdd_mismatch` is now evaluated only when `scaling_cur_freq` holds across the
   vdd read.
-- **WiFi factory-MAC identity restored** _(batch 2, awaiting flash — closes the
+- **WiFi factory-MAC identity restored** _(verified on `#29` 2026-07-03:
+  `f8:8f:ca:20:48:e1` on air, final IP **`192.168.20.195`** — closes the
   "open decision" from the acceptance run)_ — a live driver-reload test proved
   **brcmfmac/firmware IGNORES the nvram `macaddr=`** (the chip's OTP
   `14:7d:c5:3a:35:b5` always wins), so the fix is at the **NM layer**: the
@@ -152,8 +177,12 @@ All notable changes to Nexus Q Reloaded. Format follows
   (`output/stock-adb-boot.img`), scheduled for the imminent flash cycle. Node
   stays disabled meanwhile; the DTS comment is rewritten accordingly. Evidence:
   `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §4/§6.
+  **RESOLVED 2026-07-03 — the stock RAM-boot test found it: the chip is
+  HEALTHY, our pinmux was wrong** (dpm_emu pads instead of usbb2_ulpitll_dat).
+  The node is **re-enabled** and NFC **works** — see the headline entry under
+  Fixed.
 - **TWL6040 was NEVER a "dead codec" — the chip is unused/unpopulated on
-  steelhead** _(batch 2, awaiting flash)_: the stock 3.0.8 kernel contains
+  steelhead** _(flashed + boot-verified on `#29` 2026-07-03)_: the stock 3.0.8 kernel contains
   **ZERO** twl6040/AUDPWRON code (whole-image string+symbol sweep over
   `reverse-eng/vmlinux.bin`), the twldata codec pdata slot is NULL
   (`steelhead_twldata+0x24` @ `0xc0719b30`), and stock's i2c1 board info
@@ -164,8 +193,8 @@ All notable changes to Nexus Q Reloaded. Format follows
   stock evidence either), and the defconfig drops `TWL6040_CORE` /
   `SND_SOC_TWL6040` / `SND_SOC_OMAP_ABE_TWL6040` / `CLK_TWL6040`. DTB compiled
   with zero twl6040 refs (verified in the binary).
-- **i2c1–4 scl/sda pads `PIN_INPUT_PULLUP` → `PIN_INPUT`** _(batch 2, awaiting
-  flash)_ — stock-exact (mux `0x100`; the board has external pulls).
+- **i2c1–4 scl/sda pads `PIN_INPUT_PULLUP` → `PIN_INPUT`** _(flashed on `#29`
+  2026-07-03)_ — stock-exact (mux `0x100`; the board has external pulls).
 - `device-google-steelhead` depends + `i2c-tools`, `gptfdisk` (both needed for
   live diagnostics/GPT work).
 
@@ -175,16 +204,16 @@ All notable changes to Nexus Q Reloaded. Format follows
   sweep of the v1.6.5-era boot (`6.12.12 #26`) opened **B12–B21 / U4–U7**; the
   fix batch above was flash-verified 2026-07-03 on `#27`
   (B12/B13/B14/B15/B17/B18/B19/B20/U4 + B8 all confirmed gone). Opened by the
-  acceptance run and **already fixed in tree by batch 2 (built 2026-07-03,
-  AWAITING FLASH + re-acceptance)**: **B22** `twl: not initialized` ×22 burst
-  @0.78 s (patch 0030), **B23** `Skipping twl internal clock init…` (patch
+  acceptance run and **fixed by batch 2b — flashed + re-accepted on `#29`
+  2026-07-03**: **B22** `twl: not initialized` ×22 burst @0.78 s (patch 0030 —
+  count 0 on `#29`), **B23** `Skipping twl internal clock init…` (patch
   0031 — NOT the originally planned twl-fck DTS wiring, which proved harmful),
   the two **nq-healthd tooling bugs** (`led_frozen` false CRIT — patch 0029 +
   healthd r20 frame fingerprint; `vdd_mismatch` non-atomic sampling — healthd
   r20), and the **WiFi factory-MAC** identity (NM `cloned-mac-address` pin;
-  brcmfmac ignores nvram `macaddr=`). Until the `#28` image is flashed the
-  device still shows all four. Still genuinely open: **U5** bluetoothd
-  config error (did not reproduce on `#27` — watching), BT BD_ADDR is the
+  brcmfmac ignores nvram `macaddr=`; on air on `#29`, final IP
+  `192.168.20.195`). Still genuinely open: **U5** bluetoothd
+  config error (did not reproduce on `#27`/`#29` — watching), BT BD_ADDR is the
   default-pattern `43:30:A0:00:00:00` (no per-device address); the PulseAudio
   **HDMI-audio UCM profile**, **U6** gkr-pam ssh-session noise, **U7**
   nsresourced bpf-lsm, **B16** ramoops invalid-buffer error (cold boot), **B21**
@@ -193,12 +222,28 @@ All notable changes to Nexus Q Reloaded. Format follows
   deep cpuidle C2+ (HS secure dispatcher). **B8** (Alternate GPT invalid) is
   **FIXED on-device 2026-07-03** (p13 shrunk 33 sectors + backup GPT relocated,
   atomic `sgdisk`; survived the reboot — no "Alternate GPT" line on `#27`).
-  **Ethernet still dead** (LAN9500A never enumerates, PORTSC CCS=0 — the v1.4.0
-  regression, task #17). Thermal headroom is thin under sustained dual-core
+  Thermal headroom is thin under sustained dual-core
   load: peak **91.8 °C** vs the 100 °C passive trip (~8 °C) — genuine but
   expected; watch it.
   _(The morning claim "WiFi dead on the live unit" was **wrong** — the IP had
   moved due to the randomized-MAC DHCP lease; corrected same day.)_
+- **Ethernet PARTIAL COMEBACK on `#29` (2026-07-03)** — `eth0` shows
+  **carrier=1 / operstate up for the first time since the v1.4.0 regression**
+  (task #17): `smsc95xx … eth0: Link is Up - 100Mbps/Full` @74.5 s — but the
+  link **flaps** (Down within ~1 s, NM disconnect/connect loop) and DHCP never
+  completes, making `NetworkManager-wait-online.service` the one failed unit
+  of the boot. Likely one of the batch clock changes revived enumeration — a
+  strong new lead for task #17. Open follow-ups: root-cause the flap; ship an
+  eth0 NM profile with may-fail semantics so wait-online tolerates a
+  flapping/cable-less port.
+- **`led_frozen` still needs a static-by-design guard** — the r20 frame
+  fingerprint works, but the screensaver intentionally locks a **static**
+  frame after ~300 s idle and the keepalive re-commits identical bytes, so
+  `led_frozen` CRIT fires on a healthy idle device (the 2026-07-03 acceptance
+  capture's verdict=CRIT was exactly this). Fix direction: only CRIT when
+  `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` +
+  `scripts/diag/nq-health-report`). Until then, expect this false positive on
+  idle devices.
 
 ## [1.6.5] - 2026-07-01
 

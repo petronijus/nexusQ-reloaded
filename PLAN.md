@@ -18,16 +18,22 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > See `CHANGELOG.md` [Unreleased] + `docs/2026-07-02-boot-error-inventory.md`
 > §"FLASH-VERIFIED 2026-07-03".
 >
-> **BATCH 2 — built 2026-07-03, AWAITING FLASH (kernel `#28`, device r20):**
-> fixes all four newly-opened items (B22 patch 0030, B23 patch 0031, healthd
-> led/vdd bugs patch 0029 + r20, factory WiFi MAC via NM `cloned-mac-address` —
-> brcmfmac ignores nvram `macaddr=`), and carries two **major corrections**:
-> the TWL6040 was **never a dead codec** (unused/unpopulated on steelhead —
-> nodes + config removed) and the NFC **"dead hardware" verdict is RETRACTED**
-> (under investigation; stock RAM-boot discrimination test pending). After the
-> flash the WiFi IP changes one final time from `.175` (factory MAC
-> `f8:8f:ca:20:48:e1` on air). See `docs/2026-07-02-boot-error-inventory.md`
-> §"BATCH 2" + `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §6.
+> **BATCH 2b — FLASHED + ACCEPTED 2026-07-03 (kernel pkgrel 28 = uname `#29`,
+> device r20): NFC IS FIXED AND WORKING.** The stock RAM-boot discrimination
+> test (run during the flash cycle) proved the PN544 healthy and exposed the
+> real bug: our `nfc_pins` muxed the **dpm_emu debug pads**
+> (`0x1b4/0x1b6/0x1b8`) instead of the real `usbb2_ulpitll_dat1/2/3` pads
+> (`0x16a/0x16c/0x16e`) — fixed in patch 0003, node re-enabled; `#29` detects
+> `nfc_en polarity : active high` cleanly, `nfc0` registered. Batch 2 items all
+> verified: B22 gone (patch 0030, `twl: not initialized` count = 0), B23 gone
+> (0031), healthd led/vdd fixes live (0029 + r20), **factory WiFi MAC
+> `f8:8f:ca:20:48:e1` on air — final IP `192.168.20.195`**. TWL6040 correction
+> shipped (nodes/config removed). NEW: **ethernet partial comeback** — carrier
+> up for the first time since v1.4.0 but flapping, DHCP never completes
+> (task #17 lead); and `led_frozen` still needs a static-by-design guard.
+> This image is the **v1.6.6 release candidate** (release pending). See
+> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` +
+> `docs/2026-07-02-boot-error-inventory.md` §"BATCH 2b".
 >
 > **Current release: v1.6.5 (2026-07-01).** A batch of device-side fixes + companion
 > features on the v1.6.3 image (an interim **v1.6.4** was flashed internally to test the LED
@@ -115,15 +121,15 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | 🟠 needs audio-EDID sink | _(Updated 2026-07-02)_ the ALSA card registers, but with no audio-capable EDID sink PulseAudio can't build a profile for `platform-omap-hdmi-audio.1.auto` (item U4). Speaker path (TAS5713) is the working audio output |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
-| WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency, 5 GHz carries ~26–30 Mbit/s (2.4 GHz has the BT-coexist bulk stall). _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2, awaiting flash: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the IP changes one final time after the flash_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
+| WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency, 5 GHz carries ~26–30 Mbit/s (2.4 GHz has the BT-coexist bulk stall). _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
 | **TAS5713 amplifier** | ✅ works | _(Updated 2026-06-29, v1.6.1)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed**. The v1.6.0 2× too-fast bug (McBSP2 `CLKGDV=0` + 256-BCLK frame → FSYNC at 2× rate) is **fixed by kernel patch 0022** (CLKGDV derived from the real fclk); on-device 60 s now plays in 60.00 s. librespot/Spotify outputs here via the 48 kHz `nexusq` PCM. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` |
 | Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-03)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). The U5 `bluetoothd: Failed to set default system config for hci0` error did NOT appear on the `#27` boot (watching, not closed). Minor identity item: BD_ADDR is the default-pattern `43:30:A0:00:00:00` — no per-device address set |
-| TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (batch 2, awaiting flash). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
-| NFC (PN544) | 🟠 under investigation | _(Retracted 2026-07-03 — was "🔴 DEAD HARDWARE", 2026-07-02)_ no i2c ACK at 0x28 under any VEN/fw mode, **but** software parity with stock is now COMPLETE (pins/polarity/timing MATCH; stock has NO software power path — pdata = 3 gpios, zero regulator calls; our regulator state matches stock bit-for-bit), so the no-ACK is **unexplained**, and we never conclude dead hardware. Next: NFC test under the stock RAM boot (`output/stock-adb-boot.img`), scheduled for the imminent flash cycle. DTS node stays `status = "disabled"` meanwhile (B15 line gone since the 2026-07-03 flash) |
+| TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
+| NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
-| Ethernet (LAN9500A) | 🟠 sw bug, not dead HW | _(Updated 2026-06-28)_ the "dead hardware" verdict was **wrong** — fixed in v1.1.0/v1.3.0 (patches 0006/0012); **regressed** in v1.4.0 by the cpufreq boot-timing change (down on current builds, fix tracked 1.4.1) |
+| Ethernet (LAN9500A) | 🟠 sw bug, not dead HW | _(Updated 2026-07-03)_ the "dead hardware" verdict was **wrong** — fixed in v1.1.0/v1.3.0 (patches 0006/0012); **regressed** in v1.4.0 by the cpufreq boot-timing change. **PARTIAL COMEBACK on `#29` (2026-07-03):** carrier=1/operstate up for the first time since the regression, but the link **flaps** (~1 s Up/Down loop) and DHCP never completes → `NetworkManager-wait-online` fails; likely a batch-2 clock change revived enumeration (task #17 lead). Follow-ups: root-cause the flap + eth0 NM profile with may-fail semantics |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 
 ## Plan (by priority)
@@ -205,13 +211,13 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       ZERO twl6040/AUDPWRON code (whole-image string+symbol sweep), the twldata
       codec pdata slot is NULL (`steelhead_twldata+0x24` @ `0xc0719b30`), stock
       i2c1 board info registers only `twl6030@0x48`, and gpio_127 as AUDPWRON
-      had no stock evidence. The missing ACK is stock-correct. Batch 2 (built,
-      awaiting flash) DELETES the node + ABE card + `twl6040_pins` from the DTS
+      had no stock evidence. The missing ACK is stock-correct. Batch 2 (flashed
+      2026-07-03 on `#29`) DELETES the node + ABE card + `twl6040_pins` from the DTS
       and drops TWL6040_CORE/SND_SOC_TWL6040/SND_SOC_OMAP_ABE_TWL6040/
       CLK_TWL6040 from the defconfig. Evidence:
       `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §6.2.
 
-### 6. NFC + temp sensor  ✅/🟠 (NFC re-opened 2026-07-03)
+### 6. NFC + temp sensor  ✅ (NFC FIXED 2026-07-03 — wrong pinmux pads)
 - [x] TMP101: lm75 module added, binds, reads 41.75 °C on the board
 - [x] PN544: NFC modules added (NFC_SHDLC=y was the missing dep), driver
       binds, `nfc0` registers. 🟠 "could not detect nfc_en polarity" warning
@@ -233,6 +239,19 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       (`output/stock-adb-boot.img`), scheduled for the imminent flash cycle;
       then i2c timing/pads diff; VBAT pin measurement as last resort.
       See `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §6.3.
+- [x] **✅ FIXED 2026-07-03 — the stock RAM-boot test settled it: the chip is
+      HEALTHY, our pinmux was WRONG.** `nfc_pins` muxed the dpm_emu3/4/5 debug
+      pads (`0x1b4/0x1b6/0x1b8`); the real pads are `usbb2_ulpitll_dat1/2/3`
+      (`0x16a/0x16c/0x16e` — from the live stock `omap_mux` dump,
+      `reverse-eng/stock-omap-mux-full.txt`), so VEN/FW/IRQ never reached the
+      chip and every mainline-side probe was meaningless. Under stock: ACK at
+      0x28 with VEN high, core-reset frame accepted rc=0. Fixed in patch 0003
+      (kernel pkgrel 28, "batch 2b"), `pn544@28` re-enabled; on `#29`:
+      `nfc_en polarity : active high` clean, `nfc0` registered.
+      See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` +
+      `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §7.
+- [ ] NFC follow-up: read an actual tag (`nfc-list`/neard) to exercise the
+      RF path end-to-end.
 
 ### 7. TOSLINK / SPDIF output (audio, nice-to-have)
 Optical out is driven by the OMAP4's own McASP block -- fully independent of

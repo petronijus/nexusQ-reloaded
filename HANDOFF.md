@@ -4,7 +4,73 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-03 later (latest): BATCH 2 BUILT (kernel `#28`, device r20) — AWAITING FLASH + acceptance; TWL6040 + NFC verdicts corrected
+## Session 2026-07-03 final (latest): BATCH 2b FLASHED + ACCEPTED — **NFC IS FIXED AND WORKING** (kernel r28 `#29` + device r20)
+
+The batch-2 image below was flashed and **accepted 2026-07-03** — with one
+twist: the scheduled **stock RAM-boot NFC discrimination test** (step ② of the
+pending checklist) found the real NFC bug BEFORE the flash, so patch 0003 was
+regenerated once more and the kernel shipped at pkgrel **28** (uname
+**`#29-postmarketOS`**, all 31 patches; the built-but-never-flashed pkgrel
+27/`#28` was superseded). Device pkg stayed **r20**. The flashed image is the
+**v1.6.6 release candidate — release pending Petr's go.** Full detail:
+`docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + the inventory
+doc's "BATCH 2b" section. Capture: `nq-captures/20260703-144228/`.
+
+- **THE HEADLINE — NFC FIXED: the DTS muxed the WRONG PADS.** `nfc_pins` used
+  IOPAD `0x1b4`/`0x1b6`/`0x1b8` (the **dpm_emu3/4/5 debug pads**); the real
+  PN544 pads for gpio162/163/164 are **`usbb2_ulpitll_dat1/2/3` at
+  `0x16a`/`0x16c`/`0x16e`**. Mainline drove the gpios correctly at the
+  controller, but the pads were never muxed to GPIO → VEN/FW/IRQ never reached
+  the chip → it looked electrically dead from every mainline-side probe. Found
+  by the stock RAM boot (`fastboot boot output/stock-adb-boot.img` + musl
+  i2c-tools over adb: **ACK at 0x28 with VEN high**, the exact 6-byte
+  core-reset frame accepted rc=0, silent with VEN low, ACK in fw-mode) + the
+  live **`omap_mux` debugfs dump from the working stock kernel**
+  (`0x16a`/`0x16c` = `0x0003` OUTPUT|MODE3, `0x16e` = `0x011b`
+  INPUT_PULLUP|MODE3; full dump preserved at
+  `reverse-eng/stock-omap-mux-full.txt`, gitignored). Fix: `nfc_pins`
+  corrected + `pn544@28` re-enabled (patch 0003, pkgrel 28). On `#29`:
+  `NFC: nfc_en polarity : active high` — **clean, no fallback** —
+  `/sys/class/nfc/nfc0` exists. Two wrong verdicts retracted on the way
+  ("dead hardware" 2026-07-02 — it drove gpios into unmuxed pads; "software
+  parity complete, suspect board-level" — the §4 audit compared logical pins,
+  not IOPAD offsets). **Lesson: the stock RAM-boot discrimination test is the
+  gold standard**; third win for never-conclude-dead-hardware (ethernet,
+  TWL6040, NFC).
+- **Acceptance `#29` PASSED:** uname `#29`, `nproc=2`; **B22 `twl: not
+  initialized` count = 0** (patch 0030), **B23 gone** (0031); all batch-1 wins
+  holding (no OUT-OF-RANGE / cpuidle / clkctrl ID>24 / deferred / PVDD / vbus
+  / Alternate-GPT). CPU/power nominal: `ondemand`, **1200 MHz @ 1 380 000 µV
+  exact**, C1 state0, 69.8 °C idle / 91.8 °C load peak. LED: frame bin_attr
+  readable (0029), fingerprint changes while animating, `led_sum=4416` via
+  `nq-healthd --once`. Audio: only pulseaudio; Loopback + NexusQSpeaker cards.
+  Remaining err/warn = exactly the known-open residue (B4, B10, B16 cold-boot
+  ramoops, B21, journald BPF/ACL).
+- **WiFi: factory MAC `f8:8f:ca:20:48:e1` on air** (the NM pin works) —
+  **NEW AND FINAL IP: `192.168.20.195`**; pwrseq @4.5 s.
+- **NEW FINDING — ethernet PARTIAL COMEBACK (task #17 lead):** `eth0` has
+  **carrier=1/operstate up for the first time since the v1.4.0 regression** —
+  but the link **flaps** (`Link is Up` @74.5 s → `Link is Down` within ~1 s,
+  repeating; NM disconnect/connect loop) and DHCP never completes, making
+  `NetworkManager-wait-online.service` the ONE failed unit this boot. Likely a
+  batch clock change revived enumeration. Follow-ups: root-cause the flap +
+  ship an eth0 NM profile with **may-fail semantics** so wait-online tolerates
+  a flapping/cable-less port.
+- **OPEN — `led_frozen` needs a static-by-design guard:** the r20 fingerprint
+  works, but the screensaver intentionally locks a static frame after ~300 s
+  idle and the keepalive re-commits identical bytes → `led_frozen` CRIT fires
+  on a healthy idle device (this acceptance capture's verdict=CRIT was exactly
+  that; `nq_resp=1` throughout). Fix: only CRIT when `nq_resp=0` or
+  `nexusqd_no_progress` co-fires (`nq-healthd` +
+  `scripts/diag/nq-health-report`). Until then diagnostics must expect this
+  false positive.
+- **Next steps:** release **v1.6.6** (pending Petr), NFC tag-read test, the
+  eth0 flap root-cause + may-fail profile, the led_frozen guard; then the
+  standing B4/B10/B16/B21, U5 (watch), U6, U7, PA HDMI-UCM, deep cpuidle C2+.
+
+---
+
+## Session 2026-07-03 later: BATCH 2 BUILT (kernel `#28`, device r20) — was "awaiting flash" (superseded: shipped as batch 2b/`#29`, see above); TWL6040 + NFC verdicts corrected
 
 Batch 2 of the boot-error cleanup is **implemented and built, NOT yet flashed**
 — the device waits for a **manual fastboot power-cycle by Petr**. Kernel
@@ -131,8 +197,8 @@ capture `nq-captures/20260703-005812/`.
 - **Next steps:** fix the B22 twl burst + B23 twl fck; fix the two nq-healthd
   bugs; decide the WiFi factory-MAC bake; then **release v1.6.6**
   (`PUBLIC_RELEASE=1`). Ethernet (task #17) remains the standing regression.
-  _→ ALL implemented + built later 2026-07-03 (batch 2, see the session above);
-  awaiting flash + acceptance before the release._
+  _→ ALL implemented + built later 2026-07-03 (batch 2, see the sessions above);
+  flashed + accepted the same day as batch 2b/`#29` — NFC fixed en route._
 
 ---
 

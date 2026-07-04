@@ -106,9 +106,10 @@ blind to nexusqd's writes — see the bug note below).
 (crit/warn/info) and, where meaningful, the `t_mono` uptime so the report can
 print the per-sample timeline around it.
 
-> **Known nq-healthd bugs (found by the 2026-07-03 acceptance run; FIXED in
-> tree 2026-07-03 — kernel patch 0029 + `device-google-steelhead` r20, built,
-> awaiting flash — but still live on any `#27`/r19-or-older device):**
+> **Known nq-healthd bugs (found by the 2026-07-03 acceptance run; FIXED
+> on-device since the `#29` flash 2026-07-03 — kernel patch 0029 +
+> `device-google-steelhead` r20 — but still live on any `#27`/r19-or-older
+> device):**
 > - **`led_frozen` is a permanent FALSE CRIT on nexusqd r5+ (≤ r19)** — healthd
 >   fingerprints the led_classdev `brightness` attributes, but nexusqd commits
 >   frames via the **write-only `frame` bin_attr**, so the sampled `led_sum` is
@@ -117,11 +118,21 @@ print the per-sample timeline around it.
 >   patch 0029 makes `frame` readable (0644) — the system previously had NO
 >   readable ring-state source — and healthd fingerprints it (md5 + byte sum),
 >   keeping the brightness loop only as a pre-0029 fallback.
+>   ⚠️ **Still OPEN on r20 (2026-07-03): a static-by-design guard.** The
+>   screensaver intentionally locks a **static** frame after ~300 s idle and
+>   the v1.6.5 keepalive re-commits identical bytes, so the (now real)
+>   fingerprint legitimately stops changing on a healthy idle device →
+>   `led_frozen` CRIT is a false positive there (the `#29` acceptance capture
+>   ended verdict=CRIT on exactly this, `nq_resp=1` throughout). Planned fix
+>   (`nq-healthd` + `nq-health-report`): escalate `led_frozen` to CRIT only
+>   when `nq_resp=0` or `nexusqd_no_progress` co-fires. Until then, a
+>   `led_frozen` CRIT with a responsive daemon on an idle device is expected.
 > - **`vdd_mismatch` can be fabricated by non-atomic sampling (≤ r19)** — freq
 >   and vdd are read at different instants, so a DVFS transition between the
 >   reads looks like a mismatch (17/71 samples in the acceptance capture).
 >   **Fix (r20):** the sample is judged only when `scaling_cur_freq` holds
->   across the vdd read.
+>   across the vdd read. Verified clean in the `#29` acceptance capture
+>   (2026-07-03, `nq-captures/20260703-144228/`).
 
 > **`librespot_restart` ≠ the "Spotify skips" symptom.** `librespot_restart` is a
 > real *service* flap (the unit's `NRestarts` grew). **Historical (FIXED in v1.6.1):**

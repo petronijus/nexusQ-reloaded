@@ -52,6 +52,18 @@ RE toolkit (Bash + python + capstone; `pip install capstone` if missing):
   `0x431BC` → udelay(2)). State the µs, not the raw const.
 - **omap_mux_init_signal(name, flags)** / **omap_mux_init_gpio(gpio, flags)**
   calls reveal pad routing and direction.
+- ⚠️ **Pinmux claims are verified at the IOPAD-OFFSET level, never at the
+  logical-gpio level** (lesson 2026-07-03, the NFC miss): an audit that
+  matched stock's gpio numbers/polarities/timings passed while our DTS muxed
+  the WRONG PADS (`nfc_pins` used dpm_emu3/4/5 `0x1b4/0x1b6/0x1b8` instead of
+  `usbb2_ulpitll_dat1/2/3` `0x16a/0x16c/0x16e`) — the gpio controller was
+  driven correctly but the signals never left the SoC. Always resolve which
+  pad offset the DTS `OMAP4_IOPAD(...)` entries actually touch and compare
+  against a **live stock `omap_mux` debugfs dump**
+  (`reverse-eng/stock-omap-mux-full.txt`, full dump captured 2026-07-03 via
+  the stock RAM boot). When mainline says a chip is electrically dead, the
+  **stock RAM-boot discrimination test** (`fastboot boot
+  output/stock-adb-boot.img` + adb probes) is the gold-standard check.
 
 ### B. Our mainline port (the thing under test)
 - `kernel/dts/omap4-steelhead.dts` — DT (regulators, phys, pinmux, devices).

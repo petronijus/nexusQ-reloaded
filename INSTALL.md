@@ -106,7 +106,8 @@ optional -- find the device on your LAN as hostname `steelhead`.
 > ignores the nvram `macaddr=` too). The v1.6.6 image therefore pins the
 > **factory MAC** at the NM layer instead
 > (`cloned-mac-address=F8:8F:CA:20:48:E1` in the baked profile /
-> `scripts/gen-wifi-profile.sh`).
+> `scripts/gen-wifi-profile.sh`) — verified on air 2026-07-03 on the
+> v1.6.6-candidate flash.
 
 ## What works in v0.1.0
 
@@ -122,9 +123,9 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
 | Companion app / remote control | ✅ working (v1.6.3) — volume, LED theme + brightness, now-playing; via the on-device `nexusq-control` LAN bridge (TCP 45015, mDNS `_nexusq._tcp`, reachable over WiFi since v1.6.5) + a Flutter phone/desktop app (built separately, **not** in the image) |
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
-| NFC (PN544) | 🟠 under investigation — no i2c ACK on the reference unit (2026-07-02), but the "dead hardware" verdict was **retracted 2026-07-03** (software parity with stock is complete, cause unexplained); DTS node disabled meanwhile |
+| NFC (PN544) | ✅ **fixed 2026-07-03, ships in v1.6.6** — the chip was never dead: the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), found via a stock RAM-boot probe; clean `nfc_en` polarity detect + `nfc0` registers on the v1.6.6-candidate kernel. On v1.6.5 the node is still disabled |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
-| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, currently down on cpufreq builds (v1.4.0 boot-timing regression, fix tracked 1.4.1; re-confirmed still down 2026-07-03) |
+| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, down since the v1.4.0 boot-timing regression (fix tracked). **Partial comeback 2026-07-03** on the v1.6.6-candidate kernel: carrier up for the first time since the regression, but the link flaps and DHCP doesn't complete yet |
 | TWL6040 codec (headset) | ⚪ not populated/unused on steelhead (corrected 2026-07-03 — the stock kernel never drove it; no headset path by design, was wrongly "dead hardware") |
 | SMP (2nd CPU core) | ✅ dual-core works (v1.2.0; `nproc=2`) |
 

@@ -6,6 +6,21 @@ other kernel work (e.g. SMP second-core) is in flight. First made to work in
 change, work the **Regression triage** at the bottom — it tells you *which layer*
 broke.
 
+> **Status 2026-07-03 — PARTIAL COMEBACK on kernel `#29` (task #17 lead).**
+> The v1.4.0 cpufreq boot-timing regression had eth fully dead (no enumeration,
+> PORTSC CCS=0) on every build since. On the batch-2b `#29` boot, `eth0`
+> **enumerates AND gets carrier for the first time since the regression**:
+> `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but the link
+> **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP
+> never completes, so `NetworkManager-wait-online.service` fails. Suspect one
+> of the batch-2 clock changes (patch 0025 ti-sysc clkdev / `CLK_TWL=y` /
+> the VC-voltage work) revived enumeration. Open: root-cause the flap
+> (triage §5 step 1 "flapping" now applies — but note this flap is at the
+> *link* layer in dmesg, not only NM DHCP bounce); ship an eth0 NM profile
+> with may-fail semantics so wait-online tolerates a flapping/cable-less port.
+> Evidence: `nq-captures/20260703-144228/` +
+> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
+
 The chip is a USB-ethernet adapter soldered behind the OMAP4 EHCI port 1:
 `OMAP4 EHCI port1 → SMSC USB3320 ULPI PHY (38.4 MHz) → LAN9500A (0424:9e00) → RJ45`.
 

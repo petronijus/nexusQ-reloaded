@@ -72,9 +72,14 @@ Findings are tagged by `kind`; interpret them like this:
   `#27`/r19** (2026-07-03 finding): healthd fingerprints led_classdev
   `brightness`, but nexusqd commits via the write-only `frame` bin_attr →
   `led_sum` is structurally 0. There, ignore `led_frozen`; judge the ring by
-  `nq_resp`/`nexusled status`. **Fixed in batch 2 (awaiting flash):** kernel
-  patch 0029 makes `frame` readable and nq-healthd r20 fingerprints it — on
-  `#28`/r20+ the fingerprint (and `led_frozen`) is real. Similarly,
+  `nq_resp`/`nexusled status`. **On `#29`/r20+ (flashed 2026-07-03)** kernel
+  patch 0029 makes `frame` readable and nq-healthd r20 fingerprints it — the
+  fingerprint is real, **BUT `led_frozen` CRIT still false-fires on any idle
+  device**: the screensaver locks a static frame after ~300 s and the
+  keepalive re-commits identical bytes, so a healthy idle device trips it
+  (`nq_resp=1` throughout — the `#29` acceptance capture's CRIT was this).
+  Believe `led_frozen` only when `nq_resp=0`/`nexusqd_no_progress` co-fires;
+  the guard is a planned nq-healthd/nq-health-report fix. Similarly,
   `vdd_mismatch` warnings on ≤r19 can be non-atomic freq/vdd sampling
   artifacts (fixed in r20 by re-checking freq across the vdd read).
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is
@@ -101,10 +106,11 @@ Findings are tagged by `kind`; interpret them like this:
   DVFS transition; persistent = a VC-bridge / TPS62361 power-path problem
   (path B). Cross-check the `POWER_REGULATORS` + `omap_voltage/ti-abb/tps`
   sections of `snapshot.txt`.
-  ⚠️ Known tooling bug (2026-07-03): freq and vdd are sampled non-atomically, so
+  ⚠️ Known tooling bug (2026-07-03, images ≤ r19): freq and vdd are sampled
+  non-atomically, so
   a DVFS transition between the reads fabricates a mismatch — re-read freq after
-  vdd before believing a warning. Fix pending in
-  `pmos/device-google-steelhead/nq-healthd`.
+  vdd before believing a warning. **Fixed in nq-healthd r20** (on device since
+  the `#29` flash, 2026-07-03).
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
 - **governor_not_scaling** — load was high but freq never left 350 MHz; the

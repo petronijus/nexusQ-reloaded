@@ -49,14 +49,14 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
-| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager. On v1.6.5 the DHCP IP wanders (NM randomized-MAC → fresh lease per boot — that was the 2026-07-02 "dead WiFi" scare); **fixed + verified on device 2026-07-03** (stable MAC/IP, ships in v1.6.6 — which also pins the **factory MAC** at the NM layer, since brcmfmac ignores the nvram `macaddr=`) |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager. On v1.6.5 the DHCP IP wanders (NM randomized-MAC → fresh lease per boot — that was the 2026-07-02 "dead WiFi" scare); **fixed + verified on device 2026-07-03** (stable MAC/IP, ships in v1.6.6 — which pins the **factory MAC** at the NM layer, verified on air, since brcmfmac ignores the nvram `macaddr=`) |
 | 🔵 **Bluetooth** (BCM4330) | ✅ | |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
-| 📡 **NFC** (PN544) | 🟠 | under investigation — no i2c ACK on the reference unit, but software parity with the stock kernel is complete, so the cause is unexplained (the 2026-07-02 "dead hardware" verdict was retracted 2026-07-03); DTS node disabled meanwhile |
+| 📡 **NFC** (PN544) | ✅ | **fixed 2026-07-03** — the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), so the chip only *looked* dead; found via a stock RAM-boot probe + live stock pinmux dump. Clean `nfc_en` polarity detect, `nfc0` registers · ships in v1.6.6 (tag-read test pending) |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
-| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down on cpufreq builds (v1.4.0 regression, fix tracked; still down 2026-07-03: no enumeration, PORTSC CCS=0) |
+| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down since the v1.4.0 cpufreq regression, fix tracked. **Partial comeback 2026-07-03** (v1.6.6-candidate kernel `#29`): carrier is up for the first time since the regression, but the link flaps and DHCP doesn't complete yet |
 | 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
 | 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
 

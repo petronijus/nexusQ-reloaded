@@ -50,14 +50,14 @@ ping -c1 -W2 172.16.42.1
 - Prefer the repo's own `scripts/diag/nqctl` if it already knows the link
   (`nqctl status`, `nqctl run '<cmd>'`).
 - Fallbacks: **serial** `/dev/ttyACM0` @115200 (`steelhead login:`, user/147147) —
-  works even with no net; **WiFi** vlan20 — stable **`192.168.20.175`** since
-  2026-07-03 (stable-MAC image; on the `#27` boot the on-air MAC is the chip's
-  OTP `14:7d:c5:3a:35:b5`, NOT the factory `f8:8f:ca:20:48:e1`). ⚠️ **After the
-  pending batch-2 flash (`#28`, built 2026-07-03) the device pins the factory
-  MAC `f8:8f:ca:20:48:e1` (NM cloned-mac) → new lease, `.175` goes stale.**
+  works even with no net; **WiFi** vlan20 — stable FINAL IP
+  **`192.168.20.195`** since the 2026-07-03 batch-2b flash (`#29`): the image
+  pins the **factory MAC `f8:8f:ca:20:48:e1`** (NM cloned-mac, verified on
+  air). Older images: the interim `#27` used the chip's OTP
+  `14:7d:c5:3a:35:b5` (lease `.175`); v1.6.5 randomized the MAC per boot.
   If it moved, find the lease in OPNsense Kea
   (`opnsense-api GET /api/kea/leases4/search`) by hostname `steelhead` or the
-  MAC per the image (OTP on `#27`, factory on `#28`+; on the older v1.6.5
+  MAC per the image (factory on `#29`+, OTP on `#27`; on the older v1.6.5
   image the MAC is per-boot randomized and the IP wanders — hostname-match
   only). This host may not route into vlan20.
 - If NOTHING answers on any transport after a few minutes, STOP and report that
@@ -100,6 +100,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`. Known
   regression: on-board eth went down (carrier=0) in the cpufreq patch series.
+  ⚠️ Since `#29` (2026-07-03) it has a **partial comeback**: carrier=1/up for
+  the first time since v1.4.0, but the link **flaps** (~1 s Up/Down loop) and
+  DHCP never completes — expect `NetworkManager-wait-online.service` as a
+  failed unit from this (known finding, not a new fault; task #17 has a live
+  lead). Report the flap pattern, don't call carrier=1 "fixed".
+- **NFC** (NXP PN544, i2c 2-0028) — **works since `#29` (2026-07-03**, the
+  pinmux fix; on older kernels the node is disabled/mis-muxed):
+  `ls /sys/class/nfc/` → `nfc0` present; dmesg should show
+  `NFC: nfc_en polarity : active high` **without** a "Could not detect …
+  fallback" line (the fallback line = the pre-fix symptom). Tag-read
+  (`nfc-list`) still untested — RF path not yet exercised.
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
   **`ondemand`** since the 2026-07-03 flash — verified, with
@@ -166,10 +177,16 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `frame` bin_attr**, so the sampled `led_sum` is structurally 0 and the frozen
   heuristic always trips — there, **ignore `led_frozen`** and judge the ring by
   `nq_resp`/`nexusled status` (+ eyes); do NOT re-diagnose it as a hang.
-  **FIXED in batch 2 (built 2026-07-03, awaiting flash):** kernel patch 0029
-  makes `frame` readable (0644) and nq-healthd r20 fingerprints it (md5 + byte
-  sum) — on `#28`/r20 and later the LED fingerprint is real and `led_frozen`
-  is trustworthy again.
+  **On `#29`/r20+ (flashed 2026-07-03)** patch 0029 makes `frame` readable
+  (0644) and nq-healthd r20 fingerprints it (md5 + byte sum) — the LED
+  fingerprint is real. ⚠️ **BUT `led_frozen` CRIT is STILL a false positive on
+  any idle device** (open, needs a static-by-design guard): the screensaver
+  intentionally locks a **static** frame after ~300 s idle and the keepalive
+  re-commits identical bytes, so the fingerprint legitimately stops changing
+  while healthy (`nq_resp=1`; the `#29` acceptance capture's verdict=CRIT was
+  exactly this). Treat `led_frozen` as real ONLY when `nq_resp=0` or
+  `nexusqd_no_progress` co-fires — that guard is the planned fix in
+  `nq-healthd` + `scripts/diag/nq-health-report`.
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old
@@ -183,7 +200,8 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   ⚠️ Known tooling bug (2026-07-03, on images up to r19): healthd samples freq
   and vdd **non-atomically**, so a DVFS transition between the two reads
   fabricates a mismatch — re-read freq after vdd before believing a warning.
-  **Fixed in nq-healthd r20** (batch 2, awaiting flash): the sample is only
+  **Fixed in nq-healthd r20** (flashed 2026-07-03 with `#29`; clean in the
+  acceptance capture): the sample is only
   judged when `scaling_cur_freq` holds across the vdd read.
 - **thermal_throttle / thermal_crit** — at/over 100 °C passive / 125 °C critical.
 - **governor_not_scaling** — load was high but freq stuck at 350 MHz (cpufreq stall);

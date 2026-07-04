@@ -20,6 +20,11 @@ TWL6040 turned out to be **unused/unpopulated on steelhead** — never a dead
 codec. B22 is fixed by patch 0030 in batch 2, built 2026-07-03, awaiting
 flash.)_
 
+_(Final update 2026-07-03: the §6.3 stock RAM-boot test ran — **the NFC chip
+is healthy; our DTS muxed the wrong pads. NFC is FIXED and working on `#29`**
+(batch 2b, kernel pkgrel 28). See the new **§7**. B22/B23 verified gone on
+`#29`.)_
+
 ## 1. The OMAP4460 voltage-domain table (fixes B12)
 
 Stock per-domain PMIC descriptors (`omap4_mpu_pmic` / `omap4_iva_pmic` /
@@ -90,6 +95,16 @@ dispatcher) is a **future project**, not attempted here.
 > TWL6040" comparison collapsed too — the TWL6040 was never a dead chip (§6).
 > Next discriminator: NFC under the stock RAM boot (§6.3). The original
 > 2026-07-02 text below is kept as the record.
+>
+> **RESOLVED 2026-07-03 (later) — NFC FIXED; this section's "pins MATCH"
+> verdict needs a correction: the NAMES matched but the audit compared
+> LOGICAL pins, not the IOPAD offsets our DTS used.** The stock RAM boot
+> (§6.3, executed) proved the chip healthy, and the live stock `omap_mux`
+> dump showed our `nfc_pins` muxed the **dpm_emu3/4/5 debug pads**
+> (`0x1b4`/`0x1b6`/`0x1b8`) instead of the real `usbb2_ulpitll_dat1/2/3`
+> pads (`0x16a`/`0x16c`/`0x16e`) — so gpio162/163/164 were driven correctly
+> at the controller but never reached the chip. Full story + fix in **§7**
+> below and `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
 
 Stock `nfc_gpios` (`0xc0719750`): en=**163** active-high, fw=**162**,
 irq=**164** pull-up; `pn544_dev_ioctl` VEN timing 20/60 ms. Our DTS/driver
@@ -174,3 +189,53 @@ kernel is confirmed to have i2c-dev via kallsyms). If stock ACKs, diff further
 (i2c timing/pads); hardware measurement of the VBAT pin is the last resort.
 The DTS pn544 comment was rewritten accordingly (node stays disabled so a
 known-cause probe failure doesn't pollute every boot).
+
+## 7. 2026-07-03 (flash cycle) — the stock RAM boot ran: chip HEALTHY, our PINMUX was wrong → NFC FIXED
+
+The §6.3 discrimination test was executed during the batch-2 flash cycle and
+settled the question in one session:
+
+### 7.1 Stock RAM-boot evidence (the chip is alive)
+
+`fastboot boot output/stock-adb-boot.img`, musl-static i2c-tools pushed over
+adb. Under the stock kernel on THIS unit:
+
+- `i2cdetect`: **ACK at 0x28 with VEN (gpio163) high**; **silent with VEN
+  low**; ACK in fw-download mode (FW=1 + VEN=1) too;
+- the driver's exact **6-byte core-reset frame accepted, rc=0**.
+
+So every 2026-07-02 mainline-side "no ACK" measurement was true but
+meaningless — the mainline kernel was never actually driving the chip.
+
+### 7.2 The pinmux discovery (live `omap_mux` dump from the working kernel)
+
+The stock kernel's `omap_mux` debugfs dump — taken while NFC was ACKing —
+gave the ground truth our board-file reading never had:
+
+| Pad | Offset | Stock value | Meaning |
+|-----|--------|-------------|---------|
+| `usbb2_ulpitll_dat1` | **0x16a** | `0x0003` | OUTPUT \| MODE3 → **gpio_162 FW** |
+| `usbb2_ulpitll_dat2` | **0x16c** | `0x0003` | OUTPUT \| MODE3 → **gpio_163 VEN** |
+| `usbb2_ulpitll_dat3` | **0x16e** | `0x011b` | INPUT_PULLUP \| MODE3 → **gpio_164 IRQ** |
+
+Our DTS `nfc_pins` had **`0x1b4`/`0x1b6`/`0x1b8`** — the **dpm_emu3/4/5**
+debug pads. The §4 audit passed because it verified the **logical** gpio
+numbers, polarities and timings (which DID match stock) — it never checked
+which **IOPAD offsets** our DTS was muxing for those gpios. Correction of
+method for future audits: **a pinmux claim is only verified against pad
+offsets from a live mux dump**, not against logical pin numbers.
+
+The full dump is preserved at **`reverse-eng/stock-omap-mux-full.txt`**
+(gitignored local artifact, non-redistributable dir) — the reference for any
+future pinmux question on this board.
+
+### 7.3 Fix + verification
+
+`nfc_pins` corrected to the real pads + `pn544@28` re-enabled (patch 0003
+regenerated; kernel pkgrel **28** → uname `#29`, "batch 2b"). On `#29`:
+`NFC: Detecting nfc_en polarity` → **`NFC: nfc_en polarity : active high`**
+(clean, no fallback), `/sys/class/nfc/nfc0` registered. **NFC works**; the
+tag-read test is the remaining follow-up. Third confirmation of the
+never-conclude-dead-hardware rule (ethernet, TWL6040, now NFC) — and the
+**stock RAM-boot discrimination test is the gold standard** for
+hardware-vs-software questions on this device.
