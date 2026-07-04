@@ -4,10 +4,27 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.7] - 2026-07-05
+
+> Device pkg **r21** (kernel unchanged: `6.12.12-r28`, `#29-postmarketOS`).
+> Flashed + accepted 2026-07-05: zero failed units across 3 boots (the baked
+> eth profiles handle both a present and an ABSENT ethernet chip gracefully —
+> `NetworkManager-wait-online` green either way), `led_static` guard verified
+> live (33× info, zero false CRIT in 91 samples), NFC clean probe, WiFi factory
+> MAC/.195, CPU/power nominal.
+
+### Known issues
+- **LAN9500A enumeration intermittency is BACK (task #17 REOPENED, narrowed):**
+  on the acceptance boots the chip did not enumerate at all (USB CCS=0, 0/3
+  boots; the 2026-07-03/04 boots enumerated 3/3 with the byte-identical
+  kernel). The NM retry-loop half of #17 IS fixed (this release); the
+  remaining half is the kernel/ehci bring-up race — the direct-cable
+  `eth-direct` workflow was verified end-to-end on 2026-07-04 on an
+  enumerated boot and is unaffected when the chip appears.
 
 ### Fixed
-- **ETHERNET RESOLVED — task #17 CLOSED (2026-07-04).** The `#29` "partial
+- **ETHERNET NM-LAYER RESOLVED (2026-07-04; task #17 narrowed, see Known
+  issues).** The `#29` "partial
   comeback / carrier flap" was fully explained and fixed. The LAN9500A/driver
   is **fully healthy** (revived by batch 2b): with NM detached, carrier held
   90+ s with **zero transitions**, 100Mbps/Full, 0 rx/tx errors, under
