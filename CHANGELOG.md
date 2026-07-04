@@ -4,15 +4,14 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.6] - 2026-07-04
 
 > The whole 2026-07-02 boot-error fix batch below was **flashed 2026-07-03 and
 > the acceptance run PASSED** — uname `#27-postmarketOS`, zero failed units,
 > **9/10 targeted dmesg error classes gone** (only the `twl: not initialized`
 > line survived, mutated into the new B22 burst). Kernel
 > `linux-google-steelhead` pkgrel **26** (patches 0023–0028),
-> `device-google-steelhead` pkgrel **19**. This batch ships as **v1.6.6** at
-> release time. Inventory + per-item verification:
+> `device-google-steelhead` pkgrel **19**. Inventory + per-item verification:
 > `docs/2026-07-02-boot-error-inventory.md` ("FLASH-VERIFIED 2026-07-03");
 > stock-parity evidence: `docs/2026-07-02-stock-parity-voltage-wifi-idle.md`.
 >
@@ -28,8 +27,8 @@ All notable changes to Nexus Q Reloaded. Format follows
 > fingerprint via the readable `frame` attr, CPU/power nominal (ondemand,
 > 1200 MHz @ 1 380 mV exact). One new finding: **ethernet partial comeback**
 > (see Known issues). Capture `nq-captures/20260703-144228/`; full story:
-> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`. This image is the
-> **v1.6.6 release candidate** (release pending).
+> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`. This image
+> **is v1.6.6** (kernel `#29-postmarketOS`, r28 + device r20).
 
 ### Fixed
 - **NFC (PN544) IS FIXED AND WORKING — the DTS muxed the WRONG PADS (B15,
