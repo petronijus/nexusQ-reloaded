@@ -4,7 +4,9 @@ version_files: []                 # tag-only versioning (kernel port milestones)
 changelog: CHANGELOG.md
 artifacts:
   mode: local                     # built locally (pmbootstrap/Docker), not in GitHub CI
-  local_build: ./docker-build.sh
+  # PUBLIC_RELEASE=1: release artifacts must NOT contain the baked personal
+  # access (WiFi PSK / ssh keys) — the preflight below verifies it.
+  local_build: PUBLIC_RELEASE=1 ./docker-build.sh
   # Build emits output/boot.img + output/google-steelhead.img; the release step
   # renames to the versioned scheme and sparse-converts the rootfs (raw2simg.py),
   # matching the v0.1.0 assets:

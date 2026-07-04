@@ -164,7 +164,12 @@ else
     : > "$DEV_APORT/ssh-authorized-keys"
     echo "  WARNING: private/access/authorized_keys absent -> no ssh keys baked"
 fi
-if [ -f "$SRC/private/access/wifi.nmconnection" ]; then
+if [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
+    # Already truncated above -- NEVER stage the WiFi PSK into a release image.
+    # (This guard must mirror the ssh one: a bare `if -f private/...` here once
+    # re-staged the PSK right over the truncated placeholder. 2026-07-04.)
+    :
+elif [ -f "$SRC/private/access/wifi.nmconnection" ]; then
     cp "$SRC/private/access/wifi.nmconnection" "$DEV_APORT/wifi.nmconnection"
     echo "  Staged wifi.nmconnection (private overlay)"
 else
