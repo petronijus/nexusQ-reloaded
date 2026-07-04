@@ -98,13 +98,18 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   radio/firmware working from network not configured.) brcmfmac wants
   `brcm/brcmfmac4330-sdio.bin` + nvram `brcm/brcmfmac4330-sdio.txt` (NOT the bcmdhd
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).
-- **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`. Known
-  regression: on-board eth went down (carrier=0) in the cpufreq patch series.
-  ⚠️ Since `#29` (2026-07-03) it has a **partial comeback**: carrier=1/up for
-  the first time since v1.4.0, but the link **flaps** (~1 s Up/Down loop) and
-  DHCP never completes — expect `NetworkManager-wait-online.service` as a
-  failed unit from this (known finding, not a new fault; task #17 has a live
-  lead). Report the flap pattern, don't call carrier=1 "fixed".
+- **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
+  ✅ **RESOLVED 2026-07-04 (task #17 closed)** — the link is healthy
+  (100Mbps/Full, 0 errors, stable carrier); the historical "flap" was NM's
+  auto-generated-profile DHCP retry loop (fixed by baked eth0 profiles, device
+  r21 — hot-deployed on the current unit). Healthy picture now: eth0 sits
+  quietly at NM "disconnected" (or "connected" if `eth-direct` was activated /
+  a real LAN gave a lease), carrier stable, and
+  **`NetworkManager-wait-online` PASSES** (`nm-online -s` rc=0) — a wait-online
+  failure is a REAL fault again, report it. A recurring ~47 s
+  activate/deactivate loop in the journal = the r21 profiles are missing
+  (pre-r21 image). NB eth0's hw MAC is random per boot (no MAC EEPROM) — a
+  changing LAN lease is expected, not a fault.
 - **NFC** (NXP PN544, i2c 2-0028) — **works since `#29` (2026-07-03**, the
   pinmux fix; on older kernels the node is disabled/mis-muxed):
   `ls /sys/class/nfc/` → `nfc0` present; dmesg should show
@@ -179,14 +184,16 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `nq_resp`/`nexusled status` (+ eyes); do NOT re-diagnose it as a hang.
   **On `#29`/r20+ (flashed 2026-07-03)** patch 0029 makes `frame` readable
   (0644) and nq-healthd r20 fingerprints it (md5 + byte sum) — the LED
-  fingerprint is real. ⚠️ **BUT `led_frozen` CRIT is STILL a false positive on
-  any idle device** (open, needs a static-by-design guard): the screensaver
-  intentionally locks a **static** frame after ~300 s idle and the keepalive
-  re-commits identical bytes, so the fingerprint legitimately stops changing
-  while healthy (`nq_resp=1`; the `#29` acceptance capture's verdict=CRIT was
-  exactly this). Treat `led_frozen` as real ONLY when `nq_resp=0` or
-  `nexusqd_no_progress` co-fires — that guard is the planned fix in
-  `nq-healthd` + `scripts/diag/nq-health-report`.
+  fingerprint is real. ✅ **Static-by-design guard LIVE since 2026-07-04**
+  (healthd r21, hot-deployed + `scripts/diag/nq-health-report`): the
+  screensaver intentionally locks a **static** frame after ~300 s idle and the
+  keepalive re-commits identical bytes, so a healthy idle device's fingerprint
+  legitimately stops changing — that now emits **info `led_static`**, NOT a
+  CRIT; `led_frozen` CRIT fires only when `nq_resp=0`/`nq_progress=0` co-fires
+  (i.e. a `led_frozen` CRIT is now believable — treat it as a real
+  ring/AVR/nexusqd hang). Expect `led_static` info lines on idle captures;
+  they are healthy. (Only a device running healthd ≤ r20 still shows the old
+  idle false CRIT.)
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old

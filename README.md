@@ -56,7 +56,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | 📡 **NFC** (PN544) | ✅ | **fixed 2026-07-03** — the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), so the chip only *looked* dead; found via a stock RAM-boot probe + live stock pinmux dump. Clean `nfc_en` polarity detect, `nfc0` registers · ships in v1.6.6 (tag-read test pending) |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
-| 🌐 **Ethernet** (LAN9500A) | 🟠 | **not** dead HW — down since the v1.4.0 cpufreq regression, fix tracked. **Partial comeback 2026-07-03** (v1.6.6-candidate kernel `#29`): carrier is up for the first time since the regression, but the link flaps and DHCP doesn't complete yet |
+| 🌐 **Ethernet** (LAN9500A) | ✅ | **resolved 2026-07-04** — the v1.4.0 regression ended with the v1.6.6 kernel (carrier back), and the remaining "flap" was NetworkManager's serverless-DHCP retry loop, not the link: fixed by baked eth0 NM profiles (`eth-lan` DHCP + `eth-direct` static for the PC↔Q cable, `ssh root@10.42.0.2`). 100Mbps/Full, 0 errors. Note: the chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
 | 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
 | 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
 
@@ -174,7 +174,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.1 ── ✦ TAS5713 audio fixed + Spotify Connect baked in           2026-06-29
 1.6.2 ── ✦ LED music visualizer reacts to playback                 2026-06-30
 1.6.3 ── ✦ companion app + LAN control bridge                       2026-06-30
-1.6.5 ── ✦ breathing themes + 5 visualisations · LED keepalive · companion/WiFi  ← latest  2026-07-01
+1.6.5 ── ✦ breathing themes + 5 visualisations · LED keepalive · companion/WiFi   2026-07-01
+1.6.6 ── ✦ NFC fixed (pinmux) · boot-error cleanup · factory MAC on air  ← latest  2026-07-04
 ```
 
 ---

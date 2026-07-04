@@ -423,12 +423,12 @@ stayed r20. Full NFC story:
 - **Remaining err/warn = exactly the known-open residue:** B4, B10, B16
   (cold-boot ramoops), B21 (journald BPF/ACL, L2C, gpmc cs0, pmu affinity).
 
-### NEW findings (open after batch 2b)
+### NEW findings (opened after batch 2b — BOTH CLOSED 2026-07-04)
 
 | Item | Evidence / analysis |
 |------|---------------------|
-| **Ethernet PARTIAL COMEBACK** (task #17, new lead) | `eth0` has **carrier=1 / operstate up for the first time since the v1.4.0 regression**: `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but it **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP never completes → `NetworkManager-wait-online.service` is the ONE failed unit this boot. Likely one of the batch clock changes revived enumeration. Follow-ups: root-cause the flap; ship an eth0 NM profile with **may-fail semantics** so wait-online tolerates a flapping/cable-less port. |
-| **`led_frozen` static-by-design guard** | The r20 fingerprint works, but the screensaver **intentionally locks a static frame after ~300 s idle** and the keepalive re-commits identical bytes → `led_frozen` CRIT fires on a healthy idle device (this capture's verdict=CRIT was exactly that: `led_sum=1120` static, `led_stall` climbing, `nq_resp=1` throughout). Fix: only CRIT when `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` + `scripts/diag/nq-health-report`). Until fixed, diagnostics must expect this false positive on idle devices. |
+| **Ethernet PARTIAL COMEBACK** (task #17, new lead) — **FIXED 2026-07-04, task #17 CLOSED** | `eth0` has **carrier=1 / operstate up for the first time since the v1.4.0 regression**: `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but it **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP never completes → `NetworkManager-wait-online.service` is the ONE failed unit this boot. Likely one of the batch clock changes revived enumeration. Follow-ups: root-cause the flap; ship an eth0 NM profile with **may-fail semantics** so wait-online tolerates a flapping/cable-less port. → **Resolution 2026-07-04:** the link/driver is fully healthy (NM detached: 90+ s carrier, zero transitions, 0 errors); the flap was NM's auto-generated "Wired connection 1" serverless-DHCP retry loop (MAC reset on deactivate bounces the carrier, the carrier event re-arms autoconnect — ~47 s period, 14 811 journal lines/29 h). Fixed by baked profiles (`no-auto-default=eth0`, `eth-lan` with `cloned-mac-address=permanent` + `autoconnect-retries=1`, `eth-direct` static) in device r21 (hot-deployed); `nm-online -s` rc=0, `ssh root@10.42.0.2` works. `docs/2026-07-04-ethernet-resolved-and-led-guard.md`. |
+| **`led_frozen` static-by-design guard** — **SHIPPED 2026-07-04** | The r20 fingerprint works, but the screensaver **intentionally locks a static frame after ~300 s idle** and the keepalive re-commits identical bytes → `led_frozen` CRIT fires on a healthy idle device (this capture's verdict=CRIT was exactly that: `led_sum=1120` static, `led_stall` climbing, `nq_resp=1` throughout). Fix: only CRIT when `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` + `scripts/diag/nq-health-report`). → **Shipped 2026-07-04 exactly so** (healthd r21 hot-deployed + nq-health-report; healthy static frame → info `led_static`); regression-tested on THIS capture: verdict CRIT → OK, `led_static … 25 occasion(s)`. |
 
 ### Status after batch 2b (end of 2026-07-03)
 
@@ -437,3 +437,11 @@ candidate** — release pending Petr's go. Open, in priority order: the **eth0
 flap** root-cause + may-fail NM profile (task #17, now with a live lead), the
 **`led_frozen` guard**, then the standing B4/B10/B16/B21, U5 (watch), U6, U7,
 PA HDMI-audio UCM profile, deep cpuidle C2+, NFC tag-read test.
+
+**UPDATE 2026-07-04:** v1.6.6 was **released** (tag `v1.6.6`), and the two
+image-specific open items above are **CLOSED** — ethernet resolved (task #17
+closed; the flap was an NM config loop, fixed by baked eth0 profiles in device
+r21) and the `led_frozen` guard shipped (healthd r21 + nq-health-report).
+Details: `docs/2026-07-04-ethernet-resolved-and-led-guard.md`. Remaining open:
+the standing B4/B10/B16/B21, U5 (watch), U6, U7, PA HDMI-audio UCM profile,
+deep cpuidle C2+, NFC tag-read test.

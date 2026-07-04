@@ -17,8 +17,12 @@ Delegate device discovery to the **`nexusq-connect` subagent** (Agent tool,
 of the main context. Pass any hint the user gave (a last-known IP, "use USB",
 "it's on wifi").
 
-The agent owns: checking fastboot/adb state, then probing **eth-direct** (carrier,
-host IP `10.42.0.1`, known device IPs, IPv6 link-local, mDNS `steelhead.local`),
+The agent owns: checking fastboot/adb state, then probing **eth-direct**
+(RESOLVED 2026-07-04, first-class again: host has the persistent
+`eth-direct-host` profile on `enp7s0`, the device bakes an `eth-direct` static
+profile 10.42.0.2/24 — `autoconnect=no` by design, so if ssh fails over the
+cable but another path works, `nmcli c up eth-direct` on the device, then
+`ssh root@10.42.0.2`; device eth0's hw MAC is random per boot — no MAC EEPROM),
 **USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
 changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
 serial console as a fallback), and **WiFi** (stable FINAL IP **`192.168.20.195`**
@@ -28,11 +32,10 @@ via the `opnsense-api` helper, matching hostname `steelhead` or the MAC per the
 flashed image: the **factory `f8:8f:ca:20:48:e1` on `#29`+** (NM-pinned,
 verified on air), the chip's OTP `14:7d:c5:3a:35:b5` on the interim `#27`
 (lease `.175`); on the older v1.6.5 image the lease MAC is
-randomized per boot and the IP wanders, hostname-match only). NB since `#29`
-device eth0 can show carrier=1 yet be unusable (link flaps, no DHCP) — verify
-eth-direct with a real ssh. It
+randomized per boot and the IP wanders, hostname-match only). It
 verifies the winner with a real `ssh` probe and returns the single best connect
-command + fallbacks. It does NOT change anything on the device.
+command + fallbacks. It does NOT change anything on the device (the one allowed
+exception: activating the baked `eth-direct` profile).
 
 When it reports back, relay the connect command to the user (and use it yourself
 for any follow-up shell work). See [[nexusq-device-access]], [[nexusq-usb-gadget-rename]],

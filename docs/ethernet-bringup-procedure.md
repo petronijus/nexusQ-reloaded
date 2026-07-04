@@ -6,20 +6,29 @@ other kernel work (e.g. SMP second-core) is in flight. First made to work in
 change, work the **Regression triage** at the bottom — it tells you *which layer*
 broke.
 
-> **Status 2026-07-03 — PARTIAL COMEBACK on kernel `#29` (task #17 lead).**
-> The v1.4.0 cpufreq boot-timing regression had eth fully dead (no enumeration,
-> PORTSC CCS=0) on every build since. On the batch-2b `#29` boot, `eth0`
-> **enumerates AND gets carrier for the first time since the regression**:
-> `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but the link
-> **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP
-> never completes, so `NetworkManager-wait-online.service` fails. Suspect one
-> of the batch-2 clock changes (patch 0025 ti-sysc clkdev / `CLK_TWL=y` /
-> the VC-voltage work) revived enumeration. Open: root-cause the flap
-> (triage §5 step 1 "flapping" now applies — but note this flap is at the
-> *link* layer in dmesg, not only NM DHCP bounce); ship an eth0 NM profile
-> with may-fail semantics so wait-online tolerates a flapping/cable-less port.
-> Evidence: `nq-captures/20260703-144228/` +
-> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.
+> **Status 2026-07-04 — RESOLVED. Task #17 CLOSED.**
+> The v1.4.0 regression (no enumeration, PORTSC CCS=0) ended with batch 2b
+> (`#29`, 2026-07-03) — likely one of the batch-2 clock changes revived
+> enumeration — and the remaining "carrier flap" was root-caused 2026-07-04 as
+> **NOT a link-layer fault at all**: the LAN9500A/driver is **fully healthy**
+> (NM detached: carrier held 90+ s with zero transitions, 100Mbps/Full, 0 rx/tx
+> errors, under `ondemand` — which also rules out the cpufreq-timing theory on
+> the current image; autosuspend already pinned by patch 0006; boot
+> enumeration textbook). The flap was **NetworkManager's auto-generated "Wired
+> connection 1" DHCP retry loop** on the serverless direct cable: 45 s DHCP
+> timeout → deactivate resets the cloned "stable" MAC → the MAC write bounces
+> the LAN9500A carrier → the carrier event resets NM's autoconnect-retries
+> counter → reactivate (self-arming, ~47 s period, 14 811 journal lines in
+> 29 h; also the `NetworkManager-wait-online` failure). Fixed by the baked
+> eth0 NM profiles in `device-google-steelhead` r21 — see §4 (the new
+> zero-touch workflow) and
+> `docs/2026-07-04-ethernet-resolved-and-led-guard.md`. Verified live:
+> eth0 settles at "disconnected" quietly, `nm-online -s` rc=0,
+> `ssh root@10.42.0.2` over the cable works.
+> _(Superseded status 2026-07-03 "partial comeback, link flaps" — the dmesg
+> Up/Down lines were real but NM-induced, not a driver/HW wobble. Evidence:
+> `nq-captures/20260703-144228/` +
+> `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md`.)_
 
 The chip is a USB-ethernet adapter soldered behind the OMAP4 EHCI port 1:
 `OMAP4 EHCI port1 → SMSC USB3320 ULPI PHY (38.4 MHz) → LAN9500A (0424:9e00) → RJ45`.
@@ -129,12 +138,40 @@ ssh root@172.16.42.1 'systemctl reboot'
 
 ---
 
-## 4. Bring up + reach the device over ethernet (direct PC↔Nexus cable)
+## 4. Reach the device over ethernet (direct PC↔Nexus cable) — zero-touch since 2026-07-04
 
 The Nexus RJ45 is cabled directly to `petronijus-PC` NIC **`enp7s0`** (Intel I225-V,
-100 Mbps). A direct cable has **no DHCP server**, so use static IPs both ends. Without
-this, NetworkManager sits in "connecting (getting IP)", times out ~every 45 s and
-**bounces the carrier** (the "flap" — it is NOT a hardware fault).
+100 Mbps). A direct cable has **no DHCP server** — this is exactly the topology that
+armed the old NM retry loop (see the Status note). Since `device-google-steelhead`
+**r21** (hot-deployed 2026-07-04; baked in the next image) eth0 is owned by three
+shipped config files, and the host has a persistent profile too — no ad-hoc setup
+on either end:
+
+- **Device (baked):** `eth-no-auto-default.conf` (`no-auto-default=eth0` — NM never
+  generates "Wired connection 1"), `eth-lan.nmconnection` (DHCP, `dhcp-timeout=30`,
+  `autoconnect-retries=1`, **`cloned-mac-address=permanent`** — the key: no MAC
+  churn → no carrier bounce → the retry counter sticks; on a serverless wire the
+  port goes quiet instead of looping), `eth-direct.nmconnection` (static
+  **10.42.0.2/24 + 10.0.0.2/24**, never-default, `autoconnect=no`).
+- **Host (persistent NM profile `eth-direct-host` on `enp7s0`):** 10.42.0.1/24 +
+  10.0.0.1/24, never-default, autoconnect — replaces the old
+  `managed no` + manual `ip addr add` dance.
+
+**Workflow:** activate the device-side static profile once per boot (over the
+gadget/WiFi, or a serial shell), then ssh over the cable:
+```bash
+ssh root@172.16.42.1 'nmcli c up eth-direct'   # manual by design — must not
+                                               # fight eth-lan's DHCP on a real LAN
+ssh root@10.42.0.2
+```
+Verified 2026-07-04: ping 3/3 (0.77 ms avg), ssh works, `nm-online -s` rc=0.
+
+⚠️ **eth0's hw MAC is RANDOM per boot** (the LAN9500A has no MAC EEPROM), and
+`cloned-mac-address=permanent` puts that random address on the wire — so **on a
+real LAN the DHCP lease/IP changes every boot**. If a stable LAN identity is ever
+wanted, pin a fixed `cloned-mac-address=XX:…` in `eth-lan.nmconnection`.
+
+<details><summary>Pre-r21 manual procedure (reference — needed only on older images)</summary>
 
 **Device side (persistent, survives reboot):**
 ```bash
@@ -148,7 +185,10 @@ nmcli con up eth-direct
 sudo nmcli dev set enp7s0 managed no
 sudo ip addr add 10.42.0.1/24 dev enp7s0 ; sudo ip link set enp7s0 up
 ```
-Then: `ssh root@10.42.0.2`.
+Then: `ssh root@10.42.0.2`. Without a static profile, NM sits in "connecting
+(getting IP)", times out ~every 45 s and **bounces the carrier** (the historical
+"flap" — never a hardware fault).
+</details>
 
 **Verify:**
 ```bash
@@ -168,8 +208,12 @@ Work top-down; each step says which layer is at fault.
 
 1. **Does `eth0` exist?** `ssh root@<dev> 'ls /sys/class/net; dmesg | grep -iE "smsc95|0424:9e00|usb 1-1"'`
    - **`eth0` present, link up, but no connectivity** → it's the *runtime* layer, not the
-     kernel. Redo §4 (static IPs / `eth-direct` profile). Most common false alarm.
-   - **`eth0` present but flapping** → NetworkManager DHCP bounce. §4 static profile.
+     kernel. Redo §4 (`nmcli c up eth-direct` / the baked profiles). Most common false alarm.
+   - **`eth0` present but "flapping"** → an NM activation loop bouncing the carrier via MAC
+     rewrites, NOT a link fault (root-caused 2026-07-04, see the Status note). On r21+ the
+     baked `eth-no-auto-default.conf` + `eth-lan` profile prevent it; on older images use
+     the §4 manual static profile. Confirm by detaching NM
+     (`nmcli dev set eth0 managed no`) — a healthy link holds carrier indefinitely.
    - **No `eth0` / no `usb 1-1` device** → kernel/HW layer, go on.
 
 2. **Did the build actually contain the fix?** Re-check the build log for

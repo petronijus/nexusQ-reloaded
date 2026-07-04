@@ -74,12 +74,14 @@ Findings are tagged by `kind`; interpret them like this:
   `led_sum` is structurally 0. There, ignore `led_frozen`; judge the ring by
   `nq_resp`/`nexusled status`. **On `#29`/r20+ (flashed 2026-07-03)** kernel
   patch 0029 makes `frame` readable and nq-healthd r20 fingerprints it — the
-  fingerprint is real, **BUT `led_frozen` CRIT still false-fires on any idle
-  device**: the screensaver locks a static frame after ~300 s and the
-  keepalive re-commits identical bytes, so a healthy idle device trips it
-  (`nq_resp=1` throughout — the `#29` acceptance capture's CRIT was this).
-  Believe `led_frozen` only when `nq_resp=0`/`nexusqd_no_progress` co-fires;
-  the guard is a planned nq-healthd/nq-health-report fix. Similarly,
+  fingerprint is real. ✅ **Since 2026-07-04 (healthd r21, hot-deployed, +
+  nq-health-report) the static-by-design guard is LIVE**: a static frame with
+  a healthy daemon (the screensaver locks a static frame after ~300 s and the
+  keepalive re-commits identical bytes) emits **info `led_static`** — expected
+  on idle captures, not a fault — while `led_frozen` CRIT fires only with a
+  distress co-signal (`nq_resp=0`/`nq_progress=0`), so a CRIT is now
+  believable as a real hang. (On healthd r20 exactly, the idle false CRIT
+  still applies — believe it only with the distress co-signal.) Similarly,
   `vdd_mismatch` warnings on ≤r19 can be non-atomic freq/vdd sampling
   artifacts (fixed in r20 by re-checking freq across the vdd read).
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is

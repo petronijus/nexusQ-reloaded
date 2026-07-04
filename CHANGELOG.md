@@ -4,6 +4,49 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+### Fixed
+- **ETHERNET RESOLVED — task #17 CLOSED (2026-07-04).** The `#29` "partial
+  comeback / carrier flap" was fully explained and fixed. The LAN9500A/driver
+  is **fully healthy** (revived by batch 2b): with NM detached, carrier held
+  90+ s with **zero transitions**, 100Mbps/Full, 0 rx/tx errors, under
+  `ondemand` (rules out the cpufreq-timing theory for the current image). The
+  "flap" was **NetworkManager's auto-generated "Wired connection 1" DHCP retry
+  loop** on a wire with no DHCP server (the direct PC↔Nexus cable): 45 s DHCP
+  timeout → deactivate resets the cloned "stable" MAC → the MAC write bounces
+  the LAN9500A carrier → the carrier event resets NM's autoconnect-retries
+  counter → reactivate — self-arming, ~47 s period, 14 811 journal lines in
+  29 h; it also failed `NetworkManager-wait-online` (the one failed unit in the
+  `#29` acceptance). Fix (`device-google-steelhead` **r21**, also hot-deployed
+  to the running device): `eth-no-auto-default.conf` (`no-auto-default=eth0`) +
+  baked `eth-lan.nmconnection` (DHCP, `dhcp-timeout=30`,
+  `autoconnect-retries=1`, **`cloned-mac-address=permanent`** — no MAC churn →
+  no carrier bounce → the retry counter sticks) + `eth-direct.nmconnection`
+  (static 10.42.0.2/24 + 10.0.0.2/24, never-default, manual activation). Host
+  side: persistent NM profile `eth-direct-host` on petronijus-PC `enp7s0`
+  (10.42.0.1/24 + 10.0.0.1/24) — the direct-cable workflow needs zero ad-hoc
+  setup on either end. Verified live 2026-07-04: eth0 settles at
+  "disconnected" quietly (0 re-activations), carrier stable, **`nm-online -s`
+  rc=0**, `nmcli c up eth-direct` → ping 3/3 (0.77 ms avg) → **`ssh
+  root@10.42.0.2` works**. Caveat: eth0's hw MAC is **random per boot** (no
+  MAC EEPROM) — on a real LAN the DHCP lease/IP changes per boot; pin a fixed
+  cloned MAC in eth-lan if stable LAN identity is ever wanted.
+  `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+- **`led_frozen` static-by-design guard (2026-07-04)** — the other open item
+  from the `#29` acceptance. `nq-healthd` (r21, hot-deployed + restarted) now
+  emits crit `led_frozen` **only when the frozen frame co-fires with distress**
+  (`nq_resp=0` or `nq_progress=0`); a static frame with a healthy daemon emits
+  **info `led_static`** (the screensaver locks a static frame by design).
+  `scripts/diag/nq-health-report` mirrors the logic and splits the summary into
+  `led_frozen_events` / `led_static_events`. Regression-tested on the
+  `nq-captures/20260703-144228/` capture: verdict **CRIT → OK** with
+  `led_static … 25 occasion(s)`.
+
+> Deployment note: the tree carries device pkg **r21**; the device still runs
+> the r20 image with these files **hot-deployed** (verified) — the next
+> rebuild+reflash bakes them. No kernel change in this batch.
+
 ## [1.6.6] - 2026-07-04
 
 > The whole 2026-07-02 boot-error fix batch below was **flashed 2026-07-03 and
@@ -234,7 +277,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   of the boot. Likely one of the batch clock changes revived enumeration — a
   strong new lead for task #17. Open follow-ups: root-cause the flap; ship an
   eth0 NM profile with may-fail semantics so wait-online tolerates a
-  flapping/cable-less port.
+  flapping/cable-less port. _(RESOLVED 2026-07-04 — the flap was NM's
+  auto-generated-profile DHCP retry loop, the link itself is healthy; see
+  [Unreleased] and `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.)_
 - **`led_frozen` still needs a static-by-design guard** — the r20 frame
   fingerprint works, but the screensaver intentionally locks a **static**
   frame after ~300 s idle and the keepalive re-commits identical bytes, so
@@ -242,7 +287,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   capture's verdict=CRIT was exactly this). Fix direction: only CRIT when
   `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` +
   `scripts/diag/nq-health-report`). Until then, expect this false positive on
-  idle devices.
+  idle devices. _(SHIPPED 2026-07-04 exactly as described — healthd r21 +
+  nq-health-report emit info `led_static` for a healthy static frame; see
+  [Unreleased].)_
 
 ## [1.6.5] - 2026-07-01
 

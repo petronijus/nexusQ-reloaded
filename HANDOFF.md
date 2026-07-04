@@ -4,7 +4,57 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-03 final (latest): BATCH 2b FLASHED + ACCEPTED — **NFC IS FIXED AND WORKING** (kernel r28 `#29` + device r20)
+## Session 2026-07-04 (latest): **ETHERNET RESOLVED — task #17 CLOSED** + led_frozen guard shipped (device r21, hot-deployed; v1.6.6 released)
+
+**v1.6.6 was released 2026-07-04** (tag `v1.6.6` = the accepted `#29`/r20
+image). This follow-up session closed both open items from the `#29`
+acceptance. Everything verified on the live device; the tree carries device
+pkg **r21 uncommitted** — the device still runs the r20 image with the r21
+files **hot-deployed** (already in the APKBUILD, so the next rebuild+reflash
+bakes them; no kernel change). Full record:
+`docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+
+- **ETHERNET RESOLVED.** The `#29` "partial comeback / carrier flap" is fully
+  explained: the **LAN9500A/driver is fully healthy** (batch 2b revived it —
+  NM detached: carrier held 90+ s with ZERO transitions, 100Mbps/Full, 0 rx/tx
+  errors, under `ondemand`, which rules out the cpufreq-timing theory;
+  autosuspend pinned by patch 0006; textbook boot enumeration). The "flap" was
+  **NM's auto-generated "Wired connection 1" DHCP retry loop** on the
+  serverless direct cable: 45 s DHCP timeout → deactivate resets the cloned
+  "stable" MAC → the MAC write bounces the LAN9500A carrier → the carrier
+  event resets NM's autoconnect-retries counter → reactivate. Self-arming,
+  ~47 s period, **14 811 journal lines in 29 h**; also the
+  `NetworkManager-wait-online` failure from the acceptance. TX/RX proven
+  healthy (DISCOVERs captured on the host NIC; static-IP ping 0 % loss both
+  ways). **Fix (device r21, hot-deployed + verified):**
+  `eth-no-auto-default.conf` (`no-auto-default=eth0`) + `eth-lan.nmconnection`
+  (DHCP, `dhcp-timeout=30`, `autoconnect-retries=1`,
+  **`cloned-mac-address=permanent`** — the key: no MAC churn → no carrier
+  bounce → the retry counter sticks) + `eth-direct.nmconnection` (static
+  10.42.0.2/24 + 10.0.0.2/24, never-default, manual `nmcli c up eth-direct`).
+  **Host side:** persistent NM profile **`eth-direct-host`** on petronijus-PC
+  `enp7s0` (10.42.0.1/24 + 10.0.0.1/24, never-default, autoconnect) — the
+  direct-cable workflow needs zero ad-hoc setup on either end. **Verified:**
+  eth0 settles "disconnected" quietly (0 re-activations), carrier stable,
+  **`nm-online -s` rc=0**, `nmcli c up eth-direct` → ping 3/3 (0.77 ms avg) →
+  **`ssh root@10.42.0.2` works**. ⚠️ Caveat: eth0's hw MAC is **random per
+  boot** (no MAC EEPROM) — on a real LAN the lease/IP changes per boot; pin a
+  fixed cloned MAC in eth-lan if stable LAN identity is ever wanted.
+- **`led_frozen` static-by-design guard SHIPPED.** `nq-healthd` (r21,
+  hot-deployed + service restarted) emits crit `led_frozen` only when the
+  frozen frame **co-fires with distress** (`nq_resp=0` or `nq_progress=0`); a
+  static frame with a healthy daemon → **info `led_static`** (screensaver
+  locks a static frame by design). `scripts/diag/nq-health-report` mirrors it
+  (summary split into `led_frozen_events`/`led_static_events`).
+  Regression-tested on the `nq-captures/20260703-144228/` capture: verdict
+  **CRIT → OK**, `led_static … 25 occasion(s)`.
+- **Next steps:** commit + rebuild/reflash to bake r21; NFC tag-read test;
+  then the standing B4/B10/B16/B21, U5 (watch), U6, U7, PA HDMI-audio UCM,
+  deep cpuidle C2+.
+
+---
+
+## Session 2026-07-03 final: BATCH 2b FLASHED + ACCEPTED — **NFC IS FIXED AND WORKING** (kernel r28 `#29` + device r20)
 
 The batch-2 image below was flashed and **accepted 2026-07-03** — with one
 twist: the scheduled **stock RAM-boot NFC discrimination test** (step ② of the

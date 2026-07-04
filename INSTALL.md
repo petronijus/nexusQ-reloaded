@@ -125,7 +125,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
 | NFC (PN544) | ✅ **fixed 2026-07-03, ships in v1.6.6** — the chip was never dead: the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), found via a stock RAM-boot probe; clean `nfc_en` polarity detect + `nfc0` registers on the v1.6.6-candidate kernel. On v1.6.5 the node is still disabled |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
-| Ethernet (LAN9500A) | 🟠 **not** dead HW — fixed v1.1.0/v1.3.0, down since the v1.4.0 boot-timing regression (fix tracked). **Partial comeback 2026-07-03** on the v1.6.6-candidate kernel: carrier up for the first time since the regression, but the link flaps and DHCP doesn't complete yet |
+| Ethernet (LAN9500A) | ✅ **resolved 2026-07-04** — carrier came back with the v1.6.6 kernel, and the remaining "flap" was NetworkManager's serverless-DHCP retry loop (not the link): fixed by baked eth0 NM profiles (`eth-lan` DHCP + `eth-direct` static `10.42.0.2` for a direct PC↔Q cable). Note: the chip has no MAC EEPROM, so the hw MAC (and a LAN DHCP lease) is random per boot |
 | TWL6040 codec (headset) | ⚪ not populated/unused on steelhead (corrected 2026-07-03 — the stock kernel never drove it; no headset path by design, was wrongly "dead hardware") |
 | SMP (2nd CPU core) | ✅ dual-core works (v1.2.0; `nproc=2`) |
 

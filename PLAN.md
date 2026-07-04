@@ -3,7 +3,21 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **Flashed + acceptance-verified 2026-07-03, unreleased (becomes v1.6.6):** the
+> **2026-07-04 — v1.6.6 RELEASED (tag `v1.6.6` = the accepted `#29`/r20 image),
+> and both post-acceptance open items CLOSED the same day:** (1) **ETHERNET
+> RESOLVED, task #17 closed** — the `#29` "carrier flap" was NetworkManager's
+> auto-generated-profile serverless-DHCP retry loop (deactivate's MAC reset
+> bounced the LAN9500A carrier, the carrier event re-armed autoconnect; ~47 s
+> period), not the link: NM detached, carrier held 90+ s / zero transitions /
+> 0 errors. Fixed by baked eth0 profiles (device pkg **r21**, hot-deployed):
+> `no-auto-default=eth0`, `eth-lan` (DHCP, `cloned-mac-address=permanent`,
+> one retry), `eth-direct` (static 10.42.0.2, manual) + host profile
+> `eth-direct-host`; `nm-online -s` rc=0, `ssh root@10.42.0.2` works.
+> (2) **`led_frozen` static-by-design guard shipped** (healthd r21 +
+> nq-health-report): crit only with distress co-signal, healthy static frame →
+> info `led_static`. See `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+>
+> **Flashed + acceptance-verified 2026-07-03, released 2026-07-04 as v1.6.6:** the
 > boot-error-inventory fix batch — kernel patches 0023–0028 (twl6030 vsel/VC
 > voltages, C1-only cpuidle replacing `cpuidle.off=1`, ti-sysc clkdev,
 > phy-generic vbus, pwrseq clk-settle), governor back to `ondemand`, `CLK_TWL=y`
@@ -30,12 +44,13 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > `f8:8f:ca:20:48:e1` on air — final IP `192.168.20.195`**. TWL6040 correction
 > shipped (nodes/config removed). NEW: **ethernet partial comeback** — carrier
 > up for the first time since v1.4.0 but flapping, DHCP never completes
-> (task #17 lead); and `led_frozen` still needs a static-by-design guard.
-> This image is the **v1.6.6 release candidate** (release pending). See
+> (task #17 lead); and `led_frozen` still needs a static-by-design guard
+> _(both closed 2026-07-04, see the top note)_.
+> This image **was released as v1.6.6 on 2026-07-04**. See
 > `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` +
 > `docs/2026-07-02-boot-error-inventory.md` §"BATCH 2b".
 >
-> **Current release: v1.6.5 (2026-07-01).** A batch of device-side fixes + companion
+> **v1.6.5 (2026-07-01)** _(superseded by v1.6.6)_**.** A batch of device-side fixes + companion
 > features on the v1.6.3 image (an interim **v1.6.4** was flashed internally to test the LED
 > keepalive but never published — folded into v1.6.5; the 1.6.3 → 1.6.5 gap is intentional).
 > Final pkgrels: `nexusqd` **r5**, `nexusq-control` **r4**, `device-google-steelhead` **r17**;
@@ -129,7 +144,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
-| Ethernet (LAN9500A) | 🟠 sw bug, not dead HW | _(Updated 2026-07-03)_ the "dead hardware" verdict was **wrong** — fixed in v1.1.0/v1.3.0 (patches 0006/0012); **regressed** in v1.4.0 by the cpufreq boot-timing change. **PARTIAL COMEBACK on `#29` (2026-07-03):** carrier=1/operstate up for the first time since the regression, but the link **flaps** (~1 s Up/Down loop) and DHCP never completes → `NetworkManager-wait-online` fails; likely a batch-2 clock change revived enumeration (task #17 lead). Follow-ups: root-cause the flap + eth0 NM profile with may-fail semantics |
+| Ethernet (LAN9500A) | ✅ works | _(RESOLVED 2026-07-04 — task #17 CLOSED; was "🟠 sw bug" and before that a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), and the remaining "flap" was root-caused 2026-07-04 as **NM's auto-generated-profile serverless-DHCP retry loop** (MAC reset on deactivate bounced the carrier and re-armed autoconnect), not the link — NM detached, carrier held 90+ s / zero transitions / 100Mbps/Full / 0 errors. Fixed by baked eth0 NM profiles (device r21, hot-deployed): `no-auto-default=eth0` + `eth-lan` (DHCP, permanent MAC, one retry) + `eth-direct` (static 10.42.0.2, manual) + host `eth-direct-host`; `nm-online -s` rc=0, `ssh root@10.42.0.2` works. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-04-ethernet-resolved-and-led-guard.md` |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 
 ## Plan (by priority)
