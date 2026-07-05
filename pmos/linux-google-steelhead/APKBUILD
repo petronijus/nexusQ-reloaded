@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=28
+pkgrel=30
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -62,6 +62,7 @@ source="
 	0029-leds-steelhead-avr-readable-frame.patch
 	0030-twl-gate-pre-probe-access-twl-is-ready.patch
 	0031-mfd-twl-core-clocks-init-twl4030-only.patch
+	0032-mfd-omap-usb-host-depopulate-children-on-remove.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -130,4 +131,5 @@ SKIP  0028-mmc-pwrseq-simple-clk-settle-delay.patch
 SKIP  0029-leds-steelhead-avr-readable-frame.patch
 SKIP  0030-twl-gate-pre-probe-access-twl-is-ready.patch
 SKIP  0031-mfd-twl-core-clocks-init-twl4030-only.patch
+SKIP  0032-mfd-omap-usb-host-depopulate-children-on-remove.patch
 "

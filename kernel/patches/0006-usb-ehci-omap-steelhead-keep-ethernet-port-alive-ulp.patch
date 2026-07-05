@@ -1,52 +1,44 @@
 From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
-Date: Sat, 20 Jun 2026 11:55:00 +0200
-Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A bring-up (vendor host init)
+Date: Sat, 5 Jul 2026 02:00:00 +0200
+Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A power-on-reset + attach-ready
+ settle + stock ULPI bring-up
 
-The Google Nexus Q has a soldered SMSC LAN9500A USB-Ethernet chip on EHCI port 1
-behind an external SMSC USB3320 ULPI PHY (modelled as usb-nop-xceiv). It did not
-enumerate on mainline. Reverse-engineering the vendor board kernel
-(android-omap-steelhead-3.0: drivers/usb/host/ehci-omap.c #ifdef
-CONFIG_MACH_STEELHEAD, and board-steelhead-usbhost.c) shows the host-init steps
-mainline lacks. Verified on hardware: under the stock kernel the LAN9500A
-enumerates (idVendor=0424 idProduct=9e00 -> eth0), so the chip is healthy and the
-gap is purely these software steps.
+The Nexus Q's soldered LAN9500A USB-ethernet (behind a USB3320 ULPI
+PHY on port 1) needs an imperative vendor bring-up:
 
-Replicate the vendor host init (the order/placement matters):
+- Probe stages the board power-on-reset in stock order (auxclk3 38.4 MHz
+  -> 100 us refclk settle -> NENABLE -> settle -> NRESET release), with
+  two hardenings over stock's 100us/2us delays (v2, 2026-07-05): a REAL
+  200 ms power-off window first (stock claims the gpios at 0.217 s; this
+  probe runs ~4.6 s in, and on a warm reboot the chip has been running
+  since U-Boot -- a ~100 us off-pulse never discharges the rail, the
+  chip brown-outs instead of a POR and enumeration became cold-vs-warm
+  intermittent: ULPI PHY alive and register-identical on good and bad
+  boots, but the chip never drove D+ on bad ones) and a 50 ms
+  crystal/regulator settle before the reset release. The probe's clock
+  enable is devm-balanced on unbind.
+- The EHCI .reset hook does ehci_setup(), the steelhead INSNREG01 burst
+  thresholds, and stock's probe-time SINGLE ULPI Function-Control RESET
+  per PHY port (omap_ehci_soft_phy_reset @ 0xc0329b88, called twice from
+  stock's ehci_hcd_omap_probe -- kallsyms-verified 2026-07-05; an earlier
+  audit conflated it with uhh_omap_reset_link @ 0xC0331BDC, the
+  hub_control RECOVERY burst, which is retained here unused for a future
+  recovery hook). The write's viewport completion poll doubles as a
+  wait-for-PHY-ready barrier.
+- Diag logging of the PHY register state and PORTSC line-state samples
+  stays in until the intermittency is confirmed dead in the field.
 
- 1) Power-on-reset the LAN9500A in board order -- with the 38.4 MHz PHY refclk
-    (auxclk3) enabled: NENABLE(gpio_1) low, settle, NRESET(gpio_62) high. Owned
-    via the steelhead DT (enable/reset gpios + clock on &usbhsehci); optional, so
-    a no-op on other boards. Done in probe before usb_add_hcd(); gpio_62 resets
-    BOTH the USB3320 PHY and the LAN9500A (verified: holding it -ETIMEDOUTs ULPI).
- 2) Program the external USB3320 ULPI PHY into its working host state from the
-    EHCI .reset hook (omap_ehci_reset: ehci_setup() then the ULPI burst), which
-    runs from inside usb_add_hcd() AFTER the controller is reset/set up -- exactly
-    where the vendor omap_ehci_soft_phy_reset (stock VA 0xC0331BDC) does it. This
-    placement is the crux: the INSNREG05 ULPI viewport only accepts writes once
-    ehci_setup() has run, so an earlier version that issued the burst BEFORE
-    usb_add_hcd() silently dropped them (proven: a .reset-hook readback shows
-    IFC=0x18, our written value, sticking). The vendor also does NOT stop at a
-    single Function-Control soft reset: after a settle it writes five ULPI regs,
-    EACH 20 times, to force them through the marginal external ULPI link:
-        FUNC_CTRL_SET(0x05)=0x20 (RESET), FUNC_CTRL(0x04)=0x41, IFC_CTRL(0x07)=0x18,
-        OTG_CTRL(0x0a)=0x66 (host Dp/Dm pull-downs), FUNC_CTRL(0x04)=0x45 -- each x20.
-    Also set INSNREG01 OUT/IN burst thresholds = 0x80 here (vendor steelhead-only).
-
-NOTE (2026-06-24): the LAN9500A still does not enumerate with all of the above,
-even though the ULPI state is now byte-identical to stock (FUNC=0x45/IFC=0x18/
-OTG=0x66) and stock enumerates the same chip on this unit today (proven via
-stock-adb: port:1 CCS=1). So the remaining gap is NOT the PHY registers but a
-host/USBHS-level difference -- still open. This patch keeps the correct,
-stock-faithful structure (`.reset`-hook placement + full ULPI programming) as the
-base to build on; see docs/2026-06-24-ethernet-stock-proven-its-our-sw.md.
-
-Also log the ULPI identity once and pin the root hub runtime-active (userspace
-udev re-enables autosuspend via hwdb, which would halt the controller, gate the
-EHCI fclk and drop port power before the slow-to-connect LAN9500A is seen).
+v3 (2026-07-05): a same-session A/B (mainline failed 100%, the stock
+RAM-boot enumerated 100% on the same hardware) proved the enumeration
+intermittency is the reset-release->enumeration GAP: stock gives the
+LAN9500A ~2.2 s after reset before scanning the port; our probe scanned
+within ms. Add a 2500 ms post-reset attach-ready settle before the
+controller enumerates.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+--- a/drivers/usb/host/ehci-omap.c
 --- a/drivers/usb/host/ehci-omap.c
 +++ b/drivers/usb/host/ehci-omap.c
 @@ -23,18 +23,24 @@
@@ -74,7 +66,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,210 @@
+@@ -61,6 +67,215 @@
  	__raw_writel(val, base + reg);
  }
  
@@ -143,24 +135,14 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +}
 +
 +/*
-+ * Bring the external SMSC USB3320 ULPI PHY (port 1 -- the Nexus Q's soldered
-+ * LAN9500A USB-ethernet path) into its working host state, mirroring the vendor
-+ * omap_ehci_soft_phy_reset (stock VA 0xC0331BDC). The stock routine does NOT
-+ * stop at a single Function-Control soft reset: after a settle it programs five
-+ * ULPI registers and writes EACH one 20 times, to force the value through the
-+ * marginal external ULPI link. Doing only the one-shot RESET (as this driver did
-+ * before) relied on the PHY's reset defaults happening to land at FUNC=0x45 /
-+ * OTG=0x66 -- which is exactly why enumeration was intermittent: on a bad boot
-+ * OTG_CTRL was left without the host-side Dp/Dm pull-downs (0x66) and IFC_CTRL
-+ * was not forced (0x18), so the PHY answered register reads (ULPI VID 0x0424 --
-+ * alive) but the controller never saw the LAN9500A pull up D+ and the port sat
-+ * at SE0 / PORTSC CCS=0. A warm gpio_1 rail power-cycle cannot fix it because
-+ * the PHY *registers*, not the rail, are wrong. Replicate the full sequence.
-+ */
-+/*
-+ * Retained for a future ehci_hub_control recovery hook (stock's actual call
-+ * site for this sequence); not used in the plain bring-up path. References
-+ * omap_ehci_ulpi_write so that stays live too.
++ * Mirror of stock's uhh_omap_reset_link ULPI register burst (VA 0xC0331BDC)
++ * -- the heavy hub_control RECOVERY handler, NOT the probe-time reset (see
++ * the corrected attribution in omap_ehci_reset). Retained, unused, for a
++ * future hub_control recovery hook at stock's actual call site. NB the
++ * theory in this function's earlier comment (bad boots = wrong PHY
++ * registers) was disproved 2026-07-05: good and bad boots read identical
++ * FUNC=0x45 IFC=0x18 OTG=0x66 -- the intermittency was the LAN9500A
++ * brown-out-instead-of-POR on warm reboots, fixed in the probe sequence.
 + */
 +static void __maybe_unused
 +omap_ehci_soft_phy_reset(void __iomem *regs, int port)
@@ -229,6 +211,13 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 + */
 +static struct gpio_desc *steelhead_eth_phy_reset;
 +
++/* devm action: balance the probe's clk_prepare_enable(auxclk3) on unbind
++ * (the enable count leaked before -- found during the rebind experiments). */
++static void steelhead_eth_phyclk_disable(void *clk)
++{
++	clk_disable_unprepare(clk);
++}
++
 +static int omap_ehci_reset(struct usb_hcd *hcd)
 +{
 +	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
@@ -237,22 +226,17 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +	int ret, i;
 +
 +	/*
-+	 * PLAIN, stock-faithful bring-up. The stock-parity audit proved
-+	 * omap_ehci_soft_phy_reset (UHH softreset / gpio_159 / clk re-park / the
-+	 * ULPI 5-reg burst) is NOT run at bring-up: it is a runtime
-+	 * ehci_hub_control recovery handler that only fires when a port
-+	 * reset/resume times out, AFTER a device has already connected. At bring-up
-+	 * stock does a plain ehci_setup() and relies on the USB3320 reset defaults
-+	 * (FUNC=0x45 / OTG=0x66 -- host Dp/Dm pull-downs present) plus gpio_62
-+	 * NRESET released in probe; it does NOT pre-write the ULPI registers (e.g.
-+	 * the non-default IFC=0x18) before the first connect. Doing that recovery
-+	 * sequence at bring-up is the prime suspect for why the LAN9500A never
-+	 * asserted connect, and stock proved gpio_159 is not even an ethernet line
-+	 * (unused in stock's gpio table). So bring-up is now just ehci_setup() + the
-+	 * OMAP INSNREG01 burst thresholds; the port-1 UTMI functional clock is
-+	 * enabled by the omap-usb-host PHY-mode fix (patch 0012). The ULPI/UHH
-+	 * recovery helpers are retained for a future hub_control recovery hook
-+	 * (stock's actual placement).
++	 * CORRECTED ATTRIBUTION (2026-07-05, kallsyms-verified): an earlier
++	 * audit conflated two stock routines. Stock VA 0xC0331BDC is
++	 * uhh_omap_reset_link -- the heavy hub_control RECOVERY handler (UHH
++	 * softreset / gpio_159 / x20 register bursts), only fired after a
++	 * connected port's reset/resume times out. But stock's probe DOES run
++	 * omap_ehci_soft_phy_reset @ 0xc0329b88 (called twice from
++	 * ehci_hcd_omap_probe, +0x2e8/+0x2f8, guarded by port_mode==PHY): a
++	 * SINGLE ULPI Function-Control RESET write whose viewport completion
++	 * poll doubles as a wait-for-PHY-ready barrier. Replicate exactly
++	 * that here (this hook is where the UHH/UTMI clocks are guaranteed
++	 * up), after ehci_setup() + the INSNREG01 thresholds.
 +	 */
 +	ret = ehci_setup(hcd);
 +	if (ret)
@@ -262,6 +246,19 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +	ehci_write(regs, EHCI_INSNREG01,
 +		   (0x80 << EHCI_INSNREG01_OUT_THRESHOLD_SHIFT) |
 +		   (0x80 << EHCI_INSNREG01_IN_THRESHOLD_SHIFT));
++
++	/*
++	 * Stock-parity probe-time PHY soft reset: one Function-Control RESET
++	 * per PHY-mode port. The USB3320 reloads its strapped defaults
++	 * (FUNC=0x45 IFC=0x18 OTG=0x66 on this board -- identical on good and
++	 * bad boots, so this is parity, not the enumeration fix) and the
++	 * write's completion poll blocks until the PHY's ULPI clock answers.
++	 */
++	for (i = 0; i < omap->nports; i++)
++		if (omap->phy[i])
++			omap_ehci_ulpi_write(regs, i + 1,
++					     ULPI_SET(ULPI_FUNC_CTRL),
++					     ULPI_FUNC_CTRL_RESET);
 +
 +	/*
 +	 * DIAG: log the USB3320's *default* ULPI state (no writes) + CONFIGFLAG, so
@@ -285,7 +282,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +278,7 @@
+@@ -68,6 +283,7 @@
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -293,7 +290,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  };
  
  /**
-@@ -144,6 +355,61 @@
+@@ -144,6 +360,92 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -337,25 +334,56 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +			steelhead_eth_phy_reset = NULL;
 +
 +		if (eth_en && eth_reset) {
++			/*
++			 * ROOT CAUSE of the enumeration intermittency (proven
++			 * 2026-07-05 by a same-session A/B: our mainline failed
++			 * 100%, the stock RAM-boot enumerated 100% on the very
++			 * same hardware): it is the reset-release -> enumeration
++			 * GAP, not the power-cycle. Stock runs this bring-up in
++			 * board init at t=0.217 s and the EHCI driver does not
++			 * scan the port until ~2.4 s -- the LAN9500A gets ~2.2 s
++			 * after reset-release to load its config and become ready
++			 * to drive D+. Our probe ran the gpio sequence AND
++			 * usb_add_hcd() back-to-back at ~4.6 s, so the controller
++			 * enumerated within ms of reset-release, before the chip
++			 * attached -- the port saw no connect and sat at CCS=0
++			 * forever. On the "good" boots the margin happened to be
++			 * met; it is not robust. Fix = reproduce stock's settle:
++			 * a real power-off window, then clk/enable/reset, then a
++			 * >=2 s post-reset-release settle BEFORE the PHY init /
++			 * ehci_setup / usb_add_hcd path enumerates the port.
++			 */
++			msleep(200);		/* rail discharge -> true POR */
 +			eth_phyclk = devm_clk_get_optional(dev,
 +					"steelhead-ethernet-phy");
 +			if (!IS_ERR_OR_NULL(eth_phyclk)) {
 +				clk_set_rate(eth_phyclk, 38400000);
 +				clk_prepare_enable(eth_phyclk);
++				devm_add_action_or_reset(dev,
++					steelhead_eth_phyclk_disable,
++					eth_phyclk);
 +			}
 +			udelay(100);				/* refclk settle */
 +			gpiod_set_value_cansleep(eth_en, 1);	/* power/enable on */
-+			udelay(2);				/* power-good settle */
++			msleep(50);	/* crystal + regulator settle */
 +			gpiod_set_value_cansleep(eth_reset, 0);	/* release reset */
++			/*
++			 * The critical delay: give the LAN9500A the same
++			 * post-reset window stock does (measured ~2.2 s) to load
++			 * its EEPROM config and be ready to attach, BEFORE the
++			 * controller (started right after this probe) scans the
++			 * port. 2500 ms comfortably exceeds stock's proven gap.
++			 */
++			msleep(2500);		/* LAN9500A attach-ready settle */
 +			dev_info(dev,
-+				 "steelhead: LAN9500A power-on-reset sequenced (clk->enable->reset)\n");
++				 "steelhead: LAN9500A power-on-reset sequenced (200ms off -> clk -> enable -> 50ms -> reset -> 2500ms attach-ready settle)\n");
 +		}
 +	}
 +
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +453,16 @@
+@@ -187,6 +489,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -372,7 +400,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +471,83 @@
+@@ -195,6 +507,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*

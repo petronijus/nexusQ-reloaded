@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000032 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sat, 5 Jul 2026 02:05:00 +0200
+Subject: [PATCH] mfd: omap-usb-host: depopulate DT children on remove
+
+usbhs_omap_remove() unregisters the child devices with
+device_for_each_child() but never clears their DT nodes' OF_POPULATED
+flags, so after a driver unbind the re-probe's of_platform_populate()
+silently skips re-creating the EHCI/OHCI children -- the USB host is
+gone until reboot. Call of_platform_depopulate() first (it unregisters
+the DT-created children AND clears the flags); keep the child walk for
+any non-DT children. Found live on the Nexus Q while attempting a
+runtime re-init of the ethernet bring-up.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/mfd/omap-usb-host.c
++++ b/drivers/mfd/omap-usb-host.c
+@@ -838,7 +838,17 @@
+ {
+ 	pm_runtime_disable(&pdev->dev);
+ 
+-	/* remove children */
++	/*
++	 * Depopulate the DT children properly: device_for_each_child alone
++	 * leaves the child nodes' OF_POPULATED flags set, so a re-probe's
++	 * of_platform_populate() silently skips re-creating the EHCI/OHCI
++	 * child devices and the controller is gone until reboot (hit live
++	 * on the Nexus Q 2026-07-05 while attempting a runtime re-init of
++	 * the ethernet bring-up).
++	 */
++	of_platform_depopulate(&pdev->dev);
++
++	/* remove any remaining non-DT children */
+ 	device_for_each_child(&pdev->dev, NULL, usbhs_omap_remove_child);
+ }
+ 
