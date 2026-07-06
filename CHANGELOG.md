@@ -4,7 +4,12 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.8] - 2026-07-06
+
+> Ethernet works from a cold boot at last: the LAN9500A cold-init bug (task
+> #17) is fixed and gold-validated (clean fastboot flash + true cold
+> power-cycle → eth0 100Mbps/Full, 0 failed units). Kernel `#33-postmarketOS`
+> (r32), device pkg r21.
 
 > Framed for **v1.6.8** (PUBLIC build + release in progress). Kernel
 > `linux-google-steelhead` pkgrel **32** (uname **`#33`**); no device-pkg change.
