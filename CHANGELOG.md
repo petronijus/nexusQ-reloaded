@@ -4,6 +4,52 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+> Framed for **v1.6.8** (PUBLIC build + release in progress). Kernel
+> `linux-google-steelhead` pkgrel **32** (uname **`#33`**); no device-pkg change.
+
+### Fixed
+- **ETHERNET COLD-INIT FIXED — task #17 FULLY CLOSED (2026-07-06).** The
+  LAN9500A now enumerates from a **true cold boot** after a clean flash. Root
+  cause (same class as the NFC pinmux bug): `gpio_1` NENABLE — the LAN9500A
+  power-enable — is pad **`kpd_col2` at CORE padconf offset `0x186`**, but the
+  DTS `ethernet_gpios` node muxed only `gpio_62` NRESET (`0x08c`); `0x186` was
+  omitted (a prior comment wrongly placed `gpio_1` in the wkup padconf). So
+  gpiolib drove the `gpio_1` DATAOUT latch (debugfs read "asserted") while the
+  pad stayed in **safe_mode** and NENABLE never reached the chip → the LAN9500A
+  was never powered, never drove D+, and the port sat at **PORTSC CCS=0** on
+  every cold boot. The healthy USB3320 PHY (its pads ARE muxed) masked it. Stock
+  muxes both pads (`omap_mux_init_gpio` 1 & 62 @ VA `0xc00178d0`/`dc`, value
+  `0x0e03`). **Fix:** DTS `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT |
+  MUX_MODE3)` (patch 0003; kernel pkgrel **32**, uname **`#33`**). Proven three
+  ways: (a) a live mmio write of the pad register `0x4A100184` → `eth0` attach at
+  100Mbps from the cold-failed state; (b) bidirectional causality (pad set →
+  attach, pad cleared → detach); (c) **GOLD STANDARD** — a clean fastboot flash
+  of `#33` + a **true cold power-cycle** → `eth0` enumerates **100Mbps/Full,
+  0 failed units** (clean-flash warm boot #1 also enumerated). Commit
+  **e33a1b4**. Together with the r21 NM eth profiles (v1.6.7, the
+  serverless-DHCP-loop fix), ethernet is now fully working from cold: enumerate +
+  link + no DHCP retry loop. `docs/2026-07-06-eth-coldinit-resolved.md`.
+  - **Correction — the 2500ms "attach-ready settle" (kernel `#31`, commit
+    6c869e8, "closes #17") was a FALSE POSITIVE, not a fix.** Those "5/5" boots
+    all descended from a stock RAM boot via warm reboots that never cut LAN9500A
+    power, so the stock-initialized chip just stayed attached; a clean flash /
+    true cold boot without stock still failed. e33a1b4 **reverts** the patch 0006
+    power block to stock timing (`udelay(100)`/`udelay(2)`, dropping the disproven
+    200ms/50ms/2500ms delays) and removes the non-stock `gpio_159` (`0x164`) pad
+    mux + `steelhead-eth-phy-reset-gpios` property (stock leaves that pad in
+    safe_mode; not wired to the LAN9500A).
+  - **Lesson (for future gpio bring-up):** debugfs / `gpiolib` reporting a line
+    "asserted" only means the **DATAOUT latch** is driven — NOT that the pad is
+    routed to the pin. Always verify the **IOPAD mux** against a live stock
+    `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`); a healthy sibling
+    (here the USB3320 PHY) can mask a completely unmuxed control line. Probe live
+    with the aligned `/root/mmio` helper + ULPI viewport reads — **never** python
+    mmap (it wedges INSNREG05).
+- **eth0 hw MAC is random per boot** — the LAN9500A has no MAC EEPROM, so on a
+  real LAN the DHCP lease/IP changes every boot (match by hostname, not eth MAC).
+
 ## [1.6.7] - 2026-07-05
 
 > Device pkg **r21** (kernel unchanged: `6.12.12-r28`, `#29-postmarketOS`).
@@ -21,6 +67,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   remaining half is the kernel/ehci bring-up race — the direct-cable
   `eth-direct` workflow was verified end-to-end on 2026-07-04 on an
   enumerated boot and is unaffected when the chip appears.
+  _(RESOLVED 2026-07-06 in [Unreleased]/v1.6.8 — the enumeration half was the
+  unmuxed `gpio_1` NENABLE pad; task #17 FULLY CLOSED, gold-validated from a
+  true cold boot.)_
 
 ### Fixed
 - **ETHERNET NM-LAYER RESOLVED (2026-07-04; task #17 narrowed, see Known

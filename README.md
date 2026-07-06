@@ -56,7 +56,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | 📡 **NFC** (PN544) | ✅ | **fixed 2026-07-03** — the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), so the chip only *looked* dead; found via a stock RAM-boot probe + live stock pinmux dump. Clean `nfc_en` polarity detect, `nfc0` registers · ships in v1.6.6 · **live RF test 2026-07-04**: repeated card detections + data frames (follow-up: a long-lived NFC userspace) |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
-| 🌐 **Ethernet** (LAN9500A) | 🟠 | **NM layer ✅ resolved 2026-07-04** — the "flap" was NetworkManager's serverless-DHCP retry loop, not the link: fixed by baked eth0 NM profiles (`eth-lan` DHCP + `eth-direct` static for the PC↔Q cable, `ssh root@10.42.0.2`), ships in v1.6.7. When the chip is up: 100Mbps/Full, 0 errors. **Enumeration 🟠 intermittent again (2026-07-05)** — some boots the chip never enumerates (USB CCS=0; 0/3 on the v1.6.7 acceptance vs 3/3 the day before, same kernel) — a kernel/ehci bring-up race under investigation; the boot stays clean either way (no failed units). Chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
+| 🌐 **Ethernet** (LAN9500A) | ✅ | **works from a cold boot — task #17 fully closed** (gold-validated: clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units). The "enumeration intermittency" was a **pinmux miss**: `gpio_1` NENABLE (the LAN9500A power-enable) sat on an **unmuxed pad** (`kpd_col2` @ padconf `0x186`) so it never powered the chip — the healthy USB3320 PHY masked it, and the earlier "3/3 vs 0/3 boots" was stock priming, not a race. Fixed in kernel `#33` (DTS pad mux); the 2500ms "settle" it superseded was a false positive · **v1.6.8**. NM layer resolved 2026-07-04 (baked `eth-lan` DHCP + `eth-direct` static `ssh root@10.42.0.2`). Chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
 | 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
 | 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
 
@@ -144,13 +144,13 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **31 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **32 patches** in `kernel/patches/`), the
 local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/      dts · defconfig · 31 mainline patches
+kernel/      dts · defconfig · 32 mainline patches
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
 userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
 reverse-eng/ ground truth extracted from the factory kernel
@@ -176,7 +176,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.3 ── ✦ companion app + LAN control bridge                       2026-06-30
 1.6.5 ── ✦ breathing themes + 5 visualisations · LED keepalive · companion/WiFi   2026-07-01
 1.6.6 ── ✦ NFC fixed (pinmux) · boot-error cleanup · factory MAC on air     2026-07-04
-1.6.7 ── ✦ baked ethernet NM profiles · led_static healthd guard  ← latest  2026-07-05
+1.6.7 ── ✦ baked ethernet NM profiles · led_static healthd guard            2026-07-05
+1.6.8 ── ✦ ethernet works from cold — unmuxed NENABLE pad (task #17 closed)  ← latest  2026-07-06
 ```
 
 ---

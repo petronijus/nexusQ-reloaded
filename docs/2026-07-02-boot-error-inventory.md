@@ -423,11 +423,11 @@ stayed r20. Full NFC story:
 - **Remaining err/warn = exactly the known-open residue:** B4, B10, B16
   (cold-boot ramoops), B21 (journald BPF/ACL, L2C, gpmc cs0, pmu affinity).
 
-### NEW findings (opened after batch 2b — both closed 2026-07-04; the eth ENUMERATION half REOPENED 2026-07-05, see the update below)
+### NEW findings (opened after batch 2b — both closed 2026-07-04; the eth ENUMERATION half REOPENED 2026-07-05, then ✅ FIXED 2026-07-06 — unmuxed gpio_1 NENABLE pad; see the updates below)
 
 | Item | Evidence / analysis |
 |------|---------------------|
-| **Ethernet PARTIAL COMEBACK** (task #17, new lead) — **NM half FIXED 2026-07-04; enumeration half REOPENED 2026-07-05** _(the original "task #17 CLOSED" over-claimed)_ | `eth0` has **carrier=1 / operstate up for the first time since the v1.4.0 regression**: `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but it **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP never completes → `NetworkManager-wait-online.service` is the ONE failed unit this boot. Likely one of the batch clock changes revived enumeration. Follow-ups: root-cause the flap; ship an eth0 NM profile with **may-fail semantics** so wait-online tolerates a flapping/cable-less port. → **Resolution 2026-07-04:** the link/driver is fully healthy (NM detached: 90+ s carrier, zero transitions, 0 errors); the flap was NM's auto-generated "Wired connection 1" serverless-DHCP retry loop (MAC reset on deactivate bounces the carrier, the carrier event re-arms autoconnect — ~47 s period, 14 811 journal lines/29 h). Fixed by baked profiles (`no-auto-default=eth0`, `eth-lan` with `cloned-mac-address=permanent` + `autoconnect-retries=1`, `eth-direct` static) in device r21 (hot-deployed); `nm-online -s` rc=0, `ssh root@10.42.0.2` works. `docs/2026-07-04-ethernet-resolved-and-led-guard.md`. |
+| **Ethernet** (task #17) — **✅ FULLY FIXED 2026-07-06** (NM half 2026-07-04; enumeration half 2026-07-06 — unmuxed pad, gold-validated) | `eth0` has **carrier=1 / operstate up for the first time since the v1.4.0 regression**: `smsc95xx 1-1:1.0 eth0: Link is Up - 100Mbps/Full` @74.5 s — but it **flaps** (Down within ~1 s, repeating; NM disconnect/connect loop) and DHCP never completes → `NetworkManager-wait-online.service` is the ONE failed unit this boot. → **Resolution 2026-07-04 (NM half):** the link/driver is fully healthy (NM detached: 90+ s carrier, zero transitions, 0 errors); the flap was NM's auto-generated "Wired connection 1" serverless-DHCP retry loop (MAC reset on deactivate bounces the carrier, the carrier event re-arms autoconnect — ~47 s period, 14 811 journal lines/29 h). Fixed by baked profiles (`no-auto-default=eth0`, `eth-lan` with `cloned-mac-address=permanent` + `autoconnect-retries=1`, `eth-direct` static) in device r21; `nm-online -s` rc=0, `ssh root@10.42.0.2` works. → **Resolution 2026-07-06 (enumeration half, task #17 FULLY CLOSED):** the "enumeration intermittency" was NOT a race — it was a **pinmux miss**. `gpio_1` NENABLE (LAN9500A power-enable) = pad `kpd_col2` @ CORE padconf `0x186`, but `ethernet_gpios` muxed only `gpio_62` NRESET (`0x08c`); `0x186` was omitted, so gpiolib drove the DATAOUT latch (debugfs "asserted") while the pad stayed safe_mode → the chip was never powered → PORTSC CCS=0 on cold boot (the "3/3 vs 0/3" was stock priming: warm reboots from a stock RAM boot kept the chip powered). Fix: DTS `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT \| MUX_MODE3)` (patch 0003; kernel pkgrel 32, uname `#33`, commit e33a1b4; the 2500ms settle from `#31`/6c869e8 reverted as a false positive; non-stock `gpio_159`/`0x164` mux dropped). Gold-validated: clean flash of `#33` + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. `docs/2026-07-06-eth-coldinit-resolved.md`; NM half `docs/2026-07-04-ethernet-resolved-and-led-guard.md`. |
 | **`led_frozen` static-by-design guard** — **SHIPPED 2026-07-04** | The r20 fingerprint works, but the screensaver **intentionally locks a static frame after ~300 s idle** and the keepalive re-commits identical bytes → `led_frozen` CRIT fires on a healthy idle device (this capture's verdict=CRIT was exactly that: `led_sum=1120` static, `led_stall` climbing, `nq_resp=1` throughout). Fix: only CRIT when `nq_resp=0` or `nexusqd_no_progress` co-fires (`nq-healthd` + `scripts/diag/nq-health-report`). → **Shipped 2026-07-04 exactly so** (healthd r21 hot-deployed + nq-health-report; healthy static frame → info `led_static`); regression-tested on THIS capture: verdict CRIT → OK, `led_static … 25 occasion(s)`. |
 
 ### Status after batch 2b (end of 2026-07-03)
@@ -463,3 +463,16 @@ boot clean (no failed units, all 3 boots). Also: 1 residual `vdd_mismatch`
 sampling race slipped past the r20 freq-hold guard (1/91 samples, warn-only).
 See the 2026-07-05 addendum in
 `docs/2026-07-04-ethernet-resolved-and-led-guard.md`.
+
+**UPDATE 2026-07-06 — task #17 FULLY CLOSED; the enumeration "race" was a
+pinmux miss.** The overnight cold-init investigation found the real root cause:
+`gpio_1` NENABLE (LAN9500A power-enable) is pad `kpd_col2` @ CORE padconf
+`0x186`, and `ethernet_gpios` never muxed it (only `gpio_62` NRESET `0x08c`), so
+NENABLE stayed in safe_mode and the chip was never powered on a cold boot. The
+"3/3 vs 0/3 boots" was stock priming (warm reboots from a stock RAM boot kept
+the chip attached). Fix: DTS `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT
+| MUX_MODE3)` (patch 0003, kernel pkgrel **32**/uname **`#33`**, commit
+**e33a1b4**); the `#31`/6c869e8 2500ms settle is reverted as a false positive.
+**Gold-validated:** clean flash of `#33` + a true cold power-cycle → `eth0`
+100Mbps/Full, 0 failed units. Ships as **v1.6.8**.
+`docs/2026-07-06-eth-coldinit-resolved.md`.

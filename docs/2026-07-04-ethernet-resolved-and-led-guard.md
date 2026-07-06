@@ -176,6 +176,15 @@ healthd guard) shipped as **v1.6.7**
 
 ### The reopen — LAN9500A enumeration intermittency is BACK (task #17 continues, narrowed)
 
+> **RESOLVED 2026-07-06 — the "kernel/ehci bring-up race" diagnosis below was
+> WRONG.** It was not a race: `gpio_1` NENABLE sat on an **unmuxed pad**
+> (`kpd_col2` @ CORE padconf `0x186`), so the LAN9500A was never powered on a
+> cold boot; the "0/3 vs 3/3" was **stock priming** (warm reboots from a stock
+> RAM boot kept the chip attached). Fixed by a DTS pad mux (kernel `#33`, commit
+> e33a1b4); gold-validated from a true cold boot. **Task #17 FULLY CLOSED**, ships
+> v1.6.8. See `docs/2026-07-06-eth-coldinit-resolved.md`. The section below is
+> kept as the 2026-07-05 record of what was believed at the time.
+
 - **0/3 acceptance boots enumerated the chip**: USB `CCS=0`; the patch-0006
   `LAN9500A power-on-reset sequenced` init runs, but the port never shows
   connect — vs **3/3 enumerated boots on 2026-07-03/04 with the

@@ -6,8 +6,37 @@ other kernel work (e.g. SMP second-core) is in flight. First made to work in
 change, work the **Regression triage** at the bottom — it tells you *which layer*
 broke.
 
-> **Status 2026-07-05 — NM layer RESOLVED; enumeration intermittency ACTIVE
-> again (task #17 continues, narrowed to the kernel/ehci bring-up race).**
+> **Status 2026-07-06 — ✅ RESOLVED, task #17 FULLY CLOSED (enumerate + link +
+> NM), gold-validated from a true cold boot; ships as v1.6.8.**
+> The enumeration intermittency was **not a race** — it was a **pinmux miss**:
+> `gpio_1` NENABLE (the LAN9500A power-enable) is pad **`kpd_col2` @ CORE
+> padconf `0x186`**, but `ethernet_gpios` muxed only `gpio_62` NRESET (`0x08c`);
+> `0x186` was omitted (a prior comment wrongly placed `gpio_1` in the wkup
+> padconf). gpiolib drove the DATAOUT **latch** (debugfs "asserted") but the pad
+> stayed in **safe_mode**, so NENABLE never reached the chip → never powered →
+> never drove D+ → PORTSC CCS=0 on cold boot. The healthy USB3320 PHY (its pads
+> ARE muxed) masked it; the "intermittency" was **stock priming** — warm reboots
+> from a stock RAM boot never cut LAN9500A power, so a stock-initialized chip
+> stayed attached and looked like a pass. **Same pinmux-miss class as the NFC
+> bug.** Fix: DTS `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT |
+> MUX_MODE3)` (patch 0003; kernel pkgrel **32**, uname **`#33`**, commit
+> **e33a1b4**). The 2500ms "attach-ready settle" (`#31`, commit 6c869e8) was a
+> false positive and was **reverted** to stock `udelay(100)`/`udelay(2)`; the
+> non-stock `gpio_159` (`0x164`) mux + `steelhead-eth-phy-reset-gpios` property
+> were dropped (stock leaves that pad safe_mode; not wired to the LAN9500A).
+> **GOLD-VALIDATED:** clean fastboot flash of `#33` + a true cold power-cycle →
+> `eth0` enumerates **100Mbps/Full, 0 failed units** (warm boot #1 too); also
+> proven live by an mmio write of `0x4A100184` (`0x0e03010f`) + `ehci-omap`
+> rebind from the cold-failed state, and bidirectionally (pad set→attach,
+> cleared→detach). **Lesson: debugfs/gpiolib "asserted" = the DATAOUT latch is
+> driven, NOT that the pad is routed — always diff the IOPAD mux against a live
+> stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`, `kpd_col2` line
+> 520 = `0x0e03`).** Full record:
+> `docs/2026-07-06-eth-coldinit-resolved.md`.
+>
+> _(Superseded status 2026-07-05 — "NM layer RESOLVED; enumeration
+> intermittency ACTIVE again" — kept below; its NM-layer half stands, the
+> "kernel/ehci bring-up race" framing was wrong: it was the unmuxed pad.)_
 > On the v1.6.7 acceptance (flashed 2026-07-05) the LAN9500A **did not
 > enumerate on any of the 3 boots** (USB CCS=0; the patch-0006
 > `LAN9500A power-on-reset sequenced` init runs but the port never shows
@@ -85,6 +114,24 @@ The `&usbhsehci` node MUST carry the steelhead bring-up resources:
 plus the `hsusb1_phy: hsusb1-phy { compatible nop-phy; #phy-cells = <0>; }` node and
 `port1-mode = "ehci-phy"`. (These survived the SMP `cpu@1` DTS regen — verify they
 still do after any `scripts/regen-dts-patch.sh` run.)
+
+> **CRITICAL (the 2026-07-06 cold-init fix) — the `ethernet_gpios` pinctrl node
+> MUST mux BOTH gpio pads**, or the gpio is driven only at the DATAOUT latch and
+> never reaches the pin:
+> ```
+> ethernet_gpios: pinmux_ethernet_gpios {
+>     pinctrl-single,pins = <
+>         OMAP4_IOPAD(0x186, PIN_OUTPUT | MUX_MODE3)  /* kpd_col2 -> gpio_1  NENABLE */
+>         OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)  /* gpio_62 NRESET */
+>     >;
+> };
+> ```
+> `0x186` (`kpd_col2`) was omitted for a long time (a comment wrongly placed
+> gpio_1 in the wkup padconf), so NENABLE stayed in safe_mode and the LAN9500A
+> was never powered on a cold boot — the single root cause of the whole
+> "SOLVED→REGRESSED→intermittent" saga. Do NOT re-add a `gpio_159`/`0x164` mux or
+> a `steelhead-eth-phy-reset-gpios` property — stock leaves that pad safe_mode;
+> it is not wired to the LAN9500A.
 
 ### 1c. Kernel patch `0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp`
 In `ehci_hcd_omap_probe`, **before `usb_add_hcd()`** (order is the whole point):
@@ -166,9 +213,10 @@ armed the old NM retry loop (see the Status note). Since `device-google-steelhea
 **r21** (hot-deployed 2026-07-04; **baked + flashed since v1.6.7, 2026-07-05**)
 eth0 is owned by three shipped config files, and the host has a persistent
 profile too — no ad-hoc setup on either end. ⚠️ All of this presupposes the
-chip **enumerated this boot** (`ls /sys/class/net` shows `eth0`) — if there is
-no `eth0`, that's the #17 enumeration race (Status note), not a profile
-problem; reboot or use the gadget/WiFi instead:
+chip **enumerated this boot** (`ls /sys/class/net` shows `eth0`) — on `#33`+
+(v1.6.8) it enumerates from a true cold boot; if `eth0` is missing on an older
+image it's the unmuxed-pad root cause (Status note), not a profile problem;
+reboot or use the gadget/WiFi instead:
 
 - **Device (baked):** `eth-no-auto-default.conf` (`no-auto-default=eth0` — NM never
   generates "Wired connection 1"), `eth-lan.nmconnection` (DHCP, `dhcp-timeout=30`,
@@ -237,13 +285,16 @@ Work top-down; each step says which layer is at fault.
      baked `eth-no-auto-default.conf` + `eth-lan` profile prevent it; on older images use
      the §4 manual static profile. Confirm by detaching NM
      (`nmcli dev set eth0 managed no`) — a healthy link holds carrier indefinitely.
-   - **No `eth0` / no `usb 1-1` device** → kernel/HW layer. **First check: is it
-     the KNOWN enumeration intermittency?** (Active again as of 2026-07-05 —
-     0/3 v1.6.7 acceptance boots enumerated, CCS=0, on the same kernel that
-     enumerated 3/3 on 2026-07-03/04.) Reboot once or twice: if the chip
-     appears on another boot, it's the #17 ehci bring-up race, not your
-     change. If it never appears across several boots on a kernel that used
-     to enumerate, go on.
+   - **No `eth0` / no `usb 1-1` device** → kernel/HW layer. **First check the
+     `gpio_1` NENABLE pad mux** (the 2026-07-06 root cause): the flashed DTB's
+     `ethernet_gpios` MUST mux `kpd_col2` @ `0x186` (`dtc -I dtb -O dts <dtb> |
+     grep -A4 ethernet_gpios` should show BOTH `0x186` and `0x08c`). Confirm live
+     from the cold-failed state: `mmio r 0x4A100184` should read `0x0e03….` — if
+     the upper 16 bits are `0x010f` (safe_mode) the pad is unmuxed and the fix is
+     missing from this build. On `#33`+ this is fixed; a true cold boot after a
+     clean flash enumerates. (Historical: the "intermittency" 2026-07-05 was
+     **stock priming** — warm reboots from a stock RAM boot kept the chip powered
+     and masked the miss, not an ehci race.)
 
 2. **Did the build actually contain the fix?** Re-check the build log for
    `patching file drivers/usb/host/ehci-omap.c` and `.../mfd/omap-usb-host.c` with **no

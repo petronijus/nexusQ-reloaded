@@ -99,22 +99,30 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `brcm/brcmfmac4330-sdio.bin` + nvram `brcm/brcmfmac4330-sdio.txt` (NOT the bcmdhd
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
-  🟠 **Enumeration is INTERMITTENT (task #17, reopened-narrowed 2026-07-05):**
-  on some boots the chip never enumerates — no `usb 1-1`, no `eth0`, USB
-  CCS=0 (0/3 on the v1.6.7 acceptance vs 3/3 on 2026-07-03/04, byte-identical
-  kernel; a kernel/ehci bring-up race, patches 0006/0008/0012 area — NOT
-  cpufreq, NOT the NM profiles). **A missing `eth0` is the known intermittency
-  — report it as "#17 enumeration race, this boot", not as a new regression**
-  (a reboot may bring it back). ✅ The **NM layer is resolved** (2026-07-04,
-  baked eth0 profiles in device r21, in the flashed image since v1.6.7): when
-  `eth0` exists the link is healthy (100Mbps/Full, 0 errors, stable carrier) —
-  eth0 sits quietly at NM "disconnected" (or "connected" if `eth-direct` was
-  activated / a real LAN gave a lease). **`NetworkManager-wait-online` PASSES
-  even with the chip absent** (graceful degradation, verified ×3 boots) — a
-  wait-online failure is a REAL fault, report it. A recurring ~47 s
-  activate/deactivate loop in the journal = the r21 profiles are missing
-  (pre-v1.6.7 image). NB eth0's hw MAC is random per boot (no MAC EEPROM) — a
-  changing LAN lease is expected, not a fault.
+  ✅ **task #17 FULLY CLOSED 2026-07-06 — enumerates from a cold boot on `#33`+
+  (v1.6.8).** The old "enumeration intermittency" was NOT a race — it was an
+  **unmuxed `gpio_1` NENABLE pad** (`kpd_col2` @ CORE padconf `0x186`; the DTS
+  muxed only `gpio_62` NRESET at `0x08c`), so gpiolib drove the DATAOUT latch
+  (debugfs "asserted") while the pad stayed safe_mode → the chip was never
+  powered → USB CCS=0. Fixed by the DTS pad mux (patch 0003, kernel `#33`); the
+  "0/3 vs 3/3 boots" was stock priming, not a race. Gold-validated: clean flash +
+  true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. On a **pre-`#33`**
+  image `eth0` may be absent on a cold boot (that unmuxed pad) — report as the
+  known #17 root cause and note the kernel is out of date, not a new regression.
+  ✅ The **NM layer is resolved** (2026-07-04, baked eth0 profiles in device r21,
+  in the image since v1.6.7): when `eth0` exists the link is healthy
+  (100Mbps/Full, 0 errors, stable carrier) — eth0 sits quietly at NM
+  "disconnected" (or "connected" if `eth-direct` was activated / a real LAN gave
+  a lease). **`NetworkManager-wait-online` PASSES even with the chip absent**
+  (graceful degradation) — a wait-online failure is a REAL fault, report it. A
+  recurring ~47 s activate/deactivate loop in the journal = the r21 profiles are
+  missing (pre-v1.6.7 image). NB eth0's hw MAC is random per boot (no MAC
+  EEPROM) — a changing LAN lease is expected, not a fault.
+  - **gpio-debug lesson (record for reuse):** debugfs / `gpiolib` reporting a
+    line "asserted" only means the **DATAOUT latch** is driven — NOT that the pad
+    is routed to the pin. Verify the **IOPAD mux** (`mmio r 0x4A1000xx` / a live
+    stock `omap_mux` dump) before trusting a gpio; a healthy sibling can mask a
+    completely unmuxed control line. Same failure class hit NFC and ethernet.
 - **NFC** (NXP PN544, i2c 2-0028) — **works since `#29` (2026-07-03**, the
   pinmux fix; on older kernels the node is disabled/mis-muxed):
   `ls /sys/class/nfc/` → `nfc0` present; dmesg should show

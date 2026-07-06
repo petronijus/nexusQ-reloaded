@@ -87,12 +87,16 @@ Findings are tagged by `kind`; interpret them like this:
   `vdd_mismatch` warnings on ≤r19 can be non-atomic freq/vdd sampling
   artifacts (fixed in r20 by re-checking freq across the vdd read; a residual
   race remains — 1/91 samples slipped past the guard on the 2026-07-05 v1.6.7
-  acceptance — so a single isolated warn is still noise). Ethernet: a missing
-  `eth0` on a boot is the **known #17 enumeration intermittency**
-  (reopened-narrowed 2026-07-05; 0/3 v1.6.7 acceptance boots enumerated, USB
-  CCS=0) — report it as that, not a new regression; the NM layer is fixed
-  (baked r21 profiles) and `NetworkManager-wait-online` stays green even with
-  the chip absent, so a wait-online failure IS a real fault.
+  acceptance — so a single isolated warn is still noise). Ethernet: task #17 is
+  **FULLY CLOSED 2026-07-06** — `eth0` enumerates from a cold boot on `#33`+
+  (v1.6.8). The old "enumeration intermittency" was an **unmuxed `gpio_1`
+  NENABLE pad** (`kpd_col2` @ `0x186`), not a race, fixed by a DTS pad mux (the
+  "0/3 vs 3/3 boots" was stock priming). On a **pre-`#33`** image a missing
+  `eth0` is that unmuxed pad — report the kernel is out of date, not a new
+  regression. The NM layer is also fixed (baked r21 profiles) and
+  `NetworkManager-wait-online` stays green even with the chip absent, so a
+  wait-online failure IS a real fault. gpio-debug lesson: debugfs "asserted" =
+  the DATAOUT latch is driven, NOT that the pad is routed — verify the IOPAD mux.
 - **failed_unit** — a systemd unit failed. On a **pre-fix** image the usual cause is
   **python**: `python3` SIGSEGVs on ARMv7 — a **FLASH** corruption (NOT a
   build/alignment/compiler/CPython-source/qemu-build bug, all disproven) taking down

@@ -111,7 +111,19 @@ recommendation only, since you do not edit.
 
 ## Known baseline (extend/verify, don't redo from scratch)
 The ethernet bring-up has already been RE'd — see
-`docs/2026-06-22-ethernet-stock-RE.md`. Stock order:
+`docs/2026-06-22-ethernet-stock-RE.md` and the cold-init closure
+`docs/2026-07-06-eth-coldinit-resolved.md`. Stock order:
 `clk_enable(auxclk3=38.4MHz) → udelay(100) → gpio_1(ethernet_nenable)=LOW →
 udelay(2) → gpio_62(ethernet_nreset)=HIGH → EHCI`. Use it as a worked example
 of the rigor expected; verify it still holds and audit whatever the caller asks.
+
+> **Worked win (2026-07-06) — this agent found the eth cold-init root cause by
+> IOPAD diffing.** Stock muxes BOTH ethernet gpio pads (`omap_mux_init_gpio` 1 &
+> 62 @ VA `0xc00178d0`/`dc`, value `0x0e03`); the mainline DTS `ethernet_gpios`
+> muxed only `gpio_62` NRESET (`0x08c`) and **omitted `gpio_1` NENABLE = pad
+> `kpd_col2` @ CORE padconf `0x186`** (`reverse-eng/stock-omap-mux-full.txt`,
+> `kpd_col2` line 520 = `0x0e03`). gpiolib drove the DATAOUT latch (debugfs
+> "asserted") but the pad stayed safe_mode, so the LAN9500A never powered
+> (PORTSC CCS=0). Fix = DTS `OMAP4_IOPAD(0x186, PIN_OUTPUT | MUX_MODE3)`
+> (kernel `#33`). Same pinmux-miss class as the NFC bug — a reminder to always
+> verify pinmux at the IOPAD-offset level, never at the logical-signal level.

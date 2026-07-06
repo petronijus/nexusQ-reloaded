@@ -4,7 +4,51 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-05 (latest): **v1.6.7 RELEASED + FLASHED** — #17 NARROWED (NM half fixed & shipped; LAN9500A enumeration intermittency is BACK)
+## Session 2026-07-06 (latest): **ETHERNET COLD-INIT FIXED — task #17 FULLY CLOSED**, gold-validated; shipping as v1.6.8
+
+The LAN9500A "enumeration intermittency" was **not a kernel/ehci race** — it was
+a **pinmux miss** (same class as the NFC bug). `gpio_1` NENABLE (the LAN9500A
+power-enable) is pad **`kpd_col2` @ CORE padconf `0x186`**, but the DTS
+`ethernet_gpios` node muxed only `gpio_62` NRESET (`0x08c`); `0x186` was omitted
+(a prior comment wrongly placed `gpio_1` in the wkup padconf). So gpiolib drove
+the DATAOUT **latch** (debugfs read "asserted") while the pad stayed in
+**safe_mode** → NENABLE never reached the chip → LAN9500A never powered → never
+drove D+ → **PORTSC CCS=0** on every cold boot. The healthy USB3320 PHY (its
+pads ARE muxed) masked it. The "3/3 vs 0/3 boots" was **stock priming**: those
+passing boots all descended from a stock RAM boot via warm reboots that never
+cut LAN9500A power, so the stock-initialized chip just stayed attached; a clean
+flash / true cold boot without stock always failed.
+
+- **Fix (commit `e33a1b4`, supersedes the premature `6c869e8`):** DTS
+  `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT | MUX_MODE3)` (patch 0003).
+  Kernel pkgrel **32**, uname **`#33`**. Cleanup to stock parity: patch 0006
+  power block reverted to `udelay(100)`/`udelay(2)` (the disproven
+  200ms/50ms/2500ms delays dropped — the 2500ms "attach-ready settle" was the
+  false positive `6c869e8` claimed as the fix); DTS drops the non-stock
+  `gpio_159` (`0x164`) mux + `steelhead-eth-phy-reset-gpios` (stock leaves that
+  pad safe_mode; not wired to the LAN9500A).
+- **Proven three ways:** (a) live `mmio w 0x4A100184 0x0e03010f` + `ehci-omap`
+  rebind from the cold-failed state → `eth0` 100Mbps/Full; (b) bidirectional
+  causality (pad set→attach, cleared→detach); (c) **GOLD STANDARD** — a clean
+  fastboot flash of `#33` + a **true cold power-cycle** → `eth0` enumerates
+  **100Mbps/Full, 0 failed units** (clean-flash warm boot #1 too).
+- **Task #17 is now FULLY CLOSED:** enumerate (this fix) + link + the NM
+  serverless-DHCP-loop fix (r21, v1.6.7).
+- **Method / lesson:** the device was left in the cold-FAILED state and probed
+  live with the aligned `/root/mmio` helper + ULPI viewport reads (**never**
+  python mmap — it wedges INSNREG05); the stock-parity-auditor found the pad miss
+  by diffing `reverse-eng/stock-omap-mux-full.txt` (`kpd_col2` line 520 =
+  `0x0e03`) against the DTS. **debugfs/gpiolib "asserted" only means the DATAOUT
+  latch is driven — NOT that the pad is routed.** `eth0`'s hw MAC is random per
+  boot (no MAC EEPROM) → LAN lease/IP changes; match by hostname.
+- **Release:** a v1.6.8 PUBLIC build + release is in progress (handled
+  separately). Full record: `docs/2026-07-06-eth-coldinit-resolved.md`.
+- **Next steps:** the remaining standing items — PA HDMI-audio UCM, U6 gkr-pam,
+  B4, B10, B16, B21, deep cpuidle C2+, NFC long-lived userspace.
+
+---
+
+## Session 2026-07-05: **v1.6.7 RELEASED + FLASHED** — #17 NARROWED (NM half fixed & shipped; LAN9500A enumeration intermittency is BACK) _(enumeration half FIXED 2026-07-06 — see the session above)_
 
 **v1.6.7 was released and flashed 2026-07-05**
 (<https://github.com/petronijus/nexusQ-reloaded/releases/tag/v1.6.7>; assets

@@ -18,13 +18,14 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.6.7** (flashed 2026-07-05;
-device pkg r21 with the eth profiles BAKED). **eth-direct works, but ONLY on
-boots where the LAN9500A enumerated** — the enumeration intermittency is back
-as of 2026-07-05 (0/3 acceptance boots had `eth0` at all; task #17, a
-kernel/ehci race). The old "flap" was an NM config loop, fixed by the baked
-profiles — if `eth0` exists, the link is healthy (see Transport A); if `eth0`
-is absent, that is the known kernel race, NOT a profile fault. The USB gadget
+"connect like this: `<cmd>`". The device runs **v1.6.8** (kernel `#33`; device
+pkg r21 with the eth profiles BAKED). **eth-direct now works from a cold boot —
+task #17 is FULLY CLOSED (2026-07-06):** the "enumeration intermittency" was an
+unmuxed `gpio_1` NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux in
+`#33`; a true cold power-cycle enumerates `eth0` 100Mbps/Full. The old "flap"
+was an NM config loop, fixed by the baked profiles. (On a **pre-v1.6.8/`#33`**
+image `eth0` could be absent on cold boots — that was the unmuxed pad, not a
+profile fault; power-cycle onto `#33` or use another path.) The USB gadget
 renames its iface + changes MAC every reboot; WiFi is stable at
 **`192.168.20.195`** — the FINAL IP since the
 2026-07-03 batch-2b flash (`#29`), which pins the **factory MAC
@@ -103,13 +104,13 @@ there is NO network path — report "device is in fastboot, not booted; reboot i
 to get a shell" and stop. Otherwise probe the transports below.
 
 ## Transport A — eth-direct cable (host `enp7s0` ↔ device eth0)
-- ⚠️ **Works ONLY on boots where the chip enumerated (task #17, 2026-07-05):**
-  the LAN9500A enumeration is **intermittent** — on some boots there is no
-  `usb 1-1`/`eth0` at all (USB CCS=0; 0/3 on the v1.6.7 acceptance, 3/3 the
-  day before, same kernel — a kernel/ehci bring-up race). If another path is
-  up, `ssh <other-path> 'ls /sys/class/net'` — **no `eth0` = the known kernel
-  race**, do NOT diagnose the NM profiles; skip to B/C (a reboot may bring the
-  chip back).
+- ✅ **Enumerates from a cold boot on `#33`+ (v1.6.8, task #17 CLOSED
+  2026-07-06):** the old "enumeration intermittency" was an unmuxed `gpio_1`
+  NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux — a clean flash +
+  true cold power-cycle enumerates `eth0` 100Mbps/Full. On a **pre-`#33`** image
+  `eth0` may be absent on a cold boot (that unmuxed pad, not a profile fault):
+  `ssh <other-path> 'ls /sys/class/net'` — no `eth0` → skip to B/C and get onto
+  `#33`.
 - ✅ **NM layer resolved 2026-07-04:** when `eth0` exists, the link is healthy
   and carrier is **stable** (the old "flap" was NM's auto-generated-profile
   DHCP retry loop bouncing the carrier via MAC rewrites — fixed by baked eth0
