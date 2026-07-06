@@ -4,7 +4,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.10] - 2026-07-07
 
 > **v1.6.10 — the genuinely clean boot log.** Framed for **v1.6.10** (PUBLIC
 > build + release in progress, handled separately — **no git tag from here**;
