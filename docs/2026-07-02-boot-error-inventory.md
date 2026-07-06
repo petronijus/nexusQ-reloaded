@@ -533,3 +533,81 @@ fanless sphere; keep reporting the peak in every diag.
 **Backlog after v1.6.9 (PROJECTS only, no boot-log items left):** NFC
 long-lived userspace (tap-to-pair), deep cpuidle C2+ (HS secure dispatcher),
 plus the thermal-headroom watch.
+
+---
+
+## UPDATE 2026-07-06 — v1.6.10: THE BOOT LOG IS NOW GENUINELY EMPTY (every remaining B/U item closed)
+
+The "known-benign residual set" listed all through this file is **gone**. Every
+line that was still on the v1.6.9 boot (~15 err/warn) was individually
+root-caused and fixed with a REAL fix, plus two authorized exceptional downgrades
+and two genuinely-external lines documented. **Acceptance (clean fastboot flash,
+device pkg `r28` / kernel pkgrel `35` / uname `#36`): `dmesg -l err,warn` is
+EMPTY; `journalctl -b -p warning` = ONLY 3 genuinely-external residuals.** Full
+narrative + the rc1→rc5 arc and engineering lessons:
+`docs/2026-07-06-bootlog-cleanup.md`. Ships as **v1.6.10** (PUBLIC release in
+progress separately).
+
+### Every inventory item — final disposition
+
+| ID | Line | v1.6.10 disposition |
+|----|------|---------------------|
+| **B4** (part 1) | brcmfmac `…google,steelhead.bin failed -2` | ✅ FIXED — `firmware-google-steelhead` (r1) ships board-named symlinks so the device-specific probe hits. |
+| **B4** (part 2) | brcmfmac `.clm_blob` / `.txcap_blob` `-2` | ✅ FIXED — kernel **patch 0033**: OPTIONAL blobs requested with `firmware_request_nowarn` (BCM4330 CLM is in-firmware; no separate blob exists). |
+| **B10** | `hw-breakpoint: Failed to enable monitor mode on CPU 0.` | ✅ FIXED — kernel **patch 0034** drops the `HAVE_HW_BREAKPOINT` arch select. OMAP4460 HS has secure debug locked, `enable_monitor_mode()` can never set `DSCR.MDBGEN`, and stock 3.0.8 didn't build it. **No functional loss.** |
+| **B16** | `ramoops: found existing invalid buffer` | ✅ Absent on the clean-flash acceptance boot (dmesg err/warn empty). Cold-boot ramoops garbage; no dedicated fix was needed — it did not fire this run. Watch for a recurrence on a truly cold boot. |
+| **B21** `pmu` | `no interrupt-affinity property, guessing.` | ✅ FIXED — DTS `&pmu` `interrupt-affinity = <&cpu0 &cpu1>`. |
+| **B21** `gpmc` | `gpmc_mem_init: disabling cs 0 mapped at 0x0-0x1000000` | ✅ FIXED — DTS `&gpmc` `status = "disabled"` (no GPMC device on steelhead). |
+| **B21** journald ACL | `Failed to set ACL … Not supported` | ✅ FIXED — defconfig `CONFIG_EXT4_FS_POSIX_ACL=y` (also makes per-user `journalctl` work). |
+| **B21** journald BPF | `unit configures an IP firewall, but … does not support BPF/cgroup firewalling` | ✅ FIXED — **BPF ENABLED** (`BPF_SYSCALL=y`+`BPF_JIT=y`+`CGROUP_BPF=y`). See the **whack-a-mole** note below; also closed the `unprivileged_bpf_disabled` sysctl warn. `CONFIG_SYN_COOKIES=y` added alongside (SYN-flood protection + kills the `tcp_syncookies` sysctl warn). |
+| **B21** L2C ×2 | `L2C: platform/DT modifies aux control register` | 🔽 **AUTHORIZED DOWNGRADE** — kernel **patch 0035** → `pr_debug`. Linux legitimately enables L2 prefetch via the secure SMC over a ROM value that leaves it off; the readback delta IS the prefetch bits, otherwise unremovable without a perf regression (immutable stock bootloader, no DT/upstream path). Register end-state identical to stock, exhaustively verified 2026-07-06. |
+| **B22/B23** | `twl: not initialized` ×22 / `Skipping twl internal clock init` | ✅ Already fixed at `#29` (patches 0030/0031, batch 2b) and **confirmed absent** on the v1.6.10 acceptance — the carry-over listing as "residual" in the v1.6.9 sections was stale. |
+| **U5** | `bluetoothd: Failed to set default system config for hci0` | ✅ FIXED (real fix; supersedes the v1.6.9 "documented-benign" verdict, which was itself a correction) — device post-install populates bluez `/etc/bluetooth/main.conf` `[LE]` with sane defaults so the MGMT system-config TLV is non-empty and the call succeeds. bluez was logging a failure though it never sent anything on an empty main.conf. |
+| **U7** | `systemd-nsresourced[…]: bpf-lsm not supported` | 🔽 **DISABLED** (masked, low priority) — preset `20-nexusq-nsresourced-off.preset` `disable` + post-install removes the enable symlinks. BPF-LSM isn't built and the appliance uses no unprivileged-userns delegation. |
+
+### Also fixed in v1.6.10 (userspace lines not previously B/U-numbered)
+
+- **Bluetooth `BD_ADDR`** (the real correctness bug found while chasing U5): the
+  controller shipped the non-unique, group-bit-set placeholder
+  `43:30:A0:00:00:00`. Fixed by DTS `local-bd-address = [e5 49 20 ca 8f f8]`
+  (stock `f8:8f:ca:20:49:e5`) **plus** kernel **patch 0036** (btbcm now
+  recognizes the `43:30:A0` BCM4330 placeholder so the DT address is actually
+  programmed — the DT alone didn't take: btbcm only knew the `43:30:B1`
+  signature). Verified: controller stays `F8:8F:CA:20:49:E5`.
+- **PulseAudio `pid.c: Daemon already running.`** — `/etc/pulse/client.conf.d`
+  disables client autospawn (PA is started once by the XDG autostart).
+- **`50-dns-filter.sh` exit 1 on `lo`** — NM `conf.d` marks loopback unmanaged so
+  the dispatcher never runs for `lo` (the upstream postmarketos-base script lacks
+  an `lo` guard — worth an upstream bug).
+- **bluetooth `ConfigurationDirectory` 755-vs-555** — drop-in
+  `ConfigurationDirectoryMode=0755`.
+- **librespot boot restart / mixer race** — `librespot.service` `ExecStartPre` is
+  a readiness gate (waits for both cards + the `NexusQ` softvol control), no
+  timeout wrapper (busybox `timeout` leaked an orphaned process).
+
+### The whack-a-mole lesson (record it)
+
+The `unit configures an IP firewall, but the local system does not support
+BPF/cgroup firewalling` notice is emitted **once for the FIRST unit** that carries
+`IPAddressDeny`. Silencing units one at a time (the interim journald/udevd
+no-ipfirewall drop-ins) just **moved the line to the next unit** — a systemd
+"first unit using IP firewalling" notice can't be killed per-unit. **Enabling BPF
+kills it for ALL units at once** and turns the default `IPAddressDeny=any` into
+real hardening; the interim per-unit drop-ins were removed once BPF was present.
+
+### The 3 genuinely-external residuals (honest, not cleanly fixable)
+
+- **eth-lan DHCP fail on a DHCP-less direct PC cable** — environmental;
+  `autoconnect=false` would break real-LAN plug-and-play.
+- **kscreen `.service` D-Bus naming** — upstream libkscreen packaging lint (hard
+  dep via lxqt-config).
+- **avahi `No NSS support for mDNS`** — `nss-mdns` is not packaged in the
+  pmOS/Alpine repos (`apk: no such package`); avahi's publish path (librespot
+  Spotify-Connect zeroconf) works fine.
+
+Anything beyond these three on a future boot is a **regression**, not a
+known-benign residual. The standing **~94–99 °C** sustained-load thermal
+watch-item remains (not a fault). **No serial-console access exists** on this
+device (fastboot + ssh + stock/our build only) — deep cpuidle C2/C3 is
+code-feasible but BLOCKED (the suspend-to-RAM de-risk HUNG on resume and blind
+debugging is impractical); deferred until serial exists.

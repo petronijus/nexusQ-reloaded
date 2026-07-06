@@ -23,15 +23,21 @@ Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware lo
 > `fw_bcm4330_*.bin` images. **brcmfmac cannot use those** — they are kept only for
 > parity. The WiFi firmware that actually loads is `brcmfmac4330-sdio.bin` above.
 
-brcmfmac also probes three optional names we do **not** ship (each logs a
-`Direct firmware load ... failed with error -2` at boot, then WiFi proceeds on
-the generic firmware — inventory item B4 in
-`../docs/2026-07-02-boot-error-inventory.md`):
-`brcmfmac4330-sdio.google,steelhead.bin` (a board-specific firmware override,
-probed before the generic `.bin` — a symlink/copy under that name would silence
-it), `brcmfmac4330-sdio.clm_blob` (regulatory/channel data) and the txcap blob
-(no upstream blob exists for this FWID `01-cafa6b3e`; the regulatory data is
-baked into the firmware).
+brcmfmac also probes board-specific and optional firmware names. These logged
+`Direct firmware load ... failed with error -2` at boot (inventory item B4) —
+**both silenced in v1.6.10** (the boot log is now clean):
+
+- `brcmfmac4330-sdio.google,steelhead.bin` / `.txt` — a board-specific override
+  the driver builds from the DT compatible (`google,steelhead`) and probes
+  **before** the generic `.bin`. The `firmware-google-steelhead` aport (r1) now
+  **ships board-named symlinks** to the identical generic files (comma is a legal
+  filename char), so the board-specific probe succeeds and the `-2` never
+  happens.
+- `brcmfmac4330-sdio.clm_blob` (regulatory/channel data) and the txcap blob — no
+  upstream blob exists for this FWID `01-cafa6b3e` (the regulatory data is baked
+  into the firmware), so there is nothing to ship. **Kernel patch 0033** requests
+  these OPTIONAL items with `firmware_request_nowarn`, so their absence is silent
+  instead of an error. See `../docs/2026-07-02-boot-error-inventory.md` (B4).
 
 > ℹ️ **The nvram `macaddr=` is IGNORED by brcmfmac/the firmware** (proven by a
 > live driver-reload test 2026-07-03): the chip's OTP MAC

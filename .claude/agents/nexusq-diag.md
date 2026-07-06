@@ -144,10 +144,10 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   2026-07-03 reference: 1200 MHz @ 1 380 000 µV load / 920 MHz @ 1 317 000 µV
   idle (exact OPP tracking); idle 66–78 °C, peak **91.8 °C** under dual-core
   load — only ~8 °C headroom to the 100 °C trip, so a sustained-load diag
-  SHOULD report the peak temp (expected-hot, but watch it). **2026-07-06 (v1.6.9)
-  the peak crept to ~98–99 °C** under sustained dual-core load — still below the
-  100 °C passive trip, no throttle, but the headroom is thin; this is an active
-  watch-item, always report the peak.
+  SHOULD report the peak temp (expected-hot, but watch it). **2026-07-06
+  (v1.6.9/v1.6.10) the peak sits ~94–99 °C** under sustained dual-core load —
+  still below the 100 °C passive trip, no throttle, but the headroom is thin;
+  this is an active watch-item, always report the peak.
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
 - **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
@@ -251,19 +251,28 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
 - **pstore** (crit) — a previous boot panicked (only survives a *warm* reboot).
 
 Every boot/dmesg error is ours to fix — never dismiss one as benign/expected.
-As of **v1.6.9** the boot is CLEAN (0 failed units) and every remaining err/warn
-has been **individually root-caused and triaged** to a known-benign residual
-set — do NOT re-derive them, but a **NEW / unlisted** line is still ours. Known
-residual (all benign, individually documented in
-`docs/2026-07-02-boot-error-inventory.md`): **U5** bluetoothd
-`Failed to set default system config for hci0` (bluez sends the MGMT batch
-regardless; BCM4330B1 rejects it; controller works — no clean suppression),
-**B4** brcmfmac `google,steelhead.bin`/`.clm_blob` probe misses then generic fw
-loads, **B10** hw-breakpoint monitor-mode, **B16** cold-boot ramoops
-invalid-buffer, **B21** L2C/gpmc-cs0/pmu-affinity/journald-BPF+ACL, **B22/B23**
-twl init-order, **U7** nsresourced bpf-lsm. (**U4** HDMI-audio PA noise and
-**U6** gkr-pam are FIXED in v1.6.9 — see above; if either recurs, it's a
-regression.)
+As of **v1.6.10** the boot log is **GENUINELY CLEAN**: on a clean-flash boot of
+`#36` / device r28, **`dmesg -l err,warn` is EMPTY** and `journalctl -b -p
+warning` contains **ONLY these 3 genuinely-external residuals** — anything else
+is a **REGRESSION**, report it:
+  1. **eth-lan DHCP fail** on a DHCP-less direct PC cable (environmental —
+     `autoconnect=false` would break real-LAN plug-and-play);
+  2. **kscreen `.service` D-Bus naming** (upstream libkscreen packaging lint, hard
+     dep via lxqt-config);
+  3. **avahi `No NSS support for mDNS`** (`nss-mdns` unpackaged in pmOS/Alpine;
+     avahi's publish path for librespot Spotify-Connect zeroconf works fine).
+The whole former B/U residual set (B4 brcmfmac fw-probe, B10 hw-breakpoint, B16
+ramoops, B21 L2C/gpmc/pmu/journald-BPF+ACL, B22/B23 twl, U5 bluetoothd
+system-config, U7 nsresourced, U4 HDMI-audio, U6 gkr-pam) is **FIXED / downgraded
+/ disabled in v1.6.10** — do NOT report any of them as benign; their return is a
+regression. Notable v1.6.10 truths: BPF is now enabled (systemd IP-hardening
+functional; no IP-firewall notice); the L2C aux-modify notice is an **authorized**
+`pr_debug` downgrade (register end-state identical to stock); Bluetooth BD_ADDR is
+the real per-device `F8:8F:CA:20:49:E5` (was placeholder `43:30:A0:00:00:00`).
+Full disposition table: `docs/2026-07-02-boot-error-inventory.md` (v1.6.10
+update) + `docs/2026-07-06-bootlog-cleanup.md`. **No serial console exists** on
+this device (fastboot + ssh + stock/our build only) — deep cpuidle C2/C3 is
+BLOCKED (resume hang can't be debugged blind), not a diag finding.
 
 ## 5. Report back
 

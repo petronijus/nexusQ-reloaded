@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.9)
+# Nexus Q Reloaded -- Install Guide (v1.6.10)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,17 +12,14 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.9.img` (5.0 MiB), `nexusq-rootfs-v1.6.9-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.6.10.img` (~5.3 MiB), `nexusq-rootfs-v1.6.10-sparse.img.zst`
   (~2.08 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.6.9.sha256`
-  - **`nexusq-boot-v1.6.9.img` is byte-identical to v1.6.8's boot** (the kernel is
-    unchanged since v1.6.8 -- `6.12.12-r32`, uname `#33`; v1.6.9 is a device-package-only
-    release). If v1.6.8's boot is already on the device you can **flash only userdata**
-    and skip the boot step below. Verify against `nexusq-v1.6.9.sha256`.
-    (The v1.6.6/v1.6.7 boot, md5 `12fba8987364226b2c60aaaf94650557`, is the OLDER `#29`
-    kernel -- pre-ethernet-cold-init -- and the v1.6.2/v1.6.3/v1.6.5 boot, md5
-    `36a3dec2c4a493710dffa18c4d796236`, is older still; flash **both** images when coming
-    from any of those.)
+  decompress it, see step 2), `nexusq-v1.6.10.sha256`
+  - **`nexusq-boot-v1.6.10.img` is a NEW boot image** -- v1.6.10 rebuilds the kernel
+    (`6.12.12-r35`, uname `#36`; patches 0033-0036 + a BPF/ACL/SYN defconfig), so it is
+    **not** byte-identical to the v1.6.8/v1.6.9 boot. The BPF core grew the image ~0.3 MiB
+    (from 5.0 MiB), still **well under the 8 MB boot partition**. Coming from any earlier
+    release you must flash **both** boot and userdata. Verify against `nexusq-v1.6.10.sha256`.
 
 ## 1. Enter fastboot mode
 
@@ -37,8 +34,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# (Identical to v1.6.8's boot -- skip this line if that one is already flashed.)
-fastboot flash boot nexusq-boot-v1.6.9.img
+# v1.6.10 rebuilt the kernel (~5.3 MiB with BPF) -- flash it (not identical to v1.6.8/v1.6.9).
+fastboot flash boot nexusq-boot-v1.6.10.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -47,8 +44,8 @@ fastboot flash boot nexusq-boot-v1.6.9.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.9-sparse.img.zst   # -> nexusq-rootfs-v1.6.9-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.9-sparse.img
+zstd -d nexusq-rootfs-v1.6.10-sparse.img.zst   # -> nexusq-rootfs-v1.6.10-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.6.10-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -152,7 +149,7 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
 - **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
-- Kernel: mainline 6.12.12 + the 31 patches in `kernel/patches/`,
+- Kernel: mainline 6.12.12 + the 36 patches in `kernel/patches/`,
   config `kernel/configs/steelhead_defconfig`.
 
 ```bash

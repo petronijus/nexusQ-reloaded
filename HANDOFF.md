@@ -4,7 +4,78 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-06 (latest): **v1.6.9 BOOT-LOG CLEANUP — the boot log is now clean**
+## Session 2026-07-06 (latest): **v1.6.10 — the boot log is GENUINELY clean (dmesg err/warn EMPTY)**
+
+v1.6.9 still booted with **~15 err/warn lines**. v1.6.10 closes **all** of them —
+every one root-caused and fixed with a REAL fix, plus two authorized exceptional
+downgrades and two honestly-documented external lines. **Acceptance (clean
+fastboot flash, device pkg `r28` / kernel pkgrel `35` / uname `#36`):
+`dmesg -l err,warn` is EMPTY; `journalctl -b -p warning` = ONLY the 3
+genuinely-external residuals below.** Kernel patches **0033–0036**, defconfig
+(BPF/ACL/SYN), DTS (pmu/gpmc/BD_ADDR), device pkg r22→r28, new
+`firmware-google-steelhead` (r1). boot.img grew **~0.3 MB** (the BPF core) → still
+well under the 8 MB boot partition. A v1.6.10 PUBLIC build + release is in
+progress separately (**no tag from here**). Full note:
+`docs/2026-07-06-bootlog-cleanup.md` (rc1→rc5 arc); inventory closed out in
+`docs/2026-07-02-boot-error-inventory.md`.
+
+- **kernel/DTS:** `&pmu interrupt-affinity`; `&gpmc status=disabled` (no GPMC on
+  steelhead); patch **0033** brcmfmac `firmware_request_nowarn` for the OPTIONAL
+  clm/txcap blobs (BCM4330 CLM is in-firmware); patch **0034** drops the
+  `HAVE_HW_BREAKPOINT` arch select (OMAP4460 HS = secure debug locked, monitor
+  mode can never enable, stock didn't build it — zero functional loss); patch
+  **0036** + DTS `local-bd-address=[e5 49 20 ca 8f f8]` gives the controller its
+  real per-device **BD_ADDR `F8:8F:CA:20:49:E5`** (was the non-unique,
+  group-bit-set placeholder `43:30:A0:00:00:00` — the DT alone didn't take,
+  btbcm only knew the `43:30:B1` signature).
+- **defconfig:** `CONFIG_EXT4_FS_POSIX_ACL=y` (journald ACL + per-user
+  journalctl); **BPF enabled** (`BPF_SYSCALL`+`BPF_JIT`+`CGROUP_BPF`) — the
+  whack-a-mole fix, see below; `CONFIG_SYN_COOKIES=y`.
+- **firmware pkg (r1):** board-named brcmfmac symlinks so the device-specific
+  `google,steelhead.bin` probe hits.
+- **device pkg (r28):** PA client autospawn off; `50-dns-filter.sh` skipped on
+  `lo` (NM marks loopback unmanaged); bluetooth `ConfigurationDirectoryMode=0755`;
+  librespot `ExecStartPre` readiness gate (no busybox `timeout` orphan);
+  bluetoothd `main.conf [LE]` populated so the MGMT system-config TLV is non-empty
+  (the "Failed to set default system config" line was bluez logging a failure it
+  never actually sent — corrects the v1.6.9 "benign" framing); `systemd-nsresourced`
+  disabled (preset + post-install symlink removal — BPF-LSM not built, no
+  unprivileged-userns use).
+- **AUTHORIZED downgrade:** patch **0035** → L2C aux-modify notice to `pr_debug`.
+  Linux legitimately enables L2 prefetch via the secure SMC over a ROM value that
+  leaves it off; the readback delta IS the prefetch bits, otherwise unremovable
+  without a perf regression (immutable stock bootloader). Register end-state
+  identical to stock, exhaustively verified.
+- **Whack-a-mole lesson:** the systemd `unit configures an IP firewall … does not
+  support BPF/cgroup firewalling` notice fires **once for the FIRST unit** with
+  `IPAddressDeny`, so silencing units one-by-one just moves it to the next unit.
+  **Enable BPF or nothing** — BPF kills it for ALL units and makes
+  `IPAddressDeny=any` functional hardening.
+- **No-serial lesson (blocks deep cpuidle):** the only device paths are
+  **fastboot + ssh + stock/our build** — **no serial console**. Deep cpuidle
+  C2/C3 is code-feasible (mainline has the OMAP4460 HS secure idle dispatcher,
+  services 0x1c/0x1d/0x21) but **BLOCKED**: the suspend-to-RAM de-risk HUNG on
+  resume and debugging a resume hang blind (no console; pstore doesn't survive the
+  DRAM re-init) is impractical. **Deferred until serial exists — do not re-attempt
+  C2+ blind.**
+- **The 3 genuinely-external residuals (honest, not cleanly fixable):**
+  (1) **eth-lan DHCP fail** on a DHCP-less direct PC cable — environmental
+  (`autoconnect=false` would break real-LAN plug-and-play); (2) **kscreen
+  `.service` D-Bus naming** — upstream libkscreen packaging lint (hard dep via
+  lxqt-config); (3) **avahi `No NSS support for mDNS`** — `nss-mdns` is not
+  packaged in the pmOS/Alpine repos (avahi's publish path for librespot
+  Spotify-Connect zeroconf works fine). Anything else on a future boot is a
+  **regression**.
+- **Thermal watch (active):** sustained dual-core load peaks **~94–99 °C** (below
+  the 100 °C passive trip, no throttle) — thin headroom on the fanless sphere;
+  keep reporting the peak in every diag.
+- **Next steps / backlog (PROJECTS only — no boot-log items left):** NFC
+  long-lived userspace (tap-to-pair), deep cpuidle C2+ (blocked on serial),
+  the thermal-headroom watch.
+
+---
+
+## Session 2026-07-06: **v1.6.9 BOOT-LOG CLEANUP — the boot log is now clean**
 
 The last two once-per-boot / per-ssh log-noise items on the (already clean)
 v1.6.8 boot are fixed — all **cosmetic, no functional change**. Device pkg

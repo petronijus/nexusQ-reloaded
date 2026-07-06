@@ -41,7 +41,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 
 | Subsystem | Status | Notes |
 |---|:---:|---|
-| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **clean boot log** — 0 failed units, the last cosmetic gkr-pam + HDMI-audio log noise silenced · v1.6.9 |
+| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **genuinely clean boot log** — 0 failed units, `dmesg` err/warn EMPTY, and `journalctl -b -p warning` down to only 3 documented-external lines (all ~15 v1.6.9 residual err/warn lines root-caused + fixed) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
@@ -50,7 +50,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager. On v1.6.5 the DHCP IP wanders (NM randomized-MAC → fresh lease per boot — that was the 2026-07-02 "dead WiFi" scare); **fixed + verified on device 2026-07-03** (stable MAC/IP, ships in v1.6.6 — which pins the **factory MAC** at the NM layer, verified on air, since brcmfmac ignores the nvram `macaddr=`) |
-| 🔵 **Bluetooth** (BCM4330) | ✅ | |
+| 🔵 **Bluetooth** (BCM4330) | ✅ | per-device **BD_ADDR** `F8:8F:CA:20:49:E5` programmed since v1.6.10 (was the non-unique placeholder `43:30:A0:00:00:00`; DTS `local-bd-address` + btbcm patch 0036) |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
@@ -144,13 +144,13 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **32 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **36 patches** in `kernel/patches/`), the
 local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/      dts · defconfig · 32 mainline patches
+kernel/      dts · defconfig · 36 mainline patches
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
 userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
 reverse-eng/ ground truth extracted from the factory kernel
@@ -178,7 +178,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.6 ── ✦ NFC fixed (pinmux) · boot-error cleanup · factory MAC on air     2026-07-04
 1.6.7 ── ✦ baked ethernet NM profiles · led_static healthd guard            2026-07-05
 1.6.8 ── ✦ ethernet works from cold — unmuxed NENABLE pad (task #17 closed)          2026-07-06
-1.6.9 ── ✦ boot log is now clean — gkr-pam + HDMI-audio noise silenced       ← latest  2026-07-06
+1.6.9 ── ✦ boot log clean — gkr-pam + HDMI-audio noise silenced                      2026-07-06
+1.6.10 ─ ✦ boot log GENUINELY clean — dmesg err/warn EMPTY (all ~15 lines fixed)  ← latest  2026-07-06
 ```
 
 ---

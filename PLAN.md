@@ -3,6 +3,32 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-06 — v1.6.10: THE BOOT LOG IS GENUINELY CLEAN (PUBLIC release in
+> progress, no tag from here).** v1.6.9 still booted with **~15 err/warn lines**;
+> v1.6.10 closes **all** of them — every one root-caused + fixed with a real fix,
+> plus two authorized exceptional downgrades and two honestly-documented external
+> lines. **Acceptance (clean flash, device `r28` / kernel pkgrel `35` / uname
+> `#36`): `dmesg -l err,warn` EMPTY; `journalctl -b -p warning` = ONLY 3
+> genuinely-external residuals.** Kernel patches **0033–0036** (brcmfmac
+> nowarn-clm, drop HW_BREAKPOINT arch-select, L2C→pr_debug downgrade, btbcm
+> 43:30:A0 BD_ADDR), defconfig **BPF** (`BPF_SYSCALL`/`BPF_JIT`/`CGROUP_BPF`) +
+> `EXT4_FS_POSIX_ACL` + `SYN_COOKIES`, DTS `&pmu interrupt-affinity` / `&gpmc
+> disabled` / `local-bd-address`, device pkg r22→r28 (PA autospawn off, dns-filter
+> lo-guard, bluetooth confdir 0755, librespot readiness gate, bluetoothd
+> `main.conf [LE]`, nsresourced disabled), new `firmware-google-steelhead` (r1,
+> board-named brcmfmac symlinks). boot.img +~0.3 MB (BPF) → still < 8 MB.
+> **BD_ADDR** now the real per-device `F8:8F:CA:20:49:E5` (was placeholder
+> `43:30:A0:00:00:00`). **Whack-a-mole lesson:** the systemd IP-firewall notice
+> fires once for the FIRST unit with `IPAddressDeny` — can't kill it per-unit,
+> needs BPF or nothing. **No-serial lesson:** deep cpuidle C2/C3 stays BLOCKED
+> (feasible code, but the suspend-to-RAM de-risk HUNG on resume and there is no
+> serial console to debug it blind — deferred until serial exists). **3 external
+> residuals:** eth-lan DHCP on a DHCP-less direct cable (environmental), kscreen
+> `.service` D-Bus naming (upstream libkscreen), avahi No-NSS-mDNS (`nss-mdns`
+> unpackaged). Thermal watch: peak ~94–99 °C under sustained load (no throttle).
+> See `docs/2026-07-06-bootlog-cleanup.md` (rc1→rc5) + the v1.6.10 update in
+> `docs/2026-07-02-boot-error-inventory.md`.
+>
 > **2026-07-06 — v1.6.9 BOOT-LOG CLEANUP: the boot log is now clean (PUBLIC
 > release in progress).** The last two cosmetic log-noise items are fixed
 > (device pkg **r23**, kernel **unchanged** `6.12.12-r32`/`#33`; **no functional
@@ -188,7 +214,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency, 5 GHz carries ~26–30 Mbit/s (2.4 GHz has the BT-coexist bulk stall). _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
 | **TAS5713 amplifier** | ✅ works | _(Updated 2026-06-29, v1.6.1)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed**. The v1.6.0 2× too-fast bug (McBSP2 `CLKGDV=0` + 256-BCLK frame → FSYNC at 2× rate) is **fixed by kernel patch 0022** (CLKGDV derived from the real fclk); on-device 60 s now plays in 60.00 s. librespot/Spotify outputs here via the 48 kHz `nexusq` PCM. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` |
-| Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-03)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). The U5 `bluetoothd: Failed to set default system config for hci0` error did NOT appear on the `#27` boot (watching, not closed). Minor identity item: BD_ADDR is the default-pattern `43:30:A0:00:00:00` — no per-device address set |
+| Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). **BD_ADDR is now the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
@@ -423,6 +449,12 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       registration error.
 - [ ] follow-on: deep idle C2+ — stock has C1–C4 but C2+ traps into the HS
       secure dispatcher (services 0x1c/0x1d/0x21); a dedicated future project.
+      **BLOCKED on serial-console access (2026-07-06):** the code path is feasible
+      (mainline has the OMAP4460 HS secure idle dispatcher) but the suspend-to-RAM
+      de-risk step **HUNG on resume**, and there is **no serial console** on this
+      device (fastboot + ssh + stock/our build only; pstore doesn't survive the
+      DRAM re-init) to debug a resume hang blind. Deferred until serial exists —
+      do NOT re-attempt C2+ blind.
 
 ### 11. Companion app + LAN control bridge  ✅ DONE 2026-06-30 (v1.6.3)
 A modern phone/desktop remote for the Q + the on-device bridge it talks to — replacing

@@ -129,19 +129,25 @@ Findings are tagged by `kind`; interpret them like this:
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
   ⚠️ **Thin headroom (active watch-item):** peak under sustained dual-core load
-  crept from 91.8 °C (2026-07-03) to **~98–99 °C (2026-07-06, v1.6.9)** — still
-  below the 100 °C trip, no throttle, but only ~1–2 °C to spare. Always report
-  the peak temp on a load run.
+  crept from 91.8 °C (2026-07-03) to **~94–99 °C (2026-07-06, v1.6.9/v1.6.10)** —
+  still below the 100 °C trip, no throttle, but only ~1–2 °C to spare at the top.
+  Always report the peak temp on a load run.
 - **governor_not_scaling** — load was high but freq never left 350 MHz; the
   governor or cpufreq path is stalling. See `CPU` + `CLOCKS` (`dpll_mpu`).
 - **kernel_errors** — new oops/WARN/i2c-timeout/voltage lines; read the
-  `KERNEL_LOG_FULL` tail in `snapshot.txt`. ℹ️ **As of v1.6.9 the boot is CLEAN
-  (0 failed units)** and the remaining err/warn are all a **known, individually
-  triaged benign residual** (U5 bluetoothd MGMT-config, B4 brcmfmac fw-probe
-  misses, B10 hw-breakpoint, B16 cold-boot ramoops, B21 L2C/gpmc/pmu/journald,
-  B22/B23 twl, U7 nsresourced bpf-lsm — all in
-  `docs/2026-07-02-boot-error-inventory.md`); don't re-derive them, but a NEW /
-  unlisted line is still ours.
+  `KERNEL_LOG_FULL` tail in `snapshot.txt`. ℹ️ **As of v1.6.10 the boot log is
+  GENUINELY CLEAN:** on a clean-flash `#36` / device r28 boot, `dmesg -l err,warn`
+  is **EMPTY** and `journalctl -b -p warning` = **ONLY 3 genuinely-external
+  residuals** — (1) eth-lan DHCP fail on a DHCP-less direct PC cable
+  (environmental), (2) kscreen `.service` D-Bus naming (upstream libkscreen),
+  (3) avahi `No NSS support for mDNS` (`nss-mdns` unpackaged). **Anything else is
+  a REGRESSION** — including the whole former B/U residual set (B4 brcmfmac
+  fw-probe, B10 hw-breakpoint, B16 ramoops, B21 L2C/gpmc/pmu/journald, B22/B23
+  twl, U5 bluetoothd, U7 nsresourced), all now fixed/downgraded/disabled in
+  v1.6.10 (patches 0033–0036, defconfig BPF/ACL/SYN, DTS, device r28 — see
+  `docs/2026-07-02-boot-error-inventory.md` v1.6.10 update +
+  `docs/2026-07-06-bootlog-cleanup.md`). The L2C aux-modify notice is an
+  **authorized** `pr_debug` downgrade (register end-state identical to stock).
 - **HDMI-audio card / PulseAudio** — the `omap-hdmi-audio` ALSA card is a
   snd-soc-dummy-DAI (not a usable sink; HDMI is desktop video only). Since
   **v1.6.9** PA ignores it via a `PULSE_IGNORE` udev rule, so
