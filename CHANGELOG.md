@@ -4,7 +4,12 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.6.9] - 2026-07-06
+
+> Boot-log cleanup: the two residual once-per-boot / per-ssh log-noise items
+> are gone (gkr-pam keyring, PulseAudio HDMI card) — the boot log is now clean.
+> Device pkg r23; kernel unchanged `#33-postmarketOS` (boot.img byte-identical
+> to v1.6.8). Cosmetic only, no functional change.
 
 > Framed for **v1.6.9** (PUBLIC build + release in progress, handled
 > separately — no git tag from here). All cosmetic boot-log cleanup, **no
