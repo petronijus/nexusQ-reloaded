@@ -1,4 +1,4 @@
-# Tell PulseAudio to ignore the omap-hdmi-audio ALSA card (card "HDMI").
+# Tell PulseAudio to ignore the omap-hdmi-audio ALSA card.
 #
 # On steelhead the HDMI-A-1 output carries the LXQt DESKTOP VIDEO only; its
 # ALSA audio card is backed by snd-soc-dummy-dai with no real IEC958 routing,
@@ -8,4 +8,11 @@
 # PULSE_IGNORE so PA never tries to load module-alsa-card for it. (Real HDMI
 # audio out would need omap-hdmi-audio DAI routing in the DTS/driver — a
 # separate project with no value on a speaker device.)
-SUBSYSTEM=="sound", KERNEL=="card1", ATTRS{id}=="HDMI", ENV{PULSE_IGNORE}="1"
+#
+# Match by the backing PLATFORM device (omap-hdmi-audio.1.auto), NOT the ALSA
+# card index: the card number is probe-order dependent (HDMI was card1 on one
+# boot, card2 on another), and a KERNEL=="cardN" pin matched the wrong card and
+# left HDMI un-ignored (v1.6.9-rc1 reject). KERNELS= walks the parent chain to
+# the stable platform name. Verified live: tags only the HDMI card, not
+# Loopback/tas5713.
+SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="omap-hdmi-audio.1.auto", ENV{PULSE_IGNORE}="1"
