@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=26
+pkgrel=27
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -54,7 +54,6 @@ source="
 	pam-base-auth
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
-	systemd-journald-no-ipfirewall.conf
 	20-nexusq-nsresourced-off.preset
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
@@ -112,12 +111,14 @@ package() {
 	install -Dm644 "$srcdir"/wifi-stable-mac.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-stable-mac.conf
 
-	# Boot-log cleanup (both cosmetic, no functional change):
-	#  - pam-base-auth shadows /usr/lib/pam.d/base-auth to drop the desktop
-	#    keyring lines, silencing "gkr-pam: couldn't unlock the login keyring"
-	#    on every key-based ssh login (gnome-keyring is a hard dep of
-	#    nm-applet/gvfs/webkit so it can't be removed; nothing here uses the
-	#    user keyring). base-session is intentionally NOT shadowed.
+	# Boot-log cleanup (cosmetic, no functional change):
+	#  - pam-base-auth + pam-base-session shadow /usr/lib/pam.d/base-{auth,session}
+	#    to drop the desktop-keyring PAM lines, silencing "gkr-pam: couldn't
+	#    unlock the login keyring" on every key-based ssh login (the noisy one is
+	#    the base-session auto_start). gnome-keyring stays installed (hard dep of
+	#    nm-applet/gvfs/webkit); nothing here uses the user keyring. base-session
+	#    preserves pam_systemd (XDG_RUNTIME_DIR); all its lines are -session
+	#    optional so a stale copy can never block login.
 	#  - PULSE_IGNORE the omap-hdmi-audio card (dummy-DAI, not a usable sink)
 	#    so PulseAudio stops failing module-alsa-card on it every boot.
 	install -Dm644 "$srcdir"/pam-base-auth \
@@ -126,14 +127,6 @@ package() {
 		"$pkgdir"/etc/pam.d/base-session
 	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
 		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
-	# Clear journald's IPAddressDeny=any so systemd doesn't try to install a
-	# cgroup/BPF IP firewall this (deliberately BPF-less) kernel can't enforce.
-	install -Dm644 "$srcdir"/systemd-journald-no-ipfirewall.conf \
-		"$pkgdir"/etc/systemd/system/systemd-journald.service.d/no-ipfirewall.conf
-	# systemd-udevd also ships IPAddressDeny=any — same BPF-firewall warning as
-	# journald; clear it the same way (reuse the drop-in body).
-	install -Dm644 "$srcdir"/systemd-journald-no-ipfirewall.conf \
-		"$pkgdir"/etc/systemd/system/systemd-udevd.service.d/no-ipfirewall.conf
 	# Disable systemd-nsresourced via a low-priority preset (NOT a /dev/null mask,
 	# which makes preset-all warn). See the .preset file header for the ordering.
 	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
@@ -324,7 +317,6 @@ SKIP  wireplumber-autostart-off.desktop
 SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
-SKIP  systemd-journald-no-ipfirewall.conf
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf

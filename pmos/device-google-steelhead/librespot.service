@@ -30,7 +30,7 @@ Wants=network-online.target
 # leading `-`: if it never becomes ready ExecStart won't run (Restart handles it).
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do \
     [ -e /proc/asound/NexusQSpeaker ] && [ -e /proc/asound/Loopback ] || { sleep 1; continue; }; \
-    timeout -k 2 4 aplay -q -D nexusq_soft -f dat -d 1 /dev/zero 2>/dev/null; \
+    aplay -q -D nexusq_soft -f dat -d 1 /dev/zero 2>/dev/null; \
     amixer -c NexusQSpeaker sget NexusQ >/dev/null 2>&1 && exit 0; \
     sleep 1; \
   done; echo "librespot: NexusQ mixer control never appeared" >&2; exit 1'
