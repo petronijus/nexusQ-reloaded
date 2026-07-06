@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000035 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 6 Jul 2026 15:10:00 +0200
+Subject: [PATCH] ARM: l2c: downgrade the OMAP4 aux-modify notice to debug
+
+On OMAP4 Linux legitimately programs the PL310 aux control via the
+secure SMC to enable L2 data+instr prefetch and shared-override on top
+of the ROM value that leaves them off; the readback delta the l2c core
+reports (0x0e070000 -> 0x3e470000) IS exactly those performance bits.
+It is informational, not a fault -- but it printed two pr_warn lines on
+every boot of every OMAP4 board. The stock 2012 bootloader is immutable
+(can't pre-set aux), no DT/upstream path can reconcile the readback
+without disabling prefetch (a real regression), so the only way to a
+clean boot log is to stop warning about the platform's own legitimate,
+secure aux write. Downgrade both readback-delta notices to pr_debug;
+the register end-state (and the post-init AUX_CTRL info print) are
+unchanged. (Exhaustively verified unfixable-otherwise 2026-07-06.)
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mm/cache-l2x0.c
++++ b/arch/arm/mm/cache-l2x0.c
+@@ -805,7 +805,18 @@
+ 	aux |= aux_val;
+ 
+ 	if (old_aux != aux)
+-		pr_warn("L2C: DT/platform modifies aux control register: 0x%08x -> 0x%08x\n",
++		/*
++		 * steelhead: NOT an error. OMAP4 legitimately programs the L2
++		 * aux via the secure SMC to enable L2 data/instr prefetch +
++		 * shared-override over the ROM value that leaves them off; the
++		 * delta IS exactly those perf bits. The stock 2012 bootloader is
++		 * immutable and no DT/upstream path can reconcile the readback
++		 * (exhaustively verified 2026-07-06), so this informational
++		 * readback-delta notice is downgraded to debug rather than kept
++		 * as a permanent boot warning. Register end-state is identical to
++		 * stock. Authorized informational-downgrade, not a defect mask.
++		 */
++		pr_debug("L2C: DT/platform modifies aux control register: 0x%08x -> 0x%08x\n",
+ 		        old_aux, aux);
+ 
+ 	/* Determine the number of ways */
+@@ -1788,7 +1799,10 @@
+ 
+ 	old_aux = readl_relaxed(l2x0_base + L2X0_AUX_CTRL);
+ 	if (old_aux != ((old_aux & aux_mask) | aux_val)) {
+-		pr_warn("L2C: platform modifies aux control register: 0x%08x -> 0x%08x\n",
++		/* steelhead: informational readback-delta, not an error -- see the
++		 * pr_debug note in __l2c_init above; OMAP4 secure-SMC enables L2
++		 * prefetch over the ROM value. Downgraded to debug. */
++		pr_debug("L2C: platform modifies aux control register: 0x%08x -> 0x%08x\n",
+ 		        old_aux, (old_aux & aux_mask) | aux_val);
+ 	} else if (aux_mask != ~0U && aux_val != 0) {
+ 		pr_alert("L2C: platform provided aux values match the hardware, so have no effect.  Please remove them.\n");

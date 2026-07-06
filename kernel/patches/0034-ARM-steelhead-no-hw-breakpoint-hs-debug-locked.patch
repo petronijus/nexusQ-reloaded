@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000034 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 6 Jul 2026 15:05:00 +0200
+Subject: [PATCH] ARM: steelhead: don't select HAVE_HW_BREAKPOINT (HS debug locked)
+
+The Nexus Q's OMAP4460 is a fused HS part with secure debug locked, so
+enable_monitor_mode() can never set DSCR.MDBGEN -- it logged
+"hw-breakpoint: Failed to enable monitor mode on CPU 0" every boot and
+perf/ptrace hardware watchpoints cannot function regardless. Stock 3.0.8
+did not build the feature (no hw_breakpoint symbols in its image). Drop
+the arch select so the feature is not built: matches stock, removes the
+boot warning, zero functional loss on this silicon. This kernel builds
+only for steelhead, so dropping it arch-wide in-tree is safe.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -109,7 +109,14 @@
+ 	select HAVE_FUNCTION_GRAPH_TRACER
+ 	select HAVE_FUNCTION_TRACER if !XIP_KERNEL
+ 	select HAVE_GCC_PLUGINS
+-	select HAVE_HW_BREAKPOINT if PERF_EVENTS && (CPU_V6 || CPU_V6K || CPU_V7)
++	# HAVE_HW_BREAKPOINT deliberately NOT selected on the steelhead build:
++	# the OMAP4460 is a fused HS part with secure debug locked, so
++	# enable_monitor_mode() can never set DSCR.MDBGEN (it logged
++	# "hw-breakpoint: Failed to enable monitor mode on CPU 0" every boot).
++	# perf/ptrace HW watchpoints cannot function on this silicon regardless;
++	# stock 3.0.8 did not build the feature either. Dropping the select
++	# matches stock and removes the boot warning with zero functional loss.
++	# (steelhead-only kernel; safe to drop arch-wide in this tree.)
+ 	select HAVE_IRQ_TIME_ACCOUNTING
+ 	select HAVE_KERNEL_GZIP
+ 	select HAVE_KERNEL_LZ4

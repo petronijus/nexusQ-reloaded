@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000033 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 6 Jul 2026 15:00:00 +0200
+Subject: [PATCH] brcmfmac: don't error on a missing OPTIONAL firmware (clm_blob)
+
+The SDIO fwreq marks the CLM blob BRCMF_FW_REQF_OPTIONAL and the driver
+treats its absence as fine ("no clm_blob available ... limited
+channels"). On the BCM4330 the CLM/regulatory data is compiled into the
+firmware image -- no brcmfmac4330-sdio.clm_blob exists -- yet the
+synchronous fallback path loaded it with request_firmware(), emitting
+"Direct firmware load for brcm/brcmfmac4330-sdio.clm_blob failed with
+error -2" on every boot. Use firmware_request_nowarn() for OPTIONAL
+items at the fallback so the loader does not warn about a file the
+driver itself declares optional. Non-optional items are unchanged.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+@@ -666,6 +666,16 @@
+ 	}
+ 
+ fallback:
++	/*
++	 * The BCM4330 CLM/regulatory data is compiled into the firmware image
++	 * (no separate brcmfmac4330-sdio.clm_blob exists for this FWID), and the
++	 * driver flags that item BRCMF_FW_REQF_OPTIONAL and treats its absence as
++	 * fine ("no clm_blob available"). Don't emit a firmware-load error for an
++	 * item the driver itself declares optional -- use the nowarn loader so the
++	 * spurious "Direct firmware load ... failed with error -2" line is gone.
++	 */
++	if (cur->flags & BRCMF_FW_REQF_OPTIONAL)
++		return firmware_request_nowarn(fw, cur->path, fwctx->dev);
+ 	return request_firmware(fw, cur->path, fwctx->dev);
+ }
+ 

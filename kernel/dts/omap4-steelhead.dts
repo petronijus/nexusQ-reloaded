@@ -635,6 +635,15 @@
 		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
 		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */
 		host-wakeup-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>; /* gpio_47 HOST_WAKE */
+		/* Real per-device BT MAC (stock injected it via the
+		 * board_steelhead_bluetooth.btaddr= cmdline). Without it btbcm
+		 * leaves the BCM4330B1 .hcd placeholder 43:30:A0:00:00:00, which is
+		 * (a) identical on every unit (pairing-record collisions) and (b)
+		 * malformed — MSB 0x43 has the multicast/group bit set, an invalid
+		 * unicast public address. btbcm issues the vendor Write_BD_ADDR
+		 * (0xFC01) from this property. Bytes are DT little-endian of
+		 * f8:8f:ca:20:49:e5 (2026-07-06). */
+		local-bd-address = [e5 49 20 ca 8f f8];
 		/* TWL6030 CLK32KG — same pin as WiFi (stock BT rfkill enables the
 		 * identical "clk32kaudio"-named CLK32KG regulator; see the pwrseq
 		 * node comment for the naming trap). */
@@ -861,3 +870,24 @@
  * descriptor wires omap4_smp_ops, so no explicit cpu enable-method is needed
  * (HS secure-SMC release path; stock service IDs already match mainline).
  */
+
+/*
+ * PMU (dual Cortex-A9 performance monitors). The two per-CPU PMU SPIs (54,55)
+ * map to cpu0/cpu1; declaring interrupt-affinity makes that explicit and
+ * silences the arm_pmu "no interrupt-affinity property, guessing" boot warning.
+ * cpu@1 has no label upstream, so reference it by path.
+ */
+&pmu {
+	interrupt-affinity = <&cpu0>, <&{/cpus/cpu@1}>;
+};
+
+/*
+ * GPMC (general-purpose memory controller): the Nexus Q has no GPMC memory
+ * device (no NAND/NOR; every gpmc_* name in this DTS is a pad muxed to GPIO,
+ * which does not need the controller). Left enabled, gpmc_mem_init finds the
+ * ROM's stale CS0 mapping at 0x0 and logs "disabling cs 0 mapped at
+ * 0x0-0x1000000". Nothing consumes &gpmc, so disable it.
+ */
+&gpmc {
+	status = "disabled";
+};

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=23
+pkgrel=24
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -54,6 +54,7 @@ source="
 	pam-base-auth
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
+	systemd-journald-no-ipfirewall.conf
 	ssh-authorized-keys
 	wifi.nmconnection
 	nexusq-usb-acm-console.sh
@@ -121,6 +122,17 @@ package() {
 		"$pkgdir"/etc/pam.d/base-session
 	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
 		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
+	# Clear journald's IPAddressDeny=any so systemd doesn't try to install a
+	# cgroup/BPF IP firewall this (deliberately BPF-less) kernel can't enforce.
+	install -Dm644 "$srcdir"/systemd-journald-no-ipfirewall.conf \
+		"$pkgdir"/etc/systemd/system/systemd-journald.service.d/no-ipfirewall.conf
+	# Mask systemd-nsresourced: it needs BPF-LSM (not built) to lock down user
+	# namespaces, so without it its workers just die (exit 1) and it logs
+	# "bpf-lsm not supported" every boot. This appliance uses no unprivileged
+	# userns ID-delegation, nothing Requires it — mask the service + its socket.
+	mkdir -p "$pkgdir"/etc/systemd/system
+	ln -sf /dev/null "$pkgdir"/etc/systemd/system/systemd-nsresourced.service
+	ln -sf /dev/null "$pkgdir"/etc/systemd/system/systemd-nsresourced.socket
 
 	# eth0 is OWNED by the baked profiles (see the file comments): eth-lan
 	# (DHCP, one attempt per carrier event) + eth-direct (the static
@@ -297,6 +309,7 @@ SKIP  wireplumber-autostart-off.desktop
 SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
+SKIP  systemd-journald-no-ipfirewall.conf
 SKIP  ssh-authorized-keys
 SKIP  wifi.nmconnection
 SKIP  nexusq-usb-acm-console.sh

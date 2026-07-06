@@ -41,6 +41,17 @@ package() {
 		"$pkgdir"/lib/firmware/brcm/brcmfmac4330-sdio.txt
 	install -Dm644 "$srcdir/BCM4330B1.hcd" \
 		"$pkgdir"/lib/firmware/brcm/BCM4330B1.hcd
+
+	# brcmfmac builds a board-specific name from the DT compatible
+	# ("google,steelhead") and tries brcmfmac4330-sdio.google,steelhead.{bin,txt}
+	# BEFORE the generic files, logging "Direct firmware load ... failed -2" for
+	# the .bin. Ship board-named symlinks to the (identical) generic files so the
+	# board-specific probe succeeds and the -2 never happens. Comma is a legal
+	# filename char. (The .txt probe is already nowarn, symlinked for consistency.)
+	ln -sf brcmfmac4330-sdio.bin \
+		"$pkgdir"/lib/firmware/brcm/"brcmfmac4330-sdio.google,steelhead.bin"
+	ln -sf brcmfmac4330-sdio.txt \
+		"$pkgdir"/lib/firmware/brcm/"brcmfmac4330-sdio.google,steelhead.txt"
 }
 
 sha512sums=""
