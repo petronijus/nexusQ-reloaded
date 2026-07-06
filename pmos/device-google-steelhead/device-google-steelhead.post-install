@@ -39,4 +39,16 @@ dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY >/dev/null 
 EOF
 fi
 
+# --- Disable systemd-nsresourced (BPF-LSM not built; unused on this appliance) ---
+# The systemd package's own configure enables systemd-nsresourced.socket (an
+# /etc/systemd/system/sockets.target.wants symlink) before our 20-nexusq-
+# nsresourced-off.preset is in place, and the image build's preset pass does not
+# re-evaluate it afterwards — so it stayed socket-activated and logged
+# "bpf-lsm not supported" every boot. Remove the enable symlinks directly (this
+# is exactly what `systemctl disable` does; done as a filesystem op because
+# systemctl is not reliably usable at package-configure time in the build
+# chroot). The shipped 20-*.preset then keeps it disabled on any later preset-all.
+rm -f /etc/systemd/system/sockets.target.wants/systemd-nsresourced.socket \
+      /etc/systemd/system/multi-user.target.wants/systemd-nsresourced.service
+
 exit 0
