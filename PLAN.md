@@ -3,6 +3,25 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-06 — v1.6.9 BOOT-LOG CLEANUP: the boot log is now clean (PUBLIC
+> release in progress).** The last two cosmetic log-noise items are fixed
+> (device pkg **r23**, kernel **unchanged** `6.12.12-r32`/`#33`; **no functional
+> change**): (1) **gkr-pam** "couldn't unlock the login keyring" on every ssh
+> session — `/etc/pam.d/base-auth`+`base-session` drop the desktop-keyring PAM
+> lines (gnome-keyring stays as an nm-applet/gvfs/webkit dep; `pam_systemd`
+> preserved); 0 gkr lines verified. (2) **PulseAudio `module-alsa-card`** on the
+> omap-hdmi-audio card — a `PULSE_IGNORE` udev rule; the r22 attempt pinned
+> `KERNEL=="card1"` and was REJECTED (ALSA index is probe-order dependent — HDMI
+> was card2 that boot), r23 matches the backing platform device
+> `KERNELS=="omap-hdmi-audio.1.auto"` (index-independent). **bluetoothd** U5 left
+> documented-benign. **Acceptance on r23 = ACCEPT:** 0 failed units, gkr=0, HDMI
+> noise=0, eth cold-init works, WiFi/NFC/CPU healthy, no new regression; residual
+> err/warn = the known-benign set. **Thermal watch:** peaked ~98–99 °C under
+> sustained dual-core load (below the 100 °C trip, no throttle). **Backlog is now
+> PROJECTS only:** NFC long-lived userspace (tap-to-pair), deep cpuidle C2+, the
+> thermal-headroom watch. See `docs/2026-07-06-bootlog-cleanup.md` and the v1.6.9
+> update in `docs/2026-07-02-boot-error-inventory.md`.
+>
 > **2026-07-06 — ETHERNET COLD-INIT FIXED, task #17 FULLY CLOSED (ships as
 > v1.6.8, PUBLIC release in progress).** The LAN9500A "enumeration
 > intermittency" was **not a kernel/ehci race** (correcting the note below) — it

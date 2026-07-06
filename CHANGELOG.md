@@ -6,21 +6,46 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+> Framed for **v1.6.9** (PUBLIC build + release in progress, handled
+> separately — no git tag from here). All cosmetic boot-log cleanup, **no
+> functional change**; device pkg **r23**, kernel **unchanged** `6.12.12-r32`
+> (uname `#33`). Acceptance **ACCEPT on r23** (clean fastboot flash): **0 failed
+> units**, gkr=0, HDMI-audio noise=0, ethernet cold-init works (100Mbps/Full),
+> WiFi/NFC/CPU healthy, no new regression; the residual err/warn are all the
+> known-benign set. Watch-item: under sustained dual-core load the SoC peaked
+> **~98–99 °C** (below the 100 °C passive trip, no throttle) — the known thin
+> thermal headroom.
+
 ### Fixed
-- **Boot-log cleanup (cosmetic, device pkg r22).** Two once-per-boot / per-ssh
-  log-noise items on an otherwise-clean boot, both root-caused and fixed (not
-  masked): (1) `gkr-pam: couldn't unlock the login keyring` on every key-based
-  ssh session — `/etc/pam.d/base-auth`+`base-session` now shadow the Alpine
-  base to drop the desktop-keyring PAM lines (gnome-keyring is a hard dep of
-  nm-applet/gvfs/webkit so it stays installed; nothing here uses the user
-  keyring; pam_systemd/XDG_RUNTIME_DIR preserved). (2) PulseAudio
-  `module-alsa-card: Failed to find a working profile` on the omap-hdmi-audio
-  card — a `PULSE_IGNORE` udev rule tells PA to skip it (the card is a
-  dummy-DAI with no real audio routing; HDMI carries desktop video only).
-  Validated live: 0 gkr lines across fresh logins, `udevadm test` sets
-  PULSE_IGNORE=1. `bluetoothd: Failed to set default system config for hci0`
-  is documented benign (bluez sends the MGMT batch regardless; controller
-  initialises and works — no clean suppression exists).
+- **Boot-log cleanup (cosmetic, device pkg r23; no functional change).** Two
+  once-per-boot / per-ssh log-noise items on an otherwise-clean boot, both
+  root-caused and fixed (not masked):
+  - **`gkr-pam: couldn't unlock the login keyring`** on every key-based ssh
+    session — `/etc/pam.d/base-auth`+`base-session` now shadow the Alpine base
+    to drop the desktop-keyring PAM lines (gnome-keyring is a hard dep of
+    nm-applet/gvfs/webkit so it stays installed; nothing here uses the user
+    keyring; `pam_systemd`/`pam_rundir` → `XDG_RUNTIME_DIR` preserved, and every
+    base-session line is `-session optional` so a stale copy can never block
+    login). Verified: **0 gkr lines across fresh logins, sessions register**
+    (`loginctl`).
+  - **PulseAudio `module-alsa-card: Failed to find a working profile`** on the
+    omap-hdmi-audio card every boot — a `PULSE_IGNORE` udev rule tells PA to
+    skip it (the card is a snd-soc-dummy-DAI with no usable IEC958 sink; HDMI
+    carries desktop video only, device audio is TAS5713 + snd-aloop).
+    - **r22 → r23 correction:** the first attempt (r22) pinned
+      `KERNEL=="card1"` and was **rejected in acceptance** — the ALSA card index
+      is **probe-order dependent** (HDMI enumerated as `card2` that boot), so the
+      rule tagged the wrong card and PA still errored. r23 matches the backing
+      **platform device** instead: `SUBSYSTEM=="sound", KERNEL=="card*",
+      KERNELS=="omap-hdmi-audio.1.auto"` — index-independent. Verified on r23:
+      `PULSE_IGNORE=1` lands only on the HDMI card, **0 module-alsa-card errors**.
+    - **Lesson:** ALSA card indices are probe-order dependent — a per-card udev
+      rule (`PULSE_IGNORE` and friends) MUST match by backing device (`KERNELS=`)
+      or card id, **never** by `cardN` index.
+- `bluetoothd: Failed to set default system config for hci0` is left as
+  **documented-benign**: bluez sends `MGMT_OP_SET_DEF_SYSTEM_CONFIG` regardless
+  of `main.conf` and the BCM4330B1 rejects the batch, but the controller
+  initialises and works (`Powered: yes`) — no clean suppression exists.
 
 ## [1.6.8] - 2026-07-06
 

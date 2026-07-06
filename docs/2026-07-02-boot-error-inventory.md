@@ -91,8 +91,8 @@ bottom — now the authoritative status — and
 | ID | journal (verbatim) | Analysis |
 |----|--------------------|----------|
 | **U4** | `systemd[484]: pipewire-pulse.socket: Socket service pipewire-pulse.service not loaded, refusing.` + `Failed to listen on PipeWire PulseAudio.` · `pulseaudio[912]: [pulseaudio] module-alsa-card.c: Failed to find a working profile.` · `pulseaudio[912]: [pulseaudio] module.c: Failed to load module "module-alsa-card" (argument: "device_id="1" name="platform-omap-hdmi-audio.1.auto" …"): initialization failed.` · `pulseaudio[1307]: [pulseaudio] pid.c: Daemon already running.` ×2 | **PulseAudio vs PipeWire conflict** in the user session: a `pipewire-pulse.socket` exists without its service, PulseAudio itself runs but can't profile the HDMI-audio ALSA card (no audio-capable EDID sink — README status 🟠), and a second PA spawn races the first. Decide ONE sound server for the image (the working audio path — librespot→ALSA softvol→tee — bypasses both) and remove/disable the loser. |
-| **U5** | `bluetoothd[365]: Failed to set default system config for hci0` | bluetoothd can't push its default controller config to the BCM4330. BT is functionally up (hci0 patched to `BCM4330B1 (002.001.003) build 0482`); find which config item is rejected. |
-| **U6** | `sshd-session.pam[…]: gkr-pam: unable to locate daemon control file` (every ssh session, ×12+ over the boot) · `gkr-pam: couldn't unlock the login keyring.` · `login[…]: gkr-pam: error looking up user information` | **gnome-keyring PAM** is wired into the ssh/login PAM stack but no keyring daemon exists for these sessions (headless root/user logins). Pure noise on every session — drop `pam_gnome_keyring` from the relevant PAM services in the image. |
+| **U5** | `bluetoothd[365]: Failed to set default system config for hci0` | bluetoothd can't push its default controller config to the BCM4330. BT is functionally up (hci0 patched to `BCM4330B1 (002.001.003) build 0482`); find which config item is rejected. **_(RESOLVED 2026-07-06 → DOCUMENTED-BENIGN, v1.6.9: bluez sends `MGMT_OP_SET_DEF_SYSTEM_CONFIG` regardless of `main.conf` and the BCM4330B1 rejects the batch, but the controller initialises and works — `Powered: yes`; no clean suppression exists. Not a fault.)_** |
+| **U6** | `sshd-session.pam[…]: gkr-pam: unable to locate daemon control file` (every ssh session, ×12+ over the boot) · `gkr-pam: couldn't unlock the login keyring.` · `login[…]: gkr-pam: error looking up user information` | **gnome-keyring PAM** is wired into the ssh/login PAM stack but no keyring daemon exists for these sessions (headless root/user logins). Pure noise on every session — drop `pam_gnome_keyring` from the relevant PAM services in the image. **_(FIXED 2026-07-06, v1.6.9: `/etc/pam.d/base-auth`+`base-session` shadow the Alpine base to drop the desktop-keyring PAM lines; gnome-keyring stays installed as an nm-applet/gvfs/webkit dep, `pam_systemd`/`pam_rundir` preserved. Verified: 0 gkr lines across fresh logins, sessions register. See v1.6.9 update at end.)_** |
 | **U7** | `systemd-nsresourced[224]: bpf-lsm not supported, can't lock down user namespace.` | Kernel lacks BPF-LSM (`CONFIG_BPF_LSM`); nsresourced degrades. Decide: enable BPF-LSM in the defconfig (size/perf cost on armv7) or accept + document as a known image limitation. Related to the journald BPF warning in B21. |
 
 Also captured in the -p err stream (self-inflicted, documented not fixed):
@@ -476,3 +476,60 @@ the chip attached). Fix: DTS `ethernet_gpios` += `OMAP4_IOPAD(0x186, PIN_OUTPUT
 **Gold-validated:** clean flash of `#33` + a true cold power-cycle → `eth0`
 100Mbps/Full, 0 failed units. Ships as **v1.6.8**.
 `docs/2026-07-06-eth-coldinit-resolved.md`.
+
+---
+
+## UPDATE 2026-07-06 — v1.6.9 BOOT-LOG CLEANUP: U6 gkr + U4 HDMI-audio FIXED, U5 documented-benign
+
+The last two once-per-boot / per-ssh log-noise items on the otherwise-clean
+v1.6.8 boot are now fixed (both cosmetic, **no functional change**); device pkg
+**r23**, kernel **unchanged** `6.12.12-r32` (uname `#33`). Full note:
+`docs/2026-07-06-bootlog-cleanup.md`.
+
+- **U6 gkr-pam — FIXED (commit e155ec9, r22).** `/etc/pam.d/base-auth` +
+  `base-session` shadow the Alpine base to drop the desktop-keyring PAM lines
+  (the session-phase `auto_start` was the noisy one). gnome-keyring stays
+  installed — it is a hard dep of nm-applet/gvfs/webkit — but nothing on this
+  appliance uses the user keyring; `pam_systemd`/`pam_rundir` → `XDG_RUNTIME_DIR`
+  are preserved and every base-session line is `-session optional` so a stale
+  copy can never block login. Verified: **0 gkr lines across 4 fresh logins,
+  `loginctl` sessions intact**.
+- **U4 (HDMI-audio half) — FIXED (r22 → r23).** PulseAudio's
+  `module-alsa-card: Failed to find a working profile` on the omap-hdmi-audio
+  card is silenced with a `PULSE_IGNORE` udev rule (the card is a
+  snd-soc-dummy-DAI — not a usable IEC958 sink; HDMI is desktop video only,
+  device audio is TAS5713 + snd-aloop).
+  - **r22 was REJECTED in acceptance:** it pinned `KERNEL=="card1"`, but the
+    ALSA card index is **probe-order dependent** — HDMI enumerated as `card2`
+    that boot, so the rule tagged the tas5713 card (id mismatch → no-op) and the
+    real HDMI card was never tagged; PA still failed on it.
+  - **r23 (commit f4462a1)** matches the backing platform device instead:
+    `SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="omap-hdmi-audio.1.auto"`.
+    `KERNELS=` walks the parent chain to the stable platform name, independent
+    of the card number. Verified on r23 via `udevadm test`: `PULSE_IGNORE=1`
+    lands **only** on the HDMI card (not Loopback/tas5713), and after a PA
+    restart the HDMI card no longer appears in `pactl list cards` —
+    **0 module-alsa-card errors**.
+  - **Lesson (record it):** ALSA card indices are probe-order dependent — a
+    per-card udev rule (`PULSE_IGNORE` and any similar) MUST match by backing
+    device (`KERNELS=`) or card id, **never** by `cardN` index.
+- **U5 bluetoothd — DOCUMENTED-BENIGN (not fixed).** bluez sends
+  `MGMT_OP_SET_DEF_SYSTEM_CONFIG` regardless of `main.conf` and the BCM4330B1
+  rejects the batch, but the controller initialises and works (`Powered: yes`).
+  No clean suppression exists — left as a known-benign one-liner.
+
+**Acceptance on r23 (clean fastboot flash, ACCEPT):** 0 failed units, gkr=0,
+HDMI-audio noise=0, ethernet cold-init works (100Mbps/Full), WiFi/NFC/CPU
+healthy, **no new regression**. The remaining err/warn are now **exactly the
+known-benign residual set** (B4 fw-probe misses then generic fw loads, B10
+hw-breakpoint, B16 cold-boot ramoops, B21 L2C/gpmc/pmu/journald, B22/B23 twl,
+U7 nsresourced bpf-lsm) — nothing user-facing.
+
+**Thermal watch-item:** under sustained dual-core load the SoC peaked
+**~98–99 °C** this run (was 91.8 °C on 2026-07-03) — still below the 100 °C
+passive trip, **no throttle**, but the known thin thermal headroom on this
+fanless sphere; keep reporting the peak in every diag.
+
+**Backlog after v1.6.9 (PROJECTS only, no boot-log items left):** NFC
+long-lived userspace (tap-to-pair), deep cpuidle C2+ (HS secure dispatcher),
+plus the thermal-headroom watch.

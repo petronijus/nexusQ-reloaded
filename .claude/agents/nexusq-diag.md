@@ -144,7 +144,10 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   2026-07-03 reference: 1200 MHz @ 1 380 000 µV load / 920 MHz @ 1 317 000 µV
   idle (exact OPP tracking); idle 66–78 °C, peak **91.8 °C** under dual-core
   load — only ~8 °C headroom to the 100 °C trip, so a sustained-load diag
-  SHOULD report the peak temp (expected-hot, but watch it).
+  SHOULD report the peak temp (expected-hot, but watch it). **2026-07-06 (v1.6.9)
+  the peak crept to ~98–99 °C** under sustained dual-core load — still below the
+  100 °C passive trip, no throttle, but the headroom is thin; this is an active
+  watch-item, always report the peak.
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
 - **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
@@ -158,6 +161,15 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   stayed up; `librespot_restart` is a real restart). If the ~40 s auto-skip ever
   returns it's an audio-clock regression. See
   `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md`.
+  ℹ️ **HDMI-audio card (v1.6.9):** the `omap-hdmi-audio` ALSA card is a
+  snd-soc-dummy-DAI — NOT a usable sink (HDMI is desktop video only). PulseAudio
+  now **ignores** it via a `PULSE_IGNORE` udev rule so `module-alsa-card` no
+  longer errors every boot. **Lesson — ALSA card indices are probe-order
+  dependent:** the first rule pinned `KERNEL=="card1"` and broke (HDMI came up
+  as card2 one boot, tagging the wrong card); the shipped rule matches the
+  backing device `KERNELS=="omap-hdmi-audio.1.auto"`. Any per-card udev/PA rule
+  you write MUST match by backing device (`KERNELS=`) or card id, **never** by a
+  `cardN` index.
 - **python ON DEVICE** (armv7 SIGSEGV, **fixed 2026-06-28, v1.6.0**): `python3 -S -c '';
   echo rc=$?`. rc **0** = healthy (the v1.6.0 default-linker r5 build, clean-flashed);
   rc **139** = a corrupt libpython is installed. **ONE documented root cause:** a
@@ -239,6 +251,19 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
 - **pstore** (crit) — a previous boot panicked (only survives a *warm* reboot).
 
 Every boot/dmesg error is ours to fix — never dismiss one as benign/expected.
+As of **v1.6.9** the boot is CLEAN (0 failed units) and every remaining err/warn
+has been **individually root-caused and triaged** to a known-benign residual
+set — do NOT re-derive them, but a **NEW / unlisted** line is still ours. Known
+residual (all benign, individually documented in
+`docs/2026-07-02-boot-error-inventory.md`): **U5** bluetoothd
+`Failed to set default system config for hci0` (bluez sends the MGMT batch
+regardless; BCM4330B1 rejects it; controller works — no clean suppression),
+**B4** brcmfmac `google,steelhead.bin`/`.clm_blob` probe misses then generic fw
+loads, **B10** hw-breakpoint monitor-mode, **B16** cold-boot ramoops
+invalid-buffer, **B21** L2C/gpmc-cs0/pmu-affinity/journald-BPF+ACL, **B22/B23**
+twl init-order, **U7** nsresourced bpf-lsm. (**U4** HDMI-audio PA noise and
+**U6** gkr-pam are FIXED in v1.6.9 — see above; if either recurs, it's a
+regression.)
 
 ## 5. Report back
 

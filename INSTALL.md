@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.7)
+# Nexus Q Reloaded -- Install Guide (v1.6.9)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,14 +12,17 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.7.img` (5.0 MiB), `nexusq-rootfs-v1.6.7-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.6.9.img` (5.0 MiB), `nexusq-rootfs-v1.6.9-sparse.img.zst`
   (~2.08 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.6.7.sha256`
-  - **`nexusq-boot-v1.6.7.img` is byte-identical to v1.6.6's boot** (the kernel is
-    unchanged since v1.6.6; md5 `12fba8987364226b2c60aaaf94650557`). If v1.6.6's boot is
-    already on the device you can **flash only userdata** and skip the boot step below.
-    (The older v1.6.2/v1.6.3/v1.6.5 boot, md5 `36a3dec2c4a493710dffa18c4d796236`, is a
-    DIFFERENT kernel -- flash both images when coming from those.)
+  decompress it, see step 2), `nexusq-v1.6.9.sha256`
+  - **`nexusq-boot-v1.6.9.img` is byte-identical to v1.6.8's boot** (the kernel is
+    unchanged since v1.6.8 -- `6.12.12-r32`, uname `#33`; v1.6.9 is a device-package-only
+    release). If v1.6.8's boot is already on the device you can **flash only userdata**
+    and skip the boot step below. Verify against `nexusq-v1.6.9.sha256`.
+    (The v1.6.6/v1.6.7 boot, md5 `12fba8987364226b2c60aaaf94650557`, is the OLDER `#29`
+    kernel -- pre-ethernet-cold-init -- and the v1.6.2/v1.6.3/v1.6.5 boot, md5
+    `36a3dec2c4a493710dffa18c4d796236`, is older still; flash **both** images when coming
+    from any of those.)
 
 ## 1. Enter fastboot mode
 
@@ -34,8 +37,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# (Identical to v1.6.6's boot -- skip this line if that one is already flashed.)
-fastboot flash boot nexusq-boot-v1.6.7.img
+# (Identical to v1.6.8's boot -- skip this line if that one is already flashed.)
+fastboot flash boot nexusq-boot-v1.6.9.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -44,8 +47,8 @@ fastboot flash boot nexusq-boot-v1.6.7.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.7-sparse.img.zst   # -> nexusq-rootfs-v1.6.7-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.7-sparse.img
+zstd -d nexusq-rootfs-v1.6.9-sparse.img.zst   # -> nexusq-rootfs-v1.6.9-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.6.9-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -124,7 +127,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
 | Companion app / remote control | ✅ working (v1.6.3) — volume, LED theme + brightness, now-playing; via the on-device `nexusq-control` LAN bridge (TCP 45015, mDNS `_nexusq._tcp`, reachable over WiFi since v1.6.5) + a Flutter phone/desktop app (built separately, **not** in the image) |
-| HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) |
+| HDMI audio | 🟠 needs a sink with audio EDID (TV/AVR) — the omap-hdmi-audio card is a dummy-DAI, so as of v1.6.9 PulseAudio ignores it (`PULSE_IGNORE` udev rule); no more boot-log noise |
 | NFC (PN544) | ✅ **fixed 2026-07-03, ships in v1.6.6** — the chip was never dead: the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), found via a stock RAM-boot probe; clean `nfc_en` polarity detect + `nfc0` registers on the v1.6.6-candidate kernel. On v1.6.5 the node is still disabled |
 | TOSLINK / SPDIF | ⬜ not wired up yet |
 | Ethernet (LAN9500A) | ✅ **works from a cold boot since v1.6.8 (task #17 fully closed)** — the "enumeration intermittency" was a pinmux miss (`gpio_1` NENABLE on an unmuxed pad `0x186`, so the chip was never powered); fixed by a DTS pad mux in kernel `#33`, gold-validated from a true cold power-cycle (`eth0` 100Mbps/Full, 0 failed units). NM layer also resolved (baked `eth-lan` DHCP + `eth-direct` static `10.42.0.2` for a direct PC↔Q cable). Note: the chip has no MAC EEPROM, so the hw MAC (and a LAN DHCP lease) is random per boot. On a **pre-v1.6.8 image** `eth0` may be absent on cold boots — power-cycle or use the USB gadget/WiFi |

@@ -4,7 +4,48 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-06 (latest): **ETHERNET COLD-INIT FIXED — task #17 FULLY CLOSED**, gold-validated; shipping as v1.6.8
+## Session 2026-07-06 (latest): **v1.6.9 BOOT-LOG CLEANUP — the boot log is now clean**
+
+The last two once-per-boot / per-ssh log-noise items on the (already clean)
+v1.6.8 boot are fixed — all **cosmetic, no functional change**. Device pkg
+**r23**, kernel **unchanged** `6.12.12-r32` (uname `#33`). A v1.6.9 PUBLIC build
++ release is in progress separately (no tag from here). Full note:
+`docs/2026-07-06-bootlog-cleanup.md`; inventory update at the end of
+`docs/2026-07-02-boot-error-inventory.md`.
+
+- **gkr-pam `couldn't unlock the login keyring` (U6) — FIXED (commit e155ec9,
+  r22):** `/etc/pam.d/base-auth`+`base-session` shadow the Alpine base to drop
+  the desktop-keyring PAM lines. gnome-keyring stays installed (hard dep of
+  nm-applet/gvfs/webkit); nothing here uses the user keyring;
+  `pam_systemd`/`pam_rundir` (`XDG_RUNTIME_DIR`) preserved. Verified: **0 gkr
+  lines across fresh logins, sessions register**.
+- **PulseAudio `module-alsa-card` on omap-hdmi-audio (U4 half) — FIXED, r22 →
+  r23:** a `PULSE_IGNORE` udev rule tells PA to skip the HDMI card (a
+  dummy-DAI, not a usable sink — HDMI is desktop video only). **r22 pinned
+  `KERNEL=="card1"` and was REJECTED in acceptance** — the ALSA card index is
+  **probe-order dependent** (HDMI came up as card2 that boot), so it tagged the
+  wrong card. **r23 (commit f4462a1)** matches the backing platform device
+  `KERNELS=="omap-hdmi-audio.1.auto"` — index-independent. Verified: PULSE_IGNORE
+  only on the HDMI card, **0 module-alsa-card errors**.
+  - **Lesson:** ALSA card indices are probe-order dependent — a per-card udev
+    rule (PULSE_IGNORE and similar) MUST match by backing device (`KERNELS=`) or
+    card id, **never** by `cardN` index.
+- **bluetoothd `Failed to set default system config for hci0` (U5) — left
+  DOCUMENTED-BENIGN:** bluez sends the MGMT batch regardless of `main.conf` and
+  the BCM4330B1 rejects it, but the controller initialises and works
+  (`Powered: yes`) — no clean suppression.
+- **Acceptance on r23 (clean fastboot flash) = ACCEPT:** 0 failed units, gkr=0,
+  HDMI noise=0, ethernet cold-init works (100Mbps/Full), WiFi/NFC/CPU healthy,
+  no new regression; residual err/warn = the known-benign set only. **Thermal
+  watch:** SoC peaked ~98–99 °C under sustained dual-core load (below the 100 °C
+  passive trip, no throttle) — thin thermal headroom, keep watching.
+- **Next steps / backlog (PROJECTS only — no boot-log items left):** NFC
+  long-lived userspace (tap-to-pair), deep cpuidle C2+ (HS secure dispatcher),
+  the thermal-headroom watch.
+
+---
+
+## Session 2026-07-06: **ETHERNET COLD-INIT FIXED — task #17 FULLY CLOSED**, gold-validated; shipping as v1.6.8
 
 The LAN9500A "enumeration intermittency" was **not a kernel/ehci race** — it was
 a **pinmux miss** (same class as the NFC bug). `gpio_1` NENABLE (the LAN9500A

@@ -41,7 +41,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 
 | Subsystem | Status | Notes |
 |---|:---:|---|
-| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash |
+| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **clean boot log** — 0 failed units, the last cosmetic gkr-pam + HDMI-audio log noise silenced · v1.6.9 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
@@ -55,7 +55,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | 📡 **NFC** (PN544) | ✅ | **fixed 2026-07-03** — the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), so the chip only *looked* dead; found via a stock RAM-boot probe + live stock pinmux dump. Clean `nfc_en` polarity detect, `nfc0` registers · ships in v1.6.6 · **live RF test 2026-07-04**: repeated card detections + data frames (follow-up: a long-lived NFC userspace) |
-| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID |
+| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID (the card is a dummy-DAI — PA now ignores it via a `PULSE_IGNORE` udev rule, so no more boot-log noise · v1.6.9) |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | **works from a cold boot — task #17 fully closed** (gold-validated: clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units). The "enumeration intermittency" was a **pinmux miss**: `gpio_1` NENABLE (the LAN9500A power-enable) sat on an **unmuxed pad** (`kpd_col2` @ padconf `0x186`) so it never powered the chip — the healthy USB3320 PHY masked it, and the earlier "3/3 vs 0/3 boots" was stock priming, not a race. Fixed in kernel `#33` (DTS pad mux); the 2500ms "settle" it superseded was a false positive · **v1.6.8**. NM layer resolved 2026-07-04 (baked `eth-lan` DHCP + `eth-direct` static `ssh root@10.42.0.2`). Chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
 | 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
 | 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
@@ -177,7 +177,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.5 ── ✦ breathing themes + 5 visualisations · LED keepalive · companion/WiFi   2026-07-01
 1.6.6 ── ✦ NFC fixed (pinmux) · boot-error cleanup · factory MAC on air     2026-07-04
 1.6.7 ── ✦ baked ethernet NM profiles · led_static healthd guard            2026-07-05
-1.6.8 ── ✦ ethernet works from cold — unmuxed NENABLE pad (task #17 closed)  ← latest  2026-07-06
+1.6.8 ── ✦ ethernet works from cold — unmuxed NENABLE pad (task #17 closed)          2026-07-06
+1.6.9 ── ✦ boot log is now clean — gkr-pam + HDMI-audio noise silenced       ← latest  2026-07-06
 ```
 
 ---

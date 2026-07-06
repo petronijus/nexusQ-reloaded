@@ -128,10 +128,29 @@ Findings are tagged by `kind`; interpret them like this:
   the `#29` flash, 2026-07-03).
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
+  ⚠️ **Thin headroom (active watch-item):** peak under sustained dual-core load
+  crept from 91.8 °C (2026-07-03) to **~98–99 °C (2026-07-06, v1.6.9)** — still
+  below the 100 °C trip, no throttle, but only ~1–2 °C to spare. Always report
+  the peak temp on a load run.
 - **governor_not_scaling** — load was high but freq never left 350 MHz; the
   governor or cpufreq path is stalling. See `CPU` + `CLOCKS` (`dpll_mpu`).
 - **kernel_errors** — new oops/WARN/i2c-timeout/voltage lines; read the
-  `KERNEL_LOG_FULL` tail in `snapshot.txt`.
+  `KERNEL_LOG_FULL` tail in `snapshot.txt`. ℹ️ **As of v1.6.9 the boot is CLEAN
+  (0 failed units)** and the remaining err/warn are all a **known, individually
+  triaged benign residual** (U5 bluetoothd MGMT-config, B4 brcmfmac fw-probe
+  misses, B10 hw-breakpoint, B16 cold-boot ramoops, B21 L2C/gpmc/pmu/journald,
+  B22/B23 twl, U7 nsresourced bpf-lsm — all in
+  `docs/2026-07-02-boot-error-inventory.md`); don't re-derive them, but a NEW /
+  unlisted line is still ours.
+- **HDMI-audio card / PulseAudio** — the `omap-hdmi-audio` ALSA card is a
+  snd-soc-dummy-DAI (not a usable sink; HDMI is desktop video only). Since
+  **v1.6.9** PA ignores it via a `PULSE_IGNORE` udev rule, so
+  `module-alsa-card: Failed to find a working profile` no longer fires. If it
+  recurs it's a regression. **Lesson — ALSA card indices are probe-order
+  dependent:** the first rule pinned `KERNEL=="card1"` and tagged the wrong card
+  (HDMI came up as card2 one boot); the shipped rule matches the backing device
+  `KERNELS=="omap-hdmi-audio.1.auto"`. Any per-card udev/PA rule MUST match by
+  backing device (`KERNELS=`) or card id, never by `cardN` index.
 - **pstore** (crit) — a previous boot panicked; the dump is in the `PSTORE`
   section. Remember pstore only survives a *warm* reboot.
 
