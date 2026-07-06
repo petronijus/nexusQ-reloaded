@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=21
+pkgrel=22
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -51,6 +51,9 @@ source="
 	brcmfmac-mpc-off.conf
 	pipewire-autostart-off.desktop
 	wireplumber-autostart-off.desktop
+	pam-base-auth
+	pam-base-session
+	91-pulseaudio-hdmi-ignore.rules
 	ssh-authorized-keys
 	wifi.nmconnection
 	nexusq-usb-acm-console.sh
@@ -103,6 +106,21 @@ package() {
 	# documented ssh path broke (2026-07-02).
 	install -Dm644 "$srcdir"/wifi-stable-mac.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-stable-mac.conf
+
+	# Boot-log cleanup (both cosmetic, no functional change):
+	#  - pam-base-auth shadows /usr/lib/pam.d/base-auth to drop the desktop
+	#    keyring lines, silencing "gkr-pam: couldn't unlock the login keyring"
+	#    on every key-based ssh login (gnome-keyring is a hard dep of
+	#    nm-applet/gvfs/webkit so it can't be removed; nothing here uses the
+	#    user keyring). base-session is intentionally NOT shadowed.
+	#  - PULSE_IGNORE the omap-hdmi-audio card (dummy-DAI, not a usable sink)
+	#    so PulseAudio stops failing module-alsa-card on it every boot.
+	install -Dm644 "$srcdir"/pam-base-auth \
+		"$pkgdir"/etc/pam.d/base-auth
+	install -Dm644 "$srcdir"/pam-base-session \
+		"$pkgdir"/etc/pam.d/base-session
+	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
+		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
 
 	# eth0 is OWNED by the baked profiles (see the file comments): eth-lan
 	# (DHCP, one attempt per carrier event) + eth-direct (the static
@@ -276,6 +294,9 @@ SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
 SKIP  pipewire-autostart-off.desktop
 SKIP  wireplumber-autostart-off.desktop
+SKIP  pam-base-auth
+SKIP  pam-base-session
+SKIP  91-pulseaudio-hdmi-ignore.rules
 SKIP  ssh-authorized-keys
 SKIP  wifi.nmconnection
 SKIP  nexusq-usb-acm-console.sh

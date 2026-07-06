@@ -1,0 +1,26 @@
+# basic PAM session for Alpine — steelhead override of /usr/lib/pam.d/base-session.
+#
+# Faithful copy of the Alpine base-session with ONLY the two desktop-keyring
+# lines (pam_gnome_keyring auto_start, pam_kwallet5) dropped. That auto_start
+# is what logged "gkr-pam: couldn't unlock the login keyring" on every
+# key-based ssh session (no login password to unlock with). All the
+# session-critical modules — pam_systemd / pam_rundir / pam_elogind
+# (XDG_RUNTIME_DIR) — are preserved. Every line here is "-session optional"
+# (non-fatal) so a stale copy can never block login. gnome-keyring stays
+# installed (hard dep of nm-applet/gvfs/webkit); it is just not auto-started
+# from the login session, which this appliance never uses.
+#
+# NB: mirrors the Alpine base-session as of the pmOS snapshot; re-sync if
+# Alpine's /usr/lib/pam.d/base-session changes.
+session include base-session-noninteractive
+
+# potential providers that set up session stuff / a XDG_RUNTIME_DIR
+-session optional pam_rundir.so
+-session optional pam_elogind.so
+-session optional pam_systemd.so
+-session optional pam_ck_connector.so
+-session optional pam_turnstile.so
+-session optional pam_dumb_runtime_dir.so
+
+# support for OpenRC user service autostarting, if openrc-user-pam is installed.
+-session optional pam_openrc.so

@@ -1,0 +1,11 @@
+# Tell PulseAudio to ignore the omap-hdmi-audio ALSA card (card "HDMI").
+#
+# On steelhead the HDMI-A-1 output carries the LXQt DESKTOP VIDEO only; its
+# ALSA audio card is backed by snd-soc-dummy-dai with no real IEC958 routing,
+# so any PCM open returns -EINVAL and PA's auto-profile probe fails with
+# "module-alsa-card: Failed to find a working profile" every boot. It is not a
+# usable audio sink (device audio is the TAS5713 speaker + snd-aloop). Tag it
+# PULSE_IGNORE so PA never tries to load module-alsa-card for it. (Real HDMI
+# audio out would need omap-hdmi-audio DAI routing in the DTS/driver — a
+# separate project with no value on a speaker device.)
+SUBSYSTEM=="sound", KERNEL=="card1", ATTRS{id}=="HDMI", ENV{PULSE_IGNORE}="1"

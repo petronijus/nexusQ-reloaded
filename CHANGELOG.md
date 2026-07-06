@@ -4,6 +4,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+### Fixed
+- **Boot-log cleanup (cosmetic, device pkg r22).** Two once-per-boot / per-ssh
+  log-noise items on an otherwise-clean boot, both root-caused and fixed (not
+  masked): (1) `gkr-pam: couldn't unlock the login keyring` on every key-based
+  ssh session — `/etc/pam.d/base-auth`+`base-session` now shadow the Alpine
+  base to drop the desktop-keyring PAM lines (gnome-keyring is a hard dep of
+  nm-applet/gvfs/webkit so it stays installed; nothing here uses the user
+  keyring; pam_systemd/XDG_RUNTIME_DIR preserved). (2) PulseAudio
+  `module-alsa-card: Failed to find a working profile` on the omap-hdmi-audio
+  card — a `PULSE_IGNORE` udev rule tells PA to skip it (the card is a
+  dummy-DAI with no real audio routing; HDMI carries desktop video only).
+  Validated live: 0 gkr lines across fresh logins, `udevadm test` sets
+  PULSE_IGNORE=1. `bluetoothd: Failed to set default system config for hci0`
+  is documented benign (bluez sends the MGMT batch regardless; controller
+  initialises and works — no clean suppression exists).
+
 ## [1.6.8] - 2026-07-06
 
 > Ethernet works from a cold boot at last: the LAN9500A cold-init bug (task

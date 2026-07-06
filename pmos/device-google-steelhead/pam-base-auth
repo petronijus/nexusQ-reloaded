@@ -1,0 +1,17 @@
+# basic PAM auth for Alpine — steelhead override of /usr/lib/pam.d/base-auth.
+#
+# Identical to the Alpine base-auth EXCEPT the two "-auth optional" desktop
+# keyring lines are dropped. On this headless/appliance device every login is
+# key-based ssh (no login password), so pam_gnome_keyring's login-keyring
+# unlock always failed and logged "gkr-pam: couldn't unlock the login keyring"
+# on EVERY ssh session. gnome-keyring is a hard dependency of
+# nm-applet/gvfs/webkit (can't be removed) and nothing here uses the user
+# keyring (NM secrets live in system-connections), so dropping it from the
+# auth stack is correct, not a mask. Only base-auth is shadowed — base-session
+# (pam_systemd / XDG_RUNTIME_DIR) is left untouched deliberately.
+#
+# NB: this mirrors the Alpine base-auth as of the pmOS snapshot; if Alpine's
+# /usr/lib/pam.d/base-auth gains a new required module, re-sync this file.
+auth required pam_unix.so nullok
+auth required pam_nologin.so
+auth required pam_env.so
