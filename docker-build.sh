@@ -264,6 +264,7 @@ APK_PY="/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
 PART_PY="/usr/lib/python3.12/site-packages/pmb/install/partition.py"
 LOSETUP_PY="/usr/lib/python3.12/site-packages/pmb/install/losetup.py"
 BACKEND_PY="/usr/lib/python3.12/site-packages/pmb/build/backend.py"
+BLOCKDEV_PY="/usr/lib/python3.12/site-packages/pmb/install/blockdevice.py"
 
 sudo python3 << 'PATCH_APK'
 path = "/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
@@ -339,6 +340,40 @@ else:
     print("  partition.py: already patched or pattern changed")
 PATCH_PARTITION
 
+sudo python3 << 'PATCH_BLOCKDEV'
+# THE Phase 9 "PREPARE INSTALL BLOCKDEVICE" fix. ROOT CAUSE of the install
+# aborting at "(native) % busybox su pmos -c HOME=/home/pmos mkdir -p
+# /home/pmos/rootfs" (exit 125): pmbootstrap-in-Docker runs the native chroot's
+# `pmos` user as uid 12345 (its sandbox uid), while that chroot's /home/pmos is
+# owned by uid 1000 -> the ONE user-level mkdir (blockdevice.create_and_mount_image)
+# hits EPERM. A pre-`install` host-side chown does NOT survive, because `install`
+# itself re-creates ("PREPARE NATIVE CHROOT / Creating chroot") the native chroot
+# and resets /home/pmos back to 1000 *after* our chown, then fails on the mkdir.
+#
+# The clean, correct fix (not a workaround): run just that mkdir as root. It only
+# needs the directory to EXIST -- every operation that follows in the same function
+# (truncate, losetup, mount, and later the rsync of the rootfs into the image) is
+# ALREADY `pmb.chroot.root(...)`, so nothing depends on the dir being pmos-owned.
+# Running mkdir as root succeeds regardless of /home/pmos ownership and removes the
+# uid-drift dependency entirely -- exactly parallel to the abuild-as-root fix above.
+path = "/usr/lib/python3.12/site-packages/pmb/install/blockdevice.py"
+with open(path) as f:
+    content = f.read()
+
+old = 'pmb.chroot.user(["mkdir", "-p", "/home/pmos/rootfs"])'
+new = 'pmb.chroot.root(["mkdir", "-p", "/home/pmos/rootfs"])'
+
+if new in content:
+    print("  blockdevice.py: already patched (idempotent re-run)")
+elif old in content:
+    content = content.replace(old, new)
+    with open(path, "w") as f:
+        f.write(content)
+    print("  Patched blockdevice.py: mkdir /home/pmos/rootfs runs as root -> no uid-12345 EPERM")
+else:
+    print("  blockdevice.py: PATTERN NOT FOUND (pmbootstrap changed the mkdir call!)")
+PATCH_BLOCKDEV
+
 sudo python3 << 'PATCH_BACKEND'
 # THE fakeroot fix. ROOT CAUSE of the build hanging forever at
 # ">>> <pkg>: Entering fakeroot..." (device-google-steelhead reliably; any
@@ -410,6 +445,7 @@ echo "  Compiling patched files..."
 sudo python3 -c "import py_compile; py_compile.compile('$APK_PY', doraise=True)" && echo "    apk.py: OK"
 sudo python3 -c "import py_compile; py_compile.compile('$PART_PY', doraise=True)" && echo "    partition.py: OK"
 sudo python3 -c "import py_compile; py_compile.compile('$BACKEND_PY', doraise=True)" && echo "    backend.py: OK"
+sudo python3 -c "import py_compile; py_compile.compile('$BLOCKDEV_PY', doraise=True)" && echo "    blockdevice.py: OK"
 
 echo ""
 echo "=== Phase 7: Initialize pmbootstrap config ==="
