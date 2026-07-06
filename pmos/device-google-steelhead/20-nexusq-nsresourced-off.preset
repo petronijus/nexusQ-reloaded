@@ -1,0 +1,12 @@
+# Disable systemd-nsresourced on steelhead — it needs BPF-LSM (deliberately not
+# built; minimal image) to lock down user namespaces, so its workers just die
+# (exit 1) and it logs "bpf-lsm not supported" every boot. This appliance uses
+# no unprivileged-userns ID delegation and nothing Requires it.
+#
+# 90-systemd.preset ships `enable systemd-nsresourced.socket`; systemctl preset
+# resolves each unit against the FIRST matching rule in lexicographic filename
+# order, so this file MUST sort before 90-* to win — hence the 20- prefix.
+# `disable` (not a /dev/null mask) keeps preset-all happy: masking a system unit
+# via /dev/null makes preset-all log "Unit ... is masked" (v1.6.10-rc1 reject).
+disable systemd-nsresourced.service
+disable systemd-nsresourced.socket

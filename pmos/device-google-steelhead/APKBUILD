@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=24
+pkgrel=25
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -55,6 +55,10 @@ source="
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
 	systemd-journald-no-ipfirewall.conf
+	20-nexusq-nsresourced-off.preset
+	bluetooth-confdir-mode.conf
+	pulse-client-no-autospawn.conf
+	nm-lo-unmanaged.conf
 	ssh-authorized-keys
 	wifi.nmconnection
 	nexusq-usb-acm-console.sh
@@ -126,13 +130,24 @@ package() {
 	# cgroup/BPF IP firewall this (deliberately BPF-less) kernel can't enforce.
 	install -Dm644 "$srcdir"/systemd-journald-no-ipfirewall.conf \
 		"$pkgdir"/etc/systemd/system/systemd-journald.service.d/no-ipfirewall.conf
-	# Mask systemd-nsresourced: it needs BPF-LSM (not built) to lock down user
-	# namespaces, so without it its workers just die (exit 1) and it logs
-	# "bpf-lsm not supported" every boot. This appliance uses no unprivileged
-	# userns ID-delegation, nothing Requires it — mask the service + its socket.
-	mkdir -p "$pkgdir"/etc/systemd/system
-	ln -sf /dev/null "$pkgdir"/etc/systemd/system/systemd-nsresourced.service
-	ln -sf /dev/null "$pkgdir"/etc/systemd/system/systemd-nsresourced.socket
+	# systemd-udevd also ships IPAddressDeny=any — same BPF-firewall warning as
+	# journald; clear it the same way (reuse the drop-in body).
+	install -Dm644 "$srcdir"/systemd-journald-no-ipfirewall.conf \
+		"$pkgdir"/etc/systemd/system/systemd-udevd.service.d/no-ipfirewall.conf
+	# Disable systemd-nsresourced via a low-priority preset (NOT a /dev/null mask,
+	# which makes preset-all warn). See the .preset file header for the ordering.
+	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/20-nexusq-nsresourced-off.preset
+	# Align bluetooth.service ConfigurationDirectoryMode with the shipped
+	# /etc/bluetooth 0755 (silences the 755-vs-555 mode warning).
+	install -Dm644 "$srcdir"/bluetooth-confdir-mode.conf \
+		"$pkgdir"/etc/systemd/system/bluetooth.service.d/confdir-mode.conf
+	# PA: start once (XDG autostart) — disable client autospawn (daemon-already-running race).
+	install -Dm644 "$srcdir"/pulse-client-no-autospawn.conf \
+		"$pkgdir"/etc/pulse/client.conf.d/50-nexusq-no-autospawn.conf
+	# NM: loopback unmanaged so the dns-filter dispatcher never runs (and fails) on lo.
+	install -Dm644 "$srcdir"/nm-lo-unmanaged.conf \
+		"$pkgdir"/etc/NetworkManager/conf.d/10-lo-unmanaged.conf
 
 	# eth0 is OWNED by the baked profiles (see the file comments): eth-lan
 	# (DHCP, one attempt per carrier event) + eth-direct (the static
@@ -310,6 +325,10 @@ SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
 SKIP  systemd-journald-no-ipfirewall.conf
+SKIP  20-nexusq-nsresourced-off.preset
+SKIP  bluetooth-confdir-mode.conf
+SKIP  pulse-client-no-autospawn.conf
+SKIP  nm-lo-unmanaged.conf
 SKIP  ssh-authorized-keys
 SKIP  wifi.nmconnection
 SKIP  nexusq-usb-acm-console.sh

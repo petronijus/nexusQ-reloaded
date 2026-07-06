@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000036 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 6 Jul 2026 19:30:00 +0200
+Subject: [PATCH] Bluetooth: btbcm: treat 43:30:A0 as a BCM4330 default bdaddr
+
+The Nexus Q's BCM4330B1 powers up reporting BD_ADDR 43:30:A0:00:00:00 --
+a waiting-for-configuration placeholder that differs from the
+43:30:B1:00:00:00 (BDADDR_BCM4330B1) signature btbcm already knows. Since
+it wasn't recognised, btbcm_check_bdaddr() never set HCI_QUIRK_INVALID_BDADDR,
+so hci_bcm never set HCI_QUIRK_USE_BDADDR_PROPERTY, and the DT
+`local-bd-address` (the real per-device MAC f8:8f:ca:20:49:e5) was never
+programmed -- the controller kept the non-unique, group-bit-set placeholder.
+Add the 43:30:A0 placeholder to the default-address list so the DT address
+is applied via the vendor Write_BD_ADDR at setup.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/bluetooth/btbcm.c
++++ b/drivers/bluetooth/btbcm.c
+@@ -28,6 +28,10 @@
+ #define BDADDR_BCM43430A1 (&(bdaddr_t) {{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}})
+ #define BDADDR_BCM4324B3 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb3, 0x24, 0x43}})
+ #define BDADDR_BCM4330B1 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb1, 0x30, 0x43}})
++/* steelhead BCM4330B1 reports 43:30:A0:00:00:00 as its unconfigured
++ * placeholder (differs from the B1 signature above); treat it as a
++ * waiting-for-configuration default so the DT local-bd-address is applied. */
++#define BDADDR_BCM4330A0 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xa0, 0x30, 0x43}})
+ #define BDADDR_BCM4334B0 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb0, 0x34, 0x43}})
+ #define BDADDR_BCM4345C5 (&(bdaddr_t) {{0xac, 0x1f, 0x00, 0xc5, 0x45, 0x43}})
+ #define BDADDR_BCM43341B (&(bdaddr_t) {{0xac, 0x1f, 0x00, 0x1b, 0x34, 0x43}})
+@@ -126,6 +130,7 @@
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM2076B1) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM4324B3) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM4330B1) ||
++	    !bacmp(&bda->bdaddr, BDADDR_BCM4330A0) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM4334B0) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM4345C5) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM43430A0) ||

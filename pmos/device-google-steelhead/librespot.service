@@ -15,15 +15,25 @@ Wants=network-online.target
 # through the ALSA softvol control (asound.conf), the same knob the companion
 # bridge reads/writes — so Spotify and the companion share one volume.
 # --onevent feeds now-playing + volume changes to nexusq-control.
-# Bootstrap the softvol control BEFORE librespot's ALSA mixer opens it. The
-# "NexusQ" softvol control (asound.conf) does not exist until the nexusq_soft
-# PCM is first opened by *something*, but librespot opens the mixer control
-# BEFORE the sink and exits with "Could not find Alsa mixer control" on a fresh
-# boot -> crash-loops forever (the control is recreated empty every boot, so a
-# reboot never helps). Open nexusq_soft once (1 s of digital silence) to create
-# the control. The leading `-` ignores a transient failure (audio not ready
-# yet); Restart=on-failure then retries until sound.target settles.
-ExecStartPre=-/bin/sh -c 'timeout 5 aplay -q -D nexusq_soft -f cd -d 1 /dev/zero'
+# Bootstrap the "NexusQ" softvol control BEFORE librespot's ALSA mixer opens it.
+# That control (asound.conf) does not exist until the nexusq_soft PCM is first
+# opened by *something*, but librespot opens the mixer BEFORE the sink and exits
+# "Could not find Alsa mixer control" if it isn't there yet.
+#
+# This is a READINESS GATE (not fire-and-forget): sound.target is a passive
+# target that does NOT guarantee card enumeration, and at boot PulseAudio
+# briefly claims the exclusive TAS5713 hw (module-alsa-card) until
+# module-suspend-on-idle releases it (~5 s) — so an early one-shot probe hit
+# EBUSY and librespot crash-restarted 2-3× before settling. Instead, wait (up to
+# 30 s) until both cards are enumerated AND nexusq_soft actually opens (PA has
+# released the hw) AND the NexusQ control exists, then start once, cleanly. No
+# leading `-`: if it never becomes ready ExecStart won't run (Restart handles it).
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do \
+    [ -e /proc/asound/NexusQSpeaker ] && [ -e /proc/asound/Loopback ] || { sleep 1; continue; }; \
+    timeout 4 aplay -q -D nexusq_soft -f dat -d 1 /dev/zero 2>/dev/null; \
+    amixer -c NexusQSpeaker sget NexusQ >/dev/null 2>&1 && exit 0; \
+    sleep 1; \
+  done; echo "librespot: NexusQ mixer control never appeared" >&2; exit 1'
 ExecStart=/usr/bin/librespot \
     --name "Nexus Q" \
     --backend alsa \
