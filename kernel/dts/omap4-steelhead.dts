@@ -296,11 +296,34 @@
 		>;
 	};
 
-	/* gpio_1 (NENABLE) is gpio_wk1 in the wkup padconf, not here */
 	ethernet_gpios: ethernet-gpios {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x08c, PIN_OUTPUT | MUX_MODE3)		/* gpmc_wait0.gpio_62 NRESET */
-			OMAP4_IOPAD(0x164, PIN_OUTPUT | MUX_MODE3)		/* usbb2_ulpitll_dir.gpio_159 -- 3rd reset line stock pulses in soft_phy_reset */
+			/*
+			 * THE cold-init fix (2026-07-06): gpio_1 NENABLE, the
+			 * LAN9500A power-enable, is pad kpd_col2 @ 0x186 in the
+			 * CORE padconf -- NOT the wkup domain as a prior comment
+			 * wrongly assumed, which is why it was omitted. Without
+			 * this mux gpiolib drove the gpio_1 DATAOUT latch (read
+			 * "asserted") but the pad stayed in safe_mode and NENABLE
+			 * never reached the chip, so the LAN9500A was never
+			 * powered on and never drove D+ (PORTSC CCS=0 forever) on
+			 * a cold boot. Stock muxes BOTH pads (omap_mux_init_gpio
+			 * 1 and 62 @ VA 0xc00178d0/dc, values 0x0e03). Proven
+			 * live: writing this pad (0x4A100184 upper16=0x0e03) +
+			 * re-running the bring-up made eth0 attach at 100Mbps
+			 * from the cold-failed state. Same pinmux-miss class of
+			 * bug as the NFC pads. */
+			OMAP4_IOPAD(0x186, PIN_OUTPUT | MUX_MODE3)		/* kpd_col2.gpio_1 NENABLE (LAN9500A power enable) */
+			/*
+			 * gpio_159 (usbb2_ulpitll_dir 0x164) intentionally NOT
+			 * muxed: stock leaves that pad in safe_mode (mux dump
+			 * 0x011f) and only pulses gpio_159 in a hub_control resume
+			 * recovery path that is a no-op on this board — it is not
+			 * wired to the LAN9500A. Driving it was a non-stock guess;
+			 * removed 2026-07-06 for parity (the real fix is the 0x186
+			 * NENABLE pad above).
+			 */
 		>;
 	};
 
@@ -660,12 +683,11 @@
 	 */
 	clocks = <&auxclk3_ck>;
 	clock-names = "steelhead-ethernet-phy";
-	steelhead-ethernet-enable-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* gpio_1  NENABLE */
+	steelhead-ethernet-enable-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* gpio_1  NENABLE (pad kpd_col2 0x186, see ethernet_gpios) */
 	steelhead-ethernet-reset-gpios = <&gpio2 30 GPIO_ACTIVE_LOW>;	/* gpio_62 NRESET  */
-	/* 3rd reset line stock pulses (low->2ms->high) in soft_phy_reset, after the
-	 * UHH softreset, before the ULPI burst -- gpio_159 (gpio5 bit31). Purpose
-	 * not proven from vmlinux (hard reset to the LAN9500A or USB3320). */
-	steelhead-eth-phy-reset-gpios = <&gpio5 31 GPIO_ACTIVE_LOW>;	/* gpio_159 (name <=32 chars for the gpiolib buffer) */
+	/* gpio_159 (steelhead-eth-phy-reset) removed 2026-07-06: stock leaves
+	 * its pad in safe_mode and it is not wired to the LAN9500A (its only
+	 * stock use is a no-op resume-recovery path). Not an ethernet line. */
 
 	#address-cells = <1>;
 	#size-cells = <0>;

@@ -1,44 +1,29 @@
 From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Sat, 5 Jul 2026 02:00:00 +0200
-Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A power-on-reset + attach-ready
- settle + stock ULPI bring-up
+Subject: [PATCH] usb: ehci-omap: steelhead LAN9500A power-on-reset + stock
+ ULPI bring-up
 
-The Nexus Q's soldered LAN9500A USB-ethernet (behind a USB3320 ULPI
-PHY on port 1) needs an imperative vendor bring-up:
+The Nexus Q's soldered LAN9500A USB-ethernet (behind a USB3320 ULPI PHY
+on port 1) needs the vendor board bring-up staged in the EHCI probe
+before the controller starts: auxclk3 38.4 MHz refclk -> 100 us ->
+NENABLE (gpio_1) low = power on -> 2 us -> NRESET (gpio_62) high =
+release (stock omap4_steelhead_ehci_init @ 0xc00178c4). The EHCI .reset
+hook then does ehci_setup(), the steelhead INSNREG01 burst thresholds,
+and stock's probe-time single ULPI Function-Control RESET per PHY port
+(whose viewport completion poll also acts as a wait-for-PHY-ready
+barrier). The probe's clock enable is devm-balanced on unbind.
 
-- Probe stages the board power-on-reset in stock order (auxclk3 38.4 MHz
-  -> 100 us refclk settle -> NENABLE -> settle -> NRESET release), with
-  two hardenings over stock's 100us/2us delays (v2, 2026-07-05): a REAL
-  200 ms power-off window first (stock claims the gpios at 0.217 s; this
-  probe runs ~4.6 s in, and on a warm reboot the chip has been running
-  since U-Boot -- a ~100 us off-pulse never discharges the rail, the
-  chip brown-outs instead of a POR and enumeration became cold-vs-warm
-  intermittent: ULPI PHY alive and register-identical on good and bad
-  boots, but the chip never drove D+ on bad ones) and a 50 ms
-  crystal/regulator settle before the reset release. The probe's clock
-  enable is devm-balanced on unbind.
-- The EHCI .reset hook does ehci_setup(), the steelhead INSNREG01 burst
-  thresholds, and stock's probe-time SINGLE ULPI Function-Control RESET
-  per PHY port (omap_ehci_soft_phy_reset @ 0xc0329b88, called twice from
-  stock's ehci_hcd_omap_probe -- kallsyms-verified 2026-07-05; an earlier
-  audit conflated it with uhh_omap_reset_link @ 0xC0331BDC, the
-  hub_control RECOVERY burst, which is retained here unused for a future
-  recovery hook). The write's viewport completion poll doubles as a
-  wait-for-PHY-ready barrier.
-- Diag logging of the PHY register state and PORTSC line-state samples
-  stays in until the intermittency is confirmed dead in the field.
-
-v3 (2026-07-05): a same-session A/B (mainline failed 100%, the stock
-RAM-boot enumerated 100% on the same hardware) proved the enumeration
-intermittency is the reset-release->enumeration GAP: stock gives the
-LAN9500A ~2.2 s after reset before scanning the port; our probe scanned
-within ms. Add a 2500 ms post-reset attach-ready settle before the
-controller enumerates.
+NB the actual cold-init fix lives in the DTS: gpio_1 NENABLE's pad
+(kpd_col2 0x186) must be muxed to gpio, which it was not until
+2026-07-06 -- without it this NENABLE write never reached the chip and
+the LAN9500A never powered on (cold enumeration failed, PORTSC CCS=0).
+With the pad muxed, stock's short delays here are sufficient (proven by
+a true cold power-cycle); the earlier 200ms/50ms/2500ms delays came
+from a wrong timing/discharge theory and were removed.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/drivers/usb/host/ehci-omap.c
 --- a/drivers/usb/host/ehci-omap.c
 +++ b/drivers/usb/host/ehci-omap.c
 @@ -23,18 +23,24 @@
@@ -290,7 +275,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  };
  
  /**
-@@ -144,6 +360,92 @@
+@@ -144,6 +360,79 @@
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -335,25 +320,20 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +
 +		if (eth_en && eth_reset) {
 +			/*
-+			 * ROOT CAUSE of the enumeration intermittency (proven
-+			 * 2026-07-05 by a same-session A/B: our mainline failed
-+			 * 100%, the stock RAM-boot enumerated 100% on the very
-+			 * same hardware): it is the reset-release -> enumeration
-+			 * GAP, not the power-cycle. Stock runs this bring-up in
-+			 * board init at t=0.217 s and the EHCI driver does not
-+			 * scan the port until ~2.4 s -- the LAN9500A gets ~2.2 s
-+			 * after reset-release to load its config and become ready
-+			 * to drive D+. Our probe ran the gpio sequence AND
-+			 * usb_add_hcd() back-to-back at ~4.6 s, so the controller
-+			 * enumerated within ms of reset-release, before the chip
-+			 * attached -- the port saw no connect and sat at CCS=0
-+			 * forever. On the "good" boots the margin happened to be
-+			 * met; it is not robust. Fix = reproduce stock's settle:
-+			 * a real power-off window, then clk/enable/reset, then a
-+			 * >=2 s post-reset-release settle BEFORE the PHY init /
-+			 * ehci_setup / usb_add_hcd path enumerates the port.
++			 * Stock board bring-up order (omap4_steelhead_ehci_init
++			 * @ VA 0xc00178c4): auxclk3 38.4 MHz refclk on -> 100 us
++			 * -> NENABLE low (power on) -> 2 us -> NRESET high
++			 * (release). CRUCIAL: gpio_1 NENABLE only reaches the
++			 * LAN9500A because its pad (kpd_col2 0x186) is muxed in
++			 * the DTS ethernet_gpios node -- that pinmux, missing
++			 * before 2026-07-06, was the whole cold-init bug (the
++			 * chip was never powered, so it never drove D+ and the
++			 * port sat at CCS=0). With the pad muxed, stock's short
++			 * delays are sufficient and cold enumeration is reliable
++			 * (proven by a true cold power-cycle). The earlier
++			 * 200ms/50ms/2500ms delays were from a wrong
++			 * timing/discharge theory and are removed.
 +			 */
-+			msleep(200);		/* rail discharge -> true POR */
 +			eth_phyclk = devm_clk_get_optional(dev,
 +					"steelhead-ethernet-phy");
 +			if (!IS_ERR_OR_NULL(eth_phyclk)) {
@@ -364,26 +344,18 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +					eth_phyclk);
 +			}
 +			udelay(100);				/* refclk settle */
-+			gpiod_set_value_cansleep(eth_en, 1);	/* power/enable on */
-+			msleep(50);	/* crystal + regulator settle */
-+			gpiod_set_value_cansleep(eth_reset, 0);	/* release reset */
-+			/*
-+			 * The critical delay: give the LAN9500A the same
-+			 * post-reset window stock does (measured ~2.2 s) to load
-+			 * its EEPROM config and be ready to attach, BEFORE the
-+			 * controller (started right after this probe) scans the
-+			 * port. 2500 ms comfortably exceeds stock's proven gap.
-+			 */
-+			msleep(2500);		/* LAN9500A attach-ready settle */
++			gpiod_set_value_cansleep(eth_en, 1);	/* NENABLE low: power on */
++			udelay(2);				/* power-good settle */
++			gpiod_set_value_cansleep(eth_reset, 0);	/* release NRESET */
 +			dev_info(dev,
-+				 "steelhead: LAN9500A power-on-reset sequenced (200ms off -> clk -> enable -> 50ms -> reset -> 2500ms attach-ready settle)\n");
++				 "steelhead: LAN9500A power-on-reset sequenced (clk->enable->reset, stock timing)\n");
 +		}
 +	}
 +
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +489,16 @@
+@@ -187,6 +476,16 @@
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -400,7 +372,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +507,83 @@
+@@ -195,6 +494,83 @@
  	device_wakeup_enable(hcd->self.controller);
  
  	/*
