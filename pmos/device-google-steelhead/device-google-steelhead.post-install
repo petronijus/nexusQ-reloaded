@@ -39,6 +39,21 @@ dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY >/dev/null 
 EOF
 fi
 
+# --- Give bluetoothd a non-empty default system config ---
+# bluez ships /etc/bluetooth/main.conf with only section headers (no keys), so
+# set_def_system_config() builds an EMPTY MGMT TLV, mgmt_send_tlv() returns 0,
+# and bluetoothd logs "Failed to set default system config for hci0" on every
+# boot even though nothing actually failed. Populate the [LE] section with a few
+# sane connection-parameter defaults so the TLV is non-empty and the MGMT call
+# succeeds (verified live: the line disappears, controller stays healthy). We
+# patch bluez's own main.conf in place (it is a hard dep, already unpacked here)
+# rather than ship our own copy, which would collide with bluez's file ownership.
+# Idempotent: only inserted if not already present.
+if ! grep -q '^MinConnectionInterval' /etc/bluetooth/main.conf 2>/dev/null; then
+	sed -i '/^\[LE\]/a MinConnectionInterval=7\nMaxConnectionInterval=42\nConnectionLatency=0\nConnectionSupervisionTimeout=42' \
+		/etc/bluetooth/main.conf
+fi
+
 # --- Disable systemd-nsresourced (BPF-LSM not built; unused on this appliance) ---
 # The systemd package's own configure enables systemd-nsresourced.socket (an
 # /etc/systemd/system/sockets.target.wants symlink) before our 20-nexusq-

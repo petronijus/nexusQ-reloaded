@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=27
+pkgrel=28
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
