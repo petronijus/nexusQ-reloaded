@@ -211,9 +211,9 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | 🟠 needs audio-EDID sink | _(Updated 2026-07-02)_ the ALSA card registers, but with no audio-capable EDID sink PulseAudio can't build a profile for `platform-omap-hdmi-audio.1.auto` (item U4). Speaker path (TAS5713) is the working audio output |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
-| WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency, 5 GHz carries ~26–30 Mbit/s (2.4 GHz has the BT-coexist bulk stall). _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
-| USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service |
-| **TAS5713 amplifier** | ✅ works | _(Updated 2026-06-29, v1.6.1)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed**. The v1.6.0 2× too-fast bug (McBSP2 `CLKGDV=0` + 256-BCLK frame → FSYNC at 2× rate) is **fixed by kernel patch 0022** (CLKGDV derived from the real fclk); on-device 60 s now plays in 60.00 s. librespot/Spotify outputs here via the 48 kHz `nexusq` PCM. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` |
+| WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency. _(Characterized 2026-07-07: 5 GHz is **healthy, NOT flaky** — −48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss; bulk **~34 Mbit/s is a HARDWARE CEILING** of the 2010-era 1×1 802.11n chip on SDIO, not a bug — same cipher does ~80 over ethernet so the crypto/CPU ceiling ≈80 and WiFi is the limit; 2 streams aggregate to less; `powersave=2` no change; ~100× the appliance's need. 2.4 GHz retested = also stable/not flaky but strictly worse (~13–16 Mbit). See `docs/2026-07-07-wifi-characterization-and-ethernet-default.md`.)_ _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
+| USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service. _(2026-07-07: demoted to FALLBACK — the direct-cable **ethernet path `10.42.0.2` is now the default** deploy/control transport: ~80 Mbit/s, 0.62 ms, fixed IP; the gadget's `enx*` renames per boot.)_ |
+| **TAS5713 amplifier** | ✅ works | _(Updated 2026-07-07, v1.6.13/v1.6.15)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed** (v1.6.0 2× bug fixed by patch 0022). **⚠️ physically SILENT until v1.6.13** — `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the amp got no clock/data/frame (`aplay` rc=0); fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed audible. Since **v1.6.15** it is one selectable **PulseAudio** output (was direct ALSA); librespot feeds PA as an input. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
 | Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). **BD_ADDR is now the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
@@ -224,9 +224,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 ## Plan (by priority)
 
-### 1. TAS5713 amplifier  ✅ DONE 2026-06-29 (v1.6.1)
+### 1. TAS5713 amplifier  ✅ DONE 2026-06-29 (v1.6.1 software) · physically AUDIBLE 2026-07-07 (v1.6.13)
 The reason this device exists. **✅ speaker audio works at correct pitch/speed — the
 v1.6.0 2× too-fast bug was root-caused and fixed (kernel patch 0022).**
+> ⚠️ **Correction 2026-07-07:** the v1.6.1 "works" was **software-pipeline-only** — the
+> physical amp was SILENT until v1.6.13 because `mcbsp2_pins` muxed the wrong balls
+> (`abe_dmic_*`), leaving the real McBSP2 I2S balls in `safe_mode` (`aplay` rc=0 but no
+> clock/data/frame). Fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed
+> audible. See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
 - [x] DTS: `simple-audio-card` "NexusQ-Speaker" wiring McBSP2 → TAS5713
 - [x] DTS: MCLK 12.288 MHz (dpll_per_m3x2 61.44 MHz → auxclk1 /5 → fref_clk1_out
       pad 0x19a); McBSP2 master (clkx/fsx pads OUTPUT), SRG from abe_24m_fclk
@@ -343,14 +348,20 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
 - [ ] NFC follow-up: read an actual tag (`nfc-list`/neard) to exercise the
       RF path end-to-end.
 
-### 7. TOSLINK / SPDIF output (audio, nice-to-have)
+### 7. TOSLINK / SPDIF output (audio)  ✅ DONE 2026-07-07 (v1.6.13 kernel / v1.6.15 output)
 Optical out is driven by the OMAP4's own McASP block -- fully independent of
 the (absent) TWL6040 codec. `spdif_dit` node already exists in the DTS.
-- [ ] check mainline support for the OMAP4 McASP variant (davinci-mcasp may
-      not know it -- might need a small driver patch)
-- [ ] wire a second simple-audio-card: McASP -> spdif_dit
-- [ ] test into a DAC/AV receiver
-- Payoff for a vinyl/music household: bit-perfect digital out into a hi-fi DAC
+- [x] mainline support confirmed — `davinci-mcasp` already knows `ti,omap4-mcasp-audio`
+      + DIT/IEC958; NO driver patch needed (defconfig `SND_SOC_DAVINCI_MCASP=m` +
+      `SND_SOC_SPDIF=m`)
+- [x] wired a second simple-audio-card `sound_spdif` (`NexusQ-SPDIF`): `&mcasp0` DIT →
+      `spdif_dit`, new `mcasp_spdif_pins` (`0x0f8` MUX_MODE2, AXR0 out). Probe `-EINVAL`
+      fixed with `format="i2s"` + mcasp bit/frame-master
+- [x] a selectable PulseAudio output ("Optický výstup") since v1.6.15; PA pinned to
+      48 kHz so the DIT locks (44.1 kHz → "off by 88435 PPM")
+- [ ] listen-test into a real DAC / AV receiver (built · flash-verify pending)
+- Payoff for a vinyl/music household: bit-perfect digital out into a hi-fi DAC.
+  Full record: `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`
 
 ### 8. Flaky boot (research)
 - [ ] needs UART serial console (requires opening the device / soldering)
@@ -389,10 +400,13 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `nexusled auto` resumes it after a manual override. Verified live (breathing + colors).
 - [x] **Plan 3b music-reactive (done 2026-06-20):** all 5 scenes (Waveform/WaveformSolid/
       Circles/PointMorph/StarField) + AudioCapture/FFT/BeatProcessor ported pixel-perfect from
-      the decompiled `Visualizer.apk` and wired into `nexusqd` (audio tap = arecord on the
-      snd-aloop loopback). Verified live: a track played into the loopback drives the ring.
-      RE: `docs/2026-06-19-music-effects-RE.md`. Audio source for now is the loopback (local
-      WAV or librespot/Spotify Connect "Nexus Q").
+      the decompiled `Visualizer.apk` and wired into `nexusqd` (audio tap = arecord).
+      Verified live: a track drives the ring.
+      RE: `docs/2026-06-19-music-effects-RE.md`. _(Since **v1.6.15** the tap reads the
+      active output's **PulseAudio monitor** — `arecord -D pulse`, follows output
+      selection — instead of the snd-aloop loopback, plus an **AGC** so the ring reacts
+      to the music at any listening volume; see
+      `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.)_
 - [x] **Spotify Connect (librespot) baked into the build 2026-06-29 (v1.6.1)** —
       `librespot 0.8.0` (libmdns backend) advertises "Nexus Q"; phone discovers,
       authenticates and streams over **5 GHz** WiFi (the 2.4 GHz bulk stall no longer

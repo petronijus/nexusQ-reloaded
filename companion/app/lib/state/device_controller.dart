@@ -34,6 +34,11 @@ class DeviceController extends ChangeNotifier {
       state.applyJson(s);
       notifyListeners();
     } catch (_) {/* stays on defaults until first event */}
+    try {
+      final o = await _client.call('listOutputs');
+      state.applyOutputs(o);
+      notifyListeners();
+    } catch (_) {/* keep the default output set until it's available */}
   }
 
   void _onEvent(NexusQEvent e) {
@@ -47,6 +52,8 @@ class DeviceController extends ChangeNotifier {
         if (e.data['scene'] is String) state.scene = e.data['scene'] as String;
       case 'brightnessChanged':
         if (e.data['brightness'] is num) state.brightness = (e.data['brightness'] as num).round();
+      case 'outputChanged':
+        if (e.data['output'] is String) state.output = e.data['output'] as String;
       case 'nowPlayingChanged':
         state.nowPlaying = NowPlaying.fromJson(e.data);
     }
@@ -83,6 +90,12 @@ class DeviceController extends ChangeNotifier {
     state.brightness = b.clamp(0, 255);
     notifyListeners();
     _client.notify('setBrightness', {'brightness': state.brightness});
+  }
+
+  void setOutput(String id) {
+    state.output = id;
+    notifyListeners();
+    _client.notify('setOutput', {'output': id});
   }
 
   void playPause() {

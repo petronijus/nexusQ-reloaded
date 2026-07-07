@@ -4,15 +4,16 @@
 # librespot (now-playing). Built for the target by pmbootstrap.
 pkgname=nexusq-control
 pkgver=0.1.0
-pkgrel=4
-pkgdesc="Nexus Q companion control bridge (LAN ↔ nexusqd/ALSA/librespot)"
+pkgrel=6
+pkgdesc="Nexus Q companion control bridge (LAN ↔ nexusqd/PulseAudio/librespot)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
 license="GPL-2.0-only"
-# python3: the daemon + onevent hook. alsa-utils: amixer (volume).
+# python3: the daemon + onevent hook. pulseaudio-utils: pactl (output selection +
+# volume/mute on the active sink). alsa-utils: amixer (class-D amp safety toggle).
 # avahi-tools: avahi-publish-service for mDNS discovery (optional but enables
 # zero-config discovery by the companion).
-depends="python3 alsa-utils avahi-tools"
+depends="python3 pulseaudio-utils alsa-utils avahi-tools"
 options="!check"
 # Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-control/.
 source="

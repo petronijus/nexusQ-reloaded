@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=28
+pkgrel=31
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -51,12 +51,14 @@ source="
 	brcmfmac-mpc-off.conf
 	pipewire-autostart-off.desktop
 	wireplumber-autostart-off.desktop
+	pulseaudio.service
 	pam-base-auth
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
 	20-nexusq-nsresourced-off.preset
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
+	50-nexusq-48k.conf
 	nm-lo-unmanaged.conf
 	ssh-authorized-keys
 	wifi.nmconnection
@@ -68,6 +70,7 @@ source="
 	nq-diag-snapshot
 	nq-healthd.service
 	librespot.service
+	librespot-nexusq
 	60_spotify.nft
 	55_nexusq-control.nft
 	asound.conf
@@ -138,6 +141,10 @@ package() {
 	# PA: start once (XDG autostart) — disable client autospawn (daemon-already-running race).
 	install -Dm644 "$srcdir"/pulse-client-no-autospawn.conf \
 		"$pkgdir"/etc/pulse/client.conf.d/50-nexusq-no-autospawn.conf
+	# PA: pin all sinks to 48 kHz (McASP S/PDIF + McBSP2/TAS5713 clock only the
+	# 48 kHz family cleanly; 44.1 kHz -> McASP "off by 88435 PPM"). Resample 44.1.
+	install -Dm644 "$srcdir"/50-nexusq-48k.conf \
+		"$pkgdir"/etc/pulse/daemon.conf.d/50-nexusq-48k.conf
 	# NM: loopback unmanaged so the dns-filter dispatcher never runs (and fails) on lo.
 	install -Dm644 "$srcdir"/nm-lo-unmanaged.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/10-lo-unmanaged.conf
@@ -171,6 +178,22 @@ package() {
 		"$pkgdir"/etc/xdg/nexusq/autostart/wireplumber.desktop
 	install -dm755 "$pkgdir"/etc/systemd/user
 	ln -sf /dev/null "$pkgdir"/etc/systemd/user/pipewire-pulse.socket
+
+	# ...but suppressing PipeWire is only half of it: PulseAudio was never
+	# actually STARTED. Alpine's PA ships no systemd user unit and relies on the
+	# XDG autostart pulseaudio.desktop (start-pulseaudio-x11), which does not
+	# fire in this systemd + LXQt/labwc Wayland session (xdg-desktop-autostart
+	# .target stays dead; the .desktop is X-GNOME-HiddenUnderSystemd; autospawn
+	# is off) → no daemon → PA clients get "Connection refused" → red-cross tray
+	# icon (diagnosed 2026-07-07). Ship a native PA user service and enable it
+	# for every user session via the default.target.wants symlink (a plain user
+	# daemon — NOT socket-activated, which double-binds the native socket PA's
+	# own default.pa creates). autospawn stays off (50-nexusq-no-autospawn.conf).
+	install -Dm644 "$srcdir"/pulseaudio.service \
+		"$pkgdir"/usr/lib/systemd/user/pulseaudio.service
+	install -dm755 "$pkgdir"/usr/lib/systemd/user/default.target.wants
+	ln -sf ../pulseaudio.service \
+		"$pkgdir"/usr/lib/systemd/user/default.target.wants/pulseaudio.service
 
 	# Baked-in device access. Both files are staged into this aport by
 	# docker-build.sh (Phase 6) from the PRIVATE overlay (private/access/) —
@@ -241,19 +264,30 @@ package() {
 	ln -sf ../nq-healthd.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nq-healthd.service
 
-	# Spotify Connect (librespot) — the audio source. It outputs via the "nexusq"
-	# ALSA PCM (asound.conf), which addresses the speaker by NAME (card numbers
-	# race between TAS5713 and HDMI across boots) and resamples everything to
-	# 48 kHz: the McBSP2->TAS5713 link only clocks the 48 kHz family cleanly, and
-	# with kernel patch 0022 (the CLKGDV fix) that yields an exact 48 kHz FSYNC
-	# (correct pitch/speed; before 0022 audio ran exactly 2x too fast). librespot
-	# 0.8.0 ships only the libmdns zeroconf backend, which coexists with avahi.
+	# Spotify Connect (librespot) — one INPUT into the PulseAudio hub (PA-centric
+	# audio design). It runs as a systemd USER unit (uid-10000 `user` session, so
+	# it shares that session's PA) via the wrapper /usr/bin/librespot-nexusq
+	# (--backend alsa --device pulse; the ALSA `pulse` plugin routes into PA). The
+	# OUTPUT (TAS5713 / SPDIF / HDMI) is the PA default sink, selectable by the
+	# companion app — NOT a hardwired asound.conf `type multi` fan-out. Enabled
+	# for the autologin session by the default.target.wants symlink (same pattern
+	# as pulseaudio.service above; no linger needed).
+	#   librespot 0.8.0 ships ONLY the libmdns zeroconf backend, which advertises
+	# on every interface; the wrapper pins it to the live wlan0 IPv4
+	# (--zeroconf-interface) so it never announces the usb0 gadget IP, and avahi is
+	# constrained to wlan0 in the post-install.
+	# NB asound.conf is still installed: the "nexusq"/snd-aloop loopback it defines
+	# feeds nexusqd's LED music-visualizer tap (arecord hw:Loopback,1). That tap
+	# will move to a PA monitor source when the companion bridge is reworked; until
+	# then librespot no longer writes the loopback, so the visualizer is dormant.
 	install -Dm644 "$srcdir"/asound.conf \
 		"$pkgdir"/etc/asound.conf
+	install -Dm755 "$srcdir"/librespot-nexusq \
+		"$pkgdir"/usr/bin/librespot-nexusq
 	install -Dm644 "$srcdir"/librespot.service \
-		"$pkgdir"/etc/systemd/system/librespot.service
+		"$pkgdir"/usr/lib/systemd/user/librespot.service
 	ln -sf ../librespot.service \
-		"$pkgdir"/etc/systemd/system/multi-user.target.wants/librespot.service
+		"$pkgdir"/usr/lib/systemd/user/default.target.wants/librespot.service
 	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
@@ -314,12 +348,14 @@ SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
 SKIP  pipewire-autostart-off.desktop
 SKIP  wireplumber-autostart-off.desktop
+SKIP  pulseaudio.service
 SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf
+SKIP  50-nexusq-48k.conf
 SKIP  nm-lo-unmanaged.conf
 SKIP  ssh-authorized-keys
 SKIP  wifi.nmconnection
@@ -331,6 +367,7 @@ SKIP  nq-healthd
 SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
 SKIP  librespot.service
+SKIP  librespot-nexusq
 SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft
 SKIP  asound.conf

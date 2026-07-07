@@ -44,20 +44,21 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **genuinely clean boot log** — 0 failed units, `dmesg` err/warn EMPTY, and `journalctl -b -p warning` down to only 3 documented-external lines (all ~15 v1.6.9 residual err/warn lines root-caused + fixed) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
-| 🔊 **TAS5713 25 W speaker** | ✅ | correct pitch — the 2× clock bug is fixed · v1.6.1 |
-| 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 |
-| 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 |
-| 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 |
-| 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer |
-| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager. On v1.6.5 the DHCP IP wanders (NM randomized-MAC → fresh lease per boot — that was the 2026-07-02 "dead WiFi" scare); **fixed + verified on device 2026-07-03** (stable MAC/IP, ships in v1.6.6 — which pins the **factory MAC** at the NM layer, verified on air, since brcmfmac ignores the nvram `macaddr=`) |
+| 🔊 **TAS5713 25 W speaker** | ✅ | **audible since v1.6.13** (kernel r36). The software pipeline (driver/PCM/softvol, correct pitch — 2× clock bug) landed v1.6.1, but the physical amp was **silent through every earlier release**: `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the McBSP2 I2S clock/data/frame never reached the amp (`aplay` rc=0, nothing driven). Root-caused + fixed in DTS 2026-07-07 (stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0) → user-confirmed audible. Now one selectable PulseAudio output (**v1.6.15**, built · flash-verify pending). Residual crackle deferred (polish item — the `type multi` theory is moot now the tap is a PA monitor). See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
+| 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 · **now a PulseAudio input** (systemd user unit → `--device pulse`), one movable PA sink-input · v1.6.15 |
+| 🔊 **Audio output selection** (speaker / optical / HDMI) | ✅ | **v1.6.15** (built · flash-verify pending): PulseAudio is the hub, the active output = the PA default sink, picked from the companion app (`listOutputs`/`setOutput` → `pactl set-default-sink` + move all sink-inputs + class-D amp safety toggle). Input-agnostic + future-proof (BT-A2DP / Tidal / casting can join as further PA inputs) |
+| 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 · **volume-independent** — re-tapped to the active output's PA monitor + an AGC (auto-gain) so it reacts to the music at any listening volume, no low-volume flicker · v1.6.15 |
+| 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 · **output selector** (Holo-dark segmented control) + volume/mute now act on the active PA sink · v1.6.15 |
+| 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer · **desktop audio sink fixed v1.6.12** (the red-cross no-sink tray icon: PA now starts via a native systemd USER unit — Alpine ships none and the XDG autostart never fires under systemd+Wayland — and the sole sink is the TAS5713 speaker) |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager, factory MAC pinned at the NM layer (stable IP since v1.6.6). **Characterized 2026-07-07: 5 GHz is healthy — NOT flaky** (−48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss); bulk **~34 Mbit/s is a hardware ceiling** of the 2010-era 1×1 802.11n BCM4330 (not a bug — same cipher does ~80 over ethernet, so WiFi is the limit; ~100× the appliance's need). Use **ethernet for bulk** |
 | 🔵 **Bluetooth** (BCM4330) | ✅ | per-device **BD_ADDR** `F8:8F:CA:20:49:E5` programmed since v1.6.10 (was the non-unique placeholder `43:30:A0:00:00:00`; DTS `local-bd-address` + btbcm patch 0036) |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | 📡 **NFC** (PN544) | ✅ | **fixed 2026-07-03** — the DTS muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), so the chip only *looked* dead; found via a stock RAM-boot probe + live stock pinmux dump. Clean `nfc_en` polarity detect, `nfc0` registers · ships in v1.6.6 · **live RF test 2026-07-04**: repeated card detections + data frames (follow-up: a long-lived NFC userspace) |
-| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID (the card is a dummy-DAI — PA now ignores it via a `PULSE_IGNORE` udev rule, so no more boot-log noise · v1.6.9) |
-| 🌐 **Ethernet** (LAN9500A) | ✅ | **works from a cold boot — task #17 fully closed** (gold-validated: clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units). The "enumeration intermittency" was a **pinmux miss**: `gpio_1` NENABLE (the LAN9500A power-enable) sat on an **unmuxed pad** (`kpd_col2` @ padconf `0x186`) so it never powered the chip — the healthy USB3320 PHY masked it, and the earlier "3/3 vs 0/3 boots" was stock priming, not a race. Fixed in kernel `#33` (DTS pad mux); the 2500ms "settle" it superseded was a false positive · **v1.6.8**. NM layer resolved 2026-07-04 (baked `eth-lan` DHCP + `eth-direct` static `ssh root@10.42.0.2`). Chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
-| 💿 **TOSLINK / SPDIF** | ⬜ | not wired up yet |
+| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID (the card is a dummy-DAI — PA ignores it via a `PULSE_IGNORE` udev rule, so no more boot-log noise · v1.6.9); joins the output selector as `hdmi` once that rule is lifted against a real audio sink (TV/AVR) — UNTESTED |
+| 🌐 **Ethernet** (LAN9500A) | ✅ | **works from a cold boot — task #17 fully closed** (gold-validated: clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units). The "enumeration intermittency" was a **pinmux miss**: `gpio_1` NENABLE (the LAN9500A power-enable) sat on an **unmuxed pad** (`kpd_col2` @ padconf `0x186`) so it never powered the chip — the healthy USB3320 PHY masked it, and the earlier "3/3 vs 0/3 boots" was stock priming, not a race. Fixed in kernel `#33` (DTS pad mux); the 2500ms "settle" it superseded was a false positive · **v1.6.8**. NM layer resolved 2026-07-04 (baked `eth-lan` DHCP + `eth-direct` static `ssh root@10.42.0.2`). **Now the DEFAULT deploy/control path** (measured 2026-07-07: ~80 Mbit/s, 0.62 ms — faster + more stable than WiFi/USB-gadget, fixed IP; the direct-cable static profile auto-comes-up since device r29 · v1.6.12). Chip has no MAC EEPROM → random MAC/lease per boot on a LAN |
+| 💿 **TOSLINK / SPDIF** | ✅ | **brought up in v1.6.13** — no C driver (mainline `davinci-mcasp` DIT/IEC958): defconfig `SND_SOC_DAVINCI_MCASP=m`+`SND_SOC_SPDIF=m`, DTS `&mcasp0` + `mcasp_spdif_pins` (`0x0f8` MUX_MODE2, AXR0) + `sound_spdif` card. Probe `-EINVAL` fixed via `format="i2s"`+mcasp master. A selectable PA output ("Optický výstup") since **v1.6.15**; PA pinned to 48 kHz (`50-nexusq-48k.conf`) so the DIT locks (44.1 kHz → "off by 88435 PPM"). Both PA sinks report 48000 Hz on fresh boot |
 | 🎧 **TWL6040 headset codec** | ⚪ | not populated/unused on steelhead — the stock kernel never drove it (verified 2026-07-03); no headset path **by design** (was wrongly called "dead hardware") |
 
 <sub>Full per-milestone detail in [CHANGELOG.md](CHANGELOG.md) · hardware map &amp; roadmap in [PLAN.md](PLAN.md).</sub>
@@ -71,10 +72,11 @@ How a tap on your phone becomes sound **and** light — the heart of the v1.6.x 
 ```mermaid
 flowchart LR
     P([📱 Phone<br/>Spotify app]) -->|mDNS · Spotify Connect| L[librespot<br/>“Nexus Q”]
-    L -->|48 kHz S16| T{{ALSA tee<br/>multi + route}}
-    T -->|McBSP2 · CLKGDV fix| S([🔊 TAS5713<br/>25 W speaker])
-    T -->|snd-aloop| LB[(Loopback)]
-    LB -->|arecord| N[nexusqd<br/>FFT · beat detect]
+    L -->|--device pulse| PA{{PulseAudio<br/>hub · 48 kHz}}
+    PA -->|default sink| S([🔊 TAS5713<br/>25 W speaker])
+    PA -.->|selectable| SP([💿 optical SPDIF])
+    PA -.->|selectable| HD([🔈 HDMI])
+    PA -->|sink.monitor · arecord| N[nexusqd<br/>FFT · beat · AGC]
     N -->|I²C → AVR| R(((🔴 32-LED ring)))
 
     style S fill:#1f6feb,stroke:#1f6feb,color:#fff
@@ -82,13 +84,18 @@ flowchart LR
     style L fill:#1db954,stroke:#1db954,color:#fff
 ```
 
-The same stream is **teed** to the amplifier and to a virtual loopback; the daemon
-that drives the LEDs reads the loopback, runs an FFT, and animates the ring — so the
-orb glows in time with whatever you're playing. The speaker is the timing master, so
-the lights never stall the music.
+Since **v1.6.15** **PulseAudio is the hub**: librespot feeds it as one input
+(`--device pulse`), and the active **output** — TAS5713 speaker, optical SPDIF, or
+HDMI — is the PA default sink, chosen from the companion app. The LED daemon reads
+the active sink's **monitor**, runs an FFT with an auto-gain stage, and animates the
+ring — so the orb glows in time with whatever you're playing, at any volume. (Before
+v1.6.15 the stream was teed via an ALSA `type multi` to the amp + a snd-aloop
+loopback; the McBSP2 pinmux fix in v1.6.13 was what first made the physical amp
+audible at all.)
 
 Since **v1.6.3** a phone/desktop **companion app** auto-discovers the Q over mDNS and
-controls **volume** (one ALSA softvol shared with Spotify-Connect), the **LED color theme +
+controls **volume** (since v1.6.15 the active PA output's sink; input-agnostic), the
+**audio output** (speaker / optical / HDMI · v1.6.15), the **LED color theme +
 brightness**, the **music visualisation**, **mute** (with a device-side mute-LED indicator),
 and shows **now-playing** — talking to the on-device `nexusq-control` LAN bridge (TCP 45015,
 line-delimited JSON — reachable over WiFi since **v1.6.5**). Since **v1.6.5** a color theme
@@ -179,7 +186,9 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.7 ── ✦ baked ethernet NM profiles · led_static healthd guard            2026-07-05
 1.6.8 ── ✦ ethernet works from cold — unmuxed NENABLE pad (task #17 closed)          2026-07-06
 1.6.9 ── ✦ boot log clean — gkr-pam + HDMI-audio noise silenced                      2026-07-06
-1.6.10 ─ ✦ boot log GENUINELY clean — dmesg err/warn EMPTY (all ~15 lines fixed)  ← latest  2026-07-06
+1.6.10 ─ ✦ boot log GENUINELY clean — dmesg err/warn EMPTY (all ~15 lines fixed)  ← latest tag  2026-07-06
+1.6.13 ─ ✦ TAS5713 speaker finally AUDIBLE (McBSP2 pinmux) + SPDIF bring-up      2026-07-07
+1.6.15 ─ ✦ PA-centric audio: multi-input → PulseAudio → app-selectable output · LED AGC  (built · flash-verify pending)  2026-07-07
 ```
 
 ---

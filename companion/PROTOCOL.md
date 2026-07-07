@@ -70,17 +70,38 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 { "volume": 42, "muted": false,
   "brightness": 200,
   "theme": "blue", "scene": "waveform",
+  "output": "speaker",
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
                   "artUrl": "...", "source": "spotify" } }
 ```
+- `output`: id of the active audio output (the current PulseAudio default sink) —
+  one of `speaker` (TAS5713 banana terminals) / `spdif` (optical) / `hdmi`.
 
-### Volume / mute  (→ real ALSA mixer + nexusqd mute LED, see §6)
+### Volume / mute  (→ the active output's PulseAudio sink + nexusqd mute LED, see §6)
 | Method | params | result | Event emitted |
 |---|---|---|---|
 | `setVolume` | `{ "volume": 0..100 }` | `{ volume, muted }` | `volumeChanged` |
 | `adjustVolume` | `{ "steps": int }` | `{ volume, muted }` | `volumeChanged` |
 | `setMuted` | `{ "muted": bool }` | `{ volume, muted }` | `volumeChanged` — also drives the device mute LED via nexusqd `muted 0\|1` |
 | `toggleMute` | — | `{ volume, muted }` | `volumeChanged` — also drives the device mute LED |
+
+Volume/mute act on the **currently-active output's PA sink** (input-agnostic —
+follows the selected output, and applies to any input feeding it).
+
+### Audio output  (→ PulseAudio default sink + move-sink-input, see §6)
+| Method | params | result | Event emitted |
+|---|---|---|---|
+| `listOutputs` | — | `{ "outputs": [ {id, label, sink, available} ], "active": "<id>" }` | — |
+| `setOutput` | `{ "output": "<id>" }` | `{ output }` | `outputChanged` — also re-emits `volumeChanged` (new sink's level/mute) |
+
+Output ids: `speaker` ("Reproduktor", TAS5713 banana terminals) · `spdif`
+("Optický výstup", optical S/PDIF) · `hdmi` ("HDMI", listed only when a real HDMI
+sink is present — it is usually `PULSE_IGNORE`'d). `setOutput` errors `bad_request`
+for an unknown/unavailable id. Switching the output is **input-agnostic**: the
+bridge sets the PA default sink (for new streams) **and** moves every existing
+sink-input onto it (so a currently-playing stream follows). As a hardware-amp
+safety, the class-D TAS5713 amp is powered on only when `speaker` is active and
+switched off for `spdif`/`hdmi`.
 
 ### LED ring  (→ nexusqd Unix socket `/run/nexusqd.sock`)
 | Method | params | result | Event |
@@ -104,15 +125,26 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 | `getDeviceInfo` | — | `{ name, model:"steelhead", serial, swVersion }` |
 
 ## 5. Reserved for later (not v1)
-`hello`/pairing handshake + token, multi-room grouping, output routing (HDMI/analog/SPDIF),
-fixed-volume line-out, sync delay, calibration, the stock UDP beacon for cross-compat. All extend
-this same envelope (new `method`/`event` names) without breaking v1 clients.
+`hello`/pairing handshake + token, multi-room grouping, fixed-volume line-out, sync delay,
+calibration, the stock UDP beacon for cross-compat. All extend this same envelope (new
+`method`/`event` names) without breaking v1 clients. _(Output routing — speaker/optical/HDMI —
+graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
 
 ## 6. Device-side wiring (informative — see the gap analysis in the RE doc §9)
-- **Volume/mute** → an ALSA control. Add an ALSA `softvol` (the `NexusQ` control on `nexusq_soft`),
-  bind `librespot --mixer alsa --alsa-mixer-control NexusQ` so Spotify-Connect volume and companion
-  volume are the *same* knob, read/write it via `amixer`/libasound. Mute also sends nexusqd
-  `muted 0|1` so the device **mute LED** matches the app (the same LED the hardware mute key lights).
+- **Audio topology** → PulseAudio is the hub: each **input** (librespot now; BT-A2DP / Tidal /
+  casting later) is a PA client, and the **output** is the PA default sink. PA runs in the
+  uid-10000 `user` session; the root bridge reaches it via `pactl` with `PULSE_SERVER`/`PULSE_COOKIE`.
+- **Volume/mute** → `pactl set-sink-volume`/`set-sink-mute` on the **active output's sink** (read
+  back with `get-sink-volume`/`get-sink-mute`), so the knob is input-agnostic and follows the output.
+  Mute also sends nexusqd `muted 0|1` so the device **mute LED** matches the app (the same LED the
+  hardware mute key lights). _(Follow-up tuning: the TAS5713 amp gain is very hot/steep — app ~8% is
+  already deafening — so a usable-range gain cap on the TAS5713 `Master`/`Speaker` control is planned;
+  v1 is plain linear %.)_
+- **Output routing** → `pactl set-default-sink <sink>` (new streams) **+** `move-sink-input` for every
+  current sink-input (so a playing stream follows). Known sinks: `alsa_output.platform-sound-tas5713.*`
+  → `speaker`, `alsa_output.platform-sound-spdif.*` → `spdif`, an HDMI sink → `hdmi` (usually
+  `PULSE_IGNORE`'d). The class-D TAS5713 amp is toggled on/off (`amixer sset Speaker`) so it is silent
+  unless it is the active output.
 - **LED theme** → a color theme is a **breathing override**: the bridge sends `breathe R G B`
   to `/run/nexusqd.sock`; nexusqd pulses the compositor manual layer (priority 8) in that hue with
   the idle-screensaver throb, **always visible** (over the music visualizer / a blanked screensaver);

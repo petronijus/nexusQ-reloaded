@@ -13,7 +13,7 @@ capture.*
 |------|------|--------------|
 | `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package) |
 | `pmos/device-google-steelhead/nq-diag-snapshot` | device | comprehensive read-only "log everything" one-shot dump |
-| `scripts/diag/nqctl` | host | reach the device over the best link (USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
+| `scripts/diag/nqctl` | host | reach the device over the best link (ethernet `10.42.0.2` first, then USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
 | `scripts/diag/nq-collect` | host | **the engine**: connect → snapshot → pull/burst samples → save locally → analyze |
 | `scripts/diag/nq-health-report` | host | analyze a capture → findings (human + JSON) |
 | `.claude/skills/nexusq-diag/` | — | agent skill wrapping `nq-collect` + interpretation guidance |
@@ -31,7 +31,7 @@ cat nq-captures/latest/report.txt  # the findings
 scripts/diag/nqctl status                 # which links are up
 scripts/diag/nqctl run 'nq-diag-snapshot --brief'
 scripts/diag/nqctl logs --follow          # tail the live health log
-scripts/diag/nqctl net-usb up             # stable USB link when WiFi is flaky
+scripts/diag/nqctl net-usb up             # USB-gadget fallback (ethernet 10.42.0.2 is the default)
 scripts/diag/nq-health-report nq-captures/latest   # re-analyze a capture
 ```
 

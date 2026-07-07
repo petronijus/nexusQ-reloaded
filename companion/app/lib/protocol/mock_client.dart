@@ -14,8 +14,14 @@ class MockClient implements NexusQClient {
   int _brightness = 200;
   String _theme = 'blue';
   String _scene = 'waveform';
+  String _output = 'speaker';
   bool _playing = true;
   int _trackIdx = 0;
+
+  static const _outputs = [
+    {'id': 'speaker', 'label': 'Reproduktor', 'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback', 'available': true},
+    {'id': 'spdif', 'label': 'Optický výstup', 'sink': 'alsa_output.platform-sound-spdif.stereo-fallback', 'available': true},
+  ];
 
   static const _tracks = [
     {'artist': 'Boards of Canada', 'track': 'Roygbiv', 'album': 'Music Has the Right to Children'},
@@ -55,6 +61,7 @@ class MockClient implements NexusQClient {
         'brightness': _brightness,
         'theme': _theme,
         'scene': _scene,
+        'output': _output,
         'nowPlaying': _nowPlaying,
         'name': 'Nexus Q (mock)',
       };
@@ -97,6 +104,16 @@ class MockClient implements NexusQClient {
         _scene = p['scene'] as String;
         _events.add(NexusQEvent('sceneChanged', {'scene': _scene}));
         return {'scene': _scene};
+      case 'listOutputs':
+        return {'outputs': _outputs, 'active': _output};
+      case 'setOutput':
+        final id = p['output'] as String;
+        if (!_outputs.any((o) => o['id'] == id)) {
+          throw NexusQError('bad_request', 'unknown output $id');
+        }
+        _output = id;
+        _events.add(NexusQEvent('outputChanged', {'output': _output}));
+        return {'output': _output};
       case 'setBrightness':
         _brightness = (p['brightness'] as num).round().clamp(0, 255);
         _events.add(NexusQEvent('brightnessChanged', {'brightness': _brightness}));

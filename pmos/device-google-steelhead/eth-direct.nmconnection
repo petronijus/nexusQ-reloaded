@@ -1,12 +1,24 @@
-# The documented direct PC<->Nexus cable workflow (host side: 10.42.0.1/24
-# or 10.0.0.1/24 on enp7s0). Manual activation only: nmcli c up eth-direct
-# — it must not fight eth-lan's DHCP on a real LAN.
+# The direct PC<->Nexus cable workflow (host side: 10.42.0.1/24 or
+# 10.0.0.1/24 on enp7s0). This is now the DEFAULT deploy/control path
+# (ethernet ~80 Mbit/s + 0.6 ms, far more stable than the USB gadget which
+# renames every reboot; WiFi bulk caps at ~34 Mbit/s — see the wifi memory).
+#
+# autoconnect=true, but a LOWER autoconnect-priority than eth-lan (5 < 10):
+# on a real LAN eth-lan's DHCP wins; on the serverless direct cable eth-lan
+# makes its single DHCP attempt, fails, and NM falls through to this static
+# profile (~10 s after carrier-up, once eth-lan's dhcp-timeout elapses) — so
+# 10.42.0.2 comes up automatically, no manual `nmcli c up eth-direct`.
+# never-default=true keeps it from hijacking the route if it ever activates
+# on a real LAN. autoconnect-retries=1 + permanent MAC (below) prevent the
+# carrier-bounce retry loop that plagued eth-lan (see that file's comment).
 [connection]
 id=eth-direct
 uuid=5f69d9bc-836d-5705-af21-61e11fac0a74
 type=ethernet
 interface-name=eth0
-autoconnect=false
+autoconnect=true
+autoconnect-priority=5
+autoconnect-retries=1
 
 [ipv4]
 method=manual

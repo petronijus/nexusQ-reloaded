@@ -66,4 +66,19 @@ fi
 rm -f /etc/systemd/system/sockets.target.wants/systemd-nsresourced.socket \
       /etc/systemd/system/multi-user.target.wants/systemd-nsresourced.service
 
+# --- Constrain avahi (mDNS) to WiFi only ---
+# librespot 0.8.0's only zeroconf backend (libmdns) is pinned to the wlan0 IP by
+# the librespot-nexusq wrapper, but avahi-daemon itself also answers steelhead.local
+# on every interface (incl. the usb0 gadget) and can steer discovery to the wrong
+# (usb0/eth-dev) address. Pin avahi to wlan0 so all mDNS (Spotify Connect now,
+# casting/AirPlay later) advertises the reachable WiFi address. avahi has no
+# drop-in dir, so patch avahi-daemon.conf in place. Idempotent.
+if [ -f /etc/avahi/avahi-daemon.conf ] && ! grep -q '^allow-interfaces=wlan0' /etc/avahi/avahi-daemon.conf; then
+	if grep -q '^\[server\]' /etc/avahi/avahi-daemon.conf; then
+		sed -i '/^\[server\]/a allow-interfaces=wlan0' /etc/avahi/avahi-daemon.conf
+	else
+		printf '[server]\nallow-interfaces=wlan0\n' >> /etc/avahi/avahi-daemon.conf
+	fi
+fi
+
 exit 0

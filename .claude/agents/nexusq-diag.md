@@ -152,9 +152,30 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   dual-core works since v1.2.0; flag any single-core boot as a regression.
 - **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
   the card; the path **plays at correct pitch/speed** since **v1.6.1** (kernel patch
-  0022 — derives McBSP2 `CLKGDV` from the real fclk). librespot/Spotify output via the
-  48 kHz `nexusq` ALSA PCM. To sanity-check: time a fixed-length clip/silence to the
-  `nexusq` PCM — should match wall-clock (~1.000×).
+  0022 — derives McBSP2 `CLKGDV` from the real fclk). To sanity-check: time a
+  fixed-length clip/silence — should match wall-clock (~1.000×).
+  🚨 **MAJOR (fixed v1.6.13, kernel r36): the physical speaker was SILENT the whole
+  project until 2026-07-07.** The ALSA/PCM/softvol pipeline was healthy end-to-end
+  (`aplay` rc=0) but nothing reached the amp: `mcbsp2_pins` muxed the WRONG balls
+  (`0x110/0x114/0x116` = `abe_dmic_*`, NOT McBSP2), so the real I2S balls
+  (`0x0f6` clkx / `0x0fa` dx / `0x0fc` fsx) sat in `safe_mode` (no clock/data/frame).
+  Fixed to the stock pads at `MUX_MODE0`. **So any pre-v1.6.13 "TAS5713 audio works"
+  claim was software-pipeline-only.** Same failure class as NFC/ethernet: an unmuxed
+  pad on a healthy driver. If the amp goes silent again with `aplay` rc=0, suspect the
+  pinmux, not the driver. See
+  `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+  🔀 **Audio routing is PA-centric since v1.6.15 (device r31 / nexusq-control r6):**
+  the old direct-ALSA `type multi` fan-out is GONE. librespot is now a PulseAudio
+  INPUT (systemd USER unit, `--device pulse`); the active OUTPUT (speaker / SPDIF /
+  HDMI) = the PA **default sink**, switched from the companion app via `nexusq-control`
+  `setOutput` (`pactl set-default-sink` + move all sink-inputs + a class-D amp Speaker
+  safety toggle + point PA default-source at the active `<sink>.monitor`). Volume/mute
+  are `pactl` on the active sink. **Checks:** `pactl list short sinks` (as uid-10000,
+  or root with `PULSE_SERVER`/`PULSE_COOKIE`) shows the tas5713 + spdif sinks; both
+  report **48000 Hz** (PA pinned to 48 kHz by `50-nexusq-48k.conf` — 44.1 kHz detunes
+  the McASP DIT, "off by 88435 PPM"). Deferred polish: TAS5713 gain is very hot (app
+  ~8% ≈ deafening, gain-cap TODO); boot default should be speaker-not-spdif; a residual
+  crackle (measure with speaker safe-disconnected).
   ℹ️ **Historical (FIXED in v1.6.1):** the v1.6.0 path played **2× too fast** (FSYNC at
   2× rate; 60 s drained in ~30 s), which made a librespot/Spotify track **auto-skip
   ~40 s in** — that was the audio-clock bug, **not** a librespot crash (the service
@@ -170,6 +191,33 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   backing device `KERNELS=="omap-hdmi-audio.1.auto"`. Any per-card udev/PA rule
   you write MUST match by backing device (`KERNELS=`) or card id, **never** by a
   `cardN` index.
+  ✅ **Desktop audio sink (v1.6.12, device r30):** the LXQt/labwc **Wayland**
+  desktop had a **red-cross no-sink tray icon** — PA never started (Alpine ships
+  no PA systemd user unit; the XDG autostart `start-pulseaudio-x11` never fires
+  under systemd+Wayland — `xdg-desktop-autostart.target` dead — with
+  `autospawn=no`). Fixed by a native `pulseaudio.service` systemd USER unit
+  (`default.target.wants/` symlink; plain daemon, NOT socket-activated — a socket
+  double-binds PA's own native socket → "bind(): Address in use"), plus a 2nd
+  PULSE_IGNORE rule for the snd-aloop **Loopback** (`KERNELS=="snd_aloop.0"`) so
+  PA's ONLY sink is the TAS5713 speaker (Loopback had grabbed the default sink at
+  card index 0). **Check:** `systemctl --user is-active pulseaudio` = active, and
+  `pactl get-default-sink` = `alsa_output.platform-sound-tas5713.stereo-fallback`
+  (NOT `…snd_aloop…`). Red cross / `pactl` "Connection refused" = PA down =
+  regression. See `docs/2026-07-07-desktop-audio-pulseaudio-fix.md`.
+- **LED music-visualizer tap + AGC (v1.6.15, nexusqd r7):** the visualizer no longer
+  reads the snd-aloop loopback — nexusqd runs `arecord -D pulse` capturing PA's
+  **default SOURCE**, which `nexusq-control` keeps pointed at the active sink's
+  `.monitor` (so the LED follows the selected output). nexusqd is root and reaches the
+  uid-10000 PA via `PULSE_SERVER`/`PULSE_COOKIE` in `nexusqd.service`. An **AGC**
+  (`audiocap.c`, `AGC_TARGET 0.15`, fast attack / slow release, noise-gate) normalizes
+  the post-volume monitor level so the ring reacts to the MUSIC at any listening
+  volume. **Healthy tell:** a steady `audio DETECTED vol=0.150` (== AGC_TARGET) in the
+  nexusqd log. The pre-AGC symptom was the visualizer **flickering ↔ breathing at low
+  volume** (raw level below threshold) — if that returns, the AGC/monitor tap
+  regressed. See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+- **`ss` is NOT installed on the device** (busybox/Alpine minimal) — use **`netstat`**
+  (`netstat -tlnp` / `netstat -ln`) to check listening sockets. (A `ss`-not-found caused
+  a long "no listener" misdiagnosis of the PA/bridge sockets.)
 - **python ON DEVICE** (armv7 SIGSEGV, **fixed 2026-06-28, v1.6.0**): `python3 -S -c '';
   echo rc=$?`. rc **0** = healthy (the v1.6.0 default-linker r5 build, clean-flashed);
   rc **139** = a corrupt libpython is installed. **ONE documented root cause:** a

@@ -7,18 +7,24 @@
 # docs/ethernet-bringup-procedure.md. One DHCP attempt per carrier
 # event is enough: on a real LAN it completes; on a serverless wire it
 # goes quiet instead of looping (re-plug triggers a fresh attempt).
+#
+# Priority 10 (higher than eth-direct's 5): NM tries DHCP FIRST on any eth0
+# carrier. On a real LAN it completes and wins. On the serverless direct
+# cable it fails its single attempt after dhcp-timeout, and NM then falls
+# through to the static eth-direct profile. dhcp-timeout lowered 30->10 s so
+# that fallback to the (now default) direct-cable path is quick.
 [connection]
 id=eth-lan
 uuid=75a00777-c260-5d9e-ae84-d92ebd4abec7
 type=ethernet
 interface-name=eth0
 autoconnect=true
-autoconnect-priority=5
+autoconnect-priority=10
 autoconnect-retries=1
 
 [ipv4]
 method=auto
-dhcp-timeout=30
+dhcp-timeout=10
 route-metric=200
 
 [ipv6]

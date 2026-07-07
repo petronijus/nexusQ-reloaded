@@ -20,6 +20,18 @@
 
 #define SAMPLES_PER_SEGMENT   1024   /* Visualizer.getCaptureSizeRange()[1] (ICS) */
 #define SEGMENTS_PER_SECOND   20     /* Visualizer.getMaxCaptureRate()/1000 (ICS) */
+
+/* AGC (auto-gain) for the PulseAudio-monitor tap. The tap reads the active
+ * sink's .monitor, which is AFTER PA volume/mute, so the raw level scales with
+ * the listening volume (~0.01-0.03 mean-abs at normal volume vs ~0.1-0.2
+ * full-scale). Normalize to AGC_TARGET so the visualizer reacts to the MUSIC
+ * independent of volume (matching the old pre-volume loopback tap). Fast attack,
+ * slow release (beats/dynamics still show); a noise gate keeps true silence
+ * silent so it falls back to the breathing screensaver. */
+#define AGC_TARGET       0.15f   /* desired mean-abs when music is playing */
+#define AGC_RELEASE      0.95f   /* per-segment EMA (~1.5 s at 20 seg/s) tracking down */
+#define AGC_NOISE_FLOOR  0.001f  /* raw mean-abs below this = silence (gate to 0) */
+#define AGC_MAX_GAIN     50.0f   /* cap so we never blow up the noise floor */
 #define AUDIO_BUF             (SAMPLES_PER_SEGMENT * 5)
 #define BEAT_VALUES_LEN       120
 #define AUDIOCAP_FFT_SCALE    (127.0 / 512.0)   /* real-FFT -> int8 (approx; documented) */
@@ -47,6 +59,7 @@ struct audio_state {
     int   buffer_index;
     int   last_segment_index;
     float volume;
+    float agc_level;   /* AGC: slow-tracked level of the raw capture (see on_segment) */
     /* FFT scratch (signed 8-bit packed, android Visualizer layout) */
     signed char fft[SAMPLES_PER_SEGMENT];
     /* BeatProcessor */

@@ -1,0 +1,27 @@
+# PulseAudio as a systemd USER service (Nexus Q).
+#
+# Alpine's pulseaudio ships NO systemd user units — it relies on the XDG
+# autostart `/etc/xdg/autostart/pulseaudio.desktop` (Exec=start-pulseaudio-x11,
+# X-GNOME-HiddenUnderSystemd=true). In this systemd + LXQt/labwc *Wayland*
+# session that path never fires: systemd's xdg-desktop-autostart.target stays
+# dead, the .desktop is "hidden under systemd" (defers to a native unit that
+# didn't exist), and autospawn is off (50-nexusq-no-autospawn.conf) — so no PA
+# daemon ever started → /run/user/<uid>/pulse/native missing → every PA client
+# (the LXQt volume applet, pactl) got "Connection refused" → red-cross tray icon.
+#
+# Fix: start PA as a plain user daemon at session login. NOT socket-activated —
+# PA's own default.pa loads module-native-protocol-unix and binds the native
+# socket itself, so a systemd pulseaudio.socket double-binds it ("bind():
+# Address in use"). --log-target=stderr (systemd captures it into the journal);
+# this Alpine PA build rejects --log-target=journal.
+[Unit]
+Description=Sound Service
+ConditionUser=!root
+
+[Service]
+ExecStart=/usr/bin/pulseaudio --daemonize=no --log-target=stderr
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

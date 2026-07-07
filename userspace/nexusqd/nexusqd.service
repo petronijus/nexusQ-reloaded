@@ -14,6 +14,14 @@ ExecStart=/usr/bin/nexusqd
 WatchdogSec=15s
 Restart=on-failure
 RestartSec=2
+# The audio-reactive visualizer tap spawns `arecord -D pulse` to capture PA's
+# default SOURCE (which the companion bridge keeps pointed at the active sink's
+# .monitor). nexusqd runs as root, but PulseAudio lives in the uid-10000 `user`
+# session — these let a root PA client reach it (verified). No start ordering vs
+# PA is needed: if PA is late, arecord just fails and audio.c's respawn-on-EOF
+# loop (AUDIO_RESPAWN_S) retries until PA is up.
+Environment=PULSE_SERVER=unix:/run/user/10000/pulse/native
+Environment=PULSE_COOKIE=/home/user/.config/pulse/cookie
 
 [Install]
 WantedBy=multi-user.target

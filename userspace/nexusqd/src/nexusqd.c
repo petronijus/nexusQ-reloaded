@@ -146,9 +146,9 @@ int main(void) {
     double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
     double last_avr_push = 0.0;    /* last AVR frame commit — drives the keepalive re-push */
     for (;;) {
-        /* arecord exits immediately if hw:Loopback,1 is absent (snd-aloop not
-         * loaded) or the device is busy; the loop below then closes afd. Re-spawn
-         * it periodically so audio recovers once the loopback appears, without
+        /* arecord (-D pulse) exits immediately if PulseAudio is not up yet (e.g.
+         * early boot) or the device is busy; the loop below then closes afd. Re-spawn
+         * it periodically so audio recovers once PA is available, without
          * busy-spinning on a dead pipe in the meantime. */
         if (afd < 0 && now_s() >= afd_retry) { afd = audio_open(); afd_retry = now_s() + AUDIO_RESPAWN_S; }
 

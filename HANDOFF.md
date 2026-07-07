@@ -4,7 +4,175 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-06 (latest): **v1.6.10 — the boot log is GENUINELY clean (dmesg err/warn EMPTY)**
+## Session 2026-07-07 (evening, latest): **PA-centric audio system — v1.6.15** (BUILT, flash-verify PENDING)
+
+✅ **BUILT 2026-07-07 and about to be flashed — each capability confirmed live
+during bring-up; the final clean-flash acceptance sweep is still PENDING.**
+Package delta: `device-google-steelhead` **r31**, `nexusq-control` **r6**,
+`nexusqd` **r7**, `linux` **r36** (the v1.6.13 SPDIF/McBSP2 kernel, already
+flashed as a test build). Full record:
+`docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+
+The design: multi-input → **PulseAudio hub** → app-selectable output, replacing
+the old direct-ALSA `type multi` fan-out. Every input (librespot now; BT-A2DP /
+Tidal / casting later) is a PA client; the active output (TAS5713 / SPDIF / HDMI)
+is the PA default sink chosen from the companion app; the LED visualizer taps the
+active output's monitor with an auto-gain stage.
+
+**Kernel foundation (v1.6.13, `linux` r36, already flashed as a test build):**
+- **MAJOR: the speaker (TAS5713) was SILENT the whole project — a wrong McBSP2
+  pinmux, now fixed → it actually plays** (user-confirmed audible). `mcbsp2_pins`
+  was muxing `0x110/0x114/0x116` = the `abe_dmic_*` balls, NOT McBSP2, so the real
+  I2S balls sat in `safe_mode` and the amp got no clock/data/frame (`aplay` rc=0
+  but nothing driven). Fixed to stock McBSP2 pads **`0x0f6` clkx / `0x0fa` dx /
+  `0x0fc` fsx** MUX_MODE0 (confirmed vs `reverse-eng/stock-omap-mux-full.txt` +
+  live pinctrl). **Recontextualizes all prior "TAS5713 works" claims as
+  software-pipeline-only.**
+- **SPDIF (optical) brought up** — no C driver work (mainline `davinci-mcasp`
+  supports `ti,omap4-mcasp-audio` + DIT/IEC958). defconfig
+  `SND_SOC_DAVINCI_MCASP=m` + `SND_SOC_SPDIF=m`; DTS `&mcasp0` okay + new
+  `mcasp_spdif_pins` (`0x0f8` MUX_MODE2, AXR0 out) + new `sound_spdif`
+  simple-audio-card (`NexusQ-SPDIF`, mcasp0 DIT ↔ `spdif_dit`). Probe `-EINVAL`
+  (`snd_soc_dai_set_fmt -22`, fmt FORMAT field = 0) fixed via `format = "i2s"` +
+  `bitclock`/`frame-master = <&spdif_cpu>` (folded in as `rc2`; DTB verified;
+  pkgrel kept 36 so module vermagic matches the rootfs).
+
+**PA-centric userspace (v1.6.15 — implemented + baked):**
+- **librespot → PA (VERIFIED end-to-end).** Now a systemd USER unit (uid-10000)
+  via wrapper `/usr/bin/librespot-nexusq` (`--backend alsa --device pulse` — 0.8.0
+  has no native PA backend; `--zeroconf-interface <wlan0 IP>` — 0.8.0 ships only
+  libmdns which otherwise advertised the usb0 gadget IP; `--ap-port 443`;
+  `--disable-credential-cache`). avahi pinned to wlan0 (`allow-interfaces=wlan0`).
+  Spotify Connect discoverable + connectable + plays into PA.
+- **Output selection (VERIFIED end-to-end).** `nexusq-control` gained
+  `listOutputs`/`setOutput` (+ `outputChanged`): `setOutput` = `pactl
+  set-default-sink` + move all sink-inputs (input-agnostic) + amp Speaker
+  on/off safety toggle + points PA default-source at the active sink's monitor.
+  Volume/mute reworked amixer→pactl on the active sink; the root bridge reaches
+  the user PA via `PULSE_SERVER`/`PULSE_COOKIE`. Flutter app got an OUTPUT selector
+  (Holo-dark segmented control). App switch → device default sink + Speaker toggle.
+- **SPDIF 48 kHz (VERIFIED).** `50-nexusq-48k.conf` pins PA to 48000 + resamples
+  (McASP DIT + McBSP2 clock only the 48 kHz family cleanly; 44.1 kHz → "off by
+  88435 PPM"). Both PA sinks report 48000 Hz on fresh boot.
+- **LED visualizer re-tapped + AGC (VERIFIED live).** Tap moved off the dead
+  snd-aloop loopback to a PA monitor source (nexusqd `arecord -D pulse` on the
+  active sink's monitor — follows output selection) + an **AGC** (nexusqd r7,
+  audiocap.c, `AGC_TARGET 0.15`) that normalizes the post-volume monitor level so
+  the LED reacts to music at any volume. Steady `audio DETECTED vol=0.150`, no
+  flicker (pre-AGC symptom was flickering visualizer↔breathing at low volume).
+- **HDMI audio (unchanged):** real `omap-hdmi-audio`; PCM open `-EINVAL` only
+  because the attached Philips 190C DVI monitor has a 128-byte EDID (no CEA ext,
+  no audio). Joins the output list as `hdmi` once its PULSE_IGNORE rule is lifted
+  against a real audio sink — UNTESTED.
+
+**Deferred polish (NOT in v1.6.15 — need care/hardware):**
+1. **Volume gain-cap** — TAS5713 amp is very hot (app ~8% ≈ deafening); bridge
+   sends plain linear pactl % for now. Cap Master/Speaker gain to a usable SPL
+   range; needs calibration with the user at a safe volume / reconnected speaker.
+2. **Boot default output** — should be the speaker; PA picked spdif/sink0 on boot;
+   ensure the speaker sink is boot-default and not muted.
+3. **Speaker crackle** — the McBSP2/TAS5713 dropout heard when the speaker first
+   became audible; the type-multi theory is now moot (tap moved to a monitor
+   source). Re-diagnose from measurement (speaker safe-disconnected); check whether
+   48 kHz already reduced it.
+
+**Next steps:** (1) **flash-verify v1.6.15** — full clean-flash acceptance sweep;
+(2) work the deferred polish list above; (3) multi-input roadmap (BT-A2DP / Tidal /
+casting each join as another PA client — routing + LED tap already work).
+
+**Gotcha:** `ss` is NOT installed on the device — use **`netstat`** (`-tlnp`) to
+check listening sockets (caused a long misdiagnosis of "no listener").
+
+---
+
+## Session 2026-07-07: **Desktop audio sink fixed** (v1.6.12, device r29→r30)
+
+The LXQt/labwc **Wayland** desktop showed a **red-cross (no-sink) audio tray
+icon** — no sound. Diagnosed + fixed live 2026-07-07 (device pkg **r29→r30**,
+verified across a reboot). Full note:
+`docs/2026-07-07-desktop-audio-pulseaudio-fix.md`.
+
+- **Layer 1 — PulseAudio never started.** Alpine's PA ships no systemd user unit;
+  it relies on the XDG autostart `pulseaudio.desktop`
+  (`start-pulseaudio-x11`, `X-GNOME-HiddenUnderSystemd=true`), which never fires
+  under systemd + Wayland (`xdg-desktop-autostart.target` dead, .desktop hidden-
+  under-systemd deferring to a native unit that didn't exist, `autospawn=no`). →
+  no daemon → `/run/user/10000/pulse/native` missing → PA clients "Connection
+  refused" → red cross. **Not** a PipeWire-owns-the-session issue (PW already
+  suppressed). **Fix:** ship a native **`pulseaudio.service` systemd USER unit**
+  (`pulseaudio --daemonize=no --log-target=stderr`, `ConditionUser=!root`,
+  `Restart=on-failure`), enabled via a `default.target.wants/` symlink. NOT
+  socket-activated (a `pulseaudio.socket` double-binds the native socket PA's own
+  `default.pa` creates → "bind(): Address in use"); `--log-target=journal` is
+  rejected by this Alpine build, `stderr` → journal via systemd.
+- **Layer 2 — wrong default sink.** PA auto-loaded `module-alsa-card` for the
+  snd-aloop **Loopback** (card index 0 on some boots) → made it the DEFAULT sink
+  (audio into loopback plumbing, EBUSY risk vs librespot/tap). **Fix:** extend
+  `91-pulseaudio-hdmi-ignore.rules` with a 2nd rule `KERNELS=="snd_aloop.0"`
+  PULSE_IGNORE (platform-name match; card index is probe-order-unstable). PA's
+  ONLY sink is now the **TAS5713 speaker** → deterministic default. Verified live:
+  post-reboot PA `is-active`, sole sink
+  `alsa_output.platform-sound-tas5713.stereo-fallback`, and it is the default.
+- **Baked (device r30):** `pmos/device-google-steelhead/pulseaudio.service` (new),
+  `91-pulseaudio-hdmi-ignore.rules` (2nd rule), `APKBUILD`
+  (source/sha512sums/package + pkgrel 29→30).
+- **Process lesson:** run the FULL `nexusq-diag` sweep after every flash + boot —
+  this red-cross regression was caught only because the user noticed the tray
+  icon; the post-flash check was too narrow (must include desktop audio: PA
+  running + a real default sink).
+
+⚠️ **Version note:** the ethernet-default work below was built + flashed as
+**v1.6.11** for testing but never git-tagged/released. The next release is
+**v1.6.12** and includes BOTH the ethernet-default change (device r29) AND this
+audio fix (r30) → shipped delta over v1.6.10 is **r28→r30**.
+
+---
+
+## Session 2026-07-07: **WiFi characterized + ethernet is the default deploy path** (device r28→r29, built as v1.6.11 test → ships in v1.6.12)
+
+Two findings, both measured live 2026-07-07 on the running **v1.6.10** image
+(device pkg `r28`, kernel `#36`). No kernel change; the only baked delta is
+`device-google-steelhead` **r28→r29** (three NM ethernet-profile tweaks, already
+applied LIVE on the device). Built + flashed as v1.6.11 for testing (never
+tagged) → ships in **v1.6.12**. Full note:
+`docs/2026-07-07-wifi-characterization-and-ethernet-default.md`.
+
+- **WiFi (BCM4330) — 5 GHz is HEALTHY, NOT flaky; the old "flaky" framing is
+  RETIRED.** 5 GHz `Svatovitske-Internety-5g`: −48 dBm, link 62/70, **0**
+  discarded/retry/frag pkts, jitter **2.6 ms / 6 ms max, 0 % loss**. Bulk
+  **~34 Mbit/s is a HARDWARE CEILING** of the 2010-era 1×1 802.11n combo chip on
+  SDIO (last fw Jan-2013, 5.90.195.114), not a bug — ruled out per-flow (2
+  streams *aggregate* to ~29, less), crypto (same cipher does ~80 over ethernet →
+  the A9 crypto ceiling ≈80, WiFi is the limit), power-save (`powersave=2` = no
+  change) and SDIO (mmc4 already 50 MHz/4-bit, ~200 Mbit raw). ~100× the
+  appliance's real need. 2.4 GHz retested: also **stable, not flaky** (0 % loss)
+  but strictly worse — main AP is 802.11g-only (~14 Mbit); the chip *does* do
+  2.4 GHz 11n (joined the `_EXT` mesh at 130 Mbit negotiated) but still only
+  ~13–16 Mbit real (backhaul + congested ch6).
+- **Ethernet is now the DEFAULT deploy/control path** (replaces the USB gadget).
+  Measured 2026-07-07: **~80 Mbit/s, 0.62 ms, 0 % loss** — beats WiFi (~34) and
+  the USB gadget (~64 crypto), and has a fixed name/IP (the gadget's `enx*`
+  renames per boot). Direct cable: host `eth-direct-host` on `enp7s0`
+  10.42.0.1/24 ↔ device `eth-direct` 10.42.0.2/24.
+- **Config change (baked r29):** `eth-direct.nmconnection` is now
+  **`autoconnect=true`** (was false) at `autoconnect-priority=5`,
+  `autoconnect-retries=1`; `eth-lan.nmconnection` priority **5→10**,
+  `dhcp-timeout` **30→10 s**. On a real LAN `eth-lan`'s DHCP wins; on the
+  serverless direct cable `eth-lan` fails its one attempt (~10 s) and NM falls
+  through to the static `eth-direct` → **10.42.0.2 comes up automatically, no
+  manual `nmcli c up eth-direct`**. `scripts/diag/nqctl` now tries ethernet first
+  (eth→usb→wifi) + gained an ssh-agent-independent `SSH_OPTS`. The
+  `nexusq-connect` agent/skill briefs promote `eth-direct` to the #1 transport.
+  ⚠️ eth0 hw MAC is still random per boot (no MAC EEPROM) → LAN lease/IP changes;
+  the direct-cable static path is unaffected.
+- **Next steps:** ship the v1.6.12 build (bakes r30 = ethernet r29 + audio) +
+  reflash + git-tag it (v1.6.11 was a test build only); the standing
+  PROJECTS (NFC tap-to-pair, deep cpuidle C2+ blocked on serial, thermal-headroom
+  watch ~94–99 °C).
+
+---
+
+## Session 2026-07-06: **v1.6.10 — the boot log is GENUINELY clean (dmesg err/warn EMPTY)**
 
 v1.6.9 still booted with **~15 err/warn lines**. v1.6.10 closes **all** of them —
 every one root-caused and fixed with a REAL fix, plus two authorized exceptional

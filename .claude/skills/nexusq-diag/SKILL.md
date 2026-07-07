@@ -148,6 +148,25 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-07-02-boot-error-inventory.md` v1.6.10 update +
   `docs/2026-07-06-bootlog-cleanup.md`). The L2C aux-modify notice is an
   **authorized** `pr_debug` downgrade (register end-state identical to stock).
+- **TAS5713 speaker was SILENT until v1.6.13 (kernel r36)** — a wrong `mcbsp2_pins`
+  mux (`0x110/0x114/0x116` = `abe_dmic_*`, not McBSP2) left the real I2S balls in
+  `safe_mode`, so the amp got no clock/data/frame while the ALSA pipeline read
+  healthy (`aplay` rc=0). Fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0. Any
+  pre-v1.6.13 "audio works" claim was software-only; silent amp with rc=0 = suspect
+  the pinmux, not the driver.
+- **Audio routing is PA-centric (v1.6.15, device r31 / nexusq-control r6 / nexusqd
+  r7)** — the ALSA `type multi` fan-out is gone. librespot is a PA INPUT (USER unit,
+  `--device pulse`); the active OUTPUT (speaker/SPDIF/HDMI) = the PA **default sink**,
+  switched from the app via `setOutput` (`pactl set-default-sink` + move sink-inputs +
+  amp Speaker safety toggle + default-source→`<sink>.monitor`). Volume/mute = `pactl`
+  on the active sink. Both sinks run **48000 Hz** (`50-nexusq-48k.conf`; 44.1 kHz
+  detunes the McASP DIT). The LED visualizer reads the active `<sink>.monitor` via
+  `arecord -D pulse` + an **AGC** (`AGC_TARGET 0.15`) so it reacts to music at any
+  volume — healthy tell: steady `audio DETECTED vol=0.150`; low-volume
+  flicker↔breathing = AGC regressed. See
+  `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+- **`ss` is NOT installed on the device** — use **`netstat -tlnp`** to check listening
+  sockets (a `ss`-not-found caused a long "no listener" misdiagnosis).
 - **HDMI-audio card / PulseAudio** — the `omap-hdmi-audio` ALSA card is a
   snd-soc-dummy-DAI (not a usable sink; HDMI is desktop video only). Since
   **v1.6.9** PA ignores it via a `PULSE_IGNORE` udev rule, so
@@ -157,6 +176,20 @@ Findings are tagged by `kind`; interpret them like this:
   (HDMI came up as card2 one boot); the shipped rule matches the backing device
   `KERNELS=="omap-hdmi-audio.1.auto"`. Any per-card udev/PA rule MUST match by
   backing device (`KERNELS=`) or card id, never by `cardN` index.
+- **Desktop audio sink / PulseAudio running (v1.6.12, device r30)** — the
+  LXQt/labwc **Wayland** desktop had a **red-cross no-sink tray icon** because PA
+  never started: Alpine ships no PA systemd user unit and the XDG autostart
+  (`start-pulseaudio-x11`, hidden-under-systemd) never fires under systemd+Wayland
+  (`xdg-desktop-autostart.target` dead), with `autospawn=no`. **Fix:** a native
+  `pulseaudio.service` systemd USER unit (`default.target.wants/` symlink,
+  plain daemon, NOT socket-activated — a socket double-binds PA's own native
+  socket → "bind(): Address in use"). Also PULSE_IGNORE the snd-aloop **Loopback**
+  (`KERNELS=="snd_aloop.0"`) so PA's ONLY sink is the TAS5713 speaker (Loopback had
+  become the default sink at card index 0 on some boots). **Diag check:**
+  `systemctl --user is-active pulseaudio` = active, and the default sink is
+  `alsa_output.platform-sound-tas5713.stereo-fallback` (NOT `…snd_aloop…`). Red
+  cross / "Connection refused" from `pactl` = PA not running = regression. See
+  `docs/2026-07-07-desktop-audio-pulseaudio-fix.md`.
 - **pstore** (crit) — a previous boot panicked; the dump is in the `PSTORE`
   section. Remember pstore only survives a *warm* reboot.
 

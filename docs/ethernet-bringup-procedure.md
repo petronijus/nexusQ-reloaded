@@ -187,55 +187,71 @@ Boot image must be **< ~6.5 MB** (U-Boot ceiling) and DTB appended to the zImage
 
 ## 3. Flash to the boot partition (p9) — from the running device, no fastboot
 
-Device is reachable over the USB gadget (`172.16.42.1`) or, once up, over ethernet
-(`10.42.0.2`, see §4). The gadget iface on the host renames every reboot — re-add the
-host IP first (`sudo ip addr add 172.16.42.2/24 dev enx<...>`).
+Device is reachable over **ethernet (`10.42.0.2`, the DEFAULT deploy path since
+2026-07-07 — ~80 Mbit/s, 0.62 ms, fixed IP; see §4)** or, as a fallback, over the
+USB gadget (`172.16.42.1` — solid but its `enx*` iface renames every reboot, so
+re-add the host IP first with `sudo ip addr add 172.16.42.2/24 dev enx<...>`).
+WiFi works too but caps at ~34 Mbit/s (BCM4330 HW ceiling — see
+`docs/2026-07-07-wifi-characterization-and-ethernet-default.md`), so prefer the
+cable for a boot-image push. Substitute the reachable host below (`10.42.0.2` or
+`172.16.42.1`) — `nqctl` picks it for you (ethernet first):
 ```bash
+DEV=root@10.42.0.2        # or root@172.16.42.1 (gadget fallback)
 # 1. back up the currently-working p9 FIRST
-ssh root@172.16.42.1 'dd if=/dev/mmcblk0p9 bs=1M' > output/p9-backup.img
+ssh $DEV 'dd if=/dev/mmcblk0p9 bs=1M' > output/p9-backup.img
 # 2. push + verify + flash + read-back verify
 LSHA=$(sha256sum output/boot-eth.img | awk '{print $1}'); SZ=$(stat -c%s output/boot-eth.img)
-ssh root@172.16.42.1 "cat > /tmp/b.img" < output/boot-eth.img
-ssh root@172.16.42.1 "sha256sum /tmp/b.img"          # must equal $LSHA
-ssh root@172.16.42.1 "dd if=/tmp/b.img of=/dev/mmcblk0p9 bs=1M conv=fsync; sync;
-                      head -c $SZ /dev/mmcblk0p9 | sha256sum"   # must equal $LSHA
+ssh $DEV "cat > /tmp/b.img" < output/boot-eth.img
+ssh $DEV "sha256sum /tmp/b.img"          # must equal $LSHA
+ssh $DEV "dd if=/tmp/b.img of=/dev/mmcblk0p9 bs=1M conv=fsync; sync;
+          head -c $SZ /dev/mmcblk0p9 | sha256sum"   # must equal $LSHA
 # 3. reboot (clean systemd reboot boots from p9; ~90-130 s back up)
-ssh root@172.16.42.1 'systemctl reboot'
+ssh $DEV 'systemctl reboot'
 ```
 
 ---
 
-## 4. Reach the device over ethernet (direct PC↔Nexus cable) — zero-touch since 2026-07-04
+## 4. Reach the device over ethernet (direct PC↔Nexus cable) — the DEFAULT path, fully automatic since r29 (2026-07-07)
 
-The Nexus RJ45 is cabled directly to `petronijus-PC` NIC **`enp7s0`** (Intel I225-V,
-100 Mbps). A direct cable has **no DHCP server** — this is exactly the topology that
-armed the old NM retry loop (see the Status note). Since `device-google-steelhead`
-**r21** (hot-deployed 2026-07-04; **baked + flashed since v1.6.7, 2026-07-05**)
-eth0 is owned by three shipped config files, and the host has a persistent
-profile too — no ad-hoc setup on either end. ⚠️ All of this presupposes the
-chip **enumerated this boot** (`ls /sys/class/net` shows `eth0`) — on `#33`+
+This is now the **default deploy/control transport** — measured 2026-07-07 at
+**~80 Mbit/s, 0.62 ms, 0 % loss**, beating WiFi (~34) and the USB gadget (~64
+crypto), and it has a fixed name/IP (the gadget renames per boot). The Nexus RJ45
+is cabled directly to `petronijus-PC` NIC **`enp7s0`** (Intel I225-V, 100 Mbps). A
+direct cable has **no DHCP server** — this is exactly the topology that armed the
+old NM retry loop (see the Status note). Since `device-google-steelhead` **r21**
+(baked since v1.6.7) eth0 is owned by shipped config files, and the host has a
+persistent profile too — no ad-hoc setup on either end. ⚠️ All of this presupposes
+the chip **enumerated this boot** (`ls /sys/class/net` shows `eth0`) — on `#33`+
 (v1.6.8) it enumerates from a true cold boot; if `eth0` is missing on an older
 image it's the unmuxed-pad root cause (Status note), not a profile problem;
 reboot or use the gadget/WiFi instead:
 
 - **Device (baked):** `eth-no-auto-default.conf` (`no-auto-default=eth0` — NM never
-  generates "Wired connection 1"), `eth-lan.nmconnection` (DHCP, `dhcp-timeout=30`,
-  `autoconnect-retries=1`, **`cloned-mac-address=permanent`** — the key: no MAC
-  churn → no carrier bounce → the retry counter sticks; on a serverless wire the
-  port goes quiet instead of looping), `eth-direct.nmconnection` (static
-  **10.42.0.2/24 + 10.0.0.2/24**, never-default, `autoconnect=no`).
+  generates "Wired connection 1"), `eth-lan.nmconnection` (DHCP,
+  **`autoconnect-priority=10`**, `dhcp-timeout=10`, `autoconnect-retries=1`,
+  **`cloned-mac-address=permanent`** — no MAC churn → no carrier bounce → the retry
+  counter sticks; on a serverless wire the port goes quiet instead of looping),
+  `eth-direct.nmconnection` (static **10.42.0.2/24 + 10.0.0.2/24**, never-default;
+  **since r29 `autoconnect=true` at `autoconnect-priority=5`**).
 - **Host (persistent NM profile `eth-direct-host` on `enp7s0`):** 10.42.0.1/24 +
   10.0.0.1/24, never-default, autoconnect — replaces the old
   `managed no` + manual `ip addr add` dance.
 
-**Workflow:** activate the device-side static profile once per boot (over the
-gadget/WiFi, or a serial shell), then ssh over the cable:
+**Fall-through logic (r29, 2026-07-07):** on any eth0 carrier NM tries `eth-lan`
+DHCP FIRST (priority 10). On a real LAN it completes and wins. On the serverless
+direct cable it fails its single attempt after `dhcp-timeout=10 s`, and NM then
+falls through to the lower-priority static `eth-direct` → **10.42.0.2 comes up
+automatically, no manual `nmcli c up`**.
+
+**Workflow:** just ssh over the cable once the device is booted:
 ```bash
-ssh root@172.16.42.1 'nmcli c up eth-direct'   # manual by design — must not
-                                               # fight eth-lan's DHCP on a real LAN
-ssh root@10.42.0.2
+ssh root@10.42.0.2          # comes up on its own ~10 s after carrier
+# if the fall-through hasn't fired yet (or a pre-r29 image with autoconnect=no):
+ssh root@172.16.42.1 'nmcli c up eth-direct'   # force it over the gadget/WiFi
 ```
-Verified 2026-07-04: ping 3/3 (0.77 ms avg), ssh works, `nm-online -s` rc=0.
+Verified 2026-07-07: ping 0 % loss (~0.62 ms), ssh works, `nm-online -s` rc=0.
+_(Pre-r29, 2026-07-04: `eth-direct` was `autoconnect=no` and required a manual
+`nmcli c up eth-direct` each boot — now automatic.)_
 
 ⚠️ **eth0's hw MAC is RANDOM per boot** (the LAN9500A has no MAC EEPROM), and
 `cloned-mac-address=permanent` puts that random address on the wire — so **on a
@@ -269,7 +285,8 @@ ssh root@10.42.0.2 'dmesg | grep -iE "smsc95|0424:9e00"'
 ```
 Healthy: `usb 1-1: New USB device ... idVendor=0424 idProduct=9e00` then
 `smsc95xx ... eth0: register 'smsc95xx' ... Link is Up - 100Mbps/Full`.
-Throughput on this HW is ~30–60 Mbps (USB2 / single-core bound), not a fault.
+Throughput ~80 Mbit/s (crypto/CPU-bound, measured 2026-07-07 — the fastest of the
+three transports), not a fault.
 
 ---
 
@@ -279,7 +296,8 @@ Work top-down; each step says which layer is at fault.
 
 1. **Does `eth0` exist?** `ssh root@<dev> 'ls /sys/class/net; dmesg | grep -iE "smsc95|0424:9e00|usb 1-1"'`
    - **`eth0` present, link up, but no connectivity** → it's the *runtime* layer, not the
-     kernel. Redo §4 (`nmcli c up eth-direct` / the baked profiles). Most common false alarm.
+     kernel. On r29+ the static `eth-direct` auto-comes-up ~10 s after carrier (§4); if it
+     hasn't yet, force it with `nmcli c up eth-direct`. Most common false alarm.
    - **`eth0` present but "flapping"** → an NM activation loop bouncing the carrier via MAC
      rewrites, NOT a link fault (root-caused 2026-07-04, see the Status note). On r21+ the
      baked `eth-no-auto-default.conf` + `eth-lan` profile prevent it; on older images use

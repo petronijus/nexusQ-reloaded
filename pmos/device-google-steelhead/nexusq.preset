@@ -11,15 +11,20 @@
 # services in 90-base.preset) is to declare them enabled here; preset-all then
 # (re)creates the enable symlink on every run.
 #
-# librespot/nq-healthd/nexusq-usb-gadget are "local" units (their unit files
-# live in /etc), which preset-all leaves alone, but we list them too so all
-# device autostart is declarative and robust against future preset changes.
+# nq-healthd/nexusq-usb-gadget are "local" units (their unit files live in /etc),
+# which preset-all leaves alone, but we list them too so all device autostart is
+# declarative and robust against future preset changes.
+#
+# NB librespot is NOT here: since device pkg r31 it is a systemd USER unit
+# (/usr/lib/systemd/user/librespot.service, runs in the uid-10000 session for
+# PulseAudio access) enabled via a user default.target.wants symlink — exactly
+# like pulseaudio.service. This is a SYSTEM preset, so it must not reference the
+# user unit (a system preset-all can't enable a user unit, and would warn).
 #
 # Priority 95 sorts after postmarketos-base's 90-* presets (no nexusq entries
 # there, so no conflict) and BEFORE 99-default's `disable *`, so these enable
 # lines win.
 enable nexusq-control.service
 enable nexusqd.service
-enable librespot.service
 enable nq-healthd.service
 enable nexusq-usb-gadget.service

@@ -6,7 +6,8 @@ the work out to the subsystems that already run on the device:
 
 | Concern | Backend |
 |---|---|
-| volume / mute | ALSA softvol control **`NexusQ`** via `amixer` (librespot is bound to the same control, so Spotify-Connect and companion volume are one knob) |
+| audio output | PulseAudio default sink via `pactl` — `set-default-sink` + `move-sink-input` for every stream (input-agnostic); class-D amp toggled for safety. PA runs in the uid-10000 `user` session, reached from root with `PULSE_SERVER`/`PULSE_COOKIE` |
+| volume / mute | `pactl set-sink-volume`/`set-sink-mute` on the **active output's** PA sink (input-agnostic, follows the output) |
 | LED theme / brightness | `nexusqd` control socket `/run/nexusqd.sock` (`theme <name>` / `brightness <0-255>`) |
 | now-playing | `librespot --onevent /usr/bin/nexusq-onevent` pushes track/volume changes to the bridge's local socket `/run/nexusq-control.sock` (read-only metadata + transport state) |
 | discovery | mDNS `_nexusq._tcp` via `avahi-publish-service` (best-effort) |
@@ -25,18 +26,22 @@ Packaged by `pmos/nexusq-control/APKBUILD`; pulled into the image by the device 
 
 ## Run / test on the host
 ```sh
-NEXUSQ_BIND_HOST=127.0.0.1 NEXUSQ_MIXER_CARD=… NEXUSQ_MIXER_CTRL=… ./nexusq-control
+NEXUSQ_BIND_HOST=127.0.0.1 NEXUSQ_PULSE_SERVER=unix:/run/user/1000/pulse/native ./nexusq-control
 ```
-Config via env: `NEXUSQ_BIND_HOST/PORT` (0.0.0.0:45015), `NEXUSQ_MIXER_CARD` (NexusQSpeaker),
-`NEXUSQ_MIXER_CTRL` (NexusQ), `NEXUSQD_SOCK` (/run/nexusqd.sock), `NEXUSQ_HOOK_SOCK`
-(/run/nexusq-control.sock), `NEXUSQ_NAME` ("Nexus Q").
+Config via env: `NEXUSQ_BIND_HOST/PORT` (0.0.0.0:45015), `NEXUSQ_MIXER_CARD` (NexusQSpeaker,
+for the amp toggle), `NEXUSQ_AMP_CTRL` (Speaker), `NEXUSQ_PULSE_SERVER`
+(unix:/run/user/10000/pulse/native), `NEXUSQ_PULSE_COOKIE` (/home/user/.config/pulse/cookie),
+`NEXUSQD_SOCK` (/run/nexusqd.sock), `NEXUSQ_HOOK_SOCK` (/run/nexusq-control.sock),
+`NEXUSQ_NAME` ("Nexus Q").
 
 ## v1 limitations
 - **Transport (play/pause/next/previous) is `unavailable`** — librespot is a Spotify-Connect
   receiver with no local transport API; control happens from the Spotify app. A future backend
   (e.g. go-librespot's HTTP API) could fill this in (PROTOCOL.md §5).
-- The softvol `NexusQ` control is created when librespot first opens `nexusq_soft`; until then
-  `amixer` reads fail and the bridge reports a default volume, reconciling on the first event.
+- Volume/mute follow the **active output's PA sink**; if PulseAudio isn't up yet (no sinks), the
+  bridge reports a default volume and reconciles on the first event / a later `setOutput`.
+- **TAS5713 gain is very hot/steep** (app ~8% ≈ deafening); v1 sends plain linear pactl % — a
+  usable-range gain cap on the TAS5713 `Master`/`Speaker` control is a known follow-up tuning.
 
 ## Device verification (verified live — v1.6.3, 2026-07-01)
 Verified on hardware from a clean v1.6.3 flash: the bridge auto-starts (`active`, no boot
@@ -50,6 +55,9 @@ job**, so it was enabled but never auto-started (manual `systemctl start` masked
 enabled durably via the `95-nexusq.preset` systemd preset (a `/usr/lib` vendor wants and a bare
 `/etc` symlink were both stripped by the image build's `preset-all` + pmOS's `disable *`).
 
-Re-verify after a reflash: `systemctl status nexusq-control`, `amixer -c NexusQSpeaker sget
-NexusQ`, then point the app at the device (`flutter run --dart-define=NEXUSQ_HOST=<ip>`) and
-check volume/theme/brightness + now-playing.
+Re-verify after a reflash: `systemctl status nexusq-control`, `pactl list short sinks` (as the
+uid-10000 user, or from root with `PULSE_SERVER`/`PULSE_COOKIE`), then point the app at the
+device (`flutter run --dart-define=NEXUSQ_HOST=<ip>`) and check output switching + volume/theme/
+brightness + now-playing. **Still needs a live device test** (output selection + volume/mute on
+PA sinks landed as repo code only): confirm `setOutput` moves a currently-playing stream, that
+the amp toggle silences the banana terminals on `spdif`, and calibrate the TAS5713 gain range.

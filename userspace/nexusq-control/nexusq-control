@@ -5,9 +5,11 @@ Implements the v1 companion protocol (companion/PROTOCOL.md): newline-delimited
 JSON over TCP. It is the single LAN endpoint the Flutter companion talks to, and
 it fans the work out to the device subsystems that already exist:
 
-  - volume / mute        -> ALSA mixer control  (amixer; librespot is bound to
-                            the same control via --mixer alsa, so Spotify-Connect
-                            volume and companion volume are one knob)
+  - output selection     -> PulseAudio default sink  (pactl; PA is the audio hub
+                            and every INPUT is a PA client, every OUTPUT a sink —
+                            switching = set-default-sink + move all sink-inputs)
+  - volume / mute        -> the active output's PA sink  (pactl set-sink-volume/
+                            set-sink-mute; input-agnostic, follows the output)
   - LED theme / brightness -> nexusqd control socket  (/run/nexusqd.sock)
   - now-playing            -> librespot --onevent hook pushes metadata + volume
                             in over a local unix socket (read-only metadata,
@@ -18,13 +20,15 @@ loop, a unix accept loop for the librespot hook, and one handler thread per
 client. State is shared under a lock; device events are broadcast to all clients.
 
 Config via env:
-  NEXUSQ_BIND_HOST   (default 0.0.0.0)
-  NEXUSQ_BIND_PORT   (default 45015)
-  NEXUSQ_MIXER_CARD  (default NexusQSpeaker)
-  NEXUSQ_MIXER_CTRL  (default NexusQ)        # the softvol control (see asound.conf)
-  NEXUSQD_SOCK       (default /run/nexusqd.sock)
-  NEXUSQ_HOOK_SOCK   (default /run/nexusq-control.sock)
-  NEXUSQ_NAME        (default "Nexus Q")
+  NEXUSQ_BIND_HOST     (default 0.0.0.0)
+  NEXUSQ_BIND_PORT     (default 45015)
+  NEXUSQ_MIXER_CARD    (default NexusQSpeaker)  # ALSA card for the amp safety toggle
+  NEXUSQ_AMP_CTRL      (default Speaker)        # class-D amp on/off control on that card
+  NEXUSQ_PULSE_SERVER  (default unix:/run/user/10000/pulse/native)  # user-session PA
+  NEXUSQ_PULSE_COOKIE  (default /home/user/.config/pulse/cookie)    # lets root reach it
+  NEXUSQD_SOCK         (default /run/nexusqd.sock)
+  NEXUSQ_HOOK_SOCK     (default /run/nexusq-control.sock)
+  NEXUSQ_NAME          (default "Nexus Q")
 """
 import json
 import os
@@ -36,10 +40,26 @@ import threading
 HOST = os.environ.get("NEXUSQ_BIND_HOST", "0.0.0.0")
 PORT = int(os.environ.get("NEXUSQ_BIND_PORT", "45015"))
 MIXER_CARD = os.environ.get("NEXUSQ_MIXER_CARD", "NexusQSpeaker")
-MIXER_CTRL = os.environ.get("NEXUSQ_MIXER_CTRL", "NexusQ")
+AMP_CTRL = os.environ.get("NEXUSQ_AMP_CTRL", "Speaker")
+# PulseAudio runs in the uid-10000 `user` session; root reaches it with the user's
+# cookie (verified). Both overridable, like MIXER_CARD.
+PULSE_SERVER = os.environ.get("NEXUSQ_PULSE_SERVER", "unix:/run/user/10000/pulse/native")
+PULSE_COOKIE = os.environ.get("NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/cookie")
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 HOOK_SOCK = os.environ.get("NEXUSQ_HOOK_SOCK", "/run/nexusq-control.sock")
 DEVICE_NAME = os.environ.get("NEXUSQ_NAME", "Nexus Q")
+
+# Known PulseAudio sinks → a stable id + Czech-friendly label. Matched by substring
+# against the PA sink name (e.g. alsa_output.platform-sound-tas5713.stereo-fallback)
+# so we tolerate profile-suffix drift. Order = the app's display order. This mapping
+# is INPUT-AGNOSTIC: any input (librespot now; BT-A2DP / Tidal / casting later) is a
+# PA client whose stream we move onto whichever of these sinks is the active output.
+OUTPUTS = [
+    {"id": "speaker", "label": "Reproduktor",    "match": "tas5713"},
+    {"id": "spdif",   "label": "Optický výstup", "match": "spdif"},
+    {"id": "hdmi",    "label": "HDMI",           "match": "hdmi"},
+]
+OUTPUT_BY_ID = {o["id"]: o for o in OUTPUTS}
 
 THEMES = [
     {"name": "blue", "label": "Blue"},
@@ -83,38 +103,142 @@ def log(*a):
     print("[nexusq-control]", *a, flush=True)
 
 
-class Mixer:
-    """Thin amixer wrapper over the configured ALSA control (0..100 + mute)."""
+def _pactl(*args, timeout=4):
+    """Run pactl against the uid-10000 user PulseAudio (root uses the user cookie)."""
+    return subprocess.run(
+        ["pactl", *args],
+        env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
+        capture_output=True, text=True, timeout=timeout,
+    )
 
-    _pct = re.compile(r"\[(\d{1,3})%\]")
-    _onoff = re.compile(r"\[(on|off)\]")
 
-    def _run(self, *args):
-        return subprocess.run(
-            ["amixer", "-M", "-c", MIXER_CARD, *args],
-            capture_output=True, text=True, timeout=4,
-        )
+def _amixer(*args, timeout=4):
+    """Run amixer on the speaker card (used only for the class-D amp safety toggle)."""
+    return subprocess.run(
+        ["amixer", "-c", MIXER_CARD, *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
 
-    def get(self):
-        """Return (volume 0..100, muted) or (None, None) if the control is absent."""
+
+class Pulse:
+    """pactl access to the user-session PulseAudio: enumerate sinks, read/set the
+    default sink, and move sink-inputs. Resilient — a pactl hiccup never throws,
+    it degrades to empty/None so it can't take down the bridge."""
+
+    def sinks(self):
+        """Return the list of PA sink names (`pactl list short sinks`), or []."""
         try:
-            r = self._run("sget", MIXER_CTRL)
+            r = _pactl("list", "short", "sinks")
             if r.returncode != 0:
-                return None, None
-            vol = self._pct.search(r.stdout)
-            off = self._onoff.search(r.stdout)
-            return (int(vol.group(1)) if vol else None,
-                    (off.group(1) == "off") if off else False)
+                return []
+            names = []
+            for ln in r.stdout.splitlines():
+                cols = ln.split("\t")
+                if len(cols) >= 2 and cols[1].strip():
+                    names.append(cols[1].strip())
+            return names
+        except Exception as e:  # noqa: BLE001 - never let pactl kill the bridge
+            log("pactl list sinks failed:", e)
+            return []
+
+    def default_sink(self):
+        try:
+            r = _pactl("get-default-sink")
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception as e:  # noqa: BLE001
+            log("pactl get-default-sink failed:", e)
+        return None
+
+    def set_default_sink(self, sink):
+        try:
+            _pactl("set-default-sink", sink)
+        except Exception as e:  # noqa: BLE001
+            log("pactl set-default-sink failed:", e)
+
+    def set_default_source(self, source):
+        """Point PA's default SOURCE at `source` (we use `<sink>.monitor` of the
+        active output). This is what makes the nexusqd visualizer tap — `arecord -D
+        pulse`, which captures the PA DEFAULT SOURCE — follow the selected output:
+        the default source does NOT auto-track the default sink, so we steer it
+        here on every output change / at startup. Resilient: a failure here must
+        never break output selection (worst case the ring taps the previous
+        output's monitor until the next switch)."""
+        try:
+            _pactl("set-default-source", source)
+        except Exception as e:  # noqa: BLE001
+            log("pactl set-default-source failed:", e)
+
+    def sink_input_ids(self):
+        """Return the ids of every current sink-input (`pactl list short sink-inputs`)."""
+        try:
+            r = _pactl("list", "short", "sink-inputs")
+            if r.returncode != 0:
+                return []
+            ids = []
+            for ln in r.stdout.splitlines():
+                cols = ln.split("\t")
+                if cols and cols[0].strip():
+                    ids.append(cols[0].strip())
+            return ids
+        except Exception as e:  # noqa: BLE001
+            log("pactl list sink-inputs failed:", e)
+            return []
+
+    def move_all_inputs(self, sink):
+        """Move every existing sink-input onto `sink` so a live stream follows the
+        output switch. Input-agnostic: works for any PA client."""
+        for sid in self.sink_input_ids():
+            try:
+                _pactl("move-sink-input", sid, sink)
+            except Exception as e:  # noqa: BLE001
+                log("pactl move-sink-input failed:", sid, e)
+
+
+class Mixer:
+    """Volume/mute on a *given PA sink* via pactl (0..100 + mute). The active
+    output's sink is passed in, so volume is input-agnostic and follows the output.
+
+    NOTE: the TAS5713 class-D amp has a very hot/steep gain (app ~8% is already
+    deafening); a usable-range gain cap on the TAS5713 Master/Speaker control is a
+    known follow-up tuning — we apply a plain linear pactl percentage for now."""
+
+    _pct = re.compile(r"(\d{1,3})%")
+
+    def get(self, sink):
+        """Return (volume 0..100, muted) for `sink`, or (None, None) on failure."""
+        if not sink:
+            return None, None
+        try:
+            rv = _pactl("get-sink-volume", sink)
+            rm = _pactl("get-sink-mute", sink)
+            vol = None
+            if rv.returncode == 0:
+                m = self._pct.search(rv.stdout)  # first %: the volume (dB has no %)
+                vol = int(m.group(1)) if m else None
+            muted = "yes" in rm.stdout.lower() if rm.returncode == 0 else False
+            return vol, muted
         except Exception as e:  # noqa: BLE001 - never let a mixer hiccup kill the bridge
-            log("amixer get failed:", e)
+            log("pactl get volume failed:", e)
             return None, None
 
-    def set_volume(self, pct):
+    def set_volume(self, sink, pct):
+        if not sink:
+            return
         pct = max(0, min(100, int(pct)))
-        self._run("sset", MIXER_CTRL, f"{pct}%", "unmute")
+        try:
+            _pactl("set-sink-volume", sink, f"{pct}%")
+            _pactl("set-sink-mute", sink, "0")  # setting a level implies unmute
+        except Exception as e:  # noqa: BLE001
+            log("pactl set volume failed:", e)
 
-    def set_muted(self, muted):
-        self._run("sset", MIXER_CTRL, "mute" if muted else "unmute")
+    def set_muted(self, sink, muted):
+        if not sink:
+            return
+        try:
+            _pactl("set-sink-mute", sink, "1" if muted else "0")
+        except Exception as e:  # noqa: BLE001
+            log("pactl set mute failed:", e)
 
 
 def nexusqd_send(line):
@@ -132,21 +256,53 @@ def nexusqd_send(line):
 
 class Bridge:
     def __init__(self):
+        self.pulse = Pulse()
         self.mixer = Mixer()
         self.lock = threading.Lock()
         self.clients = {}          # id -> socket
         self._next_id = 0
-        vol, muted = self.mixer.get()
+        # Seed the active output from PA's current default sink (fall back to speaker),
+        # then read volume/mute off that sink.
+        output = self._output_for_sink(self.pulse.default_sink()) or "speaker"
+        init_sink = self._sink_for_output(output) or self.pulse.default_sink()
+        vol, muted = self.mixer.get(init_sink)
+        # Seed PA's default SOURCE to the active output's monitor so the nexusqd LED
+        # visualizer taps the active mix from the very first boot, before any
+        # setOutput. `arecord -D pulse` captures the default source, which does not
+        # auto-track the default sink — we keep it steered here and on every switch.
+        if init_sink:
+            self.pulse.set_default_source(init_sink + ".monitor")
         self.state = {
             "volume": vol if vol is not None else 50,
             "muted": bool(muted),
             "brightness": 255,
             "theme": "blue",
             "scene": "waveform",
+            "output": output,
             "nowPlaying": {"playing": False, "artist": "", "track": "",
                            "album": "", "artUrl": "", "source": ""},
             "name": DEVICE_NAME,
         }
+
+    # --- output/sink resolution -----------------------------------------
+    def _sink_for_output(self, oid):
+        """Resolve an output id (speaker/spdif/hdmi) to a present PA sink name, or None."""
+        o = OUTPUT_BY_ID.get(oid)
+        if o is None:
+            return None
+        return next((n for n in self.pulse.sinks() if o["match"] in n), None)
+
+    def _output_for_sink(self, sink):
+        """Reverse-map a PA sink name to a known output id, or None if unrecognised."""
+        if not sink:
+            return None
+        return next((o["id"] for o in OUTPUTS if o["match"] in sink), None)
+
+    def _active_sink(self):
+        """The PA sink of the currently-selected output (fall back to PA's default)."""
+        with self.lock:
+            oid = self.state.get("output")
+        return (self._sink_for_output(oid) if oid else None) or self.pulse.default_sink()
 
     # --- client registry / broadcast ------------------------------------
     def add_client(self, sock):
@@ -187,6 +343,10 @@ class Bridge:
                     "serial": _serial(), "swVersion": _sw_version()}, []
         if method in ("setVolume", "adjustVolume", "setMuted", "toggleMute"):
             return self._volume_cmd(method, p)
+        if method == "listOutputs":
+            return self._list_outputs(), []
+        if method == "setOutput":
+            return self._set_output(p)
         if method == "setTheme":
             name = str(p.get("theme", ""))
             cmds = THEME_CMDS.get(name)
@@ -231,23 +391,25 @@ class Bridge:
         raise Err("unknown_method", method)
 
     def _volume_cmd(self, method, p):
+        # Volume/mute always act on the *active output's* PA sink, so the knob is
+        # input-agnostic and follows the current output.
+        sink = self._active_sink()
         with self.lock:
             vol = self.state["volume"]
             muted = self.state["muted"]
         if method == "setVolume":
             vol = max(0, min(100, int(p.get("volume", vol))))
             muted = False
-            self.mixer.set_volume(vol)
-            self.mixer.set_muted(False)
+            self.mixer.set_volume(sink, vol)  # implies unmute
         elif method == "adjustVolume":
             vol = max(0, min(100, vol + int(p.get("steps", 0))))
-            self.mixer.set_volume(vol)
+            self.mixer.set_volume(sink, vol)
         elif method == "setMuted":
             muted = bool(p.get("muted", False))
-            self.mixer.set_muted(muted)
+            self.mixer.set_muted(sink, muted)
         elif method == "toggleMute":
             muted = not muted
-            self.mixer.set_muted(muted)
+            self.mixer.set_muted(sink, muted)
         with self.lock:
             self.state["volume"] = vol
             self.state["muted"] = muted
@@ -255,6 +417,62 @@ class Bridge:
         # (idempotent set, same LED the hardware mute key lights)
         nexusqd_send(f"muted {1 if muted else 0}")
         return {"volume": vol, "muted": muted}, [("volumeChanged", {"volume": vol, "muted": muted})]
+
+    def _list_outputs(self):
+        """Enumerate the known outputs, marking which have a present PA sink and which
+        is active (the current default sink). HDMI is omitted when its sink is absent
+        (usually PULSE_IGNORE'd); speaker/spdif are always listed."""
+        sinks = self.pulse.sinks()
+        active = self._output_for_sink(self.pulse.default_sink())
+        outs = []
+        for o in OUTPUTS:
+            sink = next((n for n in sinks if o["match"] in n), None)
+            if sink is None and o["id"] == "hdmi":
+                continue  # no real HDMI sink present → don't advertise it
+            outs.append({
+                "id": o["id"],
+                "label": o["label"],
+                "sink": sink or "",
+                "available": sink is not None,
+            })
+        if active is None:
+            with self.lock:
+                active = self.state.get("output", "speaker")
+        return {"outputs": outs, "active": active}
+
+    def _set_output(self, p):
+        oid = str(p.get("output", ""))
+        if oid not in OUTPUT_BY_ID:
+            raise Err("bad_request", f"unknown output {oid}")
+        sink = self._sink_for_output(oid)
+        if sink is None:
+            raise Err("bad_request", f"output {oid} unavailable")
+        # 1) new streams go here, 2) move every current stream so a live one follows.
+        self.pulse.set_default_sink(sink)
+        self.pulse.move_all_inputs(sink)
+        # 3) point PA's default SOURCE at this output's monitor so the nexusqd LED
+        # visualizer (`arecord -D pulse`, captures the default source) taps the mix
+        # actually going to the selected output. Resilient (see set_default_source).
+        self.pulse.set_default_source(sink + ".monitor")
+        # Hardware amp safety: power the class-D amp ONLY when the speaker is active,
+        # so the banana-terminal amp is silent for the optical / HDMI outputs.
+        if oid == "speaker":
+            _amixer("sset", AMP_CTRL, "on")
+            self.mixer.set_muted(sink, False)  # unmute the speaker sink
+        else:
+            _amixer("sset", AMP_CTRL, "off")
+        # reconcile volume/mute from the now-active sink so the UI reflects reality
+        vol, muted = self.mixer.get(sink)
+        with self.lock:
+            self.state["output"] = oid
+            if vol is not None:
+                self.state["volume"] = vol
+                self.state["muted"] = bool(muted)
+            vol_out = self.state["volume"]
+            muted_out = self.state["muted"]
+        events = [("outputChanged", {"output": oid}),
+                  ("volumeChanged", {"volume": vol_out, "muted": muted_out})]
+        return {"output": oid}, events
 
     # --- librespot hook (internal, over the unix socket) ----------------
     def on_hook(self, obj):
@@ -424,7 +642,7 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((HOST, PORT))
     srv.listen(8)
-    log(f"listening on {HOST}:{PORT}  (mixer {MIXER_CARD}:{MIXER_CTRL}, nexusqd {NEXUSQD_SOCK})")
+    log(f"listening on {HOST}:{PORT}  (PA {PULSE_SERVER}, amp {MIXER_CARD}:{AMP_CTRL}, nexusqd {NEXUSQD_SOCK})")
     try:
         while True:
             conn, addr = srv.accept()

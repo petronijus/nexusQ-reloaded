@@ -2,13 +2,15 @@
 # kernel frame channel. Built for the target by pmbootstrap (armv7/musl).
 pkgname=nexusqd
 pkgver=0.1.0
-pkgrel=5
+pkgrel=7
 pkgdesc="Nexus Q LED ring daemon (steelhead-avr)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="armv7"
 license="GPL-2.0-only"
-# arecord (alsa-utils) is the Plan 3b audio tap; needs the snd-aloop loopback
-# module loaded (see scripts/build-aloop-module.sh + /etc/modules-load.d).
+# arecord (alsa-utils) is the audio-visualizer tap; it now uses the ALSA→PulseAudio
+# plugin (`arecord -D pulse`) to capture PA's default SOURCE (kept pointed at the
+# active sink's .monitor by nexusq-control), so it follows the selected output and
+# reacts to any input. The old snd-aloop loopback tap is vestigial (see audio.h).
 depends="alsa-utils"
 options="!check"   # unit tests run on the host CI, not in the cross build
 # Source files are staged flat next to this APKBUILD by docker-build.sh

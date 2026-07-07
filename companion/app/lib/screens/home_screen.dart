@@ -87,6 +87,14 @@ class HomeScreen extends StatelessWidget {
                   ],
                 ),
 
+                // --- OUTPUT (PulseAudio sink routing) --------------------
+                const _SectionHeader('OUTPUT'),
+                _OutputSelector(
+                  outputs: s.outputs,
+                  active: s.output,
+                  onSelect: controller.setOutput,
+                ),
+
                 // --- BRIGHTNESS ------------------------------------------
                 const _SectionHeader('BRIGHTNESS'),
                 Row(
@@ -223,6 +231,87 @@ class HomeScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Audio-output routing as a Holo-dark segmented control: one pill per available
+/// PA sink (speaker / optical / HDMI), the active one glowing Holo-Blue. Selecting
+/// one calls `setOutput`, which re-routes whatever is playing (input-agnostic).
+/// Unavailable outputs render dimmed and non-tappable.
+class _OutputSelector extends StatelessWidget {
+  const _OutputSelector({
+    required this.outputs,
+    required this.active,
+    required this.onSelect,
+  });
+  final List<AudioOutput> outputs;
+  final String active;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final o in outputs) ...[
+          Expanded(
+            child: _OutputPill(
+              output: o,
+              selected: o.id == active,
+              onTap: o.available ? () => onSelect(o.id) : null,
+            ),
+          ),
+          if (o != outputs.last) const SizedBox(width: 10),
+        ],
+      ],
+    );
+  }
+}
+
+class _OutputPill extends StatelessWidget {
+  const _OutputPill({required this.output, required this.selected, this.onTap});
+  final AudioOutput output;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final fg = !enabled
+        ? NexusQColors.divider
+        : selected
+            ? NexusQColors.accent
+            : NexusQColors.dim;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? NexusQColors.accent.withValues(alpha: 0.10) : null,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: selected ? NexusQColors.accent : NexusQColors.divider,
+            width: selected ? 2 : 1,
+          ),
+          boxShadow: selected
+              ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.5), blurRadius: 8)]
+              : null,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(output.icon, size: 22, color: fg),
+            const SizedBox(height: 6),
+            Text(
+              output.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: fg),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

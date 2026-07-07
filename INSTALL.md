@@ -53,7 +53,7 @@ is ~23 chunks, each reporting OKAY — measured 2026-07-03).
 
 **After any reflash:** the device regenerates its SSH host key on first boot,
 so your next `ssh` will warn about a changed key. Clear the stale entries
-first: `ssh-keygen -R 172.16.42.1` (and the device's WiFi IP).
+first: `ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the device's WiFi IP).
 
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
 only way to brick the device.
@@ -116,7 +116,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | Subsystem | Status |
 |-----------|--------|
 | HDMI video + XFCE4 desktop | ✅ |
-| WiFi (BCM4330, original calibration) | ✅ working — the 2026-07-02 "dead" verdict was wrong: the DHCP **IP had moved** (NM randomized MAC → fresh lease per boot; see the note in §5). Stable-MAC fix **verified on device 2026-07-03** (ships in v1.6.6) |
+| WiFi (BCM4330, original calibration) | ✅ working, stable IP since v1.6.6 (factory MAC pinned at the NM layer). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
 | Bluetooth | ✅ |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |

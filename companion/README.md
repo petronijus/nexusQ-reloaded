@@ -21,9 +21,13 @@ plays; and an **app-mute now lights the device mute LED** (the volume/mute path 
 `../docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.)_ The Flutter
 companion (`app/`) and its device-side LAN bridge (`nexusq-control`,
 `../userspace/nexusq-control/`, aport `../pmos/nexusq-control/`) are done: the app
-auto-discovers the Q over mDNS and controls **volume** (one ALSA softvol shared with
-Spotify-Connect), **LED color theme (breathing) + brightness**, the **music visualisation**,
-and shows **now-playing**. The original app was reverse-engineered first — the full feature catalog, the
+auto-discovers the Q over mDNS and controls the **audio output** (speaker / optical
+SPDIF / HDMI — `listOutputs`/`setOutput`, a Holo-dark segmented control · v1.6.15),
+**volume/mute** (since v1.6.15 the active PulseAudio output's sink — input-agnostic,
+was one ALSA softvol), **LED color theme (breathing) + brightness**, the **music
+visualisation**, and shows **now-playing**. _(Since v1.6.15 audio is PA-centric:
+librespot is a PulseAudio input and the output is the PA default sink; see
+`../docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

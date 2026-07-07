@@ -236,9 +236,32 @@ void audiocap_free(struct audio_state *a) {
 
 void audiocap_on_segment(struct audio_state *a, const float *segment) {
     int start = a->buffer_index;
+
+    /* raw mean-abs level of this segment (before AGC) */
+    float raw = 0.0f;
+    for (int i = 0; i < SAMPLES_PER_SEGMENT; i++)
+        raw += segment[i] < 0 ? -segment[i] : segment[i];
+    raw /= SAMPLES_PER_SEGMENT;
+
+    /* AGC (see audiocap.h): the PA-monitor tap is post-volume, so raw scales
+     * with the listening volume. Track it (fast attack, slow release) and
+     * normalize to AGC_TARGET so the visualizer reacts to the MUSIC regardless
+     * of volume; gate true silence so it falls back to the breathing idle. */
+    if (raw > a->agc_level) a->agc_level = raw;
+    else a->agc_level = a->agc_level * AGC_RELEASE + raw * (1.0f - AGC_RELEASE);
+    float gain;
+    if (raw < AGC_NOISE_FLOOR || a->agc_level < 1e-6f) {
+        gain = 0.0f;                                     /* silence gate */
+    } else {
+        gain = AGC_TARGET / a->agc_level;
+        if (gain > AGC_MAX_GAIN) gain = AGC_MAX_GAIN;
+        if (gain < 1.0f)         gain = 1.0f;            /* never attenuate a hot signal */
+    }
+
     float vol = 0.0f;
     for (int i = 0; i < SAMPLES_PER_SEGMENT; i++) {
-        float s = segment[i];
+        float s = segment[i] * gain;
+        if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;   /* clip to [-1,1] */
         a->waveform[a->buffer_index++] = s;
         vol += s < 0 ? -s : s;
     }
@@ -246,6 +269,8 @@ void audiocap_on_segment(struct audio_state *a, const float *segment) {
     a->last_segment_index = start;
     if (a->buffer_index == AUDIO_BUF) a->buffer_index = 0;
 
+    /* FFT/beat on the ORIGINAL segment — the beat detector is scale-robust
+     * (counts bins over a threshold), so AGC gain would only shift the noise. */
     fft_real(segment, a->fft);
     beat_on_segment(a, a->volume, a->fft);
 }

@@ -215,6 +215,38 @@
 			sound-dai = <&tas5713>;
 		};
 	};
+
+	/*
+	 * Optical S/PDIF out: OMAP4 McASP in DIT (IEC958) mode -> spdif-dit codec.
+	 * In DIT mode the McASP generates its own IEC958 framing, so no i2s
+	 * format / bit-/frame-master negotiation is needed (unlike the TAS5713
+	 * link above); the link just binds the McASP DIT DAI to the DIT codec.
+	 * Mirrors stock's omap-mcasp-dai <-> dit-hifi card ("Steelhead SPDIF Card").
+	 */
+	sound_spdif: sound-spdif {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "NexusQ-SPDIF";
+		/*
+		 * The McASP in DIT mode generates the IEC958 framing itself, but
+		 * simple-audio-card still calls snd_soc_dai_set_fmt() on the cpu DAI.
+		 * davinci_mcasp_set_dai_fmt() returns -EINVAL (-22, seen at v1.6.13
+		 * probe) when the SND_SOC_DAIFMT_FORMAT field is 0 (its default: case).
+		 * Give it a valid format ("i2s") and make the McASP the bit+frame
+		 * master — DIT drives its own TX clock from the ABE McASP fck, there is
+		 * no external codec clock (spdif-dit is a dummy sink).
+		 */
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&spdif_cpu>;
+		simple-audio-card,frame-master = <&spdif_cpu>;
+
+		spdif_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcasp0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&spdif_dit>;
+		};
+	};
 };
 
 &omap4_pmx_core {
@@ -390,17 +422,36 @@
 	};
 
 	/*
-	 * McBSP2 I2S pads for TAS5713 amplifier.
-	 * These are SEPARATE from the McPDM pads (0x106-0x10e) used by TWL6040.
-	 * McBSP2 pads: clkx=0x110, dr=0x112, dx=0x114, fsx=0x116
+	 * McBSP2 I2S pads for the TAS5713 amplifier.
+	 * Stock (board-steelhead.c + reverse-eng/stock-omap-mux-full.txt) routes
+	 * McBSP2 on the abe_mcbsp2_* ball cluster in MUX_MODE0:
+	 *   clkx=0x0f6, dx=0x0fa, fsx=0x0fc   (dr=0x0f8 is unused by the TX-only
+	 *   TAS5713 link and is repurposed as the S/PDIF AXR out, see below).
+	 * The previous DTS muxed 0x110/0x114/0x116 — but those are the abe_dmic_*
+	 * pads, NOT McBSP2. Confirmed 2026-07-07 against the stock mux dump AND a
+	 * live pinctrl read: with the old (wrong) mux, 0x0f6/0x0fa/0x0fc sat in
+	 * safe_mode, so the McBSP2 I2S clock/data/frame never reached the amp
+	 * (aplay returned rc=0 but nothing was actually driven to the speaker).
 	 */
 	mcbsp2_pins: mcbsp2-pins {
 		pinctrl-single,pins = <
-			/* McBSP2 is bit/frame master -> all pads outputs
-			 * (board-steelhead.c muxes clkx/dx/fsx as OUTPUT) */
-			OMAP4_IOPAD(0x110, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_clkx */
-			OMAP4_IOPAD(0x114, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_dx */
-			OMAP4_IOPAD(0x116, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_fsx */
+			/* McBSP2 is bit/frame master -> clkx/dx/fsx OUTPUT (stock) */
+			OMAP4_IOPAD(0x0f6, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_clkx */
+			OMAP4_IOPAD(0x0fa, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_dx */
+			OMAP4_IOPAD(0x0fc, PIN_OUTPUT | MUX_MODE0)		/* abe_mcbsp2_fsx */
+		>;
+	};
+
+	/*
+	 * S/PDIF (optical TOSLINK) output: OMAP4 McASP serializer AXR0 on the
+	 * abe_mcbsp2_dr ball in MUX_MODE2 (abe_mcasp_axr). Stock board-steelhead.c
+	 * does exactly omap_mux_init_signal("abe_mcbsp2_dr.abe_mcasp_axr", 0) ->
+	 * padconf 0x0f8 = 0x0002. This ball is McBSP2's data-RECEIVE line, unused
+	 * by the TX-only TAS5713 link, so the speaker and optical paths never clash.
+	 */
+	mcasp_spdif_pins: mcasp-spdif-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x0f8, PIN_OUTPUT | MUX_MODE2)		/* abe_mcbsp2_dr.abe_mcasp_axr */
 		>;
 	};
 
@@ -745,6 +796,22 @@
 			  <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
 	assigned-clock-parents = <&abe_24m_fclk>,
 				 <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>;
+	#sound-dai-cells = <0>;
+	status = "okay";
+};
+
+/*
+ * OMAP4 McASP -> optical S/PDIF (TOSLINK). The mcasp0 node itself
+ * (ti,omap4-mcasp-audio: target-module @ 0x40128000 + L3 data port, op-mode=<1>
+ * DIT/IEC958, serial-dir=<1> = serializer 0 = TX, dmas <&sdma 8>, ABE McASP
+ * fck) already lives in omap4-l4-abe.dtsi, disabled. steelhead just enables it
+ * and adds the AXR0 output pinmux. No ABE DSP firmware needed — davinci-mcasp
+ * drives the McASP registers directly (stock parity: stock disabled the ABE L3
+ * IRQ and did the same). Codec + card: spdif_dit + sound_spdif above.
+ */
+&mcasp0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcasp_spdif_pins>;
 	#sound-dai-cells = <0>;
 	status = "okay";
 };

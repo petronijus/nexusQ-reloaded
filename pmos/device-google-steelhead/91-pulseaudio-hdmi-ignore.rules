@@ -1,13 +1,21 @@
 # Tell PulseAudio to ignore the omap-hdmi-audio ALSA card.
 #
-# On steelhead the HDMI-A-1 output carries the LXQt DESKTOP VIDEO only; its
-# ALSA audio card is backed by snd-soc-dummy-dai with no real IEC958 routing,
-# so any PCM open returns -EINVAL and PA's auto-profile probe fails with
-# "module-alsa-card: Failed to find a working profile" every boot. It is not a
-# usable audio sink (device audio is the TAS5713 speaker + snd-aloop). Tag it
-# PULSE_IGNORE so PA never tries to load module-alsa-card for it. (Real HDMI
-# audio out would need omap-hdmi-audio DAI routing in the DTS/driver — a
-# separate project with no value on a speaker device.)
+# The HDMI card IS the real mainline omap-hdmi-audio (SND_SOC_OMAP_HDMI, platform
+# device omap-hdmi-audio.1.auto) — NOT a driver stub. Its PCM open returns
+# -EINVAL and PA's auto-profile probe fails ("Failed to find a working profile")
+# because it needs an AUDIO-CAPABLE HDMI sink, and the display currently attached
+# (a Philips 190C monitor) is DVI-class: its EDID is a 128-byte base block with
+# NO CEA-861 extension, so no audio data block, so the HDMI link runs DVI mode
+# with no audio path. That is CORRECT behaviour for that sink, not a bug.
+#
+# => HDMI audio out very likely WORKS on a real audio-capable sink (TV / AV
+# receiver) with no code change, but this is UNTESTED — we have no audio-capable
+# HDMI display to confirm it (verified 2026-07-07 via EDID; see the audio-outputs
+# bring-up note). Keep this PULSE_IGNORE regardless: on a DVI monitor the card is
+# unusable, and even on a TV routing desktop audio out HDMI is not what this
+# speaker appliance wants by default (the TAS5713 speaker is the sink). If HDMI
+# audio is ever wanted as a selectable output, drop this rule after confirming
+# the card opens on the target sink.
 #
 # Match by the backing PLATFORM device (omap-hdmi-audio.1.auto), NOT the ALSA
 # card index: the card number is probe-order dependent (HDMI was card1 on one
@@ -16,3 +24,16 @@
 # the stable platform name. Verified live: tags only the HDMI card, not
 # Loopback/tas5713.
 SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="omap-hdmi-audio.1.auto", ENV{PULSE_IGNORE}="1"
+
+# Also ignore the snd-aloop Loopback card. It is INTERNAL ALSA plumbing, not a
+# user sink: librespot/audio play into `nexusq_soft` (asound.conf) which routes
+# through the Loopback, and the companion bridge taps the Loopback capture side
+# at the ALSA level. When PA auto-loads module-alsa-card for it, PA (a) exposes a
+# bogus "Loopback Analog Stereo" sink that, being card index 0 on some boots,
+# became the DEFAULT sink so desktop audio went into the loopback instead of the
+# speaker, and (b) can hold the Loopback playback device, risking EBUSY against
+# the librespot→speaker / tap chain. Tag PULSE_IGNORE so the ONLY PA sink is the
+# TAS5713 speaker (deterministic default regardless of probe-order card index).
+# Same platform-name match rationale as HDMI above (card index is unstable:
+# Loopback has been card0 with tas5713/HDMI shuffling around it across boots).
+SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="snd_aloop.0", ENV{PULSE_IGNORE}="1"

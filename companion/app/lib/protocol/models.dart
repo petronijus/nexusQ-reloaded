@@ -70,6 +70,43 @@ const kVisualizations = <Visualization>[
   Visualization('starfield',     'Starfield',  Icons.auto_awesome),
 ];
 
+/// An audio OUTPUT sink exposed by the device (`listOutputs`). Input-agnostic:
+/// the device routes whatever is currently playing (Spotify now; BT/Tidal/cast
+/// later) to the selected output.
+class AudioOutput {
+  const AudioOutput({required this.id, required this.label, this.available = true});
+  final String id;
+  final String label;
+  final bool available;
+
+  factory AudioOutput.fromJson(Map<String, dynamic> j) => AudioOutput(
+        id: j['id'] as String? ?? '',
+        label: j['label'] as String? ?? (j['id'] as String? ?? ''),
+        available: j['available'] is bool ? j['available'] as bool : true,
+      );
+
+  /// A Holo-style glyph per known output id (falls back to a generic speaker).
+  IconData get icon {
+    switch (id) {
+      case 'speaker':
+        return Icons.speaker;
+      case 'spdif':
+        return Icons.fiber_manual_record; // optical / TOSLINK
+      case 'hdmi':
+        return Icons.tv;
+      default:
+        return Icons.volume_up;
+    }
+  }
+}
+
+/// Shown until the bridge's `listOutputs` fills in the real set — the two
+/// always-present hardware outputs (matches the device's speaker + optical).
+const kDefaultOutputs = <AudioOutput>[
+  AudioOutput(id: 'speaker', label: 'Reproduktor'),
+  AudioOutput(id: 'spdif', label: 'Optický výstup'),
+];
+
 /// The full device state mirrored from the bridge (`getState` / events).
 class DeviceState {
   DeviceState({
@@ -78,16 +115,20 @@ class DeviceState {
     this.brightness = 200,
     this.theme = 'blue',
     this.scene = 'waveform',
+    this.output = 'speaker',
+    List<AudioOutput>? outputs,
     this.nowPlaying = const NowPlaying(),
     this.connected = false,
     this.deviceName = 'Nexus Q',
-  });
+  }) : outputs = outputs ?? kDefaultOutputs;
 
   int volume; // 0..100
   bool muted;
   int brightness; // 0..255
   String theme;
   String scene; // active music visualisation (kVisualizations name)
+  String output; // active audio output id (speaker/spdif/hdmi)
+  List<AudioOutput> outputs; // available outputs, from listOutputs
   NowPlaying nowPlaying;
   bool connected;
   String deviceName;
@@ -98,6 +139,8 @@ class DeviceState {
         brightness: brightness,
         theme: theme,
         scene: scene,
+        output: output,
+        outputs: outputs,
         nowPlaying: nowPlaying,
         connected: connected,
         deviceName: deviceName,
@@ -109,7 +152,19 @@ class DeviceState {
     if (j['brightness'] is num) brightness = (j['brightness'] as num).round();
     if (j['theme'] is String) theme = j['theme'] as String;
     if (j['scene'] is String) scene = j['scene'] as String;
+    if (j['output'] is String) output = j['output'] as String;
     if (j['nowPlaying'] is Map) nowPlaying = NowPlaying.fromJson(Map<String, dynamic>.from(j['nowPlaying']));
     if (j['name'] is String) deviceName = j['name'] as String;
+  }
+
+  /// Apply a `listOutputs` result: the available outputs + the active one.
+  void applyOutputs(Map<String, dynamic> j) {
+    if (j['outputs'] is List) {
+      outputs = [
+        for (final o in (j['outputs'] as List))
+          if (o is Map) AudioOutput.fromJson(Map<String, dynamic>.from(o)),
+      ];
+    }
+    if (j['active'] is String) output = j['active'] as String;
   }
 }

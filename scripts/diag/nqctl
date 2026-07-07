@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # nqctl — one command to reach the Nexus Q (steelhead) no matter which link is up.
 #
-# The device is reachable three ways, each with different failure modes:
-#   - WiFi  (BCM4330)  ssh root@<device-wifi-ip> — routable but drops under bulk
+# The device is reachable four ways, each with different failure modes:
+#   - Ethernet (direct) ssh root@10.42.0.2      — DEFAULT: ~80 Mbit/s, 0.6 ms,
+#                                                 stable + fixed IP (direct
+#                                                 PC<->Nexus cable, host 10.42.0.1)
 #   - USB-net (RNDIS)  ssh root@172.16.42.1     — rock-solid once established,
 #                                                 but the gadget defaults to an
-#                                                 ACM serial console, not net
+#                                                 ACM serial console, not net,
+#                                                 and its enx* name changes each boot
+#   - WiFi  (BCM4330)  ssh root@<device-wifi-ip> — routable, fine for control, but
+#                                                 bulk caps ~34 Mbit/s (chip limit)
 #   - USB serial       /dev/ttyACM0             — always present; the bootstrap
 #                                                 path used to flip the gadget
 #
-# nqctl picks the best reachable path automatically, and `nqctl net-usb up`
-# performs the whole RNDIS-gadget + host-NAT dance (previously done by hand).
+# nqctl picks the best reachable path automatically (ethernet first), and
+# `nqctl net-usb up` performs the RNDIS-gadget + host-NAT dance (rarely needed now).
 #
 # Commands:
 #   nqctl status                 show which paths are reachable
-#   nqctl run [--path P] CMD...  run CMD on the device (P = auto|usb|wifi)
+#   nqctl run [--path P] CMD...  run CMD on the device (P = auto|eth|usb|wifi)
 #   nqctl ssh  [--path P]        interactive shell
 #   nqctl push LOCAL REMOTE      copy a file to the device
 #   nqctl pull REMOTE LOCAL      copy a file from the device
@@ -24,6 +29,7 @@
 #   nqctl serial                 attach to the raw serial console (/dev/ttyACM0)
 #
 # Host-side config (override via env):
+NQ_ETH_HOST="${NQ_ETH_HOST:-10.42.0.2}"   # direct PC<->Nexus cable (default, fastest+stablest)
 NQ_WIFI_HOST="${NQ_WIFI_HOST:-}"
 NQ_USB_HOST="${NQ_USB_HOST:-172.16.42.1}"
 NQ_USB_HOST_IP="${NQ_USB_HOST_IP:-172.16.42.2}"
@@ -31,7 +37,14 @@ NQ_USB_CIDR="${NQ_USB_CIDR:-24}"
 NQ_SERIAL="${NQ_SERIAL:-/dev/ttyACM0}"
 NQ_USER="${NQ_USER:-root}"
 NQ_UPLINK="${NQ_UPLINK:-}"          # host iface with internet; auto-detected if empty
+NQ_SSH_KEY="${NQ_SSH_KEY:-$HOME/.ssh/id_ed25519}"   # device key (baked into the image)
 SSH_OPTS=(-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+# Work even when the host ssh-agent is unavailable / broken (no ssh-askpass in a
+# non-interactive shell): disable the agent and use the on-disk device key
+# directly, instead of falling through to a password prompt that then fails.
+if [ -f "$NQ_SSH_KEY" ]; then
+	SSH_OPTS+=(-o IdentityAgent=none -o IdentitiesOnly=yes -i "$NQ_SSH_KEY")
+fi
 
 set -u
 say() { printf '%s\n' "$*" >&2; }
@@ -42,11 +55,15 @@ reachable() { # reachable <host>
 	ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" true 2>/dev/null
 }
 
-pick_host() { # echoes the best reachable host IP, or empty; prefers stable USB
+pick_host() { # echoes the best reachable host IP, or empty; prefers direct ethernet
 	case "${1:-auto}" in
-		usb)  reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST"; return 0; } ;;
+		eth)  reachable "$NQ_ETH_HOST"  && { echo "$NQ_ETH_HOST";  return 0; } ;;
+		usb)  reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST";  return 0; } ;;
 		wifi) reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; } ;;
 		auto)
+			# Ethernet first: ~80 Mbit/s, 0.6 ms, stable, and (unlike the USB
+			# gadget) a fixed name/IP. USB gadget and WiFi are fallbacks.
+			reachable "$NQ_ETH_HOST"  && { echo "$NQ_ETH_HOST";  return 0; }
 			reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST";  return 0; }
 			reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; }
 			;;
@@ -139,6 +156,7 @@ if [ "${1:-}" = "--path" ]; then path="$2"; shift 2; fi
 
 case "$cmd" in
 	status)
+		printf 'Ethernet %-15s ' "$NQ_ETH_HOST";  reachable "$NQ_ETH_HOST"  && echo "UP" || echo "down"
 		printf 'USB-net  %-15s ' "$NQ_USB_HOST";  reachable "$NQ_USB_HOST"  && echo "UP" || echo "down"
 		printf 'WiFi     %-15s ' "$NQ_WIFI_HOST"; reachable "$NQ_WIFI_HOST" && echo "UP" || echo "down"
 		printf 'Serial   %-15s ' "$NQ_SERIAL";    [ -e "$NQ_SERIAL" ] && echo "present" || echo "absent"

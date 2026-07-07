@@ -47,13 +47,16 @@ you noticed **for free** while probing (an `enx*` present, `carrier=1`, a
 
 ### Fast pass (do this first, stop at first ssh hit)
 Run these near-instant checks; the moment one `ssh` works, that is the answer:
-1. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
-   (Most reliable since the composite RNDIS+ACM gadget; try this first.)
-2. **eth-direct** `10.42.0.2` (and `10.0.0.2`) — instant if `enp7s0` carrier=1
-   AND the device's `eth-direct` profile is active (it's `autoconnect=no`; if
-   ssh fails but another path works, `nmcli c up eth-direct` on the device
-   brings it up — the host side is zero-touch via the `eth-direct-host`
-   profile).
+1. **eth-direct** `10.42.0.2` (and `10.0.0.2`) — **THE DEFAULT PATH** (~80 Mbit/s,
+   0.6 ms, stable, fixed IP). Instant if `enp7s0` carrier=1. Since device pkg r29
+   the `eth-direct` profile is **`autoconnect=true`** (falls through automatically
+   ~10 s after carrier-up, once `eth-lan`'s DHCP attempt times out), so on a booted
+   device with the cable in it usually just works. Host side is zero-touch via the
+   `eth-direct-host` profile. (If ssh still fails but another path works, the
+   fallthrough may not have fired yet — `nmcli c up eth-direct` on the device forces
+   it.)
+2. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
+   (Composite RNDIS+ACM gadget; solid fallback, but its `enx*` name changes per boot.)
 3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Current stable
    FINAL IP (since the 2026-07-03 batch-2b/`#29` flash):
    `192.168.20.195` (`ssh root@192.168.20.195`). (`.175` was the interim
@@ -117,14 +120,17 @@ to get a shell" and stop. Otherwise probe the transports below.
   profiles in device pkg r21, **in the flashed image since v1.6.7**). Both
   ends carry persistent profiles: **host `eth-direct-host`** on `enp7s0`
   (10.42.0.1/24 + 10.0.0.1/24, autoconnect — no manual `ip addr add` needed)
-  and **device `eth-direct`** (static 10.42.0.2/24 + 10.0.0.2/24,
-  **`autoconnect=no` by design** so it never fights DHCP on a real LAN).
+  and **device `eth-direct`** (static 10.42.0.2/24 + 10.0.0.2/24). Since device
+  pkg **r29** `eth-direct` is **`autoconnect=true`** at a lower priority than
+  `eth-lan` (5 < 10): on a real LAN `eth-lan`'s DHCP wins; on the direct cable
+  `eth-lan` fails its one DHCP attempt (dhcp-timeout 10 s) and NM falls through
+  to this static profile — so `10.42.0.2` comes up on its own, no manual step.
 - `cat /sys/class/net/enp7s0/carrier`. `0` = cable out / device eth0 down /
   chip did not enumerate this boot → skip to B/C. `1` = link up:
-  - try `ssh root@10.42.0.2` (then `10.0.0.2`) directly.
-  - ssh fails but B/C works? The device profile isn't active — run
-    `nmcli c up eth-direct` on the device over that path, then
-    `ssh root@10.42.0.2` (verified 2026-07-04: ping 0.77 ms, ssh works).
+  - try `ssh root@10.42.0.2` (then `10.0.0.2`) directly — this is the default path.
+  - ssh fails but B/C works? The fallthrough may not have fired yet (or a pre-r29
+    image with `autoconnect=no`) — run `nmcli c up eth-direct` on the device over
+    that path, then `ssh root@10.42.0.2` (verified: ping ~0.6 ms, ssh works).
   - only on a **pre-r21 image**: also ensure the host IP by hand
     (`ip addr add 10.42.0.1/24 dev enp7s0`; `ip link set enp7s0 up`) and, if no
     IP answers, discover on the link: `ping6 -c2 ff02::1%enp7s0` →

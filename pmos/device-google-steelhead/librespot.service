@@ -1,57 +1,26 @@
+# librespot Spotify Connect — a systemd USER unit (runs in the uid-10000 `user`
+# session so it shares that session's PulseAudio). Installed to
+# /usr/lib/systemd/user/ and auto-started via a default.target.wants symlink
+# (same mechanism as pulseaudio.service — no linger needed under autologin).
+#
+# This REPLACES the old root/system unit that went straight to ALSA
+# (--device nexusq_soft, the asound.conf `type multi` fan-out) and shared its
+# volume with the companion bridge via the "NexusQ" ALSA softvol. Under the
+# PA-centric design librespot is just one PA INPUT; OUTPUT selection (TAS5713 /
+# SPDIF / HDMI) and volume live in PulseAudio. All the args (PA device, the
+# libmdns wlan0-interface pin, --ap-port 443, cache) are in the wrapper
+# /usr/bin/librespot-nexusq.
 [Unit]
-Description=librespot — Spotify Connect (Nexus Q)
+Description=librespot — Spotify Connect (Nexus Q, PulseAudio input)
 Documentation=https://github.com/librespot-org/librespot
-After=network-online.target sound.target
-Wants=network-online.target
+After=pulseaudio.service network-online.target
+Wants=pulseaudio.service network-online.target
 
 [Service]
-# Output via the "nexusq" ALSA PCM (asound.conf): plug -> hw:1,0 forced to 48000 Hz.
-# The McBSP2/TAS5713 link only clocks the 48 kHz family cleanly, so 44.1 kHz
-# Spotify content is resampled to 48k; with the kernel CLKGDV fix FSYNC is an
-# exact 48 kHz so playback is at correct pitch/tempo.
-# --ap-port 443 works around VLAN20 blocking librespot's default AP port 4070.
-# --zeroconf-port is fixed so the nftables drop-in (60_spotify.nft) can match it.
-# --device nexusq_soft + --mixer alsa --alsa-mixer-control NexusQ route volume
-# through the ALSA softvol control (asound.conf), the same knob the companion
-# bridge reads/writes — so Spotify and the companion share one volume.
-# --onevent feeds now-playing + volume changes to nexusq-control.
-# Bootstrap the "NexusQ" softvol control BEFORE librespot's ALSA mixer opens it.
-# That control (asound.conf) does not exist until the nexusq_soft PCM is first
-# opened by *something*, but librespot opens the mixer BEFORE the sink and exits
-# "Could not find Alsa mixer control" if it isn't there yet.
-#
-# This is a READINESS GATE (not fire-and-forget): sound.target is a passive
-# target that does NOT guarantee card enumeration, and at boot PulseAudio
-# briefly claims the exclusive TAS5713 hw (module-alsa-card) until
-# module-suspend-on-idle releases it (~5 s) — so an early one-shot probe hit
-# EBUSY and librespot crash-restarted 2-3× before settling. Instead, wait (up to
-# 30 s) until both cards are enumerated AND nexusq_soft actually opens (PA has
-# released the hw) AND the NexusQ control exists, then start once, cleanly. No
-# leading `-`: if it never becomes ready ExecStart won't run (Restart handles it).
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do \
-    [ -e /proc/asound/NexusQSpeaker ] && [ -e /proc/asound/Loopback ] || { sleep 1; continue; }; \
-    aplay -q -D nexusq_soft -f dat -d 1 /dev/zero 2>/dev/null; \
-    amixer -c NexusQSpeaker sget NexusQ >/dev/null 2>&1 && exit 0; \
-    sleep 1; \
-  done; echo "librespot: NexusQ mixer control never appeared" >&2; exit 1'
-ExecStart=/usr/bin/librespot \
-    --name "Nexus Q" \
-    --backend alsa \
-    --device nexusq_soft \
-    --mixer alsa \
-    --alsa-mixer-control NexusQ \
-    --alsa-mixer-device "hw:CARD=NexusQSpeaker" \
-    --bitrate 320 \
-    --format S16 \
-    --initial-volume 60 \
-    --ap-port 443 \
-    --zeroconf-port 37879 \
-    --onevent /usr/bin/nexusq-onevent \
-    --cache /var/cache/librespot
+ExecStart=/usr/bin/librespot-nexusq
 Restart=on-failure
 RestartSec=5
-RuntimeDirectory=librespot
 CacheDirectory=librespot
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

@@ -18,11 +18,14 @@ of the main context. Pass any hint the user gave (a last-known IP, "use USB",
 "it's on wifi").
 
 The agent owns: checking fastboot/adb state, then probing **eth-direct**
-(NM layer resolved 2026-07-04 and baked since v1.6.7 — flashed 2026-07-05:
-host has the persistent `eth-direct-host` profile on `enp7s0`, the device
-bakes an `eth-direct` static profile 10.42.0.2/24 — `autoconnect=no` by
-design, so if ssh fails over the cable but another path works, `nmcli c up
-eth-direct` on the device, then `ssh root@10.42.0.2`. ✅ Enumerates from a cold
+(**the DEFAULT path** — ~80 Mbit/s, 0.6 ms, stable, fixed IP; measured
+2026-07-07 to beat both WiFi ~34 Mbit/s and the USB gadget. NM layer resolved
+2026-07-04 and baked since v1.6.7 — flashed 2026-07-05: host has the persistent
+`eth-direct-host` profile on `enp7s0`, the device bakes an `eth-direct` static
+profile 10.42.0.2/24 — since device pkg **r29 `autoconnect=true`** at lower
+priority than `eth-lan` so it falls through automatically ~10 s after
+carrier-up; if ssh still fails over the cable but another path works, `nmcli c up
+eth-direct` on the device forces it, then `ssh root@10.42.0.2`. ✅ Enumerates from a cold
 boot on `#33`+ (v1.6.8, task #17 CLOSED 2026-07-06 — the old "enumeration
 intermittency" was an unmuxed `gpio_1` NENABLE pad, fixed by a DTS pad mux); on
 a **pre-`#33`** image `eth0` may be absent on a cold boot (that unmuxed pad, not
