@@ -6,6 +6,11 @@ import 'client.dart';
 /// Real transport: newline-delimited JSON objects over TCP (PROTOCOL.md §1).
 /// Requests carry an incrementing `id`; responses are correlated back to their
 /// pending future; objects with an `event` key are pushed to [events].
+///
+/// The client is re-connectable: when the socket drops ([connection] emits
+/// false), a later [connect] dials a fresh socket to the same host and
+/// re-subscribes. The reconnect *policy* (backoff, heartbeat, lifecycle
+/// probes) lives in DeviceController, keyed off [needsSupervision].
 class TcpClient implements NexusQClient {
   TcpClient({required this.host, this.port = 45015});
 
@@ -13,6 +18,8 @@ class TcpClient implements NexusQClient {
   final int port;
 
   Socket? _socket;
+  Future<void>? _dialing; // single-flight guard: concurrent connects share it
+  bool _closed = false;
   int _nextId = 1;
   final _pending = <int, Completer<Map<String, dynamic>>>{};
   final _events = StreamController<NexusQEvent>.broadcast();
@@ -24,17 +31,38 @@ class TcpClient implements NexusQClient {
   Stream<bool> get connection => _conn.stream;
 
   @override
-  Future<void> connect() async {
+  bool get needsSupervision => true;
+
+  @override
+  Future<void> connect() {
+    if (_closed) return Future.error(NexusQError('unavailable', 'client closed'));
+    if (_socket != null) return Future.value(); // already connected
+    return _dialing ??= _dial().whenComplete(() => _dialing = null);
+  }
+
+  Future<void> _dial() async {
     final s = await Socket.connect(host, port, timeout: const Duration(seconds: 5));
+    if (_closed) {
+      s.destroy();
+      return;
+    }
     _socket = s;
     _conn.add(true);
     s
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen(_onLine, onError: (_) => _drop(), onDone: _drop);
-    // hydrate state + subscribe to all events
-    await call('subscribe', {'events': ['*']});
+        // Guard on THIS socket: after a drop + reconnect, the stale socket's
+        // late onDone/onError must not tear down the fresh connection.
+        .listen(_onLine, onError: (_) => _dropIf(s), onDone: () => _dropIf(s));
+    // hydrate the event channel: subscribe to all events. If this fails the
+    // link is not actually usable — tear it down so the caller retries cleanly.
+    try {
+      await call('subscribe', {'events': ['*']});
+    } catch (_) {
+      _drop();
+      rethrow;
+    }
   }
 
   void _onLine(String line) {
@@ -83,18 +111,32 @@ class TcpClient implements NexusQClient {
     _socket?.write('${jsonEncode({'method': method, 'params': ?params})}\n');
   }
 
+  @override
+  void disconnect() => _drop();
+
+  void _dropIf(Socket s) {
+    if (identical(_socket, s)) _drop();
+  }
+
   void _drop() {
-    _conn.add(false);
+    final s = _socket;
+    if (s == null) return; // idempotent: onError + onDone may both fire
+    _socket = null;
+    s.destroy();
     for (final c in _pending.values) {
       c.completeError(NexusQError('unavailable', 'connection closed'));
     }
     _pending.clear();
-    _socket = null;
+    if (!_closed) _conn.add(false);
   }
 
   @override
   Future<void> close() async {
-    await _socket?.close();
+    if (_closed) return;
+    _closed = true;
+    try {
+      await _socket?.flush(); // let queued notifies out before tearing down
+    } catch (_) {/* dropping anyway */}
     _drop();
     await _events.close();
     await _conn.close();

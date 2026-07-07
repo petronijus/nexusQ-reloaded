@@ -31,206 +31,261 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
           body: SafeArea(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin, 8,
-                  NexusQSpace.standardMargin, 24),
+            child: Column(
               children: [
-                // --- the device, as the original showed it ----------------
-                const SizedBox(height: 12),
-                Center(
-                  child: DeviceSphere(
-                    on: !s.muted && s.theme != 'off',
-                    colors: theme.colors, // base glow reflects the LED theme palette
-                    size: 184,
+                if (!s.connected)
+                  _ConnectionBanner(
+                    reconnecting: s.reconnecting,
+                    onRetry: controller.reconnectNow,
                   ),
-                ),
-                const SizedBox(height: 14),
-                Center(
-                  child: Text(s.deviceName,
-                      style: const TextStyle(
-                          color: NexusQColors.white, fontSize: 20, fontWeight: FontWeight.w300)),
-                ),
-                if (!np.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Center(
-                      child: Text('${np.track} · ${np.artist}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
-                    ),
-                  ),
-                const SizedBox(height: 20),
-
-                // --- VOLUME ----------------------------------------------
-                const _SectionHeader('VOLUME'),
-                Row(
-                  children: [
-                    IconButton(
-                      onPressed: controller.toggleMute,
-                      icon: Icon(s.muted ? Icons.volume_off : Icons.volume_up),
-                      color: s.muted ? NexusQColors.dim : NexusQColors.accent,
-                    ),
-                    Expanded(
-                      child: Slider(
-                        value: s.volume.toDouble(),
-                        max: 100,
-                        onChanged: (v) => controller.setVolume(v.round()),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 36,
-                      child: Text('${s.volume}',
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(color: NexusQColors.dim)),
-                    ),
-                  ],
-                ),
-
-                // --- OUTPUT (PulseAudio sink routing) --------------------
-                const _SectionHeader('OUTPUT'),
-                _OutputSelector(
-                  outputs: s.outputs,
-                  active: s.output,
-                  onSelect: controller.setOutput,
-                ),
-
-                // --- BRIGHTNESS ------------------------------------------
-                const _SectionHeader('BRIGHTNESS'),
-                Row(
-                  children: [
-                    const Icon(Icons.brightness_low, color: NexusQColors.dim, size: 20),
-                    Expanded(
-                      child: Slider(
-                        value: s.brightness.toDouble(),
-                        max: 255,
-                        onChanged: (v) => controller.setBrightness(v.round()),
-                      ),
-                    ),
-                    const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
-                  ],
-                ),
-
-                // --- LIGHT THEME -----------------------------------------
-                const _SectionHeader('LIGHT THEME'),
-                SizedBox(
-                  height: 66,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: kLedThemes.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
-                    itemBuilder: (context, i) {
-                      final t = kLedThemes[i];
-                      final selected = t.name == s.theme;
-                      return GestureDetector(
-                        onTap: () => controller.setTheme(t.name),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: t.colors.length > 1
-                                    ? SweepGradient(colors: [...t.colors, t.colors.first])
-                                    : null,
-                                color: t.colors.length == 1 ? t.colors.first : null,
-                                border: Border.all(
-                                  color: selected ? NexusQColors.accent : NexusQColors.divider,
-                                  width: selected ? 3 : 1,
-                                ),
-                                boxShadow: selected
-                                    ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
-                                    : null,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(t.label,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: selected ? NexusQColors.accent : NexusQColors.dim)),
-                          ],
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin,
+                        8, NexusQSpace.standardMargin, 24),
+                    children: [
+                      // --- the device, as the original showed it ----------------
+                      const SizedBox(height: 12),
+                      Center(
+                        child: DeviceSphere(
+                          on: !s.muted && s.theme != 'off',
+                          colors: theme.colors, // base glow reflects the LED theme palette
+                          size: 184,
                         ),
-                      );
-                    },
-                  ),
-                ),
-
-                // --- VISUALIZATION (music-reactive scenes) ---------------
-                const _SectionHeader('VISUALIZATION'),
-                SizedBox(
-                  height: 66,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: kVisualizations.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
-                    itemBuilder: (context, i) {
-                      final v = kVisualizations[i];
-                      final selected = v.name == s.scene;
-                      return GestureDetector(
-                        onTap: () => controller.setScene(v.name),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: selected ? NexusQColors.accent : NexusQColors.divider,
-                                  width: selected ? 3 : 1,
-                                ),
-                                boxShadow: selected
-                                    ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
-                                    : null,
-                              ),
-                              child: Icon(v.icon,
-                                  size: 20,
-                                  color: selected ? NexusQColors.accent : NexusQColors.dim),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(v.label,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: selected ? NexusQColors.accent : NexusQColors.dim)),
-                          ],
+                      ),
+                      const SizedBox(height: 14),
+                      Center(
+                        child: Text(s.deviceName,
+                            style: const TextStyle(
+                                color: NexusQColors.white, fontSize: 20, fontWeight: FontWeight.w300)),
+                      ),
+                      if (!np.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Center(
+                            child: Text('${np.track} · ${np.artist}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
+                          ),
                         ),
-                      );
-                    },
-                  ),
-                ),
+                      const SizedBox(height: 20),
 
-                // --- NOW PLAYING -----------------------------------------
-                const _SectionHeader('NOW PLAYING'),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                        onPressed: controller.previous,
-                        icon: const Icon(Icons.skip_previous),
-                        color: NexusQColors.white),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      iconSize: 40,
-                      onPressed: controller.playPause,
-                      icon: Icon(np.playing ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                      color: NexusQColors.accent,
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                        onPressed: controller.next,
-                        icon: const Icon(Icons.skip_next),
-                        color: NexusQColors.white),
-                  ],
+                      // --- VOLUME ----------------------------------------------
+                      const _SectionHeader('VOLUME'),
+                      Row(
+                        children: [
+                          IconButton(
+                            onPressed: controller.toggleMute,
+                            icon: Icon(s.muted ? Icons.volume_off : Icons.volume_up),
+                            color: s.muted ? NexusQColors.dim : NexusQColors.accent,
+                          ),
+                          Expanded(
+                            child: Slider(
+                              value: s.volume.toDouble(),
+                              max: 100,
+                              onChanged: (v) => controller.setVolume(v.round()),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 36,
+                            child: Text('${s.volume}',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(color: NexusQColors.dim)),
+                          ),
+                        ],
+                      ),
+
+                      // --- OUTPUT (PulseAudio sink routing) --------------------
+                      const _SectionHeader('OUTPUT'),
+                      _OutputSelector(
+                        outputs: s.outputs,
+                        active: s.output,
+                        onSelect: controller.setOutput,
+                      ),
+
+                      // --- BRIGHTNESS ------------------------------------------
+                      const _SectionHeader('BRIGHTNESS'),
+                      Row(
+                        children: [
+                          const Icon(Icons.brightness_low, color: NexusQColors.dim, size: 20),
+                          Expanded(
+                            child: Slider(
+                              value: s.brightness.toDouble(),
+                              max: 255,
+                              onChanged: (v) => controller.setBrightness(v.round()),
+                            ),
+                          ),
+                          const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
+                        ],
+                      ),
+
+                      // --- LIGHT THEME -----------------------------------------
+                      const _SectionHeader('LIGHT THEME'),
+                      SizedBox(
+                        height: 66,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: kLedThemes.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 12),
+                          itemBuilder: (context, i) {
+                            final t = kLedThemes[i];
+                            final selected = t.name == s.theme;
+                            return GestureDetector(
+                              onTap: () => controller.setTheme(t.name),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: t.colors.length > 1
+                                          ? SweepGradient(colors: [...t.colors, t.colors.first])
+                                          : null,
+                                      color: t.colors.length == 1 ? t.colors.first : null,
+                                      border: Border.all(
+                                        color: selected ? NexusQColors.accent : NexusQColors.divider,
+                                        width: selected ? 3 : 1,
+                                      ),
+                                      boxShadow: selected
+                                          ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                                          : null,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(t.label,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                      // --- VISUALIZATION (music-reactive scenes) ---------------
+                      const _SectionHeader('VISUALIZATION'),
+                      SizedBox(
+                        height: 66,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: kVisualizations.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 12),
+                          itemBuilder: (context, i) {
+                            final v = kVisualizations[i];
+                            final selected = v.name == s.scene;
+                            return GestureDetector(
+                              onTap: () => controller.setScene(v.name),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: selected ? NexusQColors.accent : NexusQColors.divider,
+                                        width: selected ? 3 : 1,
+                                      ),
+                                      boxShadow: selected
+                                          ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                                          : null,
+                                    ),
+                                    child: Icon(v.icon,
+                                        size: 20,
+                                        color: selected ? NexusQColors.accent : NexusQColors.dim),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(v.label,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                      // --- NOW PLAYING -----------------------------------------
+                      const _SectionHeader('NOW PLAYING'),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                              onPressed: controller.previous,
+                              icon: const Icon(Icons.skip_previous),
+                              color: NexusQColors.white),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            iconSize: 40,
+                            onPressed: controller.playPause,
+                            icon: Icon(np.playing ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                            color: NexusQColors.accent,
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                              onPressed: controller.next,
+                              icon: const Icon(Icons.skip_next),
+                              color: NexusQColors.white),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// A slim Holo-dark strip under the app bar while the device link is down:
+/// spinner + "reconnecting" while the controller retries on its own, a wifi-off
+/// glyph once it is merely waiting (backgrounded), and a manual Retry that is
+/// always available — the screen stays alive instead of appearing frozen.
+class _ConnectionBanner extends StatelessWidget {
+  const _ConnectionBanner({required this.reconnecting, required this.onRetry});
+  final bool reconnecting;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+          horizontal: NexusQSpace.standardMargin, vertical: 6),
+      decoration: const BoxDecoration(
+        color: NexusQColors.surface,
+        border: Border(bottom: BorderSide(color: NexusQColors.divider)),
+      ),
+      child: Row(
+        children: [
+          if (reconnecting)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: NexusQColors.accent),
+            )
+          else
+            const Icon(Icons.wifi_off, size: 16, color: NexusQColors.dim),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              reconnecting ? 'Connection lost — reconnecting…' : 'Disconnected',
+              style: const TextStyle(color: NexusQColors.dim, fontSize: 13),
+            ),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      ),
     );
   }
 }

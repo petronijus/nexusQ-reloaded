@@ -35,6 +35,14 @@ class MockClient implements NexusQClient {
   @override
   Stream<bool> get connection => _conn.stream;
 
+  /// In-process — the "link" can never drop, so no reconnect/heartbeat/resume
+  /// supervision is wanted (and none of it must run under plain `test()`).
+  @override
+  bool get needsSupervision => false;
+
+  @override
+  void disconnect() {/* nothing to tear down — the mock link is permanent */}
+
   @override
   Future<void> connect() async {
     await Future<void>.delayed(const Duration(milliseconds: 300));

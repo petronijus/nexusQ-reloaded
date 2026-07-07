@@ -119,6 +119,7 @@ class DeviceState {
     List<AudioOutput>? outputs,
     this.nowPlaying = const NowPlaying(),
     this.connected = false,
+    this.reconnecting = false,
     this.deviceName = 'Nexus Q',
   }) : outputs = outputs ?? kDefaultOutputs;
 
@@ -131,6 +132,7 @@ class DeviceState {
   List<AudioOutput> outputs; // available outputs, from listOutputs
   NowPlaying nowPlaying;
   bool connected;
+  bool reconnecting; // link down, the controller is auto-retrying
   String deviceName;
 
   DeviceState copy() => DeviceState(
@@ -143,6 +145,7 @@ class DeviceState {
         outputs: outputs,
         nowPlaying: nowPlaying,
         connected: connected,
+        reconnecting: reconnecting,
         deviceName: deviceName,
       );
 

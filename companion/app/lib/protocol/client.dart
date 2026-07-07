@@ -16,7 +16,18 @@ abstract class NexusQClient {
   /// Connection state stream (true = connected).
   Stream<bool> get connection;
 
+  /// Whether this transport can silently die and therefore needs supervision
+  /// (reconnect with backoff, heartbeat, resume probes). True for the real
+  /// TCP link; false for the in-process mock, which can never drop.
+  bool get needsSupervision;
+
   Future<void> connect();
+
+  /// Tear the current transport down (if any) WITHOUT closing the client:
+  /// [connection] emits false and a later [connect] may re-establish the link.
+  /// Used by the supervisor when an active probe proves the socket half-open.
+  void disconnect();
+
   Future<void> close();
 
   /// Send a request and await its correlated response `result` (or throw on error).
