@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<!--
+  labwc config for the Nexus Q (steelhead) LXQt-Wayland session.
+
+  The only reason this file exists is to wire the front-panel volume ring to
+  PulseAudio. The AVR exposes the ring as the "steelhead-avr-keys" input device
+  emitting XF86AudioRaiseVolume / XF86AudioLowerVolume / XF86AudioMute. nexusqd
+  reads the same evdev node directly for the LED volume overlay, but nothing was
+  changing the ACTUAL audio volume: this Wayland/labwc session had no media-key
+  bindings, so the PA sink volume (and the LXQt panel volume applet, which
+  reflects PulseAudio) never moved. Two pieces make it work:
+   - the udev rule 92-steelhead-avr-keyboard.rules (ID_INPUT_KEYBOARD + seat
+     tag, without which libinput/labwc never receives the device), and
+   - these keybinds -> /usr/bin/nq-vol -> pactl on @DEFAULT_SINK@ (the output
+     currently selected in the companion app), capped at 100%.
+  <default /> keeps labwc's built-in window keybindings — we only ADD audio keys.
+-->
+<labwc_config>
+  <keyboard>
+    <default />
+    <keybind key="XF86AudioRaiseVolume">
+      <action name="Execute" command="nq-vol up"/>
+    </keybind>
+    <keybind key="XF86AudioLowerVolume">
+      <action name="Execute" command="nq-vol down"/>
+    </keybind>
+    <keybind key="XF86AudioMute">
+      <action name="Execute" command="nq-vol mute"/>
+    </keybind>
+  </keyboard>
+</labwc_config>

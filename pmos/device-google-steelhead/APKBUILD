@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=31
+pkgrel=32
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -55,6 +55,9 @@ source="
 	pam-base-auth
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
+	92-steelhead-avr-keyboard.rules
+	labwc-rc.xml
+	nq-vol
 	20-nexusq-nsresourced-off.preset
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
@@ -130,6 +133,17 @@ package() {
 		"$pkgdir"/etc/pam.d/base-session
 	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
 		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
+	# Front-panel volume ring -> real (PulseAudio) volume. Three pieces:
+	# udev seat/keyboard tag (without it labwc never receives the device),
+	# labwc keybinds in the skel rc.xml, and the nq-vol pactl helper (capped
+	# at 100%). The tray volume applet then follows via the bridge's
+	# panel.conf re-link on every output switch (nexusq-control r7+).
+	install -Dm644 "$srcdir"/92-steelhead-avr-keyboard.rules \
+		"$pkgdir"/etc/udev/rules.d/92-steelhead-avr-keyboard.rules
+	install -Dm644 "$srcdir"/labwc-rc.xml \
+		"$pkgdir"/etc/skel/.config/labwc/rc.xml
+	install -Dm755 "$srcdir"/nq-vol \
+		"$pkgdir"/usr/bin/nq-vol
 	# Disable systemd-nsresourced via a low-priority preset (NOT a /dev/null mask,
 	# which makes preset-all warn). See the .preset file header for the ordering.
 	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
@@ -352,6 +366,9 @@ SKIP  pulseaudio.service
 SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
+SKIP  92-steelhead-avr-keyboard.rules
+SKIP  labwc-rc.xml
+SKIP  nq-vol
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf

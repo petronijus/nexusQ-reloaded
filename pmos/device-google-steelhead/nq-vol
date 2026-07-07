@@ -1,0 +1,16 @@
+#!/bin/sh
+# Volume-key helper for the labwc keybinds: the front-panel rotary ring
+# (steelhead-avr-keys, XF86Audio*) drives the PulseAudio DEFAULT sink — i.e.
+# whatever output (speaker / SPDIF / HDMI) is currently selected. Kept as a
+# script (not inline in rc.xml) because the cap logic needs quoting that XML
+# attributes can't hold. `up` is capped at 100% — a raw `pactl +3%` happily
+# runs past 100% into digital over-amplification (observed 477%).
+case "$1" in
+	up)
+		pactl set-sink-volume @DEFAULT_SINK@ +3%
+		V=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1 | tr -d %)
+		[ "${V:-0}" -gt 100 ] && pactl set-sink-volume @DEFAULT_SINK@ 100%
+		;;
+	down) pactl set-sink-volume @DEFAULT_SINK@ -3% ;;
+	mute) pactl set-sink-mute @DEFAULT_SINK@ toggle ;;
+esac

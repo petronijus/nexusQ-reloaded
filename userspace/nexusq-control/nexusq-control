@@ -36,6 +36,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 
 HOST = os.environ.get("NEXUSQ_BIND_HOST", "0.0.0.0")
 PORT = int(os.environ.get("NEXUSQ_BIND_PORT", "45015"))
@@ -48,6 +49,12 @@ PULSE_COOKIE = os.environ.get("NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/c
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 HOOK_SOCK = os.environ.get("NEXUSQ_HOOK_SOCK", "/run/nexusq-control.sock")
 DEVICE_NAME = os.environ.get("NEXUSQ_NAME", "Nexus Q")
+# The LXQt panel volume applet pins to a device INDEX ([volume] device=N in
+# panel.conf), it does not follow PA's default sink — we re-link it on every
+# output switch (see _sync_panel_applet). The appliance's canonical output after
+# boot is the speaker (PA itself would pick sink #0, probe-order dependent).
+PANEL_CONF = os.environ.get("NEXUSQ_PANEL_CONF", "/home/user/.config/lxqt/panel.conf")
+BOOT_OUTPUT = os.environ.get("NEXUSQ_BOOT_OUTPUT", "speaker")
 
 # Known PulseAudio sinks → a stable id + Czech-friendly label. Matched by substring
 # against the PA sink name (e.g. alsa_output.platform-sound-tas5713.stereo-fallback)
@@ -118,6 +125,61 @@ def _amixer(*args, timeout=4):
         ["amixer", "-c", MIXER_CARD, *args],
         capture_output=True, text=True, timeout=timeout,
     )
+
+
+def _sync_panel_applet(sink):
+    """Re-link the LXQt panel volume applet to the active output's sink.
+
+    The applet does NOT follow PA's default sink — it pins to a device index
+    ([volume] device=N in panel.conf, N = the sink's position in PA's sink
+    list, which is probe-order dependent, so we compute it at switch time).
+    lxqt-panel watches panel.conf and applies the change live (verified
+    2026-07-07), so the tray icon always shows/controls the selected output.
+    Best-effort: silently skip when the panel config does not exist yet
+    (fresh home before first login) or PA is unreachable; never let this
+    break output switching.
+    """
+    try:
+        if not PANEL_CONF or not os.path.isfile(PANEL_CONF):
+            return
+        r = _pactl("list", "short", "sinks")
+        if r.returncode != 0:
+            return
+        idx = None
+        rows = [l for l in r.stdout.splitlines() if l.strip()]
+        for i, ln in enumerate(rows):
+            if sink in ln.split():
+                idx = i
+                break
+        if idx is None:
+            return
+        with open(PANEL_CONF) as f:
+            lines = f.read().splitlines()
+        out, in_vol, done = [], False, False
+        for ln in lines:
+            s = ln.strip()
+            if s.startswith("["):
+                if in_vol and not done:
+                    out.append(f"device={idx}")
+                    done = True
+                in_vol = (s == "[volume]")
+                out.append(ln)
+                continue
+            if in_vol and re.match(r"\s*device\s*=", ln):
+                if not done:
+                    out.append(f"device={idx}")
+                    done = True
+                continue
+            out.append(ln)
+        if in_vol and not done:
+            out.append(f"device={idx}")
+            done = True
+        if not done:
+            out += ["", "[volume]", f"device={idx}"]
+        with open(PANEL_CONF, "w") as f:  # in-place: keeps the user's owner/mode
+            f.write("\n".join(out) + "\n")
+    except Exception as e:  # noqa: BLE001
+        log("panel applet sync failed:", e)
 
 
 class Pulse:
@@ -283,6 +345,28 @@ class Bridge:
                            "album": "", "artUrl": "", "source": ""},
             "name": DEVICE_NAME,
         }
+        # Boot default OUTPUT: on a fresh boot PA's default is just its first
+        # sink (probe-order dependent — often the SPDIF), but this appliance's
+        # canonical output is the speaker. Steer to BOOT_OUTPUT once PA is up:
+        # the bridge is a system service that starts well before the user
+        # session's PulseAudio, so retry in the background (~90 s), then give
+        # up quietly (setOutput from the app still works). Applying via
+        # _set_output keeps everything consistent (streams moved, amp toggle,
+        # LED-tap monitor source, tray-icon link, state + no clients yet).
+        def _boot_output():
+            if BOOT_OUTPUT not in OUTPUT_BY_ID:
+                return
+            for _ in range(45):
+                try:
+                    if self._sink_for_output(BOOT_OUTPUT):
+                        self._set_output({"output": BOOT_OUTPUT})
+                        log("boot output ->", BOOT_OUTPUT)
+                        return
+                except Exception:  # noqa: BLE001 - PA not up yet; retry
+                    pass
+                time.sleep(2)
+            log("boot output: PA never became ready, leaving PA's default")
+        threading.Thread(target=_boot_output, daemon=True).start()
 
     # --- output/sink resolution -----------------------------------------
     def _sink_for_output(self, oid):
@@ -454,6 +538,8 @@ class Bridge:
         # visualizer (`arecord -D pulse`, captures the default source) taps the mix
         # actually going to the selected output. Resilient (see set_default_source).
         self.pulse.set_default_source(sink + ".monitor")
+        # 4) re-link the desktop tray volume icon to this output (best-effort).
+        _sync_panel_applet(sink)
         # Hardware amp safety: power the class-D amp ONLY when the speaker is active,
         # so the banana-terminal amp is silent for the optical / HDMI outputs.
         if oid == "speaker":

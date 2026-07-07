@@ -1,0 +1,9 @@
+# The AVR front-panel volume ring ("steelhead-avr-keys") only gets ID_INPUT_KEY
+# from udev's default input_id heuristics and, crucially, no "seat" tag on its
+# event node (71-seat.rules tags KERNEL=="input*" parents, not "event*"), so
+# logind/libinput never hand the device to the compositor: labwc held no fd for
+# it and its XF86Audio* keys never reached the volume keybinds. (The LED volume
+# overlay still worked because nexusqd reads the evdev node directly — which is
+# what masked this for so long.) Tag the event node as a seat keyboard so labwc
+# receives the keys; verified 2026-07-07 (libinput debug-events + keybinds fire).
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="steelhead-avr-keys", ENV{ID_INPUT_KEYBOARD}="1", TAG+="seat"
