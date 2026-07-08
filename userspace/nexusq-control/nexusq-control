@@ -719,9 +719,57 @@ def publish_mdns():
         return None
 
 
+def pa_watch_thread(bridge):
+    """Watch PulseAudio for sink volume/mute changes made OUTSIDE the bridge — the
+    physical dome dial (nq-vol runs `pactl set-sink-volume`) and the LXQt panel
+    applet both poke PA directly — and push them to app clients so the app slider
+    tracks the knob. `pactl subscribe` fires 'change on sink' for volume, mute and
+    run-state alike, so we re-read the active sink and broadcast only when the
+    level or mute actually moved (state transitions from the LED tap gating would
+    otherwise spam)."""
+    env = {**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE}
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                ["pactl", "subscribe"], stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+            for line in proc.stdout:
+                if "on sink #" not in line:
+                    continue
+                sink = bridge._active_sink()
+                if not sink:
+                    continue
+                vol, muted = bridge.mixer.get(sink)
+                if vol is None:
+                    continue
+                with bridge.lock:
+                    moved = (vol != bridge.state["volume"]
+                             or bool(muted) != bridge.state["muted"])
+                    if moved:
+                        bridge.state["volume"] = vol
+                        bridge.state["muted"] = bool(muted)
+                if moved:
+                    bridge.broadcast("volumeChanged",
+                                     {"volume": vol, "muted": bool(muted)})
+        except FileNotFoundError:
+            log("pactl not found; dome-dial -> app volume sync disabled")
+            return
+        except OSError:
+            pass
+        finally:
+            if proc:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        time.sleep(1)  # subscribe ended (e.g. PA restart) — re-subscribe
+
+
 def main():
     bridge = Bridge()
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
+    threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     mdns = publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

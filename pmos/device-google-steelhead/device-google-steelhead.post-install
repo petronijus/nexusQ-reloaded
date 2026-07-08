@@ -81,4 +81,11 @@ if [ -f /etc/avahi/avahi-daemon.conf ] && ! grep -q '^allow-interfaces=wlan0' /e
 	fi
 fi
 
+# NOTE: the TAS5713 mixer-path Speaker-unity pin is NOT here. .post-install runs
+# too early — apk fired it before pulseaudio (a late-unpacked dep) was unpacked,
+# so an [ -f ] sed silently skipped and the image stacked Master+Speaker to
+# +48 dB. It now lives in device-google-steelhead.trigger, which apk runs after
+# the alsa-mixer paths dir is populated. (Same latent risk applies to the avahi
+# patch above: it too patches a late-unpacked dep and can skip at build time.)
+
 exit 0

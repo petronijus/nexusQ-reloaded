@@ -4,6 +4,104 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased] — v1.7.3 (BUILDING, not yet flashed)
+
+> **v1.7.3 — completes the volume fix + adds bidirectional (dial→app) volume sync.**
+> Framed for **v1.7.3** (versioning is tag-only). **BUILT, NOT yet flashed as an
+> image, NOT tagged** — but the fix itself is **verified LIVE on device** (the r35
+> path pin applied on the running v1.7.2 device; measured + user-confirmed). Package
+> delta: `device-google-steelhead` **r34 → r35**, `nexusq-control` **r7 → r8**. Full
+> analysis (§4 Resolution): `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+
+### Fixed — v1.7.3
+
+- **Volume fix COMPLETED — PA now drives only the TAS5713 Master, not Master+Speaker
+  stacked** (`device-google-steelhead` r35 post-install). Kernel patch `0038`
+  (v1.7.2) shifted the Master dB scale but the amp was still deafening: on-device
+  measurement showed PA drives **BOTH** the Master (numid 1) **and** the per-channel
+  Speaker (numid 2), because `analog-output-speaker.conf` marks both as
+  `volume = merge`. PA **stacks** them — Master (0..+24 dB) then Speaker (another
+  0..+24 dB) = **+48 dB at PA 100 %** (the shifted Master TLV made PA recruit Speaker
+  *sooner*, so 0038 alone was insufficient). Fix: the post-install `sed`s
+  `[Element Speaker] volume = merge → volume = zero` (pins Speaker at unity, 0 dB;
+  in-place, idempotent, same pattern as the bluez/avahi path patches). **Measured
+  live (v1.7.2 + this pin):** PA 20 % = −17.5 dB · 50 % = +6 dB (comfortable,
+  mid-dial) · 100 % = +24 dB (was +48); Speaker pinned 0 dB throughout; Base Volume
+  100 %; spreads cleanly 0-100 %. **User confirmed by ear: "this is good."** Closes
+  the audio-gain-cap polish item (no separate lower ceiling needed).
+
+### Added — v1.7.3
+
+- **Bidirectional volume sync — the physical dome dial and LXQt applet now update the
+  companion app slider** (`nexusq-control` r8, bridge `pa_watch_thread`). A
+  `pactl subscribe` loop detects sink volume/mute changes made **outside** the bridge
+  (dome dial via `nq-vol` → `pactl set-sink-volume`, and the panel applet) and
+  broadcasts `volumeChanged` to app clients so the slider tracks the knob. Re-reads
+  the active sink on each `on sink #` event but broadcasts **only on an actual
+  level/mute change** — the sink run-state transitions from the v1.7.1 LED-tap
+  gating don't spam clients. Verified live.
+
+## [1.7.2] — 2026-07-08 (kernel flashed/on device; volume completed by v1.7.3)
+
+> **v1.7.2 — TAS5713 volume-scale rework (no PA software boost) + boot-log cleanup.**
+> Kernel (`linux` r37 → **r39**, patches **0038** + **0039**) **flashed and on
+> device**; the volume-scale shift is measured correct but was **insufficient by
+> itself** — completed by the v1.7.3 Speaker-pin (see [Unreleased] above). Full
+> analysis: `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+
+### Changed — v1.7.2
+
+- **TAS5713 Master volume maps to PA 0-100 % with no software boost** (kernel patch
+  `0038`, `linux` r38). The TAS5713 gets its **own** ALSA controls instead of
+  sharing mainline `tas5711_controls`. The mainline `tas5711_volume_tlv` tops out at
+  **+24 dB**, so PA's 100 % sat above the hardware max: Master saturated at **~PA
+  45 %**, PA added **software gain** above (dead zone + quality loss), and the
+  desktop icon read "45 %" at the real ceiling. Fix: shift **only** the Master dB
+  scale (`tas5713_volume_tlv = -12750`) so the hardware max register maps to PA
+  0 dB / 100 % (spreads 0-100 %, no software boost, icon reads full, hardware/dB
+  throughout). ⚠️ **Insufficient alone** — on-device measurement found PA *also*
+  drives the per-channel Speaker control (`analog-output-speaker.conf` merges both),
+  stacking a second +24 dB (+48 dB at 100 %); **completed in v1.7.3** by pinning
+  Speaker at unity. See [Unreleased] v1.7.3 and §4 of the note.
+
+### Fixed — v1.7.2
+
+- **Boot log no longer floods with NFC SHDLC frame dumps** (kernel patch `0039`,
+  `linux` r39). `SHDLC_DUMP_SKB()` used `print_hex_dump(KERN_DEBUG)`, which writes
+  to the ring buffer regardless of loglevel; the continuous pn544 poll for NFC
+  tap-to-send emitted **~200 "shdlc: .." lines/boot**. Switched to
+  `print_hex_dump_debug()` (no-op without `CONFIG_DYNAMIC_DEBUG`, which this image
+  lacks).
+- **Kernel cmdline trimmed of debug-forcing flags** (`kernel/configs/steelhead_defconfig`
+  `CONFIG_CMDLINE`, `scripts/repack-bootimg.sh`, `build-noramdisk.sh`): removed
+  `earlyprintk` + `ignore_loglevel`, `loglevel=7` → `loglevel=4`. `ignore_loglevel`
+  was forcing ALL debug prints (gpiolib "can't parse scl-gpios" + the shdlc dumps)
+  onto the HDMI console. The diag boot scripts (`build-diag-boot2.sh`,
+  `manual-export.sh`) were intentionally LEFT verbose.
+
+## [1.7.1] — 2026-07-08
+
+> **v1.7.1 — idle-CPU/thermal fix: the LED audio tap is gated on playback.**
+> SHIPPED and **verified live on device**. Package delta: `nexusqd` **r7 → r8**
+> (commit `af7fa0e`). Notes:
+> `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+
+### Fixed — v1.7.1
+
+- **Idle CPU ~7 % → ~1 %: gate the LED music-visualizer tap on PA activity**
+  (`userspace/nexusqd`, `pmos/nexusqd` r8). The tap (`arecord -D pulse` on
+  `tas5713.monitor`) was an uncorked PA source-output, so suspend-on-idle could
+  never suspend the sink — at silence the `tas5713` sink stayed **IDLE (clocked)**
+  and PA + arecord burned ~7 % (the top idle-heat contributor). nexusqd now polls
+  `pactl list short sink-inputs` and only runs arecord while a real playback stream
+  exists; when idle it stops arecord so the sink **suspends**. Gate signal is
+  sink-input **count, not audio level** (a quiet passage keeps the tap on); pactl is
+  polled only around a transition, never while music flows. `audio_open()` returns
+  the arecord pid, `audio_close()` SIGTERMs it. New dep `pulseaudio-utils`.
+  **Verified on device (v1.7.1):** idle → arecord=0, sink SUSPENDED, nexusqd 0 %;
+  playback → arecord=1, sink RUNNING; after playback → arecord=0 (re-gated), sink
+  IDLE→SUSPENDED. Satisfies the AI-handover "idle temperature / performance" task.
+
 ## [1.7.0] — 2026-07-08
 
 > **v1.7.0 — NFC tap-to-send: tap a phone on the dome and the Nexus Q hands it a

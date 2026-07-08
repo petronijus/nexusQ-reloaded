@@ -1,0 +1,30 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] nfc: hci: shdlc: gate the frame hexdumps behind dynamic-debug
+
+SHDLC_DUMP_SKB() dumped every SHDLC I-frame (tx) and every incoming frame (rx)
+with print_hex_dump(KERN_DEBUG, ...). print_hex_dump() ALWAYS writes to the
+kernel ring buffer regardless of the console loglevel, so on steelhead — where a
+userspace daemon polls the pn544 continuously for NFC tap-to-send — the boot log
+and journal fill with hundreds of "shdlc: 00000000: .." lines every boot.
+
+Switch to print_hex_dump_debug(), which is a no-op unless CONFIG_DYNAMIC_DEBUG
+(or per-file DEBUG) is enabled — neither is on this image — so the frame dumps
+vanish from the ring buffer/journal while staying one dynamic-debug toggle away
+when actually debugging SHDLC. The paired pr_debug("%s:\n") is already gated the
+same way.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ net/nfc/hci/llc_shdlc.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/net/nfc/hci/llc_shdlc.c
++++ b/net/nfc/hci/llc_shdlc.c
+@@ -101,7 +101,7 @@
+ #define SHDLC_DUMP_SKB(info, skb)				  \
+ do {								  \
+ 	pr_debug("%s:\n", info);				  \
+-	print_hex_dump(KERN_DEBUG, "shdlc: ", DUMP_PREFIX_OFFSET, \
++	print_hex_dump_debug("shdlc: ", DUMP_PREFIX_OFFSET, \
+ 		       16, 1, skb->data, skb->len, 0);		  \
+ } while (0)

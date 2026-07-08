@@ -148,6 +148,14 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-07-02-boot-error-inventory.md` v1.6.10 update +
   `docs/2026-07-06-bootlog-cleanup.md`). The L2C aux-modify notice is an
   **authorized** `pr_debug` downgrade (register end-state identical to stock).
+  ℹ️ **DEBUG-level noise on v1.7.0/v1.7.1 (NOT err/warn):** the continuous NFC-tap
+  poll emits **~200 "shdlc: .." lines/boot** and the old cmdline
+  (`ignore_loglevel`+`loglevel=7`) forces the debug firehose (gpiolib "can't parse
+  scl-gpios") onto the HDMI console — `dmesg -l err,warn` stays EMPTY, so NOT a
+  regression. **Silenced in v1.7.2** (kernel r39, on device): patch `0039`
+  (`print_hex_dump_debug`) + cmdline drops `earlyprintk`/`ignore_loglevel`,
+  `loglevel=7`→`4`. Confirm shdlc gone on the next sweep. See
+  `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
 - **TAS5713 speaker was SILENT until v1.6.13 (kernel r36)** — a wrong `mcbsp2_pins`
   mux (`0x110/0x114/0x116` = `abe_dmic_*`, not McBSP2) left the real I2S balls in
   `safe_mode`, so the amp got no clock/data/frame while the ALSA pipeline read
@@ -165,6 +173,27 @@ Findings are tagged by `kind`; interpret them like this:
   volume — healthy tell: steady `audio DETECTED vol=0.150`; low-volume
   flicker↔breathing = AGC regressed. See
   `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+- **LED tap GATED on playback (v1.7.1, nexusqd r8)** — the `arecord -D pulse` tap
+  used to run continuously (uncorked PA source-output held the `tas5713` sink
+  IDLE/clocked at silence → ~7 % idle CPU, top idle-heat source). nexusqd now polls
+  `pactl list short sink-inputs` and runs arecord **only while a stream plays** (gate
+  = sink-input count, not level). **Idle-healthy tell:** no `arecord`, `tas5713` sink
+  **SUSPENDED** (not IDLE) in `pactl list short sinks`, nexusqd **~0-1 %** CPU (was
+  ~7 %); playback → arecord present + sink RUNNING; after → re-gated → SUSPENDED.
+  arecord running at idle / sink IDLE / nexusqd ~7 % = regression. Dep `+pulseaudio-utils`.
+  See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+- **Volume gain RESOLVED (v1.7.2 kernel 0038 + v1.7.3 device r35, verified live)** — PA
+  used to stack **both** TAS5713 controls: `analog-output-speaker.conf` marked
+  `[Element Master]` **and** `[Element Speaker]` as `volume = merge`, so PA filled
+  Master (0..+24 dB) then recruited Speaker (another +24 dB) = **+48 dB at 100 %**
+  (deafening). Fix = kernel 0038 (Master dB-scale shift, on device) **plus** device
+  **r35** post-install `sed`ing `[Element Speaker] volume = merge → volume = zero`
+  (pins Speaker at unity). **Healthy tell:** `amixer`/`pactl` shows Speaker (numid 2)
+  at **0 dB**, Master (numid 1) carrying the range; measured PA 50 % ≈ +6 dB, 100 % =
+  +24 dB. Speaker at +24 dB / total +48 dB = the merge-stacking regressed. Also
+  **nexusq-control r8** = dial→app volume sync (`pactl subscribe` → `volumeChanged`).
+  r35 + r8 are BUILDING into **v1.7.3** — verified live, not yet in a flashed image.
+  See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md` §4.
 - **`ss` is NOT installed on the device** — use **`netstat -tlnp`** to check listening
   sockets (a `ss`-not-found caused a long "no listener" misdiagnosis).
 - **NFC tap-to-send (v1.7.0, device r33 / kernel r37)** — the PN544 chip works since

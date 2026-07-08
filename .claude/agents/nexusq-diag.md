@@ -185,9 +185,14 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   are `pactl` on the active sink. **Checks:** `pactl list short sinks` (as uid-10000,
   or root with `PULSE_SERVER`/`PULSE_COOKIE`) shows the tas5713 + spdif sinks; both
   report **48000 Hz** (PA pinned to 48 kHz by `50-nexusq-48k.conf` — 44.1 kHz detunes
-  the McASP DIT, "off by 88435 PPM"). Deferred polish: TAS5713 gain is very hot (app
-  ~8% ≈ deafening, gain-cap TODO); boot default should be speaker-not-spdif; a residual
-  crackle (measure with speaker safe-disconnected).
+  the McASP DIT, "off by 88435 PPM"). **Volume gain RESOLVED** (v1.7.2 kernel patch
+  0038 Master dB-scale shift + device r35 post-install pinning the per-channel
+  Speaker at unity — PA was stacking Master+Speaker `volume = merge` = +48 dB at
+  100%; now Master-only: PA 50% = +6 dB, 100% = +24 dB, user-confirmed). Note: r35 +
+  nexusq-control r8 (dial→app sync) are BUILDING into v1.7.3, verified live but not
+  yet in a flashed image. Deferred polish: boot default should be speaker-not-spdif;
+  a residual **crackle / "lupance"** during playback (the next task — measure with
+  speaker safe-disconnected).
   ℹ️ **Historical (FIXED in v1.6.1):** the v1.6.0 path played **2× too fast** (FSYNC at
   2× rate; 60 s drained in ~30 s), which made a librespot/Spotify track **auto-skip
   ~40 s in** — that was the audio-clock bug, **not** a librespot crash (the service
@@ -227,6 +232,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   nexusqd log. The pre-AGC symptom was the visualizer **flickering ↔ breathing at low
   volume** (raw level below threshold) — if that returns, the AGC/monitor tap
   regressed. See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+  ✅ **Tap is GATED on playback (v1.7.1, nexusqd r8):** the `arecord -D pulse` tap
+  used to run continuously (uncorked PA source-output → the `tas5713` sink stayed
+  **IDLE/clocked** at silence → **~7 % idle CPU**, top idle-heat source). nexusqd now
+  polls `pactl list short sink-inputs` and runs arecord **only while a real playback
+  stream exists** (gate = sink-input **count, not level**). **Healthy idle tell:**
+  no `arecord` process, the `tas5713` sink **SUSPENDED** (not IDLE) in
+  `pactl list short sinks`, nexusqd **~0-1 % CPU** (was ~7 %). **During playback:**
+  an `arecord` appears and the sink is **RUNNING**; **after** playback it re-gates off
+  ~4 s later → SUSPENDED. Idle showing arecord running / sink IDLE / nexusqd ~7 % =
+  the gate regressed. nexusqd now depends on `pulseaudio-utils` (pactl). See
+  `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
 - **`ss` is NOT installed on the device** (busybox/Alpine minimal) — use **`netstat`**
   (`netstat -tlnp` / `netstat -ln`) to check listening sockets. (A `ss`-not-found caused
   a long "no listener" misdiagnosis of the PA/bridge sockets.)
@@ -330,7 +346,20 @@ functional; no IP-firewall notice); the L2C aux-modify notice is an **authorized
 `pr_debug` downgrade (register end-state identical to stock); Bluetooth BD_ADDR is
 the real per-device `F8:8F:CA:20:49:E5` (was placeholder `43:30:A0:00:00:00`).
 Full disposition table: `docs/2026-07-02-boot-error-inventory.md` (v1.6.10
-update) + `docs/2026-07-06-bootlog-cleanup.md`. **No serial console exists** on
+update) + `docs/2026-07-06-bootlog-cleanup.md`.
+ℹ️ **DEBUG-level noise on v1.7.0/v1.7.1 images (NOT an err/warn regression):** the
+continuous pn544 NFC-tap poll emits **~200 "shdlc: 00000000: .." lines/boot**, and
+the old cmdline (`ignore_loglevel` + `loglevel=7`) forces the whole debug firehose
+(incl. gpiolib "can't parse scl-gpios") onto the HDMI console. This is
+**debug-level**, so `dmesg -l err,warn` stays EMPTY — do not report it as a
+regression. **Silenced in v1.7.2** (BUILDING, not yet flashed): patch `0039`
+(`print_hex_dump_debug`, no-op here) kills the shdlc dumps, and the cmdline drops
+`earlyprintk`+`ignore_loglevel` with `loglevel=7`→`4`
+(`kernel/configs/steelhead_defconfig`, `scripts/repack-bootimg.sh`,
+`build-noramdisk.sh`). Once v1.7.2 is flashed, verify the shdlc lines are gone and
+the console is no longer at debug level. Diag boot scripts stay verbose on purpose.
+See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+**No serial console exists** on
 this device (fastboot + ssh + stock/our build only) — deep cpuidle C2/C3 is
 BLOCKED (resume hang can't be debugged blind), not a diag finding.
 

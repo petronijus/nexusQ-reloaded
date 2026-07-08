@@ -1,0 +1,64 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] ASoC: tas571x: TAS5713 (steelhead) master volume scale — no PA software boost
+
+The TAS5713 shares tas5711_controls, whose Master volume dB scale tops out at
++24 dB digital gain, so PulseAudio's 100% sat above the hardware max: the Master
+control saturated ~PA 45% and PA added software gain above that (dead zone + a
+software boost that hurts quality; the desktop icon read 45% at the real max).
+
+Give the TAS5713 its own controls whose MASTER uses a scale shifted down 24 dB so
+the hardware max register maps to PA 0 dB / 100% (PA spreads 0-100% across the
+Master control, no software boost, icon reads full at the ceiling, hardware
+volume throughout). The per-channel Speaker volume KEEPS the original scale: PA
+pins it at its "0 dB" point and a shifted scale would pin it at the +24 dB
+extreme, stacking a second +24 dB on Master (measured +48 dB at PA 100%).
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ sound/soc/codecs/tas571x.c | 28 ++++++++++++++++++++++++++--
+ 1 file changed, 26 insertions(+), 2 deletions(-)
+
+--- a/sound/soc/codecs/tas571x.c	2026-07-08 14:54:06.586221433 +0200
++++ b/sound/soc/codecs/tas571x.c	2026-07-08 14:54:06.594445267 +0200
+@@ -785,11 +785,39 @@
+ 	.vol_reg_size			= 1,
+ };
+ 
++/* Nexus Q (steelhead): the TAS5713 master volume tops out at a large digital
++ * gain, so PulseAudio's 100% sat well above the hardware maximum -- the Master
++ * control saturated around PA 45% and PA added SOFTWARE gain above that (a dead
++ * zone in the top half of the slider + a software boost that hurts quality and
++ * made the desktop volume icon read 45% at the real max). Give the TAS5713 its
++ * own Master dB scale shifted so the hardware maximum register (0xff) maps to
++ * PA 0 dB (== PA 100%): PA then spreads its whole 0-100% across the Master
++ * control with NO software boost, the icon reads full at the real ceiling, and
++ * volume stays hardware/decibel the whole way. The per-channel Speaker volume
++ * MUST keep the original scale: PA pins it at its "0 dB" point, and shifting it
++ * too would pin it at the register's +24 dB extreme, stacking a second +24 dB
++ * on Master (measured +48 dB total at PA 100%). Original scale -> unity. */
++static const DECLARE_TLV_DB_SCALE(tas5713_volume_tlv, -12750, 50, 1);
++
++static const struct snd_kcontrol_new tas5713_controls[] = {
++	SOC_SINGLE_TLV("Master Volume",
++		       TAS571X_MVOL_REG,
++		       0, 0xff, 1, tas5713_volume_tlv),
++	SOC_DOUBLE_R_TLV("Speaker Volume",
++			 TAS571X_CH1_VOL_REG,
++			 TAS571X_CH2_VOL_REG,
++			 0, 0xff, 1, tas5711_volume_tlv),
++	SOC_DOUBLE("Speaker Switch",
++		   TAS571X_SOFT_MUTE_REG,
++		   TAS571X_SOFT_MUTE_CH1_SHIFT, TAS571X_SOFT_MUTE_CH2_SHIFT,
++		   1, 1),
++};
++
+ static const struct tas571x_chip tas5713_chip = {
+ 	.supply_names			= tas5711_supply_names,
+ 	.num_supply_names		= ARRAY_SIZE(tas5711_supply_names),
+-	.controls			= tas5711_controls,
+-	.num_controls			= ARRAY_SIZE(tas5711_controls),
++	.controls			= tas5713_controls,
++	.num_controls			= ARRAY_SIZE(tas5713_controls),
+ 	.regmap_config			= &tas5711_regmap_config,
+ 	.vol_reg_size			= 1,
+ };

@@ -4,7 +4,50 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-08 (latest): **NFC tap-to-send — v1.7.0** (VERIFIED end-to-end on device)
+## Session 2026-07-08 (latest): **idle-CPU tap gating (v1.7.1, SHIPPED) + volume fix RESOLVED (v1.7.2 kernel + v1.7.3 path pin) + dial→app sync + boot-log cleanup**
+
+Follow-on to the v1.7.0 NFC session below. Full analysis:
+`docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+
+✅ **v1.7.1 — SHIPPED & VERIFIED on device: LED audio tap gated on playback.**
+`nexusqd` **r8** (commit `af7fa0e`, dep `+pulseaudio-utils`). The visualizer tap
+(`arecord -D pulse` on `tas5713.monitor`) was an uncorked PA source-output that held
+the sink IDLE/clocked at silence → **~7 % idle CPU** (top idle-heat source). nexusqd
+now polls `pactl list short sink-inputs` and runs arecord **only while a real stream
+plays**; idle → arecord stopped → sink **SUSPENDED**. Gate = sink-input **count, not
+level**. **Verified live:** idle arecord=0 / sink SUSPENDED / nexusqd 0 %; playback
+arecord=1 / sink RUNNING; after playback re-gated → SUSPENDED. Idle CPU **~7 %→~1 %**.
+Closes the AI-handover idle-temperature/performance task.
+
+✅ **VOLUME RESOLVED — verified LIVE + user-confirmed ("this is good")**, baking into
+**v1.7.3** (`device-google-steelhead` **r35** + `nexusq-control` **r8**; NOT yet
+flashed as an image, NOT tagged). Kernel patch **0038** (v1.7.2, on device) shifted
+the Master dB scale but **alone was insufficient**: on-device measurement showed PA
+drives **BOTH** the TAS5713 Master (numid 1) **and** the per-channel Speaker (numid
+2) — `analog-output-speaker.conf` marks both `volume = merge`, so PA **stacks** them
+(+24 dB Master then +24 dB Speaker = **+48 dB at 100 %**; the shift made PA recruit
+Speaker *sooner*). **Complete fix = 0038 + device r35 post-install** `sed`ing
+`[Element Speaker] volume = merge → volume = zero` (pins Speaker at unity). PA now
+drives **only** Master. **Measured live:** PA 20 % = −17.5 dB · 50 % = +6 dB
+(comfortable, mid-dial) · 100 % = +24 dB (was +48); Speaker 0 dB throughout. Gain-cap
+polish item CLOSED.
+
+✅ **Dial→app volume sync (`nexusq-control` r8, v1.7.3, verified live):** bridge
+`pa_watch_thread` runs `pactl subscribe`; the physical dome dial (`nq-vol`) and LXQt
+applet now update the companion app slider (broadcasts `volumeChanged` only on a real
+level/mute change, so LED-tap-gating sink state changes don't spam).
+
+🚧 **v1.7.2 boot-log cleanup (kernel `linux` r37→r39, on device):** shdlc frame
+hexdumps → `print_hex_dump_debug` (no-op here) kills ~200 "shdlc: .." lines/boot from
+the continuous NFC poll; cmdline dropped `earlyprintk`+`ignore_loglevel`,
+`loglevel=7`→`4` (ignore_loglevel was forcing all debug onto the HDMI console). Diag
+boot scripts left verbose intentionally.
+
+**Next:** flash v1.7.3 + full diag sweep, then investigate **audio crackling /
+"lupance" during playback** (user-flagged for after the volume work is clean — it now
+is).
+
+## Session 2026-07-08: **NFC tap-to-send — v1.7.0** (VERIFIED end-to-end on device)
 
 ✅ **v1.7.0 is the tagged release** — it bundles everything built-but-never-tagged
 since **v1.6.10** (the audio v1.6.14–16 work, ethernet-default + desktop-audio fix
@@ -65,8 +108,10 @@ under `--no-cross` — same trap already fixed in `docker-build.sh`.
 2. **Q-side reader is a Python prototype** — a C daemon would be cleaner for the image.
 3. **Continuous NFC polling keeps the RF field active** (minor power/thermal);
    revisit if it matters.
-4. **Audio polish still open** (from the v1.6.15 session below): volume gain-cap
-   (amp hot), speaker crackle (McBSP2/TAS5713, from measurement).
+4. **Audio polish** (from the v1.6.15 session below): the **volume gain-cap is
+   RESOLVED** (kernel 0038 + device r35 Speaker-pin, verified live + user-confirmed —
+   see the latest session at the top; no separate lower ceiling needed). **Speaker
+   crackle / "lupance"** (McBSP2/TAS5713, from measurement) still open — the next task.
 
 ---
 

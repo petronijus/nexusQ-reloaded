@@ -30,7 +30,7 @@ mkbootimg \
     --second_offset 0x00f00000 \
     --tags_offset 0x00000100 \
     --pagesize 2048 \
-    --cmdline "console=tty0 loglevel=7 ignore_loglevel earlyprintk panic=30" \
+    --cmdline "console=tty0 loglevel=4 panic=30" \
     -o /tmp/output/boot-noramdisk.img
 
 ls -lh /tmp/output/boot-noramdisk.img
