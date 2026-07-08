@@ -84,6 +84,43 @@ if old in content:
 else: print("  apk.py already patched / pattern changed")
 PATCH_APK
 
+echo "=== Phase 6b2: Patch backend.py (abuild as root -> skip fakeroot/faked) ==="
+# Under --no-cross the kernel package() runs in the armv7 chroot under qemu, where
+# abuild's fakeroot `faked` daemon busy-loops at ~100% CPU forever (qemu-arm can't
+# run it). Same fix as docker-build.sh Phase 6b: run abuild AS ROOT (-F,
+# HOME=/home/pmos) so abuild sets FAKEROOT="" and skips fakeroot entirely, producing
+# correct root:root files. Without this the fast kernel build hangs at
+# ">>> linux-google-steelhead: Entering fakeroot...".
+sudo python3 - <<'PATCH_BACKEND'
+path = "/usr/lib/python3.12/site-packages/pmb/build/backend.py"
+with open(path) as f:
+    content = f.read()
+
+reps = [
+    ('pmb.chroot.user(cmd, buildchroot, Path("/home/pmos/build"), env=env)',
+     'pmb.chroot.root(cmd, buildchroot, Path("/home/pmos/build"), env=env)'),
+    ('cmd = ["abuild", "-d", "-D", "postmarketOS"]',
+     'cmd = ["abuild", "-F", "-d", "-D", "postmarketOS"]'),
+    ('env: Env = {"SUDO_APK": "abuild-apk --no-progress"',
+     'env: Env = {"SUDO_APK": "abuild-apk --no-progress", "HOME": "/home/pmos"'),
+]
+applied = 0
+for old, new in reps:
+    if new in content:
+        applied += 1
+    elif old in content:
+        content = content.replace(old, new)
+        applied += 1
+    else:
+        print(f"  backend.py: PATTERN NOT FOUND -> {old!r}")
+if applied == len(reps):
+    with open(path, "w") as f:
+        f.write(content)
+    print("  Patched backend.py: abuild runs as root (-F, HOME=/home/pmos) -> no fakeroot/faked hang")
+else:
+    print(f"  backend.py: only {applied}/{len(reps)} patterns matched -- NOT writing (fakeroot hang risk!)")
+PATCH_BACKEND
+
 echo "=== Phase 7: pmbootstrap config ==="
 WORK="/home/pmos/.local/var/pmbootstrap"
 mkdir -p "$XDG_CONFIG_HOME" "$WORK"
@@ -128,7 +165,12 @@ echo "=== Phase 8: Build linux-google-steelhead (armv7) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 pmbootstrap checksum linux-google-steelhead 2>&1 || true
 set +e
-pmbootstrap build linux-google-steelhead --arch armv7 --force 2>&1
+# --no-cross (qemu-only), matching docker-build.sh Phase 8: the cross toolchain /
+# crossdirect is broken in this image. The cross-native gcc aborts kconfig with
+# "armv7-alpine-linux-musleabihf-gcc: unknown assembler invoked" /
+# "Kconfig.include: Sorry, this assembler is not supported." Force qemu-only so the
+# build uses the armv7 chroot's own (working) native gcc/as, exactly as Phase 8 does.
+pmbootstrap --no-cross build linux-google-steelhead --arch armv7 --force 2>&1
 RC=$?
 set -e
 echo "=== kernel build exit: $RC ==="

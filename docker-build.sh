@@ -706,7 +706,7 @@ if [ -n "${PYTHON3_VALIDATE_RUNS:-}" ]; then
             tail -15 "/tmp/validate-$_v.log" 2>/dev/null | sed 's/^/      /'
             _vcorrupt=$((_vcorrupt + 1)); continue
         fi
-        _vapk=$(find "$WORK/packages" -name "$PY3_APK_NAME" -print -quit 2>/dev/null)
+        _vapk=$(find "$WORK/packages" -path "*/armv7/$PY3_APK_NAME" -print -quit 2>/dev/null)
         tar -xzOf "$_vapk" usr/lib/libpython3.14.so.1.0 > "/tmp/validate-$_v.so" 2>/dev/null
         if python3 "$GATE" "/tmp/validate-$_v.so" > "/tmp/validate-$_v.gate" 2>&1; then
             _vverdict="CLEAN  "; _vclean=$((_vclean + 1))
@@ -764,7 +764,12 @@ for _try in $(seq 1 "$PYTHON3_MAX_TRIES"); do
     # pkgrel-EXACT (see PY3_APK_NAME above): the work-volume repo accumulates stale
     # python3 apks from prior runs, so a bare r*.apk glob could gate/export the wrong
     # one. Match only the apk this build produced.
-    _apk=$(find "$WORK/packages" -name "$PY3_APK_NAME" -print -quit 2>/dev/null)
+    # Match ONLY the target (armv7) apk: pmbootstrap also builds a native x86_64
+    # python3 of the SAME name for the buildroot, and a bare -name glob picks
+    # whichever the fs returns first — often x86_64, whose 64-bit libpython fails
+    # the "32-bit LE ELF" gate as a false CORRUPT (looped the whole build). The
+    # target apk lives under .../packages/edge/armv7/.
+    _apk=$(find "$WORK/packages" -path "*/armv7/$PY3_APK_NAME" -print -quit 2>/dev/null)
     if [ -z "$_apk" ]; then
         echo "  ERROR: build returned 0 but no $PY3_APK_NAME under $WORK/packages."
         PYTHON3_RC=1
@@ -826,6 +831,50 @@ if [ $BUILD_RC -ne 0 ]; then
 fi
 
 if [ $BUILD_RC -eq 0 ]; then
+    echo ""
+    echo "=== Phase 8b: Pre-build systemd (avoid a mid-install build+zap) ==="
+    # ROOT CAUSE of the "chroot: cannot change root directory to
+    # '.../chroot_native': No such file or directory" (exit 125) failure at
+    # Phase 9 "PREPARE INSTALL BLOCKDEVICE" (mkdir -p /home/pmos/rootfs):
+    #
+    # `pmbootstrap install` resolves the full rootfs dependency closure and, if
+    # ANY package in it is not already cached in the work-volume repo, builds it
+    # inline. pmbootstrap's inline `pmb build` finishes with a STRICT-mode zap
+    # ("Zapping buildroots ...") that does `rm -rf .../chroot_native`. When that
+    # build happens MID-install (after install has already created chroot_native
+    # in its "(1/4) PREPARE NATIVE CHROOT" step), the zap deletes the very
+    # chroot_native that install's next step (blockdevice create -> chroot mkdir)
+    # relies on -> exit 125, install aborts.
+    #
+    # This is invisible on a warm volume where every dep is already cached, but
+    # bites whenever upstream pmaports bumps a base package: on 2026-07-08 the
+    # systemd-edge channel moved systemd to 261.1-r2, so install compiled systemd
+    # (20 min) and the post-build strict zap nuked chroot_native.
+    #
+    # The durable fix is to pre-build the heavy base package(s) HERE, before
+    # install: this build's own post-build zap only removes chroot_native while
+    # NOTHING needs it (install re-creates it fresh in step 1/4), and by the time
+    # install runs the systemd apk is cached, so install builds nothing and its
+    # chroot_native survives to the blockdevice step. No --force: a warm volume
+    # with systemd already cached skips this in seconds; it only compiles when
+    # pmaports actually bumped systemd.
+    # --arch armv7 is REQUIRED: systemd is a generic aport (not a device aport),
+    # so a bare `build systemd` would default to the native x86_64 arch (install
+    # x86_64 makedepends into chroot_native -> apk exit 13) and build the WRONG
+    # arch. install needs the armv7 systemd, exactly like the python3 override
+    # (Phase 7d) which also passes --arch armv7. No --force here: warm volumes
+    # with the armv7 systemd apk already cached skip the compile.
+    set +e
+    pmbootstrap --no-cross build systemd --arch armv7 2>&1
+    SYSTEMD_RC=$?
+    set -e
+    echo "=== systemd pre-build exit code: $SYSTEMD_RC ==="
+    if [ $SYSTEMD_RC -ne 0 ]; then
+        echo "=== systemd PRE-BUILD FAILED (exit $SYSTEMD_RC) ==="
+        tail -80 "$WORK/log.txt" 2>/dev/null
+        exit 1
+    fi
+
     echo ""
     echo "=== Phase 9: Install image ==="
     set +e
