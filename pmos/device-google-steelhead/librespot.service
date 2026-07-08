@@ -15,6 +15,11 @@ Description=librespot — Spotify Connect (Nexus Q, PulseAudio input)
 Documentation=https://github.com/librespot-org/librespot
 After=pulseaudio.service network-online.target
 Wants=pulseaudio.service network-online.target
+# This user unit is enabled globally (/etc/systemd/user/default.target.wants),
+# so it would also start in root's (or any admin's) user manager on login and
+# crash-loop fighting the appliance instance for the zeroconf port. Pin it to
+# the appliance user (uid 10000); other users' managers skip it silently.
+ConditionUser=10000
 
 [Service]
 ExecStart=/usr/bin/librespot-nexusq
