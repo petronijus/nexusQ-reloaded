@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'nfc/hce_listener.dart';
 import 'protocol/client.dart';
 import 'protocol/mock_client.dart';
 import 'protocol/tcp_client.dart';
@@ -24,8 +25,12 @@ void main() {
 }
 
 class NexusQApp extends StatelessWidget {
-  const NexusQApp({super.key, this.initialClient});
+  NexusQApp({super.key, this.initialClient});
   final NexusQClient? initialClient;
+
+  /// App-level messenger so NFC (HCE) messages can surface as a SnackBar from
+  /// any screen, independent of the current Scaffold.
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +38,11 @@ class NexusQApp extends StatelessWidget {
       title: 'nexusQ-reloaded',
       debugShowCheckedModeBanner: false,
       theme: buildNexusQTheme(),
-      home: ConnectGate(initialClient: initialClient),
+      scaffoldMessengerKey: _messengerKey,
+      home: HceListener(
+        messengerKey: _messengerKey,
+        child: ConnectGate(initialClient: initialClient),
+      ),
     );
   }
 }

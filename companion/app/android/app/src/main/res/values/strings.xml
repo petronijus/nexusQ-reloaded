@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown in Android's "Tap & pay / other" NFC settings for our HCE service. -->
+    <string name="hce_service_description">nexusQ-reloaded tap-to-receive</string>
+    <string name="hce_aid_group_description">Nexus Q text link</string>
+</resources>

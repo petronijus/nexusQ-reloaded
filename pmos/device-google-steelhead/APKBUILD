@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=32
+pkgrel=33
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -58,6 +58,8 @@ source="
 	92-steelhead-avr-keyboard.rules
 	labwc-rc.xml
 	nq-vol
+	nexusq-nfc-send
+	nexusq-nfc.service
 	20-nexusq-nsresourced-off.preset
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
@@ -144,6 +146,17 @@ package() {
 		"$pkgdir"/etc/skel/.config/labwc/rc.xml
 	install -Dm755 "$srcdir"/nq-vol \
 		"$pkgdir"/usr/bin/nq-vol
+	# NFC tap-to-send daemon (reverse-HCE reader): the Q reads a phone running
+	# the companion app's HostApduService and pushes a text on each tap. Needs
+	# the pn544 RATS kernel fix (linux patch 0037). neard is intentionally NOT
+	# installed — this daemon owns the kernel NFC device directly.
+	install -Dm755 "$srcdir"/nexusq-nfc-send \
+		"$pkgdir"/usr/bin/nexusq-nfc-send
+	install -Dm644 "$srcdir"/nexusq-nfc.service \
+		"$pkgdir"/etc/systemd/system/nexusq-nfc.service
+	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-nfc.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-nfc.service
 	# Disable systemd-nsresourced via a low-priority preset (NOT a /dev/null mask,
 	# which makes preset-all warn). See the .preset file header for the ordering.
 	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
@@ -369,6 +382,8 @@ SKIP  91-pulseaudio-hdmi-ignore.rules
 SKIP  92-steelhead-avr-keyboard.rules
 SKIP  labwc-rc.xml
 SKIP  nq-vol
+SKIP  nexusq-nfc-send
+SKIP  nexusq-nfc.service
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf

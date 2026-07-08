@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <!-- HCE card emulation: receive a short text from the Nexus Q reader over NFC. -->
+    <uses-permission android:name="android.permission.NFC"/>
+    <!-- required=false so the app still installs on phones without NFC/HCE (it is
+         primarily a LAN companion); the code guards every NFC access. -->
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false"/>
     <application
         android:label="nexusQ-reloaded"
         android:name="${applicationName}"
@@ -30,6 +35,20 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- HCE service: emulates a card under AID F0010203040506 so the Nexus Q
+             (acting as the NFC reader) can push a short UTF-8 text to the phone. -->
+        <service
+            android:name=".NqHceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/apduservice"/>
+        </service>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

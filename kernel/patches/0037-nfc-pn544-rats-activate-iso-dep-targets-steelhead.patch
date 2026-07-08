@@ -1,0 +1,48 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] nfc: pn544: RATS-activate all ISO-DEP targets, not just DESFire
+
+pn544_hci_ready() disables the reader firmware's ISO 14443-4 auto-activation
+(PN544_RF_READER_A_AUTO_ACTIVATION written 0x00), so layer-4 activation is the
+driver's job: it must send an explicit RATS via CONTINUE_ACTIVATION before a
+WR_XCHG_DATA I-block can reach an ISO-DEP target. pn544_hci_complete_target_
+discovered() only did this for one card (Mifare DESFire, sens_res == 0x4403),
+per its own TODO. Every other ISO-DEP target -- including an Android phone in
+Host Card Emulation (ATQA 0x0004 / SAK 0x20) -- was therefore transceived while
+still in layer-3 state, and the firmware answered ANY_E_NOK; the phone entered
+card emulation (wakelock) but never received the SELECT APDU (processCommandApdu
+was never called).
+
+Trigger CONTINUE_ACTIVATION for any target that advertises ISO 14443-4 (SAK bit
+5 set; target->sel_res is populated from the reader-A SAK by the HCI core),
+keeping the DESFire ATQA match as a belt-and-suspenders. This makes the Nexus Q
+able to read/exchange APDUs with modern HCE phones, which is what the tap-to-
+send feature needs. The chip already implements reader-side ISO-DEP (DESFire
+works through this exact path); it only needed to be told to activate layer 4.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ drivers/nfc/pn544/pn544.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+--- a/drivers/nfc/pn544/pn544.c
++++ b/drivers/nfc/pn544/pn544.c
+@@ -556,10 +556,16 @@
+ 		}
+ 	} else if (target->supported_protocols & NFC_PROTO_ISO14443_MASK) {
+ 		/*
+-		 * TODO: maybe other ISO 14443 require some kind of continue
+-		 * activation, but for now we've seen only this one below.
++		 * AUTO_ACTIVATION is disabled in pn544_hci_ready(), so ISO 14443-4
++		 * (ISO-DEP) targets must be layer-4 activated here with an explicit
++		 * RATS (CONTINUE_ACTIVATION); otherwise WR_XCHG_DATA hits a layer-3
++		 * target and the firmware returns ANY_E_NOK. The original code only
++		 * did this for Mifare DESFire (sens_res 0x4403); do it for every
++		 * ISO-DEP target (SAK bit 5 set) so we can also transceive with
++		 * Android Host Card Emulation (ATQA 0x0004 / SAK 0x20).
+ 		 */
+-		if (target->sens_res == 0x4403)	/* Type 4 Mifare DESFire */
++		if ((target->sel_res & 0x20) ||	/* ISO 14443-4 / ISO-DEP */
++		    target->sens_res == 0x4403)	/* Type 4 Mifare DESFire */
+ 			r = nfc_hci_send_cmd(hdev, NFC_HCI_RF_READER_A_GATE,
+ 			      PN544_RF_READER_A_CMD_CONTINUE_ACTIVATION,
+ 			      NULL, 0, NULL);

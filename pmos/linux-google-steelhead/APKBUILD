@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=36
+pkgrel=37
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -67,6 +67,7 @@ source="
 	0034-ARM-steelhead-no-hw-breakpoint-hs-debug-locked.patch
 	0035-ARM-l2c-downgrade-omap4-aux-modify-notice.patch
 	0036-Bluetooth-btbcm-recognize-bcm4330-4330a0-placeholder.patch
+	0037-nfc-pn544-rats-activate-iso-dep-targets-steelhead.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -140,4 +141,5 @@ SKIP  0033-brcmfmac-nowarn-optional-firmware-clm-blob.patch
 SKIP  0034-ARM-steelhead-no-hw-breakpoint-hs-debug-locked.patch
 SKIP  0035-ARM-l2c-downgrade-omap4-aux-modify-notice.patch
 SKIP  0036-Bluetooth-btbcm-recognize-bcm4330-4330a0-placeholder.patch
+SKIP  0037-nfc-pn544-rats-activate-iso-dep-targets-steelhead.patch
 "

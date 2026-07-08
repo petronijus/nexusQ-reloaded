@@ -28,3 +28,4 @@ enable nexusq-control.service
 enable nexusqd.service
 enable nq-healthd.service
 enable nexusq-usb-gadget.service
+enable nexusq-nfc.service

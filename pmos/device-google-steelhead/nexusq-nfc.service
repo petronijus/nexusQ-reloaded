@@ -1,0 +1,27 @@
+[Unit]
+Description=Nexus Q NFC tap-to-send (reverse-HCE reader -> companion app)
+Documentation=file:///usr/bin/nexusq-nfc-send
+# nfc0 (pn544) probes early in boot; start late and self-heal if it is not
+# ready yet. This daemon OWNS the kernel NFC device (raw PF_NFC netlink +
+# ISO-DEP socket), so neard must NOT run alongside it — neard is intentionally
+# not installed on the image.
+After=multi-user.target
+
+[Service]
+Type=simple
+# The phone runs the companion app's HostApduService (HCE); this reader (the Q
+# is the ISO-DEP reader) SELECTs our AID and pushes NQ_NFC_MESSAGE on each tap,
+# once per tap (re-arms when the phone leaves the field). See nq-nfc-send.py.
+Environment=NQ_NFC_LOOP=1
+# quote the value: systemd splits an unquoted Environment= on whitespace,
+# which would truncate a multi-word message to its first word.
+Environment="NQ_NFC_MESSAGE=Ahoj z Nexus Q!"
+ExecStart=/usr/bin/nexusq-nfc-send
+Restart=always
+RestartSec=5
+# Continuous NFC polling is low priority next to audio on this OMAP4.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
