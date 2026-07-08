@@ -2,7 +2,7 @@
 # kernel frame channel. Built for the target by pmbootstrap (armv7/musl).
 pkgname=nexusqd
 pkgver=0.1.0
-pkgrel=7
+pkgrel=8
 pkgdesc="Nexus Q LED ring daemon (steelhead-avr)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="armv7"
@@ -11,7 +11,9 @@ license="GPL-2.0-only"
 # plugin (`arecord -D pulse`) to capture PA's default SOURCE (kept pointed at the
 # active sink's .monitor by nexusq-control), so it follows the selected output and
 # reacts to any input. The old snd-aloop loopback tap is vestigial (see audio.h).
-depends="alsa-utils"
+# pulseaudio-utils: `pactl list short sink-inputs` gates the tap on a live playback
+# stream so PA can suspend the sink at idle (idle-CPU fix, see src/audio.c).
+depends="alsa-utils pulseaudio-utils"
 options="!check"   # unit tests run on the host CI, not in the cross build
 # Source files are staged flat next to this APKBUILD by docker-build.sh
 # (from userspace/nexusqd/{src,include,Makefile,...}); prepare() restores the tree.

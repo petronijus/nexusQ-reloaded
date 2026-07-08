@@ -2,6 +2,7 @@
 #ifndef NEXUSQD_AUDIO_H
 #define NEXUSQD_AUDIO_H
 #include <stdint.h>
+#include <sys/types.h>   /* pid_t */
 
 /* Plan 3b audio tap. The original used android.media.audiofx.Visualizer (a system
  * service) to capture the output mix; on postmarketOS the equivalent is a
@@ -35,7 +36,18 @@
 /* mean(|sample|/32768) over n S16 samples, in [0,1]; 0 if n<=0. (pure) */
 float audio_mean_abs(const int16_t *samples, int n);
 /* spawn arecord on AUDIO_DEVICE; return a non-blocking read fd for raw S16_LE
- * PCM, or -1 on failure. */
-int   audio_open(void);
+ * PCM, or -1 on failure, and store the arecord child pid in *pid (or -1) so
+ * audio_close() can terminate it. */
+int   audio_open(pid_t *pid);
+/* stop the tap: SIGTERM the arecord child (*pid) and close the read fd (*fd).
+ * Closing the read end also makes arecord die on its next write (SIGPIPE) even
+ * if the pid is stale/racy — arecord writes every capture period, so it exits
+ * within ~one period regardless. Safe with *fd<0 / *pid<0. Resets *fd and *pid. */
+void  audio_close(int *fd, pid_t *pid);
+
+/* Sink-input gate (idle-CPU fix, see audio.c): run `pactl list short sink-inputs`
+ * and return the number of real PA playback streams (non-empty output lines), or
+ * 0 if pactl fails / PulseAudio is down (safe: no streams -> keep the tap off). */
+int   pa_sink_inputs_active(void);
 
 #endif

@@ -38,6 +38,22 @@
  * (an actively animating frame already writes on every tick via the memcmp). */
 #define AVR_KEEPALIVE_S 1.0
 
+/* PA sink-input gate (idle-CPU fix). The arecord visualizer tap is an UNCORKED
+ * PA source-output on the active sink's `.monitor`; while it runs it keeps that
+ * sink out of suspend-on-idle, so at SILENCE the tas5713 sink stays IDLE
+ * (clocked) instead of SUSPENDED and PA+arecord burn ~10% CPU on this weak
+ * OMAP4 doing nothing (top idle-heat contributor). Fix: only run the tap while a
+ * real playback stream (a PA *sink-input*) exists — then PA suspends the sink at
+ * true idle (CPU -> ~0, like the untapped spdif) yet the LED still reacts on
+ * play. The gate signal is the sink-input COUNT, never captured silence: a quiet
+ * passage / paused-connected stream still has a sink-input, so the tap stays on
+ * through it. To keep idle overhead near zero we run `pactl` only at a possible
+ * transition — while the tap is OFF (watch for a stream starting) and while it is
+ * ON but raw-silent for TAP_QUIET_S (watch for the stream ending); while music
+ * actually flows we never poll. */
+#define PA_POLL_S    1.5   /* min seconds between sink-input re-counts (at a transition) */
+#define TAP_QUIET_S  4.0   /* raw-silent this long while tapping -> re-check if the stream ended */
+
 /* Compositor layers, by priority (matches the original arbitration):
  *   10  reaction   — volume overlay (Plan 2b), active only during the overlay
  *    8  manual     — CLI/socket override (set/theme/off), off until used (our feature)
@@ -101,11 +117,13 @@ int main(void) {
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
                                  * (companion `brightness N` over the control socket) */
 
-    /* Plan 3b audio: spawn arecord on the ALSA loopback, feed PCM segments to the
-     * AudioCapture port (volume/FFT/beat); the music scene reacts and the
-     * screensaver fades when getVolume >= 0.01. */
-    signal(SIGCHLD, SIG_IGN);   /* reap arecord automatically if it exits */
-    int afd = audio_open();
+    /* Plan 3b audio: spawn `arecord -D pulse` to tap PA's default source, feed PCM
+     * segments to the AudioCapture port (volume/FFT/beat); the music scene reacts
+     * and the screensaver fades when getVolume >= 0.01. The tap is NOT opened here:
+     * it is gated on a live PA sink-input (see PA_POLL_S above) so it stays off at
+     * idle and PA can suspend the sink. */
+    signal(SIGCHLD, SIG_IGN);   /* reap arecord/pactl automatically when they exit */
+    int afd = -1; pid_t apid = -1;
     struct audio_state ac; audiocap_init(&ac);
     struct music music; music_init(&music, (uint64_t)(start * 1e9));
     struct music_layer ml = { &music, 0.0f };
@@ -136,6 +154,9 @@ int main(void) {
     uint8_t lastpk[RING*3] = {0}, pk[RING*3];
     double next_frame = now_s();   /* monotonic render deadline (decouples fps from audio) */
     double afd_retry = 0.0;        /* next time to re-spawn arecord after it died */
+    int    tap_should_run = 0;     /* a real PA playback stream (sink-input) exists -> tap on */
+    double pa_poll = 0.0;          /* next PA sink-input re-count (gated; 0 = check now) */
+    double quiet_since = -1.0;     /* when the raw capture went silent while tapping (-1 = not) */
 
     /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
      * ready, then ping WATCHDOG=1 from the render loop below. A *hang* in that
@@ -146,11 +167,35 @@ int main(void) {
     double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
     double last_avr_push = 0.0;    /* last AVR frame commit — drives the keepalive re-push */
     for (;;) {
-        /* arecord (-D pulse) exits immediately if PulseAudio is not up yet (e.g.
-         * early boot) or the device is busy; the loop below then closes afd. Re-spawn
-         * it periodically so audio recovers once PA is available, without
-         * busy-spinning on a dead pipe in the meantime. */
-        if (afd < 0 && now_s() >= afd_retry) { afd = audio_open(); afd_retry = now_s() + AUDIO_RESPAWN_S; }
+        /* PA sink-input gate (idle-CPU fix — see PA_POLL_S at the top). Re-count PA
+         * playback streams only at a possible transition: while the tap is OFF (a
+         * stream may have started) or while it is ON but has been raw-silent for
+         * TAP_QUIET_S (the stream may have ended). While music flows we never poll. */
+        {
+            double nowg = now_s();
+            int poll_due = 0;
+            if (!tap_should_run)
+                poll_due = nowg >= pa_poll;                       /* watch for a stream starting */
+            else if (quiet_since >= 0.0 && nowg - quiet_since >= TAP_QUIET_S)
+                poll_due = nowg >= pa_poll;                       /* raw-silent a while: ended? */
+            if (poll_due) {
+                tap_should_run = pa_sink_inputs_active() > 0;
+                pa_poll = nowg + PA_POLL_S;
+            }
+            if (tap_should_run) {
+                /* (re)spawn arecord if it should be tapping but isn't yet
+                 * (intentionally stopped, died, or PA was late at boot) — bounded
+                 * to one short-lived arecord per AUDIO_RESPAWN_S, never a busy-spin. */
+                if (afd < 0 && nowg >= afd_retry) {
+                    afd = audio_open(&apid);
+                    afd_retry = nowg + AUDIO_RESPAWN_S;
+                }
+            } else if (afd >= 0) {
+                /* no stream -> stop the tap so PA suspends the sink (CPU -> ~0) */
+                audio_close(&afd, &apid);
+                monofill = 0; quiet_since = -1.0;
+            }
+        }
 
         struct pollfd pfds[3]; int np = 0;
         int ki = -1, ai = -1;
@@ -264,7 +309,9 @@ int main(void) {
              * a HUP/ERR fd keeps poll() returning instantly, which free-runs the
              * loop at ~90% CPU. Close it; the top-of-loop re-spawn retries later. */
             if (dead || (pfds[ai].revents & (POLLHUP | POLLERR))) {
-                close(afd); afd = -1; ai = -1; monofill = 0;
+                /* arecord already exited (auto-reaped by SIGCHLD=SIG_IGN), so just
+                 * drop the fd — do NOT kill apid (its pid may already be reused). */
+                close(afd); afd = -1; apid = -1; ai = -1; monofill = 0;
                 afd_retry = now + AUDIO_RESPAWN_S;
             }
         }
@@ -299,6 +346,17 @@ int main(void) {
         ml.alpha = child_alpha;
 
         int audio_on = vol >= SS_AUDIO_THRESH;
+        /* Track how long the raw capture has been silent WHILE the tap runs, so the
+         * gate above knows when to re-count sink-inputs. `vol` here is post-noise-
+         * gate (audiocap zeroes it below AGC_NOISE_FLOOR), so vol==0 means true raw
+         * silence, not a quiet-but-present passage (AGC amplifies that to ~target).
+         * This is only a re-check TRIGGER — the authoritative stop signal remains the
+         * sink-input count, so a quiet passage never actually stops the tap. */
+        if (tap_should_run && afd >= 0 && !audio_on) {
+            if (quiet_since < 0.0) quiet_since = now;
+        } else {
+            quiet_since = -1.0;
+        }
         if (audio_on != prev_audio) {
             fprintf(stderr, "[nexusqd] audio %s (vol=%.3f) scene=%d\n",
                     audio_on ? "DETECTED" : "silent", vol, music_scene(&music));
