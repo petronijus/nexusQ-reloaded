@@ -4,7 +4,21 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — framed for v1.6.15
+## [1.7.0] — 2026-07-08
+
+> **v1.7.0 — NFC tap-to-send: tap a phone on the dome and the Nexus Q hands it a
+> short message over NFC, shown in the companion app.** This is the tagged
+> release; it bundles everything built-but-never-tagged since **v1.6.10** (the
+> last tag): the new **NFC tap-to-send** headline, the full **PA-centric audio
+> system** (v1.6.14–16 — multi-input → PulseAudio → app-selectable output, LED
+> AGC, SPDIF 48 kHz, the McBSP2 pinmux that first made the speaker audible), the
+> **physical volume dial → PulseAudio + tray icon** (v1.6.16), the companion
+> app's **auto-reconnect on resume/drop**, ethernet-as-default + the desktop-audio
+> sink fix (v1.6.12). **Package state shipping in v1.7.0:**
+> `device-google-steelhead` **r33**, `linux` **r37** (37 patches — new pn544 RATS
+> fix 0037), `nexusqd` **r7**, `nexusq-control` **r7**, plus the Flutter companion
+> app with native HCE. NFC was VERIFIED end-to-end on device 2026-07-08; full
+> record `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
 
 > **v1.6.15 — the PA-centric audio system: multi-input → PulseAudio hub →
 > app-selectable output, with a volume-independent LED visualizer.** Framed for
@@ -42,6 +56,86 @@ All notable changes to Nexus Q Reloaded. Format follows
 > default sink). Notes:
 > `docs/2026-07-07-wifi-characterization-and-ethernet-default.md`,
 > `docs/2026-07-07-desktop-audio-pulseaudio-fix.md`.
+
+### Added — v1.7.0: NFC tap-to-send (reverse-HCE, Q → phone)
+
+> The v1.7.0 headline. **VERIFIED end-to-end on device 2026-07-08.** Package
+> delta: kernel `linux` **r37** (new patch **0037**), `device-google-steelhead`
+> **r33**, companion app (native Kotlin HCE + Dart listener). Full investigation
+> and design: `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
+
+- **Tap the dome with your phone → the Nexus Q pushes a short UTF-8 text to it
+  over NFC**, surfaced as a Holo-dark SnackBar in the companion app. Sends **once
+  per tap** (re-arms when the phone leaves the field). The payload is a static
+  greeting for now (`NQ_NFC_MESSAGE`, default `Ahoj z Nexus Q!`).
+- **Why it had to be reverse-HCE (the hard part).** The 2011 **PN544 canNOT be a
+  passive tag / host-card-emulate** — its card-emulation RF path routes only to a
+  hardware Secure Element over SWP, which this device does not have (host CE only
+  arrived with the next chip gen PN547 + Android 4.4); and Google removed **Android
+  Beam** (NFC P2P push) in Android 14. So "tap a bare phone and it reads the Q like
+  a sticker" is impossible on this hardware, and passive stickers were rejected.
+  The working path inverts the roles: the **phone runs a HostApduService (HCE**,
+  fully supported on modern Android), the **Q is the ISO-DEP reader**, and data
+  flows Q→phone as APDUs. Requires the companion app installed + foreground.
+- **The key kernel fix — pn544 RATS-activate all ISO-DEP targets (patch 0037,
+  `linux` r37).** The mainline pn544 driver only sent RATS (ISO 14443-4 layer-4
+  activation, via `CONTINUE_ACTIVATION`) for Mifare DESFire (`sens_res == 0x4403`)
+  per its own TODO; an Android HCE phone (**ATQA 0x0004 / SAK 0x20**) never matched,
+  so the reader transceived against a still-layer-3 target and the chip returned
+  `ANY_E_NOK` — the phone entered card emulation but `processCommandApdu` was never
+  called. Fix: RATS-activate **any** ISO-DEP target (`target->sel_res & 0x20`),
+  keeping the DESFire ATQA match as belt-and-suspenders. This was THE missing piece
+  (the chip already does reader-side ISO-DEP — DESFire works through the same path).
+- **Device side (`device-google-steelhead` r33):** `/usr/bin/nexusq-nfc-send` — a
+  Python reverse-HCE reader daemon (raw `PF_NFC` generic-netlink poll on `nfc0` +
+  an ISO-DEP `NFC_SOCKPROTO_RAW` socket; custom **AID `F0010203040506`**; SELECT +
+  payload APDU `80 10 00 00 <Lc> <utf8>`) run by `nexusq-nfc.service`
+  (`NQ_NFC_LOOP=1`, `NQ_NFC_MESSAGE`, enabled in `nexusq.preset`). **neard is NOT
+  installed** — the daemon owns the kernel NFC device directly. The reader is a
+  working **Python prototype** (a C rewrite is possible future polish).
+- **Companion app (Flutter) side:** native Kotlin `NqHceService` (HostApduService,
+  AID `F0010203040506`, category `other`, **`android:shouldDefaultToObserveMode="false"`
+  — CRUCIAL on Android 15**, which otherwise defaults HCE to observe-mode and won't
+  answer APDUs); `HceBridge` (persists the last message with **`.commit()` — NOT
+  `apply()`**, which lost the message when the service was killed before the async
+  flush — and delivers it to Flutter); `MainActivity` Event/MethodChannel +
+  `setPreferredService` on resume (unambiguous routing, no app-chooser); Dart
+  `HceListener` showing the SnackBar. **VERIFIED trail:** `NqHceService: received
+  text` → `HceBridge: post: persisted (sink=true)` → `flutter: [HCE] show
+  (messenger=true)` → the user saw the SnackBar.
+- **Usage gotchas (durable):** tap **and hold steady ~5–10 s** — RATS NOKs if the
+  phone moves mid-activation; the companion app must be **foreground** (preferred
+  HCE routing) with the **screen on**. Reader dev/test note: `systemctl stop neard`
+  was needed only when neard was live-installed — the shipped image has no neard.
+
+### Deferred / future — NFC (honest, not in v1.7.0)
+- **Payload is a static greeting** (`NQ_NFC_MESSAGE`). The useful next step is
+  sending the device's **connection info** (IP / mDNS) so the app could
+  auto-connect — the original "tap to onboard" intent — but that needs app-side
+  parsing plus mDNS re-discovery (also still owed to the app reconnect path).
+- **Q-side reader is a Python prototype** — a C daemon would be cleaner for the
+  shipped image.
+- **Continuous NFC polling keeps the RF field active** (minor power/thermal on
+  this thin-headroom OMAP4); revisit if it matters.
+
+### Added — v1.6.16: physical volume dial → PulseAudio + tray icon
+
+- **The Nexus Q's capacitive volume dial now drives PulseAudio** (was ALSA
+  softvol) and the LXQt/labwc tray volume icon follows the active output
+  selection. Device pkg **r32**, kernel + labwc glue. Built + flashed 2026-07-07.
+
+### Changed — companion app: auto-reconnect on resume/drop
+
+- **The app now recovers a dropped/backgrounded connection with no app kill.**
+  It previously connected once and never recovered — when Android backgrounded it
+  and tore down (or half-opened) the TCP socket, returning left a dead connection.
+  New: idempotent socket teardown + per-socket done/error guards (a stale socket's
+  late close can't kill a fresh connection), a foreground-only backoff reconnect
+  supervisor (1→2→4→8→15 s cap) with full re-hydration (subscribe→getState→
+  listOutputs) on every reconnect, a resume-time active `getState` probe (a
+  half-open post-doze socket looks alive until written to), a 25 s heartbeat, and a
+  Holo-dark reconnecting/disconnected banner. **Verified on-device:** background→
+  resume re-attaches with no app kill.
 
 ### Added — v1.6.15: the PA-centric audio system (multi-input → PulseAudio → selectable output)
 
@@ -152,6 +246,13 @@ All notable changes to Nexus Q Reloaded. Format follows
   speaker safe-disconnected, and check whether the 48 kHz pin already reduced it.
 
 ### Fixed
+- **Fast kernel-only build path no longer hangs at "Entering fakeroot…"**
+  (`scripts/build-kernel-boot.sh`, new Phase 6b2). Under `--no-cross` the kernel
+  `package()` runs in the armv7 chroot where abuild's `faked` busy-loops forever
+  under qemu — the same trap already fixed for the full `docker-build.sh`. The fix
+  patches pmbootstrap `backend.py` to run **abuild as root** (`-F`,
+  `HOME=/home/pmos`) so `FAKEROOT=""` skips fakeroot and produces correct
+  root:root files. (Needed to build the pn544 RATS kernel `r37` on the fast path.)
 - **Desktop audio: red-cross "no sound sink" on the LXQt/labwc Wayland desktop
   fixed** (diagnosed + fixed live 2026-07-07, device pkg **r29→r30**; verified
   across a reboot). Two layers:

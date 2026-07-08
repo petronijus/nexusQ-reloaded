@@ -123,15 +123,27 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
     is routed to the pin. Verify the **IOPAD mux** (`mmio r 0x4A1000xx` / a live
     stock `omap_mux` dump) before trusting a gpio; a healthy sibling can mask a
     completely unmuxed control line. Same failure class hit NFC and ethernet.
-- **NFC** (NXP PN544, i2c 2-0028) — **works since `#29` (2026-07-03**, the
+- **NFC** (NXP PN544, i2c 2-0028) — the chip **works since `#29` (2026-07-03**, the
   pinmux fix; on older kernels the node is disabled/mis-muxed):
   `ls /sys/class/nfc/` → `nfc0` present; dmesg should show
   `NFC: nfc_en polarity : active high` **without** a "Could not detect …
   fallback" line (the fallback line = the pre-fix symptom). RF path exercised
-  2026-07-04 (netlink poller: repeated `NFC_EVENT_TARGETS_FOUND` + card data
-  frames in dmesg). ⚠️ Do NOT kill an active NFC poll session mid-poll
-  (`timeout`/harness kills) — it wedges the pn544 HCI state until reboot
-  (known fragility; the follow-up is a long-lived NFC userspace). See
+  2026-07-04 (netlink poller: repeated `NFC_EVENT_TARGETS_FOUND` + card data frames).
+  🆕 **NFC tap-to-send SHIPPED v1.7.0 (device r33, kernel r37):** `nexusq-nfc.service`
+  runs `/usr/bin/nexusq-nfc-send`, a **reverse-HCE reader daemon** that OWNS `nfc0`
+  (raw `PF_NFC` netlink poll + ISO-DEP raw socket) and pushes `NQ_NFC_MESSAGE` to a
+  phone running the companion app's HostApduService on each tap (AID `F0010203040506`).
+  **Checks:** `systemctl is-active nexusq-nfc` = active; its journal shows the poll
+  loop (`[nfc] daemon: listening…`) and, on a real tap, `*** SENT … phone received
+  it ***`. **neard is intentionally NOT installed** — the daemon owns the device; if
+  a diag needs raw NFC, `systemctl stop nexusq-nfc` first (don't run a second NFC
+  consumer against `nfc0`). The enabling kernel change is **patch 0037**: the pn544
+  driver now RATS-activates **any** ISO-DEP target (`sel_res & 0x20`), not just
+  Mifare DESFire — without it a modern **Android HCE phone (ATQA 0x0004 / SAK 0x20)**
+  stays layer-3 and the chip returns `ANY_E_NOK` (phone never gets the SELECT APDU).
+  ⚠️ Do NOT kill an active NFC poll session mid-poll (`timeout`/harness kills) — it
+  wedges the pn544 HCI state until reboot (known fragility). See
+  `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:

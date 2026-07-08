@@ -160,3 +160,30 @@ graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
 
 The bridge is a small standalone daemon (keeps the nexusqd render loop lean); it owns the LAN
 socket + mDNS + ALSA + librespot glue and talks to nexusqd over the existing Unix socket.
+
+## 7. NFC tap-to-send (out-of-band — NOT over this TCP protocol) — v1.7.0
+
+Separate from the LAN control channel above: when you **tap the phone on the Q's
+dome**, the Q sends a short UTF-8 text to the phone over **NFC**, shown as a SnackBar
+in the app. This does not use the TCP/JSON envelope; it is a distinct NFC APDU link.
+
+- **Direction / roles: reverse-HCE.** The PN544 (2011) can't host-card-emulate (its
+  card-emulation RF path needs a hardware Secure Element this device lacks) and Android
+  Beam is gone, so the **phone runs a HostApduService (HCE)** and the **Q is the ISO-DEP
+  reader** (device daemon `nexusq-nfc-send`). Data flows **Q → phone** as APDUs.
+- **AID:** `F0010203040506` (custom, category `other`).
+- **Wire protocol (both ends implement exactly this):**
+  1. `SELECT` by AID: `00 A4 04 00 07 F0 01 02 03 04 05 06 00` → phone answers `90 00`
+     iff the AID matches (else `6A82`).
+  2. Payload: `80 10 00 00 <Lc> <Lc UTF-8 bytes>` → phone extracts the text, shows it,
+     answers `90 00`. Unknown INS → `6D00`.
+- **App side:** `NqHceService` (HostApduService) + `apduservice.xml` — note
+  **`android:shouldDefaultToObserveMode="false"`** (Android 15 otherwise defaults HCE to
+  observe-mode and never answers), `requireDeviceUnlock/ScreenOn="false"`. `HceBridge`
+  persists the last message with **`.commit()` (not `apply()`)** and hands it to Flutter;
+  `MainActivity` claims `setPreferredService` while foreground; `HceListener` renders it.
+- **Requires** the companion app **installed + foreground**, screen on; **tap and hold
+  steady ~5–10 s** (the reader's RATS activation NOKs if the phone moves).
+- **Payload today** is a static greeting (`NQ_NFC_MESSAGE`). Reserved next step: send the
+  device's connection info (IP / mDNS) so the app could auto-connect (tap-to-onboard).
+- Full design + the enabling kernel fix: `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.

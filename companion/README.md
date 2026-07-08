@@ -27,7 +27,12 @@ SPDIF / HDMI — `listOutputs`/`setOutput`, a Holo-dark segmented control · v1.
 was one ALSA softvol), **LED color theme (breathing) + brightness**, the **music
 visualisation**, and shows **now-playing**. _(Since v1.6.15 audio is PA-centric:
 librespot is a PulseAudio input and the output is the PA default sink; see
-`../docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+`../docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.)_ _(v1.7.0 adds two
+things: an **NFC tap-to-send receiver** — the app runs a HostApduService so the Q
+(the NFC reader) can push a short text onto the phone on a tap, shown as a SnackBar,
+see `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` + [`PROTOCOL.md`](PROTOCOL.md) §7;
+and **auto-reconnect on resume/drop** so backgrounding the app no longer needs an
+app-kill to recover the connection.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

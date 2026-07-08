@@ -167,6 +167,16 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
 - **`ss` is NOT installed on the device** — use **`netstat -tlnp`** to check listening
   sockets (a `ss`-not-found caused a long "no listener" misdiagnosis).
+- **NFC tap-to-send (v1.7.0, device r33 / kernel r37)** — the PN544 chip works since
+  `#29` (2026-07-03 pinmux fix); tap-to-send shipped v1.7.0. `nexusq-nfc.service` runs
+  `/usr/bin/nexusq-nfc-send`, a **reverse-HCE reader daemon** that OWNS `nfc0` (the Q is
+  the ISO-DEP reader, the phone runs the companion HCE service; AID `F0010203040506`).
+  **Check:** `systemctl is-active nexusq-nfc` = active + `ls /sys/class/nfc/` → `nfc0`.
+  **neard is NOT installed** (the daemon owns the device — don't start a second NFC
+  consumer against `nfc0`; `systemctl stop nexusq-nfc` first if raw NFC is needed).
+  Enabler: kernel **patch 0037** RATS-activates any ISO-DEP target (was DESFire-only),
+  so a modern HCE phone (SAK 0x20) is reachable — without it the chip returns
+  `ANY_E_NOK`. See `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
 - **HDMI-audio card / PulseAudio** — the `omap-hdmi-audio` ALSA card is a
   snd-soc-dummy-DAI (not a usable sink; HDMI is desktop video only). Since
   **v1.6.9** PA ignores it via a `PULSE_IGNORE` udev rule, so

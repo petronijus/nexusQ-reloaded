@@ -4,7 +4,73 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-07 (evening, latest): **PA-centric audio system — v1.6.15** (BUILT, flash-verify PENDING)
+## Session 2026-07-08 (latest): **NFC tap-to-send — v1.7.0** (VERIFIED end-to-end on device)
+
+✅ **v1.7.0 is the tagged release** — it bundles everything built-but-never-tagged
+since **v1.6.10** (the audio v1.6.14–16 work, ethernet-default + desktop-audio fix
+v1.6.12, the volume dial → PA v1.6.16, companion auto-reconnect) **plus the new
+headline: NFC tap-to-send.** Package state: `device-google-steelhead` **r33**,
+`linux` **r37** (37 patches — new pn544 RATS 0037), `nexusqd` **r7**,
+`nexusq-control` **r7**, companion app with native HCE. Full record:
+`docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
+
+**What it does:** tap the dome with your phone → the Q pushes a short UTF-8 text
+to it over NFC, shown as a SnackBar in the companion app. Sends **once per tap**.
+
+**Why it had to be reverse-HCE (the hard part):**
+- The 2011 **PN544 cannot be a passive tag / host-card-emulate** — its
+  card-emulation RF path routes only to a hardware Secure Element over SWP, which
+  this device lacks (host CE arrived with PN547 + Android 4.4). And Google removed
+  **Android Beam** (NFC P2P push) in Android 14. So "tap a bare phone, it reads the
+  Q like a sticker" is impossible here; passive stickers were rejected.
+- Working path: the **phone runs a HostApduService (HCE)**, the **Q is the ISO-DEP
+  reader**, data flows Q→phone as APDUs. Needs the companion app installed + foreground.
+
+**THE kernel fix (patch 0037, `linux` r37):** the mainline pn544 driver only sent
+RATS (ISO 14443-4 layer-4 activation via `CONTINUE_ACTIVATION`) for Mifare DESFire
+(`sens_res == 0x4403`); an Android HCE phone (**ATQA 0x0004 / SAK 0x20**) never
+matched, so the reader transceived against a layer-3 target and the chip returned
+`ANY_E_NOK` (phone entered card emulation but never got the SELECT APDU). Fix:
+RATS-activate **any** ISO-DEP target (`target->sel_res & 0x20`), DESFire match kept
+as belt-and-suspenders. This was THE missing piece.
+
+**Device side (r33):** `/usr/bin/nexusq-nfc-send` — Python reverse-HCE reader
+daemon (raw `PF_NFC` netlink poll on `nfc0` + ISO-DEP raw socket; **AID
+`F0010203040506`**; SELECT + payload APDU `80 10 00 00 <Lc> <utf8>`) run by
+`nexusq-nfc.service` (`NQ_NFC_LOOP=1`, `NQ_NFC_MESSAGE`, enabled in `nexusq.preset`).
+**neard NOT installed** — the daemon owns the NFC device. Reader is a **prototype**.
+
+**Companion (Flutter) side:** native Kotlin `NqHceService` (HostApduService, AID
+`F0010203040506`, category `other`, **`android:shouldDefaultToObserveMode="false"`
+— CRUCIAL on Android 15** which otherwise defaults HCE to observe-mode and won't
+answer APDUs); `HceBridge` (persists via **`.commit()` NOT `apply()`** — apply lost
+the message when the service was killed before the async flush); `MainActivity`
+Event/MethodChannel + `setPreferredService` on resume; Dart `HceListener` SnackBar.
+**VERIFIED trail:** `NqHceService: received text` → `HceBridge: post: persisted
+(sink=true)` → `flutter: [HCE] show (messenger=true)` → user saw the SnackBar.
+
+**Usage gotchas (durable):** tap **and hold steady ~5–10 s** (RATS NOKs if the
+phone moves mid-activation); companion app **foreground**, **screen on**. Reader
+dev/test: `systemctl stop neard` only if neard was live-installed (image has none).
+
+**Build note:** the fast kernel path (`scripts/build-kernel-boot.sh`) got the
+abuild-as-root fix (new Phase 6b2) so it no longer hangs at "Entering fakeroot…"
+under `--no-cross` — same trap already fixed in `docker-build.sh`.
+
+**Deferred / future (honest):**
+1. **NFC payload is a static greeting** (`NQ_NFC_MESSAGE`). Next step: send the
+   device's connection info (IP/mDNS) so the app could auto-connect (the original
+   "tap to onboard" intent) — needs app-side parsing + mDNS re-discovery (also
+   still owed to the app-reconnect path).
+2. **Q-side reader is a Python prototype** — a C daemon would be cleaner for the image.
+3. **Continuous NFC polling keeps the RF field active** (minor power/thermal);
+   revisit if it matters.
+4. **Audio polish still open** (from the v1.6.15 session below): volume gain-cap
+   (amp hot), speaker crackle (McBSP2/TAS5713, from measurement).
+
+---
+
+## Session 2026-07-07 (evening): **PA-centric audio system — v1.6.15** (BUILT, flash-verify PENDING)
 
 ✅ **BUILT 2026-07-07 and about to be flashed — each capability confirmed live
 during bring-up; the final clean-flash acceptance sweep is still PENDING.**

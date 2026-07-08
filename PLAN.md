@@ -3,6 +3,19 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-08 — v1.7.0 (tagged release): NFC TAP-TO-SEND.** Tap a phone on the
+> dome → the Q pushes a short text over NFC, shown in the companion app. Uses
+> **reverse-HCE** (the 2011 PN544 can't host-card-emulate and Android Beam is gone,
+> so the phone runs a HostApduService and the **Q is the ISO-DEP reader**). Enabler:
+> kernel **patch 0037** — the pn544 driver now RATS-activates **any** ISO-DEP target
+> (was Mifare-DESFire-only), so a modern Android HCE phone (ATQA 0x0004 / SAK 0x20)
+> is reachable. Device `nexusq-nfc-send` daemon (owns `nfc0`, neard not installed) +
+> companion native HCE. v1.7.0 also bundles the built-but-untagged work since
+> v1.6.10 (PA-centric audio v1.6.14–16, volume dial → PA, ethernet-default,
+> companion auto-reconnect). Package state: `device-google-steelhead` **r33**,
+> `linux` **r37**, `nexusqd` **r7**, `nexusq-control` **r7**. VERIFIED on device.
+> See `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
+>
 > **2026-07-06 — v1.6.10: THE BOOT LOG IS GENUINELY CLEAN (PUBLIC release in
 > progress, no tag from here).** v1.6.9 still booted with **~15 err/warn lines**;
 > v1.6.10 closes **all** of them — every one root-caused + fixed with a real fix,
@@ -216,7 +229,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | **TAS5713 amplifier** | ✅ works | _(Updated 2026-07-07, v1.6.13/v1.6.15)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed** (v1.6.0 2× bug fixed by patch 0022). **⚠️ physically SILENT until v1.6.13** — `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the amp got no clock/data/frame (`aplay` rc=0); fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed audible. Since **v1.6.15** it is one selectable **PulseAudio** output (was direct ALSA); librespot feeds PA as an input. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
 | Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). **BD_ADDR is now the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
-| NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. Tag-read test pending. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` |
+| NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | ✅ works from cold | _(✅ FULLY FIXED 2026-07-06, task #17 CLOSED — was "🟠 enumeration intermittent" 2026-07-05, briefly "CLOSED" 2026-07-04, "🟠 sw bug", and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), the "flap" was root-caused 2026-07-04 as **NM's serverless-DHCP retry loop** (fixed by baked eth0 NM profiles, device r21, v1.6.7: `no-auto-default=eth0` + `eth-lan` + `eth-direct` static + host `eth-direct-host`; `ssh root@10.42.0.2` works). The **enumeration** half was root-caused 2026-07-06 as a **pinmux miss**: `gpio_1` NENABLE = pad `kpd_col2` @ padconf `0x186`, which `ethernet_gpios` never muxed → gpiolib drove the DATAOUT latch (debugfs "asserted") but the pad stayed safe_mode → chip never powered → CCS=0 (the "0/3 vs 3/3" was stock priming, not a race). Fixed by the DTS pad mux (patch 0003, kernel `#33`, commit e33a1b4; 2500ms settle reverted as a false positive). **Gold-validated:** clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-06-eth-coldinit-resolved.md` (+ `docs/2026-07-04-ethernet-resolved-and-led-guard.md` for the NM half) |
@@ -345,8 +358,14 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       `nfc_en polarity : active high` clean, `nfc0` registered.
       See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` +
       `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §7.
-- [ ] NFC follow-up: read an actual tag (`nfc-list`/neard) to exercise the
-      RF path end-to-end.
+- [x] **NFC tap-to-send SHIPPED 2026-07-08 (v1.7.0, device r33 / kernel r37).**
+      The RF path is exercised end-to-end via **reverse-HCE** (the Q is the ISO-DEP
+      reader, the phone runs a HostApduService): `nexusq-nfc-send` daemon pushes a
+      text to the companion app on each tap. Enabler = kernel **patch 0037**
+      (RATS-activate any ISO-DEP target, not just DESFire). neard is NOT installed —
+      the daemon owns `nfc0`. See `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
+      _(Deferred: send IP/mDNS as the payload for tap-to-onboard; C-rewrite the
+      Python reader.)_
 
 ### 7. TOSLINK / SPDIF output (audio)  ✅ DONE 2026-07-07 (v1.6.13 kernel / v1.6.15 output)
 Optical out is driven by the OMAP4's own McASP block -- fully independent of
