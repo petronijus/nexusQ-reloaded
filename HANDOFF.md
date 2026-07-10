@@ -4,7 +4,123 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-08 (latest): **idle-CPU tap gating (v1.7.1, SHIPPED) + volume fix RESOLVED (v1.7.2 kernel + v1.7.3 path pin) + dial→app sync + boot-log cleanup**
+## Session 2026-07-09 (latest): **Bluetooth A2DP FIXED (BT UART max-speed, kernel 0040) + crackle ISOLATED to the output path + v1.7.4 bake reverted → v1.8.0**
+
+Full write-up: `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
+Ships as **v1.8.0** (`linux` r39 → **r40**, `device-google-steelhead` **r38** — r38
+reused from the burned v1.7.4, which was never committed/tagged).
+
+✅ **Bluetooth A2DP now reliable — ROOT CAUSE = the BT HCI UART had no `max-speed`.**
+The BCM4330 BT HCI runs over **UART2**; our DTS BT node had **no `max-speed`**, so
+`hci_bcm` left `oper_speed=0` and **never synced the host UART to the baud the BCM4330
+firmware operates at** → host/controller drift → a stream of `Bluetooth: hci0: Frame
+reassembly failed (-84)` (EILSEQ), HCI command tx timeouts, a **phantom "Connected"**
+state, and A2DP audio in **corrupt bursts** (~1 s then silence) until the phone
+dropped the link (HCI reason `0x13`). Fix: kernel patch **`0040`** sets
+`max-speed = <3000000>` (stock ran the BT UART at **3 Mbaud**; RTS/CTS already muxed in
+`uart2_pins`). **VERIFIED live** (boot.img flash): reassembly failures **0** (was 26+),
+controller addr correct unicast **F8:8F:CA:20:49:E5** (`local-bd-address` honoured),
+pairing + A2DP stable, user-confirmed (*"bluetooth jede, perfektni prace"*). This was
+**NOT** WiFi/BT coexistence and **NOT** HFP/SCO (both earlier wrong guesses) — it was
+the real cause of every past "BT won't stay connected / wrong state" symptom. A2DP path:
+`phone → BT → PulseAudio bluez_source (s24le/48 kHz, no resample) → looped to TAS5713`.
+
+✅ **Crackle ISOLATED to the OUTPUT path.** Bringing up A2DP gave a second, independent
+**input** (bypasses librespot + WiFi). Result: **A2DP crackles the SAME as librespot**
+→ the fault is **NOT** app/librespot/WiFi, it is the shared **PA → TAS5713 → sDMA →
+McBSP2** output path — directly confirming the 2026-07-08 bus/DMA-contention diagnosis.
+**Outstanding fix (NOT done):** OMAP4 sDMA `HIGH_PRIORITY` (`CCR_READ_PRIORITY`, `BIT(6)`
+in `drivers/dma/ti/omap-dma.c`, defined but never applied) on the McBSP2 cyclic channel.
+
+✅ **v1.7.4 bake REVERTED to a safe subset** (device r38). REMOVED: the McBSP2 THRESHOLD
+service (`nexusq-mcbsp-threshold.service` — garbled audio), the 600 ms buffer
+(`60-nexusq-latency.conf` — rejected), the RT configs (`10-nexusq-rtprio.conf` +
+`CPUSchedulingPolicy` on the user units — `214/SETSCHEDULER` crash-loop). KEPT:
+**`tsched=0`** baked into `default.pa` via the apk **trigger** (device pkg now also
+triggers on `/etc/pulse`), the **TAS5713 Speaker-unity pin**, and the **+24 dB ceiling**.
+
+⚠️ **Maturity:** the **BT fix is verified live** (boot.img flash). The **full v1.8.0
+rootfs image is BUILT + pending on-device verification** (the `tsched=0` bake + v1.7.4
+revert live in the rootfs, so they need a full flash to confirm; a build runs in
+parallel). The crackle root-cause (sDMA priority) is still the outstanding audio task.
+
+---
+
+## Session 2026-07-08: **audio crackle "lupance" DIAGNOSED = memory-bus / DMA contention (live-only mitigations; NOTHING baked/committed)**
+
+Follow-on to the volume session below. Full write-up:
+`docs/2026-07-08-audio-crackle-dma-contention.md`.
+
+⚠️ **Maturity — nothing here is shipped/baked/committed.** The tuning is
+config-persistent on the *running rootfs* (survives reboot) but a **reflash wipes
+it**; the root-cause fix is **not implemented**. The only committed+baked audio work
+of the day is the volume/dial/boot-log change (commit `2634b45`, **v1.7.3 / device
+r37**).
+
+✅ **DIAGNOSED — the Spotify-playback crackle is bus/DMA contention.** The audio
+SDMA that refills the **McBSP2 FIFO underflows in HARDWARE** when other bus masters
+(WiFi SDIO, the USB-ethernet LAN9500A, memory-heavy tasks) contend on the L3/EMIF
+interconnect. Proven: **0** PA XRUN / **0** dmesg underruns / low CPU / clean
+librespot logs (not a PA-buffer/CPU/network problem); stopping the LED tap **and**
+NFC didn't fix it; it worsens with **any** activity — even the operator's ssh over
+**ethernet** (USB on this device) breaks it, so **not WiFi-specific** — and a
+CPU+memory-bandwidth stress test made it "definitely worse". It is **below** the PA
+buffer (DMA→FIFO is hardware-timed) and **below** thread scheduling (SDMA is a DMA
+engine + hardirq; WiFi RX is softirq/NAPI, above all userspace SCHED_FIFO).
+`cpu_dma_latency=0` didn't help → arbitration, not idle-retention latency.
+
+🩹 **Live-only mitigations (config-persistent, NOT baked) → "dramatically better,
+occasional glitch remaining":** (1) **`tsched=0`** in `/etc/pulse/default.pa` — the
+biggest win (kills PA timer-scheduling periodic clicks, fixed ALSA fragments);
+(2) **~400 ms PA buffer** (`/etc/pulse/daemon.conf.d/60-nexusq-latency.conf`:
+`default-fragments=8`, `default-fragment-size-msec=50`; dome dial stays instant via
+hardware volume; 683 ms + `soxr-mq` both tried & rejected); (3) **priority** — same
+`60-*.conf` (`high-priority`, `nice-level=-11`, RT req) + a systemd drop-in
+`/etc/systemd/system/user@10000.service.d/10-nexusq-rtprio.conf`
+(`LimitRTPRIO=95`) so rtkit can grant RT. BUT PA's IO thread still only takes
+high-priority, so it was manually promoted with **`chrt -f -p 55`** (librespot 45)
+— **runtime-only, LOST on reboot**. After the user's hard-power reboot, `tsched=0` +
+buffer + `nice -11` + RTPRIO limit survive; the RT `chrt` + `cpu_dma_latency` holder
+are gone.
+
+⚠️ **Operational:** the on-device stress used **unbounded `while :;`** CPU loops →
+saturated both cores, starved sshd, locked out ssh on all transports → user
+hard-powered the box. **Future device stress must be `timeout`-bounded + niced.**
+
+⛔ **v1.7.4 bake attempt REGRESSED — the v1.7.4 artifact (device `r38`) is UNUSABLE,
+DO NOT FLASH IT.** It baked the tuning but two items are broken: (a) McBSP2
+`dma_op_mode=threshold` is **harmful** — "completely broken / interrupts exactly like
+originally" with **0 PA/dmesg XRUN** (corruption, not underrun; matches the auditor's
+channel-shift warning — threshold must NOT be used on this hardware; earlier "threshold
+helped" was confounded by RT+WiFi-PM applied together); (b) **RT via systemd
+`CPUSchedulingPolicy=rr` on the USER services crash-loops both** (`214/SETSCHEDULER …
+Operation not permitted` → PA + librespot never start → **no audio**; user services
+can't `SCHED_RR` even with `LimitRTPRIO=95` — needs `CAP_SYS_NICE`). The
+`CPUSchedulingPolicy` lines were **removed from the repo** `pulseaudio.service` /
+`librespot.service` (repo fixed) but the **v1.7.4 image still has them**. Keepers
+(live-confirmed): `tsched=0`, **WiFi runtime-PM off**, **~400 ms** buffer (600 ms adds
+LED-visualizer lag), RT via **`chrt`**. New clue: cold-boot first 1–2 s is broken then
+"catches" → **librespot ramp-up** may be a separate contributor. Current live state
+(v1.7.4 flashed then hand-tuned): `element` mode, `tsched=0`, 600 ms buffer, WiFi PM
+off, **no RT** — audio works but still interrupts.
+
+**Next:** (1) **Bluetooth A2DP sink as a DIAGNOSTIC** — play from the phone over BT
+(bypasses librespot + WiFi) to localize the fault: BT clean → source path
+(librespot/WiFi); BT also crackles → output path (PA→TAS5713→sDMA/McBSP2). Adapter
+"Google Nexus Q" (BD F8:8F:CA:20:49:E5), A2DP endpoints registered; **pairing not yet
+completing** (being debugged). (2) **The real fix — sDMA `HIGH_PRIORITY` kernel
+patch**: set `CCR_READ_PRIORITY` (`BIT(6)`, `drivers/dma/ti/omap-dma.c` — defined but
+never applied to any channel) on the McBSP2 (sig 32/tas5713) cyclic channel so audio
+reads outrank SDIO/USB at the sDMA/L3 port (`omap4_data.rw_priority=true` already
+enables the GCR path; only the per-channel bit is missing) — helps librespot AND BT AND
+any player. (3) **Fix the device package**: remove/disable
+`nexusq-mcbsp-threshold.service`, drop the 600 ms buffer to ~400 ms, and replace the
+broken user-service RT with a **root promoter** (system service that `chrt`s the PA
+`alsa-sink` + librespot threads — root can always set RT).
+
+---
+
+## Session 2026-07-08: **idle-CPU tap gating (v1.7.1, SHIPPED) + volume fix RESOLVED (v1.7.2 kernel + v1.7.3 path pin) + dial→app sync + boot-log cleanup**
 
 Follow-on to the v1.7.0 NFC session below. Full analysis:
 `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
@@ -43,9 +159,14 @@ the continuous NFC poll; cmdline dropped `earlyprintk`+`ignore_loglevel`,
 `loglevel=7`→`4` (ignore_loglevel was forcing all debug onto the HDMI console). Diag
 boot scripts left verbose intentionally.
 
-**Next:** flash v1.7.3 + full diag sweep, then investigate **audio crackling /
-"lupance" during playback** (user-flagged for after the volume work is clean — it now
-is).
+**Next:** audio crackle now diagnosed as **memory-bus / DMA contention** (see the
+2026-07-08 crackle session at the very top) — two follow-ups: (1) a **kernel
+audio-DMA-priority fix** (OMAP4 sDMA `HIGH_PRIORITY`/`DMA4_CCR`, L3/EMIF QoS,
+omap-mcbsp FIFO+PM-QoS) so the McBSP2 FIFO wins bus arbitration under contention;
+(2) **bake the live crackle tuning** (`tsched=0`, `60-nexusq-latency.conf`,
+`10-nexusq-rtprio.conf`) into the device package **+ a permanent RT-thread-promotion
+mechanism** (the manual `chrt` is runtime-only). Also still owed: flash v1.7.3 +
+full diag sweep.
 
 ## Session 2026-07-08: **NFC tap-to-send — v1.7.0** (VERIFIED end-to-end on device)
 

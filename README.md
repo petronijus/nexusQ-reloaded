@@ -13,8 +13,8 @@
 
 A discontinued Android curio with no apps, no recovery, and a sealed bootloader —
 turned into a **dual-core postmarketOS media player** with Spotify&nbsp;Connect,
-a beat-reactive **32-LED ring**, a Wayland desktop, a 1.2&nbsp;GHz CPU,
-**NFC tap-to-send**, and a **phone/desktop companion remote**.
+**Bluetooth A2DP**, a beat-reactive **32-LED ring**, a Wayland desktop, a
+1.2&nbsp;GHz CPU, **NFC tap-to-send**, and a **phone/desktop companion remote**.
 
 [**Install**](INSTALL.md) · [**Releases**](https://github.com/petronijus/nexusQ-reloaded/releases) · [**Changelog**](CHANGELOG.md) · [**The story**](#-first-light)
 
@@ -44,14 +44,14 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **genuinely clean boot log** — 0 failed units, `dmesg` err/warn EMPTY, and `journalctl -b -p warning` down to only 3 documented-external lines (all ~15 v1.6.9 residual err/warn lines root-caused + fixed) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
-| 🔊 **TAS5713 25 W speaker** | ✅ | **audible since v1.6.13** (kernel r36). The software pipeline (driver/PCM/softvol, correct pitch — 2× clock bug) landed v1.6.1, but the physical amp was **silent through every earlier release**: `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the McBSP2 I2S clock/data/frame never reached the amp (`aplay` rc=0, nothing driven). Root-caused + fixed in DTS 2026-07-07 (stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0) → user-confirmed audible. Now one selectable PulseAudio output (**v1.6.15**, shipped in v1.7.0). Residual crackle deferred (polish item — the `type multi` theory is moot now the tap is a PA monitor). See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
+| 🔊 **TAS5713 25 W speaker** | ✅ | **audible since v1.6.13** (kernel r36). The software pipeline (driver/PCM/softvol, correct pitch — 2× clock bug) landed v1.6.1, but the physical amp was **silent through every earlier release**: `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the McBSP2 I2S clock/data/frame never reached the amp (`aplay` rc=0, nothing driven). Root-caused + fixed in DTS 2026-07-07 (stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0) → user-confirmed audible. Now one selectable PulseAudio output (**v1.6.15**, shipped in v1.7.0). Residual playback **crackle ISOLATED 2026-07-09 to the common OUTPUT path** (`PulseAudio → TAS5713 → sDMA → McBSP2`): A2DP (`phone → BT → PA`, a wholly different input) crackles the SAME as librespot → NOT the app/librespot/WiFi, confirming the 2026-07-08 **memory-bus / DMA-contention** diagnosis (the McBSP2 SDMA FIFO underflows in hardware when other bus masters contend on L3/EMIF). Mitigation baked in v1.8.0 = `tsched=0` (via the apk trigger) + Speaker-unity pin; the **root-cause kernel fix — OMAP4 sDMA `HIGH_PRIORITY` (`CCR_READ_PRIORITY`) on the McBSP2 DMA channel — is outstanding**. See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md` + `docs/2026-07-08-audio-crackle-dma-contention.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 · **now a PulseAudio input** (systemd user unit → `--device pulse`), one movable PA sink-input · v1.6.15 |
 | 🔊 **Audio output selection** (speaker / optical / HDMI) | ✅ | **v1.6.15** (shipped in v1.7.0): PulseAudio is the hub, the active output = the PA default sink, picked from the companion app (`listOutputs`/`setOutput` → `pactl set-default-sink` + move all sink-inputs + class-D amp safety toggle). Input-agnostic + future-proof (BT-A2DP / Tidal / casting can join as further PA inputs) |
 | 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 · **volume-independent** — re-tapped to the active output's PA monitor + an AGC (auto-gain) so it reacts to the music at any listening volume, no low-volume flicker · v1.6.15 · **tap now gated on playback** so the amp sink suspends when idle (idle CPU ~7 % → ~1 %) · v1.7.1 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 · **output selector** (Holo-dark segmented control) + volume/mute now act on the active PA sink · v1.6.15 · **NFC tap-to-send receiver** (HCE — the Q taps a message onto the phone, shown as a SnackBar) + **auto-reconnect on resume/drop** (no more app-kill after backgrounding) · v1.7.0 · **two-way volume sync** — the app slider now tracks the **physical dome dial** and the LXQt applet (bridge `pactl subscribe` → `volumeChanged`) · v1.7.3 (verified live, not yet in a flashed image) |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer · **desktop audio sink fixed v1.6.12** (the red-cross no-sink tray icon: PA now starts via a native systemd USER unit — Alpine ships none and the XDG autostart never fires under systemd+Wayland — and the sole sink is the TAS5713 speaker) |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager, factory MAC pinned at the NM layer (stable IP since v1.6.6). **Characterized 2026-07-07: 5 GHz is healthy — NOT flaky** (−48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss); bulk **~34 Mbit/s is a hardware ceiling** of the 2010-era 1×1 802.11n BCM4330 (not a bug — same cipher does ~80 over ethernet, so WiFi is the limit; ~100× the appliance's need). Use **ethernet for bulk** |
-| 🔵 **Bluetooth** (BCM4330) | ✅ | per-device **BD_ADDR** `F8:8F:CA:20:49:E5` programmed since v1.6.10 (was the non-unique placeholder `43:30:A0:00:00:00`; DTS `local-bd-address` + btbcm patch 0036) |
+| 🔵 **Bluetooth** + **A2DP audio** (BCM4330) | ✅ | **A2DP sink reliable since v1.8.0** — pair a phone and stream to the Q (`phone → BT → PulseAudio bluez_source s24le/48 kHz → TAS5713`). Root cause of every past "won't stay connected / phantom Connected / corrupt-burst audio" was a **missing BT HCI UART `max-speed`**: the BCM4330 HCI runs over UART2 and `hci_bcm` left `oper_speed=0`, never syncing the host UART to the firmware baud → `hci0: Frame reassembly failed (-84)` (EILSEQ) + tx timeouts. Kernel **patch 0040** sets `max-speed = <3000000>` (stock ran 3 Mbaud); verified live — reassembly failures 0 (was 26+), controller addr correct. (NOT coexistence, NOT HFP/SCO — both earlier wrong guesses.) Per-device **BD_ADDR** `F8:8F:CA:20:49:E5` since v1.6.10 (DTS `local-bd-address` + btbcm patch 0036) |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
@@ -72,7 +72,9 @@ How a tap on your phone becomes sound **and** light — the heart of the v1.6.x 
 ```mermaid
 flowchart LR
     P([📱 Phone<br/>Spotify app]) -->|mDNS · Spotify Connect| L[librespot<br/>“Nexus Q”]
+    P -.->|🔵 Bluetooth A2DP · v1.8.0| B[bluez_source<br/>s24le · 48 kHz]
     L -->|--device pulse| PA{{PulseAudio<br/>hub · 48 kHz}}
+    B -.->|loopback| PA
     PA -->|default sink| S([🔊 TAS5713<br/>25 W speaker])
     PA -.->|selectable| SP([💿 optical SPDIF])
     PA -.->|selectable| HD([🔈 HDMI])
@@ -151,13 +153,13 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **37 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **40 patches** in `kernel/patches/`), the
 local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/      dts · defconfig · 37 mainline patches
+kernel/      dts · defconfig · 40 mainline patches
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
 userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
 reverse-eng/ ground truth extracted from the factory kernel
@@ -191,7 +193,10 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.15 ─ ✦ PA-centric audio: multi-input → PulseAudio → app-selectable output · LED AGC   2026-07-07
 1.6.16 ─ ✦ physical volume dial → PulseAudio + tray icon follows output           2026-07-07
 1.7.0 ── ✦ NFC tap-to-send (reverse-HCE, Q → phone) · companion auto-reconnect   ← latest tag  2026-07-08
+1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   ← built · BT verified live, full-image flash pending  2026-07-09
 ```
+
+<sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>
 
 ---
 

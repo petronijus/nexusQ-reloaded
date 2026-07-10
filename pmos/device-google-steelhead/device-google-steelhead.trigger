@@ -22,4 +22,13 @@ for dir in "$@"; do
 	sed -i '/^\[Element Speaker\]$/,/^\[/ s/^volume = merge$/volume = zero/' "$conf"
 done
 
+# Also force PA interrupt-based scheduling (tsched=0). Timer-based scheduling was
+# the biggest cause of the periodic playback crackle on this OMAP4. default.pa is
+# pulseaudio-owned; patch it here (trigger) for the same reason as the mixer path.
+for dir in "$@"; do
+	dp="$dir/default.pa"
+	[ -f "$dp" ] || continue
+	sed -i 's/^load-module module-udev-detect$/load-module module-udev-detect tsched=0/' "$dp"
+done
+
 exit 0

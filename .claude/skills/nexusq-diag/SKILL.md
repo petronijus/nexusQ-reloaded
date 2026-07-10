@@ -194,6 +194,28 @@ Findings are tagged by `kind`; interpret them like this:
   **nexusq-control r8** = dial→app volume sync (`pactl subscribe` → `volumeChanged`).
   r35 + r8 are BUILDING into **v1.7.3** — verified live, not yet in a flashed image.
   See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md` §4.
+- **Bluetooth A2DP RELIABLE (v1.8.0, kernel r40 / device r38)** — root cause of every
+  past "BT won't stay connected / phantom Connected / corrupt-burst audio" was a
+  **missing BT HCI UART `max-speed`**: the BCM4330 HCI runs over UART2 and `hci_bcm`
+  left `oper_speed=0`, never syncing the host UART to the firmware baud. Kernel **patch
+  0040** sets `max-speed = <3000000>` (stock 3 Mbaud). **Healthy tell:**
+  `dmesg | grep -c 'Frame reassembly failed'` = **0** (was 26+), `bluetoothctl show`
+  controller addr = **F8:8F:CA:20:49:E5**, and while a phone is connected a
+  `bluez_source` (s24le/48 kHz) appears in `pactl list short sources` → looped to the
+  TAS5713 sink. ANY `hci0: Frame reassembly failed (-84)` = the max-speed fix
+  regressed. NOT coexistence, NOT HFP/SCO (both earlier wrong guesses). Verified live
+  (boot.img); full v1.8.0 image built, flash-verification pending.
+  See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
+- **Crackle ("lupance") ISOLATED to the OUTPUT path (2026-07-09)** — A2DP
+  (`phone → BT → PA`, a wholly different input) crackles the SAME as librespot → the
+  fault is NOT app/librespot/WiFi, it is the shared `PA → TAS5713 → sDMA → McBSP2`
+  path (bus/DMA contention). Mitigation baked v1.8.0 = **`tsched=0`** in
+  `/etc/pulse/default.pa` (via the apk trigger; healthy tell: `grep tsched
+  /etc/pulse/default.pa` → `module-udev-detect tsched=0`) + Speaker-unity pin. The
+  root-cause fix (OMAP4 sDMA `HIGH_PRIORITY` on the McBSP2 channel) is **outstanding**.
+  ⛔ v1.7.4 was a burned bake — its THRESHOLD service / 600 ms buffer / RT configs were
+  removed; if any reappear (`nexusq-mcbsp-threshold.service`, `60-nexusq-latency.conf`,
+  `CPUSchedulingPolicy` on the user units) it regressed.
 - **`ss` is NOT installed on the device** — use **`netstat -tlnp`** to check listening
   sockets (a `ss`-not-found caused a long "no listener" misdiagnosis).
 - **NFC tap-to-send (v1.7.0, device r33 / kernel r37)** — the PN544 chip works since

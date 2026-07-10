@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=37
+pkgrel=38
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -37,7 +37,7 @@ makedepends="devicepkg-dev"
 install="$pkgname.post-install"
 # apk trigger: patch pulseaudio's tas5713 mixer path AFTER pulseaudio is unpacked
 # (.post-install runs too early — it fires before late-unpacked deps' files exist).
-triggers="$pkgname.trigger=/usr/share/pulseaudio/alsa-mixer/paths"
+triggers="$pkgname.trigger=/usr/share/pulseaudio/alsa-mixer/paths:/etc/pulse"
 subpackages="$pkgname-nonfree-firmware:nonfree_firmware"
 source="
 	deviceinfo

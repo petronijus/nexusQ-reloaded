@@ -682,6 +682,16 @@
 		compatible = "brcm,bcm4330-bt";
 		pinctrl-names = "default";
 		pinctrl-0 = <&bt_pins>;
+		/* Operating HCI UART baud. WITHOUT this, hci_bcm leaves oper_speed=0
+		 * and never syncs the host UART to the rate the BCM4330 firmware runs
+		 * at, so host and controller drift apart -> "hci0: Frame reassembly
+		 * failed (-84)" (EILSEQ), command tx timeouts, phantom Connected
+		 * state, and A2DP audio arriving in corrupt bursts (~1 s sound then
+		 * seconds of silence). Stock ran the BT UART at 3 Mbaud (the value
+		 * that dominates the stock kernel image); match it so hci_bcm commands
+		 * both ends to 3 Mbaud and the link is clean. RTS/CTS are muxed in
+		 * uart2_pins. (2026-07-08 crackle/BT-audio investigation.) */
+		max-speed = <3000000>;
 		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; /* gpio_46 BT_EN */
 		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
 		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */

@@ -86,10 +86,17 @@ and gathers a short live burst. Paths are documented in `scripts/diag/README.md`
 The runtime tooling focuses on nexusqd/power/thermal/cpufreq; ALSO sweep the
 hardware the user usually asks about, via ssh. Quote the evidence line for each:
 
-- **Bluetooth** (BCM4330B1, UART/`hci_uart_bcm`): `dmesg | grep -i bluetooth` — did
-  the patchram load (finds `brcm/BCM4330B1.hcd`) or "Patch file not found, tried:"?
-  `hciconfig -a` / `bluetoothctl show` → is `hci0` UP? Missing `.hcd` →
-  `/lib/firmware/brcm/BCM4330B1.hcd` absent.
+- **Bluetooth + A2DP** (BCM4330B1, UART2/`hci_uart_bcm`): `dmesg | grep -i bluetooth`
+  — did the patchram load (finds `brcm/BCM4330B1.hcd`) or "Patch file not found,
+  tried:"? `hciconfig -a` / `bluetoothctl show` → is `hci0` UP, and is the controller
+  address the real **F8:8F:CA:20:49:E5** (NOT the old `43:30:A0:00:00:00`)? Missing
+  `.hcd` → `/lib/firmware/brcm/BCM4330B1.hcd` absent. **`hci0: Frame reassembly failed
+  (-84)` (EILSEQ) is NOT benign** — it means the host UART baud drifted from the
+  controller; the DTS BT node needs `max-speed = <3000000>` (kernel patch **0040**,
+  v1.8.0) so `hci_bcm` syncs both ends to 3 Mbaud. Before 0040 this produced tx
+  timeouts, a phantom "Connected" state, and A2DP in corrupt bursts → count MUST be
+  0 now. It was **NOT** WiFi/BT coexistence and **NOT** HFP/SCO. For A2DP, check the
+  PA `bluez_source` appears (`pactl list short sources`) while a phone is connected.
 - **WiFi** (BCM4330, `brcmfmac`): `dmesg | grep -i brcmfmac` — did
   `brcm/brcmfmac4330-sdio.bin` load or fail "-2"? `iw dev` → does `wlan0` exist?
   `sudo iw dev wlan0 scan | grep -iE 'SSID|freq'` → does it SEE 5 GHz APs (freq
@@ -190,9 +197,18 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   Speaker at unity — PA was stacking Master+Speaker `volume = merge` = +48 dB at
   100%; now Master-only: PA 50% = +6 dB, 100% = +24 dB, user-confirmed). Note: r35 +
   nexusq-control r8 (dial→app sync) are BUILDING into v1.7.3, verified live but not
-  yet in a flashed image. Deferred polish: boot default should be speaker-not-spdif;
-  a residual **crackle / "lupance"** during playback (the next task — measure with
-  speaker safe-disconnected).
+  yet in a flashed image. Deferred polish: boot default should be speaker-not-spdif.
+  **Crackle / "lupance" DIAGNOSED 2026-07-08 = memory-bus / DMA contention** (the
+  McBSP2 audio SDMA underflows the FIFO in HARDWARE when other bus masters — WiFi
+  SDIO, the USB-ethernet LAN9500A, memory-heavy tasks — contend on L3/EMIF). Diag
+  note: **`0` PA XRUN / `0` dmesg underruns / low CPU does NOT rule it out** — it is
+  below the PA buffer (DMA→FIFO is hardware-timed) and below thread scheduling (SDMA
+  = DMA engine + hardirq; WiFi RX = softirq/NAPI, above all userspace SCHED_FIFO). It
+  worsens with ANY concurrent activity incl. ssh-over-ethernet (USB here), so it is
+  NOT WiFi-specific; `cpu_dma_latency=0` doesn't help. Live-only PA mitigations
+  (`tsched=0`, ~400 ms buffer, RT priority) help but the root-cause kernel fix
+  (sDMA `HIGH_PRIORITY`/L3-EMIF QoS/omap-mcbsp PM-QoS) is NOT done and the tuning is
+  NOT baked. Full note: `docs/2026-07-08-audio-crackle-dma-contention.md`.
   ℹ️ **Historical (FIXED in v1.6.1):** the v1.6.0 path played **2× too fast** (FSYNC at
   2× rate; 60 s drained in ~30 s), which made a librespot/Spotify track **auto-skip
   ~40 s in** — that was the audio-clock bug, **not** a librespot crash (the service

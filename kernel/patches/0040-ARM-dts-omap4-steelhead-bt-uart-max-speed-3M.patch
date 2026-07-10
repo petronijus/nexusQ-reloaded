@@ -1,0 +1,38 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] ARM: dts: omap4-steelhead: set BT HCI UART max-speed = 3 Mbaud
+
+The BCM4330 Bluetooth HCI runs over UART2. Without a `max-speed` property the
+hci_bcm driver leaves oper_speed = 0 and never synchronises the host UART to the
+baud the BCM4330 firmware operates at, so the two ends drift apart. On device
+this manifests as a stream of "Bluetooth: hci0: Frame reassembly failed (-84)"
+(EILSEQ — corrupted HCI bytes), HCI command tx timeouts, a phantom "Connected"
+state that does not reflect reality, and A2DP audio arriving in corrupt bursts
+(~1 s of sound then several seconds of silence). The phone ultimately drops the
+link (HCI reason 0x13, remote-user-terminated).
+
+The stock Android kernel ran the steelhead BT UART at 3 Mbaud (the baud that
+dominates the stock image). Set the same operating speed so hci_bcm commands
+both the controller and the host UART to 3 Mbaud and the link is clean. Hardware
+flow control (RTS/CTS) is already muxed in uart2_pins.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+--- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -524,6 +524,13 @@
+ 		compatible = "brcm,bcm4330-bt";
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&bt_pins>;
++		/* Operating HCI UART baud. Without it hci_bcm leaves oper_speed=0 and
++		 * never syncs the host UART to the BCM4330 firmware rate -> host and
++		 * controller drift -> "hci0: Frame reassembly failed (-84)" (EILSEQ),
++		 * command tx timeouts, phantom Connected state, A2DP audio in corrupt
++		 * bursts. Stock ran the BT UART at 3 Mbaud; match it. RTS/CTS muxed in
++		 * uart2_pins. (2026-07-08 BT-audio investigation.) */
++		max-speed = <3000000>;
+ 		shutdown-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>; /* gpio_46 BT_EN */
+ 		reset-gpios = <&gpio2 20 GPIO_ACTIVE_LOW>; /* gpio_52 BT_RESET */
+ 		device-wakeup-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>; /* gpio_45 BT_WAKE */

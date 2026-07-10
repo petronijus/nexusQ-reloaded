@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.6.10)
+# Nexus Q Reloaded -- Install Guide (v1.8.0)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,14 +12,15 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.6.10.img` (~5.3 MiB), `nexusq-rootfs-v1.6.10-sparse.img.zst`
-  (~2.08 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.6.10.sha256`
-  - **`nexusq-boot-v1.6.10.img` is a NEW boot image** -- v1.6.10 rebuilds the kernel
-    (`6.12.12-r35`, uname `#36`; patches 0033-0036 + a BPF/ACL/SYN defconfig), so it is
-    **not** byte-identical to the v1.6.8/v1.6.9 boot. The BPF core grew the image ~0.3 MiB
-    (from 5.0 MiB), still **well under the 8 MB boot partition**. Coming from any earlier
-    release you must flash **both** boot and userdata. Verify against `nexusq-v1.6.10.sha256`.
+- release artifacts: `nexusq-boot-v1.8.0.img` (~5.3 MiB), `nexusq-rootfs-v1.8.0-sparse.img.zst`
+  (~2.1 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
+  decompress it, see step 2), `nexusq-v1.8.0.sha256`
+  - **`nexusq-boot-v1.8.0.img` is a NEW boot image** -- v1.8.0 rebuilds the kernel
+    (`6.12.12-r40`; patches through 0040, incl. the BCM4330 **BT UART `max-speed = 3 Mbaud`**
+    fix that ends the HCI frame corruption and makes Bluetooth A2DP reliable), so it is
+    **not** byte-identical to earlier boots. At ~5.3 MiB it is still **well under the 8 MB
+    boot partition**. Coming from any earlier release you must flash **both** boot and
+    userdata. Verify against `nexusq-v1.8.0.sha256`.
 
 ## 1. Enter fastboot mode
 
@@ -34,8 +35,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v1.6.10 rebuilt the kernel (~5.3 MiB with BPF) -- flash it (not identical to v1.6.8/v1.6.9).
-fastboot flash boot nexusq-boot-v1.6.10.img
+# v1.8.0 rebuilt the kernel (~5.3 MiB; patches through 0040, BT UART max-speed fix) -- flash it.
+fastboot flash boot nexusq-boot-v1.8.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -44,8 +45,8 @@ fastboot flash boot nexusq-boot-v1.6.10.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.6.10-sparse.img.zst   # -> nexusq-rootfs-v1.6.10-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.6.10-sparse.img
+zstd -d nexusq-rootfs-v1.8.0-sparse.img.zst   # -> nexusq-rootfs-v1.8.0-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.8.0-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -111,13 +112,13 @@ optional -- find the device on your LAN as hostname `steelhead`.
 > `scripts/gen-wifi-profile.sh`) — verified on air 2026-07-03 on the
 > v1.6.6-candidate flash.
 
-## What works in v0.1.0
+## What works
 
 | Subsystem | Status |
 |-----------|--------|
 | HDMI video + XFCE4 desktop | ✅ |
 | WiFi (BCM4330, original calibration) | ✅ working, stable IP since v1.6.6 (factory MAC pinned at the NM layer). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
-| Bluetooth | ✅ |
+| Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |
 | TAS5713 25 W speaker amp | ✅ working (24/48 kHz; 44.1 k is resampled to 48 k via the `nexusq` ALSA PCM) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022) |
