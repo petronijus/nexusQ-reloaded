@@ -1,0 +1,61 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] dma: omap: high L3 read-priority for the cyclic (audio) sDMA channel
+
+EXPERIMENT / beyond-stock. The residual playback crackle on the Nexus Q is
+McBSP2 sDMA FIFO starvation: the audio DMA refill reads from DDR lose L3/EMIF
+arbitration to the other bus masters this image runs (WiFi SDIO, the USB-eth
+LAN9500A, the LXQt/Wayland desktop, PulseAudio), which the minimal stock
+appliance never had -- so the FIFO underflows and playback clicks. A2DP (a
+native-48 kHz input, no resampling) drops identically to librespot, isolating
+the fault to the common output path PA -> TAS5713 -> sDMA -> McBSP2.
+
+mainline defines CCR_READ_PRIORITY (BIT 6, the channel's L3 read-port priority)
+but never sets it, and inits GCR with HI_THREAD_RESERVED=0. Stock also left the
+per-channel bit clear (its priority plumbing is inert for audio) but did set
+GCR HI_THREAD_RESERVED=1 (GCR=0x11010). This goes one deliberate step beyond
+stock: mark ONLY the cyclic channel (which on this appliance is the audio path)
+high read-priority, so the elevation stays relative -- bulk/memcpy transfers
+keep normal priority -- and set GCR HI_THREAD_RESERVED=1 so a high-priority
+sDMA thread FIFO slot is actually reserved for it. To be validated on-device
+(does the crackle drop?); cleanly revertible if it does not help.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ drivers/dma/ti/omap-dma.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+--- a/drivers/dma/ti/omap-dma.c
++++ b/drivers/dma/ti/omap-dma.c
+@@ -1197,6 +1197,20 @@
+ 	else
+ 		d->ccr |= CCR_DST_AMODE_CONSTANT | CCR_SRC_AMODE_POSTINC;
+
++	/*
++	 * Nexus Q (steelhead): raise this channel's L3 READ priority. Cyclic
++	 * DMA on this appliance is the audio path (McBSP2 -> TAS5713 / McASP
++	 * S/PDIF); for playback (MEM_TO_DEV) the source is DDR, so the periodic
++	 * refill reads compete on L3/EMIF with WiFi SDIO, the USB-eth LAN9500A
++	 * and the LXQt desktop -- when they win, the McBSP2 sDMA FIFO underflows
++	 * and playback crackles. Marking only the cyclic (audio) channel high
++	 * read-priority keeps the elevation relative (bulk/memcpy stay normal).
++	 * Beyond stock (stock ran a minimal appliance with far less bus
++	 * contention and left this bit clear); paired with GCR HI_THREAD_RESERVED=1
++	 * so a high-priority sDMA thread FIFO slot is actually reserved.
++	 */
++	d->ccr |= CCR_READ_PRIORITY;
++
+ 	d->cicr = CICR_DROP_IE;
+ 	if (flags & DMA_PREP_INTERRUPT)
+ 		d->cicr |= CICR_FRAME_IE;
+@@ -1827,7 +1841,10 @@
+ 		}
+ 	}
+
+-	omap_dma_init_gcr(od, DMA_DEFAULT_ARB_RATE, DMA_DEFAULT_FIFO_DEPTH, 0);
++	/* tparams=1: reserve one high-priority sDMA thread (GCR HI_THREAD_RESERVED,
++	 * stock steelhead value 0x11010) so the audio channel's CCR_READ_PRIORITY
++	 * above has a reserved FIFO slot to win L3 arbitration. */
++	omap_dma_init_gcr(od, DMA_DEFAULT_ARB_RATE, DMA_DEFAULT_FIFO_DEPTH, 1);
+
+ 	if (od->cfg->needs_busy_check) {
+ 		od->nb.notifier_call = omap_dma_busy_notifier;

@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=40
+pkgrel=41
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -71,6 +71,7 @@ source="
 	0038-ASoC-tas571x-tas5713-steelhead-volume-scale-no-sw-boost.patch
 	0039-nfc-hci-shdlc-silence-frame-hexdumps-steelhead.patch
 	0040-ARM-dts-omap4-steelhead-bt-uart-max-speed-3M.patch
+	0041-dma-omap-high-read-priority-for-cyclic-audio-channel.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -148,4 +149,5 @@ SKIP  0037-nfc-pn544-rats-activate-iso-dep-targets-steelhead.patch
 SKIP  0038-ASoC-tas571x-tas5713-steelhead-volume-scale-no-sw-boost.patch
 SKIP  0039-nfc-hci-shdlc-silence-frame-hexdumps-steelhead.patch
 SKIP  0040-ARM-dts-omap4-steelhead-bt-uart-max-speed-3M.patch
+SKIP  0041-dma-omap-high-read-priority-for-cyclic-audio-channel.patch
 "
