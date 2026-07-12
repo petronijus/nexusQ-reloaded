@@ -113,3 +113,13 @@ The unusable v1.7.4 artifact's bad additions are **removed** from the device pac
   boot.img, so they need a full flash to confirm).
 - The **crackle root-cause fix (sDMA HIGH_PRIORITY)** is still **not implemented** —
   the outstanding audio task.
+
+> **RESOLVED 2026-07-12 — the crackle investigation is CLOSED.** The sDMA
+> `HIGH_PRIORITY` fix landed as kernel **r41** patch `0041` and killed the
+> load-correlated component — which revealed a SECOND, independent fault: a
+> metronomic ~1/s load-independent click from **two free-running crystals**
+> (mainline reparented the DPLL_ABE reference to sys_32k while the TAS5713 MCLK
+> sits on the 38.4 MHz crystal), fixed by kernel **r42** patch `0042` (DPLL_ABE
+> relocked from sys_clkin at 98.304 MHz — stock topology). Hardware-verified,
+> user-confirmed perfectly clean playback. (Also: v1.8.0 was tagged 2026-07-10.)
+> Full write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.

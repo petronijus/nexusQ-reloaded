@@ -4,7 +4,69 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-09 (latest): **Bluetooth A2DP FIXED (BT UART max-speed, kernel 0040) + crackle ISOLATED to the output path + v1.7.4 bake reverted → v1.8.0**
+## Session 2026-07-12 (latest): **CRACKLE CLOSED — two independent layers, both fixed (kernel r41 sDMA priority + r42 DPLL_ABE sys_clkin); v1.8.1 built (unreleased)**
+
+Full write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
+Commits: `fc7e280` (r41, patch 0041), `9f76754` (r42, patch 0042), `554175b`
+(build-infra). Current kernel = **r42** (`#43-postmarketOS`, on device; r42
+supersedes r41).
+
+✅ **The playback crackle ("lupance") is CLOSED — it was TWO independent faults:**
+
+1. **Layer A — load-correlated drops → sDMA HIGH read priority (r41, patch 0041).**
+   `CCR_READ_PRIORITY` (BIT(6), defined-but-never-applied in
+   `drivers/dma/ti/omap-dma.c`) set on the cyclic/audio channel + GCR
+   `HI_THREAD_RESERVED=1`. **Verified live:** `GCR = 0x00011010`, active audio
+   channel ch20 CCR bit6=1. After r41 the crackle became **load-INDEPENDENT**
+   (ssh/scp no longer affected it) — that pivot is what isolated layer B.
+2. **Layer B — metronomic ~1/s click = TWO FREE-RUNNING CRYSTALS (r42, patch 0042).**
+   Mainline `clk-44xx.c` reparents `CM_ABE_PLL_REF_CLKSEL`
+   (`abe_dpll_refclk_mux_ck`) to **sys_32k** for deep-idle PM (never entered here —
+   C1-only), while TAS5713 MCLK (auxclk1 12.288 MHz) derives from DPLL_PER /
+   **sys_clkin 38.4 MHz** → McBSP2 frame clock and amp MCLK drift at the crystals'
+   relative ppm (~21 ppm ≈ 1 sample slip/s @ 48 kHz). Stock **x-loader AND
+   bootloader** force the mux to SYS_CLK and lock DPLL_ABE at exactly **98.304 MHz**
+   (M=64/N=24); the stock kernel never touches it — **our port was actively undoing
+   the bootloader's correct setting**. Audit evidence: xloader `prcm_init` tail
+   offsets `0x5c7c–0x5ca0` (`bic #1` on `0x4a30610c`), bootloader `0x1e0c–0x1e30`,
+   `steelhead_init` `clk_set_parent` chain @ `0xc0016770`+ in
+   `reverse-eng/vmlinux.bin`. Fix = DTS `assigned-clocks` on `&mcbsp2` (reparent
+   mux → `sys_clkin_ck`, relock `dpll_abe_ck` 98304000). **Verified:** `clk_summary`
+   shows the reparent + 98.304 MHz lock; **user-confirmed perfectly clean playback**
+   (*"bez jedinyho zaskobrtnuti"*).
+
+⚠️ **REPO GOTCHA (cost a build): editing `kernel/dts/omap4-steelhead.dts` alone is a
+SILENT NO-OP.** The DTS enters the kernel tree **via `kernel/patches/`** (0003 +
+follow-ups) — that is what the build scripts stage; `kernel/dts/` is the reference
+copy. The first r42 build shipped the old DTB until the DTB verification caught it;
+the change had to become **patch 0042**. Any DTS change → a patch + verify the
+built DTB.
+
+🔧 **Build-infra fixes (`554175b`, `scripts/build-kernel-boot.sh`):** apk picked by
+**exact `pkgver-pkgrel`** from the staged APKBUILD (newest-glob grabbed a STALE
+kernel apk); `ls | head` SIGPIPE (rc 141 under pipefail) removed; kernel found by
+**globbing `vmlinuz*`** (newer postmarketos-installkernel names it
+`vmlinuz-<kernelrelease>`).
+
+🖥️ **Windows-host gotchas (durable):** MSYS/Git-Bash path mangling breaks the
+docker run (`/src` → `C:/Program Files/Git/src`) — **launch via PowerShell**;
+CRLF broke sed-parsed APKBUILD vars + the dos2unix whitelist —
+`core.autocrlf=false` set machine-locally, worktree renormalized to LF.
+
+📦 **Release state:** a **v1.8.1 full image** (kernel **r41**, rootfs identical to
+v1.8.0 content) was built + **passed the full verification gate** 2026-07-12:
+`output/nexusq-boot-v1.8.1.img` (sha256 `5cc4e8c1…aec55d`),
+`output/nexusq-rootfs-v1.8.1-sparse.img` (sha256 `46f31943…dd9f4ca`). **NOT
+tagged/released** — the open decision with the user is v1.8.1 as-is vs going
+straight to a **v1.9.0 with r42**. (v1.8.0 itself was tagged 2026-07-10.)
+
+**Next:** the release decision (v1.8.1 vs v1.9.0-with-r42); then the standing
+backlog (deep cpuidle C2+ blocked on serial, NFC payload = connection info,
+thermal watch).
+
+---
+
+## Session 2026-07-09: **Bluetooth A2DP FIXED (BT UART max-speed, kernel 0040) + crackle ISOLATED to the output path + v1.7.4 bake reverted → v1.8.0**
 
 Full write-up: `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
 Ships as **v1.8.0** (`linux` r39 → **r40**, `device-google-steelhead` **r38** — r38
@@ -43,6 +105,8 @@ triggers on `/etc/pulse`), the **TAS5713 Speaker-unity pin**, and the **+24 dB c
 rootfs image is BUILT + pending on-device verification** (the `tsched=0` bake + v1.7.4
 revert live in the rootfs, so they need a full flash to confirm; a build runs in
 parallel). The crackle root-cause (sDMA priority) is still the outstanding audio task.
+_(As written 2026-07-09 — superseded: v1.8.0 was tagged 2026-07-10, and the crackle
+was CLOSED 2026-07-12 by kernel r41 + r42; see the session above.)_
 
 ---
 
@@ -1744,7 +1808,7 @@ If `mkinitfs` fails in the chroot (QEMU binfmt issues), use `manual-export.sh` w
 | File | Purpose |
 |------|---------|
 | `kernel/configs/steelhead_defconfig` | Kernel config (MODIFIED: key drivers =y) |
-| `kernel/dts/omap4-steelhead.dts` | Device tree source (579 lines) |
+| `kernel/dts/omap4-steelhead.dts` | Device tree source — **reference copy only: the build stages the DTS via `kernel/patches/` (0003 + follow-ups); editing this file alone is a silent no-op** (bit hard 2026-07-12 — see that session note) |
 | `kernel/patches/0001-*.patch` | TAS5713 audio amp driver |
 | `kernel/patches/0002-*.patch` | TAS5713 DT binding |
 | `kernel/patches/0003-*.patch` | Steelhead DTS added to kernel tree |

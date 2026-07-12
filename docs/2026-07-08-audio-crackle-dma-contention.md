@@ -233,3 +233,11 @@ to localize the fault.
 `element` mode (threshold **reverted**), `tsched=0`, **600 ms** buffer, **WiFi PM
 off** (live), **NO RT** (`CPUScheduling` removed live). **Audio works but still
 interrupts.**
+
+> **CLOSED 2026-07-12.** The sDMA `HIGH_PRIORITY` fix above shipped as kernel
+> **r41** (patch `0041`) and resolved the load-correlated contention component; the
+> residual metronomic ~1/s click was a SECOND, independent fault — two free-running
+> crystals (DPLL_ABE ref on sys_32k vs TAS5713 MCLK on sys_clkin 38.4 MHz), fixed
+> by kernel **r42** (patch `0042`, DPLL_ABE relocked from sys_clkin). Playback is
+> now clean, user-confirmed. See
+> `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.

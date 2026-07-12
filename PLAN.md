@@ -3,6 +3,25 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-12 — CRACKLE CLOSED: TWO INDEPENDENT LAYERS, BOTH FIXED (kernel r41 +
+> r42, hardware-verified; user-confirmed perfectly clean playback).** (a)
+> load-correlated component → **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on
+> the cyclic/audio channel + GCR `HI_THREAD_RESERVED=1`; verified live
+> `GCR=0x00011010`, ch20 CCR bit6=1) — after r41 the crackle was load-INDEPENDENT,
+> which isolated (b): a metronomic ~1/s click from **two free-running crystals** —
+> mainline reparents the DPLL_ABE reference (`CM_ABE_PLL_REF_CLKSEL`) to sys_32k
+> while the TAS5713 MCLK derives from DPLL_PER/sys_clkin 38.4 MHz (~21 ppm ≈
+> 1 sample slip/s @ 48 kHz); stock x-loader + bootloader lock DPLL_ABE from
+> sys_clkin at exactly 98.304 MHz and our port was undoing it → **r42** patch
+> **0042** (DTS `assigned-clocks` on `&mcbsp2`: reparent → `sys_clkin_ck`, relock
+> 98304000; `clk_summary`-verified on `#43-postmarketOS`). **r42 supersedes r41 as
+> the current kernel.** A **v1.8.1** full image (r41 kernel) was built + passed
+> verification 2026-07-12 but is **unreleased** — decision open: v1.8.1 vs a v1.9.0
+> with r42. ⚠️ Repo gotcha recorded: the DTS ships **via `kernel/patches/`** —
+> editing `kernel/dts/` alone is a silent no-op (the first r42 build was; caught by
+> DTB verification). See
+> `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
+>
 > **2026-07-09 — v1.8.0: BLUETOOTH A2DP RELIABLE + CRACKLE ISOLATED TO THE OUTPUT
 > PATH.** The BCM4330 BT HCI runs over UART2; our DTS BT node had **no `max-speed`**,
 > so `hci_bcm` left `oper_speed=0` and never synced the host UART to the firmware
@@ -15,11 +34,13 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > TAS5713`). With A2DP working, the crackle experiment ran: **A2DP crackles the SAME
 > as librespot** → the crackle is in the shared **output** path (PA → TAS5713 → sDMA
 > → McBSP2), confirming the DMA-contention diagnosis; the **sDMA `HIGH_PRIORITY`
-> kernel fix is the outstanding crackle task**. The burned **v1.7.4** bake is reverted
+> kernel fix is the outstanding crackle task** _(done 2026-07-12 as r41 — plus the
+> second r42 clock-drift layer; see the top note)_. The burned **v1.7.4** bake is reverted
 > to a safe subset (kept `tsched=0` + Speaker-unity pin; dropped THRESHOLD service,
 > 600 ms buffer, RT configs). Package: `linux` **r40**, `device-google-steelhead`
 > **r38**. BT fix verified live (boot.img); full image built, on-device verification
-> pending. See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
+> pending _(v1.8.0 tagged 2026-07-10)_.
+> See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
 >
 > **2026-07-08 — v1.7.0 (tagged release): NFC TAP-TO-SEND.** Tap a phone on the
 > dome → the Q pushes a short text over NFC, shown in the companion app. Uses
@@ -244,7 +265,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |
 | WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency. _(Characterized 2026-07-07: 5 GHz is **healthy, NOT flaky** — −48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss; bulk **~34 Mbit/s is a HARDWARE CEILING** of the 2010-era 1×1 802.11n chip on SDIO, not a bug — same cipher does ~80 over ethernet so the crypto/CPU ceiling ≈80 and WiFi is the limit; 2 streams aggregate to less; `powersave=2` no change; ~100× the appliance's need. 2.4 GHz retested = also stable/not flaky but strictly worse (~13–16 Mbit). See `docs/2026-07-07-wifi-characterization-and-ethernet-default.md`.)_ _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service. _(2026-07-07: demoted to FALLBACK — the direct-cable **ethernet path `10.42.0.2` is now the default** deploy/control transport: ~80 Mbit/s, 0.62 ms, fixed IP; the gadget's `enx*` renames per boot.)_ |
-| **TAS5713 amplifier** | ✅ works | _(Updated 2026-07-07, v1.6.13/v1.6.15)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed** (v1.6.0 2× bug fixed by patch 0022). **⚠️ physically SILENT until v1.6.13** — `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the amp got no clock/data/frame (`aplay` rc=0); fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed audible. Since **v1.6.15** it is one selectable **PulseAudio** output (was direct ALSA); librespot feeds PA as an input. **Playback crackle diagnosed 2026-07-08** as **memory-bus / DMA contention** (McBSP2 SDMA FIFO underflows in HW under L3/EMIF contention — not a PA/CPU/network underrun); live-only PA mitigations help ("dramatically better") but the kernel audio-DMA-priority fix is **not yet done** and the tuning is **not yet baked**. See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` + `docs/2026-07-08-audio-crackle-dma-contention.md` |
+| **TAS5713 amplifier** | ✅ works | _(Updated 2026-07-07, v1.6.13/v1.6.15)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed** (v1.6.0 2× bug fixed by patch 0022). **⚠️ physically SILENT until v1.6.13** — `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the amp got no clock/data/frame (`aplay` rc=0); fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed audible. Since **v1.6.15** it is one selectable **PulseAudio** output (was direct ALSA); librespot feeds PA as an input. **Playback crackle diagnosed 2026-07-08** as **memory-bus / DMA contention** (McBSP2 SDMA FIFO underflows in HW under L3/EMIF contention — not a PA/CPU/network underrun). _(**CLOSED 2026-07-12:** two independent layers, both fixed — kernel **r41** patch 0041 (sDMA read priority; killed the load-correlated part) + **r42** patch 0042 (DPLL_ABE relocked from sys_clkin at 98.304 MHz — the metronomic ~1/s click was two free-running crystals). Hardware-verified, user-confirmed perfectly clean playback. See the 2026-07-12 note at the top + `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.)_ See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` + `docs/2026-07-08-audio-crackle-dma-contention.md` |
 | Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). **BD_ADDR is now the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |

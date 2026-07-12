@@ -4,7 +4,72 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [1.8.0] — 2026-07-09 (BT fix verified live via boot.img; full image built, on-device verification pending)
+## [Unreleased] — crackle CLOSED (kernel r41 + r42, hardware-verified 2026-07-12; release decision v1.8.1-vs-v1.9.0 open)
+
+> **The playback crackle ("lupance") investigation is CLOSED — it was TWO independent
+> faults stacked, both fixed and hardware-verified 2026-07-12:** (a) load-correlated
+> bus/DMA contention → kernel **r41** (patch `0041`, commit `fc7e280`); (b) a
+> metronomic ~1/s load-independent click from **two free-running crystals** → kernel
+> **r42** (patch `0042`, commit `9f76754`). Final state: user-confirmed **perfectly
+> clean playback** on kernel `#43-postmarketOS` (*"bez jedinyho zaskobrtnuti"*).
+> **r42 supersedes r41 as the current kernel.** A **v1.8.1 full image** (kernel r41,
+> rootfs identical to v1.8.0 content) was built and passed the full verification
+> gate 2026-07-12 but is **NOT tagged/released** — the release decision (v1.8.1
+> as-is vs a v1.9.0 with r42) is still open. Full write-up:
+> `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
+
+### Fixed
+
+- **Crackle layer A — load-correlated drops → sDMA HIGH read priority** (kernel
+  patch `0041`, `linux` r41, commit `fc7e280`). The fix owed since 2026-07-08/09:
+  `drivers/dma/ti/omap-dma.c` defines `CCR_READ_PRIORITY` (`BIT(6)`) but never
+  applies it; 0041 sets it on the **cyclic (audio) channel** and reserves a
+  high-priority GCR thread (`HI_THREAD_RESERVED=1`) so the McBSP2 FIFO-refill reads
+  outrank SDIO/USB at the sDMA/L3 port. **Verified live:** `GCR = 0x00011010`,
+  active audio channel ch20 CCR bit6 = 1. After r41 the crackle became
+  **load-INDEPENDENT** (ssh/scp no longer affected it) — the behavioral change that
+  isolated layer B.
+- **Crackle layer B — the metronomic ~1/s click = two free-running crystals →
+  DPLL_ABE relocked from sys_clkin** (kernel patch `0042` — DTS `assigned-clocks`
+  on `&mcbsp2` — `linux` r42, commit `9f76754`). Mainline `clk-44xx.c` reparents
+  `CM_ABE_PLL_REF_CLKSEL` (`abe_dpll_refclk_mux_ck`) to **sys_32k** for deep-idle
+  PM (states steelhead never enters — C1-only, patch 0024), while the TAS5713 MCLK
+  (auxclk1 12.288 MHz) derives from DPLL_PER on the **38.4 MHz** system crystal —
+  so the McBSP2 frame clock and the amp MCLK drifted at the crystals' relative ppm
+  (~21 ppm ≈ **1 sample slip/s at 48 kHz**). Stock **x-loader AND bootloader** force
+  the mux to SYS_CLK and lock DPLL_ABE at exactly **98.304 MHz** (M=64/N=24) and the
+  stock kernel never touches it — **our port was actively undoing the bootloader's
+  correct setting** (audit evidence: xloader `prcm_init` tail offsets
+  `0x5c7c–0x5ca0` — `bic #1` on `CM_ABE_PLL_REF_CLKSEL` `0x4a30610c`; bootloader
+  `0x1e0c–0x1e30`; `steelhead_init` `clk_set_parent` chain at `0xc0016770`+ in
+  `reverse-eng/vmlinux.bin`). Fix: reparent `abe_dpll_refclk_mux_ck` →
+  `sys_clkin_ck` + relock `dpll_abe_ck` at 98304000 — single reference crystal for
+  the whole audio path, stock topology. **Verified on device** (kernel
+  `#43-postmarketOS`): `clk_summary` shows the reparent + 98.304 MHz lock; playback
+  clean, user-confirmed.
+- **Fast kernel build hardened** (`scripts/build-kernel-boot.sh`, commit `554175b`):
+  the apk is now picked by **exact `pkgver-pkgrel`** from the staged APKBUILD (the
+  newest-glob selection grabbed a **stale** kernel apk from the work-volume repo);
+  no more `ls | head` (SIGPIPE → rc 141 under `pipefail`); and the kernel is found
+  by **globbing `vmlinuz*`** (newer `postmarketos-installkernel` names it
+  `boot/vmlinuz-<kernelrelease>`).
+
+### Documented
+
+- **⚠️ REPO GOTCHA — editing `kernel/dts/omap4-steelhead.dts` alone is a silent
+  no-op:** the DTS enters the kernel tree **via `kernel/patches/`** (0003 +
+  follow-ups) — that is what the build scripts stage. The first r42 build shipped
+  the OLD DTB until the DTB verification caught it; the change had to become patch
+  `0042`. Any DTS change must land as a patch and the built DTB must be verified.
+- **Windows build-host gotchas (durable):** MSYS/Git-Bash mangles the docker `-v`
+  path (`/src` → `C:/Program Files/Git/src`) — launch the build via PowerShell;
+  CRLF breaks sed-parsed APKBUILD vars and the dos2unix whitelist —
+  `core.autocrlf=false` set machine-locally + worktree renormalized to LF.
+- **v1.8.1 artifacts** (built + verification-gate-passed 2026-07-12, unreleased):
+  `output/nexusq-boot-v1.8.1.img` sha256 `5cc4e8c1…aec55d`,
+  `output/nexusq-rootfs-v1.8.1-sparse.img` sha256 `46f31943…dd9f4ca`.
+
+## [1.8.0] — 2026-07-09 (tagged 2026-07-10; BT fix verified live via boot.img)
 
 > **v1.8.0 — Bluetooth A2DP now works reliably (root cause found + fixed) + the
 > playback crackle ISOLATED to the output path + the burned v1.7.4 bake reverted to a
@@ -51,7 +116,8 @@ All notable changes to Nexus Q Reloaded. Format follows
   in the shared **PulseAudio → TAS5713 → sDMA → McBSP2** output path, directly
   confirming the 2026-07-08 bus/DMA-contention hypothesis. **Outstanding fix (NOT done
   yet):** the OMAP4 sDMA `HIGH_PRIORITY` patch (`CCR_READ_PRIORITY` on the McBSP2
-  cyclic DMA channel).
+  cyclic DMA channel). _(Done 2026-07-12 as kernel r41 patch 0041 — plus a second,
+  independent clock-drift layer fixed by r42 patch 0042; see [Unreleased] above.)_
 - **The burned v1.7.4 crackle-bake is REVERTED to a safe subset** in the device
   package (`device-google-steelhead` r38). REMOVED: the McBSP2 THRESHOLD op-mode
   service (`nexusq-mcbsp-threshold.service` — garbled audio), the 600 ms PA buffer

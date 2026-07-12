@@ -150,8 +150,11 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
 - **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
-- Kernel: mainline 6.12.12 + the 36 patches in `kernel/patches/`,
-  config `kernel/configs/steelhead_defconfig`.
+- Kernel: mainline 6.12.12 + the patches in `kernel/patches/` (42 as of kernel
+  r42, 2026-07-12), config `kernel/configs/steelhead_defconfig`.
+  ⚠️ The steelhead DTS enters the kernel tree **via those patches** (0003 +
+  follow-ups) — `kernel/dts/omap4-steelhead.dts` is the reference copy; editing it
+  alone does NOT change the built DTB.
 
 ```bash
 # kernel + dtb

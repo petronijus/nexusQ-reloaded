@@ -204,15 +204,22 @@ Findings are tagged by `kind`; interpret them like this:
   `bluez_source` (s24le/48 kHz) appears in `pactl list short sources` → looped to the
   TAS5713 sink. ANY `hci0: Frame reassembly failed (-84)` = the max-speed fix
   regressed. NOT coexistence, NOT HFP/SCO (both earlier wrong guesses). Verified live
-  (boot.img); full v1.8.0 image built, flash-verification pending.
+  (boot.img); v1.8.0 tagged 2026-07-10.
   See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
-- **Crackle ("lupance") ISOLATED to the OUTPUT path (2026-07-09)** — A2DP
-  (`phone → BT → PA`, a wholly different input) crackles the SAME as librespot → the
-  fault is NOT app/librespot/WiFi, it is the shared `PA → TAS5713 → sDMA → McBSP2`
-  path (bus/DMA contention). Mitigation baked v1.8.0 = **`tsched=0`** in
-  `/etc/pulse/default.pa` (via the apk trigger; healthy tell: `grep tsched
-  /etc/pulse/default.pa` → `module-udev-detect tsched=0`) + Speaker-unity pin. The
-  root-cause fix (OMAP4 sDMA `HIGH_PRIORITY` on the McBSP2 channel) is **outstanding**.
+- **Crackle ("lupance") CLOSED 2026-07-12 — two independent kernel fixes (r41 + r42),
+  verified clean playback on `#43-postmarketOS`.** (a) Load-correlated drops =
+  bus/DMA contention → kernel **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on the
+  cyclic audio channel + GCR `HI_THREAD_RESERVED=1`). **Healthy tell:** sDMA
+  `GCR = 0x00011010`, active audio channel CCR **bit6 = 1** (verified on ch20).
+  (b) Metronomic ~1/s load-independent click = two free-running crystals (DPLL_ABE
+  ref on sys_32k vs TAS5713 MCLK on the 38.4 MHz crystal) → kernel **r42** patch
+  **0042** (DPLL_ABE relocked from sys_clkin). **Healthy tell:** `clk_summary` shows
+  `abe_dpll_refclk_mux_ck` under `sys_clkin_ck` and `dpll_abe_ck` = **98304000**;
+  a mux under `sys_32k_ck` or another rate = regression, the 1 Hz click returns.
+  Baked mitigation from v1.8.0 still present: **`tsched=0`** in
+  `/etc/pulse/default.pa` (healthy tell: `grep tsched /etc/pulse/default.pa` →
+  `module-udev-detect tsched=0`) + Speaker-unity pin.
+  See `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
   ⛔ v1.7.4 was a burned bake — its THRESHOLD service / 600 ms buffer / RT configs were
   removed; if any reappear (`nexusq-mcbsp-threshold.service`, `60-nexusq-latency.conf`,
   `CPUSchedulingPolicy` on the user units) it regressed.

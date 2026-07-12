@@ -18,6 +18,13 @@ Agent tool (`subagent_type: "nexusq-build"`), passing any specifics the user gav
 (target version, whether to do a cold rebuild / wipe the `nexusq-workdir` volume,
 whether to also extract+sparse-convert the artifacts).
 
+⚠️ **Kernel/DTS gotcha (2026-07-12):** editing `kernel/dts/omap4-steelhead.dts`
+alone is a **silent no-op** — the DTS enters the kernel tree via
+`kernel/patches/` (0003 + follow-ups), which is what the build stages. Any DTS
+change must become a patch (+ pkgrel bump) and the built DTB must be verified to
+contain it. On this Windows host, launch docker via **PowerShell** (MSYS/Git-Bash
+mangles `/src`) and keep files **LF** (CRLF breaks sed-parsed APKBUILD vars).
+
 The agent owns: the correct `docker run` invocation (never `./docker-build.sh` on
 the host, never sudo, never from a git worktree), live monitoring, the
 known-failure catalog with fixes (channel mismatch → volume wipe, oversized

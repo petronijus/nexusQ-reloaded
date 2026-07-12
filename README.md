@@ -44,7 +44,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash · **genuinely clean boot log** — 0 failed units, `dmesg` err/warn EMPTY, and `journalctl -b -p warning` down to only 3 documented-external lines (all ~15 v1.6.9 residual err/warn lines root-caused + fixed) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · since v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS · v1.4.0 (governor `ondemand` again — verified on device 2026-07-03, ships in v1.6.6; was `conservative` v1.5.0–v1.6.5) |
-| 🔊 **TAS5713 25 W speaker** | ✅ | **audible since v1.6.13** (kernel r36). The software pipeline (driver/PCM/softvol, correct pitch — 2× clock bug) landed v1.6.1, but the physical amp was **silent through every earlier release**: `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the McBSP2 I2S clock/data/frame never reached the amp (`aplay` rc=0, nothing driven). Root-caused + fixed in DTS 2026-07-07 (stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0) → user-confirmed audible. Now one selectable PulseAudio output (**v1.6.15**, shipped in v1.7.0). Residual playback **crackle ISOLATED 2026-07-09 to the common OUTPUT path** (`PulseAudio → TAS5713 → sDMA → McBSP2`): A2DP (`phone → BT → PA`, a wholly different input) crackles the SAME as librespot → NOT the app/librespot/WiFi, confirming the 2026-07-08 **memory-bus / DMA-contention** diagnosis (the McBSP2 SDMA FIFO underflows in hardware when other bus masters contend on L3/EMIF). Mitigation baked in v1.8.0 = `tsched=0` (via the apk trigger) + Speaker-unity pin; the **root-cause kernel fix — OMAP4 sDMA `HIGH_PRIORITY` (`CCR_READ_PRIORITY`) on the McBSP2 DMA channel — is outstanding**. See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md` + `docs/2026-07-08-audio-crackle-dma-contention.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` |
+| 🔊 **TAS5713 25 W speaker** | ✅ | **audible since v1.6.13** (kernel r36). The software pipeline (driver/PCM/softvol, correct pitch — 2× clock bug) landed v1.6.1, but the physical amp was **silent through every earlier release**: `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the McBSP2 I2S clock/data/frame never reached the amp (`aplay` rc=0, nothing driven). Root-caused + fixed in DTS 2026-07-07 (stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0) → user-confirmed audible. Now one selectable PulseAudio output (**v1.6.15**, shipped in v1.7.0). The residual playback **crackle is CLOSED 2026-07-12 — it was TWO independent faults, both fixed** (hardware-verified, user-confirmed perfectly clean playback): (a) load-correlated bus/DMA contention → kernel **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on the cyclic audio channel + GCR `HI_THREAD_RESERVED=1`; verified `GCR=0x00011010`, ch20 CCR bit6=1); (b) a metronomic ~1/s click from **two free-running crystals** — mainline reparented the DPLL_ABE reference to sys_32k while the TAS5713 MCLK sat on the 38.4 MHz crystal (~21 ppm ≈ 1 sample slip/s @ 48 kHz) → kernel **r42** patch **0042** relocks DPLL_ABE from `sys_clkin` at exactly 98.304 MHz, the stock topology the bootloader sets and our port was undoing. See `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md` (+ the 07-08/07-09 diagnosis notes) |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, streams over 5 GHz · v1.6.1 · **now a PulseAudio input** (systemd user unit → `--device pulse`), one movable PA sink-input · v1.6.15 |
 | 🔊 **Audio output selection** (speaker / optical / HDMI) | ✅ | **v1.6.15** (shipped in v1.7.0): PulseAudio is the hub, the active output = the PA default sink, picked from the companion app (`listOutputs`/`setOutput` → `pactl set-default-sink` + move all sink-inputs + class-D amp safety toggle). Input-agnostic + future-proof (BT-A2DP / Tidal / casting can join as further PA inputs) |
 | 🔴 **LED music visualizer** | ✅ | the ring dances to the beat · v1.6.2 · **5 selectable visualisations** + breathing color themes · idle-keepalive (no more dark-after-idle AVR starvation) · v1.6.5 · **volume-independent** — re-tapped to the active output's PA monitor + an AGC (auto-gain) so it reacts to the music at any listening volume, no low-volume flicker · v1.6.15 · **tap now gated on playback** so the amp sink suspends when idle (idle CPU ~7 % → ~1 %) · v1.7.1 |
@@ -153,13 +153,13 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **40 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **42 patches** in `kernel/patches/`), the
 local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`.
 
 ```
-kernel/      dts · defconfig · 40 mainline patches
+kernel/      dts · defconfig · 42 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
 userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
 reverse-eng/ ground truth extracted from the factory kernel
@@ -192,8 +192,9 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.13 ─ ✦ TAS5713 speaker finally AUDIBLE (McBSP2 pinmux) + SPDIF bring-up      2026-07-07
 1.6.15 ─ ✦ PA-centric audio: multi-input → PulseAudio → app-selectable output · LED AGC   2026-07-07
 1.6.16 ─ ✦ physical volume dial → PulseAudio + tray icon follows output           2026-07-07
-1.7.0 ── ✦ NFC tap-to-send (reverse-HCE, Q → phone) · companion auto-reconnect   ← latest tag  2026-07-08
-1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   ← built · BT verified live, full-image flash pending  2026-07-09
+1.7.0 ── ✦ NFC tap-to-send (reverse-HCE, Q → phone) · companion auto-reconnect   2026-07-08
+1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   ← latest tag (2026-07-10)
+next ─── ✦ playback crackle CLOSED — sDMA read-priority (r41) + DPLL_ABE sys_clkin relock (r42)   hardware-verified 2026-07-12 · release pending (v1.8.1 vs v1.9.0)
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

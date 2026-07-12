@@ -198,17 +198,25 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   100%; now Master-only: PA 50% = +6 dB, 100% = +24 dB, user-confirmed). Note: r35 +
   nexusq-control r8 (dial→app sync) are BUILDING into v1.7.3, verified live but not
   yet in a flashed image. Deferred polish: boot default should be speaker-not-spdif.
-  **Crackle / "lupance" DIAGNOSED 2026-07-08 = memory-bus / DMA contention** (the
-  McBSP2 audio SDMA underflows the FIFO in HARDWARE when other bus masters — WiFi
-  SDIO, the USB-ethernet LAN9500A, memory-heavy tasks — contend on L3/EMIF). Diag
-  note: **`0` PA XRUN / `0` dmesg underruns / low CPU does NOT rule it out** — it is
-  below the PA buffer (DMA→FIFO is hardware-timed) and below thread scheduling (SDMA
-  = DMA engine + hardirq; WiFi RX = softirq/NAPI, above all userspace SCHED_FIFO). It
-  worsens with ANY concurrent activity incl. ssh-over-ethernet (USB here), so it is
-  NOT WiFi-specific; `cpu_dma_latency=0` doesn't help. Live-only PA mitigations
-  (`tsched=0`, ~400 ms buffer, RT priority) help but the root-cause kernel fix
-  (sDMA `HIGH_PRIORITY`/L3-EMIF QoS/omap-mcbsp PM-QoS) is NOT done and the tuning is
-  NOT baked. Full note: `docs/2026-07-08-audio-crackle-dma-contention.md`.
+  **Crackle / "lupance" CLOSED 2026-07-12 — it was TWO independent faults, both
+  fixed in the kernel** (diagnosis history: 2026-07-08 DMA-contention note +
+  2026-07-09 output-path isolation). (a) Load-correlated drops = memory-bus / DMA
+  contention (the McBSP2 audio SDMA underflows the FIFO in HARDWARE under L3/EMIF
+  contention — `0` PA XRUN / `0` dmesg underruns / low CPU does NOT rule it out,
+  it sits below the PA buffer and below thread scheduling) → fixed by kernel
+  **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on the cyclic audio channel +
+  GCR `HI_THREAD_RESERVED=1`). **Healthy tell:** sDMA `GCR = 0x00011010` and the
+  active audio channel's CCR has **bit6 = 1** (verified live on ch20).
+  (b) A metronomic ~1/s load-independent click = TWO free-running crystals
+  (mainline reparents the DPLL_ABE ref to sys_32k while TAS5713 MCLK sits on the
+  38.4 MHz crystal; ~21 ppm ≈ 1 sample slip/s @ 48 kHz) → fixed by kernel **r42**
+  patch **0042** (DPLL_ABE relocked from sys_clkin at 98.304 MHz, stock topology).
+  **Healthy tell:** `/sys/kernel/debug/clk/clk_summary` shows
+  `abe_dpll_refclk_mux_ck` under `sys_clkin_ck` and `dpll_abe_ck` at **98304000**;
+  a mux back under `sys_32k_ck` or a different DPLL_ABE rate = the fix regressed
+  and the 1 Hz click will return. Verified clean playback on `#43-postmarketOS`
+  (user-confirmed). Notes: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`
+  (+ `docs/2026-07-08-audio-crackle-dma-contention.md` for the contention diag method).
   ℹ️ **Historical (FIXED in v1.6.1):** the v1.6.0 path played **2× too fast** (FSYNC at
   2× rate; 60 s drained in ~30 s), which made a librespot/Spotify track **auto-skip
   ~40 s in** — that was the audio-clock bug, **not** a librespot crash (the service

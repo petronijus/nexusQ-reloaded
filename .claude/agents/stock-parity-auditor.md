@@ -127,3 +127,16 @@ of the rigor expected; verify it still holds and audit whatever the caller asks.
 > (PORTSC CCS=0). Fix = DTS `OMAP4_IOPAD(0x186, PIN_OUTPUT | MUX_MODE3)`
 > (kernel `#33`). Same pinmux-miss class as the NFC bug — a reminder to always
 > verify pinmux at the IOPAD-offset level, never at the logical-signal level.
+
+> **Worked win (2026-07-12) — the audio-clock audit must include the BOOTLOADERS,
+> not just the stock kernel.** The metronomic ~1/s playback click was mainline
+> undoing a *bootloader* clock setting: stock **x-loader** (`prcm_init` tail, file
+> offsets `0x5c7c–0x5ca0`: `bic #1` on `CM_ABE_PLL_REF_CLKSEL` `0x4a30610c`) AND
+> the **second-stage bootloader** (offsets `0x1e0c–0x1e30`) force the DPLL_ABE
+> reference mux to SYS_CLK and lock DPLL_ABE at exactly 98.304 MHz (M=64/N=24);
+> the stock kernel merely inherits it (`steelhead_init` `clk_get`/`clk_set_parent`
+> chain @ `0xc0016770`+ in `reverse-eng/vmlinux.bin`), while mainline `clk-44xx.c`
+> reparented the mux to sys_32k at clk init → two free-running crystals in the
+> audio path. Fix = kernel patch `0042` (r42). Lesson: "the stock kernel doesn't
+> touch it" does NOT mean the value is a hardware default — diff against the
+> x-loader/bootloader init too.
