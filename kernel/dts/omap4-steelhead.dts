@@ -801,11 +801,31 @@
 	 * The internal SRG already runs at 24.576 MHz via the bit-26 default;
 	 * we now set the parents explicitly so the intent is unambiguous and the
 	 * invalid -EINVAL reparent is gone.
+	 *
+	 * DPLL_ABE reference (CM_ABE_PLL_REF_CLKSEL): mainline clk-44xx.c
+	 * reparents it to sys_32k for deep-idle PM -- states steelhead never
+	 * enters (C1-only, see patch 0024). The stock x-loader and bootloader
+	 * lock DPLL_ABE from sys_clkin (38.4 MHz, M=64/N=24 = exactly
+	 * 98.304 MHz) and the stock kernel leaves it alone. With the mainline
+	 * 32k reference the McBSP2 bit/frame clocks (DPLL_ABE, 32.768 kHz
+	 * watch crystal) and the TAS5713 MCLK (DPLL_PER, 38.4 MHz system
+	 * crystal) free-run against each other and beat at the crystals'
+	 * relative ppm offset: the amp slips one sample per ~1 s -- a
+	 * metronomic, load-independent playback click. Reparent the ABE DPLL
+	 * back to sys_clkin (= stock topology, single reference crystal for
+	 * the whole audio path) and relock at 98.304 MHz. assigned-clock
+	 * parents are applied before rates, so the relock uses the new
+	 * reference.
 	 */
-	assigned-clocks = <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>,
+	assigned-clocks = <&abe_dpll_refclk_mux_ck>,
+			  <&dpll_abe_ck>,
+			  <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>,
 			  <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 24>;
-	assigned-clock-parents = <&abe_24m_fclk>,
+	assigned-clock-parents = <&sys_clkin_ck>,
+				 <0>,
+				 <&abe_24m_fclk>,
 				 <&abe_clkctrl OMAP4_MCBSP2_CLKCTRL 26>;
+	assigned-clock-rates = <0>, <98304000>, <0>, <0>;
 	#sound-dai-cells = <0>;
 	status = "okay";
 };
