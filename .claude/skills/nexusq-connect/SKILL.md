@@ -33,9 +33,10 @@ a profile fault) — `ls /sys/class/net` for `eth0` first, get onto `#33`; devic
 eth0's hw MAC is random per boot — no MAC EEPROM),
 **USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
 changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
-serial console as a fallback), and **WiFi** (stable FINAL IP **`192.168.20.195`**
-since the 2026-07-03 batch-2b/`#29` factory-MAC flash — try it directly; else
-look the lease up in OPNsense
+serial console as a fallback), and **WiFi** (last-known lease
+**`192.168.20.184`** as of 2026-07-12 — the factory-MAC pin does NOT freeze the
+lease, the router reassigned `.195`→`.184`; try the last-known IP but **never
+hardcode it** — else look the lease up in OPNsense
 via the `opnsense-api` helper, matching hostname `steelhead` or the MAC per the
 flashed image: the **factory `f8:8f:ca:20:48:e1` on `#29`+** (NM-pinned,
 verified on air), the chip's OTP `14:7d:c5:3a:35:b5` on the interim `#27`

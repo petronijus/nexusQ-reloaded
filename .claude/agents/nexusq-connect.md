@@ -18,19 +18,21 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.6.8** (kernel `#33`; device
-pkg r21 with the eth profiles BAKED). **eth-direct now works from a cold boot —
+"connect like this: `<cmd>`". The device runs **v1.8.1** (kernel `#43`/r42,
+flashed 2026-07-12; eth profiles baked since r21). **eth-direct now works from a cold boot —
 task #17 is FULLY CLOSED (2026-07-06):** the "enumeration intermittency" was an
 unmuxed `gpio_1` NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux in
 `#33`; a true cold power-cycle enumerates `eth0` 100Mbps/Full. The old "flap"
 was an NM config loop, fixed by the baked profiles. (On a **pre-v1.6.8/`#33`**
 image `eth0` could be absent on cold boots — that was the unmuxed pad, not a
 profile fault; power-cycle onto `#33` or use another path.) The USB gadget
-renames its iface + changes MAC every reboot; WiFi is stable at
-**`192.168.20.195`** — the FINAL IP since the
-2026-07-03 batch-2b flash (`#29`), which pins the **factory MAC
-`f8:8f:ca:20:48:e1`** (NM `cloned-mac-address`). Older images: `.175` on the
-`#27` stable-MAC flash (OTP MAC), wandering per-boot IPs on v1.6.5. Re-discover
+renames its iface + changes MAC every reboot; WiFi last leased
+**`192.168.20.184`** (since 2026-07-12) — the on-air **factory MAC
+`f8:8f:ca:20:48:e1`** is pinned (NM `cloned-mac-address`, since the 2026-07-03
+`#29` flash) but **the router can still reassign the lease** (it moved
+`.195`→`.184` on 2026-07-12), so **treat any WiFi IP as a hint, never a
+constant**. Older leases: `.195` (2026-07-03→07-12), `.175` on the interim
+`#27` OTP-MAC flash, wandering per-boot IPs on v1.6.5. Re-discover
 by hostname `steelhead` or the factory MAC if it ever moves. Do not modify the
 device (sole allowed exception: `nmcli c up eth-direct` — activating the baked
 static profile, see Transport A).
@@ -57,25 +59,28 @@ Run these near-instant checks; the moment one `ssh` works, that is the answer:
    it.)
 2. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
    (Composite RNDIS+ACM gadget; solid fallback, but its `enx*` name changes per boot.)
-3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Current stable
-   FINAL IP (since the 2026-07-03 batch-2b/`#29` flash):
-   `192.168.20.195` (`ssh root@192.168.20.195`). (`.175` was the interim
-   `#27`-era IP; only stale-lease relevant now.)
+3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Last-known
+   lease (2026-07-12): `192.168.20.184` (`ssh root@192.168.20.184`) — but the
+   router CAN reassign it (it moved from `.195` on 2026-07-12), so a miss here
+   just means "look up the lease", not "WiFi is down". (`.195` = 2026-07-03→
+   07-12 lease, `.175` = the interim `#27`-era one.)
 If any of those ssh-verifies → report it and STOP. Only if ALL fail do you drop to
 the slow discovery in the per-transport sections below (host-IP setup, IPv6
 link-local, mDNS, OPNsense lease lookup).
 
 ## Device facts
 - Hostname: **`steelhead`** (→ try `steelhead.local` via mDNS).
-- WiFi lives on **vlan20** (`192.168.20.x`, DHCP). Since the 2026-07-03
-  batch-2b flash (`#29`, the v1.6.6-candidate) the IP is **stable and FINAL:
-  `192.168.20.195`** — try it directly.
+- WiFi lives on **vlan20** (`192.168.20.x`, DHCP). The on-air MAC is stable
+  (factory-pinned since the 2026-07-03 `#29` flash) but **the lease is NOT
+  guaranteed stable** — the router reassigned `.195`→`.184` on 2026-07-12.
+  Last-known: `192.168.20.184` — try it first, then lease-lookup by
+  hostname/MAC. **Never hardcode the WiFi IP.**
 - **WiFi on-air MAC — depends on the flashed image** (which one is on the
   device: check `uname -r`/`#N` or just match both MACs in leases):
-  - **currently flashed (`#29`, since 2026-07-03)**: the **factory
-    `f8:8f:ca:20:48:e1`** — the baked profile pins
+  - **currently flashed (`#29`+ through the current `#43`/v1.8.1)**: the
+    **factory `f8:8f:ca:20:48:e1`** — the baked profile pins
     `cloned-mac-address=F8:8F:CA:20:48:E1` at the NM layer (verified on air;
-    lease = `192.168.20.195`).
+    lease `.195` 2026-07-03→07-12, then `.184`).
   - the interim `#27` image used the chip's **OTP `14:7d:c5:3a:35:b5`**
     (`wifi-stable-mac.conf` `cloned-mac-address=permanent`; brcmfmac never
     reads the factory-cal MAC, and a live driver-reload test proved it ignores
@@ -95,8 +100,8 @@ link-local, mDNS, OPNsense lease lookup).
   (`eth-lan`/`eth-direct`/`no-auto-default`) are baked since device pkg r21 —
   in the flashed image since v1.6.7 (2026-07-05)**. A
   reflash also **regenerates the ssh host key** — `ssh-keygen -R 172.16.42.1;
-  ssh-keygen -R 192.168.20.195; ssh-keygen -R 10.42.0.2` before the first
-  post-flash ssh.
+  ssh-keygen -R <current WiFi IP, e.g. 192.168.20.184>; ssh-keygen -R 10.42.0.2`
+  before the first post-flash ssh.
 - sudo on this host: `SUDO_PASS=$(op-cache "sudo petronijus-PC" password); echo "$SUDO_PASS" | sudo -S <cmd>`.
 - Prefer **IPv4**: this host has had a dead IPv6 default route make ssh hang
   ("Connection failed"); if a name resolves to v6 and it stalls, use the v4 literal.
@@ -152,8 +157,8 @@ to get a shell" and stop. Otherwise probe the transports below.
   fallback (the caller can `screen /dev/ttyACM0 115200`).
 
 ## Transport C — WiFi (vlan20, DHCP)
-- Try `192.168.20.195` first (the FINAL IP since the 2026-07-03 batch-2b/`#29`
-  factory-MAC image), or
+- Try the last-known lease first (`192.168.20.184` as of 2026-07-12; `.195`
+  before that — the router CAN reassign it even with the pinned factory MAC), or
   the caller-supplied IP. Otherwise **find the lease in OPNsense** with the
   `opnsense-api` helper (`~/.local/bin/opnsense-api`, caches creds):
   `opnsense-api GET /api/dhcpv4/leases/searchLease` (ISC) — if that 404s, try the
@@ -168,8 +173,9 @@ to get a shell" and stop. Otherwise probe the transports below.
 ### Joining WiFi after a fresh flash (wlan0 disconnected, no saved profile)
 Since 2026-07-03 the image **bakes the WiFi profile** (generated by
 `scripts/gen-wifi-profile.sh` from the private overlay) — a freshly-flashed
-device auto-joins (verified: came up on `.175` on `#27`, then the final
-`192.168.20.195` on `#29`). Manual rejoin is only
+device auto-joins (verified: `.175` on `#27`, `.195` on `#29`,
+`.184` after the 2026-07-12 v1.8.1 flash — the lease moves, the MAC doesn't).
+Manual rejoin is only
 needed if the build was made WITHOUT the generated profile (public build /
 profile not generated). Then (reach the device over the USB gadget first):
 - **SSID:** `Svatovitske-Internety-5g` — **always the 5 GHz one** (2.4 GHz suffers the

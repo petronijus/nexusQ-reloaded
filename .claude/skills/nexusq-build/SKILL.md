@@ -22,8 +22,15 @@ whether to also extract+sparse-convert the artifacts).
 alone is a **silent no-op** — the DTS enters the kernel tree via
 `kernel/patches/` (0003 + follow-ups), which is what the build stages. Any DTS
 change must become a patch (+ pkgrel bump) and the built DTB must be verified to
-contain it. On this Windows host, launch docker via **PowerShell** (MSYS/Git-Bash
+contain it. On a Windows host, launch docker via **PowerShell** (MSYS/Git-Bash
 mangles `/src`) and keep files **LF** (CRLF breaks sed-parsed APKBUILD vars).
+
+⚠️ **Firmware-overlay gotcha (2026-07-12):** on any new/other build machine the
+gitignored `./firmware/` overlay must be populated
+(`cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal firmware/`) or the
+build silently packs the **empty `firmware-google-steelhead` fallback** → the
+image boots with **no wlan0 / no BT** (bit the first v1.8.1 flash). Gate: build
+log says `Staged BCM4330 firmware` + rootfs `/lib/firmware/brcm/` is complete.
 
 The agent owns: the correct `docker run` invocation (never `./docker-build.sh` on
 the host, never sudo, never from a git worktree), live monitoring, the

@@ -94,23 +94,18 @@ Three failure modes hit while building r41/r42:
    instead of `boot/vmlinuz`. Fixed: extract the whole `boot/` tree and **glob
    `vmlinuz*`** (busybox tar has no `--wildcards`).
 
-## 5. Release state — v1.8.1 = kernel r42 (released same evening)
+## 5. Release state — v1.8.1 = kernel r42 (finalized on Ubuntu, see §7)
 
 - The user decided the release is **v1.8.1 with kernel r42**. An intermediate
   same-day **r41-only** build of that version passed the gate first (its artifacts
   had sha256 `5cc4e8c1…`/`46f31943…`) but was **superseded and overwritten** before
   release.
-- Final v1.8.1 artifacts (full verification gate passed 2026-07-12 evening; the
-  Docker-crash-interrupted extraction was redone and every hash proven end-to-end):
-  - `nexusq-boot-v1.8.1.img` — sha256 `517483798331b57e79564cb7e47412a18f673691ee7e9afbb8af67cb9babd7bf`
-    (bit-identical to the DTB-verified `boot-r42-abe-sysclk.img`)
-  - `nexusq-rootfs-v1.8.1-sparse.img` — sha256 `ab6bc0dcd92451bac5920a358bf040d230bd63cdb6b1c634fe1387ddb398b915`
-    (all-RAW, 34 chunks; de-sparse round-trip == raw `065baada6e9931b36f67dba4a101d76dbab3909171af154815a7b037ce025a24`)
-  - rootfs proven to install `linux-google-steelhead-6.12.12-r42`, init=systemd,
-    python3 3.14.5-r5 with the libpython ship gate CLEAN.
-- **Flashed to the device** (boot + userdata) the same evening — **but this rootfs
-  shipped WITHOUT WiFi/BT firmware** (see below) and must be rebuilt + re-flashed
-  before the v1.8.1 tag.
+- The Windows-built v1.8.1 artifacts (verification gate passed 2026-07-12
+  afternoon; boot sha256 `51748379…babd7bf`, sparse `ab6bc0dc…98b915`) were
+  **SUPERSEDED the same evening** by the Ubuntu rebuild in §7 — the Windows rootfs
+  shipped WITHOUT WiFi/BT firmware (the gotcha below). The r42 kernel *source* is
+  identical between the two builds; the byte differences are rebuild artifacts.
+- **The FINAL v1.8.1 artifacts + hashes are in §7.**
 
 ### ⚠️ Firmware-overlay machine-setup gotcha (found by the flash)
 
@@ -123,8 +118,9 @@ empty package. It is populated there now (2026-07-12). **On any new build machin
 `cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal firmware/` first**,
 and check the build log for `Staged BCM4330 firmware` (NOT the empty fallback).
 The verification gate must include `/lib/firmware/brcm/` contents from now on.
-Final v1.8.1 rebuild + re-flash + tag handed over to the Ubuntu machine (the
-audio-fix verification above is unaffected — it was done on the prior rootfs).
+The final v1.8.1 rebuild + re-flash was handed over to the Ubuntu machine and
+**completed the same evening — see §7** (the audio-fix verification above is
+unaffected — it was done on the prior rootfs).
 
 ## 6. Session context — Windows build-host gotchas (durable)
 
@@ -134,3 +130,65 @@ audio-fix verification above is unaffected — it was done on the prior rootfs).
 - **CRLF broke the build**: sed-parsed APKBUILD vars and the dos2unix whitelist
   choke on CRLF line endings. During the v1.8.1 build `core.autocrlf` was set
   **false machine-locally** and the worktree **renormalized to LF**.
+
+## 7. FINAL v1.8.1 — Ubuntu rebuild + flash + 10/10 acceptance (2026-07-12 evening)
+
+Completion of the Windows→Ubuntu handover: the image was rebuilt on
+`petronijus-PC` with the **populated `./firmware/` overlay**, flashed, and
+acceptance-swept. This closes the v1.8.1 release work (tag next).
+
+### Build (full docker build, exit 0 — ALL verification gates PASS)
+
+- Firmware staging confirmed: build log `Staged BCM4330 firmware` (NOT the empty
+  fallback); rootfs `/lib/firmware/brcm/` complete — `brcmfmac4330-sdio.bin` +
+  `.txt`, `BCM4330B1.hcd`, and the `google,steelhead` board-named aliases.
+- Kernel: `linux-google-steelhead-6.12.12-r42` (`#43-postmarketOS`).
+- DTB decompiled **from the packed boot.img** confirms the 0042 fix: `&mcbsp2`
+  `assigned-clocks` (`abe_dpll_refclk_mux_ck` → `sys_clkin_ck`, `dpll_abe_ck`
+  98304000).
+- libpython ship gate CLEAN (3×); boot.img ramdisk-less **5,543,936 B**; sparse
+  rootfs all-RAW **23 chunks**, de-sparse round-trip verified against the raw.
+
+### FINAL artifact hashes (`output/nexusq-v1.8.1.sha256`)
+
+- `nexusq-boot-v1.8.1.img` — sha256
+  `6d55b3485e9b1704ec398348ed8e30e8fb50b4628f69a8337f1d60d6bfd42157`
+- `nexusq-rootfs-v1.8.1-sparse.img` — sha256
+  `ec3d47a03cb0ff73940ee40054e8153586b649856d1d2da36e162c16fe1c748d`
+- `nexusq-rootfs-v1.8.1-raw.img` — sha256
+  `d4f1bba550002f21f377c862bbe32bbe50185c9ee0eb183552d5f50c23bd6f2e`
+
+These SUPERSEDE the Windows-build hashes in §5 (boot `51748379…`, sparse
+`ab6bc0dc…`, raw `065baada…`). The boot.img was rebuilt too — **same r42
+source**, the byte difference is only from the rebuild.
+
+### Acceptance — full nexusq-diag sweep, **10/10 PASS** (`nq-captures/20260712-233542/`)
+
+- `uname`: `6.12.12 #43-postmarketOS` (kernel r42).
+- Clock fix live: `abe_dpll_refclk_mux_ck` under `sys_clkin_ck`, DPLL_ABE
+  **98.304 MHz**.
+- sDMA fix live: `GCR 0x00011010`, audio channel CCR bit6 = 1.
+- **WiFi RESTORED** (the Windows-rootfs regression fixed): 5 GHz associated,
+  IP **192.168.20.184**, factory MAC `f8:8f:ca:20:48:e1` correct.
+- **BT RESTORED**: controller `F8:8F:CA:20:49:E5`, `Frame reassembly failed` = 0.
+- Audio stack healthy: TAS5713 default sink, 48 kHz, `tsched=0`, Speaker at
+  unity, idle-suspended.
+- CPU 1.2 GHz reached, VDD_MPU **1380 mV exact**; thermal peak **96.7 °C**, no
+  throttle (the thin-headroom watch-item stands).
+- `dmesg` err/warn EMPTY; journal = only the 3 known externals; **0 failed
+  units**; nexusqd / NFC / python3 healthy.
+
+### ⚠️ Durable operational note — the WiFi DHCP lease CAN move
+
+The router reassigned the lease **`.195` → `192.168.20.184`** on 2026-07-12
+even though wlan0 keeps the pinned factory MAC (router-side reassignment; eth0's
+random-per-boot MAC was already known). **The connect flow must not hardcode
+`.195`** — treat any cached WiFi IP as a hint and re-discover by hostname
+`steelhead` / factory MAC in the router leases.
+
+### Remaining
+
+- Tag `v1.8.1` (main session, right after this sweep) — closes the Todoist
+  AI-handover item "finish v1.8.1 on Ubuntu".
+- Human step: the user's listening test on the final image (the crackle fix was
+  already user-confirmed on the earlier r42 boot).

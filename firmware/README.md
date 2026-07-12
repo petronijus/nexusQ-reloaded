@@ -87,3 +87,15 @@ APKBUILD installs them to `/lib/firmware/brcm/`. So you only need to place
 If the proprietary blobs are **absent** (a public clone without the overlay),
 `docker-build.sh` automatically swaps in an **empty** `firmware-google-steelhead`
 package so the build still succeeds; WiFi/BT simply come up with no firmware.
+
+> ⚠️ **Machine-setup gotcha (bit the first v1.8.1 flash, 2026-07-12):** the empty
+> fallback is SILENT for the maintainer too — on a build machine where the
+> gitignored `./firmware/` overlay was never populated, the image builds and
+> flashes fine but boots with **no `wlan0` and no BT** (`/lib/firmware/brcm/`
+> empty). On any new build machine stage the blobs FIRST
+> (`cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal firmware/`, or
+> `./scripts/setup-firmware.sh`), and verify the build log says
+> **`Staged BCM4330 firmware`** — not the empty fallback. The image verification
+> gate now also checks the rootfs `/lib/firmware/brcm/` contents (the final
+> v1.8.1 rebuild verified `brcmfmac4330-sdio.bin`/`.txt` + `BCM4330B1.hcd` + the
+> `google,steelhead` aliases present).

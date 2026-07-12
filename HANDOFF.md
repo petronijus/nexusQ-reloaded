@@ -4,7 +4,7 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-12 (latest): **CRACKLE CLOSED — two independent layers, both fixed (kernel r41 sDMA priority + r42 DPLL_ABE sys_clkin); v1.8.1 built (unreleased)**
+## Session 2026-07-12 (latest): **CRACKLE CLOSED — two independent layers, both fixed (kernel r41 sDMA priority + r42 DPLL_ABE sys_clkin); v1.8.1 FINAL — rebuilt on Ubuntu, flashed, acceptance 10/10**
 
 Full write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
 Commits: `fc7e280` (r41, patch 0041), `9f76754` (r42, patch 0042), `554175b`
@@ -55,19 +55,38 @@ CRLF broke sed-parsed APKBUILD vars + the dos2unix whitelist —
 
 📦 **Release state:** **v1.8.1 = kernel r42** (user decision; an intermediate
 r41-only build of the same version passed the gate earlier that day but was
-superseded and its artifacts overwritten). A full build passed the gate and was
-flashed 2026-07-12 evening — **but shipped WITHOUT WiFi/BT firmware**: the
-Windows machine's gitignored `./firmware/` overlay had never been populated, so
-`docker-build.sh` silently packed the empty `firmware-google-steelhead`
-fallback (no `wlan0`, `/lib/firmware/brcm/` empty). Overlay populated
-(`cp private/firmware/{bcm4330.hcd,bcmdhd.cal} firmware/`); **the final v1.8.1
-rebuild + re-flash + tag is handed over to the Ubuntu machine** (Todoist
-AI-handover). Device meanwhile runs r42 boot + the firmware-less rootfs,
-reachable via USB gadget `172.16.42.1` / eth-direct only. The r42 boot.img is
-final (sha256 `51748379…0ae42e`, DTB-verified).
+superseded and its artifacts overwritten). The first full flash (Windows build)
+**shipped WITHOUT WiFi/BT firmware**: the Windows machine's gitignored
+`./firmware/` overlay had never been populated, so `docker-build.sh` silently
+packed the empty `firmware-google-steelhead` fallback (no `wlan0`,
+`/lib/firmware/brcm/` empty). Overlay populated
+(`cp private/firmware/{bcm4330.hcd,bcmdhd.cal} firmware/`) and **the FINAL
+v1.8.1 image was rebuilt on Ubuntu the same evening** — full docker build exit 0,
+ALL gates PASS (`Staged BCM4330 firmware` in the log, `/lib/firmware/brcm/`
+complete incl. the `google,steelhead` aliases, kernel 6.12.12-r42
+`#43-postmarketOS`, DTB decompiled from the packed boot.img carries the 0042
+assigned-clocks, libpython CLEAN 3×, boot.img ramdisk-less 5,543,936 B, sparse
+all-RAW 23 chunks round-trip-verified). **Flashed (fastboot boot + chunked
+sparse userdata) and ACCEPTANCE-PASSED 10/10** via the full nexusq-diag sweep
+(`nq-captures/20260712-233542/`): uname `#43`/r42; clock fix live
+(abe_dpll_refclk_mux under sys_clkin, DPLL_ABE 98.304 MHz); sDMA GCR
+`0x00011010` + audio ch CCR bit6=1; **WiFi RESTORED** (5 GHz associated, IP
+**192.168.20.184** — lease moved from `.195` router-side despite the pinned
+factory MAC `f8:8f:ca:20:48:e1` → **never hardcode the WiFi IP**); **BT
+RESTORED** (`F8:8F:CA:20:49:E5`, 0 frame-reassembly); audio stack healthy
+(TAS5713 default, 48 k, tsched=0, Speaker unity, idle-suspended); CPU 1.2 GHz +
+VDD_MPU 1380 mV exact; thermal peak 96.7 °C no throttle (watch-item stands);
+dmesg err/warn EMPTY; journal = only the 3 known externals; 0 failed units;
+nexusqd/NFC/python3 healthy. **FINAL hashes** (`output/nexusq-v1.8.1.sha256`):
+boot `6d55b348…d42157`, sparse `ec3d47a0…c748d`, raw `d4f1bba5…3d6f2e` — the
+Windows-build hashes (boot `51748379…`) are SUPERSEDED (same r42 source,
+byte-diff = rebuild).
 
-**Next:** finish the v1.8.1 release on Ubuntu; then the standing backlog (deep
-cpuidle C2+ blocked on serial, NFC payload = connection info, thermal watch).
+**Next:** tag `v1.8.1` (main session — this closes the Todoist AI-handover
+"finish v1.8.1 on Ubuntu"); user listening test on the final image (the crackle
+fix was already user-confirmed on the earlier r42 boot); then the standing
+backlog (deep cpuidle C2+ blocked on serial, NFC payload = connection info,
+thermal watch).
 
 ---
 

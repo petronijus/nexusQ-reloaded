@@ -17,8 +17,12 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > 98304000; `clk_summary`-verified on `#43-postmarketOS`). **v1.8.1 = kernel r42**
 > (user decision; the earlier same-day r41-only build of that version was
 > superseded and overwritten). First full flash exposed the empty `./firmware/`
-> overlay on the Windows machine (rootfs without WiFi/BT firmware) — final rebuild
-> + re-flash + tag handed over to Ubuntu. ⚠️ Repo gotcha recorded: the DTS ships **via `kernel/patches/`** —
+> overlay on the Windows machine (rootfs without WiFi/BT firmware) — the **FINAL
+> v1.8.1 image was rebuilt on Ubuntu the same evening** (all gates PASS, firmware
+> staged), **flashed + acceptance-passed 10/10** (`nq-captures/20260712-233542/`:
+> both audio fixes live, WiFi + BT restored — WiFi lease moved `.195`→`.184`
+> router-side, don't hardcode it — dmesg err/warn empty, 0 failed units).
+> ⚠️ Repo gotcha recorded: the DTS ships **via `kernel/patches/`** —
 > editing `kernel/dts/` alone is a silent no-op (the first r42 build was; caught by
 > DTB verification). See
 > `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.

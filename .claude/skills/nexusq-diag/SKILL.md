@@ -192,7 +192,8 @@ Findings are tagged by `kind`; interpret them like this:
   at **0 dB**, Master (numid 1) carrying the range; measured PA 50 % ≈ +6 dB, 100 % =
   +24 dB. Speaker at +24 dB / total +48 dB = the merge-stacking regressed. Also
   **nexusq-control r8** = dial→app volume sync (`pactl subscribe` → `volumeChanged`).
-  r35 + r8 are BUILDING into **v1.7.3** — verified live, not yet in a flashed image.
+  r35 + r8 shipped via v1.7.3 and are **in the flashed image since the v1.8.x
+  full-rootfs flashes** (was "not yet flashed" as of 2026-07-08).
   See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md` §4.
 - **Bluetooth A2DP RELIABLE (v1.8.0, kernel r40 / device r38)** — root cause of every
   past "BT won't stay connected / phantom Connected / corrupt-burst audio" was a

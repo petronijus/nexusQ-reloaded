@@ -50,10 +50,11 @@ ping -c1 -W2 172.16.42.1
 - Prefer the repo's own `scripts/diag/nqctl` if it already knows the link
   (`nqctl status`, `nqctl run '<cmd>'`).
 - Fallbacks: **serial** `/dev/ttyACM0` @115200 (`steelhead login:`, user/147147) —
-  works even with no net; **WiFi** vlan20 — stable FINAL IP
-  **`192.168.20.195`** since the 2026-07-03 batch-2b flash (`#29`): the image
-  pins the **factory MAC `f8:8f:ca:20:48:e1`** (NM cloned-mac, verified on
-  air). Older images: the interim `#27` used the chip's OTP
+  works even with no net; **WiFi** vlan20 — last-known lease
+  **`192.168.20.184`** (2026-07-12; the router reassigned `.195`→`.184` even
+  though the image pins the **factory MAC `f8:8f:ca:20:48:e1`** — the MAC is
+  stable, the lease is NOT; never hardcode the WiFi IP). Older images: the
+  interim `#27` used the chip's OTP
   `14:7d:c5:3a:35:b5` (lease `.175`); v1.6.5 randomized the MAC per boot.
   If it moved, find the lease in OPNsense Kea
   (`opnsense-api GET /api/kea/leases4/search`) by hostname `steelhead` or the

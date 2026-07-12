@@ -32,9 +32,20 @@ the host first). Missing files do NOT fail the build — Phase 6 logs a
 `WARNING: ... absent` and bakes an image without that access (it comes up
 unreachable over WiFi / without root ssh after a clean flash). Grep the build
 log for `Staged ssh-authorized-keys` + `Staged wifi.nmconnection`.
+**Same trap for firmware:** the gitignored `./firmware/` overlay
+(`bcm4330.hcd` + `bcmdhd.cal` from `private/firmware/`) must be populated on
+the build machine, or Phase 6 silently packs the **empty**
+`firmware-google-steelhead` fallback → the image boots with **no wlan0 and no
+BT** (bit the first v1.8.1 flash, 2026-07-12). Before any build meant for
+flashing: `cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal
+firmware/` (or `./scripts/setup-firmware.sh`), then grep the log for
+**`Staged BCM4330 firmware`** and verify the rootfs `/lib/firmware/brcm/`
+contents in the verification gate.
 _Pipeline proven end-to-end 2026-07-03: the flashed image auto-joined WiFi
-(final IP `192.168.20.195` on the factory-MAC `#29` image; `.175` on the
-interim `#27`) and key-based `root@` ssh worked over gadget + WiFi._
+(lease `192.168.20.195` on the factory-MAC `#29` image; `.175` on the
+interim `#27`; the router moved the lease to `.184` on 2026-07-12 — the lease
+is not stable, only the MAC is) and key-based `root@` ssh worked over gadget +
+WiFi._
 
 ## ⚠️ Kernel/DTS changes ship VIA `kernel/patches/` — NOT via `kernel/dts/`
 
@@ -215,6 +226,7 @@ the output must equal the raw image. See `docs/2026-06-28-session-findings.md` �
 | the flashed kernel is an OLD pkgrel despite a green build (fast path `build-kernel-boot.sh`) | the newest-glob apk selection picked a STALE kernel apk from the persistent work-volume repo | FIXED in `554175b` — the apk is selected by **exact `pkgver-pkgrel`** parsed from the staged APKBUILD; if it regresses, restore the exact-name selection |
 | fast path fails to find `boot/vmlinuz` in the kernel apk | newer `postmarketos-installkernel` installs `boot/vmlinuz-<kernelrelease>` | FIXED in `554175b` — extract the whole `boot/` tree and glob `vmlinuz*` (busybox tar has no `--wildcards`) |
 | `/src not found` even with the correct `docker run` (Git Bash) | MSYS path mangling rewrote `/src` → `C:/Program Files/Git/src` | launch via PowerShell (or `MSYS_NO_PATHCONV=1`) — see "Windows host gotchas" |
+| image boots with **no wlan0 / no BT**, `/lib/firmware/brcm/` empty, build was green | the gitignored `./firmware/` overlay was never populated on this build machine → Phase 6 silently packed the **empty** `firmware-google-steelhead` fallback | populate `firmware/` from `private/firmware/` FIRST; grep the log for `Staged BCM4330 firmware`; gate on rootfs `/lib/firmware/brcm/` contents (bit the first v1.8.1 flash, 2026-07-12) |
 | APKBUILD vars parse empty / dos2unix whitelist misses files | CRLF line endings | renormalize to LF; `core.autocrlf=false` (set machine-locally 2026-07-12) |
 
 When a fix means editing `docker-build.sh` / an APKBUILD / `deviceinfo`, make the

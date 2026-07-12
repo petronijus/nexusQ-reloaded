@@ -18,7 +18,12 @@ All notable changes to Nexus Q Reloaded. Format follows
 > full flash exposed a machine-setup gotcha: the Windows machine's gitignored
 > `./firmware/` overlay was empty → the rootfs shipped the **empty
 > firmware-google-steelhead fallback** (no wlan0, no BT firmware). Overlay populated;
-> the final rebuild + re-flash + tag was handed over to the Ubuntu machine. Full
+> the **FINAL v1.8.1 image was rebuilt on Ubuntu the same evening** (full docker
+> build, all gates PASS incl. `Staged BCM4330 firmware` + a complete
+> `/lib/firmware/brcm/`), **flashed, and acceptance-swept 10/10**
+> (`nq-captures/20260712-233542/`): both audio fixes live (DPLL_ABE 98.304 MHz
+> under sys_clkin; sDMA GCR `0x00011010` + CCR bit6), WiFi + BT restored, dmesg
+> err/warn EMPTY, 0 failed units, CPU 1.2 GHz @ 1380 mV. Full
 > write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
 
 ### Fixed
@@ -68,11 +73,21 @@ All notable changes to Nexus Q Reloaded. Format follows
   path (`/src` → `C:/Program Files/Git/src`) — launch the build via PowerShell;
   CRLF breaks sed-parsed APKBUILD vars and the dos2unix whitelist —
   `core.autocrlf=false` set machine-locally + worktree renormalized to LF.
-- **v1.8.1 artifacts** (kernel r42; built + verification-gate-passed + flashed
-  2026-07-12): `output/nexusq-boot-v1.8.1.img` sha256 `51748379…0ae42e`
-  (bit-identical to the DTB-verified `boot-r42-abe-sysclk.img`),
-  `output/nexusq-rootfs-v1.8.1-sparse.img` sha256 `ab6bc0dc…98b915` (all-RAW;
-  de-sparse round-trip == raw `065baada…25a24`).
+- **v1.8.1 FINAL artifacts** (kernel r42; Ubuntu rebuild with the populated
+  firmware overlay, verification-gate-passed + flashed + acceptance-passed
+  2026-07-12 evening; `output/nexusq-v1.8.1.sha256`):
+  `nexusq-boot-v1.8.1.img` sha256
+  `6d55b3485e9b1704ec398348ed8e30e8fb50b4628f69a8337f1d60d6bfd42157` (5,543,936 B,
+  ramdisk-less; DTB in the packed image verified to carry the 0042
+  assigned-clocks), `nexusq-rootfs-v1.8.1-sparse.img` sha256
+  `ec3d47a0…c748d` (all-RAW, 23 chunks; round-trip == raw `d4f1bba5…3d6f2e`).
+  The earlier Windows-build hashes (boot `51748379…`, sparse `ab6bc0dc…`) are
+  **SUPERSEDED** — same r42 source, but that rootfs lacked WiFi/BT firmware; the
+  byte differences are rebuild artifacts.
+- **WiFi DHCP lease can move (durable):** the router reassigned the device's
+  wlan0 lease `.195` → `192.168.20.184` on 2026-07-12 even with the pinned
+  factory MAC `f8:8f:ca:20:48:e1` — never hardcode the WiFi IP; re-discover by
+  hostname `steelhead` / factory MAC.
 
 ## [1.8.0] — 2026-07-09 (tagged 2026-07-10; BT fix verified live via boot.img)
 
