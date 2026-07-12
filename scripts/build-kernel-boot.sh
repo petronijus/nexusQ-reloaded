@@ -183,15 +183,26 @@ fi
 echo "=== Phase 9: Repack kernel-only boot.img from the built apk ==="
 # abuild cleans the pkgdir after creating the .apk, so extract vmlinuz + dtb
 # straight from the freshly built package instead of the (now empty) pkgdir.
-APK=$(ls -t "$WORK"/packages/*/armv7/linux-google-steelhead-*.apk 2>/dev/null | head -1)
-[ -n "$APK" ] || { echo "no linux-google-steelhead apk under $WORK/packages"; exit 1; }
+# Select by EXACT pkgver-pkgrel from the staged APKBUILD (never a newest-glob,
+# which can pick a stale apk) and without any `... | head` pipeline (SIGPIPE ->
+# rc 141 under pipefail killed the script here on 2026-07-12; use -print -quit).
+KVER=$(sed -n 's/^pkgver=//p' "$SRC/pmos/linux-google-steelhead/APKBUILD" | tr -d '\r')
+KREL=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/linux-google-steelhead/APKBUILD" | tr -d '\r')
+echo "  expecting linux-google-steelhead-$KVER-r$KREL.apk"
+APK=$(find "$WORK/packages" -type f -name "linux-google-steelhead-$KVER-r$KREL.apk" -print -quit 2>/dev/null)
+[ -n "$APK" ] || { echo "no linux-google-steelhead-$KVER-r$KREL.apk under $WORK/packages"; exit 1; }
 echo "  apk: $APK"
 EX=/tmp/kapk; rm -rf "$EX"; mkdir -p "$EX"
-tar xzf "$APK" -C "$EX" boot/vmlinuz boot/dtbs/omap4-steelhead.dtb 2>/dev/null
-VM="$EX/boot/vmlinuz"
+# The kernel image name depends on the postmarketos-installkernel version: older
+# ones install boot/vmlinuz, newer ones keep boot/vmlinuz-<kernelrelease> (seen
+# 2026-07-12 with a fresh pmaports clone). Extract the whole boot/ tree and glob
+# for it (busybox tar has no --wildcards); validity is checked right below.
+tar xzf "$APK" -C "$EX" boot 2>/dev/null || true
+VM=$(find "$EX/boot" -maxdepth 1 -type f -name 'vmlinuz*' -print -quit 2>/dev/null)
 DTB="$EX/boot/dtbs/omap4-steelhead.dtb"
-[ -f "$VM" ]  || { echo "missing vmlinuz in apk"; tar tzf "$APK" | grep -i vmlinuz; exit 1; }
+[ -n "$VM" ] && [ -f "$VM" ] || { echo "missing vmlinuz* in apk"; tar tzf "$APK" | grep -i vmlinuz; exit 1; }
 [ -f "$DTB" ] || { echo "missing dtb in apk"; tar tzf "$APK" | grep -i steelhead.dtb; exit 1; }
+echo "  vmlinuz: $VM"
 
 # Authoritative cmdline read straight from the staged defconfig CONFIG_CMDLINE.
 # NOTE: CONFIG_CMDLINE_FORCE=y, so the kernel uses its built-in cmdline regardless
