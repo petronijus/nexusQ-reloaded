@@ -193,8 +193,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.6.15 ─ ✦ PA-centric audio: multi-input → PulseAudio → app-selectable output · LED AGC   2026-07-07
 1.6.16 ─ ✦ physical volume dial → PulseAudio + tray icon follows output           2026-07-07
 1.7.0 ── ✦ NFC tap-to-send (reverse-HCE, Q → phone) · companion auto-reconnect   2026-07-08
-1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   ← latest tag (2026-07-10)
-next ─── ✦ playback crackle CLOSED — sDMA read-priority (r41) + DPLL_ABE sys_clkin relock (r42)   hardware-verified 2026-07-12 · release pending (v1.8.1 vs v1.9.0)
+1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   2026-07-10
+1.8.1 ── ✦ playback crackle CLOSED — sDMA read-priority (r41) + DPLL_ABE sys_clkin relock (r42)   hardware-verified 2026-07-12   ← latest
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

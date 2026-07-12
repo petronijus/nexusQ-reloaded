@@ -14,10 +14,11 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > 1 sample slip/s @ 48 kHz); stock x-loader + bootloader lock DPLL_ABE from
 > sys_clkin at exactly 98.304 MHz and our port was undoing it → **r42** patch
 > **0042** (DTS `assigned-clocks` on `&mcbsp2`: reparent → `sys_clkin_ck`, relock
-> 98304000; `clk_summary`-verified on `#43-postmarketOS`). **r42 supersedes r41 as
-> the current kernel.** A **v1.8.1** full image (r41 kernel) was built + passed
-> verification 2026-07-12 but is **unreleased** — decision open: v1.8.1 vs a v1.9.0
-> with r42. ⚠️ Repo gotcha recorded: the DTS ships **via `kernel/patches/`** —
+> 98304000; `clk_summary`-verified on `#43-postmarketOS`). **v1.8.1 = kernel r42**
+> (user decision; the earlier same-day r41-only build of that version was
+> superseded and overwritten). First full flash exposed the empty `./firmware/`
+> overlay on the Windows machine (rootfs without WiFi/BT firmware) — final rebuild
+> + re-flash + tag handed over to Ubuntu. ⚠️ Repo gotcha recorded: the DTS ships **via `kernel/patches/`** —
 > editing `kernel/dts/` alone is a silent no-op (the first r42 build was; caught by
 > DTB verification). See
 > `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.

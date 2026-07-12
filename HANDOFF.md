@@ -53,16 +53,21 @@ docker run (`/src` → `C:/Program Files/Git/src`) — **launch via PowerShell**
 CRLF broke sed-parsed APKBUILD vars + the dos2unix whitelist —
 `core.autocrlf=false` set machine-locally, worktree renormalized to LF.
 
-📦 **Release state:** a **v1.8.1 full image** (kernel **r41**, rootfs identical to
-v1.8.0 content) was built + **passed the full verification gate** 2026-07-12:
-`output/nexusq-boot-v1.8.1.img` (sha256 `5cc4e8c1…aec55d`),
-`output/nexusq-rootfs-v1.8.1-sparse.img` (sha256 `46f31943…dd9f4ca`). **NOT
-tagged/released** — the open decision with the user is v1.8.1 as-is vs going
-straight to a **v1.9.0 with r42**. (v1.8.0 itself was tagged 2026-07-10.)
+📦 **Release state:** **v1.8.1 = kernel r42** (user decision; an intermediate
+r41-only build of the same version passed the gate earlier that day but was
+superseded and its artifacts overwritten). A full build passed the gate and was
+flashed 2026-07-12 evening — **but shipped WITHOUT WiFi/BT firmware**: the
+Windows machine's gitignored `./firmware/` overlay had never been populated, so
+`docker-build.sh` silently packed the empty `firmware-google-steelhead`
+fallback (no `wlan0`, `/lib/firmware/brcm/` empty). Overlay populated
+(`cp private/firmware/{bcm4330.hcd,bcmdhd.cal} firmware/`); **the final v1.8.1
+rebuild + re-flash + tag is handed over to the Ubuntu machine** (Todoist
+AI-handover). Device meanwhile runs r42 boot + the firmware-less rootfs,
+reachable via USB gadget `172.16.42.1` / eth-direct only. The r42 boot.img is
+final (sha256 `51748379…0ae42e`, DTB-verified).
 
-**Next:** the release decision (v1.8.1 vs v1.9.0-with-r42); then the standing
-backlog (deep cpuidle C2+ blocked on serial, NFC payload = connection info,
-thermal watch).
+**Next:** finish the v1.8.1 release on Ubuntu; then the standing backlog (deep
+cpuidle C2+ blocked on serial, NFC payload = connection info, thermal watch).
 
 ---
 

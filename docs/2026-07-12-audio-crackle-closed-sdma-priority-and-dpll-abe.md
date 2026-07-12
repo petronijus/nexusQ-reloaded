@@ -94,17 +94,37 @@ Three failure modes hit while building r41/r42:
    instead of `boot/vmlinuz`. Fixed: extract the whole `boot/` tree and **glob
    `vmlinuz*`** (busybox tar has no `--wildcards`).
 
-## 5. Release state — v1.8.1 built + verified, NOT tagged; r42 supersedes r41
+## 5. Release state — v1.8.1 = kernel r42 (released same evening)
 
-- A **v1.8.1 full image** (kernel **r41**, rootfs content identical to v1.8.0) was
-  built 2026-07-12 and **passed the full verification gate**. Artifacts in
-  `output/`:
-  - `nexusq-boot-v1.8.1.img` — sha256 `5cc4e8c1b48874fc67fc12f5d33069b91bb2b6edadfddc3aa83a97f3bfaec55d`
-  - `nexusq-rootfs-v1.8.1-sparse.img` — sha256 `46f31943485db3e01fddc194ad5ed159a96a9abb0757ea607d4dd7fdcdd9f4ca`
-- **NOT tagged/released** — the decision (release v1.8.1 as-is vs going straight to
-  a **v1.9.0** with r42) is still open with the user. **r42 supersedes r41 as the
-  current kernel** (r42 = r41 + patch 0042); the r42 boot.img
-  (`output/boot-r42-abe-sysclk.img`) is what runs on the device now.
+- The user decided the release is **v1.8.1 with kernel r42**. An intermediate
+  same-day **r41-only** build of that version passed the gate first (its artifacts
+  had sha256 `5cc4e8c1…`/`46f31943…`) but was **superseded and overwritten** before
+  release.
+- Final v1.8.1 artifacts (full verification gate passed 2026-07-12 evening; the
+  Docker-crash-interrupted extraction was redone and every hash proven end-to-end):
+  - `nexusq-boot-v1.8.1.img` — sha256 `517483798331b57e79564cb7e47412a18f673691ee7e9afbb8af67cb9babd7bf`
+    (bit-identical to the DTB-verified `boot-r42-abe-sysclk.img`)
+  - `nexusq-rootfs-v1.8.1-sparse.img` — sha256 `ab6bc0dcd92451bac5920a358bf040d230bd63cdb6b1c634fe1387ddb398b915`
+    (all-RAW, 34 chunks; de-sparse round-trip == raw `065baada6e9931b36f67dba4a101d76dbab3909171af154815a7b037ce025a24`)
+  - rootfs proven to install `linux-google-steelhead-6.12.12-r42`, init=systemd,
+    python3 3.14.5-r5 with the libpython ship gate CLEAN.
+- **Flashed to the device** (boot + userdata) the same evening — **but this rootfs
+  shipped WITHOUT WiFi/BT firmware** (see below) and must be rebuilt + re-flashed
+  before the v1.8.1 tag.
+
+### ⚠️ Firmware-overlay machine-setup gotcha (found by the flash)
+
+The flashed rootfs had **no `wlan0`** and `/lib/firmware/brcm/` empty:
+`firmware-google-steelhead` was the **empty-fallback variant**. Root cause: the
+gitignored `./firmware/` overlay (bcm4330.hcd + bcmdhd.cal from
+`private/firmware/`) had **never been populated on the Windows build machine** —
+`docker-build.sh`'s `[ -f "$SRC/firmware/bcm4330.hcd" ]` check silently packs the
+empty package. It is populated there now (2026-07-12). **On any new build machine:
+`cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal firmware/` first**,
+and check the build log for `Staged BCM4330 firmware` (NOT the empty fallback).
+The verification gate must include `/lib/firmware/brcm/` contents from now on.
+Final v1.8.1 rebuild + re-flash + tag handed over to the Ubuntu machine (the
+audio-fix verification above is unaffected — it was done on the prior rootfs).
 
 ## 6. Session context — Windows build-host gotchas (durable)
 

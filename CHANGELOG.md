@@ -4,7 +4,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — crackle CLOSED (kernel r41 + r42, hardware-verified 2026-07-12; release decision v1.8.1-vs-v1.9.0 open)
+## [1.8.1] — 2026-07-12 — crackle CLOSED (kernel r42, hardware-verified)
 
 > **The playback crackle ("lupance") investigation is CLOSED — it was TWO independent
 > faults stacked, both fixed and hardware-verified 2026-07-12:** (a) load-correlated
@@ -12,11 +12,14 @@ All notable changes to Nexus Q Reloaded. Format follows
 > metronomic ~1/s load-independent click from **two free-running crystals** → kernel
 > **r42** (patch `0042`, commit `9f76754`). Final state: user-confirmed **perfectly
 > clean playback** on kernel `#43-postmarketOS` (*"bez jedinyho zaskobrtnuti"*).
-> **r42 supersedes r41 as the current kernel.** A **v1.8.1 full image** (kernel r41,
-> rootfs identical to v1.8.0 content) was built and passed the full verification
-> gate 2026-07-12 but is **NOT tagged/released** — the release decision (v1.8.1
-> as-is vs a v1.9.0 with r42) is still open. Full write-up:
-> `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
+> **v1.8.1 ships kernel r42** (rootfs content otherwise identical to v1.8.0; an
+> intermediate r41-only build of the same version passed the gate earlier that day
+> but was superseded and overwritten before release — user decision). ⚠️ The first
+> full flash exposed a machine-setup gotcha: the Windows machine's gitignored
+> `./firmware/` overlay was empty → the rootfs shipped the **empty
+> firmware-google-steelhead fallback** (no wlan0, no BT firmware). Overlay populated;
+> the final rebuild + re-flash + tag was handed over to the Ubuntu machine. Full
+> write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
 
 ### Fixed
 
@@ -65,9 +68,11 @@ All notable changes to Nexus Q Reloaded. Format follows
   path (`/src` → `C:/Program Files/Git/src`) — launch the build via PowerShell;
   CRLF breaks sed-parsed APKBUILD vars and the dos2unix whitelist —
   `core.autocrlf=false` set machine-locally + worktree renormalized to LF.
-- **v1.8.1 artifacts** (built + verification-gate-passed 2026-07-12, unreleased):
-  `output/nexusq-boot-v1.8.1.img` sha256 `5cc4e8c1…aec55d`,
-  `output/nexusq-rootfs-v1.8.1-sparse.img` sha256 `46f31943…dd9f4ca`.
+- **v1.8.1 artifacts** (kernel r42; built + verification-gate-passed + flashed
+  2026-07-12): `output/nexusq-boot-v1.8.1.img` sha256 `51748379…0ae42e`
+  (bit-identical to the DTB-verified `boot-r42-abe-sysclk.img`),
+  `output/nexusq-rootfs-v1.8.1-sparse.img` sha256 `ab6bc0dc…98b915` (all-RAW;
+  de-sparse round-trip == raw `065baada…25a24`).
 
 ## [1.8.0] — 2026-07-09 (tagged 2026-07-10; BT fix verified live via boot.img)
 
