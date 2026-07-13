@@ -4,6 +4,7 @@ import 'protocol/client.dart';
 import 'protocol/mock_client.dart';
 import 'protocol/tcp_client.dart';
 import 'screens/connect_gate.dart';
+import 'setup/setup_flow.dart';
 import 'setup/stock_assets.dart';
 import 'theme/nexusq_theme.dart';
 
@@ -35,18 +36,35 @@ class NexusQApp extends StatelessWidget {
   /// any screen, independent of the current Scaffold.
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
+  /// App-level navigator so an NFC tap can route (push the setup wizard, or
+  /// replace the stack with a freshly-addressed ConnectGate) from anywhere,
+  /// without depending on a possibly-deactivated BuildContext.
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'nexusQ-reloaded',
       debugShowCheckedModeBanner: false,
+      navigatorKey: _navigatorKey,
       theme: buildNexusQTheme(),
       scaffoldMessengerKey: _messengerKey,
       home: HceListener(
         messengerKey: _messengerKey,
         onDeviceTap: (tap) {
-          _messengerKey.currentState?.showSnackBar(SnackBar(
-              content: Text('Nexus Q found via tap (${tap.provisioned ? "on LAN" : "needs setup"})')));
+          final nav = _navigatorKey.currentState;
+          if (nav == null) return;
+          if (!tap.provisioned && tap.btMac.isNotEmpty) {
+            nav.push(MaterialPageRoute(
+                builder: (_) => SetupFlow(initialMac: tap.btMac)));
+          } else {
+            final host = tap.ip ?? '${tap.host}.local';
+            nav.pushAndRemoveUntil(
+              MaterialPageRoute(
+                  builder: (_) => ConnectGate(initialClient: TcpClient(host: host))),
+              (route) => false,
+            );
+          }
         },
         child: ConnectGate(initialClient: initialClient),
       ),

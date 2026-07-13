@@ -6,6 +6,9 @@ import 'screens/cables_screen.dart';
 import 'screens/find_device_screen.dart';
 import 'screens/confirm_color_screen.dart';
 import 'screens/wifi_screen.dart';
+import 'screens/name_room_screen.dart';
+import 'screens/theme_screen.dart';
+import 'screens/outro_screen.dart';
 
 /// Shared wizard state. Screens mutate it and call [next]/[back].
 class SetupFlowState extends ChangeNotifier {
@@ -45,7 +48,9 @@ class SetupFlowScreenState extends State<SetupFlow> {
         if (widget.initialMac == null) FindDeviceScreen(flow: flow, onNext: next, onBack: back),
         ConfirmColorScreen(flow: flow, onNext: next, onBack: back),
         WifiScreen(flow: flow, onNext: next, onBack: back),
-        // Task 13 appends: NameRoomScreen, ThemeScreen, OutroScreen
+        NameRoomScreen(flow: flow, onNext: next, onBack: back),
+        ThemeScreen(flow: flow, onNext: next, onBack: back),
+        OutroScreen(flow: flow),
       ];
 
   void next() {

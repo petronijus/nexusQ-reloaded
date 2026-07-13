@@ -41,6 +41,11 @@ dependencies:
   # mDNS / DNS-SD browsing to auto-discover the device's _nexusq._tcp bridge.
   multicast_dns: ^0.3.2
 
+  # Plays the stock setup outro clip (assets/stock/raw/q_outro.mp4) at the
+  # end of the wizard; degrades to a static fallback image when the asset is
+  # absent or the plugin fails to initialize (see OutroScreen).
+  video_player: ^2.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -3,6 +3,7 @@ import '../protocol/client.dart';
 import '../protocol/discovery.dart';
 import '../protocol/mock_client.dart';
 import '../protocol/tcp_client.dart';
+import '../setup/setup_flow.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
 import '../widgets/glowing_ring.dart';
@@ -140,6 +141,12 @@ class _ConnectGateState extends State<ConnectGate> {
             TextButton(onPressed: () => _use(MockClient()), child: const Text('Demo')),
             FilledButton(onPressed: _connectManual, child: const Text('Connect')),
           ],
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: () => Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => const SetupFlow())),
+          child: const Text('Set up new device'),
         ),
       ];
 }
