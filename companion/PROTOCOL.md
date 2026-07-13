@@ -191,3 +191,149 @@ in the app. This does not use the TCP/JSON envelope; it is a distinct NFC APDU l
   `prov=true` → connect over LAN to `ip` (fallback `<host>.local`). A non-JSON payload is
   still displayed as a plain text SnackBar (`NQ_NFC_MESSAGE` override, older devices).
 - Full design + the enabling kernel fix: `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
+
+## 8. Setup transport (BT provisioning) — v1.8.x onboarding
+
+A **second transport for the same envelope** (§3), used only before the device has a
+WiFi profile: the companion app carries the device through WiFi join + naming over
+**Bluetooth RFCOMM** instead of the LAN TCP socket of §1. Implementation:
+`userspace/nexusq-setupd/nexusq-setupd` (device side); the app's Kotlin BT RFCOMM
+platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
+
+### 8.1 Transport
+
+- **BlueZ Profile1 RFCOMM server.** `nexusq-setupd` registers `org.bluez.Profile1`
+  with `ProfileManager1.RegisterProfile`, UUID **`8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`**,
+  fixed **channel 3**, `Role: server`, `RequireAuthentication: true`,
+  `RequireAuthorization: false`. `RequireAuthentication` means BlueZ requires
+  link-layer **encryption** on the ACL link (established by the Just-Works pairing
+  below) before it hands the daemon the connection — not an app-layer credential.
+- BlueZ delivers each incoming connection as a **file descriptor** via
+  `Profile1.NewConnection(device, fd, properties)`; the daemon wraps it in a
+  `socket.socket(fileno=...)` and runs one reader thread per connection
+  (`_client_loop`).
+- **Framing: the same newline-JSON envelope as §3** — one compact JSON object per
+  line, `\n`-terminated, UTF-8, request/response/error shapes identical to §3
+  (`{"id", "method", "params"}` → `{"id", "ok": true, "result"}` /
+  `{"id", "ok": false, "error": {"code", "message"}}`). `id`-less requests are
+  fire-and-forget (no response line), matching §3. There is no `event` push channel
+  in v1 of the setup transport — every result is a direct response.
+- No app-layer auth beyond the BT link encryption above: v1 trust model is
+  "whatever paired over BT during the setup window," mirroring §1's "trusted LAN,
+  no auth" for the same reason (single-user appliance, time-boxed exposure — see
+  the accepted-risk note in §8.6).
+
+### 8.2 When it runs
+
+`nexusq-setupd.service` (`Type=simple`, `Restart=on-failure`, `RestartSec=3`) is
+gated by `ExecCondition=/usr/bin/nexusq-setup-needed`, which exits 0 (run) when
+**either**:
+- `/run/nexusq-setup.force` exists, **or**
+- no `802-11-wireless` NetworkManager connection profile exists yet (fresh/unprovisioned
+  boot — `nmcli -t -f TYPE connection show`).
+
+and exits 1 (skip) otherwise. Two entry points follow from this:
+- **Unprovisioned boot**: no WiFi profile → the condition is satisfied on every
+  boot until `setWifi` succeeds and creates one.
+- **On demand**: the LAN bridge's `startSetupMode` (§4, Device info table) touches
+  the force flag and runs `systemctl start nexusq-setupd.service` — re-enters setup
+  mode even on an already-provisioned device (re-pairing/reconfiguration).
+- **Crash re-arm**: `_run_transport()` writes the force flag itself at the top of
+  its own run (not just `startSetupMode`), so `Restart=on-failure` re-running
+  `ExecCondition` after a crash still finds it set and restarts — a daemon bug
+  mid-wizard (e.g. after `setWifi` already created a profile) does not strand the
+  user outside setup mode. The flag is unlinked only on a **clean** exit (idle
+  timeout or `finishSetup`); a crash leaves it for the restart to consume.
+- **Inactivity timeout**: `NEXUSQ_SETUP_TIMEOUT` (default **600 s**) since the last
+  `core.touch()` (i.e. the last handled request) → the GLib main loop quits and the
+  daemon exits cleanly.
+- **Clean-exit cleanup** (in the `finally` around `loop.run()`, always runs):
+  `Discoverable` set back to `false`; the LED ring returns to `auto` **unless** a
+  theme was chosen via `setTheme` during this session (in which case `finishSetup`
+  already applied it and it is left alone); `/run/nexusq-setup.force` unlinked.
+
+### 8.3 Methods
+
+Same request/response shapes as §3. Errors use codes analogous to §3's
+(`unknown_method`, `unavailable`, `internal`) plus setup-specific codes
+`bad_request`, `wrong_password`, `not_found`, `timeout` for malformed params /
+WiFi-join failures.
+
+> Note: the setup daemon's code for malformed params is spelled `bad_request`
+> (the implementation's exact string) — not §3's `bad_params`.
+
+| Method | params | result | Errors |
+|---|---|---|---|
+| `getDeviceInfo` | — | `{ model:"steelhead", btMac, swVersion, provisioned: bool, proto: 1 }` | — |
+| `confirmColor` | — | `{ "rgb": [r,g,b] }` — drives the LED ring solid in the pairing color (§8.4) via nexusqd `set R G B` | `unavailable` (nexusqd unreachable) |
+| `scanNetworks` | — | `{ "networks": [ {ssid, signal, security} ] }` — deduped by SSID (strongest kept), `security` is `wpa-psk` or `open` | `unavailable` (nmcli scan failed) |
+| `setWifi` | `{ ssid, psk?, security?: "wpa-psk"\|"open", hidden?: bool }` | `{ ok: true, ip, mdns }` — `ip` is the joined `wlan0` IPv4 (or `null`), `mdns` is `"<hostname>.local"` | `bad_request` (no ssid / wpa-psk without psk), `wrong_password`, `not_found`, `timeout`, `internal` (profile create/other nmcli failure) |
+| `getNetworkState` | — | `{ "state": "idle"\|"associating"\|"online", "ip"? }` — `ip` present only when `state:"online"` | — |
+| `setName` | `{ name, room?: string }` | `{ name, room, hostname, mdns }` — `hostname` is the sanitized form of `name` (§8.5), `mdns` is `"<hostname>.local"`; also sets the system hostname and restarts `nexusq-control`(+`librespot` if the user session exists) so the new name is re-advertised | `bad_request` (missing/blank name, or non-string room), `internal` (hostname change failed) |
+| `setTheme` | `{ theme: "blue"\|"warm"\|"cool"\|"rose"\|"smoke"\|"off" }` | `{ theme }` — applies the color theme's `breathe`/`off` nexusqd command immediately and remembers it for `finishSetup` | `bad_request` (unknown theme), `unavailable` (nexusqd rejected the command) |
+| `finishSetup` | — | `{ done: true }` — green success breathe, 2 s hold, then the chosen theme (or `auto` if none was set) via nexusqd; marks the session finished, which ends the RFCOMM loop and triggers the clean-exit lifecycle (§8.2) | — |
+
+`setWifi` validates everything (ssid/psk/security) **before** any side effect
+(LED, profile delete/create), so a malformed request can never destroy an
+existing WiFi profile before failing. On any join failure it deletes the
+half-created `wifi` NM profile before returning the error, so a retry starts clean.
+WiFi credentials (`psk`) are never logged, and are never allowed into an error
+`message` string (nmcli subprocess errors are classified via `classify_nm_error`,
+never stringified raw).
+
+### 8.4 Pairing-color contract
+
+`confirmColor` is the visual pairing check: the app and the device independently
+derive the **same** color from the device's BT adapter MAC and the user confirms
+they match. Contract + cross-language (Python/Dart) test vectors:
+`companion/pairing-color-vectors.json`.
+
+Algorithm (one-liner): `hue = ((mac[4] << 8) | mac[5]) % 360`; `rgb = hsv_to_rgb(hue,
+s=1.0, v=1.0)`, channels rounded to the nearest int (0–255) — i.e. the last two MAC
+octets pick a fully-saturated hue around the color wheel.
+
+### 8.5 LED choreography
+
+| Phase | Command | Trigger |
+|---|---|---|
+| Setup mode active / joining WiFi | `spin 0 153 204` (stock `#0099CC` "starting up" rotating dot) | daemon start (`_run_transport`), and again at the top of `setWifi` (resumes the spinner after `confirmColor` left a solid color) |
+| Pairing confirmation | `set R G B` (solid, the pairing color) | `confirmColor` |
+| Theme chosen mid-wizard | `breathe R G B` / `off` (per `THEME_CMDS`) | `setTheme` |
+| Setup complete | `breathe 0 200 0` (green), held 2 s, then the chosen theme or `auto` | `finishSetup` |
+| Setup abandoned (idle timeout, no `finishSetup`) | `auto` | clean-exit cleanup (§8.2) |
+
+### 8.6 Accepted risk: Just-Works auto-pairing during setup mode
+
+While setup mode is active, `nexusq-setupd` registers a **`NoInputNoOutput`**
+BlueZ agent (`org.bluez.Agent1`) and calls `RequestDefaultAgent`, making it the
+system's default pairing agent for that window. This agent **auto-accepts**
+everything it is asked: `RequestConfirmation` (Just-Works pairing) and
+`RequestAuthorization`/`AuthorizeService` (incoming connections/service use) are
+all no-ops that return success without any user interaction on the device. This
+is deliberate, not an oversight, and is accepted as-is:
+
+- It is **window-limited**: the agent only exists while `nexusq-setupd` runs
+  (setup mode only), the adapter is discoverable only for that window, the
+  session self-terminates after 600 s of inactivity (§8.2), and `Discoverable`
+  is forced off again on every exit path.
+- It is **stock-parity behavior** — the original Nexus Q onboarding flow used the
+  same Just-Works, no-PIN pairing model; this is not a regression.
+- It is **acceptable for a single-user appliance**: there is no persistent
+  multi-user trust boundary to protect on this device outside the setup window.
+- **The residual risk**: a hostile actor within BT range during an active setup
+  window could initiate pairing and have it silently accepted, since the agent
+  never prompts or checks anything. This is mitigated in practice by (a) the
+  **LED visual-confirm step** (§8.4/`confirmColor`) — the legitimate user compares
+  the ring color against the app before proceeding, so a rogue device that pairs
+  but can't also produce the matching LED color is caught at that step — and (b)
+  the **short exposure window** (idle timeout, and discoverable is normally only
+  on for the duration of one onboarding session).
+
+### 8.7 Relationship to NFC (§7)
+
+The NFC tap payload (§7) is how the app discovers *which* transport to use: it
+decodes `{"v":1,"bt":"<BT MAC>","host":..., "ip":..., "prov": bool}` and when
+`prov` is `false` (no WiFi profile yet), it connects over BT RFCOMM to `bt` using
+this §8 transport to run the setup wizard; when `prov` is `true` it instead
+connects over the LAN using §1–§4. NFC itself carries no setup-transport
+traffic — it only hands the app the address to dial.
