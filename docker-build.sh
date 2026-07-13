@@ -350,6 +350,47 @@ else:
     print("  partition.py: already patched or pattern changed")
 PATCH_PARTITION
 
+sudo python3 << 'PATCH_PARTITIONS_MOUNT'
+# Phase 9 "File did not appear: /dev/loopNp2" fix. A docker container's /dev is
+# a STATIC tmpfs populated once at container start (no devtmpfs/udev), so the
+# partition nodes the kernel creates for `losetup -P` after start never appear
+# in the container; partitions_mount()'s wait_until_exists() then times out.
+# Fix: before waiting, mknod the missing node ourselves from sysfs, which is
+# authoritative for the partition's major:minor and appears synchronously.
+path = "/usr/lib/python3.12/site-packages/pmb/install/partition.py"
+with open(path) as f:
+    content = f.read()
+
+old = """    for i in partitions:
+        source = Path(f"{partition_prefix}{i}")
+        pmb.helpers.file.wait_until_exists(source)"""
+
+new = """    for i in partitions:
+        source = Path(f"{partition_prefix}{i}")
+        if not source.exists():
+            # Docker: static tmpfs /dev -- create the partition node from sysfs.
+            import subprocess
+            import time as _time
+            sysfs_dev = Path(f"/sys/block/{disk.name}/{source.name}/dev")
+            for _ in range(10):
+                if sysfs_dev.exists():
+                    break
+                _time.sleep(0.5)
+            if sysfs_dev.exists():
+                major, minor = sysfs_dev.read_text().strip().split(":")
+                subprocess.run(["sudo", "mknod", str(source), "b", major, minor], check=False)
+                logging.info(f"Created partition node {source} (from sysfs {major}:{minor})")
+        pmb.helpers.file.wait_until_exists(source)"""
+
+if old in content:
+    content = content.replace(old, new)
+    with open(path, "w") as f:
+        f.write(content)
+    print("  Patched partition.py: mknod-from-sysfs fallback in partitions_mount")
+else:
+    print("  partition.py partitions_mount: PATTERN NOT FOUND (pmbootstrap changed?)")
+PATCH_PARTITIONS_MOUNT
+
 sudo python3 << 'PATCH_BLOCKDEV'
 # THE Phase 9 "PREPARE INSTALL BLOCKDEVICE" fix. ROOT CAUSE of the install
 # aborting at "(native) % busybox su pmos -c HOME=/home/pmos mkdir -p
@@ -679,6 +720,34 @@ if [ $NEXUSQCTL_RC -eq 0 ]; then
     fi
 else
     echo "  WARNING: nexusq-control build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7c3: Build nexusq-setupd package (noarch) ==="
+set +e
+# Pure-Python (py3-dbus/py3-gobject3) BT provisioning daemon; noarch, no
+# compiler/qemu needed. SKIP checksums placeholder -> regenerate against the
+# staged scripts before building (without this, the implicit Phase 8/install
+# auto-build fails with "nexusq-setupd is missing in checksums").
+pmbootstrap checksum nexusq-setupd 2>&1 || true
+pmbootstrap --no-cross build nexusq-setupd --arch armv7 2>&1
+NEXUSQSETUP_RC=$?
+set -e
+echo "=== nexusq-setupd build exit code: $NEXUSQSETUP_RC ==="
+if [ $NEXUSQSETUP_RC -eq 0 ]; then
+    # pkgrel-EXACT (see the nexusqd note above): avoid exporting a stale
+    # nexusq-setupd-...-rN.apk from the persistent work-volume repo.
+    _nqs_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusq-setupd/APKBUILD" | head -1)
+    _nqs_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusq-setupd/APKBUILD" | head -1)
+    NEXUSQSETUP_APK=$(find "$WORK/packages" -name "nexusq-setupd-${_nqs_pv}-r${_nqs_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$NEXUSQSETUP_APK" ]; then
+        cp "$NEXUSQSETUP_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQSETUP_APK")"
+    else
+        echo "  WARNING: nexusq-setupd apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  WARNING: nexusq-setupd build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
 fi
 

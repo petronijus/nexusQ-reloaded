@@ -24,7 +24,7 @@ source="
 	ledcfg.c ledcfg.h fx_waveform.c fx_waveform.h fx_waveformsolid.c fx_waveformsolid.h
 	fx_circles.c fx_circles.h fx_pointmorph.c fx_pointmorph.h fx_starfield.c fx_starfield.h
 	music.c music.h nexusqd.c nexusled.c
-	sdnotify.c sdnotify.h
+	sdnotify.c sdnotify.h spinner.c spinner.h
 	Makefile nexusqd.service default.json
 "
 builddir="$srcdir"

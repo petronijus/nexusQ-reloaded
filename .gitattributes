@@ -1,0 +1,34 @@
+# Line-ending policy: LF everywhere, enforced by the REPO, not machine config.
+# Why: the dockerized pmbootstrap build and the device run Linux — CRLF breaks
+# shebangs, APKBUILD sourcing and sh scripts. On 2026-07-13 a Windows checkout
+# committed CRLF into docker-build.sh + the new aports and broke the build
+# (repo-wide renormalize followed). This file makes that impossible again.
+* text=auto eol=lf
+
+# Byte-exact files git must never re-encode:
+*.patch -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.ico -text
+*.webp -text
+*.mp4 -text
+*.ogg -text
+*.mp3 -text
+*.wav -text
+*.apk -text
+*.img -text
+*.bin -text
+*.hcd -text
+*.cal -text
+*.gz -text
+*.xz -text
+*.zip -text
+*.jar -text
+*.keystore -text
+*.jks -text
+*.so -text
+*.cpio -text
+*.ttf -text
+*.otf -text
