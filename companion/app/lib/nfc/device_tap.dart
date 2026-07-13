@@ -24,6 +24,8 @@ class DeviceTap {
       );
     } on FormatException {
       return null;
+    } on TypeError {
+      return null;
     }
   }
 }

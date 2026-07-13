@@ -22,4 +22,15 @@ void main() {
     expect(DeviceTap.tryParse('Ahoj z Nexus Q!'), isNull);
     expect(DeviceTap.tryParse('{"v":2,"bt":"x"}'), isNull);
   });
+
+  test('rejects wrong-typed fields instead of throwing', () {
+    expect(DeviceTap.tryParse('{"v":1,"bt":42,"host":"x","ip":null,"prov":true}'), isNull);
+    expect(DeviceTap.tryParse('{"v":1,"bt":"aa","host":[],"ip":7,"prov":"yes"}'), isNull);
+  });
+
+  test('missing prov defaults to not provisioned', () {
+    final t = DeviceTap.tryParse('{"v":1,"bt":"aa","host":"h","ip":null}');
+    expect(t, isNotNull);
+    expect(t!.provisioned, isFalse);
+  });
 }
