@@ -216,6 +216,15 @@ class SetupCore:
             raise Err("unavailable", "wifi scan failed")
         return {"networks": parse_wifi_list(r.stdout)}
 
+    def _delete_wifi_profile(self):
+        # best-effort cleanup; never let a delete failure mask the real error
+        # or leak subprocess internals (see _set_wifi for why we never str()
+        # a SubprocessError on this path)
+        try:
+            self.run(["nmcli", "connection", "delete", "wifi"], timeout=15)
+        except subprocess.SubprocessError:
+            pass
+
     def _set_wifi(self, p):
         ssid = p.get("ssid")
         if not isinstance(ssid, str) or not ssid:
@@ -223,25 +232,50 @@ class SetupCore:
         psk = p.get("psk", "")
         security = p.get("security", "wpa-psk" if psk else "open")
         hidden = bool(p.get("hidden", False))
+        # validate everything before any side effect (led send, profile
+        # delete/create) so a malformed request can never destroy an
+        # existing profile before failing
+        if security == "wpa-psk" and not psk:
+            raise Err("bad_request", "psk required for wpa-psk")
         # resume the spinner while we join (confirmColor left a solid color)
         self.led.send(SPIN_CMD)
         # replace any previous attempt/profile of the same name
-        self.run(["nmcli", "connection", "delete", "wifi"], timeout=15)
+        self._delete_wifi_profile()
         add = ["nmcli", "connection", "add", "type", "wifi", "con-name", "wifi",
                "ifname", WLAN, "ssid", ssid, "connection.autoconnect", "yes"]
         if security == "wpa-psk":
-            if not psk:
-                raise Err("bad_request", "psk required for wpa-psk")
             add += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
         if hidden:
             add += ["802-11-wireless.hidden", "yes"]
-        r = self.run(add, timeout=20)
-        if r.returncode != 0:
+        # NOTE: `add` embeds the cleartext psk. subprocess.TimeoutExpired
+        # (and other SubprocessError subclasses) stringify the full argv,
+        # so we must never let str(exc) reach an Err message or a log line.
+        add_failed = False
+        try:
+            r = self.run(add, timeout=20)
+        except subprocess.SubprocessError:
+            add_failed = True
+        if add_failed:
+            self._delete_wifi_profile()
             raise Err("internal", "profile create failed")
-        up = self.run(["nmcli", "connection", "up", "wifi"], timeout=90)
+        if r.returncode != 0:
+            self._delete_wifi_profile()
+            raise Err("internal", "profile create failed")
+        up_failure = None
+        try:
+            up = self.run(["nmcli", "connection", "up", "wifi"], timeout=90)
+        except subprocess.TimeoutExpired:
+            up_failure = "timeout"
+        except subprocess.SubprocessError:
+            up_failure = "internal"
+        if up_failure is not None:
+            self._delete_wifi_profile()
+            if up_failure == "timeout":
+                raise Err("timeout", "wifi join timed out")
+            raise Err("internal", "wifi join failed")
         if up.returncode != 0:
             code = classify_nm_error(up.stderr)
-            self.run(["nmcli", "connection", "delete", "wifi"], timeout=15)
+            self._delete_wifi_profile()
             raise Err(code, "wifi join failed")
         ip = self._wlan_ip()
         return {"ok": True, "ip": ip,

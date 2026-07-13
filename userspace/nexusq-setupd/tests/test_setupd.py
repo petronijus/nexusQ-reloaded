@@ -131,6 +131,41 @@ class TestSetupCore(unittest.TestCase):
             core.handle("setWifi", {"psk": "x"})
         self.assertEqual(cm.exception.code, "bad_request")
 
+    def test_set_wifi_missing_psk_has_no_side_effects(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        calls = []
+        def fake_run(args, **kw):
+            calls.append(args)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        core.run = fake_run
+        with self.assertRaises(mod.Err) as cm:
+            core.handle("setWifi", {"ssid": "X", "security": "wpa-psk"})
+        self.assertEqual(cm.exception.code, "bad_request")
+        self.assertEqual(calls, [])
+        core.led.send.assert_not_called()
+
+    def test_set_wifi_timeout_never_embeds_psk(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        calls = []
+        def fake_run(args, **kw):
+            calls.append(args)
+            if args[:3] == ["nmcli", "connection", "add"]:
+                raise mod.subprocess.TimeoutExpired(
+                    cmd=["nmcli", "connection", "add", "wifi-sec.psk", "SECRETPSK"],
+                    timeout=20)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        core.run = fake_run
+        with self.assertRaises(mod.Err) as cm:
+            core.handle("setWifi", {"ssid": "MyNet", "psk": "SECRETPSK",
+                                     "security": "wpa-psk"})
+        self.assertNotIn("SECRETPSK", cm.exception.message)
+        self.assertIn(cm.exception.code, ("internal", "timeout"))
+        self.assertIn(["nmcli", "connection", "delete", "wifi"], calls)
+        # cleanup must happen after the failing add call (last call in the list)
+        self.assertEqual(calls[-1], ["nmcli", "connection", "delete", "wifi"])
+
     def test_finish_setup_sets_finished(self):
         mod = load_daemon()
         core = self._core(mod)
