@@ -353,7 +353,13 @@ def start_setup_mode():
     subprocess.SubprocessError incl. TimeoutExpired) so a failed attempt can
     never leave it armed to force-provision an unrelated later unit start.
     """
-    open(SETUP_FORCE_FLAG, "w").close()
+    arm_err = None
+    try:
+        open(SETUP_FORCE_FLAG, "w").close()
+    except OSError as e:
+        arm_err = e
+    if arm_err is not None:
+        raise Err("unavailable", f"cannot arm setup mode: {arm_err}")
     try:
         r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"],
                            capture_output=True, text=True, timeout=15)

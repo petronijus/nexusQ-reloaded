@@ -73,6 +73,18 @@ class TestStartSetupMode(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, "unavailable")
                 self.assertFalse(os.path.exists(flag_path))
 
+    def test_start_setup_mode_arm_failure_maps_to_unavailable(self):
+        mod = load_daemon()
+        with tempfile.TemporaryDirectory() as d:
+            # Set SETUP_FORCE_FLAG to a path in a nonexistent subdirectory
+            # so open() will raise OSError when trying to create the file
+            flag_path = os.path.join(d, "nonexistent-subdir", "flag")
+            with patch.object(mod, "SETUP_FORCE_FLAG", flag_path):
+                with self.assertRaises(mod.Err) as ctx:
+                    mod.start_setup_mode()
+                self.assertEqual(ctx.exception.code, "unavailable")
+                self.assertIn("cannot arm setup mode", ctx.exception.message)
+
 
 if __name__ == "__main__":
     unittest.main()
