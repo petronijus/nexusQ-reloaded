@@ -12,6 +12,10 @@ fb_out.txt
 
 # Private overlay (non-redistributable firmware)
 /private/
+
+# Stock Nexus Q companion imagery extracted from the decompiled APK
+# (Google copyright — see scripts/extract-stock-assets.sh)
+companion/app/assets/stock/
 firmware/bcm4330.hcd
 firmware/bcmdhd.cal
 # Redistributable (upstream linux-firmware) -- cached locally, else fetched at build time

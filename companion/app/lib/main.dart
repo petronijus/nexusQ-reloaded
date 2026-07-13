@@ -4,6 +4,7 @@ import 'protocol/client.dart';
 import 'protocol/mock_client.dart';
 import 'protocol/tcp_client.dart';
 import 'screens/connect_gate.dart';
+import 'setup/stock_assets.dart';
 import 'theme/nexusq_theme.dart';
 
 /// Connection source, chosen at launch:
@@ -14,7 +15,9 @@ import 'theme/nexusq_theme.dart';
 const _host = String.fromEnvironment('NEXUSQ_HOST');
 const _mock = bool.fromEnvironment('NEXUSQ_MOCK');
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await StockAssets.init();
   NexusQClient? initial;
   if (_host.isNotEmpty) {
     initial = TcpClient(host: _host);
