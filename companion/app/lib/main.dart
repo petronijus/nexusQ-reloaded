@@ -41,6 +41,10 @@ class NexusQApp extends StatelessWidget {
       scaffoldMessengerKey: _messengerKey,
       home: HceListener(
         messengerKey: _messengerKey,
+        onDeviceTap: (tap) {
+          _messengerKey.currentState?.showSnackBar(SnackBar(
+              content: Text('Nexus Q found via tap (${tap.provisioned ? "on LAN" : "needs setup"})')));
+        },
         child: ConnectGate(initialClient: initialClient),
       ),
     );

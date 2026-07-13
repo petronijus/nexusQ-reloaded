@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../theme/nexusq_theme.dart';
+import 'device_tap.dart';
 import 'hce_channel.dart';
 
 /// Wraps the app and surfaces every NFC-received text as a Holo-dark SnackBar.
@@ -19,10 +20,17 @@ class HceListener extends StatefulWidget {
     super.key,
     required this.messengerKey,
     required this.child,
+    this.onDeviceTap,
   });
 
   final GlobalKey<ScaffoldMessengerState> messengerKey;
   final Widget child;
+
+  /// Called with the parsed device connection info when the tapped payload is
+  /// a Task-7 JSON connection-info payload (PROTOCOL.md §7). When set, this
+  /// replaces the plain-text SnackBar for JSON taps; non-JSON payloads keep
+  /// showing the SnackBar regardless.
+  final void Function(DeviceTap tap)? onDeviceTap;
 
   @override
   State<HceListener> createState() => _HceListenerState();
@@ -60,6 +68,11 @@ class _HceListenerState extends State<HceListener> with WidgetsBindingObserver {
 
   void _show(HceMessage msg) {
     debugPrint('[HCE] show "${msg.text}" (messenger=${widget.messengerKey.currentState != null})');
+    final tap = DeviceTap.tryParse(msg.text);
+    if (tap != null && widget.onDeviceTap != null) {
+      widget.onDeviceTap!(tap);
+      return;
+    }
     final messenger = widget.messengerKey.currentState;
     if (messenger == null) return;
     messenger
