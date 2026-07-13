@@ -4,7 +4,85 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-12 (latest): **CRACKLE CLOSED — two independent layers, both fixed (kernel r41 sDMA priority + r42 DPLL_ABE sys_clkin); v1.8.1 FINAL — rebuilt on Ubuntu, flashed, acceptance 10/10**
+## Session 2026-07-12→13 (latest): **v1.8.2 — idle power: the "hot idle" was an observer artifact; real fixes = conservative governor (kernel r43) + nq-healthd rewrite + root linger (device r40)**
+
+Full write-up: `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
+State: **UNCOMMITTED working tree** (defconfig + both APKBUILDs + nq-healthd) —
+the main session commits/tags v1.8.2 after user approval. Built, **flashed to the
+device 2026-07-13**, acceptance sweep PASS (`nq-captures/20260713-102339/`).
+Packages: `linux` r42 → **r43** (`#44-postmarketOS`, defconfig-only, 42 patches
+unchanged), `device-google-steelhead` r38 → **r40** (**r39 burned**, see below).
+
+✅ **Finding 1 — the ~74–76 °C "idle floor" was an OBSERVER ARTIFACT** (686 s
+true-idle study on v1.8.1): any ssh/diag session pushes the die to 74–79 °C in
+seconds (cooling constant ~10 s); the true unobserved floor is **~65–66 °C**.
+Judge idle temp ONLY from an on-device self-logging capture with no live session.
+
+✅ **Finding 2 — the real problem: 74 % of idle at ≥700 MHz/≥1203 mV** (350 MHz
+only 25.6 %): ~1000 wakeups/s with ~1.1–1.4 ms dwell (twd tick 168/s, WiFi SDIO
+29.5/s, AVR i2c 15.5/s, DISPC 4.9/s) × ondemand 20 ms sampling + `up_threshold=95`
+→ jump-to-max 3.7×/s, a 17.5 trans/s sawtooth.
+
+✅ **Finding 3 — pid 1 was the top userspace idle consumer (steady 3.4 %) — root
+cause OURS (nq-healthd):** 5 systemctl execs per 5 s sample (each root systemctl
+forces pid 1 to re-register its private-bus object tree); worse, 2 of the 5
+queried `librespot.service` on the SYSTEM manager where it hasn't existed since
+device r31 (user unit) → pid 1 loaded+GC'd a nonexistent unit every poll AND
+**`ls_active`/`ls_restarts` were silently broken r31–r38** (librespot restart
+detection dead). Second amplifier: every ssh login built + tore down
+`user@0.service` (~7.5 s CPU per login; 31 logins that boot).
+
+✅ **Governor A/B/C (8-min live windows, restored after): `conservative` WINS**
+(350 MHz 51.5 %, 1.2 GHz 9.6 %, 4.16 trans/s, coolest avg 65.1 °C); tuned
+ondemand `sampling_rate=100000`/`up_threshold=80`/`sdf=5` was a **REGRESSION**
+(parks at high OPPs, 350 MHz 21 %); `powersave_bias=100` dithers (39.9 trans/s).
+**Lesson: slower ondemand sampling does NOT tame microburst load — conservative's
+gradual `freq_step` climb does.** (Re-reverses the v1.6.6 "back to ondemand"
+defconfig call, which predates any residency measurement.)
+
+🔧 **v1.8.2 fixes shipped:**
+- defconfig `CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVE=y` (ondemand still built) — kernel r43.
+- **nq-healthd REWRITTEN process-first** (device r40): cached MainPID + /proc
+  liveness per sample, ONE `systemctl show` (3 props) only on transitions;
+  librespot queried on the uid-10000 USER manager. ⚠️ **GOTCHA that burned r39:**
+  root cannot borrow the user's `XDG_RUNTIME_DIR` — systemd 261 refuses
+  cross-user private-socket connections (`Operation not permitted, consider using
+  --machine=<user>@.host`); the correct form is
+  `systemctl -M user@ --user show …` (verified on-device). r39 shipped the broken
+  form (`ls_active=unknown` again), caught by the post-flash sweep → r40 +
+  rebuild + reflash.
+- baked `/var/lib/systemd/linger/root` (root user manager resident — kills the
+  per-login user@0 churn).
+
+📈 **Measured payoff (542 s idle re-study, final v1.8.2):** 350 MHz 25.6→**56.7 %**,
+1.2 GHz →**3.5 %**, ≥700 MHz 74→**43.3 %**, transitions 17.5→**4.25/s**, pid 1
+3.4→**0.10 %**, idle temp avg 66.4→**65.8 °C**, idle **settles at 350 MHz** (was
+~920 hover). Structural ~65 °C floor = C1-only MPUSS — unchanged, blocked on serial.
+
+📋 **Acceptance PASS** (`nq-captures/20260713-102339/`): all v1.8.1
+regressions-to-watch clean (DPLL_ABE 98.304 MHz, GCR `0x00011010`, WiFi `.184`,
+BT 0 reassembly, dmesg err/warn EMPTY, 0 failed units); thermal peak 97.2 °C
+bounded-load (known watch band). **NEW journal residual #4** (dispositioned in
+`docs/2026-07-02-boot-error-inventory.md`): one-shot `NetworkManager:
+sd-event.c:4488 assertion failed` at the RTC→NTP clock step — NM's vendored
+libsystemd asserting on the huge CLOCK_REALTIME jump; NM continued fine.
+External/upstream; real fix = backlog. **Artifacts**
+(`output/nexusq-v1.8.2.sha256`): boot `1c589a70…977d0c` (5,545,984 B), sparse
+`6538e0ba…ddb8a02` — flashed.
+
+⚠️ **Durable lessons:** `timeout N sh -c "yes & yes & wait"` ORPHANS the yes
+children — timeout each load process individually; healthd `dmesg_err` counts
+info-level brcmfmac `clm_blob` lines (cosmetic refinement candidate); the
+uid-10000 user manager is now the **#2 idle consumer at 1.28 %** (watch).
+
+**Next:** commit + tag `v1.8.2` (main session, after user approval); HDMI desktop
+idle policy (DPMS never blanks at the DRM level — DISPC awake forever; Todoist
+p3); deep cpuidle C2+ (p4, BLOCKED on serial); watch `user@10000`; standing
+backlog (NFC payload = connection info, thermal watch).
+
+---
+
+## Session 2026-07-12: **CRACKLE CLOSED — two independent layers, both fixed (kernel r41 sDMA priority + r42 DPLL_ABE sys_clkin); v1.8.1 FINAL — rebuilt on Ubuntu, flashed, acceptance 10/10**
 
 Full write-up: `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.
 Commits: `fc7e280` (r41, patch 0041), `9f76754` (r42, patch 0042), `554175b`

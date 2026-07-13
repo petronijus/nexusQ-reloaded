@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=38
+pkgrel=40
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -294,6 +294,14 @@ package() {
 	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
 	ln -sf ../nq-healthd.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nq-healthd.service
+
+	# Keep root's user manager resident (logind linger). Without it every ssh
+	# login builds and tears down the whole user@0 session — ~7.5 s CPU per
+	# login/logout cycle plus the cgroup/bpf destroy churn in pid 1 (measured
+	# 2026-07-12, idle-temperature study). Linger turns that into a one-time
+	# boot cost. logind reads this dir; an empty file named after the user is
+	# the whole mechanism (`loginctl enable-linger root` creates exactly this).
+	install -Dm644 /dev/null "$pkgdir"/var/lib/systemd/linger/root
 
 	# Spotify Connect (librespot) — one INPUT into the PulseAudio hub (PA-centric
 	# audio design). It runs as a systemd USER unit (uid-10000 `user` session, so

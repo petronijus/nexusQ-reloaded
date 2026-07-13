@@ -91,6 +91,40 @@ PREV_NEXUSQD_RESP=-1
 PREV_PSTORE=-1
 LED_STALL=0          # consecutive samples where nexusqd is up but frame frozen
 
+# --- cached unit state (process-first monitoring) -----------------------------
+# The per-sample liveness check is a /proc read on a cached MainPID; systemd is
+# consulted ONLY on transitions (pid unknown / vanished / reused). Polling
+# systemctl every sample was the top idle CPU consumer on the box: every root
+# systemctl opens pid 1's private bus and forces a full object-tree
+# re-registration — 5 execs per 5 s sample held pid 1 at a steady ~3.3 %
+# (measured 2026-07-12). A unit restart always changes MainPID, so
+# transition-triggered queries still catch every NRestarts bump.
+NQ_PID=0;  NQ_ACTIVE=unknown;  NQ_RESTARTS=0
+LS_PID=0;  LS_ACTIVE=unknown;  LS_RESTARTS=0
+# librespot is a USER unit (uid 10000) since device r31; its manager's private
+# socket lives under the user runtime dir. Querying the SYSTEM manager (as this
+# script did r31..r38) returned unknown/0 forever — librespot restart detection
+# was silently broken — and worse, made pid 1 load+GC the nonexistent unit from
+# disk on every poll.
+LS_RUNTIME=/run/user/10000
+
+# One bus connection for all three properties, printed as Key=Value lines
+# (order-independent parse). The user-scope variant reaches the uid-10000
+# manager through its private socket; env is scoped to the subshell only.
+nq_show() {
+	systemctl show -p ActiveState -p MainPID -p NRestarts nexusqd.service 2>/dev/null
+}
+ls_show() {
+	# root cannot borrow the user's XDG_RUNTIME_DIR: systemd 261 refuses
+	# cross-user private-socket connections ("Operation not permitted, consider
+	# using --machine=<user>@.host"). -M user@ goes through the sanctioned
+	# stdio-bridge path and works (verified on-device 2026-07-13). The runtime
+	# dir guard skips the spawn while the user manager isn't up yet.
+	[ -d "$LS_RUNTIME/systemd" ] || return 1
+	systemctl -M user@ --user show -p ActiveState -p MainPID -p NRestarts librespot.service 2>/dev/null
+}
+show_val() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n1; }
+
 emit_event() {
 	# emit_event <mono> <severity> <kind> <message>
 	mkdir -p "$LOGDIR"
@@ -136,13 +170,27 @@ sample() {
 		[ "$d" -gt 20000 ] && vmismatch=1
 	fi
 
-	# --- nexusqd: crash AND hang detection ---
-	nq_active=$(systemctl is-active nexusqd.service 2>/dev/null); : "${nq_active:=unknown}"
-	nq_pid=$(systemctl show -p MainPID --value nexusqd.service 2>/dev/null); : "${nq_pid:=0}"
-	nq_restarts=$(systemctl show -p NRestarts --value nexusqd.service 2>/dev/null); : "${nq_restarts:=0}"
-	nq_alive=0; nq_state="-"; nq_ticks=0
-	if [ "$nq_pid" -gt 0 ] 2>/dev/null && [ -r "/proc/$nq_pid/stat" ]; then
+	# --- nexusqd: crash AND hang detection (process-first, see cache notes) ---
+	nq_alive=0
+	if [ "$NQ_PID" -gt 0 ] 2>/dev/null \
+		&& [ "$(rd "/proc/$NQ_PID/comm")" = "nexusqd" ]; then
 		nq_alive=1
+		NQ_ACTIVE=active
+	else
+		# transition (startup / crash / restart): one systemd query re-resolves
+		# everything, including the NRestarts bump a restart implies.
+		out=$(nq_show)
+		NQ_ACTIVE=$(show_val "$out" ActiveState); : "${NQ_ACTIVE:=unknown}"
+		NQ_PID=$(show_val "$out" MainPID); : "${NQ_PID:=0}"
+		NQ_RESTARTS=$(show_val "$out" NRestarts); : "${NQ_RESTARTS:=0}"
+		if [ "$NQ_PID" -gt 0 ] 2>/dev/null \
+			&& [ "$(rd "/proc/$NQ_PID/comm")" = "nexusqd" ]; then
+			nq_alive=1
+		fi
+	fi
+	nq_active="$NQ_ACTIVE"; nq_pid="$NQ_PID"; nq_restarts="$NQ_RESTARTS"
+	nq_state="-"; nq_ticks=0
+	if [ "$nq_alive" = 1 ]; then
 		# field 3 = state, fields 14+15 = utime+stime (clock ticks)
 		nq_state=$(awk '{print $3}' "/proc/$nq_pid/stat" 2>/dev/null)
 		nq_ticks=$(awk '{print $14+$15}' "/proc/$nq_pid/stat" 2>/dev/null)
@@ -165,8 +213,28 @@ sample() {
 	PREV_NEXUSQD_TICKS="$nq_ticks"
 
 	# --- librespot (audio source feeding the visualizer) ---
-	ls_active=$(systemctl is-active librespot.service 2>/dev/null); : "${ls_active:=unknown}"
-	ls_restarts=$(systemctl show -p NRestarts --value librespot.service 2>/dev/null); : "${ls_restarts:=0}"
+	# USER unit (uid 10000) — process-first like nexusqd; the MainPID is the
+	# librespot-nexusq wrapper or the exec'd binary, so match cmdline, not comm.
+	ls_alive=0
+	if [ "$LS_PID" -gt 0 ] 2>/dev/null \
+		&& grep -qa librespot "/proc/$LS_PID/cmdline" 2>/dev/null; then
+		ls_alive=1
+		LS_ACTIVE=active
+	else
+		if out=$(ls_show); then
+			LS_ACTIVE=$(show_val "$out" ActiveState); : "${LS_ACTIVE:=unknown}"
+			LS_PID=$(show_val "$out" MainPID); : "${LS_PID:=0}"
+			LS_RESTARTS=$(show_val "$out" NRestarts); : "${LS_RESTARTS:=0}"
+			if [ "$LS_PID" -gt 0 ] 2>/dev/null \
+				&& grep -qa librespot "/proc/$LS_PID/cmdline" 2>/dev/null; then
+				ls_alive=1
+			fi
+		else
+			# user manager not up yet (early boot) — honest unknown, no spam
+			LS_ACTIVE=unknown; LS_PID=0
+		fi
+	fi
+	ls_active="$LS_ACTIVE"; ls_restarts="$LS_RESTARTS"
 
 	# --- AVR interrupt counter (sum across CPUs) ---
 	avr_irq=$(awk -v re="$AVR_IRQ_RE" '$0 ~ re {s=0; for(i=2;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i; print s; exit}' /proc/interrupts 2>/dev/null)

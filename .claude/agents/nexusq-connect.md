@@ -18,8 +18,8 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.8.1** (kernel `#43`/r42,
-flashed 2026-07-12; eth profiles baked since r21). **eth-direct now works from a cold boot —
+"connect like this: `<cmd>`". The device runs **v1.8.2** (kernel `#44`/r43,
+device r40, flashed 2026-07-13; eth profiles baked since r21). **eth-direct now works from a cold boot —
 task #17 is FULLY CLOSED (2026-07-06):** the "enumeration intermittency" was an
 unmuxed `gpio_1` NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux in
 `#33`; a true cold power-cycle enumerates `eth0` 100Mbps/Full. The old "flap"
@@ -77,7 +77,7 @@ link-local, mDNS, OPNsense lease lookup).
   hostname/MAC. **Never hardcode the WiFi IP.**
 - **WiFi on-air MAC — depends on the flashed image** (which one is on the
   device: check `uname -r`/`#N` or just match both MACs in leases):
-  - **currently flashed (`#29`+ through the current `#43`/v1.8.1)**: the
+  - **currently flashed (`#29`+ through the current `#44`/v1.8.2)**: the
     **factory `f8:8f:ca:20:48:e1`** — the baked profile pins
     `cloned-mac-address=F8:8F:CA:20:48:E1` at the NM layer (verified on air;
     lease `.195` 2026-07-03→07-12, then `.184`).

@@ -110,6 +110,13 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-06-28-session-findings.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
+  ⚠️ **`ls_active`/`ls_restarts` are UNTRUSTWORTHY in captures from device
+  r31–r39 images** (always `unknown`/`0` — healthd queried the SYSTEM manager
+  after librespot became a uid-10000 USER unit in r31, so `librespot_restart`
+  could never fire). **Fixed in r40** (v1.8.2, flashed 2026-07-13) via
+  `systemctl -M user@ --user` — root cannot borrow the user's
+  `XDG_RUNTIME_DIR` (systemd 261 refuses cross-user private sockets; r39
+  shipped that broken form and was burned).
   ℹ️ **Historical (FIXED in v1.6.1):** on v1.6.0 a Spotify track that played then
   **auto-skipped ~40 s in** was NOT a restart — it was the **TAS5713 2× speed bug**
   (McBSP2 FSYNC at 2× rate, tracks ended in half time; librespot stayed up), fixed by
@@ -129,18 +136,33 @@ Findings are tagged by `kind`; interpret them like this:
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
   ⚠️ **Thin headroom (active watch-item):** peak under sustained dual-core load
-  crept from 91.8 °C (2026-07-03) to **~94–99 °C (2026-07-06, v1.6.9/v1.6.10)** —
+  crept from 91.8 °C (2026-07-03) to **~94–99 °C (2026-07-06, v1.6.9/v1.6.10;
+  97.2 °C on the 2026-07-13 v1.8.2 acceptance)** —
   still below the 100 °C trip, no throttle, but only ~1–2 °C to spare at the top.
   Always report the peak temp on a load run.
+  ⚠️ **Idle temperature is observer-sensitive** (measured 2026-07-13): any live
+  ssh/diag session heats the die to 74–79 °C within seconds (cooling constant
+  ~10 s); the true unobserved idle floor is **~65–66 °C**. Judge idle temp only
+  from an on-device self-logging capture with no session attached.
 - **governor_not_scaling** — load was high but freq never left 350 MHz; the
   governor or cpufreq path is stalling. See `CPU` + `CLOCKS` (`dpll_mpu`).
+  Expected governor since **v1.8.2** (kernel r43, 2026-07-13): **`conservative`**
+  (was `ondemand` v1.6.6–v1.8.1) — and a healthy ≥v1.8.2 idle **settles at
+  350 MHz** (~56.7 % residency, ~4.25 trans/s); a sustained ~920 MHz idle hover
+  is a regression (the old ondemand microburst sawtooth). See
+  `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
 - **kernel_errors** — new oops/WARN/i2c-timeout/voltage lines; read the
   `KERNEL_LOG_FULL` tail in `snapshot.txt`. ℹ️ **As of v1.6.10 the boot log is
   GENUINELY CLEAN:** on a clean-flash `#36` / device r28 boot, `dmesg -l err,warn`
-  is **EMPTY** and `journalctl -b -p warning` = **ONLY 3 genuinely-external
-  residuals** — (1) eth-lan DHCP fail on a DHCP-less direct PC cable
+  is **EMPTY** and `journalctl -b -p warning` = **ONLY 4 genuinely-external
+  residuals** (3 through v1.8.1; #4 dispositioned 2026-07-13) — (1) eth-lan DHCP
+  fail on a DHCP-less direct PC cable
   (environmental), (2) kscreen `.service` D-Bus naming (upstream libkscreen),
-  (3) avahi `No NSS support for mDNS` (`nss-mdns` unpackaged). **Anything else is
+  (3) avahi `No NSS support for mDNS` (`nss-mdns` unpackaged), (4) a **one-shot**
+  NM `sd-event.c:4488 assertion failed` at the RTC→NTP clock step (NM's vendored
+  libsystemd asserting on the huge CLOCK_REALTIME jump — no RTC battery; NM
+  continues fine, WiFi associates the same second; more than one per boot = a
+  finding). **Anything else is
   a REGRESSION** — including the whole former B/U residual set (B4 brcmfmac
   fw-probe, B10 hw-breakpoint, B16 ramoops, B21 L2C/gpmc/pmu/journald, B22/B23
   twl, U5 bluetoothd, U7 nsresourced), all now fixed/downgraded/disabled in
@@ -148,6 +170,9 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-07-02-boot-error-inventory.md` v1.6.10 update +
   `docs/2026-07-06-bootlog-cleanup.md`). The L2C aux-modify notice is an
   **authorized** `pr_debug` downgrade (register end-state identical to stock).
+  ℹ️ healthd's `dmesg_err` matcher also counts **info-level** brcmfmac
+  `clm_blob` lines (too-broad matcher, noted 2026-07-13) — cosmetic false
+  positives in `kern_new_err`, not a device fault.
   ℹ️ **DEBUG-level noise on v1.7.0/v1.7.1 (NOT err/warn):** the continuous NFC-tap
   poll emits **~200 "shdlc: .." lines/boot** and the old cmdline
   (`ignore_loglevel`+`loglevel=7`) forces the debug firehose (gpiolib "can't parse

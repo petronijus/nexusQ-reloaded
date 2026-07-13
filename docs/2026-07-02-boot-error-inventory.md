@@ -182,7 +182,7 @@ Stock-parity evidence for the voltage/WiFi-clock/cpuidle/NFC items:
 | **U4** PulseAudio vs PipeWire | **Config-topology fix, not a mask**: PulseAudio is the pmOS audio backend; the pipewire package is present only as a **library dependency**, but its XDG autostart double-started a second sound server every session, and `pipewire-pulse.socket` had **no service package behind it** at all. Fix (pkgrel 18): `Hidden=true` override .desktops in `/etc/xdg/nexusq/autostart/` (activated by an `XDG_CONFIG_DIRS` prepend in `nexusq-wayland.sh`) + `/etc/systemd/user/pipewire-pulse.socket` masked to `/dev/null`. (The PA "Failed to find a working profile" HDMI-audio line is separate — UCM profile, still open.) |
 | **Access regression** (root ssh) | `docker-build.sh` Phase 6 stages `private/access/authorized_keys` → `/root/.ssh/authorized_keys` + `/etc/skel/.ssh/authorized_keys` (0600) and `private/access/wifi.nmconnection` → `/etc/NetworkManager/system-connections/` (0600); empty staged files are skipped (`[ -s ]` guards), so a public clone still builds. `authorized_keys` (petronijus-PC ed25519) **exists**; the WiFi profile is generated per machine by the NEW `scripts/gen-wifi-profile.sh` (PSK pulled from 1Password at run time; the output is **gitignored even in the private repo**) — **not yet generated**, so this build bakes ssh keys but **no WiFi profile**. |
 | **Wandering WiFi IP** | `wifi-stable-mac.conf` (pkgrel 18): `cloned-mac-address=permanent` + scan MAC randomization off — see CORRECTIONS above. |
-| **Governor** | defconfig back to `CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y` + `CONFIG_CPU_FREQ_STAT=y`. |
+| **Governor** | defconfig back to `CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y` + `CONFIG_CPU_FREQ_STAT=y`. _(Superseded 2026-07-13, v1.8.2 kernel r43: default is `conservative` again — this time measurement-backed; ondemand kept 74 % of idle at ≥700 MHz on microburst wakeups. See `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.)_ |
 | (tooling) | `i2c-tools` + `gptfdisk` added to the device package depends — both were needed live today (the NFC/efuse i2c probes, the B8 GPT work). |
 
 ### Still open after this batch
@@ -595,7 +595,7 @@ no-ipfirewall drop-ins) just **moved the line to the next unit** — a systemd
 kills it for ALL units at once** and turns the default `IPAddressDeny=any` into
 real hardening; the interim per-unit drop-ins were removed once BPF was present.
 
-### The 3 genuinely-external residuals (honest, not cleanly fixable)
+### The genuinely-external residuals (honest, not cleanly fixable) — 3 as of v1.6.10, **4 as of 2026-07-13**
 
 - **eth-lan DHCP fail on a DHCP-less direct PC cable** — environmental;
   `autoconnect=false` would break real-LAN plug-and-play.
@@ -604,8 +604,17 @@ real hardening; the interim per-unit drop-ins were removed once BPF was present.
 - **avahi `No NSS support for mDNS`** — `nss-mdns` is not packaged in the
   pmOS/Alpine repos (`apk: no such package`); avahi's publish path (librespot
   Spotify-Connect zeroconf) works fine.
+- **NM `sd-event.c:4488 assertion failed`** _(added 2026-07-13, v1.8.2
+  acceptance — `nq-captures/20260713-102339/`)_ — a **one-shot** assertion from
+  NetworkManager's **vendored libsystemd** copy, fired exactly at the RTC→NTP
+  clock step (this device has no RTC battery, so CLOCK_REALTIME jumps years at
+  the first NTP sync and NM's vendored sd-event asserts on the huge jump). NM
+  **continued fine** — WiFi associated the same second; no functional impact.
+  Disposition: external/upstream (NM's vendored code, not our tree). A real fix
+  (upstream NM, or ordering the clock step before NM start) is backlog — noted,
+  not re-attempted per boot.
 
-Anything beyond these three on a future boot is a **regression**, not a
+Anything beyond these four on a future boot is a **regression**, not a
 known-benign residual. The standing **~94–99 °C** sustained-load thermal
 watch-item remains (not a fault). **No serial-console access exists** on this
 device (fastboot + ssh + stock/our build only) — deep cpuidle C2/C3 is

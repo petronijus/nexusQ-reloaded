@@ -155,17 +155,29 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
-  **`ondemand`** since the 2026-07-03 flash — verified, with
-  `CPU_FREQ_STAT`/`time_in_state` present; `conservative` on the older v1.6.5
-  image), `scaling_max_freq`.
-  Put load on (`yes >/dev/null &`), read `cpuinfo_cur_freq`/`scaling_cur_freq`, kill
-  it → confirm it reaches 1200000. Thermal: `cat /sys/class/thermal/thermal_zone*/temp`.
-  (Idle is NOT 350 MHz — it hovers ~920 MHz, nexusqd LED polling keeps it up.)
+  **`conservative`** since the 2026-07-13 v1.8.2 flash / kernel r43 —
+  measurement-backed, see `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`;
+  was `ondemand` on v1.6.6–v1.8.1 images, `conservative` on v1.5.0–v1.6.5;
+  `CPU_FREQ_STAT`/`time_in_state` present since 2026-07-03), `scaling_max_freq`.
+  Put load on (**`timeout 12 yes >/dev/null &` — timeout each load process
+  individually; `timeout N sh -c "yes & yes & wait"` ORPHANS the children when
+  timeout kills the wrapper**), read `cpuinfo_cur_freq`/`scaling_cur_freq` →
+  confirm it reaches 1200000. Thermal: `cat /sys/class/thermal/thermal_zone*/temp`.
+  **Idle expectation changed with v1.8.2:** a healthy idle **settles at 350 MHz**
+  (56.7 % residency, ~4.25 trans/s measured 2026-07-13); a sustained ~920 MHz
+  idle hover on a ≥v1.8.2 image is a **regression** (that was the ondemand
+  microburst sawtooth + healthd's own systemctl churn, both fixed in v1.8.2).
+  ⚠️ **Idle temperature is observer-sensitive:** any live ssh/diag session heats
+  the die to **74–79 °C within seconds** (cooling constant ~10 s); the true
+  unobserved idle floor is **~65–66 °C** (C1-only MPUSS). Judge idle temp ONLY
+  from an on-device self-logging capture with no session attached — never from an
+  interactive read.
   2026-07-03 reference: 1200 MHz @ 1 380 000 µV load / 920 MHz @ 1 317 000 µV
-  idle (exact OPP tracking); idle 66–78 °C, peak **91.8 °C** under dual-core
+  idle (exact OPP tracking); peak **91.8 °C** under dual-core
   load — only ~8 °C headroom to the 100 °C trip, so a sustained-load diag
   SHOULD report the peak temp (expected-hot, but watch it). **2026-07-06
-  (v1.6.9/v1.6.10) the peak sits ~94–99 °C** under sustained dual-core load —
+  (v1.6.9/v1.6.10) the peak sits ~94–99 °C** under sustained dual-core load
+  (97.2 °C on the 2026-07-13 v1.8.2 acceptance, bounded load) —
   still below the 100 °C passive trip, no throttle, but the headroom is thin;
   this is an active watch-item, always report the peak.
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
@@ -348,20 +360,37 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
 - **thermal_throttle / thermal_crit** — at/over 100 °C passive / 125 °C critical.
 - **governor_not_scaling** — load was high but freq stuck at 350 MHz (cpufreq stall);
   see `CPU` + `CLOCKS` (`dpll_mpu`).
+- **librespot fields (`ls_active`/`ls_restarts`) are UNTRUSTWORTHY in any capture
+  from a device r31–r39 image** — healthd queried the SYSTEM manager after
+  librespot became a uid-10000 USER unit (r31), so they read `unknown`/`0`
+  forever and `librespot_restart` could never fire. **Fixed in r40** (flashed
+  2026-07-13, v1.8.2): process-first liveness + `systemctl -M user@ --user`
+  (root cannot borrow the user's `XDG_RUNTIME_DIR` — systemd 261 refuses
+  cross-user private-socket connections; r39 shipped that broken form).
 - **kernel_errors** — new oops/WARN/i2c-timeout/voltage lines; read `KERNEL_LOG_FULL`.
+  ℹ️ healthd's `dmesg_err` matcher also counts info-level brcmfmac `clm_blob`
+  lines (too-broad matcher, noted 2026-07-13) — cosmetic false positives, not a
+  device fault.
 - **pstore** (crit) — a previous boot panicked (only survives a *warm* reboot).
 
 Every boot/dmesg error is ours to fix — never dismiss one as benign/expected.
 As of **v1.6.10** the boot log is **GENUINELY CLEAN**: on a clean-flash boot of
 `#36` / device r28, **`dmesg -l err,warn` is EMPTY** and `journalctl -b -p
-warning` contains **ONLY these 3 genuinely-external residuals** — anything else
-is a **REGRESSION**, report it:
+warning` contains **ONLY these 4 genuinely-external residuals** (3 through
+v1.8.1; the 4th dispositioned 2026-07-13) — anything else is a **REGRESSION**,
+report it:
   1. **eth-lan DHCP fail** on a DHCP-less direct PC cable (environmental —
      `autoconnect=false` would break real-LAN plug-and-play);
   2. **kscreen `.service` D-Bus naming** (upstream libkscreen packaging lint, hard
      dep via lxqt-config);
   3. **avahi `No NSS support for mDNS`** (`nss-mdns` unpackaged in pmOS/Alpine;
-     avahi's publish path for librespot Spotify-Connect zeroconf works fine).
+     avahi's publish path for librespot Spotify-Connect zeroconf works fine);
+  4. **NM `sd-event.c:4488 assertion failed`** — a ONE-SHOT assert from
+     NetworkManager's **vendored libsystemd**, fired exactly at the RTC→NTP
+     clock step (no RTC battery → CLOCK_REALTIME jumps years); NM continues
+     fine, WiFi associates the same second. External/upstream (added
+     2026-07-13, v1.8.2 acceptance). More than one occurrence per boot, or any
+     NM malfunction around it, IS a finding.
 The whole former B/U residual set (B4 brcmfmac fw-probe, B10 hw-breakpoint, B16
 ramoops, B21 L2C/gpmc/pmu/journald-BPF+ACL, B22/B23 twl, U5 bluetoothd
 system-config, U7 nsresourced, U4 HDMI-audio, U6 gkr-pam) is **FIXED / downgraded

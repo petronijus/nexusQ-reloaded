@@ -3,6 +3,30 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-13 — v1.8.2: IDLE POWER — the "hot idle" was an OBSERVER ARTIFACT; the
+> real fixes are the governor + OUR healthd.** A 686 s true-idle study (v1.8.1)
+> showed any ssh/diag session heats the die to 74–79 °C in seconds (cooling
+> constant ~10 s); the true unobserved floor is **~65–66 °C**. Real faults found:
+> **74 % of idle at ≥700 MHz/≥1203 mV** (ondemand jump-to-max on ~1000 microburst
+> wakeups/s — twd 168/s, WiFi SDIO 29.5/s, AVR i2c 15.5/s — → a 17.5 trans/s
+> sawtooth) and **pid 1 as the top userspace idle consumer (3.4 %)** — OUR
+> nq-healthd ran 5 systemctl/5 s and queried librespot on the SYSTEM manager where
+> it hasn't existed since r31 (**`ls_active`/`ls_restarts` silently broken
+> r31–r38**); plus ~7.5 s CPU of `user@0` churn per ssh login. Fixes (kernel
+> **r43** `#44` defconfig-only + device **r40**; r39 burned on the systemd-261
+> cross-user-socket gotcha — correct form `systemctl -M user@ --user`): default
+> governor **`conservative`** (won the live A/B/C: 350 MHz 51.5 %, 4.16 trans/s,
+> coolest; tuned-ondemand was a REGRESSION — slower sampling does NOT tame
+> microbursts), **nq-healthd rewritten process-first** (cached MainPID + /proc
+> liveness; systemctl only on transitions), baked **root linger**. Payoff (542 s
+> re-study): 350 MHz 25.6→**56.7 %**, transitions →**4.25/s**, pid 1 →**0.10 %**,
+> idle **settles at 350 MHz**. Acceptance PASS (`nq-captures/20260713-102339/`);
+> NEW 4th external journal residual (one-shot NM vendored-libsystemd assert at the
+> RTC→NTP jump) dispositioned in the boot-error inventory. Remaining floor ~65 °C
+> = C1-only MPUSS (C2+ blocked on serial); next idle items: HDMI desktop DPMS
+> policy (p3), `user@10000` manager watch (1.28 %).
+> See `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
+>
 > **2026-07-12 — CRACKLE CLOSED: TWO INDEPENDENT LAYERS, BOTH FIXED (kernel r41 +
 > r42, hardware-verified; user-confirmed perfectly clean playback).** (a)
 > load-correlated component → **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on

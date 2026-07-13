@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.8.1)
+# Nexus Q Reloaded -- Install Guide (v1.8.2)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,16 +12,16 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.8.1.img` (~5.3 MiB), `nexusq-rootfs-v1.8.1-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.8.2.img` (~5.3 MiB), `nexusq-rootfs-v1.8.2-sparse.img.zst`
   (~2.1 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.8.1.sha256`
-  - **`nexusq-boot-v1.8.1.img` is a NEW boot image** -- v1.8.1 rebuilds the kernel
-    (`6.12.12-r42`; patches through 0042, incl. the two playback-crackle fixes:
-    **0041 sDMA audio read-priority** and **0042 DPLL_ABE relocked from sys_clkin** --
-    on top of v1.8.0's 0040 BT UART `max-speed` fix), so it is
+  decompress it, see step 2), `nexusq-v1.8.2.sha256`
+  - **`nexusq-boot-v1.8.2.img` is a NEW boot image** -- v1.8.2 rebuilds the kernel
+    (`6.12.12-r43`; same 42 patches as v1.8.1 -- incl. the crackle fixes 0041/0042
+    and the 0040 BT UART `max-speed` fix -- plus a defconfig change: default
+    cpufreq governor `conservative`, the measured idle-power fix), so it is
     **not** byte-identical to earlier boots. At ~5.3 MiB it is still **well under the 8 MB
     boot partition**. Coming from any earlier release you must flash **both** boot and
-    userdata. Verify against `nexusq-v1.8.1.sha256`.
+    userdata. Verify against `nexusq-v1.8.2.sha256`.
 
 ## 1. Enter fastboot mode
 
@@ -36,8 +36,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v1.8.1 rebuilt the kernel (~5.3 MiB; patches through 0042, crackle fixes 0041+0042) -- flash it.
-fastboot flash boot nexusq-boot-v1.8.1.img
+# v1.8.2 rebuilt the kernel (~5.3 MiB; 42 patches through 0042 + the conservative-governor defconfig) -- flash it.
+fastboot flash boot nexusq-boot-v1.8.2.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -46,8 +46,8 @@ fastboot flash boot nexusq-boot-v1.8.1.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.8.1-sparse.img.zst   # -> nexusq-rootfs-v1.8.1-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.8.1-sparse.img
+zstd -d nexusq-rootfs-v1.8.2-sparse.img.zst   # -> nexusq-rootfs-v1.8.2-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.8.2-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -152,7 +152,7 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
 - Kernel: mainline 6.12.12 + the patches in `kernel/patches/` (42 as of kernel
-  r42, 2026-07-12), config `kernel/configs/steelhead_defconfig`.
+  r43, 2026-07-13), config `kernel/configs/steelhead_defconfig`.
   ⚠️ The steelhead DTS enters the kernel tree **via those patches** (0003 +
   follow-ups) — `kernel/dts/omap4-steelhead.dts` is the reference copy; editing it
   alone does NOT change the built DTB.

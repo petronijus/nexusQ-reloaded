@@ -4,6 +4,99 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.8.2] — 2026-07-13 — idle power: conservative governor + pid-1 churn killed (kernel r43, device r40)
+
+> **The "hot idle" AI-handover task, attacked measurement-first — and the measurement
+> rewrote the problem.** A 686 s true-idle study on v1.8.1 showed the ~74–76 °C "idle
+> floor" was an **observer artifact** (any ssh/diag session heats the die to 74–79 °C
+> in seconds; cooling constant ~10 s; true unobserved floor ~65–66 °C). The REAL
+> faults found instead: **74 % of idle spent at ≥700 MHz/≥1203 mV** (ondemand
+> jump-to-max on ~1000 microburst wakeups/s → a 17.5 trans/s sawtooth) and **pid 1 as
+> the top userspace idle consumer (steady 3.4 %)** — caused by OUR nq-healthd's
+> systemctl polling, which had ALSO silently broken librespot monitoring since device
+> r31. Ships: kernel **r43** (`#44-postmarketOS`, defconfig-only — no new patch, 42
+> patches unchanged), `device-google-steelhead` **r40** (r39 was burned
+> mid-iteration, see Fixed). Flashed + acceptance-swept PASS
+> (`nq-captures/20260713-102339/`). Full write-up:
+> `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
+
+### Changed
+
+- **Default cpufreq governor → `conservative`** (defconfig
+  `CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVE=y`, ondemand still built; kernel
+  **r43**). Decided by a live A/B/C test (8-min windows, settings restored after):
+  **conservative wins** (350 MHz residency 51.5 %, 1.2 GHz 9.6 %, 4.16 trans/s,
+  coolest avg 65.1 °C); tuned ondemand
+  (`sampling_rate=100000`/`up_threshold=80`/`sampling_down_factor=5`) was a
+  **REGRESSION** (parks at high OPPs, 350 MHz only 21 %); `powersave_bias=100`
+  dithers (39.9 trans/s). **Lesson: slower ondemand sampling does NOT tame
+  microburst load** (~1000 wakeups/s × ~1.1–1.4 ms dwell: twd tick 168/s, WiFi
+  SDIO 29.5/s, AVR i2c 15.5/s, DISPC 4.9/s → ondemand's 20 ms window +
+  `up_threshold=95` = jump-to-max 3.7×/s) — conservative's gradual `freq_step`
+  climb does. This re-reverses the v1.6.6 "back to ondemand" defconfig change;
+  that call predates any idle-residency measurement.
+- **nq-healthd rewritten process-first** (device **r40**): cached MainPID +
+  `/proc` liveness per 5 s sample; **one** `systemctl show` (3 props, single bus
+  connection) only on transitions (a unit restart always changes MainPID, so
+  `NRestarts` bumps are still caught). Was 5 systemctl execs per sample — every
+  root systemctl forces pid 1 to re-register its private-bus object tree, holding
+  pid 1 at a steady ~3.4 % idle CPU.
+- **Baked `/var/lib/systemd/linger/root`** (≡ `loginctl enable-linger root`,
+  device r40): root's user manager stays resident — each ssh login was building +
+  tearing down the whole `user@0.service` session (~7.5 s CPU per login/logout
+  cycle; 31 logins in the studied boot).
+
+### Fixed
+
+- **librespot monitoring was silently DEAD r31–r38** (`ls_active`/`ls_restarts`
+  always `unknown`/`0` — librespot restart detection never fired): nq-healthd
+  queried `librespot.service` on the SYSTEM manager, where it hasn't existed
+  since it became a uid-10000 USER unit (device r31) — worse, pid 1 loaded +
+  GC'd the nonexistent unit from disk on every poll. Now queried on the
+  uid-10000 user manager via `systemctl -M user@ --user show …` (verified
+  on-device 2026-07-13). **GOTCHA that burned r39:** root cannot borrow the
+  user's `XDG_RUNTIME_DIR` — systemd 261 refuses cross-user private-socket
+  connections (`Operation not permitted, consider using --machine=<user>@.host`);
+  r39 shipped that broken form (`ls_active=unknown` again), was caught by the
+  post-flash acceptance sweep, and fixed as r40 + rebuild + reflash.
+
+### Documented
+
+- **Measured payoff (542 s idle re-study on the final v1.8.2):** 350 MHz
+  residency 25.6 → **56.7 %**, ≥700 MHz 74 → **43.3 %**, 1.2 GHz → **3.5 %**,
+  transitions 17.5 → **4.25/s**, pid 1 3.4 → **0.10 %**, idle temp avg 66.4 →
+  **65.8 °C**, idle now **settles at 350 MHz** (was a ~920 MHz hover). The
+  remaining ~65 °C structural floor is C1-only MPUSS — unchanged, blocked on
+  serial (deep cpuidle C2+ backlog).
+- **Idle-temp diag rule:** judge idle temperature only from an on-device
+  self-logging capture with **no live ssh session** — an interactive read
+  measures the measurement (74–79 °C within seconds of connecting).
+- **NEW known-external journal residual (#4):** one-shot `NetworkManager:
+  sd-event.c:4488 assertion failed` exactly at the RTC→NTP clock step — NM's
+  **vendored libsystemd** asserting on the huge CLOCK_REALTIME jump (no RTC
+  battery; the clock jumps years at NTP sync). NM continued fine, WiFi
+  associated the same second. Dispositioned in
+  `docs/2026-07-02-boot-error-inventory.md`; a real fix (upstream NM /
+  clock-step ordering) is backlog, not cleanly ours-fixable in-tree.
+- **Acceptance sweep PASS** (`nq-captures/20260713-102339/`): all v1.8.1
+  regressions-to-watch clean — DPLL_ABE 98.304 MHz, sDMA GCR `0x00011010`, WiFi
+  `.184`, BT 0 frame-reassembly, dmesg err/warn EMPTY, 0 failed units; thermal
+  peak 97.2 °C under bounded load (inside the known ~94–99 °C watch band, no
+  throttle).
+- **v1.8.2 artifacts** (`output/nexusq-v1.8.2.sha256`; flashed to the device):
+  `nexusq-boot-v1.8.2.img` sha256
+  `1c589a70ffc10e4ac0ea7197a420e5168d43da64d0e902160dcf90a0ee977d0c`
+  (5,545,984 B, ramdisk-less), `nexusq-rootfs-v1.8.2-sparse.img` sha256
+  `6538e0ba225f63585551604f0323ad4d3bdfa8d67347e27e15acbeebdddb8a02`.
+- **Durable lessons:** `timeout N sh -c "yes & yes & wait"` **ORPHANS** the
+  `yes` children when timeout kills the wrapper — timeout each load process
+  individually; healthd's `dmesg_err` matcher counts info-level brcmfmac
+  `clm_blob` lines (cosmetic refinement candidate); the uid-10000 user manager
+  (`systemd --user`) is now the #2 idle consumer at 1.28 % (minor watch item).
+- **Remaining idle backlog:** HDMI desktop idle policy (DPMS never blanks at the
+  DRM level — DISPC stays awake; Todoist p3), deep cpuidle C2+ (p4, blocked on
+  serial), `user@10000` manager watch.
+
 ## [1.8.1] — 2026-07-12 — crackle CLOSED (kernel r42, hardware-verified)
 
 > **The playback crackle ("lupance") investigation is CLOSED — it was TWO independent

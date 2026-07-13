@@ -48,10 +48,18 @@ All sources were verified against the live device + the kernel/DTS, not guessed.
 cpufreq stats are off in the kernel on images up to v1.6.5 (`CONFIG_CPU_FREQ_STAT`
 not set → no `cpufreq/stats/time_in_state`), so residency is built by sampling
 `scaling_cur_freq` over time. _(Since the 2026-07-03 flash — verified on device:
-the defconfig enables `CPU_FREQ_STAT` and defaults the governor back to
-`ondemand`, so `time_in_state` exists and the sampling fallback is just a
-cross-check.)_ Note idle is **not** 350 MHz here — it
-hovers ~920 MHz because nexusqd's LED polling keeps the clock up.
+the defconfig enables `CPU_FREQ_STAT`, so `time_in_state` exists and the sampling
+fallback is just a cross-check.)_ Expected governor: **`conservative` since
+v1.8.2 / kernel r43** (2026-07-13 — measurement-backed: ondemand's jump-to-max on
+~1000 microburst wakeups/s kept 74 % of idle at ≥700 MHz; was `ondemand`
+v1.6.6–v1.8.1, `conservative` v1.5.0–v1.6.5). Idle expectation **changed with
+v1.8.2**: a healthy idle now **settles at 350 MHz** (56.7 % residency, ~4.25
+trans/s) — the old "hovers ~920 MHz" behaviour was the ondemand sawtooth (+
+healthd's own polling load) and on a ≥v1.8.2 image it is a **regression signal**,
+not the norm. ⚠️ Idle **temperature** must be judged from an on-device
+self-logging capture with no live ssh session — any interactive session heats
+the die to 74–79 °C within seconds (cooling constant ~10 s; true unobserved idle
+floor ~65–66 °C — measured 2026-07-13).
 
 **Power delivery** — every `/sys/class/regulator/regulator.*` (resolved by the
 `name` attribute, not the opaque index). `vdd_mpu` is checked against the
@@ -147,6 +155,23 @@ co-fires; a static frame with a healthy daemon is info **`led_static`**
 >   between the two matching freq reads and the vdd read). A single isolated
 >   `vdd_mismatch` warn is still noise; only a persistent run means a real
 >   power-path fault.
+> - **`ls_active`/`ls_restarts` were silently DEAD on device r31–r39** (fixed
+>   **r40**, flashed 2026-07-13): librespot became a uid-10000 **user** unit in
+>   r31 but healthd kept querying the SYSTEM manager → always `unknown`/`0`, so
+>   `librespot_restart` could never fire on those images (and pid 1 loaded+GC'd
+>   the nonexistent unit every poll). r39's attempted fix
+>   (`XDG_RUNTIME_DIR=/run/user/10000 systemctl --user`) also fails — systemd 261
+>   refuses cross-user private-socket connections; the working form (r40) is
+>   `systemctl -M user@ --user show …`. Don't trust `ls_*` fields in any capture
+>   from an r31–r39 image.
+> - **healthd itself was the top idle CPU consumer through r39** — 5 systemctl
+>   execs per 5 s sample held pid 1 at ~3.4 % idle. **r40 is process-first**:
+>   cached MainPID + `/proc` liveness per sample; ONE `systemctl show` (3 props)
+>   only on transitions (a restart always changes MainPID, so `NRestarts` bumps
+>   are still caught). pid 1 idle: 3.4 % → 0.10 % measured.
+> - **`dmesg_err`/`kern_new_err` counts info-level brcmfmac `clm_blob` lines**
+>   (matcher too broad) — cosmetic false positives, refinement candidate
+>   (noted 2026-07-13; not a device fault).
 
 > **`librespot_restart` ≠ the "Spotify skips" symptom.** `librespot_restart` is a
 > real *service* flap (the unit's `NRestarts` grew). **Historical (FIXED in v1.6.1):**
