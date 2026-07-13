@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""nexusq-setupd — BT RFCOMM WiFi-provisioning daemon for the Nexus Q.
+
+Implements the "Setup transport" of companion/PROTOCOL.md (§8): the same
+newline-JSON envelope as the LAN bridge, carried over Bluetooth RFCOMM
+(BlueZ Profile1, service UUID 8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a).
+
+Runs ONLY in setup mode: on boot when no WiFi profile exists (unit
+ExecCondition) or on demand via the bridge's startSetupMode (force flag).
+While active: BT discoverable + Just-Works agent, LED ring spins the stock
+"starting up" blue dot, WiFi ops go through nmcli.
+
+Design mirror of userspace/nexusq-control: single file, importable for
+tests (side effects only in main()); subprocess for nmcli/hostnamectl;
+nexusqd over its Unix socket. D-Bus (dbus-python + GLib) is used ONLY for
+BlueZ Profile1/Agent1 — there is no other way to own an RFCOMM profile.
+
+Config via env:
+  NEXUSQ_SETUP_UUID     (default 8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a)
+  NEXUSQD_SOCK          (default /run/nexusqd.sock)
+  NEXUSQ_IDENTITY       (default /etc/nexusq/device.json)
+  NEXUSQ_SETUP_TIMEOUT  (default 600 s of inactivity -> exit)
+  NEXUSQ_WLAN_IFACE     (default wlan0)
+"""
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+import unicodedata
+
+SETUP_UUID = os.environ.get("NEXUSQ_SETUP_UUID", "8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a")
+NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
+IDENTITY_PATH = os.environ.get("NEXUSQ_IDENTITY", "/etc/nexusq/device.json")
+SETUP_TIMEOUT = float(os.environ.get("NEXUSQ_SETUP_TIMEOUT", "600"))
+WLAN = os.environ.get("NEXUSQ_WLAN_IFACE", "wlan0")
+FORCE_FLAG = "/run/nexusq-setup.force"
+SPIN_CMD = "spin 0 153 204"        # the stock #0099CC boot hue
+SUCCESS_CMD = "breathe 0 200 0"    # green success breathe before exit
+
+# Mirror of the bridge THEME_CMDS (userspace/nexusq-control) — keep in sync.
+THEME_CMDS = {
+    "blue":  ["breathe 0 153 204"],
+    "warm":  ["breathe 255 90 10"],
+    "cool":  ["breathe 0 200 140"],
+    "rose":  ["breathe 255 40 90"],
+    "smoke": ["breathe 110 115 135"],
+    "off":   ["off"],
+}
+
+
+def log(*a):
+    print("[nexusq-setupd]", *a, flush=True)
+
+
+class Err(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# --- pure helpers (host-tested) ------------------------------------------
+
+def pairing_color(mac):
+    """The LED visual-pairing color, derived from the BT MAC (stock trick).
+    Contract + shared vectors: companion/pairing-color-vectors.json."""
+    b = [int(x, 16) for x in mac.split(":")]
+    hue = ((b[4] << 8) | b[5]) % 360
+    c = 1.0
+    x = 1.0 - abs((hue / 60.0) % 2.0 - 1.0)
+    sect = hue // 60
+    rgbf = [(c, x, 0.0), (x, c, 0.0), (0.0, c, x),
+            (0.0, x, c), (x, 0.0, c), (c, 0.0, x)][sect]
+    return tuple(int(v * 255 + 0.5) for v in rgbf)
+
+
+def sanitize_hostname(name):
+    """Display name -> RFC-952-ish hostname: ascii-fold, lowercase,
+    non-alnum runs -> '-', trimmed, <=63 chars, fallback 'nexusq'."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    clean = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")[:63].strip("-")
+    return clean or "nexusq"
+
+
+def classify_nm_error(stderr):
+    s = stderr.lower()
+    if "secrets were required" in s or "no secrets provided" in s:
+        return "wrong_password"
+    if "no network with ssid" in s or "not found" in s:
+        return "not_found"
+    if "timeout" in s:
+        return "timeout"
+    return "internal"
+
+
+def parse_wifi_list(out):
+    """Parse `nmcli -t -f SSID,SIGNAL,SECURITY dev wifi list` output:
+    dedupe by SSID (keep strongest), skip hidden/empty SSIDs, map security."""
+    best = {}
+    for ln in out.splitlines():
+        parts = ln.split(":")
+        if len(parts) < 3:
+            continue
+        ssid = ":".join(parts[:-2])          # SSIDs may contain ':'
+        signal_s, sec = parts[-2], parts[-1]
+        if not ssid:
+            continue
+        try:
+            signal = int(signal_s)
+        except ValueError:
+            continue
+        security = "wpa-psk" if "WPA" in sec.upper() else "open"
+        if ssid not in best or best[ssid]["signal"] < signal:
+            best[ssid] = {"ssid": ssid, "signal": signal, "security": security}
+    return sorted(best.values(), key=lambda n: -n["signal"])
+
+
+# --- side-effect adapters --------------------------------------------------
+
+def run_cmd(args, timeout=60):
+    """subprocess.run wrapper (injectable in SetupCore for tests)."""
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+
+class Led:
+    """nexusqd control-socket sender (same contract as the bridge's)."""
+
+    def send(self, line):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect(NEXUSQD_SOCK)
+                s.sendall((line + "\n").encode())
+                return s.recv(64).startswith(b"ok")
+        except OSError as e:
+            log("nexusqd send failed:", e)
+            return False
+
+
+def bt_adapter_mac():
+    try:
+        with open("/sys/class/bluetooth/hci0/address") as f:
+            return f.read().strip().upper()
+    except OSError:
+        return ""
+
+
+def wifi_provisioned(run=run_cmd):
+    try:
+        r = run(["nmcli", "-t", "-f", "TYPE", "connection", "show"], timeout=10)
+        return r.returncode == 0 and "802-11-wireless" in r.stdout
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# --- the setup state machine ----------------------------------------------
+
+class SetupCore:
+    """Protocol method handlers. Transport-agnostic: Task 5's RFCOMM loop
+    calls handle(); tests call it directly. Credentials are never logged."""
+
+    def __init__(self, run=run_cmd, led=None, bt_mac=None):
+        self.run = run
+        self.led = led if led is not None else Led()
+        self.bt_mac = bt_mac if bt_mac is not None else bt_adapter_mac()
+        self.finished = False
+        self.chosen_theme = None
+        self.last_activity = time.monotonic()
+
+    def touch(self):
+        self.last_activity = time.monotonic()
+
+    # -- dispatch --
+    def handle(self, method, params):
+        self.touch()
+        p = params or {}
+        if method == "getDeviceInfo":
+            return self._device_info()
+        if method == "confirmColor":
+            return self._confirm_color()
+        if method == "scanNetworks":
+            return self._scan()
+        if method == "setWifi":
+            return self._set_wifi(p)
+        if method == "getNetworkState":
+            return self._net_state()
+        if method == "setName":
+            return self._set_name(p)
+        if method == "setTheme":
+            return self._set_theme(p)
+        if method == "finishSetup":
+            return self._finish()
+        raise Err("unknown_method", method)
+
+    # -- handlers --
+    def _device_info(self):
+        return {"model": "steelhead", "btMac": self.bt_mac,
+                "swVersion": _sw_version(), "provisioned": wifi_provisioned(self.run),
+                "proto": 1}
+
+    def _confirm_color(self):
+        r, g, b = pairing_color(self.bt_mac)
+        if not self.led.send(f"set {r} {g} {b}"):
+            raise Err("unavailable", "nexusqd not reachable")
+        return {"rgb": [r, g, b]}
+
+    def _scan(self):
+        r = self.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY",
+                      "dev", "wifi", "list", "ifname", WLAN, "--rescan", "yes"],
+                     timeout=30)
+        if r.returncode != 0:
+            raise Err("unavailable", "wifi scan failed")
+        return {"networks": parse_wifi_list(r.stdout)}
+
+    def _set_wifi(self, p):
+        ssid = p.get("ssid")
+        if not isinstance(ssid, str) or not ssid:
+            raise Err("bad_request", "ssid required")
+        psk = p.get("psk", "")
+        security = p.get("security", "wpa-psk" if psk else "open")
+        hidden = bool(p.get("hidden", False))
+        # resume the spinner while we join (confirmColor left a solid color)
+        self.led.send(SPIN_CMD)
+        # replace any previous attempt/profile of the same name
+        self.run(["nmcli", "connection", "delete", "wifi"], timeout=15)
+        add = ["nmcli", "connection", "add", "type", "wifi", "con-name", "wifi",
+               "ifname", WLAN, "ssid", ssid, "connection.autoconnect", "yes"]
+        if security == "wpa-psk":
+            if not psk:
+                raise Err("bad_request", "psk required for wpa-psk")
+            add += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+        if hidden:
+            add += ["802-11-wireless.hidden", "yes"]
+        r = self.run(add, timeout=20)
+        if r.returncode != 0:
+            raise Err("internal", "profile create failed")
+        up = self.run(["nmcli", "connection", "up", "wifi"], timeout=90)
+        if up.returncode != 0:
+            code = classify_nm_error(up.stderr)
+            self.run(["nmcli", "connection", "delete", "wifi"], timeout=15)
+            raise Err(code, "wifi join failed")
+        ip = self._wlan_ip()
+        return {"ok": True, "ip": ip,
+                "mdns": socket.gethostname() + ".local"}
+
+    def _wlan_ip(self):
+        r = self.run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", WLAN], timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().splitlines()[0].split("/")[0]
+        return None
+
+    def _net_state(self):
+        r = self.run(["nmcli", "-t", "-f", "DEVICE,STATE", "dev", "status"], timeout=10)
+        state = "idle"
+        if r.returncode == 0:
+            for ln in r.stdout.splitlines():
+                cols = ln.split(":")
+                if len(cols) >= 2 and cols[0] == WLAN:
+                    nm = cols[1]
+                    state = ("online" if nm == "connected"
+                             else "associating" if nm.startswith("connecting")
+                             else "idle")
+        out = {"state": state}
+        if state == "online":
+            out["ip"] = self._wlan_ip()
+        return out
+
+    def _set_name(self, p):
+        name = p.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise Err("bad_request", "name required")
+        room = p.get("room", "")
+        if not isinstance(room, str):
+            raise Err("bad_request", "room must be a string")
+        name = name.strip()
+        host = sanitize_hostname(name)
+        r = self.run(["hostnamectl", "set-hostname", host], timeout=15)
+        if r.returncode != 0:
+            raise Err("internal", "hostname change failed")
+        os.makedirs(os.path.dirname(IDENTITY_PATH), exist_ok=True)
+        tmp = IDENTITY_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"name": name, "room": room}, f)
+        os.replace(tmp, IDENTITY_PATH)
+        # re-advertise: the bridge publishes its mDNS name at start; librespot
+        # reads the name at start. Restart both, best-effort (setName may run
+        # before either is relevant; failures must not fail the setup).
+        self.run(["systemctl", "restart", "nexusq-control.service"], timeout=30)
+        if os.path.isdir("/run/user/10000/systemd"):
+            self.run(["systemctl", "-M", "user@", "--user", "restart",
+                      "librespot.service"], timeout=30)
+        return {"name": name, "room": room, "hostname": host,
+                "mdns": host + ".local"}
+
+    def _set_theme(self, p):
+        theme = str(p.get("theme", ""))
+        if theme not in THEME_CMDS:
+            raise Err("bad_request", f"unknown theme {theme}")
+        for c in THEME_CMDS[theme]:
+            if not self.led.send(c):
+                raise Err("unavailable", "nexusqd rejected theme")
+        self.chosen_theme = theme
+        return {"theme": theme}
+
+    def _finish(self):
+        self.led.send(SUCCESS_CMD)
+        time.sleep(2.0)
+        if self.chosen_theme:
+            for c in THEME_CMDS[self.chosen_theme]:
+                self.led.send(c)
+        else:
+            self.led.send("auto")
+        self.finished = True
+        return {"done": True}
+
+
+def _sw_version():
+    try:
+        with open("/etc/os-release") as f:
+            for ln in f:
+                if ln.startswith("VERSION="):
+                    return ln.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "unknown"
+
+
+def main():
+    # Task 5 replaces this with the BlueZ Profile1/Agent1 transport loop.
+    log("transport not yet implemented (see plan Task 5)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
