@@ -32,6 +32,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var cardEmulation: CardEmulation? = null
+    private var btSetup: BtSetupChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -71,6 +72,15 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        btSetup = BtSetupChannel(this, messenger)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        btSetup?.onPermissionResult(requestCode)
     }
 
     override fun onResume() {

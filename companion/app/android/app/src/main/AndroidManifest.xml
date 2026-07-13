@@ -9,6 +9,13 @@
     <!-- required=false so the app still installs on phones without NFC/HCE (it is
          primarily a LAN companion); the code guards every NFC access. -->
     <uses-feature android:name="android.hardware.nfc.hce" android:required="false"/>
+    <!-- BT Classic setup transport (RFCOMM provisioning). maxSdkVersion pair
+         covers pre-S devices; S+ uses the runtime BLUETOOTH_SCAN/CONNECT. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <application
         android:label="nexusQ-reloaded"
         android:name="${applicationName}"
