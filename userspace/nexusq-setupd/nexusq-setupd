@@ -503,6 +503,15 @@ def _run_transport():
         "RequireAuthorization": dbus.Boolean(False),
     })
 
+    # Arm the force flag for this session: Restart=on-failure re-runs
+    # ExecCondition, which would otherwise refuse to restart us once a wifi
+    # profile exists (crash after setWifi = user stranded mid-wizard). The
+    # clean-exit path below unlinks it; a crash leaves it so the restart runs.
+    try:
+        open(FORCE_FLAG, "w").close()
+    except OSError:
+        pass
+
     core.led.send(SPIN_CMD)
     log("setup mode active: discoverable, RFCOMM profile", SETUP_UUID)
 

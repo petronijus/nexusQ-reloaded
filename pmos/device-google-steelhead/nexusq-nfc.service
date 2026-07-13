@@ -10,12 +10,13 @@ After=multi-user.target
 [Service]
 Type=simple
 # The phone runs the companion app's HostApduService (HCE); this reader (the Q
-# is the ISO-DEP reader) SELECTs our AID and pushes NQ_NFC_MESSAGE on each tap,
-# once per tap (re-arms when the phone leaves the field). See nq-nfc-send.py.
+# is the ISO-DEP reader) SELECTs our AID and pushes the payload on each tap,
+# once per tap (re-arms when the phone leaves the field). The payload is now
+# the live connection-info JSON built per tap by build_payload() in
+# nexusq-nfc-send (NOT a static string) — NQ_NFC_MESSAGE, if set, overrides
+# build_payload() entirely, so it is kept unset here and is for manual
+# testing only (e.g. `systemctl edit` or an ad-hoc run).
 Environment=NQ_NFC_LOOP=1
-# quote the value: systemd splits an unquoted Environment= on whitespace,
-# which would truncate a multi-word message to its first word.
-Environment="NQ_NFC_MESSAGE=Ahoj z Nexus Q!"
 ExecStart=/usr/bin/nexusq-nfc-send
 Restart=always
 RestartSec=5

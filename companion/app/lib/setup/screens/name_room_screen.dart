@@ -47,10 +47,18 @@ class _NameRoomScreenState extends State<NameRoomScreen> {
       _error = null;
     });
     try {
-      await widget.flow.client.call('setName', {'name': _name.text.trim(), 'room': _room});
+      final r = await widget.flow.client.call('setName', {'name': _name.text.trim(), 'room': _room});
       if (!mounted) return;
       widget.flow.deviceName = _name.text.trim();
       widget.flow.room = _room;
+      // setName changes the device's hostname, so its mDNS name changes too:
+      // refresh the flow's cached wifiResult with the fresh value from the
+      // response so the outro screen doesn't fall back to the stale
+      // pre-rename mdns when ip is null.
+      final freshMdns = r['mdns'] as String?;
+      if (freshMdns != null && widget.flow.wifiResult != null) {
+        widget.flow.wifiResult!['mdns'] = freshMdns;
+      }
       widget.onNext();
     } on BtSetupError catch (e) {
       if (!mounted) return;
