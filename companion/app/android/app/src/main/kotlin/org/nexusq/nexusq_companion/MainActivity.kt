@@ -93,6 +93,11 @@ class MainActivity : FlutterActivity() {
         super.onPause()
     }
 
+    override fun onDestroy() {
+        btSetup?.dispose()
+        super.onDestroy()
+    }
+
     /**
      * Claim (or release) preferred-service routing for our AID while in the
      * foreground. No-op on devices without NFC/HCE. `setPreferredService`

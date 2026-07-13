@@ -39,7 +39,7 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
 
     private val main = Handler(Looper.getMainLooper())
     private var events: EventChannel.EventSink? = null
-    private var socket: BluetoothSocket? = null
+    @Volatile private var socket: BluetoothSocket? = null
     private var scanReceiver: BroadcastReceiver? = null
     private var pendingPermissionResult: MethodChannel.Result? = null
 
@@ -52,8 +52,16 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
                 "ensurePermissions" -> ensurePermissions(result)
                 "startScan" -> { startScan(); result.success(null) }
                 "stopScan" -> { stopScan(); result.success(null) }
-                "connect" -> connect(call.argument<String>("mac")!!, result)
-                "sendLine" -> sendLine(call.argument<String>("line")!!, result)
+                "connect" -> {
+                    val mac = call.argument<String>("mac")
+                    if (mac == null) result.error("bad_args", "missing mac|line", null)
+                    else connect(mac, result)
+                }
+                "sendLine" -> {
+                    val line = call.argument<String>("line")
+                    if (line == null) result.error("bad_args", "missing mac|line", null)
+                    else sendLine(line, result)
+                }
                 "disconnect" -> { disconnect(); result.success(null) }
                 else -> result.notImplemented()
             }
@@ -80,6 +88,10 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
 
     private fun ensurePermissions(result: MethodChannel.Result) {
         if (hasPermissions()) { result.success(true); return }
+        if (pendingPermissionResult != null) {
+            result.error("permission_request_pending", "a permission request is already in flight", null)
+            return
+        }
         pendingPermissionResult = result
         ActivityCompat.requestPermissions(activity, neededPermissions(), PERMISSION_REQUEST)
     }
@@ -172,5 +184,11 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
     fun disconnect() {
         socket?.let { runCatching { it.close() } }
         socket = null
+    }
+
+    /** Call from MainActivity.onDestroy to release scan receiver + socket. */
+    fun dispose() {
+        stopScan()
+        disconnect()
     }
 }
