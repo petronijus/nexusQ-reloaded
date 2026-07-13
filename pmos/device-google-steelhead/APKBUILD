@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=41
+pkgrel=42
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -24,6 +24,7 @@ depends="
 	breeze-icons
 	nexusqd
 	nexusq-control
+	nexusq-setupd
 	librespot
 	pulseaudio
 	openssh-server

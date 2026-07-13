@@ -1,0 +1,28 @@
+# Nexus Q BT WiFi-provisioning daemon — Python, BlueZ D-Bus Profile1 RFCOMM
+# carrying the companion PROTOCOL.md envelope (§8 Setup transport). Runs only
+# in setup mode (no WiFi profile / forced via the bridge startSetupMode).
+pkgname=nexusq-setupd
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q BT RFCOMM WiFi-provisioning daemon (setup mode)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# py3-dbus + py3-gobject3: BlueZ Profile1/Agent1 (fd-passing RFCOMM server —
+# no stdlib path exists). networkmanager-cli: nmcli. bluez: the daemon.
+depends="python3 py3-dbus py3-gobject3 networkmanager-cli bluez"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-setupd/.
+source="
+	nexusq-setupd nexusq-setupd.service nexusq-setup-needed
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nexusq-setupd "$pkgdir"/usr/bin/nexusq-setupd
+	install -Dm755 nexusq-setup-needed "$pkgdir"/usr/bin/nexusq-setup-needed
+	install -Dm644 nexusq-setupd.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-setupd.service
+}
+
+sha512sums="SKIP"

@@ -22,7 +22,8 @@ for apkbuild in \
     "$SRC/pmos/linux-google-steelhead/APKBUILD" \
     "$SRC/pmos/firmware-google-steelhead/APKBUILD" \
     "$SRC/pmos/nexusqd/APKBUILD" \
-    "$SRC/pmos/nexusq-control/APKBUILD"; do
+    "$SRC/pmos/nexusq-control/APKBUILD" \
+    "$SRC/pmos/nexusq-setupd/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -235,6 +236,15 @@ cp "$SRC/userspace/nexusq-control/nexusq-onevent"  "$NEXUSQCTL_DIR/"
 cp "$SRC/userspace/nexusq-control/nexusq-control.service" "$NEXUSQCTL_DIR/"
 echo "  Installed: nexusq-control (aport + bridge -> main/nexusq-control)"
 
+# nexusq-setupd: the BT provisioning daemon (pure staging, like nexusq-control).
+NEXUSQSETUP_DIR="$PMAPORTS/main/nexusq-setupd"
+mkdir -p "$NEXUSQSETUP_DIR"
+cp "$SRC/pmos/nexusq-setupd/APKBUILD"                     "$NEXUSQSETUP_DIR/"
+cp "$SRC/userspace/nexusq-setupd/nexusq-setupd"           "$NEXUSQSETUP_DIR/"
+cp "$SRC/userspace/nexusq-setupd/nexusq-setupd.service"   "$NEXUSQSETUP_DIR/"
+cp "$SRC/userspace/nexusq-setupd/nexusq-setup-needed"     "$NEXUSQSETUP_DIR/"
+echo "  Installed: nexusq-setupd (aport + daemon -> main/nexusq-setupd)"
+
 # python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
 # deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
 # That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
@@ -254,7 +264,7 @@ cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
 echo "  Installed: python3 override (gated -> main/python3)"
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
