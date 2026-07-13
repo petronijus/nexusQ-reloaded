@@ -3,6 +3,25 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-13 — ONBOARDING STEP 1 IMPLEMENTED (13/13 coding tasks, commits
+> `ae8f499..cb03cf7`, pushed; targets v1.9.0 — build/flash/acceptance = plan
+> Task 14, continues on the LINUX machine).** App-driven WiFi onboarding for
+> the display-less Q: NFC tap → BT RFCOMM provisioning → WiFi join →
+> name/room/theme → outro. New **`nexusq-setupd`** daemon (BlueZ Profile1
+> RFCOMM, UUID `8e1f0cf7-…f3d3a`, Just-Works, `ExecCondition
+> nexusq-setup-needed`, psk never logged; 23 host tests), `nexusqd` r9
+> **`spin R G B`** setup animation, `nexusq-control` r9 identity file
+> `/etc/nexusq/device.json` + **`startSetupMode`**, **NFC payload = live
+> connection info** (device r44 — closes the standing backlog item; the unit's
+> `NQ_NFC_MESSAGE` override REMOVED, a final-review catch), companion
+> **8-screen setup wizard** + Kotlin BT channel + stock-asset pipeline
+> (gitignored Google assets; 14 Flutter tests). PROTOCOL.md §8 written.
+> Also: repo-wide **`.gitattributes` LF enforcement** (`cb03cf7`) after a CRLF
+> worktree broke the dockerized build — committed blobs were never poisoned
+> (msys pipe-translation measurement artifact). **Nothing flashed yet** —
+> device runs v1.8.2; see HANDOFF.md "WHERE TO CONTINUE" +
+> `docs/2026-07-13-onboarding-step1-implementation.md`.
+>
 > **2026-07-13 — v1.8.2: IDLE POWER — the "hot idle" was an OBSERVER ARTIFACT; the
 > real fixes are the governor + OUR healthd.** A 686 s true-idle study (v1.8.1)
 > showed any ssh/diag session heats the die to 74–79 °C in seconds (cooling
@@ -432,8 +451,12 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       text to the companion app on each tap. Enabler = kernel **patch 0037**
       (RATS-activate any ISO-DEP target, not just DESFire). neard is NOT installed —
       the daemon owns `nfc0`. See `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
-      _(Deferred: send IP/mDNS as the payload for tap-to-onboard; C-rewrite the
-      Python reader.)_
+      _(Deferred: ~~send IP/mDNS as the payload for tap-to-onboard~~ — **DONE
+      2026-07-13** (commit `0307430`, device r44): the payload is now live
+      connection-info JSON `{"v":1,"bt","host","ip","prov"}` rebuilt per tap,
+      part of onboarding step 1 (targets v1.9.0, not yet flashed — see
+      `docs/2026-07-13-onboarding-step1-implementation.md`); still deferred:
+      C-rewrite the Python reader.)_
 
 ### 7. TOSLINK / SPDIF output (audio)  ✅ DONE 2026-07-07 (v1.6.13 kernel / v1.6.15 output)
 Optical out is driven by the OMAP4's own McASP block -- fully independent of

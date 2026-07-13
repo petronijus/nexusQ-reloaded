@@ -4,11 +4,106 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-12→13 (latest): **v1.8.2 — idle power: the "hot idle" was an observer artifact; real fixes = conservative governor (kernel r43) + nq-healthd rewrite + root linger (device r40)**
+## Session 2026-07-13 (latest): **ONBOARDING STEP 1 IMPLEMENTED — 13/13 coding tasks, pushed (ae8f499..cb03cf7); Task 14 (build v1.9.0-rc1 → flash → HW acceptance → tag) continues on the LINUX machine**
+
+Full write-up: `docs/2026-07-13-onboarding-step1-implementation.md`. Plan:
+`docs/superpowers/plans/2026-07-13-onboarding-step1.md` (spec approved 2026-07-13).
+**This was the last Windows session — the project moves to a Linux machine.**
+Machine-local ledgers/memory do NOT transfer; everything needed is in this repo.
+
+✅ **All 13 coding tasks executed end-to-end** (subagent-driven, per-task reviews
++ fix rounds + a final whole-branch review), 25 commits on `main`, **all pushed**:
+- **nexusqd r9** — new `spin R G B` socket command: rotating-dot setup animation
+  (`spinner.c`, host-tested; 30 ms cadence; manual layer, cleared by
+  `auto`/`set`/`breathe`/`off`).
+- **nexusq-control r9** — identity file **`/etc/nexusq/device.json`**
+  (`load_identity`; name + room; mDNS TXT `room=`), new **`startSetupMode`**
+  method (arms `/run/nexusq-setup.force` + starts nexusq-setupd; all failures
+  map to `unavailable`); the librespot wrapper reads the Spotify name from
+  device.json.
+- **NEW package `nexusq-setupd` 0.1.0-r0** (`userspace/nexusq-setupd/` +
+  `pmos/nexusq-setupd` aport + docker-build.sh Phase 7c3 staging + preset
+  enable): **BT RFCOMM WiFi provisioning** — SetupCore state machine
+  (getDeviceInfo/confirmColor/scanNetworks/setWifi/getNetworkState/setName/
+  setTheme/finishSetup; error codes `wrong_password`/`not_found`/`timeout`;
+  **psk never logged**, sanitized SubprocessError handling,
+  validate-before-side-effects), BlueZ Profile1 transport (UUID
+  `8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`, channel 3, Just-Works agent,
+  600 s idle timeout, crash-restart re-arm via the force flag),
+  `ExecCondition=/usr/bin/nexusq-setup-needed`. Extra deps `py3-dbus` +
+  `py3-gobject3` (setupd only; bridge/NFC stay stdlib). **23 host tests.**
+- **nexusq-nfc-send** (device pkg **r44**) — the tap payload is now **live
+  connection-info JSON** `{"v":1,"bt","host","ip","prov"}` rebuilt per tap —
+  **closes the standing "NFC payload = connection info" backlog item**.
+  ⚠️ Final-review critical catch: the unit's `NQ_NFC_MESSAGE` env override was
+  **REMOVED** (`af2dec4`) — it overrides `build_payload()` entirely and would
+  have dead-ended tap-to-onboard with the old static string (manual-test
+  override only now, kept unset).
+- **Companion app** — DeviceTap NFC parsing + routing, Kotlin BT RFCOMM channel
+  (`nexusq/btsetup`), Dart BtSetupClient + **pairingColor parity** (shared
+  vectors `companion/pairing-color-vectors.json`), stock-asset extraction
+  pipeline (`scripts/extract-stock-assets.sh`; Google-copyright assets
+  gitignored, `.keep` placeholders + icon fallbacks so fresh clones build),
+  the **8-screen setup wizard** (welcome/cables/find/confirm-color/wifi/
+  name-room/theme/outro with `q_outro.mp4`) + entry points (NFC tap routing in
+  main.dart, "Set up new device" in ConnectGate). **14 Flutter tests, analyze
+  clean.** Debug build **installed on the user's Pixel 9 Pro Fold**.
+- **PROTOCOL.md §8 "Setup transport"** written (`379e59c`, incl. the Just-Works
+  accepted-risk note); §7 updated for the dynamic payload; setupd README.
+- **Build agent brief updated** (`afa3101`): nexusq-build MUST report live
+  progress to main (phase transitions + 10-min heartbeats + immediate
+  error/retry notices).
+
+⚠️ **CRLF incident (durable, know this on Linux):** the Windows worktree was
+CRLF (system `autocrlf=true`) which broke the dockerized build (the container
+reads the worktree via the mount → "failed to source APKBUILD", nexusqd build
+fail). **Committed blobs were NEVER poisoned** — verified byte-exact from a
+Linux container; the earlier in-session "blob poisoning" claims were **msys
+pipe-translation measurement artifacts** (never judge git-object bytes through
+an msys pipe). Durable fix: repo-wide **`.gitattributes` forcing LF** + worktree
+normalization (`cb03cf7`). On Linux after `git pull`: worktree is LF, nothing
+else needed.
+
+⚠️ **Windows-machine-only note:** repeated null-byte file corruption was found
+outside the repo (Python stdlib, pub cache, Android SDK) — user should
+chkdsk/SMART that machine. Unrelated to the repository.
+
+### WHERE TO CONTINUE (Linux machine — plan Task 14, IN PROGRESS)
+
+1. **`git pull`** — main at `cb03cf7`+.
+2. **Build v1.9.0-rc1** via the standard dockerized pipeline. Pre-build:
+   populate the `firmware/` overlay + `private/access` per the standard
+   pre-build checklist (the v1.8.1 empty-overlay lesson). **Verification
+   additions** on the mounted rootfs: `/usr/bin/nexusq-setupd` +
+   `/usr/bin/nexusq-setup-needed` + `nexusq-setupd.service` + its
+   `nexusq.preset` enable line; `py3-dbus` + `py3-gobject3` installed;
+   `nexusq-nfc.service` **WITHOUT** `NQ_NFC_MESSAGE`;
+   `/var/lib/systemd/linger/root` present.
+3. **Flash** — the device was left in fastboot on 2026-07-13 (may need
+   re-entering).
+4. **HW acceptance = plan Task 14 Step 3** (6 numbered checks): baked-profile
+   boot must NOT enter setup mode + diag sweep; `nmcli connection delete wifi`
+   + reboot → setup mode incl. LED spin + discoverable; full wizard from the
+   Pixel incl. a **deliberately wrong password**; NFC tap in both provisioned
+   states; `startSetupMode` re-provisioning; final diag sweep. Final-review
+   recommendation: exercise the fresh-boot path with the baked
+   `wifi.nmconnection` REMOVED.
+5. **Propose tag v1.9.0** (user approves; never tag unasked).
+
+**Backlog (post-v1.9.0, final-review triage):** `bad_params` (PROTOCOL §3 doc)
+vs `bad_request` (impl) naming unification; "add second device" entry point in
+the connected app UI; Kotlin `bad_args` message polish; Dart `dispose()`
+in-flight completers; `fakeAsync` timeout tests; `ACTION_DISCOVERY_FINISHED`
+progress bar; nmcli psk-in-argv → keyfile hardening; `sendLine` write-lock.
+
+---
+
+## Session 2026-07-12→13: **v1.8.2 — idle power: the "hot idle" was an observer artifact; real fixes = conservative governor (kernel r43) + nq-healthd rewrite + root linger (device r40)**
 
 Full write-up: `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
 State: **UNCOMMITTED working tree** (defconfig + both APKBUILDs + nq-healthd) —
-the main session commits/tags v1.8.2 after user approval. Built, **flashed to the
+the main session commits/tags v1.8.2 after user approval. _(Done later the same
+day: committed as `1504ef3`, tagged **v1.8.2**.)_ Built, **flashed to the
 device 2026-07-13**, acceptance sweep PASS (`nq-captures/20260713-102339/`).
 Packages: `linux` r42 → **r43** (`#44-postmarketOS`, defconfig-only, 42 patches
 unchanged), `device-google-steelhead` r38 → **r40** (**r39 burned**, see below).

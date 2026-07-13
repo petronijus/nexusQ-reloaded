@@ -273,6 +273,13 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
+- **onboarding stack (device r44+ / nexusq-setupd, first ships v1.9.0-rc1,
+  added 2026-07-13)**: `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
+  exist; `nexusq-setupd.service` installed and its `enable` line present in the
+  `nexusq.preset`; `py3-dbus` + `py3-gobject3` in `lib/apk/db/installed`;
+  `nexusq-nfc.service` contains **NO** `NQ_NFC_MESSAGE` line (a set value
+  overrides the dynamic connection-info payload and dead-ends tap-to-onboard);
+  `/var/lib/systemd/linger/root` present (v1.8.2 device r40 bake).
 - **boot.img sane**: parse the Android v0 header — `ramdisk_size == 0` and total
   size ≤ 8388608 bytes.
 - **fstab is boot-safe** (this one bites hard): `etc/fstab` must NOT contain a

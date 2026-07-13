@@ -32,7 +32,17 @@ things: an **NFC tap-to-send receiver** — the app runs a HostApduService so th
 (the NFC reader) can push a short text onto the phone on a tap, shown as a SnackBar,
 see `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` + [`PROTOCOL.md`](PROTOCOL.md) §7;
 and **auto-reconnect on resume/drop** so backgrounding the app no longer needs an
-app-kill to recover the connection.)_ The original app was reverse-engineered first — the full feature catalog, the
+app-kill to recover the connection.)_ _(**Onboarding step 1 implemented 2026-07-13,
+targets v1.9.0 — committed, NOT yet in a flashed image:** an 8-screen **setup wizard**
+(welcome/cables/find/confirm-color/wifi/name-room/theme/outro, with the original stock
+imagery via `../scripts/extract-stock-assets.sh` — Google-copyright assets gitignored,
+fresh clones fall back gracefully) provisions the Q's WiFi over **BT RFCOMM**
+([`PROTOCOL.md`](PROTOCOL.md) §8; Kotlin `nexusq/btsetup` channel + Dart
+`BtSetupClient`; pairing-color parity via `pairing-color-vectors.json`), entered from
+an **NFC tap** — the tap payload is now live connection-info JSON (§7), so a
+provisioned tap auto-connects and an unprovisioned one jumps into the wizard — or
+"Set up new device" in the app. See
+`../docs/2026-07-13-onboarding-step1-implementation.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

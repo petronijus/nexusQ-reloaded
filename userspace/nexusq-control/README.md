@@ -10,7 +10,9 @@ the work out to the subsystems that already run on the device:
 | volume / mute | `pactl set-sink-volume`/`set-sink-mute` on the **active output's** PA sink (input-agnostic, follows the output) |
 | LED theme / brightness | `nexusqd` control socket `/run/nexusqd.sock` (`theme <name>` / `brightness <0-255>`) |
 | now-playing | `librespot --onevent /usr/bin/nexusq-onevent` pushes track/volume changes to the bridge's local socket `/run/nexusq-control.sock` (read-only metadata + transport state) |
-| discovery | mDNS `_nexusq._tcp` via `avahi-publish-service` (best-effort) |
+| discovery | mDNS `_nexusq._tcp` via `avahi-publish-service` (best-effort); TXT carries `name=` + `room=` from the identity file |
+| device identity _(2026-07-13, r9)_ | `/etc/nexusq/device.json` `{"name","room"}` — written by `nexusq-setupd`'s `setName`, read via `load_identity()` (fallback `NEXUSQ_NAME` env → "Nexus Q"); feeds `getDeviceInfo`, the mDNS TXT, and the librespot wrapper's Spotify name |
+| setup re-entry _(2026-07-13, r9)_ | `startSetupMode` method: arms `/run/nexusq-setup.force` + `systemctl start nexusq-setupd.service` (re-provisioning while already on WiFi); every failure shape maps to error `unavailable`. See `../nexusq-setupd/` + `../../companion/PROTOCOL.md` §8 |
 
 Pure Python 3 (stdlib only — the device ships `python3`). Threaded: TCP accept loop, a unix
 accept loop for the librespot hook, one handler thread per client; shared state under a lock;
@@ -32,7 +34,8 @@ Config via env: `NEXUSQ_BIND_HOST/PORT` (0.0.0.0:45015), `NEXUSQ_MIXER_CARD` (Ne
 for the amp toggle), `NEXUSQ_AMP_CTRL` (Speaker), `NEXUSQ_PULSE_SERVER`
 (unix:/run/user/10000/pulse/native), `NEXUSQ_PULSE_COOKIE` (/home/user/.config/pulse/cookie),
 `NEXUSQD_SOCK` (/run/nexusqd.sock), `NEXUSQ_HOOK_SOCK` (/run/nexusq-control.sock),
-`NEXUSQ_NAME` ("Nexus Q").
+`NEXUSQ_IDENTITY` (/etc/nexusq/device.json), `NEXUSQ_NAME` ("Nexus Q" — fallback
+when the identity file is absent).
 
 ## v1 limitations
 - **Transport (play/pause/next/previous) is `unavailable`** — librespot is a Spotify-Connect

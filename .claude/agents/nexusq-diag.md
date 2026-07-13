@@ -139,8 +139,13 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   2026-07-04 (netlink poller: repeated `NFC_EVENT_TARGETS_FOUND` + card data frames).
   🆕 **NFC tap-to-send SHIPPED v1.7.0 (device r33, kernel r37):** `nexusq-nfc.service`
   runs `/usr/bin/nexusq-nfc-send`, a **reverse-HCE reader daemon** that OWNS `nfc0`
-  (raw `PF_NFC` netlink poll + ISO-DEP raw socket) and pushes `NQ_NFC_MESSAGE` to a
+  (raw `PF_NFC` netlink poll + ISO-DEP raw socket) and pushes a payload to a
   phone running the companion app's HostApduService on each tap (AID `F0010203040506`).
+  Payload: on images ≤ v1.8.2 a static `NQ_NFC_MESSAGE` text; **since device r44
+  (2026-07-13, targets v1.9.0) it is live connection-info JSON**
+  `{"v":1,"bt","host","ip","prov"}` rebuilt per tap by `build_payload()` — the unit
+  must NOT set `NQ_NFC_MESSAGE` (it overrides the builder; a set value on an
+  r44+ image is a regression — manual-test override only).
   **Checks:** `systemctl is-active nexusq-nfc` = active; its journal shows the poll
   loop (`[nfc] daemon: listening…`) and, on a real tap, `*** SENT … phone received
   it ***`. **neard is intentionally NOT installed** — the daemon owns the device; if
@@ -153,6 +158,19 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   wedges the pn544 HCI state until reboot (known fragility). See
   `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
+- 🆕 **Setup mode / `nexusq-setupd` (device r44+ images, targets v1.9.0 — NOT on
+  flashed ≤ v1.8.2):** a BT RFCOMM WiFi-provisioning daemon
+  (`nexusq-setupd.service`, `ExecCondition=/usr/bin/nexusq-setup-needed`).
+  **Expected states:** provisioned boot (a WiFi NM profile exists, no
+  `/run/nexusq-setup.force`) → the unit is **inactive with the condition
+  failed** — an ACTIVE setupd on a provisioned boot is a fault (device
+  discoverable + LED spinner when it shouldn't be). Unprovisioned boot (or the
+  force flag armed via the bridge's `startSetupMode`) → setupd active, ring
+  runs the `spin` animation (blue rotating dot), `bluetoothctl show` =
+  Discoverable yes; it exits after `finishSetup` or 600 s idle. The psk must
+  NEVER appear in its journal (a psk in a log line = a critical bug). See
+  `companion/PROTOCOL.md` §8 +
+  `docs/2026-07-13-onboarding-step1-implementation.md`.
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
   **`conservative`** since the 2026-07-13 v1.8.2 flash / kernel r43 —

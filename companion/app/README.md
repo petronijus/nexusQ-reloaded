@@ -20,7 +20,25 @@ flutter run --dart-define=NEXUSQ_MOCK=true
 flutter run --dart-define=NEXUSQ_HOST=192.168.x.y
 ```
 
-`flutter test` runs the protocol/controller smoke test; `flutter analyze` is clean.
+`flutter test` runs the test suite (protocol/controller smoke test + the setup-wizard,
+BT-client and pairing-color tests — 14 as of 2026-07-13); `flutter analyze` is clean.
+
+## Setup wizard (onboarding step 1, added 2026-07-13 — device side targets v1.9.0)
+
+`lib/setup/` ships an 8-screen wizard (welcome / cables / find / confirm-color /
+wifi / name-room / theme / outro) that provisions an unconfigured Q over
+**BT RFCOMM** (`../PROTOCOL.md` §8): a Kotlin platform channel `nexusq/btsetup`
+does scan/connect/newline-JSON lines, Dart `lib/setup/bt_setup_client.dart` speaks
+the envelope, and `pairing_color.dart` stays bit-identical to the device's Python
+via the shared vectors `../pairing-color-vectors.json`. Entry points: an **NFC
+tap** (the payload is connection-info JSON, §7 — an unprovisioned device routes
+into the wizard with the MAC prefilled) and **"Set up new device"** on the connect
+gate.
+
+**Stock imagery:** the original Google setup assets are copyrighted and
+gitignored — run `../../scripts/extract-stock-assets.sh` (needs the private stock
+APKs) to populate `assets/stock/`; without it the wizard still builds and runs
+(tracked `.keep` placeholders + icon fallbacks).
 
 **mDNS notes:** discovery works on Android/iOS/desktop on the same subnet (perms are
 configured: Android multicast, iOS/macOS Bonjour + local-network usage). On **web** there are no
@@ -45,4 +63,5 @@ provisioning-profile add-on); without it, use the manual host field (direct TCP 
 
 Minimal remote: volume/mute, LED theme + brightness, now-playing + transport. Everything else in
 the RE triage (outputs, fixed-level, sync delay, calibration, multi-room) extends the same protocol
-later. The real device bridge (`nexusq-control`) is the next piece — see `../PROTOCOL.md` §6.
+later. The real device bridge (`nexusq-control`) shipped in v1.6.3 (was "the next piece"
+when this was written) — see `../PROTOCOL.md` §6 and `../../userspace/nexusq-control/`.

@@ -154,14 +154,16 @@ One command, fully dockerized (pmbootstrap under the hood):
 ```
 
 It builds the kernel (mainline 6.12.12 + **42 patches** in `kernel/patches/`), the
-local `python3` override, `nexusqd`, and a full systemd rootfs, then repacks a
-ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
-the hard-won gotchas live in `HANDOFF.md`.
+local `python3` override, the device daemons (`nexusqd` · `nexusq-control` ·
+`nexusq-setupd`), and a full systemd rootfs, then repacks a ramdisk-less boot
+image and verifies the result by **mounting** it. Build notes and the hard-won
+gotchas live in `HANDOFF.md`.
 
 ```
 kernel/      dts · defconfig · 42 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
-pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · python3
-userspace/   nexusqd — the LED-ring daemon (driver, screensaver, music visualizer)
+pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-setupd · python3
+userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-setupd (BT WiFi provisioning)
+companion/   Flutter companion app + PROTOCOL.md (built on the phone, not in the image)
 reverse-eng/ ground truth extracted from the factory kernel
 scripts/     diagnostics (nq-healthd, nq-collect, …)
 docs/        dated engineering record

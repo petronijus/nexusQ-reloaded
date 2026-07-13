@@ -1,5 +1,19 @@
 # Onboarding (Step 1) Implementation Plan
 
+> **EXECUTION STATUS (2026-07-13, recorded at the Windows→Linux machine
+> handover — the checkboxes below were not ticked by the executor; this block
+> is authoritative):**
+> - **Tasks 1–13: DONE** — implemented subagent-driven with per-task reviews +
+>   fix rounds + a final whole-branch review; commits `ae8f499..cb03cf7` on
+>   `main`, all pushed. Pkgrels: nexusqd **r9**, nexusq-control **r9**,
+>   nexusq-setupd **0.1.0-r0** (new), device-google-steelhead **r44**.
+> - **Task 14: IN PROGRESS** — Step 1 (PROTOCOL.md §8) DONE (`379e59c`);
+>   Steps 2–5 (build v1.9.0-rc1 → flash → HW acceptance → docs/tag) remain,
+>   **continue on the Linux machine** (see HANDOFF.md "WHERE TO CONTINUE" +
+>   `docs/2026-07-13-onboarding-step1-implementation.md`, incl. the extra
+>   rootfs verification items and the final-review recommendation to exercise
+>   the fresh-boot path with the baked `wifi.nmconnection` removed).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** App-driven WiFi onboarding for the display-less Nexus Q: NFC tap → BT RFCOMM provisioning → WiFi join → name/room/theme → outro, with the original stock imagery.

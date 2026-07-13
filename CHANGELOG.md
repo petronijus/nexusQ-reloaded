@@ -4,6 +4,71 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased] — onboarding step 1 (targets v1.9.0; rc1 build + HW acceptance pending on the Linux machine)
+
+> **App-driven WiFi onboarding for the display-less Q, implemented end-to-end
+> 2026-07-13** (plan `docs/superpowers/plans/2026-07-13-onboarding-step1.md`,
+> 13/13 coding tasks, commits `ae8f499..cb03cf7`, subagent-driven with per-task
+> + final whole-branch reviews). Flow: NFC tap → BT RFCOMM provisioning →
+> WiFi join → name/room/theme → outro, with the original stock imagery.
+> **Nothing here is flashed yet** — the device runs v1.8.2; build/flash/HW
+> acceptance = plan Task 14, continues on the Linux machine (see HANDOFF.md
+> "WHERE TO CONTINUE"). Full write-up:
+> `docs/2026-07-13-onboarding-step1-implementation.md`.
+
+### Added
+
+- **NEW package `nexusq-setupd` 0.1.0-r0** — BT RFCOMM WiFi-provisioning
+  daemon (`userspace/nexusq-setupd/` + `pmos/nexusq-setupd` aport +
+  docker-build.sh staging + `nexusq.preset` enable): SetupCore state machine
+  (getDeviceInfo/confirmColor/scanNetworks/setWifi/getNetworkState/setName/
+  setTheme/finishSetup; error codes `wrong_password`/`not_found`/`timeout`;
+  the psk is never logged), BlueZ Profile1 RFCOMM transport (service UUID
+  `8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`, channel 3, Just-Works agent —
+  accepted risk documented in PROTOCOL.md §8, 600 s idle timeout),
+  `ExecCondition=/usr/bin/nexusq-setup-needed` (runs only unprovisioned or
+  when `/run/nexusq-setup.force` is armed). Deps `py3-dbus` + `py3-gobject3`
+  (setupd only). 23 host tests.
+- **`nexusqd` `spin R G B`** (r9) — rotating-dot setup animation on the manual
+  override layer (`spinner.c`, host-tested; 30 ms cadence while active).
+- **`nexusq-control` device identity + `startSetupMode`** (r9) —
+  `/etc/nexusq/device.json` (`name` + `room`; room ships as mDNS TXT `room=`);
+  `startSetupMode` arms the force flag + starts nexusq-setupd for
+  re-provisioning (all failures map to `unavailable`); the librespot wrapper
+  reads the Spotify device name from device.json.
+- **Companion app setup wizard** — 8 screens (welcome/cables/find/
+  confirm-color/wifi/name-room/theme/outro with `q_outro.mp4`), Kotlin BT
+  RFCOMM platform channel, Dart BtSetupClient with pairing-color parity to the
+  device (shared vectors `companion/pairing-color-vectors.json`), NFC-tap +
+  "Set up new device" entry points, stock-asset extraction pipeline
+  (`scripts/extract-stock-assets.sh`; Google-copyright assets gitignored,
+  fresh clones build via `.keep` placeholders + icon fallbacks). 14 Flutter
+  tests, analyze clean; debug build installed on the reference phone.
+- **PROTOCOL.md §8 "Setup transport"** — UUID, Just-Works accepted-risk note,
+  envelope reuse, the 8 methods + error codes, lifecycle, pairing-color
+  contract.
+
+### Changed
+
+- **NFC tap payload = live connection info** (device pkg **r44**, closes the
+  standing v1.7.0 backlog item): `nexusq-nfc-send` now rebuilds
+  `{"v":1,"bt","host","ip","prov"}` per tap instead of a static greeting —
+  provisioned tap auto-connects the app over LAN, unprovisioned tap jumps
+  into the setup wizard.
+
+### Fixed
+
+- **`nexusq-nfc.service` no longer sets `NQ_NFC_MESSAGE`** (final-review
+  catch, `af2dec4`): the env override takes precedence over the dynamic
+  payload builder and would have dead-ended tap-to-onboard; it is now a
+  documented manual-test override only, kept unset.
+- **Repo-wide LF enforcement** (`.gitattributes` + renormalize, `cb03cf7`):
+  a CRLF Windows worktree (system `autocrlf=true`) broke the dockerized
+  build via the mount ("failed to source APKBUILD"). Committed blobs were
+  never poisoned (verified byte-exact from a Linux container — earlier
+  "poisoned blob" claims were msys pipe-translation measurement artifacts);
+  the LF policy now lives in the repo, not machine config.
+
 ## [1.8.2] — 2026-07-13 — idle power: conservative governor + pid-1 churn killed (kernel r43, device r40)
 
 > **The "hot idle" AI-handover task, attacked measurement-first — and the measurement
