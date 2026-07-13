@@ -58,6 +58,7 @@ class _WifiScreenState extends State<WifiScreen> {
         backgroundColor: NexusQColors.surface,
         builder: (ctx) => _PasswordSheet(ssid: net['ssid'] as String),
       );
+      if (!mounted) return;
       if (entered == null || entered.isEmpty) return;
       psk = entered;
     }

@@ -29,14 +29,17 @@ class _FindDeviceScreenState extends State<FindDeviceScreen> {
 
   Future<void> _start() async {
     final ok = await widget.flow.client.ensurePermissions();
+    if (!mounted) return;
     if (!ok) {
       setState(() => _error = 'Bluetooth permission is required to find the Q.');
       return;
     }
     _sub = widget.flow.client.scanResults.listen((r) {
+      if (!mounted) return;
       setState(() => _found[r.mac] = r);
     });
     await widget.flow.client.startScan();
+    if (!mounted) return;
     setState(() => _scanning = true);
   }
 
