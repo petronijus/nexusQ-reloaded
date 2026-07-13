@@ -15,7 +15,7 @@ Run with neard STOPPED (it otherwise owns the netlink device):
     systemctl stop neard
     python3 nq-nfc-send.py "hello world"
 """
-import socket, struct, sys, os, time, errno
+import socket, struct, sys, os, time, errno, json, subprocess
 
 # --- uapi/linux/nfc.h -------------------------------------------------------
 AF_NFC              = 39
@@ -232,11 +232,42 @@ def send_to_target(g, fam, DEV, libc, target_idx, text):
     return False
 
 
+def _read_bt_mac():
+    try:
+        with open("/sys/class/bluetooth/hci0/address") as f:
+            return f.read().strip().upper()
+    except OSError:
+        return ""
+
+
+def build_payload(run=None, gethostname=None, read_bt_mac=None):
+    """Connection info for the tap (PROTOCOL.md §7): the app parses this to
+    auto-connect (prov=true -> LAN by ip/mdns; prov=false -> BT setup by bt).
+    Resilient: every lookup degrades to null/false, never raises."""
+    run = run or (lambda a, **kw: subprocess.run(a, capture_output=True, text=True, timeout=5))
+    gethostname = gethostname or socket.gethostname
+    read_bt_mac = read_bt_mac or _read_bt_mac
+    ip, prov = None, False
+    try:
+        r = run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", "wlan0"])
+        if r.returncode == 0 and r.stdout.strip():
+            ip = r.stdout.strip().splitlines()[0].split("/")[0]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        r = run(["nmcli", "-t", "-f", "TYPE", "connection", "show"])
+        prov = r.returncode == 0 and "802-11-wireless" in r.stdout
+    except Exception:  # noqa: BLE001
+        pass
+    return json.dumps({"v": 1, "bt": read_bt_mac(), "host": gethostname(),
+                       "ip": ip, "prov": prov}, separators=(",", ":")).encode()
+
+
 def main():
-    # message: NQ_NFC_MESSAGE env (used by the systemd service, tolerates spaces)
-    # takes precedence over argv[1]; falls back to a default.
-    text = (os.environ.get("NQ_NFC_MESSAGE")
-            or (sys.argv[1] if len(sys.argv) > 1 else "Ahoj z Nexus Q!")).encode()
+    # NQ_NFC_MESSAGE / argv override kept for testing; default = live
+    # connection info, rebuilt fresh at every tap (ip/prov change over time).
+    override = os.environ.get("NQ_NFC_MESSAGE") or (sys.argv[1] if len(sys.argv) > 1 else None)
+    text = override.encode() if override else None
     loop = os.environ.get("NQ_NFC_LOOP") == "1"
     WINDOW = float(os.environ.get("NQ_NFC_WINDOW", "8" if loop else "40"))
 
@@ -269,7 +300,7 @@ def main():
                     armed = True  # field empty long enough → ready for the next tap
                 continue
             if armed:
-                if send_to_target(g, fam, DEV, libc, tid, text):
+                if send_to_target(g, fam, DEV, libc, tid, text if text is not None else build_payload()):
                     last_send = time.time()
                 armed = False
                 time.sleep(0.3)
@@ -281,7 +312,7 @@ def main():
         if tid is None:
             print("!! no ISO-DEP target seen (phone not on the dome / screen off / app not foreground)")
             return 1
-        return 0 if send_to_target(g, fam, DEV, libc, tid, text) else 1
+        return 0 if send_to_target(g, fam, DEV, libc, tid, text if text is not None else build_payload()) else 1
 
 
 if __name__ == "__main__":

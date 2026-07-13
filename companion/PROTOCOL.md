@@ -185,6 +185,9 @@ in the app. This does not use the TCP/JSON envelope; it is a distinct NFC APDU l
   `MainActivity` claims `setPreferredService` while foreground; `HceListener` renders it.
 - **Requires** the companion app **installed + foreground**, screen on; **tap and hold
   steady ~5–10 s** (the reader's RATS activation NOKs if the phone moves).
-- **Payload today** is a static greeting (`NQ_NFC_MESSAGE`). Reserved next step: send the
-  device's connection info (IP / mDNS) so the app could auto-connect (tap-to-onboard).
+- **Payload** (since step-1 onboarding): compact JSON connection info, rebuilt per tap:
+  `{"v":1,"bt":"<BT MAC>","host":"<hostname>","ip":"<wlan0 IPv4>"|null,"prov":true|false}`.
+  The app parses it: `prov=false` → jump into the setup wizard and connect over BT to `bt`;
+  `prov=true` → connect over LAN to `ip` (fallback `<host>.local`). A non-JSON payload is
+  still displayed as a plain text SnackBar (`NQ_NFC_MESSAGE` override, older devices).
 - Full design + the enabling kernel fix: `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md`.
