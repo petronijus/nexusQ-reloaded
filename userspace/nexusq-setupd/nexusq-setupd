@@ -363,10 +363,180 @@ def _sw_version():
     return "unknown"
 
 
-def main():
-    # Task 5 replaces this with the BlueZ Profile1/Agent1 transport loop.
-    log("transport not yet implemented (see plan Task 5)")
+def handle_line(core, line):
+    """One PROTOCOL.md envelope line -> response line (or None). Never raises:
+    garbage is ignored, handler errors become error responses."""
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return None
+    method = obj.get("method")
+    rid = obj.get("id")
+    if not isinstance(method, str):
+        return None
+    try:
+        result = core.handle(method, obj.get("params"))
+        resp = {"id": rid, "ok": True, "result": result}
+    except Err as e:
+        resp = {"id": rid, "ok": False, "error": {"code": e.code, "message": e.message}}
+    except Exception as e:  # noqa: BLE001
+        log("handler error:", method, e)
+        resp = {"id": rid, "ok": False, "error": {"code": "internal", "message": str(e)}}
+    return json.dumps(resp) if rid is not None else None
+
+
+def _run_transport():
+    import dbus
+    import dbus.service
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+    core = SetupCore()
+    loop = GLib.MainLoop()
+
+    AGENT_PATH = "/org/nexusq/setup/agent"
+    PROFILE_PATH = "/org/nexusq/setup/profile"
+
+    class Agent(dbus.service.Object):
+        """Just-Works auto-accept agent — active only while setupd runs."""
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+        def Release(self):
+            pass
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="ou", out_signature="")
+        def RequestConfirmation(self, device, passkey):
+            log("pairing: auto-confirming", device)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="")
+        def RequestAuthorization(self, device):
+            log("pairing: auto-authorizing", device)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            log("service: auto-authorizing", device, uuid)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+        def Cancel(self):
+            pass
+
+    class Profile(dbus.service.Object):
+        """RFCOMM server profile: BlueZ listens and hands us the socket fd."""
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="oha{sv}", out_signature="")
+        def NewConnection(self, device, fd, properties):
+            raw = fd.take()
+            log("RFCOMM connection from", device)
+            t = threading.Thread(target=_client_loop, args=(raw,), daemon=True)
+            t.start()
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="o", out_signature="")
+        def RequestDisconnection(self, device):
+            log("RFCOMM disconnect requested:", device)
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="", out_signature="")
+        def Release(self):
+            pass
+
+    def _client_loop(raw_fd):
+        sock = socket.socket(fileno=raw_fd)
+        sock.settimeout(60)
+        buf = b""
+        try:
+            while True:
+                try:
+                    chunk = sock.recv(4096)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    return
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    resp = handle_line(core, line.decode(errors="replace").strip())
+                    if resp is not None:
+                        sock.sendall((resp + "\n").encode())
+                    if core.finished:
+                        loop.quit()
+                        return
+        except OSError as e:
+            log("client io error:", e)
+        finally:
+            sock.close()
+
+    # adapter: powered + discoverable + pairable, no timeout while setup runs
+    adapter = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/hci0"),
+                             "org.freedesktop.DBus.Properties")
+    ident = {"name": "Nexus Q"}
+    try:
+        with open(IDENTITY_PATH) as f:
+            j = json.load(f)
+            if isinstance(j.get("name"), str) and j["name"].strip():
+                ident["name"] = j["name"].strip()
+    except (OSError, ValueError):
+        pass
+    adapter.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
+    adapter.Set("org.bluez.Adapter1", "Alias", dbus.String(ident["name"]))
+    adapter.Set("org.bluez.Adapter1", "DiscoverableTimeout", dbus.UInt32(0))
+    adapter.Set("org.bluez.Adapter1", "PairableTimeout", dbus.UInt32(0))
+    adapter.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(True))
+    adapter.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(True))
+
+    agent = Agent(bus, AGENT_PATH)         # noqa: F841 (exported object)
+    am = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
+                        "org.bluez.AgentManager1")
+    am.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+    am.RequestDefaultAgent(AGENT_PATH)
+
+    profile = Profile(bus, PROFILE_PATH)   # noqa: F841 (exported object)
+    pm = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
+                        "org.bluez.ProfileManager1")
+    pm.RegisterProfile(PROFILE_PATH, SETUP_UUID, {
+        "Name": dbus.String("NexusQ Setup"),
+        "Role": dbus.String("server"),
+        "Channel": dbus.UInt16(3),
+        "RequireAuthentication": dbus.Boolean(True),
+        "RequireAuthorization": dbus.Boolean(False),
+    })
+
+    core.led.send(SPIN_CMD)
+    log("setup mode active: discoverable, RFCOMM profile", SETUP_UUID)
+
+    def _idle_check():
+        if core.finished:
+            loop.quit()
+            return False
+        if time.monotonic() - core.last_activity > SETUP_TIMEOUT:
+            log(f"inactive {SETUP_TIMEOUT:.0f}s -> leaving setup mode")
+            loop.quit()
+            return False
+        return True
+
+    GLib.timeout_add_seconds(15, _idle_check)
+
+    try:
+        loop.run()
+    finally:
+        # leave no setup residue: discoverable off, LED back to auto unless a
+        # theme was chosen (finishSetup already applied it), force flag gone.
+        try:
+            adapter.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(False))
+        except Exception:  # noqa: BLE001
+            pass
+        if not core.finished:
+            core.led.send("auto")
+        try:
+            os.unlink(FORCE_FLAG)
+        except OSError:
+            pass
+    log("setup mode ended (finished=%s)" % core.finished)
     return 0
+
+
+def main():
+    return _run_transport()
 
 
 if __name__ == "__main__":

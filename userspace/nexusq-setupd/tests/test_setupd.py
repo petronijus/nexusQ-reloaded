@@ -182,5 +182,36 @@ class TestSetupCore(unittest.TestCase):
         self.assertEqual(cm.exception.code, "unknown_method")
 
 
+class TestFraming(unittest.TestCase):
+    def _core(self, mod):
+        core = mod.SetupCore(run=mock.Mock(), led=mock.Mock(), bt_mac="F8:8F:CA:20:49:E5")
+        return core
+
+    def test_ok_response(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        resp = mod.handle_line(core, '{"id": 3, "method": "confirmColor"}')
+        obj = json.loads(resp)
+        self.assertEqual(obj, {"id": 3, "ok": True, "result": {"rgb": [0, 183, 255]}})
+
+    def test_error_response(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        resp = mod.handle_line(core, '{"id": 4, "method": "nonsense"}')
+        obj = json.loads(resp)
+        self.assertFalse(obj["ok"])
+        self.assertEqual(obj["error"]["code"], "unknown_method")
+
+    def test_fire_and_forget_no_response(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        self.assertIsNone(mod.handle_line(core, '{"method": "confirmColor"}'))
+
+    def test_garbage_line_ignored(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        self.assertIsNone(mod.handle_line(core, "{not json"))
+
+
 if __name__ == "__main__":
     unittest.main()

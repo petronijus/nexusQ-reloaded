@@ -1,0 +1,17 @@
+[Unit]
+Description=Nexus Q BT WiFi-provisioning (setup mode)
+# BT + LED + NM must exist; none is a hard dep (setupd degrades gracefully).
+After=bluetooth.service nexusqd.service NetworkManager.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/nexusq-setup-needed
+ExecStart=/usr/bin/nexusq-setupd
+# One shot per trigger: it exits after finishSetup / inactivity; a crash
+# restarts it (setup must survive daemon bugs while the user is mid-flow).
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
