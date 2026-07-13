@@ -1,0 +1,10 @@
+{
+  "algorithm": "hue = ((mac[4] << 8) | mac[5]) % 360; rgb = hsv_to_rgb(hue, s=1.0, v=1.0); channels rounded to nearest int (0..255)",
+  "vectors": [
+    { "mac": "F8:8F:CA:20:49:E5", "rgb": [0, 183, 255] },
+    { "mac": "00:00:00:00:00:00", "rgb": [255, 0, 0] },
+    { "mac": "AA:BB:CC:DD:01:2C", "rgb": [255, 0, 255] },
+    { "mac": "AA:BB:CC:DD:00:3C", "rgb": [255, 255, 0] },
+    { "mac": "11:22:33:44:00:78", "rgb": [0, 255, 0] }
+  ]
+}
