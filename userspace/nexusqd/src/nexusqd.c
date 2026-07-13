@@ -5,6 +5,7 @@
 #include "compositor.h"
 #include "keys.h"
 #include "control.h"
+#include "spinner.h"
 #include "themes.h"
 #include "reaction.h"
 #include "screensaver.h"
@@ -63,9 +64,10 @@
  * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
 
 /* --- manual override layer (priority 8) ----------------------------------- */
-struct manual_ctx { int rgb[3]; int breathe; };
+struct manual_ctx { int rgb[3]; int breathe; int spin; };
 static int manual_render(void *c, double t, struct frame *out) {
     struct manual_ctx *m = c;
+    if (m->spin) { spinner_render(m->rgb, t, out); return 0; }
     if (m->breathe) {
         /* companion color theme: pulse in the hue using the SAME throb envelope
          * as the idle screensaver breathe (A in 0.1..0.8), but at priority 8 it is
@@ -111,7 +113,7 @@ int main(void) {
     double start = now_s();
     struct reaction rx = {0};
     struct screensaver ss; screensaver_init(&ss, start);
-    struct manual_ctx manual = { { 0, 0, 0 }, 0 };
+    struct manual_ctx manual = { { 0, 0, 0 }, 0, 0 };
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
@@ -210,7 +212,7 @@ int main(void) {
          * bug). poll() now only sleeps until the next frame is due; audio/input
          * that arrives sooner just wakes us to drain, then we loop and re-sleep. */
         double frame_int = reaction_overlay_active(&rx, now_s()) ? 0.016
-                         : (child_alpha > 0.0f ? 0.030 : 0.050);
+                         : ((child_alpha > 0.0f || (comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
         int to = (int)((next_frame - now_s()) * 1000.0);
         if (to < 0) to = 0;
         poll(pfds, np, to);
@@ -239,8 +241,8 @@ int main(void) {
                 char line[128] = {0}; int r = (int)read(c, line, sizeof(line)-1);
                 struct ctl_cmd cmd;
                 if (r > 0 && ctl_parse(line, &cmd) == 0) {
-                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; comp.layers[manual_idx].active = 1; }
-                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; comp.layers[manual_idx].active = 1; }
+                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; }
+                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_AUTO) { comp.layers[manual_idx].active = 0; }   /* resume screensaver/music */
                     else if (cmd.kind == CTL_SCENE) { music_set_scene(&music, cmd.value); }
                     else if (cmd.kind == CTL_MUTE) avr_set_mute(cmd.rgb[0],cmd.rgb[1],cmd.rgb[2]);
@@ -263,13 +265,21 @@ int main(void) {
                          * (over the visualizer, over a blanked/idle screensaver), so
                          * picking a color always lights the ring. `auto` clears it. */
                         memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
-                        manual.breathe = 1; comp.layers[manual_idx].active = 1;
+                        manual.breathe = 1; manual.spin = 0; comp.layers[manual_idx].active = 1;
+                    }
+                    else if (cmd.kind == CTL_SPIN) {
+                        /* setup-mode rotating dot (stock "starting up" visual):
+                         * an ANIMATED manual override at priority 8. Cleared by
+                         * auto/set/breathe/off like every manual mode. */
+                        memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
+                        manual.breathe = 0; manual.spin = 1;
+                        comp.layers[manual_idx].active = 1;
                     }
                     else if (cmd.kind == CTL_THEME) {
                         char path[256]; snprintf(path, sizeof(path), "%s/theme_%s", THEMES_DIR, cmd.name);
                         FILE *fp = fopen(path, "r");
                         if (fp) { char js[1024]; int m=(int)fread(js,1,sizeof(js)-1,fp); js[m]=0; fclose(fp);
-                                  struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); manual.breathe = 0; comp.layers[manual_idx].active = 1; } }
+                                  struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; } }
                     }
                     if (write(c, "ok\n", 3) < 0) { /* client gone */ }
                 } else { if (write(c, "err\n", 4) < 0) { /* client gone */ } }

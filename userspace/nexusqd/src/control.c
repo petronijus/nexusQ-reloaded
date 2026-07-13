@@ -24,6 +24,7 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
     }
     if (!strcmp(tok[0], "set") && n == 4)  { out->kind = CTL_SET;  return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "breathe") && n == 4) { out->kind = CTL_BREATHE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
+    if (!strcmp(tok[0], "spin") && n == 4) { out->kind = CTL_SPIN; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "mute") && n == 4) { out->kind = CTL_MUTE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "off") && n == 1)    { out->kind = CTL_OFF; return 0; }
     if (!strcmp(tok[0], "status") && n == 1) { out->kind = CTL_STATUS; return 0; }
