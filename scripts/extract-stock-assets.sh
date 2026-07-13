@@ -60,4 +60,6 @@ for f in "${want_raw[@]}"; do
     else echo "  missing raw: $f"; missing=$((missing+1)); fi
 done
 
+touch "$DEST/drawable/.keep" "$DEST/raw/.keep"
+
 echo "extract-stock-assets: done ($(find "$DEST" -type f | wc -l) files, $missing missing)"
