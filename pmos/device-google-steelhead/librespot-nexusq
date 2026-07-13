@@ -24,6 +24,18 @@ for i in $(seq 1 30); do
 done
 [ -n "$WIP" ] || { echo "librespot-nexusq: wlan0 has no IPv4 after 30s" >&2; exit 1; }
 
+# Device name: read from the same identity file the nexusq-control bridge uses
+# (/etc/nexusq/device.json, written by nexusq-setupd's setName), so Spotify
+# Connect shows whatever name the user set. Falls back to "Nexus Q" when the
+# file is absent/corrupt/unset (fresh install, before first setup) — never let
+# a missing identity file block librespot from starting.
+NQ_NAME="$(python3 - <<'EOF' 2>/dev/null || echo "Nexus Q"
+import json
+print(json.load(open("/etc/nexusq/device.json"))["name"])
+EOF
+)"
+[ -n "$NQ_NAME" ] || NQ_NAME="Nexus Q"
+
 # --ap-port 443: VLAN20 blocks Spotify's default access-point port 4070; without
 #   this, discovery succeeds but playback stalls right after the credential handoff.
 # --zeroconf-port 37879: matches the 60_spotify.nft firewall drop-in.
@@ -33,7 +45,7 @@ done
 #   (falls back to /var/cache/librespot when run by hand outside systemd).
 # --onevent nexusq-onevent: now-playing + volume hook for the companion bridge.
 exec /usr/bin/librespot \
-	--name "Nexus Q" \
+	--name "$NQ_NAME" \
 	--backend alsa --device pulse \
 	--bitrate 320 --format S16 --initial-volume 60 \
 	--ap-port 443 \

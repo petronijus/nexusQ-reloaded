@@ -4,7 +4,7 @@
 # librespot (now-playing). Built for the target by pmbootstrap.
 pkgname=nexusq-control
 pkgver=0.1.0
-pkgrel=8
+pkgrel=9
 pkgdesc="Nexus Q companion control bridge (LAN ↔ nexusqd/PulseAudio/librespot)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"

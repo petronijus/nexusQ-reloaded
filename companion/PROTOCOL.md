@@ -25,7 +25,7 @@ both ends on a trusted LAN.
 
 - **mDNS / DNS-SD**: the bridge advertises **`_nexusq._tcp.local`**, instance name = device name
   (default `"Nexus Q"`), TXT records: `proto=1`, `name=<device name>`, `model=steelhead`,
-  `id=<stable device id>`.
+  `room=<room>`, `id=<stable device id>`.
 - The companion browses `_nexusq._tcp` and connects to the resolved host:port.
 - (Optional/bonus, not v1) also answer the stock §1 UDP beacon so the *original* app could discover
   the device. Deferred.
@@ -122,7 +122,8 @@ switched off for `spdif`/`hdmi`.
 ### Device info
 | Method | params | result |
 |---|---|---|
-| `getDeviceInfo` | — | `{ name, model:"steelhead", serial, swVersion }` |
+| `getDeviceInfo` | — | `{ name, model:"steelhead", room, serial, swVersion }` |
+| `startSetupMode` | — | `{ started: true }` — arms `/run/nexusq-setup.force` and starts `nexusq-setupd` (BT re-provisioning; see §8). Errors `unavailable`. |
 
 ## 5. Reserved for later (not v1)
 `hello`/pairing handshake + token, multi-room grouping, fixed-volume line-out, sync delay,

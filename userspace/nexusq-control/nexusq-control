@@ -28,7 +28,9 @@ Config via env:
   NEXUSQ_PULSE_COOKIE  (default /home/user/.config/pulse/cookie)    # lets root reach it
   NEXUSQD_SOCK         (default /run/nexusqd.sock)
   NEXUSQ_HOOK_SOCK     (default /run/nexusq-control.sock)
-  NEXUSQ_NAME          (default "Nexus Q")
+  NEXUSQ_NAME          (default "Nexus Q")     # fallback when device.json is absent
+  NEXUSQ_IDENTITY      (default /etc/nexusq/device.json)  # {"name","room"} written
+                                                            # by nexusq-setupd's setName
 """
 import json
 import os
@@ -48,7 +50,30 @@ PULSE_SERVER = os.environ.get("NEXUSQ_PULSE_SERVER", "unix:/run/user/10000/pulse
 PULSE_COOKIE = os.environ.get("NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/cookie")
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 HOOK_SOCK = os.environ.get("NEXUSQ_HOOK_SOCK", "/run/nexusq-control.sock")
-DEVICE_NAME = os.environ.get("NEXUSQ_NAME", "Nexus Q")
+IDENTITY_PATH = os.environ.get("NEXUSQ_IDENTITY", "/etc/nexusq/device.json")
+SETUP_FORCE_FLAG = "/run/nexusq-setup.force"
+
+
+def load_identity(path=None):
+    """Device identity {name, room}: /etc/nexusq/device.json (written by
+    nexusq-setupd's setName) > NEXUSQ_NAME env > defaults. Resilient: a
+    missing/corrupt file can never take the bridge down."""
+    ident = {"name": os.environ.get("NEXUSQ_NAME", "Nexus Q"), "room": ""}
+    try:
+        with open(path or IDENTITY_PATH) as f:
+            data = json.load(f)
+        if isinstance(data.get("name"), str) and data["name"].strip():
+            ident["name"] = data["name"].strip()
+        if isinstance(data.get("room"), str):
+            ident["room"] = data["room"].strip()
+    except (OSError, ValueError):
+        pass
+    return ident
+
+
+_IDENT = load_identity()
+DEVICE_NAME = _IDENT["name"]
+DEVICE_ROOM = _IDENT["room"]
 # The LXQt panel volume applet pins to a device INDEX ([volume] device=N in
 # panel.conf), it does not follow PA's default sink — we re-link it on every
 # output switch (see _sync_panel_applet). The appliance's canonical output after
@@ -423,7 +448,7 @@ class Bridge:
             with self.lock:
                 return dict(self.state), []
         if method == "getDeviceInfo":
-            return {"name": DEVICE_NAME, "model": "steelhead",
+            return {"name": DEVICE_NAME, "model": "steelhead", "room": DEVICE_ROOM,
                     "serial": _serial(), "swVersion": _sw_version()}, []
         if method in ("setVolume", "adjustVolume", "setMuted", "toggleMute"):
             return self._volume_cmd(method, p)
@@ -472,6 +497,19 @@ class Bridge:
             # API — control happens from the Spotify app. Reserved for a future
             # backend (e.g. go-librespot's HTTP API). See PROTOCOL.md §5.
             raise Err("unavailable", "transport control not available in v1")
+        if method == "startSetupMode":
+            # Re-provisioning entry point: arm the force flag (the unit's
+            # ExecCondition honors it even when a WiFi profile exists) and
+            # start nexusq-setupd. The setup daemon owns everything after this.
+            try:
+                open(SETUP_FORCE_FLAG, "w").close()
+                r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode != 0:
+                    raise Err("unavailable", "nexusq-setupd failed to start: " + r.stderr.strip())
+            except OSError as e:
+                raise Err("unavailable", f"cannot start setup mode: {e}")
+            return {"started": True}, []
         raise Err("unknown_method", method)
 
     def _volume_cmd(self, method, p):
@@ -711,7 +749,7 @@ def publish_mdns():
     try:
         return subprocess.Popen(
             ["avahi-publish-service", DEVICE_NAME, "_nexusq._tcp", str(PORT),
-             "proto=1", f"name={DEVICE_NAME}", "model=steelhead"],
+             "proto=1", f"name={DEVICE_NAME}", "model=steelhead", f"room={DEVICE_ROOM}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError:
