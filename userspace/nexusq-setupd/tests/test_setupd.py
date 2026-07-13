@@ -212,6 +212,15 @@ class TestFraming(unittest.TestCase):
         core = self._core(mod)
         self.assertIsNone(mod.handle_line(core, "{not json"))
 
+    def test_valid_json_non_object_ignored(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        # Valid JSON but not an object should be ignored, not raise AttributeError
+        self.assertIsNone(mod.handle_line(core, "42"))
+        self.assertIsNone(mod.handle_line(core, "null"))
+        self.assertIsNone(mod.handle_line(core, '"x"'))
+        self.assertIsNone(mod.handle_line(core, "[1, 2]"))
+
 
 if __name__ == "__main__":
     unittest.main()

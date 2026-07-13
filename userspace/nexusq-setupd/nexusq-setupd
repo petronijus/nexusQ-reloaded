@@ -370,6 +370,8 @@ def handle_line(core, line):
         obj = json.loads(line)
     except ValueError:
         return None
+    if not isinstance(obj, dict):
+        return None
     method = obj.get("method")
     rid = obj.get("id")
     if not isinstance(method, str):
@@ -459,7 +461,7 @@ def _run_transport():
                     if resp is not None:
                         sock.sendall((resp + "\n").encode())
                     if core.finished:
-                        loop.quit()
+                        loop.quit()  # GMainLoop.quit() is thread-safe; safe to call from client thread
                         return
         except OSError as e:
             log("client io error:", e)
