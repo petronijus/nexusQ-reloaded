@@ -57,15 +57,17 @@ SETUP_FORCE_FLAG = "/run/nexusq-setup.force"
 def load_identity(path=None):
     """Device identity {name, room}: /etc/nexusq/device.json (written by
     nexusq-setupd's setName) > NEXUSQ_NAME env > defaults. Resilient: a
-    missing/corrupt file can never take the bridge down."""
+    missing/corrupt/wrong-shape file (including valid JSON that isn't an
+    object, e.g. `null` or `[1,2,3]`) can never take the bridge down."""
     ident = {"name": os.environ.get("NEXUSQ_NAME", "Nexus Q"), "room": ""}
     try:
         with open(path or IDENTITY_PATH) as f:
             data = json.load(f)
-        if isinstance(data.get("name"), str) and data["name"].strip():
-            ident["name"] = data["name"].strip()
-        if isinstance(data.get("room"), str):
-            ident["room"] = data["room"].strip()
+        if isinstance(data, dict):
+            if isinstance(data.get("name"), str) and data["name"].strip():
+                ident["name"] = data["name"].strip()
+            if isinstance(data.get("room"), str):
+                ident["room"] = data["room"].strip()
     except (OSError, ValueError):
         pass
     return ident
@@ -341,6 +343,35 @@ def nexusqd_send(line):
         return False
 
 
+def start_setup_mode():
+    """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
+    honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
+    daemon owns everything after this.
+
+    Arm/disarm symmetry: the flag is armed right before the attempt and is
+    best-effort disarmed on every failure path (bad exit code, OSError,
+    subprocess.SubprocessError incl. TimeoutExpired) so a failed attempt can
+    never leave it armed to force-provision an unrelated later unit start.
+    """
+    open(SETUP_FORCE_FLAG, "w").close()
+    try:
+        r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        try:
+            os.unlink(SETUP_FORCE_FLAG)
+        except OSError:
+            pass
+        raise Err("unavailable", f"cannot start setup mode: {e}")
+    if r.returncode != 0:
+        try:
+            os.unlink(SETUP_FORCE_FLAG)
+        except OSError:
+            pass
+        raise Err("unavailable", "nexusq-setupd failed to start: " + r.stderr.strip())
+    return {"started": True}
+
+
 class Bridge:
     def __init__(self):
         self.pulse = Pulse()
@@ -498,18 +529,7 @@ class Bridge:
             # backend (e.g. go-librespot's HTTP API). See PROTOCOL.md §5.
             raise Err("unavailable", "transport control not available in v1")
         if method == "startSetupMode":
-            # Re-provisioning entry point: arm the force flag (the unit's
-            # ExecCondition honors it even when a WiFi profile exists) and
-            # start nexusq-setupd. The setup daemon owns everything after this.
-            try:
-                open(SETUP_FORCE_FLAG, "w").close()
-                r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"],
-                                   capture_output=True, text=True, timeout=15)
-                if r.returncode != 0:
-                    raise Err("unavailable", "nexusq-setupd failed to start: " + r.stderr.strip())
-            except OSError as e:
-                raise Err("unavailable", f"cannot start setup mode: {e}")
-            return {"started": True}, []
+            return start_setup_mode(), []
         raise Err("unknown_method", method)
 
     def _volume_cmd(self, method, p):
