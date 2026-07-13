@@ -19,6 +19,24 @@ seen, and **prove the rootfs is correct before reporting success**. The build is
 long and the failure modes are well-catalogued below — work the catalog, don't
 re-derive.
 
+## MANDATORY: live progress reporting to the main conversation
+
+The build runs ~30–90 min and pegs a CPU core; the user must never have to ask
+"is it stuck?" (this happened 2026-07-13 — 1.5 h of silence, user rightly
+annoyed). While the build runs, report to the controller via the SendMessage
+tool with `to: "main"`:
+
+1. **Every phase transition** — one line: phase name, what it does, rough ETA
+   (e.g. `Phase 7d: python3 armv7 under qemu — the slowest phase, ~30–60 min`).
+2. **A heartbeat every ~10 min inside any long phase** — one line: elapsed
+   time + the last build-log line as proof of life.
+3. **Immediately on any retry/failure** — what failed, which catalog entry it
+   matches, what you are doing about it.
+
+Keep each message to 1–2 lines. Never go more than ~10 minutes without either
+a phase message or a heartbeat. This is not optional politeness — it is part of
+the job definition, same rank as the verification gate.
+
 ## Pre-build: the private access overlay (since 2026-07-02)
 
 Phase 6 stages **baked-in device access** from `private/access/` into the device

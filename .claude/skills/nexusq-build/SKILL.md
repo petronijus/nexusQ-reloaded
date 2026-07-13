@@ -33,7 +33,10 @@ image boots with **no wlan0 / no BT** (bit the first v1.8.1 flash). Gate: build
 log says `Staged BCM4330 firmware` + rootfs `/lib/firmware/brcm/` is complete.
 
 The agent owns: the correct `docker run` invocation (never `./docker-build.sh` on
-the host, never sudo, never from a git worktree), live monitoring, the
+the host, never sudo, never from a git worktree), live monitoring **including
+mandatory progress reports to the main conversation (SendMessage to "main": every
+phase transition + a ~10-min heartbeat inside long phases + immediate
+retry/failure notices — the user must never have to ask "is it stuck?")**, the
 known-failure catalog with fixes (channel mismatch → volume wipe, oversized
 boot.img → ramdisk-less repack, /usr/local, uid drift, SIGPIPE, …), and the
 **mandatory verification gate** — it mounts the produced rootfs and proves init =
