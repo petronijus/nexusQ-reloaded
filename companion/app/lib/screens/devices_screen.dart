@@ -67,6 +67,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
     if (s.contains('not_found')) {
       return 'Device not found — is it still in pairing mode?';
     }
+    if (s.contains('AlreadyExists') || s.contains('already')) {
+      return 'Already paired.';  // not a failure — it is the outcome they wanted
+    }
     if (s.contains('pair_failed')) {
       return 'Pairing failed. Put the device back in pairing mode and retry.';
     }
@@ -119,8 +122,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> _pair(Map<String, dynamic> d) async {
     setState(() => _busyMac = d['mac'] as String?);
     final r = await _call<Map<String, dynamic>>('pairBtDevice', {'mac': d['mac']});
-    if (mounted) setState(() => _busyMac = null);
-    if (r != null && mounted) {
+    if (!mounted) return;
+    setState(() => _busyMac = null);
+    if (r != null) {
+      // Done: stop searching and drop the results. Leaving the list up left a
+      // live "Pair" button on a device that had just paired — tapping it again
+      // asked bluez to pair an already-paired device, which came back as an
+      // error and told the user their successful pairing had failed.
+      setState(() {
+        _scanning = false;
+        _found = [];
+      });
       // `bonded` is the honest answer to "will this still be here tomorrow?".
       // `paired` alone lies: a session-only pairing reports paired and then
       // evaporates on the next reboot. Say so rather than quietly promise.

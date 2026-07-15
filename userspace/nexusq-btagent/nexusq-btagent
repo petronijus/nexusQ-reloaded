@@ -324,10 +324,18 @@ def _run():
             if setupd_active():
                 return
             try:
+                # NEVER touch the timeouts while a window is OPEN. Writing
+                # DiscoverableTimeout restarts bluez's countdown, so this tick
+                # (every 10 s) used to both overwrite a caller's requested
+                # duration — openWindow(30) silently became 120 — and keep
+                # kicking the timer, so `startPairing` lied about its own window.
+                # Only arm the default while the adapter is at rest.
+                if bool(self._get("Discoverable")):
+                    return
                 for prop in ("PairableTimeout", "DiscoverableTimeout"):
                     if int(self._get(prop)) != WINDOW_TIMEOUT:
                         self._set(prop, dbus.UInt32(WINDOW_TIMEOUT))
-                        log(f"{prop} -> {WINDOW_TIMEOUT}s (window self-closes)")
+                        log(f"{prop} -> {WINDOW_TIMEOUT}s (default for the next window)")
             except dbus.DBusException as e:
                 log("could not arm window timeouts:", e)
 
@@ -612,6 +620,12 @@ def _run():
 
                 def done():
                     self._stop_scan_once()
+                    # Close the window we opened FOR this pair. Leaving it up for
+                    # the rest of its 120 s leaves the Q pairable by anyone with
+                    # nothing left to pair — the ring would be honest and the
+                    # exposure pointless. (Petr caught this: "after a successful
+                    # pairing the search should close and pairing should stop".)
+                    self._close_window()
                     try:
                         self._set("Trusted", dbus.Boolean(True),
                                   path=self._dev_path(mac), iface=DEVICE_IFACE)
@@ -632,6 +646,18 @@ def _run():
 
                 def failed(e):
                     self._stop_scan_once()
+                    # "AlreadyExists" means it is already paired — that is the
+                    # outcome the caller wanted, not an error. Reporting it as a
+                    # failure made the app cry "something went wrong" over a
+                    # device that had just paired perfectly.
+                    if "AlreadyExists" in str(e):
+                        self._close_window()
+                        info = next((d for d in self._devices()
+                                     if d["mac"].upper() == mac.upper()), {})
+                        return reply({"paired": True,
+                                      "bonded": bool(info.get("bonded")),
+                                      "connected": bool(info.get("connected"))})
+                    self._close_window()
                     log("pair failed:", e)
                     reply({"error": "pair_failed", "message": str(e)})
 
