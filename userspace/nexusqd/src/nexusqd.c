@@ -64,10 +64,10 @@
  * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
 
 /* --- manual override layer (priority 8) ----------------------------------- */
-struct manual_ctx { int rgb[3]; int breathe; int spin; };
+struct manual_ctx { int rgb[3]; int breathe; int spin; double spin_speed; };
 static int manual_render(void *c, double t, struct frame *out) {
     struct manual_ctx *m = c;
-    if (m->spin) { spinner_render(m->rgb, t, out); return 0; }
+    if (m->spin) { spinner_render(m->rgb, t, m->spin_speed, out); return 0; }
     if (m->breathe) {
         /* companion color theme: pulse in the hue using the SAME throb envelope
          * as the idle screensaver breathe (A in 0.1..0.8), but at priority 8 it is
@@ -113,7 +113,7 @@ int main(void) {
     double start = now_s();
     struct reaction rx = {0};
     struct screensaver ss; screensaver_init(&ss, start);
-    struct manual_ctx manual = { { 0, 0, 0 }, 0, 0 };
+    struct manual_ctx manual = { { 0, 0, 0 }, 0, 0, 0.0 };
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
@@ -270,9 +270,12 @@ int main(void) {
                     else if (cmd.kind == CTL_SPIN) {
                         /* setup-mode rotating dot (stock "starting up" visual):
                          * an ANIMATED manual override at priority 8. Cleared by
-                         * auto/set/breathe/off like every manual mode. */
+                         * auto/set/breathe/off like every manual mode. cmd.speed
+                         * (rev/s, 0 = default) lets setupd vary the rate per
+                         * phase — slower while joining, faster on success. */
                         memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
                         manual.breathe = 0; manual.spin = 1;
+                        manual.spin_speed = cmd.speed;
                         comp.layers[manual_idx].active = 1;
                     }
                     else if (cmd.kind == CTL_THEME) {

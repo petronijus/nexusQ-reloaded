@@ -2,9 +2,10 @@
 #include "spinner.h"
 #include <math.h>
 
-void spinner_render(const int rgb[3], double t, struct frame *out) {
+void spinner_render(const int rgb[3], double t, double rev_per_s, struct frame *out) {
+    if (!(rev_per_s > 0.0)) rev_per_s = SPIN_REV_PER_S;
     frame_black(out);
-    double pos = fmod(t * SPIN_REV_PER_S, 1.0);
+    double pos = fmod(t * rev_per_s, 1.0);
     if (pos < 0) pos += 1.0;
     int head = (int)(pos * RING) % RING;
     double a = 1.0;
