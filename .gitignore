@@ -36,6 +36,11 @@ gadget-install.log
 reverse-eng/
 scripts/ulpiread
 
+# Working scratch: debug tools, carved stock ramdisks/system mounts, extracted
+# Google blobs (e.g. the stock BCM4330 patchram we diffed ours against). Same
+# non-redistributable class as reverse-eng/ — never committable.
+scratchpad/
+
 # Python bytecode
 __pycache__/
 *.pyc
