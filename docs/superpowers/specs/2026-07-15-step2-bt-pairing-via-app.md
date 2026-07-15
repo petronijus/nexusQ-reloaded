@@ -363,6 +363,66 @@ Only a session-scoped pairing was created. **For the mouse/keyboard use case thi
 is fatal**: a keyboard that must be re-paired after every reboot is not a
 feature.
 
+### ✅ ROOT-CAUSED 2026-07-15 — it was OUR `Pairable == Discoverable` invariant
+
+**Controlled A/B on Petr's MX Master 4. Same mouse, same agent, one variable:**
+
+| | `Pairable: no` | `Pairable: yes` |
+|---|---|---|
+| `bluetoothctl pair` says | "Pairing successful" | "Pairing successful" |
+| `Bonded` | **no** | **yes** |
+| Keys on disk | **none** | **`[PeripheralLongTermKey]` + `[IdentityResolvingKey]`** |
+| Survives `restart bluetooth` | **no** | **yes** |
+
+**The chain**, and every link is from the debug log, not from reading code:
+
+1. `bluetoothd -d` proved the key ARRIVES:
+   `new_long_term_key_callback() hci0 new LTK … type 2 enc_size 16`,
+   `bonding_attempt_complete() … status 0x0`. So it is not the radio, not the
+   kernel link, not the peer.
+2. Yet nothing is on disk → **BlueZ receives the key and deliberately discards
+   it.** BlueZ persists a key only when the kernel marks it with `store_hint`.
+3. The kernel marks an LTK persistent only if **both** sides set the *bonding*
+   bit in the SMP pairing request/response.
+4. Our kernel sets that bit only when **`HCI_BONDABLE`** is set — which is
+   exactly what BlueZ exposes as **`Adapter1.Pairable`**.
+5. `nexusq-btagent` holds `Pairable: no` at rest → no bonding bit → the key
+   arrives marked temporary → discarded → "successful" pairing that evaporates.
+
+It also explains the asymmetry perfectly: **inbound** pairing happens while setup
+has the adapter `Discoverable: yes` → the invariant makes it `Pairable: yes` →
+bonding bit → key stored. Which is why inbound bonds always persisted.
+
+**So the invariant I shipped this morning to make the ring honest silently broke
+outbound bond persistence.** Petr was right that "we know it works somehow" — it
+worked before this invariant existed.
+
+### ⚠️ Consequence: §4.1's invariant is based on the WRONG property
+
+The safety property we want is:
+
+> **the ring is dark ⇒ nobody can pair with us**
+
+What actually gates pairing is **`Pairable`** — `Discoverable` only governs
+*inquiry*. I tied the ring to `Discoverable` and mirrored `Pairable` onto it,
+which is both indirect and, as measured, harmful.
+
+**Corrected design: `ring ⇔ Pairable`.** `Pairable` is off at rest and turned on
+only when someone asked for it — an inbound pairing window (§4.1) **or the
+duration of an outbound pair (§4.2)** — and closes itself. The ring then stays
+honest in both directions, *and* outbound bonds persist, because turning
+`Pairable` on IS what makes them persist. The `startPairing` window and outbound
+pairing become the same mechanism rather than fighting each other.
+
+This is a change to the SHIPPED `nexusq-btagent` (v1.9.0), not just to this spec:
+`led_plan`/`reconcile` must key off `Pairable`, and the "enforce
+Pairable == Discoverable" rule is replaced by "Pairable is off unless a window is
+open". Its tests encode the old rule and must be rewritten with it.
+
+---
+
+**Original record of the blocker (kept — this is how it was found):**
+
 **⛔ CONFIRMED GENERAL — the "Android-specific" theory is DISPROVEN (real BLE
 keyboard, 2026-07-15).** Tested with Petr's **Logitech MX Keys** in pairing mode:
 
