@@ -43,9 +43,27 @@
             </intent-filter>
         </activity>
         <!-- HCE service: emulates a card under AID F0010203040506 so the Nexus Q
-             (acting as the NFC reader) can push a short UTF-8 text to the phone. -->
+             (acting as the NFC reader) can push a short UTF-8 text to the phone.
+
+             android:enabled="false" — OFF BY DEFAULT, ON ONLY WHILE THE SETUP UI
+             IS IN THE FOREGROUND (MainActivity toggles it in onResume/onPause).
+
+             A DISABLED component is absent from the NFC routing table entirely,
+             so a merely-installed app has zero NFC surface. That matters: this
+             app broke the user's contactless payment twice, and only ever after
+             a dev session (2026-07-15). A tap only ever worked with the app in
+             the foreground anyway, so registering an always-live card emulation
+             bought nothing and risked the phone's day job.
+
+             The component's enabled state is PERSISTED by the platform across
+             process death, which makes this fail SAFE: if we are killed
+             (`pm clear`, `adb install -r`, a crash) the service stays OFF and
+             payments keep working. The old approach failed the other way — it
+             released NFC routing from onPause, which never runs when the process
+             is killed outright. -->
         <service
             android:name=".NqHceService"
+            android:enabled="false"
             android:exported="true"
             android:permission="android.permission.BIND_NFC_SERVICE">
             <intent-filter>

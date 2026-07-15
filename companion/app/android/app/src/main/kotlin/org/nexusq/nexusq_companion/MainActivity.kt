@@ -1,6 +1,8 @@
 package org.nexusq.nexusq_companion
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -16,29 +18,30 @@ import io.flutter.plugin.common.MethodChannel
  *   - MethodChannel "nexusq/hce" exposes "getLastMessage" (resume/cold-start
  *     fallback) and "isNfcAvailable".
  *
- * WE DELIBERATELY DO NOT TOUCH NFC ROUTING.
+ * NFC EXISTS FOR THIS APP ONLY WHILE ITS UI IS IN THE FOREGROUND.
  *
- * An earlier revision claimed `CardEmulation.setPreferredService()` on every
- * onResume and released it on onPause. That was both unnecessary and harmful:
+ * [NqHceService] ships `android:enabled="false"` and is switched on in onResume
+ * / off in onPause (see [setHceServiceEnabled]). A disabled component is absent
+ * from the NFC routing table entirely, so an installed-but-unopened app has zero
+ * NFC surface. A tap only ever worked with this UI foregrounded anyway, so this
+ * costs nothing.
  *
- *  - Unnecessary: nothing else on the phone registers our AID, so the platform
- *    already routes it to us. `dumpsys nfc` shows
- *      "F0010203040506" (category: other)
- *          *DEFAULT* ApduService: ...NqHceService
- *    with this app NOT running and no preferred service set. setPreferredService
- *    only breaks ties between services competing for the SAME AID; we have no
- *    competitor.
- *  - Harmful: it grabbed foreground NFC routing priority merely because the app
- *    was open — no tap expected — and the NFC stack toggled global observe mode
- *    at that moment. Worse, the release hung off onPause, which NEVER RUNS when
- *    the process is killed outright (`pm clear`, `adb install -r`, a crash) —
- *    leaving routing claimed by a dead app. Contactless payment failed twice for
- *    the user, only ever after a dev session (2026-07-15).
+ * Why it is written this way — this app broke the user's contactless payment
+ * twice, only ever after a dev session (2026-07-15). The previous design claimed
+ * `CardEmulation.setPreferredService()` on every onResume and released it on
+ * onPause, which is wrong in both halves:
  *
- * A companion app for a speaker has no business influencing how this phone pays
- * for groceries. If a tie-break is ever genuinely needed, scope it to the exact
- * moment a tap is expected and release it from a lifecycle callback that also
- * survives process death — do not re-add a blanket onResume claim.
+ *  - it grabbed foreground NFC routing priority merely because the app was open,
+ *    with no tap expected, and the NFC stack toggled global observe mode at that
+ *    moment;
+ *  - the release hung off onPause, which NEVER RUNS when the process is killed
+ *    outright (`pm clear`, `adb install -r`, a crash) — all routine during
+ *    development — leaving routing claimed by a dead app.
+ *
+ * Toggling the component instead fails SAFE: the platform persists a component's
+ * enabled state across process death, so being killed leaves NFC OFF, not stuck
+ * on. A companion app for a speaker has no business influencing how this phone
+ * pays for groceries. Do not re-add a blanket onResume routing claim.
  */
 class MainActivity : FlutterActivity() {
 
@@ -99,8 +102,57 @@ class MainActivity : FlutterActivity() {
         btSetup?.onPermissionResult(requestCode)
     }
 
+    override fun onResume() {
+        super.onResume()
+        setHceServiceEnabled(true)
+    }
+
+    override fun onPause() {
+        setHceServiceEnabled(false)
+        super.onPause()
+    }
+
     override fun onDestroy() {
         btSetup?.dispose()
         super.onDestroy()
+    }
+
+    /**
+     * Add/remove [NqHceService] from the NFC routing table by enabling or
+     * disabling the component itself.
+     *
+     * A tap only ever worked with this UI in the foreground, so there is nothing
+     * to lose by not being registered the rest of the time — and plenty to gain:
+     * a disabled component is absent from the routing table entirely, so the app
+     * cannot influence NFC while the user is paying for groceries.
+     *
+     * This is the fail-SAFE direction, which is the whole point. The platform
+     * persists a component's enabled state across process death, so if we are
+     * killed outright (`pm clear`, `adb install -r`, a crash) the service simply
+     * stays OFF. The previous design released NFC routing from onPause — which
+     * never runs in exactly those cases, leaving routing claimed by a dead app.
+     *
+     * DONT_KILL_APP: we are toggling our own component from inside our own
+     * process; without it the platform would kill us mid-callback.
+     */
+    private fun setHceServiceEnabled(enabled: Boolean) {
+        // Nothing to route on a device with no NFC — don't churn package state.
+        if (NfcAdapter.getDefaultAdapter(this) == null) return
+        val component = ComponentName(this, NqHceService::class.java)
+        val target = if (enabled) {
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        } else {
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        }
+        try {
+            if (packageManager.getComponentEnabledSetting(component) == target) return
+            packageManager.setComponentEnabledSetting(
+                component, target, PackageManager.DONT_KILL_APP
+            )
+            Log.d(TAG, "HCE service ${if (enabled) "enabled" else "disabled"}")
+        } catch (e: Exception) {
+            // Never let NFC bookkeeping take the UI down.
+            Log.w(TAG, "setComponentEnabledSetting($enabled) failed", e)
+        }
     }
 }
