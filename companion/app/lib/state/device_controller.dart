@@ -28,6 +28,11 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   static const _maxBackoff = Duration(seconds: 15);
 
   final NexusQClient _client;
+
+  /// The live client, for screens that call the bridge directly rather than
+  /// through this controller's cached state (e.g. the Devices screen's
+  /// Bluetooth + desktop methods, which are one-shot actions, not state).
+  NexusQClient get client => _client;
   final state = DeviceState();
   StreamSubscription? _evSub, _connSub;
 

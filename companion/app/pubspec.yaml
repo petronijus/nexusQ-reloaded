@@ -34,7 +34,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #
 # 1.1.0 — BT setup onboarding (explicit bond-then-connect, secure RFCOMM).
 # 1.1.1 — NFC scoped to when a tap is actually expected (was breaking payment).
-version: 1.1.1+5
+# 1.2.0 — Devices screen: BT pairing (phone + mouse/keyboard) and the desktop toggle.
+version: 1.2.0+6
 
 environment:
   sdk: ^3.12.0
