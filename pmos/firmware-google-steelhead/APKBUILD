@@ -3,7 +3,7 @@
 # Modeled on firmware-samsung-maguro (identical BCM4330 chip)
 pkgname=firmware-google-steelhead
 pkgver=1
-pkgrel=1
+pkgrel=2
 pkgdesc="Google Nexus Q BCM4330 WiFi (brcmfmac) + BT firmware"
 url="https://postmarketos.org"
 arch="armv7"

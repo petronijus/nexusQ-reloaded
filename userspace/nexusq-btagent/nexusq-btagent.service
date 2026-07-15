@@ -1,0 +1,24 @@
+[Unit]
+Description=Nexus Q Bluetooth pairing agent (Just-Works) + pairing-exposure LED
+Documentation=file:/usr/share/doc/nexusq-btagent/README.md
+# bluetoothd must exist for us to register against; we do NOT hard-depend on it
+# beyond Wants= because the daemon re-registers on NameOwnerChanged, so a
+# bluetoothd restart (or a late start) is handled at runtime, not by ordering.
+After=bluetooth.service
+Wants=bluetooth.service
+# NO After=nexusqd.service: nexusqd is After=multi-user.target, so ordering on it
+# from a WantedBy=multi-user.target unit forms a cycle and systemd DELETES this
+# unit's start job (this exact bug killed nexusq-setupd in v1.9.0-rc1; see
+# HANDOFF 2026-07-13). The LED is a soft dependency anyway — led_send() tolerates
+# nexusqd being absent and the 10 s reconcile retries once it appears.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nexusq-btagent
+# Unlike setupd this is NOT one-shot: the appliance must be able to accept a
+# pairing at any time (BT audio), so the agent lives for the whole uptime.
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+[Desktop Entry]
+# Keep blueman-applet OUT of the LXQt session autostart.
+#
+# This file shadows blueman's own /etc/xdg/autostart/blueman.desktop (XDG
+# autostart: the same basename in a higher-priority XDG_CONFIG_DIRS entry wins,
+# and Hidden=true means "as if this .desktop did not exist").
+#
+# WHY (root-caused live 2026-07-15): blueman-applet registers a BlueZ agent with
+# IO capability DisplayYesNo. SSP derives its pairing model from BOTH ends'
+# capabilities:
+#
+#     phone DisplayYesNo + Q NoInputNoOutput -> Just Works        (no prompt)
+#     phone DisplayYesNo + Q DisplayYesNo    -> Numeric Comparison (prompt BOTH)
+#
+# so the applet forced Numeric Comparison, and bluetoothd raised a Confirm/Deny
+# dialog on the HDMI desktop. NOTHING is attached to the Q that can click it (no
+# keyboard, no mouse, no touchscreen), so every bond timed out with mgmt status
+# 0x0e. On top of that, RequestDefaultAgent is last-writer-wins, so the applet
+# also stole the default agent from nexusq-btagent whenever the session started.
+#
+# The blueman PACKAGE stays installed on purpose (blueman-manager remains
+# available to run by hand). Only the autostarted applet is suppressed, because
+# an input-less appliance must pair via Just-Works — that is nexusq-btagent's
+# job. Starting blueman-applet manually WILL break pairing again until it exits.
+Type=Application
+Name=Blueman Applet
+Exec=blueman-applet
+Hidden=true

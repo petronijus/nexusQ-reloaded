@@ -233,11 +233,24 @@ def send_to_target(g, fam, DEV, libc, target_idx, text):
 
 
 def _read_bt_mac():
+    # The Android 3.0 kernel exposed the address in sysfs; mainline 6.x does
+    # NOT (/sys/class/bluetooth/hci0/address is absent) — fall back to asking
+    # BlueZ via bluetoothctl (stdlib-only constraint: subprocess, no dbus).
+    # Bit us in v1.9.0-rc2: '"bt":""' in the tap payload dead-ended onboarding.
     try:
         with open("/sys/class/bluetooth/hci0/address") as f:
             return f.read().strip().upper()
     except OSError:
-        return ""
+        pass
+    try:
+        r = subprocess.run(["bluetoothctl", "show"], capture_output=True,
+                           text=True, timeout=5)
+        for line in r.stdout.splitlines():
+            if line.startswith("Controller ") and line.count(":") == 5:
+                return line.split()[1].upper()
+    except Exception:  # noqa: BLE001 (no adapter / bluetoothd down)
+        pass
+    return ""
 
 
 def build_payload(run=None, gethostname=None, read_bt_mac=None):

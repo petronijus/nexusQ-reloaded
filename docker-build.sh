@@ -23,7 +23,8 @@ for apkbuild in \
     "$SRC/pmos/firmware-google-steelhead/APKBUILD" \
     "$SRC/pmos/nexusqd/APKBUILD" \
     "$SRC/pmos/nexusq-control/APKBUILD" \
-    "$SRC/pmos/nexusq-setupd/APKBUILD"; do
+    "$SRC/pmos/nexusq-setupd/APKBUILD" \
+    "$SRC/pmos/nexusq-btagent/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -245,6 +246,15 @@ cp "$SRC/userspace/nexusq-setupd/nexusq-setupd.service"   "$NEXUSQSETUP_DIR/"
 cp "$SRC/userspace/nexusq-setupd/nexusq-setup-needed"     "$NEXUSQSETUP_DIR/"
 echo "  Installed: nexusq-setupd (aport + daemon -> main/nexusq-setupd)"
 
+# nexusq-btagent: the permanent BlueZ Just-Works agent (pure staging).
+NEXUSQBTA_DIR="$PMAPORTS/main/nexusq-btagent"
+mkdir -p "$NEXUSQBTA_DIR"
+cp "$SRC/pmos/nexusq-btagent/APKBUILD"                    "$NEXUSQBTA_DIR/"
+cp "$SRC/userspace/nexusq-btagent/nexusq-btagent"         "$NEXUSQBTA_DIR/"
+cp "$SRC/userspace/nexusq-btagent/nexusq-btagent.service" "$NEXUSQBTA_DIR/"
+cp "$SRC/userspace/nexusq-btagent/README.md"              "$NEXUSQBTA_DIR/"
+echo "  Installed: nexusq-btagent (aport + agent -> main/nexusq-btagent)"
+
 # python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
 # deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
 # That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
@@ -264,7 +274,7 @@ cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
 echo "  Installed: python3 override (gated -> main/python3)"
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -542,7 +552,7 @@ systemd = always
 # channel, but you are on 'systemd-edge'"). Let it auto-delete those stale
 # chroots and rebuild clean on the correct channel instead of failing.
 auto_zap_misconfigured_chroots = silently
-timezone = GMT
+timezone = Europe/Prague
 ui_extras = False
 user = user
 
@@ -672,7 +682,7 @@ pmbootstrap checksum nexusqd 2>&1 || true
 # cannot execute 'cc1': posix_spawnp: No such file or directory") and the build
 # fails (exit 3). Forcing qemu-only sidesteps the broken crossdirect toolchain and
 # builds nexusqd reliably, exactly as the real Phase 8 build already does.
-pmbootstrap --no-cross build nexusqd --arch armv7 2>&1
+pmbootstrap --no-cross build nexusqd --arch armv7 --force 2>&1
 NEXUSQD_RC=$?
 set -e
 echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
@@ -703,7 +713,7 @@ set +e
 # Pure-Python (stdlib) bridge; noarch, no compiler/qemu needed. SKIP checksums
 # placeholder -> regenerate against the staged scripts before building.
 pmbootstrap checksum nexusq-control 2>&1 || true
-pmbootstrap --no-cross build nexusq-control --arch armv7 2>&1
+pmbootstrap --no-cross build nexusq-control --arch armv7 --force 2>&1
 NEXUSQCTL_RC=$?
 set -e
 echo "=== nexusq-control build exit code: $NEXUSQCTL_RC ==="
@@ -724,14 +734,51 @@ else
 fi
 
 echo ""
-echo "=== Phase 7c3: Build nexusq-setupd package (noarch) ==="
+echo "=== Phase 7c3: Build nexusq-btagent package (noarch) ==="
+set +e
+# Pure-Python (py3-dbus/py3-gobject3) BlueZ agent; noarch, no compiler/qemu.
+# Same SKIP-checksum regeneration + --force (stale-apk-from-warm-volume trap)
+# as nexusq-setupd below.
+#
+# ORDER IS LOAD-BEARING: this MUST stay ahead of nexusq-setupd (7c4), which
+# `depends=` on nexusq-btagent. pmbootstrap resolves that dep and queues
+# nexusq-btagent for build as part of the setupd build -- but `pmbootstrap
+# checksum` is per-aport, so if setupd ran first, btagent would still carry its
+# sha512sums="SKIP" placeholder and abuild would hard-fail the whole 7c3 with
+#     >>> ERROR: nexusq-btagent: nexusq-btagent is missing in checksums
+# (exit 3), leaving no nexusq-setupd apk to export. Checksum+build every
+# dependency BEFORE its dependent. Found 2026-07-15 on the first rc4 build.
+pmbootstrap checksum nexusq-btagent 2>&1 || true
+pmbootstrap --no-cross build nexusq-btagent --arch armv7 --force 2>&1
+NEXUSQBTA_RC=$?
+set -e
+echo "=== nexusq-btagent build exit code: $NEXUSQBTA_RC ==="
+if [ $NEXUSQBTA_RC -eq 0 ]; then
+    # pkgrel-EXACT: never export a stale nexusq-btagent-...-rN.apk.
+    _nqb_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusq-btagent/APKBUILD" | head -1)
+    _nqb_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusq-btagent/APKBUILD" | head -1)
+    NEXUSQBTA_APK=$(find "$WORK/packages" -name "nexusq-btagent-${_nqb_pv}-r${_nqb_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$NEXUSQBTA_APK" ]; then
+        cp "$NEXUSQBTA_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQBTA_APK")"
+    else
+        echo "  WARNING: nexusq-btagent apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  WARNING: nexusq-btagent build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7c4: Build nexusq-setupd package (noarch) ==="
 set +e
 # Pure-Python (py3-dbus/py3-gobject3) BT provisioning daemon; noarch, no
 # compiler/qemu needed. SKIP checksums placeholder -> regenerate against the
 # staged scripts before building (without this, the implicit Phase 8/install
 # auto-build fails with "nexusq-setupd is missing in checksums").
+# Runs AFTER 7c3 on purpose: nexusq-setupd depends= nexusq-btagent (see the
+# ORDER IS LOAD-BEARING note above).
 pmbootstrap checksum nexusq-setupd 2>&1 || true
-pmbootstrap --no-cross build nexusq-setupd --arch armv7 2>&1
+pmbootstrap --no-cross build nexusq-setupd --arch armv7 --force 2>&1
 NEXUSQSETUP_RC=$?
 set -e
 echo "=== nexusq-setupd build exit code: $NEXUSQSETUP_RC ==="

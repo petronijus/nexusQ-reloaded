@@ -17,6 +17,24 @@ def load_daemon():
     return mod
 
 
+class TestReadBtMac(unittest.TestCase):
+    def test_bluetoothctl_fallback_when_sysfs_absent(self):
+        # mainline kernels have no /sys/class/bluetooth/hci0/address ->
+        # parse `bluetoothctl show`, uppercased
+        mod = load_daemon()
+        out = "Controller f8:8f:ca:20:49:e5 (public)\n\tName: Google Nexus Q\n"
+        with mock.patch("builtins.open", side_effect=OSError), \
+             mock.patch.object(mod.subprocess, "run",
+                               return_value=mock.Mock(returncode=0, stdout=out)):
+            self.assertEqual(mod._read_bt_mac(), "F8:8F:CA:20:49:E5")
+
+    def test_no_sysfs_no_bluetoothctl_degrades_to_empty(self):
+        mod = load_daemon()
+        with mock.patch("builtins.open", side_effect=OSError), \
+             mock.patch.object(mod.subprocess, "run", side_effect=OSError):
+            self.assertEqual(mod._read_bt_mac(), "")
+
+
 class TestPayload(unittest.TestCase):
     def test_provisioned_with_ip(self):
         mod = load_daemon()

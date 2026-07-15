@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=44
+pkgrel=47
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -25,6 +25,7 @@ depends="
 	nexusqd
 	nexusq-control
 	nexusq-setupd
+	nexusq-btagent
 	librespot
 	pulseaudio
 	openssh-server
@@ -33,6 +34,10 @@ depends="
 	python3-dbg
 	i2c-tools
 	gptfdisk
+	iw
+	ethtool
+	iproute2-minimal
+	tzdata
 "
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"
@@ -56,6 +61,7 @@ source="
 	brcmfmac-mpc-off.conf
 	pipewire-autostart-off.desktop
 	wireplumber-autostart-off.desktop
+	blueman-autostart-off.desktop
 	pulseaudio.service
 	pam-base-auth
 	pam-base-session
@@ -208,6 +214,17 @@ package() {
 		"$pkgdir"/etc/xdg/nexusq/autostart/pipewire.desktop
 	install -Dm644 "$srcdir"/wireplumber-autostart-off.desktop \
 		"$pkgdir"/etc/xdg/nexusq/autostart/wireplumber.desktop
+
+	# Bluetooth: keep blueman-applet out of the session. Its DisplayYesNo agent
+	# forces SSP into Numeric Comparison, which raises a Confirm/Deny dialog on
+	# the HDMI desktop that NOTHING attached to this appliance can click -> every
+	# bond timed out (mgmt 0x0e), and it also stole the default agent from
+	# nexusq-btagent (RequestDefaultAgent is last-writer-wins). Root-caused live
+	# 2026-07-15; pairing + A2DP verified working the moment the applet was gone.
+	# Same XDG_CONFIG_DIRS shadowing trick as the pipewire/wireplumber overrides
+	# above. The blueman package itself stays (blueman-manager on demand).
+	install -Dm644 "$srcdir"/blueman-autostart-off.desktop \
+		"$pkgdir"/etc/xdg/nexusq/autostart/blueman.desktop
 	install -dm755 "$pkgdir"/etc/systemd/user
 	ln -sf /dev/null "$pkgdir"/etc/systemd/user/pipewire-pulse.socket
 
@@ -381,6 +398,7 @@ SKIP  lxqt-session.conf
 SKIP  nexusq-wayland.sh
 SKIP  wifi-powersave-off.conf
 SKIP  wifi-stable-mac.conf
+SKIP  blueman-autostart-off.desktop
 SKIP  eth-lan.nmconnection
 SKIP  eth-direct.nmconnection
 SKIP  eth-no-auto-default.conf

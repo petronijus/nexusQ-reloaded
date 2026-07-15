@@ -1,0 +1,30 @@
+# Nexus Q Bluetooth pairing agent — the appliance's single, permanent BlueZ
+# Agent1. NoInputNoOutput/Just-Works (nothing on the Q can answer a prompt), and
+# it holds Pairable == Discoverable so the LED ring honestly shows the pairing
+# window. Runs for the whole uptime: BT audio (A2DP) needs a bond long after
+# nexusq-setupd has exited. See userspace/nexusq-btagent/README.md.
+pkgname=nexusq-btagent
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q Bluetooth Just-Works pairing agent + pairing-exposure LED"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# py3-dbus + py3-gobject3: BlueZ Agent1 must be exported on the system bus with
+# a GLib main loop (no stdlib path). bluez: the daemon we register against.
+depends="python3 py3-dbus py3-gobject3 bluez"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-btagent/.
+source="
+	nexusq-btagent nexusq-btagent.service README.md
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nexusq-btagent "$pkgdir"/usr/bin/nexusq-btagent
+	install -Dm644 nexusq-btagent.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-btagent.service
+	install -Dm644 README.md "$pkgdir"/usr/share/doc/nexusq-btagent/README.md
+}
+
+sha512sums="SKIP"

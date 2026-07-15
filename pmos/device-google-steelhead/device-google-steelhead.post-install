@@ -39,6 +39,17 @@ dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY >/dev/null 
 EOF
 fi
 
+# --- Local timezone: Europe/Prague ---
+# The Q's RTC has no battery backup, so it cold-boots at a bogus year-2000 date;
+# systemd-timesyncd (NTP) corrects the SYSTEM clock to UTC once the network is up.
+# Without a timezone the device then displays UTC (2 h behind Prague in CEST).
+# Pin Europe/Prague so on-device time / logs read as local once NTP has synced
+# (tzdata is a dependency). Idempotent.
+if [ -e /usr/share/zoneinfo/Europe/Prague ]; then
+	ln -sf /usr/share/zoneinfo/Europe/Prague /etc/localtime
+	echo "Europe/Prague" > /etc/timezone
+fi
+
 # --- Give bluetoothd a non-empty default system config ---
 # bluez ships /etc/bluetooth/main.conf with only section headers (no keys), so
 # set_def_system_config() builds an EMPTY MGMT TLV, mgmt_send_tlv() returns 0,
@@ -52,6 +63,22 @@ fi
 if ! grep -q '^MinConnectionInterval' /etc/bluetooth/main.conf 2>/dev/null; then
 	sed -i '/^\[LE\]/a MinConnectionInterval=7\nMaxConnectionInterval=42\nConnectionLatency=0\nConnectionSupervisionTimeout=42' \
 		/etc/bluetooth/main.conf
+fi
+
+# --- Bluetooth Class of Device: announce ourselves as a loudspeaker ---
+# Stock steelhead set Class = 0x200428 in /system/etc/bluetooth/main.conf, with
+# its own breakdown: 0x200000 = Audio service, 0x000400 = Audio/Video major
+# class, 0x000028 = HiFi Audio minor class. Mainline bluez leaves the default,
+# so the Q announced 0x007c0000 — major class "Miscellaneous" — and phones
+# listed it as an unclassified gadget rather than a speaker.
+#
+# This is IDENTITY/cosmetics, not a discovery fix: stock's own scanner ignored
+# CoD entirely and matched on SDP UUIDs (verified in HubBroker.odex), and so
+# does our companion app. Restoring it simply makes the Q look like what it is
+# in every phone's Bluetooth list. bluez 5 still honours [General] Class (the
+# shipped main.conf documents it as `#Class = 0x000100`). Idempotent.
+if ! grep -q '^Class' /etc/bluetooth/main.conf 2>/dev/null; then
+	sed -i '/^\[General\]/a Class = 0x200428' /etc/bluetooth/main.conf
 fi
 
 # --- Disable systemd-nsresourced (BPF-LSM not built; unused on this appliance) ---

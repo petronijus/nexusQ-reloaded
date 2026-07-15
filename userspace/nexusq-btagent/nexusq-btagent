@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Nexus Q Bluetooth pairing agent + pairing-exposure indicator.
+
+The Q is an appliance: there is no keyboard, mouse or touchscreen attached to
+it, so NOTHING on the device can ever answer a pairing prompt. That single fact
+drives this daemon's whole design.
+
+WHY THIS EXISTS (root-caused live 2026-07-15)
+---------------------------------------------
+SSP picks its pairing model from BOTH sides' IO capabilities:
+
+    phone DisplayYesNo + Q NoInputNoOutput -> Just Works        (no prompt)
+    phone DisplayYesNo + Q DisplayYesNo    -> Numeric Comparison (prompt BOTH ends)
+
+`blueman-applet` registers a DisplayYesNo agent, which forces the second row —
+so bluetoothd raised a Confirm/Deny dialog on the HDMI desktop that no attached
+input device could ever click, and every bond died on timeout (mgmt status 0x0e).
+This was NOT a BCM4330 limitation: pairing + A2DP were user-confirmed working
+2026-07-09 (docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md)
+and re-verified live 2026-07-15 the moment the applet was out of the way.
+
+So the Q must present NoInputNoOutput and auto-accept — the ONLY model that can
+complete here. This daemon owns that agent permanently (not just during setup),
+because a bond is needed for BT AUDIO (A2DP) too, not only WiFi provisioning:
+`nexusq-setupd` runs for minutes and exits, which would leave the appliance with
+no agent and no way to pair a phone for music.
+
+THE Pairable == Discoverable INVARIANT
+--------------------------------------
+An auto-accept Just-Works agent bonds ANY phone that asks, with no confirmation
+anywhere. That is the correct trade for an input-less appliance, but it means
+"pairable" is a real exposure window, so it must be VISIBLE and must not outlive
+its purpose. bluez leaves Pairable=true permanently by default, and Pairable —
+not Discoverable — is what actually gates bonding (discovery only affects
+inquiry; anyone who already knows the address can bond a non-discoverable but
+pairable adapter). A ring tied to Discoverable alone would therefore be a LIE:
+dark while still bondable.
+
+So this daemon holds Pairable == Discoverable. Then the LED ring is honest:
+
+    ring spinning blue  ==  someone can pair with this Q
+    ring not spinning   ==  nobody can
+
+LED OWNERSHIP
+-------------
+`nexusq-setupd` drives the ring itself while setup runs (blue spin, and its
+connecting/success/error states), and deliberately leaves the chosen theme up on
+a successful finish. This daemon therefore only touches the ring when IT took
+it — i.e. the adapter became discoverable while setupd was NOT running (a manual
+/ anomalous exposure, exactly the case worth showing). It never releases a ring
+it did not take.
+
+NB dbus/gi are imported inside _run() (same pattern as nexusq-setupd) so the
+pure logic below stays importable — and unit-testable — on a host with no BlueZ.
+"""
+
+import os
+import socket
+import subprocess
+import sys
+
+BLUEZ = "org.bluez"
+ADAPTER_PATH = "/org/bluez/hci0"
+ADAPTER_IFACE = "org.bluez.Adapter1"
+DEVICE_IFACE = "org.bluez.Device1"
+PROPS_IFACE = "org.freedesktop.DBus.Properties"
+AGENT_PATH = "/org/nexusq/btagent"
+AGENT_CAPABILITY = "NoInputNoOutput"
+
+NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
+SETUPD_UNIT = "nexusq-setupd.service"
+
+# Same stock #0099CC blue + default rate as setupd's idle spin: "open for
+# pairing" must look identical whether setupd is driving it or we are.
+DISCOVERABLE_CMD = "spin 0 153 204"
+RELEASE_CMD = "auto"
+
+RECONCILE_SECS = 10
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def led_send(line, sock_path=NEXUSQD_SOCK):
+    """Fire-and-forget to nexusqd. The ring is an indicator, never a hard dep:
+    nexusqd being down must not take the BT agent down with it."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(sock_path)
+            s.sendall((line + "\n").encode())
+        return True
+    except OSError as e:
+        log("nexusqd send failed:", e)
+        return False
+
+
+def setupd_active(run=None):
+    """True while nexusq-setupd owns the ring.
+
+    "activating" counts as active. `systemctl is-active --quiet` exits non-zero
+    for a unit that is still starting, and setupd takes a moment to come up —
+    during which it has ALREADY flipped the adapter to discoverable. That gap let
+    us grab a ring setupd was about to drive (seen live 2026-07-15).
+
+    Fails OPEN (returns True) if systemctl cannot be consulted: better to skip our
+    indicator than to stomp on setup's LED feedback mid-wizard.
+    """
+    run = run or subprocess.run
+    try:
+        r = run(["systemctl", "is-active", SETUPD_UNIT],
+                timeout=5, capture_output=True, text=True)
+        return (r.stdout or "").strip() in ("active", "activating", "reloading")
+    except (OSError, subprocess.SubprocessError) as e:
+        log("systemctl is-active failed, assuming setupd owns the LED:", e)
+        return True
+
+
+def led_plan(discoverable, owns_led, setup_running):
+    """Pure decision: what to do with the ring. Returns (command, owns_after).
+
+    Split out from the D-Bus plumbing so the ownership rules — the part that is
+    easy to get subtly wrong — are unit-testable without a Bluetooth stack.
+    """
+    if setup_running:
+        # setupd owns the ring OUTRIGHT while it runs: it spins its own blue and
+        # then drives connecting/success/error, and on success it deliberately
+        # leaves the chosen theme up. We yield unconditionally — including
+        # dropping a ring we already held, WITHOUT releasing it (sending "auto"
+        # here would wipe what setupd is showing). Yielding silently is also what
+        # keeps us from "releasing" at the end of setup and erasing that theme.
+        return None, False
+    if discoverable and not owns_led:
+        return DISCOVERABLE_CMD, True
+    if not discoverable and owns_led:
+        return RELEASE_CMD, False
+    return None, owns_led        # nothing to do; keep current ownership
+
+
+def _run():
+    import dbus
+    import dbus.mainloop.glib
+    import dbus.service
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+    class Agent(dbus.service.Object):
+        """NoInputNoOutput Just-Works agent.
+
+        With NoInputNoOutput most of these are never called (Just Works needs no
+        interaction at all — the live 2026-07-15 bond completed without a single
+        callback). They are all implemented anyway: an agent missing a method a
+        peer's model asks for makes bluetoothd fail the bond, which is precisely
+        the dead-end we are fixing. Legacy (pre-SSP) peers still ask for a PIN.
+        """
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+        def Release(self):
+            pass
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="ou", out_signature="")
+        def RequestConfirmation(self, device, passkey):
+            log("pairing: auto-confirming", device)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="")
+        def RequestAuthorization(self, device):
+            log("pairing: auto-authorizing", device)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            log("service: auto-authorizing", device, uuid)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="s")
+        def RequestPinCode(self, device):
+            log("pairing: legacy PIN requested by", device)
+            return "0000"
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="u")
+        def RequestPasskey(self, device):
+            log("pairing: passkey requested by", device)
+            return dbus.UInt32(0)
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="ouq", out_signature="")
+        def DisplayPasskey(self, device, passkey, entered):
+            pass
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
+        def DisplayPinCode(self, device, pincode):
+            pass
+
+        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+        def Cancel(self):
+            log("pairing: cancelled by remote")
+
+    class Daemon:
+        def __init__(self, bus):
+            self.bus = bus
+            self.agent = None
+            self.owns_led = False
+            self.registered = False
+
+        def _props(self, path=ADAPTER_PATH):
+            return dbus.Interface(self.bus.get_object(BLUEZ, path), PROPS_IFACE)
+
+        def _get(self, name, path=ADAPTER_PATH, iface=ADAPTER_IFACE):
+            return self._props(path).Get(iface, name)
+
+        def _set(self, name, value, path=ADAPTER_PATH, iface=ADAPTER_IFACE):
+            self._props(path).Set(iface, name, value)
+
+        def register(self):
+            """(Re)register with bluetoothd. Idempotent and safe to retry:
+            bluetoothd drops every agent when it restarts, and it may well start
+            after us."""
+            try:
+                if self.agent is None:
+                    self.agent = Agent(self.bus, AGENT_PATH)
+                am = dbus.Interface(self.bus.get_object(BLUEZ, "/org/bluez"),
+                                    "org.bluez.AgentManager1")
+                try:
+                    am.UnregisterAgent(AGENT_PATH)
+                except dbus.DBusException:
+                    pass  # not registered yet — the normal path
+                am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY)
+                # Last RequestDefaultAgent caller wins. blueman-applet's
+                # DisplayYesNo agent is kept out of autostart by the device
+                # package for exactly this reason; if it is ever started by hand
+                # it steals the default and pairing breaks again (see header).
+                am.RequestDefaultAgent(AGENT_PATH)
+                self.registered = True
+                log(f"agent registered as default ({AGENT_CAPABILITY})")
+            except dbus.DBusException as e:
+                self.registered = False
+                log("agent registration failed (will retry):", e)
+                return False
+            return True
+
+        def reconcile(self):
+            try:
+                discoverable = bool(self._get("Discoverable"))
+                pairable = bool(self._get("Pairable"))
+            except dbus.DBusException:
+                return True  # no adapter (yet); the tick / signals retry
+
+            if pairable != discoverable:
+                # Discoverable is the intent; Pairable is derived from it. Never
+                # the other way round: promoting a stray Pairable into
+                # Discoverable would widen the exposure instead of closing it.
+                log(f"enforcing Pairable={discoverable} (was {pairable})")
+                try:
+                    self._set("Pairable", dbus.Boolean(discoverable))
+                except dbus.DBusException as e:
+                    log("could not set Pairable:", e)
+
+            cmd, owns = led_plan(discoverable, self.owns_led, setupd_active())
+            if cmd is not None:
+                log("ring ON: adapter is pairable — anyone can pair" if owns
+                    else "ring released: adapter no longer pairable")
+                if led_send(cmd) or not owns:
+                    # Only claim ownership if nexusqd actually took the command;
+                    # releasing is unconditional (we are giving the ring up).
+                    self.owns_led = owns
+            return True
+
+        def _on_device_props(self, iface, changed, invalidated, path=None):
+            if iface != DEVICE_IFACE or not changed.get("Paired"):
+                return
+            # Trust the bond so its profiles (A2DP above all) reconnect on their
+            # own later without re-asking for service authorization.
+            try:
+                self._set("Trusted", dbus.Boolean(True), path=path,
+                          iface=DEVICE_IFACE)
+                log(f"bonded {self._get('Address', path=path, iface=DEVICE_IFACE)}"
+                    " -> Trusted")
+            except dbus.DBusException as e:
+                log("could not trust newly bonded device:", e)
+
+        def _on_adapter_props(self, iface, changed, invalidated, path=None):
+            if iface == ADAPTER_IFACE and ("Discoverable" in changed
+                                           or "Pairable" in changed):
+                self.reconcile()
+
+        def _on_bluez_owner(self, name, old, new):
+            if not new:
+                log("bluetoothd went away; agent dropped")
+                self.registered = False
+                self.owns_led = False  # ring state is meaningless with no adapter
+                return
+            log("bluetoothd appeared; re-registering")
+            self.register()
+            self.reconcile()
+
+        def _tick(self):
+            if not self.registered:
+                self.register()
+            self.reconcile()
+            return True
+
+        def run(self):
+            self.bus.add_signal_receiver(
+                self._on_device_props, dbus_interface=PROPS_IFACE,
+                signal_name="PropertiesChanged", arg0=DEVICE_IFACE,
+                path_keyword="path")
+            self.bus.add_signal_receiver(
+                self._on_adapter_props, dbus_interface=PROPS_IFACE,
+                signal_name="PropertiesChanged", arg0=ADAPTER_IFACE,
+                path_keyword="path")
+            self.bus.add_signal_receiver(
+                self._on_bluez_owner, dbus_interface="org.freedesktop.DBus",
+                signal_name="NameOwnerChanged", arg0=BLUEZ)
+
+            self.register()
+            self.reconcile()
+            # Backstop only: the signals above do the work; this covers a missed
+            # signal, a late adapter, or a bluetoothd that outlives our agent.
+            GLib.timeout_add_seconds(RECONCILE_SECS, self._tick)
+            GLib.MainLoop().run()
+
+    Daemon(dbus.SystemBus()).run()
+
+
+def main():
+    _run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
