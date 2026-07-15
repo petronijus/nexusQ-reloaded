@@ -107,16 +107,21 @@ class TestSetupdActive(unittest.TestCase):
         self.assertFalse(self.mod.setupd_active(
             run=self._systemctl_says("failed", rc=3)))
 
-    def test_fails_open_when_systemctl_is_unusable(self):
-        # Fail-open: better to skip our indicator than to fight setupd's LED.
+    def test_unreadable_systemctl_means_the_ring_is_ours(self):
+        # The ring is a SAFETY indicator: "dark == nobody can pair" must never
+        # be a lie. If we cannot tell whether setupd is running, claim the ring
+        # (worst case: we re-send the same blue setupd already shows). Skipping
+        # it on a pairable adapter would be the lie this daemon prevents.
         def boom(*a, **k):
             raise OSError("no systemctl")
-        self.assertTrue(self.mod.setupd_active(run=boom))
+        self.assertFalse(self.mod.setupd_active(run=boom))
 
-    def test_fails_open_on_timeout(self):
+    def test_systemctl_timeout_means_the_ring_is_ours(self):
+        # Observed live 2026-07-15: "systemctl is-active failed ... timed out
+        # after 5 seconds" under load.
         def slow(*a, **k):
             raise subprocess.TimeoutExpired("systemctl", 5)
-        self.assertTrue(self.mod.setupd_active(run=slow))
+        self.assertFalse(self.mod.setupd_active(run=slow))
 
 
 class TestLedSend(unittest.TestCase):

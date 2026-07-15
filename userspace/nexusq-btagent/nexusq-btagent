@@ -104,8 +104,15 @@ def setupd_active(run=None):
     during which it has ALREADY flipped the adapter to discoverable. That gap let
     us grab a ring setupd was about to drive (seen live 2026-07-15).
 
-    Fails OPEN (returns True) if systemctl cannot be consulted: better to skip our
-    indicator than to stomp on setup's LED feedback mid-wizard.
+    Fails to FALSE — i.e. "the ring is ours" — when systemctl cannot be consulted
+    (it has timed out live under load). This direction is deliberate: the ring is
+    a SAFETY indicator, and the invariant that must never break is "dark ==
+    nobody can pair". Assuming setupd owns the ring would make us skip it, which
+    on a pairable adapter is exactly the lie this daemon exists to prevent.
+    Assuming it is ours costs almost nothing: DISCOVERABLE_CMD is byte-identical
+    to setupd's idle spin, so the worst case is re-sending the blue it is already
+    showing, and at most a wiped theme in a rare error path. A silent dark ring
+    on a bondable appliance is the worse failure.
     """
     run = run or subprocess.run
     try:
@@ -113,8 +120,8 @@ def setupd_active(run=None):
                 timeout=5, capture_output=True, text=True)
         return (r.stdout or "").strip() in ("active", "activating", "reloading")
     except (OSError, subprocess.SubprocessError) as e:
-        log("systemctl is-active failed, assuming setupd owns the LED:", e)
-        return True
+        log("systemctl is-active failed; taking the ring so it cannot lie:", e)
+        return False
 
 
 def led_plan(discoverable, owns_led, setup_running):

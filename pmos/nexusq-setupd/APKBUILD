@@ -3,7 +3,7 @@
 # in setup mode (no WiFi profile / forced via the bridge startSetupMode).
 pkgname=nexusq-setupd
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Nexus Q BT RFCOMM WiFi-provisioning daemon (setup mode)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"

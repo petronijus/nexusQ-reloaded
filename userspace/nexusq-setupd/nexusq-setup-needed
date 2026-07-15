@@ -2,8 +2,29 @@
 # ExecCondition for nexusq-setupd: exit 0 => setup mode runs.
 #  - forced (bridge startSetupMode touched the flag) -> run
 #  - a WiFi NM profile exists (baked or provisioned)  -> don't run
+#
+# FAILS CLOSED. An earlier version piped nmcli straight into grep and threw its
+# exit code away:
+#
+#     if nmcli -t -f TYPE connection show 2>/dev/null | grep -q '^802-11-wireless$'
+#
+# so "nmcli failed / NetworkManager is not up yet" was INDISTINGUISHABLE from
+# "there is no WiFi profile" -> exit 0 -> a fully provisioned device drops into
+# setup mode and advertises itself discoverable + pairable. The pairing agent
+# auto-accepts by design (nothing attached to this appliance can answer a
+# prompt), so that transient would hand a passer-by a bond. Found by a diag
+# sweep 2026-07-15, in a window where NM was demonstrably disturbed.
+#
+# Only a SUCCESSFUL nmcli that lists no wifi profile means "unprovisioned";
+# anything else assumes provisioned and stays out of setup mode. Being wrong
+# that way costs a `startSetupMode` (or the force flag) to re-enter setup —
+# being wrong the other way leaves an open pairing window on a live device.
 [ -e /run/nexusq-setup.force ] && exit 0
-if nmcli -t -f TYPE connection show 2>/dev/null | grep -q '^802-11-wireless$'; then
-    exit 1
+
+if ! types=$(nmcli -t -f TYPE connection show 2>/dev/null); then
+	echo "nexusq-setup-needed: nmcli failed; assuming provisioned (fail closed)" >&2
+	exit 1
 fi
+
+printf '%s\n' "$types" | grep -q '^802-11-wireless$' && exit 1
 exit 0
