@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../theme/nexusq_theme.dart';
 import '../pairing_color.dart';
 import '../setup_flow.dart';
@@ -18,6 +19,7 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
   Color? _color;
   String? _status;
   bool _ledUnavailable = false;
+  bool _retryable = false;
 
   @override
   void initState() {
@@ -30,10 +32,26 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
     if (mac == null) return;
     setState(() {
       _status = 'Connecting over Bluetooth…';
+      _retryable = false;
+      _ledUnavailable = false;
       _color = pairingColor(mac); // show immediately; device confirms below
     });
     try {
       await widget.flow.client.connect(mac);
+    } on Object catch (e) {
+      // No transport at all (permission denied / pairing failed): the wizard
+      // cannot continue — offer a retry instead of a dead end.
+      if (!mounted) return;
+      setState(() {
+        _retryable = true;
+        _status = (e is PlatformException && e.code == 'permission_denied')
+            ? 'Bluetooth permission is required to reach the Q.'
+            : 'Could not connect to the Q over Bluetooth ($e). '
+                'Make sure the ring is spinning blue, then try again.';
+      });
+      return;
+    }
+    try {
       final r = await widget.flow.client.call('confirmColor');
       final rgb = (r['rgb'] as List).cast<int>();
       if (!mounted) return;
@@ -42,7 +60,7 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
         _status = null;
       });
     } on Object catch (e) {
-      // nexusqd down = LED unavailable, but setup can continue.
+      // Connected, but nexusqd could not light the ring — setup can continue.
       if (!mounted) return;
       setState(() {
         _ledUnavailable = true;
@@ -85,8 +103,12 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
             children: [
               TextButton(onPressed: widget.onBack, child: const Text('Back')),
               FilledButton(
-                onPressed: (_status == null || _ledUnavailable) ? widget.onNext : null,
-                child: Text(_ledUnavailable ? 'Continue anyway' : "Yes, that's it"),
+                onPressed: _retryable
+                    ? _connect
+                    : (_status == null || _ledUnavailable) ? widget.onNext : null,
+                child: Text(_retryable
+                    ? 'Try again'
+                    : _ledUnavailable ? 'Continue anyway' : "Yes, that's it"),
               ),
             ],
           ),

@@ -49,6 +49,14 @@ class BtSetupClient {
   Future<void> stopScan() => _method.invokeMethod('stopScan');
 
   Future<void> connect(String mac) async {
+    // Every entry path must hold the runtime BT permissions — the NFC-tap
+    // route skips FindDeviceScreen (previously the only screen that asked),
+    // and connecting without them is a SecurityException on Android 12+.
+    if (!await ensurePermissions()) {
+      throw PlatformException(
+          code: 'permission_denied',
+          message: 'Bluetooth permission is required');
+    }
     await _method.invokeMethod('connect', {'mac': mac});
   }
 

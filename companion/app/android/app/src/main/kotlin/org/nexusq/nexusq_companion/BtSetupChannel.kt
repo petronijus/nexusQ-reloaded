@@ -124,11 +124,67 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
     private fun stopScan() {
         scanReceiver?.let { runCatching { activity.unregisterReceiver(it) } }
         scanReceiver = null
-        adapter?.cancelDiscovery()
+        // cancelDiscovery throws SecurityException without BLUETOOTH_SCAN;
+        // it is advisory here (no discovery may be running at all).
+        runCatching { adapter?.cancelDiscovery() }
     }
 
     // --- connection ------------------------------------------------------
     @SuppressLint("MissingPermission")
+    /**
+     * Bond BEFORE opening the socket, and wait for it to actually complete.
+     *
+     * Letting [BluetoothSocket.connect] bond on demand does NOT work here
+     * (measured 2026-07-15): the implicit bond a secure socket triggers against
+     * an unbonded Just-Works peer forms and then immediately collapses —
+     * bluetoothd logs `bonding_attempt_complete status 0x5` (auth failed) then
+     * `0x0e` (disconnected), no link key is ever written, and the RFCOMM
+     * connection never reaches the device (setupd logs no connection at all).
+     * Android surfaces this as the misleading "incorrect PIN" toast, even though
+     * no PIN exists anywhere in a Just-Works flow.
+     *
+     * Bonding explicitly first and only then connecting is reliable: verified
+     * live — pairing from the phone's own BT settings and *then* running the app
+     * bonded, persisted the link key, authorized A2DP and delivered the RFCOMM
+     * connection. This method just does that same order in-app.
+     *
+     * Returns true once bonded. Safe to call when already bonded (no-op).
+     */
+    private fun ensureBonded(dev: BluetoothDevice, timeoutMs: Long = 30_000): Boolean {
+        if (dev.bondState == BluetoothDevice.BOND_BONDED) return true
+
+        val done = java.util.concurrent.CountDownLatch(1)
+        // AtomicBoolean, not a captured var: the broadcast lands on the main
+        // thread while this method blocks on a worker.
+        val bonded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rx = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                val d = i?.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                if (d?.address != dev.address) return
+                when (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)) {
+                    BluetoothDevice.BOND_BONDED -> { bonded.set(true); done.countDown() }
+                    // BOND_NONE after BOND_BONDING is a failure, not "not started".
+                    BluetoothDevice.BOND_NONE -> done.countDown()
+                }
+            }
+        }
+        activity.registerReceiver(rx, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+        try {
+            // Already bonding (e.g. a previous attempt) -> just wait it out.
+            if (dev.bondState != BluetoothDevice.BOND_BONDING && !dev.createBond()) {
+                Log.w(TAG, "createBond() refused for ${dev.address}")
+                return false
+            }
+            done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "createBond denied", e)
+            return false
+        } finally {
+            runCatching { activity.unregisterReceiver(rx) }
+        }
+        return bonded.get() || dev.bondState == BluetoothDevice.BOND_BONDED
+    }
+
     private fun connect(mac: String, result: MethodChannel.Result) {
         val ad = adapter
         if (ad == null) { result.error("no_bt", "Bluetooth unavailable", null); return }
@@ -137,8 +193,33 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
         thread(name = "bt-setup-connect") {
             try {
                 val dev = ad.getRemoteDevice(mac)
+                if (!ensureBonded(dev)) {
+                    emit(mapOf("type" to "state", "connected" to false))
+                    main.post {
+                        result.error("pair_failed",
+                            "Could not pair with the Nexus Q. If it was paired before, " +
+                            "forget it in Bluetooth settings and try again.", null)
+                    }
+                    return@thread
+                }
+                // SECURE (bonded) RFCOMM: this channel carries the user's WiFi
+                // PSK, and an authenticated link is encrypted by the controller,
+                // so the PSK never crosses the air in the clear. Connecting
+                // triggers Just-Works pairing — the Q answers with a permanent
+                // NoInputNoOutput auto-accept agent (nexusq-btagent), so nothing
+                // is prompted on either end, and the resulting bond is the SAME
+                // one BT audio (A2DP) then uses. The device side must match:
+                // nexusq-setupd registers the profile RequireAuthentication=True.
+                //
+                // An earlier build used createInsecureRfcommSocketToServiceRecord
+                // because the secure socket appeared to deadlock. That was NOT a
+                // BCM4330 limitation: blueman-applet's DisplayYesNo agent was
+                // forcing SSP into Numeric Comparison, whose Confirm/Deny dialog
+                // no input device on the Q can ever click. Fixed by dropping that
+                // applet from the image; secure pairing + A2DP verified live
+                // 2026-07-15. Do not "fix" a timeout here by going insecure again.
                 val sock = dev.createRfcommSocketToServiceRecord(SETUP_UUID)
-                sock.connect()   // triggers Just-Works pairing on first contact
+                sock.connect()
                 socket = sock
                 emit(mapOf("type" to "state", "connected" to true))
                 main.post { result.success(true) }

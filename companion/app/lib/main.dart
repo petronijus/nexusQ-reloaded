@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'nfc/device_tap.dart';
 import 'nfc/hce_listener.dart';
 import 'protocol/client.dart';
 import 'protocol/mock_client.dart';
@@ -28,10 +29,15 @@ void main() async {
   runApp(NexusQApp(initialClient: initial));
 }
 
-class NexusQApp extends StatelessWidget {
-  NexusQApp({super.key, this.initialClient});
+class NexusQApp extends StatefulWidget {
+  const NexusQApp({super.key, this.initialClient});
   final NexusQClient? initialClient;
 
+  @override
+  State<NexusQApp> createState() => _NexusQAppState();
+}
+
+class _NexusQAppState extends State<NexusQApp> {
   /// App-level messenger so NFC (HCE) messages can surface as a SnackBar from
   /// any screen, independent of the current Scaffold.
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -40,6 +46,36 @@ class NexusQApp extends StatelessWidget {
   /// replace the stack with a freshly-addressed ConnectGate) from anywhere,
   /// without depending on a possibly-deactivated BuildContext.
   final _navigatorKey = GlobalKey<NavigatorState>();
+
+  /// The Q re-emits its NFC connection-info every ~8 s while the phone rests on
+  /// the dome, and every app resume re-drains the last tap — so onDeviceTap
+  /// fires repeatedly for the SAME device. Without a guard each fire pushed a
+  /// fresh SetupFlow, restarting the wizard mid-flow (notably right after the
+  /// BT-permission dialog resumed the app). Track the setup we already routed
+  /// and ignore duplicates until that flow is dismissed.
+  String? _activeSetupMac;
+
+  void _onDeviceTap(DeviceTap tap) {
+    final nav = _navigatorKey.currentState;
+    if (nav == null) return;
+    if (!tap.provisioned && tap.btMac.isNotEmpty) {
+      if (_activeSetupMac == tap.btMac) return; // already setting this one up
+      _activeSetupMac = tap.btMac;
+      nav
+          .push(MaterialPageRoute(
+              builder: (_) => SetupFlow(initialMac: tap.btMac)))
+          .whenComplete(() {
+        if (_activeSetupMac == tap.btMac) _activeSetupMac = null;
+      });
+    } else {
+      final host = tap.ip ?? '${tap.host}.local';
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute(
+            builder: (_) => ConnectGate(initialClient: TcpClient(host: host))),
+        (route) => false,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,22 +87,8 @@ class NexusQApp extends StatelessWidget {
       scaffoldMessengerKey: _messengerKey,
       home: HceListener(
         messengerKey: _messengerKey,
-        onDeviceTap: (tap) {
-          final nav = _navigatorKey.currentState;
-          if (nav == null) return;
-          if (!tap.provisioned && tap.btMac.isNotEmpty) {
-            nav.push(MaterialPageRoute(
-                builder: (_) => SetupFlow(initialMac: tap.btMac)));
-          } else {
-            final host = tap.ip ?? '${tap.host}.local';
-            nav.pushAndRemoveUntil(
-              MaterialPageRoute(
-                  builder: (_) => ConnectGate(initialClient: TcpClient(host: host))),
-              (route) => false,
-            );
-          }
-        },
-        child: ConnectGate(initialClient: initialClient),
+        onDeviceTap: _onDeviceTap,
+        child: ConnectGate(initialClient: widget.initialClient),
       ),
     );
   }
