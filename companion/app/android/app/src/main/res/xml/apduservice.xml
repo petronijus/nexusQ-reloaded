@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    HCE registration for the Nexus Q "tap-to-send" link. Declares the custom AID
-    F0010203040506 under the "other" category (not a standard payment AID). The
-    device need not be unlocked or screen-on, so the Q can push a text even while
-    the phone is idle in a pocket.
+    HCE registration for the Nexus Q "tap-to-send" link: the custom AID
+    F0010203040506 under the "other" category — deliberately NOT a payment AID,
+    and no overlap with any (PPSE 325041592E5359532E4444463031, Visa, MC, ...),
+    so Google Pay keeps the payment role.
+
+    requireDeviceScreenOn=true (was false): the Q is tapped deliberately, while
+    the user is looking at the phone — so screen-on is always true for a real
+    tap. With false we answered NFC fields with the phone LOCKED AND DARK IN A
+    POCKET, including a shop's payment terminal field. Contactless payment failed
+    twice for the user, only ever after a dev session (2026-07-15); this narrows
+    our exposure to the moment a tap is actually plausible. See also
+    MainActivity, which no longer touches NFC routing at all.
+
+    requireDeviceUnlock stays false so a screen-on-but-locked phone can still
+    receive the Q's payload — that costs nothing once screen-on is required.
 -->
 <host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/hce_service_description"
     android:requireDeviceUnlock="false"
-    android:requireDeviceScreenOn="false"
+    android:requireDeviceScreenOn="true"
     android:shouldDefaultToObserveMode="false">
     <aid-group
         android:category="other"

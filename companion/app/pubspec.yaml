@@ -33,7 +33,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # unanswerable. Build with ./build-apk.sh so the UI stamp cannot drift from this.
 #
 # 1.1.0 — BT setup onboarding (explicit bond-then-connect, secure RFCOMM).
-version: 1.1.0+2
+# 1.1.1 — stop touching NFC routing (it was breaking contactless payment).
+version: 1.1.1+3
 
 environment:
   sdk: ^3.12.0
