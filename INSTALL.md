@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.8.2)
+# Nexus Q Reloaded -- Install Guide (v1.9.0)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,16 +12,17 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.8.2.img` (~5.3 MiB), `nexusq-rootfs-v1.8.2-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.9.0.img` (~5.3 MiB), `nexusq-rootfs-v1.9.0-sparse.img.zst`
   (~2.1 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.8.2.sha256`
-  - **`nexusq-boot-v1.8.2.img` is a NEW boot image** -- v1.8.2 rebuilds the kernel
-    (`6.12.12-r43`; same 42 patches as v1.8.1 -- incl. the crackle fixes 0041/0042
-    and the 0040 BT UART `max-speed` fix -- plus a defconfig change: default
-    cpufreq governor `conservative`, the measured idle-power fix), so it is
-    **not** byte-identical to earlier boots. At ~5.3 MiB it is still **well under the 8 MB
-    boot partition**. Coming from any earlier release you must flash **both** boot and
-    userdata. Verify against `nexusq-v1.8.2.sha256`.
+  decompress it, see step 2), `nexusq-v1.9.0.sha256`
+  - **The v1.9.0 kernel is UNCHANGED from v1.8.2** (`6.12.12-r43`, `#44`; 42 patches
+    through 0042 -- incl. the crackle fixes 0041/0042 and the 0040 BT UART
+    `max-speed` fix -- plus the `conservative` default-governor defconfig). v1.9.0 is
+    a **userspace** release: the app-driven onboarding stack (device r47, setupd r4,
+    btagent r1, nexusqd r10, firmware r2). At ~5.3 MiB the boot image is still **well
+    under the 8 MB boot partition**. Coming from **v1.8.2** you strictly only need
+    `userdata`; coming from **any earlier release** flash **both**. Flashing both is
+    always safe. Verify against `nexusq-v1.9.0.sha256`.
 
 ## 1. Enter fastboot mode
 
@@ -36,8 +37,10 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v1.8.2 rebuilt the kernel (~5.3 MiB; 42 patches through 0042 + the conservative-governor defconfig) -- flash it.
-fastboot flash boot nexusq-boot-v1.8.2.img
+# The v1.9.0 kernel is UNCHANGED from v1.8.2 (~5.3 MiB; 42 patches through 0042 +
+# the conservative-governor defconfig). Flashing it is a no-op from v1.8.2, required
+# from anything older, and always safe.
+fastboot flash boot nexusq-boot-v1.9.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -46,8 +49,8 @@ fastboot flash boot nexusq-boot-v1.8.2.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.8.2-sparse.img.zst   # -> nexusq-rootfs-v1.8.2-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.8.2-sparse.img
+zstd -d nexusq-rootfs-v1.9.0-sparse.img.zst   # -> nexusq-rootfs-v1.9.0-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.9.0-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -83,6 +86,52 @@ The Q runs an RNDIS network gadget on its micro-USB port:
 
 ## 5. WiFi
 
+### 5a. The normal path -- app-driven onboarding (since v1.9.0)
+
+An **unprovisioned** device arms setup mode on its own at boot: the ring spins
+blue, and the adapter goes discoverable + pairable. Then, from the companion app:
+
+1. **Tap the phone on the dome** (NFC). The app jumps straight into the setup
+   wizard. (No NFC? Use "Set up new device" and pick the Q from the BT list --
+   that list is only the fallback.)
+2. Confirm the pairing colour -> the phone bonds (Just-Works, no PIN -- **nothing
+   attached to the Q can answer a prompt**, so any PIN/confirm dialog means
+   something is wrong; see the blueman note below).
+3. Pick your SSID, enter the password -> the Q joins. **Wrong password -> the ring
+   turns red.**
+4. Name / room / theme -> outro. The Q closes its pairing window automatically.
+
+The BT setup link is **bonded and encrypted** (`RequireAuthentication=True`), so
+the WiFi PSK never crosses the air in cleartext, and it is never logged.
+
+> ⚠️ **A fresh flash of a DEV image does NOT arm setup mode.** `docker-build.sh`
+> bakes `private/access/wifi.nmconnection` into dev images, so the device
+> **self-provisions** and `nexusq-setup-needed` correctly reports "not needed".
+> **`PUBLIC_RELEASE=1` images do not bake it and DO run onboarding.** To exercise
+> onboarding on a dev image you must currently delete the baked profile by hand --
+> a `NEXUSQ_NO_WIFI=1` build flag (skip only the wifi bake, keep the ssh keys) is
+> an **open task, not yet written**.
+
+> The pairing window **fails CLOSED** (setupd r4 / btagent r1): only a
+> *successful* nmcli listing no WiFi profile counts as unprovisioned, so a
+> transient NetworkManager wobble can no longer drop a **provisioned** device into
+> a discoverable + pairable setup mode.
+
+> ⚠️ **Do not start `blueman-applet` by hand** -- its **DisplayYesNo** agent forces
+> SSP into Numeric Comparison, raising a confirm dialog on the HDMI desktop that
+> nothing attached to the Q can click, and **every bond then times out**. It is
+> suppressed by default since device r47 (the *package* stays for
+> `blueman-manager` on demand).
+
+To **re-provision** an already-configured Q (new SSID, moved house), call
+`startSetupMode` over the LAN bridge from the app -- it re-arms setup mode
+without a reflash. Tested + passing 2026-07-15.
+
+### 5b. Fallback / recovery -- join by hand
+
+Still fully supported, and the only route if you have no phone, no NFC, or a
+dev image that self-provisioned:
+
 ```bash
 ssh user@172.16.42.1
 sudo nmcli dev wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
@@ -107,18 +156,25 @@ optional -- find the device on your LAN as hostname `steelhead`.
 > in v1.6.6; the stable on-air MAC is the WiFi chip's **OTP MAC** (on the
 > reference unit `14:7d:c5:3a:35:b5`), not the factory-label MAC — brcmfmac
 > never reads the factory calibration MAC (a live driver-reload test proved it
-> ignores the nvram `macaddr=` too). The v1.6.6 image therefore pins the
-> **factory MAC** at the NM layer instead
+> ignores the nvram `macaddr=` too).
+>
+> ⚠️ **Correction (2026-07-15): the factory MAC is NOT pinned.** This note used to
+> claim the v1.6.6 image pins the **factory MAC** at the NM layer instead
 > (`cloned-mac-address=F8:8F:CA:20:48:E1` in the baked profile /
-> `scripts/gen-wifi-profile.sh`) — verified on air 2026-07-03 on the
-> v1.6.6-candidate flash.
+> `scripts/gen-wifi-profile.sh`), "verified on air 2026-07-03". A v1.9.0 diag sweep
+> found that MAC is **injected nowhere**: wlan0 runs the **OTP MAC**
+> `14:7d:c5:3a:35:b5` (Murata OUI), and the DHCP lease carries an **empty
+> hostname**. **Look your lease up by the OTP MAC** — `f8:8f:ca:20:48:e1` is stale.
+> (The **BT** MAC is fine — pinned in the DTS via `local-bd-address`.) **Open bug**,
+> tracked under CHANGELOG v1.9.0 known issues.
 
 ## What works
 
 | Subsystem | Status |
 |-----------|--------|
 | HDMI video + XFCE4 desktop | ✅ |
-| WiFi (BCM4330, original calibration) | ✅ working, stable IP since v1.6.6 (factory MAC pinned at the NM layer). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
+| WiFi (BCM4330, original calibration) | ✅ working, stable IP since v1.6.6 (stable on-air MAC = the chip's **OTP MAC** `14:7d:c5:3a:35:b5`; the "factory MAC pinned at the NM layer" claim is **retired-pending-fix** — that MAC is injected nowhere, and the lease has an empty hostname, so look it up by the OTP MAC · 2026-07-15). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
+| App-driven onboarding (NFC → BT → WiFi) | ✅ **v1.9.0** — an unprovisioned device arms setup mode itself; tap the phone on the dome → bonded/encrypted BT RFCOMM → WiFi join → name/room/theme. See §5a. ⚠️ a **dev** image self-provisions (baked WiFi) and will NOT onboard; `PUBLIC_RELEASE=1` images do |
 | Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |

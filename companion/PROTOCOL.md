@@ -202,7 +202,7 @@ platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
 
 ### 8.1 Transport
 
-> ✅ **Bonded + encrypted (2026-07-15, v1.9.0-rc4 — hardware-accepted).** The
+> ✅ **Bonded + encrypted (2026-07-15, v1.9.0 — released, hardware-accepted).** The
 > transport requires authentication: the setup link is a **bonded, encrypted** ACL,
 > so the **WiFi PSK never crosses the air in cleartext** (verified: 0 PSK lines in
 > the journal). The bond is created by the phone **before** the socket opens
@@ -252,10 +252,23 @@ platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
 gated by `ExecCondition=/usr/bin/nexusq-setup-needed`, which exits 0 (run) when
 **either**:
 - `/run/nexusq-setup.force` exists, **or**
-- no `802-11-wireless` NetworkManager connection profile exists yet (fresh/unprovisioned
-  boot — `nmcli -t -f TYPE connection show`).
+- a **SUCCESSFUL** `nmcli -t -f TYPE connection show` lists no `802-11-wireless`
+  NetworkManager connection profile (fresh/unprovisioned boot).
 
-and exits 1 (skip) otherwise. Two entry points follow from this:
+and exits 1 (skip) otherwise.
+
+> 🔒 **This check FAILS CLOSED (setupd r4, v1.9.0).** nmcli's **exit code is
+> load-bearing**: an earlier version piped it straight into `grep -q` and discarded
+> it, so "nmcli failed / NetworkManager is not up yet" was indistinguishable from
+> "there is no WiFi profile" → exit 0 → a **provisioned** device arms setup mode and
+> advertises itself **discoverable + pairable**. The agent auto-accepts by design
+> (§8.6 — nothing attached to this appliance can answer a prompt), so that transient
+> hands a passer-by a bond. **Anything other than a successful nmcli listing no wifi
+> profile assumes provisioned and stays out of setup mode**; the cost of being wrong
+> that way is one `startSetupMode` to re-enter setup, versus an open pairing window
+> on a live device.
+
+Two entry points follow from this:
 - **Unprovisioned boot**: no WiFi profile → the condition is satisfied on every
   boot until `setWifi` succeeds and creates one.
 - **On demand**: the LAN bridge's `startSetupMode` (§4, Device info table) touches
@@ -300,7 +313,7 @@ WiFi-join failures.
 | `setTheme` | `{ theme: "blue"\|"warm"\|"cool"\|"rose"\|"smoke"\|"off" }` | `{ theme }` — applies the color theme's `breathe`/`off` nexusqd command immediately and remembers it for `finishSetup` | `bad_request` (unknown theme), `unavailable` (nexusqd rejected the command) |
 | `finishSetup` | — | `{ done: true }` — green success breathe, 2 s hold, then the chosen theme (or `auto` if none was set) via nexusqd; marks the session finished, which ends the RFCOMM loop and triggers the clean-exit lifecycle (§8.2) | `bad_request` (**not wifi-provisioned yet** — see below) |
 
-> **`finishSetup` is REFUSED unless WiFi is already joined** (v1.9.0-rc4). Accepting
+> **`finishSetup` is REFUSED unless WiFi is already joined** (v1.9.0, setupd r4). Accepting
 > it unprovisioned was a trap: `finished` makes the daemon exit **0**, so
 > `Restart=on-failure` does **not** restart it and nothing re-arms setup mode until a
 > reboot — **the device is stranded off-network with the wizard gone**. (Same hazard
@@ -341,7 +354,7 @@ nexusqd r10) so setup phases read as distinct rates (default 0.75 rev/s).
 | Theme chosen mid-wizard | `breathe R G B` / `off` (per `THEME_CMDS`) | `setTheme` |
 | Setup complete | `breathe 0 200 0` (green), held 2 s, then the chosen theme or `auto` | `finishSetup` |
 | Setup abandoned (idle timeout, no `finishSetup`) | `auto` | clean-exit cleanup (§8.2) |
-| **Pairable OUTSIDE setup** (a manual/anomalous exposure) | `spin 0 153 204` / `auto` | **`nexusq-btagent`**, not setupd (v1.9.0-rc4) |
+| **Pairable OUTSIDE setup** (a manual/anomalous exposure) | `spin 0 153 204` / `auto` | **`nexusq-btagent`**, not setupd (v1.9.0) |
 
 > **The pairing-exposure indicator** (`nexusq-btagent`, 2026-07-15). The invariant
 > is **`Pairable == Discoverable`**, so the ring is honest device-wide:

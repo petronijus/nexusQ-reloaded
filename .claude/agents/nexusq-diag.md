@@ -51,16 +51,17 @@ ping -c1 -W2 172.16.42.1
   (`nqctl status`, `nqctl run '<cmd>'`).
 - Fallbacks: **serial** `/dev/ttyACM0` @115200 (`steelhead login:`, user/147147) —
   works even with no net; **WiFi** vlan20 — last-known lease
-  **`192.168.20.184`** (2026-07-12; the router reassigned `.195`→`.184` even
-  though the image pins the **factory MAC `f8:8f:ca:20:48:e1`** — the MAC is
-  stable, the lease is NOT; never hardcode the WiFi IP). Older images: the
-  interim `#27` used the chip's OTP
-  `14:7d:c5:3a:35:b5` (lease `.175`); v1.6.5 randomized the MAC per boot.
+  **`192.168.20.184`** (2026-07-12; the lease is NOT stable — never hardcode the
+  WiFi IP).
+  ⚠️ **Look leases up by the chip OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI).
+  The long-documented "the image pins the **factory MAC** `f8:8f:ca:20:48:e1`"
+  is **FALSE** — a 2026-07-15 (v1.9.0) sweep found that MAC is **injected
+  nowhere**; wlan0 has always been on the OTP MAC on air, and the DHCP lease
+  carries an **empty hostname**, so **hostname-matching `steelhead` will NOT find
+  it either**. (v1.6.5 and older randomized the MAC per boot.) **Open bug.**
   If it moved, find the lease in OPNsense Kea
-  (`opnsense-api GET /api/kea/leases4/search`) by hostname `steelhead` or the
-  MAC per the image (factory on `#29`+, OTP on `#27`; on the older v1.6.5
-  image the MAC is per-boot randomized and the IP wanders — hostname-match
-  only). This host may not route into vlan20.
+  (`opnsense-api GET /api/kea/leases4/search`) by the **OTP MAC**. This host may
+  not route into vlan20.
 - If NOTHING answers on any transport after a few minutes, STOP and report that
   (likely the black-screen boot quirk → needs a re-reboot). Don't loop forever.
 
@@ -148,7 +149,7 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   (raw `PF_NFC` netlink poll + ISO-DEP raw socket) and pushes a payload to a
   phone running the companion app's HostApduService on each tap (AID `F0010203040506`).
   Payload: on images ≤ v1.8.2 a static `NQ_NFC_MESSAGE` text; **since device r44
-  (2026-07-13, targets v1.9.0) it is live connection-info JSON**
+  (2026-07-13, released in v1.9.0) it is live connection-info JSON**
   `{"v":1,"bt","host","ip","prov"}` rebuilt per tap by `build_payload()` — the unit
   must NOT set `NQ_NFC_MESSAGE` (it overrides the builder; a set value on an
   r44+ image is a regression — manual-test override only).
@@ -164,8 +165,9 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   wedges the pn544 HCI state until reboot (known fragility). See
   `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
-- 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (v1.9.0-rc4 = device r47 /
-  setupd r3 / btagent r0 — NOT on flashed ≤ v1.8.2):** a BT RFCOMM
+- 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (**v1.9.0** = device r47 /
+  setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2 — NOT on flashed
+  ≤ v1.8.2):** a BT RFCOMM
   WiFi-provisioning daemon (`nexusq-setupd.service`,
   `ExecCondition=/usr/bin/nexusq-setup-needed`) plus the **permanent** pairing agent
   (`nexusq-btagent.service`, `Restart=always` — runs the WHOLE uptime, since A2DP
@@ -173,7 +175,18 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   **Expected states:** provisioned boot (a WiFi NM profile exists, no
   `/run/nexusq-setup.force`) → **setupd inactive with the condition failed** — an
   ACTIVE setupd on a provisioned boot is a fault (device discoverable + LED spinner
-  when it shouldn't be) — while **btagent is ACTIVE regardless**. Unprovisioned boot
+  when it shouldn't be) — while **btagent is ACTIVE regardless**.
+  🔒 **This exact fault was REAL and is fixed in setupd r4 (v1.9.0) — a diag sweep
+  found it, so keep checking it.** `nexusq-setup-needed` piped nmcli into grep and
+  **discarded the exit code**, so a transient NetworkManager wobble read as "no wifi
+  profile" → a **provisioned** device armed setup mode and went discoverable +
+  pairable (the agent auto-accepts → a stranger gets a bond). It now **fails
+  CLOSED**: only a *successful* nmcli listing no wifi profile counts as
+  unprovisioned. Likewise **btagent's `setupd_active()` fails to FALSE** (claims the
+  ring) when `systemctl is-active` cannot be consulted — it **has timed out live
+  under load** — because assuming setupd owned the ring would SKIP the
+  pairing-exposure indicator while the adapter is still pairable. **The ring going
+  dark on a pairable adapter is the lie the ring exists to prevent.** Unprovisioned boot
   (or the force flag armed via the bridge's `startSetupMode`) → setupd active
   (`setup mode active: discoverable`), ring runs the `spin` animation (blue rotating
   dot), `bluetoothctl show` = Discoverable yes; it exits after `finishSetup` or 600 s

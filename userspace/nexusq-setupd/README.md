@@ -9,7 +9,16 @@ envelope as the LAN bridge (`nexusq-control`), carried over Bluetooth RFCOMM
 > ✅ **The transport is BONDED + ENCRYPTED** (`RequireAuthentication=True` + the app's
 > secure `createRfcommSocketToServiceRecord`), so the **WiFi PSK never crosses the BT
 > link in cleartext**, and the same bond serves **A2DP**. Verified live 2026-07-15
-> (v1.9.0-rc4): 0 PSK lines in the journal.
+> (**v1.9.0**, setupd **r4**): 0 PSK lines in the journal.
+>
+> 🔒 **`nexusq-setup-needed` FAILS CLOSED (r4).** It used to pipe nmcli into grep and
+> discard the exit code, so "nmcli failed / NM is not up yet" was indistinguishable
+> from "no WiFi profile" → a **provisioned** device would arm setup mode and go
+> **discoverable + pairable**. The agent auto-accepts by design, so that transient
+> hands a passer-by a bond. **Only a SUCCESSFUL nmcli listing no wifi profile means
+> unprovisioned**; anything else assumes provisioned and stays out. Being wrong that
+> way costs a `startSetupMode` — being wrong the other way leaves an open pairing
+> window on a live device.
 >
 > ⚠️ **This daemon registers NO agent.** The Q's single, **permanent**
 > `NoInputNoOutput` Just-Works agent is **`nexusq-btagent`** (a hard `depends=` — the

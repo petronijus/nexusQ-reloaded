@@ -33,7 +33,7 @@ things: an **NFC tap-to-send receiver** — the app runs a HostApduService so th
 see `../docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` + [`PROTOCOL.md`](PROTOCOL.md) §7;
 and **auto-reconnect on resume/drop** so backgrounding the app no longer needs an
 app-kill to recover the connection.)_ _(**Onboarding step 1 implemented 2026-07-13,
-targets v1.9.0 — committed, NOT yet in a flashed image:** an 8-screen **setup wizard**
+RELEASED in v1.9.0 (flashed + hardware-accepted 2026-07-15):** an 8-screen **setup wizard**
 (welcome/cables/find/confirm-color/wifi/name-room/theme/outro, with the original stock
 imagery via `../scripts/extract-stock-assets.sh` — Google-copyright assets gitignored,
 fresh clones fall back gracefully) provisions the Q's WiFi over **BT RFCOMM**
@@ -43,8 +43,8 @@ an **NFC tap** — the tap payload is now live connection-info JSON (§7), so a
 provisioned tap auto-connects and an unprovisioned one jumps into the wizard — or
 "Set up new device" in the app. See
 `../docs/2026-07-13-onboarding-step1-implementation.md`.
-**✅ Status 2026-07-15 (built + flashed as v1.9.0-rc4, hardware-ACCEPTED; all
-UNCOMMITTED, NOT tagged): BT onboarding works autonomously from a fresh flash.**
+**✅ Status 2026-07-15 (RELEASED as v1.9.0, built from `v1.9.0-rc5`, flashed +
+hardware-ACCEPTED): BT onboarding works autonomously from a fresh flash.**
 It was two independent bugs, both ours: `blueman-applet`'s **DisplayYesNo** agent
 forced SSP into **Numeric Comparison** (an unanswerable dialog on the Q's HDMI
 desktop → every bond timed out), and the app let the RFCOMM socket **bond on

@@ -41,10 +41,10 @@ Use it rather than a bare `flutter build apk`, so the in-app version stamp
 > **Bump the build number (`+N`) on EVERY apk handed to the phone**: Android refuses a
 > downgrade, and it is how builds are told apart. (It sat at `1.0.0+1` for dozens of
 > builds and made "is this the fixed one?" unanswerable — hence `1.1.0+2`, the BT
-> setup onboarding release.) Gradle reads versionName/versionCode straight from
-> `pubspec.yaml`.
+> setup onboarding release; `1.1.1+5` ships with device **v1.9.0**.) Gradle reads
+> versionName/versionCode straight from `pubspec.yaml`.
 
-## Setup wizard (onboarding step 1, added 2026-07-13 — device side targets v1.9.0)
+## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 
 `lib/setup/` ships an 8-screen wizard (welcome / cables / find / confirm-color /
 wifi / name-room / theme / outro) that provisions an unconfigured Q over
@@ -56,9 +56,41 @@ tap** (the payload is connection-info JSON, §7 — an unprovisioned device rout
 into the wizard with the MAC prefilled) and **"Set up new device"** on the connect
 gate.
 
-**✅ Status 2026-07-15 (app 1.1.0+2, device v1.9.0-rc4 — hardware-accepted):** BT
-onboarding works end-to-end from a fresh flash (NFC tap → bond → RFCOMM → WiFi join
-→ `finishSetup`).
+**✅ Status 2026-07-15 (app 1.1.1+5, device **v1.9.0** — released, hardware-accepted):**
+BT onboarding works end-to-end from a fresh flash (NFC tap → bond → RFCOMM → WiFi
+join → `finishSetup`). Final acceptance on a fresh `v1.9.0-rc5` flash: tap delivered
+→ **bond first try (0 failed attempts)** → WiFi joined → pairing window auto-closed
+→ `NFC: released preferred` on connect.
+
+### The NFC claim is the tap (1.1.1+5, measured 2026-07-15)
+
+**Routing alone is not enough.** The phone sits in Android 15 **observe mode** and
+deliberately never answers a reader's field: `MSG_RF_FIELD_ACTIVATED` /
+`_DEACTIVATED` cycling ~150 ms, **no APDU ever reaching `NqHceService`**. The
+platform drops observe mode for the **PREFERRED** service when it declares
+`shouldDefaultToObserveMode="false"` (ours does) — **so `setPreferredService` IS the
+tap**, not an optimisation.
+
+It is therefore claimed **only where a tap is expected**: `setTapCapture` is driven
+from Dart, and only the **connect screen** (the "waiting to be tapped" state) asks
+for it. It is dropped on connect, on dispose and on every `onPause`; the HCE
+component ships `android:enabled="false"`, so a **closed app has ZERO NFC surface**
+(previously ANY open app claimed NFC priority, including while just playing music).
+
+| state | preferred | observe mode | AID routed |
+|---|---|---|---|
+| app closed / backgrounded | `null` | `true` | 0 |
+| app on the connect screen | ours | `false` | 1 |
+
+Observe mode **returns to `true` when we let go** — the phone is not left in a
+payment-hostile state.
+
+⚠️ **Motivation, and its UNPROVEN status:** the user's contactless payment failed
+twice, only ever after a dev session. This is **NOT a confirmed root cause** — it is
+**risk reduction**. The NFC telemetry shows observe mode toggled only by
+`com.android.nfc` / `com.google.android.gms`, **never by our uid**, and it returns to
+`true` on its own. **If payment fails again, capture `dumpsys nfc` AT THE MOMENT OF
+FAILURE.**
 
 > ⚠️ **Bond FIRST, then open the socket.** The app calls `createBond()` and waits for
 > `BOND_BONDED` **before** `createRfcommSocketToServiceRecord` (the **secure**

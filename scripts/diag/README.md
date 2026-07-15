@@ -69,6 +69,11 @@ path (path B).
 
 **Thermal** — `thermal_zone0` (`cpu_thermal`), trips at 100 °C (passive) and
 125 °C (critical), plus `cooling_device0/cur_state` for active throttling.
+Ground truth as of **2026-07-15**: bounded dual-core load reached **102.8 °C** —
+**past the passive trip**, so a non-zero `cur_state` under load is EXPECTED, not a
+fault (125 °C critical was never approached). This supersedes the older "peaks
+~94–99 °C, no throttle" envelope. True idle: **72–75 °C**, 52 % residency at
+350 MHz. Always report the peak.
 
 **LED ring / nexusqd / AVR** — the ring is 32 `steelhead:rgb:ring-*` LEDs (+ a
 `mute` LED) driven by the userspace daemon **nexusqd** (control socket

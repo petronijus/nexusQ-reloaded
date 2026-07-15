@@ -4,7 +4,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — onboarding step 1 (targets v1.9.0; **built + flashed as v1.9.0-rc4 2026-07-15, ACCEPTED on hardware, NOT tagged, all uncommitted**)
+## [1.9.0] — 2026-07-15 — app-driven onboarding: NFC tap → bonded BT → WiFi (device r47, setupd r4, btagent r1, nexusqd r10, kernel r43, firmware r2)
 
 > **App-driven WiFi onboarding for the display-less Q, implemented end-to-end
 > 2026-07-13** (plan `docs/superpowers/plans/2026-07-13-onboarding-step1.md`,
@@ -13,19 +13,22 @@ All notable changes to Nexus Q Reloaded. Format follows
 > WiFi join → name/room/theme → outro, with the original stock imagery.
 > Full write-up: `docs/2026-07-13-onboarding-step1-implementation.md`.
 >
-> **✅ Status 2026-07-15 (v1.9.0-rc4, built + flashed): BT onboarding WORKS
-> autonomously from a fresh flash — root-caused, fixed, user-accepted.** It was
-> **TWO independent bugs, BOTH ours, NEITHER hardware**: (1) `blueman-applet`'s
-> **DisplayYesNo** agent forced SSP into **Numeric Comparison**, raising a
-> Confirm/Deny dialog on the HDMI desktop that **nothing attached to the Q can
-> click** (every bond timed out, mgmt `0x0e`) — and `RequestDefaultAgent` being
-> last-writer-wins let it steal the default agent too; (2) the app let the RFCOMM
-> socket **bond on demand**, and Android's implicit bond against an unbonded
-> Just-Works peer collapses (`bonding_attempt_complete status 0x5` → `0x0e`),
-> surfacing as the misleading **"incorrect PIN"** toast. **v1.9.0 is not tagged;
-> everything is uncommitted.** Full record:
+> **✅ BT onboarding WORKS autonomously from a fresh flash — root-caused, fixed,
+> user-accepted.** It was **TWO independent bugs, BOTH ours, NEITHER hardware**:
+> (1) `blueman-applet`'s **DisplayYesNo** agent forced SSP into **Numeric
+> Comparison**, raising a Confirm/Deny dialog on the HDMI desktop that **nothing
+> attached to the Q can click** (every bond timed out, mgmt `0x0e`) — and
+> `RequestDefaultAgent` being last-writer-wins let it steal the default agent too;
+> (2) the app let the RFCOMM socket **bond on demand**, and Android's implicit bond
+> against an unbonded Just-Works peer collapses (`bonding_attempt_complete status
+> 0x5` → `0x0e`), surfacing as the misleading **"incorrect PIN"** toast. Shipped
+> from **v1.9.0-rc5**, flashed and hardware-accepted. Full record:
 > `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`
 > (supersedes `docs/2026-07-14-bt-onboarding-state-as-is.md`).
+>
+> ⚠️ **Read the "Known issues / open" section at the end of this release before
+> relying on it** — pairing has an un-root-caused flake, the factory WiFi MAC is
+> injected nowhere, and a diag sweep measured **102.8 °C** under load.
 >
 > **⚠️ RETRACTED: "the BCM4330 cannot complete SSP bonding."** That claim was
 > WRONG. Pairing + A2DP worked 2026-07-09 (after the v1.8.0 BT-UART `max-speed`
@@ -203,6 +206,71 @@ All notable changes to Nexus Q Reloaded. Format follows
   exit 0, so `Restart=on-failure` did **not** restart it and nothing re-armed setup
   mode until a reboot. The app reached this state live 2026-07-15.
 
+### Fixed (2026-07-15, v1.9.0-rc5) — fail CLOSED on the pairing window
+
+- **`nexusq-setup-needed` failed OPEN: a provisioned device could drop into setup
+  mode and advertise itself pairable** (`nexusq-setupd` r3→**r4**, `b2a08af`; found
+  by a diag sweep, in a window where NetworkManager was demonstrably disturbed). It
+  piped nmcli straight into grep and threw the exit code away —
+
+      if nmcli -t -f TYPE connection show 2>/dev/null | grep -q '^802-11-wireless$'
+
+  — so **"nmcli failed / NM is not up yet" was indistinguishable from "there is no
+  WiFi profile"** → exit 0 → a fully **provisioned** device arms setup mode and goes
+  **discoverable + pairable**. The agent **auto-accepts by design** (nothing
+  attached to this appliance can answer a prompt), so that transient hands a
+  passer-by a bond. Now **only a SUCCESSFUL nmcli listing no wifi profile** means
+  unprovisioned; anything else assumes provisioned and stays out. Being wrong that
+  way costs a `startSetupMode` to re-enter setup — being wrong the other way leaves
+  an open pairing window on a live device. Verified on the device including a faked
+  nmcli failure; +65 lines of host tests.
+- **`nexusq-btagent` `setupd_active()` failed OPEN in the opposite direction**
+  (btagent r0→**r1**, same commit): `systemctl is-active` **has timed out live under
+  load**, and the fallback assumed *"setupd owns the ring"* — which **SKIPS the
+  pairing-exposure indicator while the adapter is still pairable**, i.e. exactly the
+  lie the ring exists to prevent (**dark must mean nobody can pair**). It now fails
+  to **FALSE** and claims the ring. Cost is near-zero (`DISCOVERABLE_CMD` is
+  byte-identical to setupd's idle spin → worst case it re-sends the blue already
+  showing, plus a wiped theme in a rare error path); a silently dark ring on a
+  bondable appliance is the worse failure.
+
+### Added (2026-07-15, v1.9.0-rc5)
+
+- **`startSetupMode` re-provisioning — TESTED and PASSING** (the last untested
+  acceptance item). Verified live over the LAN bridge:
+  `{"ok":true,"result":{"started":true}}` → setupd active, force flag armed,
+  adapter discoverable + pairable, and **btagent correctly YIELDED the ring to
+  setupd** (no "ring ON" line).
+
+### Changed (2026-07-15, v1.9.0-rc5)
+
+- **Companion app 1.1.0+2 → 1.1.1+5 — the NFC claim is scoped to when a tap is
+  actually expected** (`f0b5b20`, `33d3122`, `4717b44`). ⚠️ The app is versioned on
+  its **OWN INDEPENDENT TRACK — deliberately NOT aligned to the image releases.**
+  **Measured, not reasoned**: routing alone is not enough, because the phone sits in
+  Android 15 **observe mode** and deliberately never answers a reader's field —
+  `MSG_RF_FIELD_ACTIVATED`/`_DEACTIVATED` cycling ~150 ms, **no APDU ever reaching
+  `NqHceService`**. The platform drops observe mode for the **PREFERRED** service
+  when it declares `shouldDefaultToObserveMode="false"`, which ours does — **so the
+  claim IS the tap.** It is now claimed **only by the connect screen** (the "waiting
+  to be tapped" state) and dropped on connect, on dispose and on every `onPause`;
+  the HCE component ships `android:enabled="false"` so a **closed app has ZERO NFC
+  surface** (previously ANY open app claimed NFC priority, including while just
+  playing music). Measured:
+
+  | state | preferred | observe mode | AID routed |
+  |---|---|---|---|
+  | app closed / backgrounded | `null` | `true` | 0 |
+  | app on the connect screen | ours | `false` | 1 |
+
+  Observe mode **returns to `true` when we let go** — the phone is not left in a
+  payment-hostile state. **Motivation — and its unproven status:** the user's
+  contactless payment failed twice, only ever after a dev session. This is **NOT a
+  confirmed root cause** and is recorded as **risk reduction only** — the NFC
+  telemetry shows observe mode toggled solely by `com.android.nfc` /
+  `com.google.android.gms`, **never by our uid**, and it returns to `true` on its
+  own. **If payment fails again, capture `dumpsys nfc` AT THE MOMENT OF FAILURE.**
+
 ### Acceptance (v1.9.0-rc4, fresh flash, 2026-07-15) — PASS
 
 Cold boot from a fresh flash → setupd armed itself (`setup mode active:
@@ -214,12 +282,26 @@ live: `bluez_source…a2dp_source s24le 2ch 48000Hz` + PA loopback. Also
 user-verified: wrong WiFi password → **ring turns red**; **NFC tap goes straight to
 pairing** (the BT device list is only the no-NFC fallback).
 
-### Known issues / open (v1.9.0-rc4)
+### Final acceptance (v1.9.0-rc5, fresh flash, 2026-07-15) — PASS (shipped)
 
-- **Pairing needed 2 failed attempts before succeeding** on the fresh-flash run
-  (user-reported). **NOT root-caused.** Suspicion only: the app's 30 s
-  `ensureBonded` timeout (phone log shows a ~27 s gap before the successful bond)
-  and/or a stale phone-side bond. **OPEN.**
+NFC tap delivered → **bond first try (0 failed attempts)** → RFCOMM → **WiFi
+joined** → `finishSetup` → pairing window auto-closed → **`NFC: released preferred`**
+the moment the device came up. **PSK: 0 log lines.** This is the build v1.9.0 is cut
+from.
+
+### Known issues / open (v1.9.0)
+
+- **Pairing flakiness — NOT root-caused.** One run needed **2 failed attempts**
+  before succeeding (user-reported); the **three subsequent runs passed first try (0
+  failures)**. Suspicion only, nothing confirmed: the app's 30 s `ensureBonded`
+  timeout (the phone log shows a ~27 s gap before the successful bond) and/or a
+  stale phone-side bond — **that second one is WEAKENED**, since a run with a stale
+  phone bond still succeeded first try. A repro needs `bluetoothd -d`. **OPEN.**
+- **The contactless-payment link is UNPROVEN.** The NFC-claim scoping (see rc5
+  above) is risk reduction, not a fix for a diagnosed fault: observe mode is toggled
+  only by `com.android.nfc`/`com.google.android.gms` in the telemetry, never by our
+  uid, and it returns to `true` on its own. **If it recurs, capture `dumpsys nfc` AT
+  THE MOMENT OF FAILURE.** **OPEN.**
 - **The dev image BAKES Petr's WiFi** (`private/access/wifi.nmconnection`), so a
   fresh-flashed **dev** image self-provisions and `nexusq-setup-needed` correctly
   reports "not needed" → **setup mode never arms**. This — not an onboarding bug —
@@ -229,10 +311,23 @@ pairing** (the BT device list is only the no-NFC fallback).
   only the wifi bake, keep ssh keys) — promised, **NOT yet written**.
 - **The factory WiFi MAC `f8:8f:ca:20:48:e1` is injected NOWHERE** — wlan0 runs the
   chip OTP MAC (`14:7d:c5:3a:35:b5`, Murata OUI; nvram `bcmdhd.cal` says
-  `00:90:4c:c5:12:38`) and its DHCP lease carries an **empty hostname**. BT MAC is
-  fine (DTS `local-bd-address`). **Open task**, unrelated to onboarding.
+  `00:90:4c:c5:12:38`) and its DHCP lease carries an **empty hostname**. **Look the
+  lease up by the OTP MAC `14:7d:c5:3a:35:b5`** — the documented
+  `f8:8f:ca:20:48:e1` is **stale**. BT MAC is fine (DTS `local-bd-address`). NB
+  `firmware/README.md`'s claim that WiFi identity is "pinned at the NetworkManager
+  layer" is **retired-pending-fix**. **Open task**, unrelated to onboarding.
 - ⚠️ **Starting `blueman-applet` by hand breaks pairing again** until it exits.
-- **Everything uncommitted; v1.9.0 not tagged.** Full record:
+- **Thermal: 102.8 °C measured under bounded dual-core load** (diag sweep
+  2026-07-15) — **above the documented 94–99 °C envelope** and past the **100 °C
+  passive trip**. Throttling engaged correctly and the 125 °C critical trip was
+  never approached, but the envelope in the docs understates the real ceiling.
+  **True idle is fine**: 72–75 °C, 52 % residency at 350 MHz. **OPEN.**
+- **librespot boot race — 5 restarts at boot** (`wlan0 has no IPv4 after 30s`): the
+  wrapper hard-binds `--zeroconf-interface`, so it must wait for the WiFi IP.
+  **Self-heals once associated**, but the restart burst is noise. **OPEN.**
+- **`onboard` SIGSEGVs every boot** in its native `osk` module. **NOT** the old
+  flash-corruption class — `python3 -S -c ''` is rc 0. **OPEN.**
+- Full record:
   `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 
 ## [1.8.2] — 2026-07-13 — idle power: conservative governor + pid-1 churn killed (kernel r43, device r40)

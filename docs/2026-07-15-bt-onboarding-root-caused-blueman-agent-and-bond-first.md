@@ -1,14 +1,18 @@
 # 2026-07-15 — BT onboarding ROOT-CAUSED + FIXED: blueman's agent hijacked SSP, and the app bonded on demand
 
-**Status: onboarding WORKS from a fresh flash, autonomously, user-accepted.**
-Built + flashed as **v1.9.0-rc4**. This **supersedes**
-`docs/2026-07-14-bt-onboarding-state-as-is.md` ("does NOT work autonomously"),
-which is kept as the record of what was known then — its §2 hypothesis was
-right, its §4 "insecure RFCOMM workaround to revisit" is now **retired**.
+**Status: onboarding WORKS from a fresh flash, autonomously, user-accepted —
+RELEASED as v1.9.0.** Root-caused and first accepted on **v1.9.0-rc4**; the
+release is built from **v1.9.0-rc5**, which adds the **fail-closed** fix (§6),
+the `startSetupMode` result (§7) and the NFC-claim scoping (§8). This
+**supersedes** `docs/2026-07-14-bt-onboarding-state-as-is.md` ("does NOT work
+autonomously"), which is kept as the record of what was known then — its §2
+hypothesis was right, its §4 "insecure RFCOMM workaround to revisit" is now
+**retired**.
 
-Base: v1.8.2 (`1504ef3`, kernel r43 `#44`). **v1.9.0 is NOT tagged yet**;
-everything below is uncommitted. Pairing/A2DP evidence reference:
-`docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
+Base: v1.8.2 (`1504ef3`, kernel r43 `#44`). Shipped package set: device **r47**,
+setupd **r4**, btagent **r1**, nexusqd **r10**, kernel **r43**, firmware **r2**;
+companion app **1.1.1+5** (its own independent track). Pairing/A2DP evidence
+reference: `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
 
 ---
 
@@ -158,10 +162,14 @@ straight to pairing** (the BT device list is only the no-NFC fallback).
 
 ## 4. Honest caveats — OPEN
 
-- **Pairing needed 2 failed attempts before succeeding** on the fresh-flash run
-  (user-reported). **NOT root-caused.** Suspicion only: the app's 30 s
-  `ensureBonded` timeout (the phone log shows a ~27 s gap before the successful
-  bond) and/or a stale phone-side bond. **OPEN.**
+- **Pairing flakiness — NOT root-caused.** One fresh-flash run needed **2 failed
+  attempts** before succeeding (user-reported); the **three subsequent runs
+  passed first try (0 failed attempts)**, including the final rc5 acceptance.
+  Suspicion only, nothing confirmed: the app's 30 s `ensureBonded` timeout (the
+  phone log shows a ~27 s gap before the successful bond) and/or a stale
+  phone-side bond — **the stale-bond leg is WEAKENED**, because a run with a
+  stale phone bond still succeeded first try. **A repro needs `bluetoothd -d`.**
+  **OPEN.**
 - **The dev image BAKES Petr's WiFi** (`private/access/wifi.nmconnection` →
   `/etc/NetworkManager/system-connections/wifi.nmconnection`), so a fresh-flashed
   **dev** image self-provisions, `nexusq-setup-needed` correctly reports "not
@@ -174,9 +182,21 @@ straight to pairing** (the BT device list is only the no-NFC fallback).
 - **The factory WiFi MAC `f8:8f:ca:20:48:e1` is injected NOWHERE.** wlan0 runs
   the chip **OTP MAC** (`14:7d:c5:3a:35:b5`, Murata OUI); the nvram
   `bcmdhd.cal` says `00:90:4c:c5:12:38`; its DHCP lease carries an **empty
-  hostname**. BT MAC is fine (DTS `local-bd-address`). **Open task**, separate
+  hostname**. **Look leases up by the OTP MAC**; `f8:8f:ca:20:48:e1` is stale.
+  BT MAC is fine (DTS `local-bd-address`). `firmware/README.md`'s "pinned at the
+  NetworkManager layer" claim is **retired-pending-fix**. **Open task**, separate
   from onboarding.
-- **v1.9.0 is NOT tagged.** Everything uncommitted.
+- **Thermal: 102.8 °C under bounded dual-core load** (diag sweep) — **above the
+  documented ~94–99 °C envelope and past the 100 °C passive trip**. Throttling
+  engaged correctly and 125 °C critical was never approached, but the documented
+  envelope understates the real ceiling. True idle is fine: **72–75 °C**, 52 %
+  residency at 350 MHz. **OPEN.**
+- **librespot boot race — 5 restarts at boot** (`wlan0 has no IPv4 after 30s`):
+  the wrapper hard-binds `--zeroconf-interface`, so it must wait for the WiFi IP.
+  **Self-heals once associated.** **OPEN.**
+- **`onboard` SIGSEGVs every boot** in its native `osk` module. **NOT** the old
+  flash-corruption class — `python3 -S -c ''` is rc 0. **OPEN.**
+- **The contactless-payment link is UNPROVEN** — see §8. **OPEN.**
 
 ---
 
@@ -199,3 +219,131 @@ the PSK gets encrypted for free, and the one bond **also serves A2DP** — which
 stock never had. The 2026-07-14 framing of insecure RFCOMM as a "workaround to
 revisit" was doubly wrong: it was **stock parity**, and we have now moved
 **beyond** stock on purpose.
+
+---
+
+## 6. rc5 — FAIL CLOSED on the pairing window (`b2a08af`)
+
+Found by a **diag sweep**, not by the wizard: two fail-**open** decisions, in
+opposite directions, both of which turn a transient into a security lie.
+
+### 6.1 `nexusq-setup-needed` — a provisioned device could go pairable (setupd r3 → **r4**)
+
+The condition piped nmcli straight into grep and **threw the exit code away**:
+
+```sh
+if nmcli -t -f TYPE connection show 2>/dev/null | grep -q '^802-11-wireless$'
+```
+
+So **"nmcli failed / NetworkManager is not up yet" was indistinguishable from
+"there is no WiFi profile"** → exit 0 → a fully **provisioned** device arms setup
+mode and advertises itself **discoverable + pairable**. The agent
+**auto-accepts by design** (nothing attached to this appliance can answer a
+prompt), so that transient **hands a passer-by a bond**. It tripped in a window
+where NM was demonstrably disturbed.
+
+**Fix:** only a **SUCCESSFUL** nmcli listing no wifi profile means unprovisioned;
+anything else assumes provisioned and stays out. The asymmetry is the point —
+being wrong that way costs a `startSetupMode` (or the force flag) to re-enter
+setup; being wrong the other way leaves **an open pairing window on a live
+device**. Verified on the device including a **faked nmcli failure**; +65 lines
+of host tests.
+
+### 6.2 `nexusq-btagent.setupd_active()` — the ring could go dark while pairable (btagent r0 → **r1**)
+
+Same class, opposite direction, and it was ours. `systemctl is-active` **has
+timed out live under load** (`systemctl is-active failed … timed out after 5
+seconds`), and the fallback assumed *"setupd owns the ring"* → **skip our
+indicator**. On a still-pairable adapter that is **exactly the lie the ring
+exists to prevent**:
+
+> **dark must mean nobody can pair.**
+
+**Fix:** fail to **FALSE** — claim the ring. The cost is near-zero:
+`DISCOVERABLE_CMD` is **byte-identical** to setupd's idle spin, so the worst case
+is re-sending the blue already showing, plus a wiped theme in a rare error path.
+A silently dark ring on a bondable appliance is the worse failure. Unit tests
+inverted accordingly (`test_unreadable_systemctl_means_the_ring_is_ours`,
+`test_systemctl_timeout_means_the_ring_is_ours`).
+
+**Lesson: when a check gates a security-visible state, decide which way it fails
+BEFORE writing it — and never let a pipeline eat the exit code of the command the
+decision rests on.**
+
+---
+
+## 7. `startSetupMode` re-provisioning — TESTED, PASSING
+
+This was the **last untested acceptance item** of onboarding step 1. Verified
+live over the LAN bridge:
+
+```json
+{"ok":true,"result":{"started":true}}
+```
+
+→ setupd **active**, force flag **armed**, adapter **discoverable + pairable**,
+and **btagent correctly YIELDED the ring to setupd** (no "ring ON" line — the
+§6.2 hand-off works in the direction that matters when setupd really is running).
+
+---
+
+## 8. The NFC claim IS the tap — and the payment story (app 1.1.1+5)
+
+**Measured, not reasoned** — and my first attempt at this was **wrong**.
+
+I removed `setPreferredService` on the theory that it bought nothing, since the
+platform already routes our AID to us. **That broke the tap**, and the reason is
+the interesting part: **routing was never the problem.** The phone sits in
+Android 15 **observe mode** and deliberately **does not answer a reader's field
+at all**. Measured with the tap failing:
+
+```
+NfcService: MSG_RF_FIELD_ACTIVATED        <- the Q's field IS seen
+NfcService: MSG_RF_FIELD_DEACTIVATED      <- ...and never answered
+(cycling ~150 ms, no APDU ever reaching NqHceService)
+```
+
+The platform **drops observe mode for the PREFERRED service** when it declares
+`shouldDefaultToObserveMode="false"`, which ours does. **So the claim IS the
+tap.**
+
+Measured after the fix:
+
+| state | preferred | observe mode | AID routed |
+|---|---|---|---|
+| app closed / backgrounded | `null` | `true` | 0 |
+| app on the connect screen | ours | `false` | 1 |
+
+Observe mode **returns to `true` when we let go** — the phone is not left in a
+payment-hostile state.
+
+**So the claim stays, but scoped:** Dart says when a tap is expected
+(`setTapCapture`), and **only the connect screen** — the "waiting to be tapped"
+state — asks for it. It is dropped the moment a Q is connected, on dispose, and
+on every `onPause`; the HCE component ships `android:enabled="false"`, so a
+**closed app has ZERO NFC surface**. Previously **ANY open app claimed NFC
+priority, including while just playing music**.
+
+### ⚠️ The payment link is UNPROVEN — record, don't conclude
+
+**Motivation:** the user's contactless payment failed **twice, only ever after a
+dev session**. That is a correlation and nothing more:
+
+- The NFC telemetry shows observe mode toggled **only** by `com.android.nfc` and
+  `com.google.android.gms` — **never by our uid**.
+- It **returns to `true` on its own**.
+
+This is **risk reduction, not a diagnosed fix**, and it must not be written up as
+a root cause. **If payment fails again: capture `dumpsys nfc` AT THE MOMENT OF
+FAILURE** — after the fact the state has already healed, which is precisely why
+this is still open.
+
+---
+
+## 9. Final acceptance (fresh `v1.9.0-rc5` flash) — PASS, shipped as v1.9.0
+
+NFC tap delivered → **bond first try (0 failed attempts)** → RFCOMM → **WiFi
+joined** → `finishSetup` → **pairing window auto-closed** → **`NFC: released
+preferred`** the moment the device came up. **PSK: 0 log lines.**
+
+This is the build **v1.9.0** is cut from. Read §4 before relying on it.

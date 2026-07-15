@@ -4,7 +4,7 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-15 (latest): **BT onboarding ROOT-CAUSED + FIXED — v1.9.0-rc4 flashed + ACCEPTED on hardware. NOT tagged, ALL UNCOMMITTED.**
+## Session 2026-07-15 (latest): **BT onboarding ROOT-CAUSED + FIXED — RELEASED as v1.9.0** (built from `v1.9.0-rc5`, flashed + hardware-accepted; committed + pushed on `main`, tagged 2026-07-15)
 
 Full record:
 `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`
@@ -36,21 +36,46 @@ worked 2026-07-09 (after the v1.8.0 BT-UART `max-speed` fix) and were **re-verif
 2026-07-15**. **Never re-derive a hardware limit from a userspace symptom**
 ([[never-conclude-dead-hardware]]).
 
-**SHIPPED (v1.9.0-rc4):** NEW **`nexusq-btagent`** r0 — the appliance's single
+**SHIPPED (v1.9.0 = device r47 / setupd r4 / btagent r1 / nexusqd r10 / kernel r43
+`#44` (unchanged from v1.8.2) / firmware r2; app on its own track at 1.1.1+5):**
+NEW **`nexusq-btagent`** — the appliance's single
 **permanent** BlueZ `Agent1` (`NoInputNoOutput` auto-accept, bonds marked
 `Trusted`; permanent because **A2DP needs a bond long after setupd exits**), which
 also holds **`Pairable == Discoverable`** so the ring is honest (**`Pairable`, not
 `Discoverable`, gates bonding** — a ring on `Discoverable` alone would be a LIE:
 dark while still bondable). Rationale: `userspace/nexusq-btagent/README.md`.
-**setupd r3** — registers **NO agent**, hard-deps btagent,
+**setupd r4** — registers **NO agent**, hard-deps btagent,
 **`RequireAuthentication=True`** (PSK no longer in the clear), `finishSetup`
 refused unless wifi is provisioned (it could strand the device out of setup mode
 forever). **device r47** — +btagent dep, preset enable, blueman-applet suppressed
 via `/etc/xdg/nexusq/autostart/blueman.desktop` (the **package stays**), bluez
-`Class = 0x200428` (live `0x006c0428`). **App 1.1.0+2** — bond-first + secure
-RFCOMM, find-list overflow, ring re-centred, `build-apk.sh`. **docker-build.sh** —
+`Class = 0x200428` (live `0x006c0428`). **App 1.1.1+5** — bond-first + secure
+RFCOMM, find-list overflow, ring re-centred, `build-apk.sh`, **NFC claim scoped to
+the connect screen**. **docker-build.sh** —
 btagent wired in; ⚠️ **phase order load-bearing: btagent (7c3) BEFORE setupd
 (7c4)**, else every clean build fails `nexusq-btagent is missing in checksums`.
+
+**rc5 — FAIL CLOSED (`b2a08af`), the security fix this release turns on:**
+`nexusq-setup-needed` (**setupd r4**) piped nmcli into grep and **threw the exit
+code away**, so "NM is not up / nmcli failed" was indistinguishable from "no WiFi
+profile" → a **provisioned** device could arm setup mode and go **discoverable +
+pairable**; the agent auto-accepts by design, so that transient **hands a stranger a
+bond**. Found by a diag sweep. Now only a *successful* nmcli listing no wifi profile
+means unprovisioned. Same class, opposite direction, in **btagent r1**:
+`setupd_active()` now fails to **FALSE** (claim the ring) — assuming setupd owned
+the ring **skipped the pairing-exposure indicator while the adapter was still
+pairable**, exactly the lie the ring exists to prevent (**dark must mean nobody can
+pair**). Both verified on device, incl. a faked nmcli failure.
+
+**`startSetupMode` re-provisioning: TESTED + PASSING** (was the last untested
+acceptance item) — live over the LAN bridge:
+`{"ok":true,"result":{"started":true}}` → setupd active, force flag armed,
+discoverable + pairable, and btagent correctly **YIELDED** the ring to setupd (no
+"ring ON" line).
+
+**Final acceptance (fresh rc5 flash):** NFC tap delivered → **bond first try (0
+failed attempts)** → RFCOMM → WiFi joined → `finishSetup` → pairing window
+auto-closed → `NFC: released preferred` on connect. **PSK: 0 log lines.**
 
 **KEEPERS from 2026-07-14** (still stand): Phantasm BT firmware (r2, md5
 `7e5bb859…`, build 0749), RFCOMM **channel 22**, BT MAC D-Bus fallback, setup stays
@@ -64,15 +89,31 @@ armed while unprovisioned, nexusqd **r10** spin-speed + LED feedback, device
    **self-provisions and setup mode never arms** — this, not an onboarding bug, is
    why the 07-14 fresh build "wouldn't come up". `PUBLIC_RELEASE=1` doesn't bake
    it. The flag should skip **only** the wifi bake, keep ssh keys.
-2. **The 2-failed-attempts-before-success pairing flake** (fresh-flash run,
-   user-reported, **NOT root-caused**). Suspicion only: the app's 30 s
-   `ensureBonded` timeout (~27 s gap before the successful bond in the phone log)
-   and/or a stale phone-side bond. **OPEN.**
+2. **The pairing flake — NOT root-caused.** One fresh-flash run needed **2 failed
+   attempts** before succeeding (user-reported); the **three subsequent runs passed
+   first try (0 failures)**. Suspicion only: the app's 30 s `ensureBonded` timeout
+   (~27 s gap before the successful bond in the phone log) and/or a stale phone-side
+   bond — **the stale-bond leg is WEAKENED**, since a run with a stale phone bond
+   still succeeded first try. **Repro needs `bluetoothd -d`.** **OPEN.**
 3. **Factory WiFi MAC `f8:8f:ca:20:48:e1` is injected NOWHERE** — wlan0 runs the
    chip OTP MAC (`14:7d:c5:3a:35:b5`, Murata OUI; nvram says `00:90:4c:c5:12:38`),
-   DHCP lease has an **empty hostname**. BT MAC is fine (DTS `local-bd-address`).
-   Separate open bug.
-4. **Commit + tag** — nothing committed; propose **v1.9.0** only with user approval.
+   DHCP lease has an **empty hostname**. **Look leases up by the OTP MAC.** BT MAC
+   is fine (DTS `local-bd-address`). `firmware/README.md`'s "pinned at the
+   NetworkManager layer" claim is **retired-pending-fix**. Separate open bug.
+4. **Thermal: 102.8 °C under bounded dual-core load** (diag sweep 2026-07-15) —
+   **above the old ~94–99 °C envelope, past the 100 °C passive trip** (throttling
+   engaged correctly; 125 °C critical never near). True idle fine: 72–75 °C, 52 %
+   at 350 MHz. **OPEN.**
+5. **librespot boot race** — 5 restarts at boot (`wlan0 has no IPv4 after 30s`): the
+   wrapper hard-binds `--zeroconf-interface`, so it must wait for the WiFi IP.
+   Self-heals once associated. **OPEN.**
+6. **`onboard` SIGSEGVs every boot** in its native `osk` module — **NOT** the old
+   flash-corruption class (`python3 -S -c ''` is rc 0). **OPEN.**
+7. **The contactless-payment link is UNPROVEN** — the NFC-claim scoping is risk
+   reduction only (observe mode is toggled solely by `com.android.nfc` /
+   `com.google.android.gms`, never by our uid, and returns to `true` on its own).
+   **If payment fails again, capture `dumpsys nfc` AT THE MOMENT OF FAILURE.**
+   **OPEN.**
 
 ⚠️ **Gotcha: starting `blueman-applet` by hand breaks pairing again** until it exits.
 
@@ -819,9 +860,13 @@ progress separately (**no tag from here**). Full note:
   packaged in the pmOS/Alpine repos (avahi's publish path for librespot
   Spotify-Connect zeroconf works fine). Anything else on a future boot is a
   **regression**.
-- **Thermal watch (active):** sustained dual-core load peaks **~94–99 °C** (below
-  the 100 °C passive trip, no throttle) — thin headroom on the fanless sphere;
-  keep reporting the peak in every diag.
+- **Thermal watch (active):** a diag sweep 2026-07-15 measured **102.8 °C** under
+  bounded dual-core load — **above the long-documented ~94–99 °C envelope and past
+  the 100 °C passive trip** (was "~94–99 °C, no throttle"; now 102.8 °C **with**
+  throttling engaged, as of 2026-07-15). Throttling engaged correctly and the
+  125 °C critical trip was never approached, but the old envelope **understates the
+  real ceiling** — thin headroom on the fanless sphere. True idle is fine: **72–75 °C**,
+  52 % residency at 350 MHz. Keep reporting the peak in every diag. **OPEN.**
 - **Next steps / backlog (PROJECTS only — no boot-log items left):** NFC
   long-lived userspace (tap-to-pair), deep cpuidle C2+ (blocked on serial),
   the thermal-headroom watch.

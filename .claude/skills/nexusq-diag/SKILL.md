@@ -135,11 +135,15 @@ Findings are tagged by `kind`; interpret them like this:
   the `#29` flash, 2026-07-03).
 - **thermal_throttle / thermal_crit / thermal_cooling_active** — at/over the
   100 °C passive or 125 °C critical trip, or cooling engaged. See `THERMAL`.
-  ⚠️ **Thin headroom (active watch-item):** peak under sustained dual-core load
-  crept from 91.8 °C (2026-07-03) to **~94–99 °C (2026-07-06, v1.6.9/v1.6.10;
-  97.2 °C on the 2026-07-13 v1.8.2 acceptance)** —
-  still below the 100 °C trip, no throttle, but only ~1–2 °C to spare at the top.
-  Always report the peak temp on a load run.
+  ⚠️ **Thin headroom (active watch-item) — the envelope has been BREACHED.** Peak
+  under sustained dual-core load crept from 91.8 °C (2026-07-03) to ~94–99 °C
+  (2026-07-06, v1.6.9/v1.6.10; 97.2 °C on the 2026-07-13 v1.8.2 acceptance) and a
+  **2026-07-15 (v1.9.0) sweep measured 102.8 °C under bounded dual-core load —
+  PAST the 100 °C passive trip** (was "~94–99 °C, no throttle"; now 102.8 °C **with**
+  throttling, as of 2026-07-15). So a **non-zero `cooling_device0/cur_state` under
+  load is EXPECTED, not a fault** — 125 °C critical was never approached. **OPEN**;
+  the old envelope understates the real ceiling. Always report the peak temp on a
+  load run.
   ⚠️ **Idle temperature is observer-sensitive** (measured 2026-07-13): any live
   ssh/diag session heats the die to 74–79 °C within seconds (cooling constant
   ~10 s); the true unobserved idle floor is **~65–66 °C**. Judge idle temp only
@@ -232,7 +236,7 @@ Findings are tagged by `kind`; interpret them like this:
   regressed. NOT coexistence, NOT HFP/SCO (both earlier wrong guesses). Verified live
   (boot.img); v1.8.0 tagged 2026-07-10.
   See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
-- **BT PAIRING: ROOT-CAUSED + FIXED 2026-07-15 (v1.9.0-rc4) — TWO userspace bugs, NOT
+- **BT PAIRING: ROOT-CAUSED + FIXED 2026-07-15 (released in v1.9.0) — TWO userspace bugs, NOT
   a BCM4330 HW limit.** ⚠️ **"The BCM4330 cannot complete SSP bonding" is RETRACTED**
   — bonding + A2DP verified 2026-07-09 AND 2026-07-15. **Never re-derive a hardware
   limit from a userspace symptom.** If pairing breaks, check these FIRST:

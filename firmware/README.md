@@ -69,8 +69,10 @@ brcmfmac also probes board-specific and optional firmware names. These logged
 > **empty hostname**. (Was documented here as "the WiFi identity is pinned at the
 > **NetworkManager layer**" via `cloned-mac-address` in the baked profile /
 > `scripts/gen-wifi-profile.sh` — that pinning is **not in effect** on the live
-> device as of 2026-07-15, so the claim is retired pending a fix.) The **BT** MAC is
-> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues.
+> device as of 2026-07-15, so the claim is retired pending a fix.) **Look DHCP leases
+> up by the OTP MAC `14:7d:c5:3a:35:b5`** — `f8:8f:ca:20:48:e1` is stale, and the
+> empty hostname means you cannot find it by name either. The **BT** MAC is
+> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues (v1.9.0).
 
 `bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
 redistributable**, so they are **not committed** (gitignored). You provide them

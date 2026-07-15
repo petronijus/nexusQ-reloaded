@@ -3,8 +3,9 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> **2026-07-15 — ✅ ONBOARDING STEP 1 SHIPPED-QUALITY: BT onboarding ROOT-CAUSED +
-> FIXED, v1.9.0-rc4 flashed + ACCEPTED on hardware (NOT tagged, all uncommitted).**
+> **2026-07-15 — ✅ ONBOARDING STEP 1 SHIPPED: BT onboarding ROOT-CAUSED + FIXED,
+> RELEASED as v1.9.0** (built from `v1.9.0-rc5`, flashed + hardware-accepted;
+> device r47 / setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2).
 > **TWO independent bugs, BOTH ours, NEITHER hardware:** (1) `blueman-applet`'s
 > **DisplayYesNo** agent forced SSP into **Numeric Comparison** → a Confirm/Deny
 > dialog on the HDMI desktop that **nothing attached to the Q can click** (every bond
@@ -14,18 +15,26 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > and surfaces as the misleading **"incorrect PIN"** toast. Fixes: **NEW
 > `nexusq-btagent`** (single **permanent** `NoInputNoOutput` agent — A2DP needs a bond
 > long after setupd exits — holding **`Pairable == Discoverable`** so the ring is
-> honest: **`Pairable`, not `Discoverable`, gates bonding**), **setupd r3**
+> honest: **`Pairable`, not `Discoverable`, gates bonding**), **setupd r4**
 > (agent-less, **`RequireAuthentication=True`** → **PSK no longer in the clear**,
 > `finishSetup` refused unprovisioned), **device r47** (blueman-applet suppressed —
-> package stays; bluez `Class = 0x200428`), **app 1.1.0+2** (bond-first + secure
-> RFCOMM). ⚠️ **RETRACTED: "the BCM4330 cannot complete SSP bonding"** — pairing +
-> A2DP worked 07-09 and were **re-verified 07-15**; *never re-derive a hardware limit
-> from a userspace symptom*. Acceptance: fresh flash → bond + `Trusted` + A2DP
-> (`0000110d`) → WiFi joined → `finishSetup` → pairing window auto-closed; **0 PSK
-> lines in the journal**. **OPEN:** `NEXUSQ_NO_WIFI=1` build flag (the dev image bakes
-> WiFi → self-provisions → setup mode never arms; **this, not onboarding, is why the
-> 07-14 fresh build "wouldn't come up"**), a 2-failed-attempts pairing flake (not
-> root-caused), factory WiFi MAC injected nowhere. Full record:
+> package stays; bluez `Class = 0x200428`), **app 1.1.1+5** (bond-first + secure
+> RFCOMM; NFC claim scoped to the connect screen). ⚠️ **RETRACTED: "the BCM4330
+> cannot complete SSP bonding"** — pairing + A2DP worked 07-09 and were
+> **re-verified 07-15**; *never re-derive a hardware limit from a userspace symptom*.
+> **rc5 = FAIL CLOSED:** `nexusq-setup-needed` discarded nmcli's exit code, so an NM
+> wobble could arm setup mode on a **provisioned** device and leave it discoverable +
+> pairable (the agent auto-accepts → a stranger gets a bond); btagent's
+> `setupd_active()` now fails to **FALSE** so the ring can never go dark while the
+> adapter is pairable. `startSetupMode` re-provisioning **tested + passing**.
+> Final acceptance (fresh rc5): tap → **bond first try (0 failures)** → RFCOMM →
+> WiFi joined → `finishSetup` → pairing window auto-closed; **0 PSK lines in the
+> journal**. **OPEN:** `NEXUSQ_NO_WIFI=1` build flag (the dev image bakes WiFi →
+> self-provisions → setup mode never arms; **this, not onboarding, is why the 07-14
+> fresh build "wouldn't come up"**), a pairing flake (one run 2 failed attempts, 3
+> later runs first-try — **not root-caused**), factory WiFi MAC injected nowhere,
+> **102.8 °C under load** (past the 100 °C passive trip), librespot boot race,
+> `onboard` SIGSEGV, and an **UNPROVEN** contactless-payment link. Full record:
 > `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 >
 > **2026-07-14 — v1.9.0-rc3 built + flashed; "NOT autonomous" ⛔ SUPERSEDED by
@@ -488,9 +497,8 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       _(Deferred: ~~send IP/mDNS as the payload for tap-to-onboard~~ — **DONE
       2026-07-13** (commit `0307430`, device r44): the payload is now live
       connection-info JSON `{"v":1,"bt","host","ip","prov"}` rebuilt per tap,
-      part of onboarding step 1 (targets v1.9.0; **flashed + hardware-accepted
-      2026-07-15 as v1.9.0-rc4** — an NFC tap goes straight to pairing, the BT
-      device list is only the no-NFC fallback — see
+      part of onboarding step 1 (**RELEASED as v1.9.0, 2026-07-15** — an NFC tap
+      goes straight to pairing, the BT device list is only the no-NFC fallback — see
       `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`);
       still deferred: C-rewrite the Python reader.)_
 

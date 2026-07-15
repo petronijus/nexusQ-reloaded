@@ -273,9 +273,10 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
-- **onboarding stack (v1.9.0-rc4 = device **r47** / nexusqd r10 / firmware r2 /
-  setupd **r3** / **nexusq-btagent r0**, 2026-07-15 — hardware-ACCEPTED, still
-  uncommitted + NOT tagged)**: `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
+- **onboarding stack (**v1.9.0**, released 2026-07-15 = device **r47** / nexusqd r10
+  / firmware r2 / setupd **r4** / **nexusq-btagent r1** / kernel r43 `#44`; built
+  from `v1.9.0-rc5`, flashed + hardware-ACCEPTED)**:
+  `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
   + **`usr/bin/nexusq-btagent`** exist; `nexusq-setupd.service` **and
   `nexusq-btagent.service`** installed with their `enable` lines in the
   `nexusq.preset`; `py3-dbus` + `py3-gobject3` in `lib/apk/db/installed`;

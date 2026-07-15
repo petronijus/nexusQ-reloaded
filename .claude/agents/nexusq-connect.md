@@ -18,8 +18,12 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.8.2** (kernel `#44`/r43,
-device r40, flashed 2026-07-13; eth profiles baked since r21). **eth-direct now works from a cold boot —
+"connect like this: `<cmd>`". The device runs **v1.9.0** (kernel `#44`/r43 —
+unchanged from v1.8.2 — device r47, setupd r4, btagent r1, nexusqd r10, firmware r2;
+flashed 2026-07-15; eth profiles baked since r21). ⚠️ **wlan0's on-air MAC is the
+chip OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI) and its DHCP lease has an **empty
+hostname** — look leases up by that MAC; the older `f8:8f:ca:20:48:e1` is **stale**
+(it is injected nowhere). **eth-direct now works from a cold boot —
 task #17 is FULLY CLOSED (2026-07-06):** the "enumeration intermittency" was an
 unmuxed `gpio_1` NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux in
 `#33`; a true cold power-cycle enumerates `eth0` 100Mbps/Full. The old "flap"
