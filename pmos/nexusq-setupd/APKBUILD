@@ -3,14 +3,17 @@
 # in setup mode (no WiFi profile / forced via the bridge startSetupMode).
 pkgname=nexusq-setupd
 pkgver=0.1.0
-pkgrel=0
+pkgrel=3
 pkgdesc="Nexus Q BT RFCOMM WiFi-provisioning daemon (setup mode)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
 license="GPL-2.0-only"
 # py3-dbus + py3-gobject3: BlueZ Profile1/Agent1 (fd-passing RFCOMM server —
 # no stdlib path exists). networkmanager-cli: nmcli. bluez: the daemon.
-depends="python3 py3-dbus py3-gobject3 networkmanager-cli bluez"
+# nexusq-btagent: setupd registers NO agent of its own — the permanent
+# NoInputNoOutput Just-Works agent is what lets the RequireAuthentication=True
+# setup profile bond at all, so it is a HARD dep, not a nicety.
+depends="python3 py3-dbus py3-gobject3 networkmanager-cli bluez nexusq-btagent"
 options="!check"
 # Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-setupd/.
 source="

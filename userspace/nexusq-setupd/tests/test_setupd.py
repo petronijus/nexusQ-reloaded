@@ -93,6 +93,16 @@ class TestSetupCore(unittest.TestCase):
         self.assertEqual(r["rgb"], [0, 183, 255])
         core.led.send.assert_called_with("set 0 183 255")
 
+    def test_confirm_color_unknown_mac_is_unavailable_not_crash(self):
+        # mainline kernels have no sysfs BT address; an empty/garbage MAC must
+        # surface as the protocol error, never a ValueError from pairing_color
+        mod = load_daemon()
+        for bad in ("", "not-a-mac", "F8:8F:CA:20:49"):
+            core = mod.SetupCore(run=mock.Mock(), led=mock.Mock(), bt_mac=bad)
+            with self.assertRaises(mod.Err) as cm:
+                core.handle("confirmColor", {})
+            self.assertEqual(cm.exception.code, "unavailable")
+
     def test_set_wifi_success(self):
         mod = load_daemon()
         core = self._core(mod)
@@ -169,10 +179,25 @@ class TestSetupCore(unittest.TestCase):
     def test_finish_setup_sets_finished(self):
         mod = load_daemon()
         core = self._core(mod)
-        core.run = lambda *a, **k: mock.Mock(returncode=0, stdout="", stderr="")
+        # provisioned: `nmcli -t -f TYPE connection show` lists a wifi profile
+        core.run = lambda *a, **k: mock.Mock(
+            returncode=0, stdout="802-11-wireless\n", stderr="")
         r = core.handle("finishSetup", {})
         self.assertTrue(r["done"])
         self.assertTrue(core.finished)
+
+    def test_finish_setup_refused_before_wifi_joined(self):
+        # REGRESSION (live 2026-07-15): the app reached finishSetup with no wifi
+        # profile. `finished` makes us exit 0, so Restart=on-failure does NOT
+        # restart us and nothing re-arms setup mode until a reboot -> the device
+        # is stranded off-network with the wizard gone.
+        mod = load_daemon()
+        core = self._core(mod)
+        core.run = lambda *a, **k: mock.Mock(returncode=0, stdout="", stderr="")
+        with self.assertRaises(mod.Err) as cm:
+            core.handle("finishSetup", {})
+        self.assertEqual(cm.exception.code, "bad_request")
+        self.assertFalse(core.finished)
 
     def test_unknown_method(self):
         mod = load_daemon()
@@ -224,3 +249,26 @@ class TestFraming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBtAdapterMac(unittest.TestCase):
+    def _fake_dbus(self, address):
+        fake = mock.MagicMock()
+        fake.Interface.return_value.Get.return_value = address
+        return fake
+
+    def test_dbus_fallback_when_sysfs_absent(self):
+        # mainline kernels have no /sys/class/bluetooth/hci0/address ->
+        # the BlueZ Adapter1.Address D-Bus fallback must kick in, uppercased
+        mod = load_daemon()
+        with mock.patch("builtins.open", side_effect=OSError), \
+             mock.patch.dict("sys.modules", {"dbus": self._fake_dbus("f8:8f:ca:20:49:e5")}):
+            self.assertEqual(mod.bt_adapter_mac(), "F8:8F:CA:20:49:E5")
+
+    def test_no_sysfs_no_dbus_degrades_to_empty(self):
+        mod = load_daemon()
+        broken = mock.MagicMock()
+        broken.SystemBus.side_effect = RuntimeError("no bus")
+        with mock.patch("builtins.open", side_effect=OSError), \
+             mock.patch.dict("sys.modules", {"dbus": broken}):
+            self.assertEqual(mod.bt_adapter_mac(), "")

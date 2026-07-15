@@ -38,8 +38,11 @@ IDENTITY_PATH = os.environ.get("NEXUSQ_IDENTITY", "/etc/nexusq/device.json")
 SETUP_TIMEOUT = float(os.environ.get("NEXUSQ_SETUP_TIMEOUT", "600"))
 WLAN = os.environ.get("NEXUSQ_WLAN_IFACE", "wlan0")
 FORCE_FLAG = "/run/nexusq-setup.force"
-SPIN_CMD = "spin 0 153 204"        # the stock #0099CC boot hue
-SUCCESS_CMD = "breathe 0 200 0"    # green success breathe before exit
+SPIN_CMD = "spin 0 153 204"          # idle/waiting: stock #0099CC blue, default rate
+CONNECTING_CMD = "spin 0 153 204 0.4"  # joining WiFi: same blue, SLOW = "working"
+SUCCESS_SPIN = "spin 0 220 60 1.6"   # WiFi joined: FAST green = "got it!"
+ERROR_CMD = "spin 220 30 30 0.5"     # join failed: slow RED, persists until retry
+SUCCESS_CMD = "breathe 0 200 0"      # green success breathe before exit (finishSetup)
 
 # Mirror of the bridge THEME_CMDS (userspace/nexusq-control) — keep in sync.
 THEME_CMDS = {
@@ -142,10 +145,22 @@ class Led:
 
 
 def bt_adapter_mac():
+    # The Android 3.0 kernel exposed the address in sysfs; mainline 6.x does
+    # NOT (/sys/class/bluetooth/hci0/address is absent) — fall back to BlueZ
+    # Adapter1.Address over D-Bus (bit us in v1.9.0-rc2: empty MAC broke
+    # confirmColor and the NFC payload).
     try:
         with open("/sys/class/bluetooth/hci0/address") as f:
             return f.read().strip().upper()
     except OSError:
+        pass
+    try:
+        import dbus
+        props = dbus.Interface(
+            dbus.SystemBus().get_object("org.bluez", "/org/bluez/hci0"),
+            "org.freedesktop.DBus.Properties")
+        return str(props.Get("org.bluez.Adapter1", "Address")).upper()
+    except Exception:  # noqa: BLE001 (no adapter / bluetoothd down)
         return ""
 
 
@@ -203,6 +218,10 @@ class SetupCore:
                 "proto": 1}
 
     def _confirm_color(self):
+        # pairing_color needs a real MAC; an unknown adapter address must be
+        # a protocol error, not a daemon crash.
+        if not re.fullmatch(r"(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}", self.bt_mac or ""):
+            raise Err("unavailable", "bt adapter address unknown")
         r, g, b = pairing_color(self.bt_mac)
         if not self.led.send(f"set {r} {g} {b}"):
             raise Err("unavailable", "nexusqd not reachable")
@@ -237,8 +256,9 @@ class SetupCore:
         # existing profile before failing
         if security == "wpa-psk" and not psk:
             raise Err("bad_request", "psk required for wpa-psk")
-        # resume the spinner while we join (confirmColor left a solid color)
-        self.led.send(SPIN_CMD)
+        # slow spin while we join (confirmColor left a solid color) — the
+        # calmer rate reads as "working on it"
+        self.led.send(CONNECTING_CMD)
         # replace any previous attempt/profile of the same name
         self._delete_wifi_profile()
         add = ["nmcli", "connection", "add", "type", "wifi", "con-name", "wifi",
@@ -256,11 +276,9 @@ class SetupCore:
         except subprocess.SubprocessError:
             add_failed = True
         if add_failed:
-            self._delete_wifi_profile()
-            raise Err("internal", "profile create failed")
+            self._fail_join("internal", "profile create failed")
         if r.returncode != 0:
-            self._delete_wifi_profile()
-            raise Err("internal", "profile create failed")
+            self._fail_join("internal", "profile create failed")
         up_failure = None
         try:
             up = self.run(["nmcli", "connection", "up", "wifi"], timeout=90)
@@ -269,17 +287,24 @@ class SetupCore:
         except subprocess.SubprocessError:
             up_failure = "internal"
         if up_failure is not None:
-            self._delete_wifi_profile()
             if up_failure == "timeout":
-                raise Err("timeout", "wifi join timed out")
-            raise Err("internal", "wifi join failed")
+                self._fail_join("timeout", "wifi join timed out")
+            self._fail_join("internal", "wifi join failed")
         if up.returncode != 0:
-            code = classify_nm_error(up.stderr)
-            self._delete_wifi_profile()
-            raise Err(code, "wifi join failed")
+            self._fail_join(classify_nm_error(up.stderr), "wifi join failed")
         ip = self._wlan_ip()
+        # brief fast-green "got it!" spin; the wizard moves on to name/theme
+        self.led.send(SUCCESS_SPIN)
         return {"ok": True, "ip": ip,
                 "mdns": socket.gethostname() + ".local"}
+
+    def _fail_join(self, code, msg):
+        # every WiFi-join failure lands here: drop the half-made profile and
+        # turn the ring RED so the failure is visible on the device too (it
+        # persists until the next attempt re-sends the slow-blue CONNECTING_CMD).
+        self._delete_wifi_profile()
+        self.led.send(ERROR_CMD)
+        raise Err(code, msg)
 
     def _wlan_ip(self):
         r = self.run(["nmcli", "-g", "IP4.ADDRESS", "dev", "show", WLAN], timeout=10)
@@ -341,6 +366,15 @@ class SetupCore:
         return {"theme": theme}
 
     def _finish(self):
+        # finishSetup is only meaningful once WiFi actually joined. Accepting it
+        # unprovisioned is a trap: `finished` makes us exit 0, so systemd does
+        # NOT restart us (Restart=on-failure) and nothing re-arms setup mode
+        # until a reboot — the device is stranded off-network with the wizard
+        # gone. Same failure the idle-timeout path already guards against; the
+        # app reached this state live on 2026-07-15 (setup "ended finished=True"
+        # with no wifi profile on disk).
+        if not wifi_provisioned(self.run):
+            raise Err("bad_request", "cannot finish setup before wifi is joined")
         self.led.send(SUCCESS_CMD)
         time.sleep(2.0)
         if self.chosen_theme:
@@ -398,31 +432,7 @@ def _run_transport():
     core = SetupCore()
     loop = GLib.MainLoop()
 
-    AGENT_PATH = "/org/nexusq/setup/agent"
     PROFILE_PATH = "/org/nexusq/setup/profile"
-
-    class Agent(dbus.service.Object):
-        """Just-Works auto-accept agent — active only while setupd runs."""
-
-        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
-        def Release(self):
-            pass
-
-        @dbus.service.method("org.bluez.Agent1", in_signature="ou", out_signature="")
-        def RequestConfirmation(self, device, passkey):
-            log("pairing: auto-confirming", device)
-
-        @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="")
-        def RequestAuthorization(self, device):
-            log("pairing: auto-authorizing", device)
-
-        @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
-        def AuthorizeService(self, device, uuid):
-            log("service: auto-authorizing", device, uuid)
-
-        @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
-        def Cancel(self):
-            pass
 
     class Profile(dbus.service.Object):
         """RFCOMM server profile: BlueZ listens and hands us the socket fd."""
@@ -486,19 +496,62 @@ def _run_transport():
     adapter.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(True))
     adapter.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(True))
 
-    agent = Agent(bus, AGENT_PATH)         # noqa: F841 (exported object)
-    am = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
-                        "org.bluez.AgentManager1")
-    am.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
-    am.RequestDefaultAgent(AGENT_PATH)
-
+    # NO agent here. The pairing agent is owned permanently by nexusq-btagent
+    # (a hard dependency of this package), for two reasons found on 2026-07-15:
+    #
+    #  * Two processes calling RequestDefaultAgent is last-writer-wins. When we
+    #    registered our own, whoever started last won — and blueman-applet's
+    #    DisplayYesNo agent kept winning, which forced SSP into Numeric
+    #    Comparison and raised a Confirm/Deny dialog on the HDMI desktop that no
+    #    attached input device could click. Every bond then died on timeout.
+    #  * A bond has to outlive setup anyway: BT audio (A2DP) needs one, and this
+    #    daemon exits after a few minutes.
+    #
+    # One always-on NoInputNoOutput agent serves both. See
+    # userspace/nexusq-btagent/README.md.
     profile = Profile(bus, PROFILE_PATH)   # noqa: F841 (exported object)
     pm = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
                         "org.bluez.ProfileManager1")
+    # Fixed RFCOMM "Channel" 22: a server-role ext profile only starts its
+    # RFCOMM listener (ext_start_servers) when a channel is given — omitting it
+    # publishes the SDP UUID but binds NO channel, so the phone connects and
+    # finds nothing. The original channel 3 collided with the Headset profile
+    # ("Address in use"); the Q's audio/PBAP stack occupies 3,9,10,13,14,15,16,
+    # 17, so 22 is chosen clear of them. The app resolves the channel via SDP by
+    # UUID, so the exact number only has to be free and stable.
+    #
+    # RequireAuthentication=True: this channel carries the WiFi PSK, and an
+    # authenticated (bonded) link is encrypted by the controller, so the PSK
+    # never crosses the air in the clear.
+    #
+    # This is a DELIBERATE, documented deviation from stock. Stock steelhead used
+    # insecure unbonded RFCOMM here (`listenUsingInsecureRfcommWithServiceRecord`
+    # in HubBroker.odex; it never called createBond at all) and accepted the
+    # cleartext PSK. We do not, because stock's constraints were not ours:
+    #   * stock ran BlueZ 4 and shipped NO A2DP at all (`DisablePlugins =
+    #     audio,network,input`), so it had no reason to ever hold a bond;
+    #   * we DO want BT audio, and A2DP requires a bond — so a bond has to exist
+    #     regardless. Reusing it here buys PSK encryption for free, instead of
+    #     bolting application-layer key agreement on top of an unbonded link.
+    #
+    # An earlier revision of this file claimed the BCM4330 "will NOT complete SSP
+    # bonding with modern phones". That was WRONG and is retracted: bonding was
+    # blocked by a competing DisplayYesNo agent (see the agent note above), and a
+    # Just-Works bond + A2DP were verified live on 2026-07-15. Bonding also
+    # worked on 2026-07-09 (docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-
+    # isolation.md). Never re-derive a hardware limit from a userspace symptom.
+    #
+    # Fixed RFCOMM "Channel" 22: a server-role ext profile only starts its
+    # RFCOMM listener (ext_start_servers) when a channel is given — omitting it
+    # publishes the SDP UUID but binds NO channel, so the phone connects and
+    # finds nothing. The original channel 3 collided with the Headset profile
+    # ("Address in use"); the Q's audio/PBAP stack occupies 3,9,10,13,14,15,16,
+    # 17, so 22 is chosen clear of them. The app resolves the channel via SDP by
+    # UUID, so the exact number only has to be free and stable.
     pm.RegisterProfile(PROFILE_PATH, SETUP_UUID, {
         "Name": dbus.String("NexusQ Setup"),
         "Role": dbus.String("server"),
-        "Channel": dbus.UInt16(3),
+        "Channel": dbus.UInt16(22),
         "RequireAuthentication": dbus.Boolean(True),
         "RequireAuthorization": dbus.Boolean(False),
     })
@@ -520,9 +573,15 @@ def _run_transport():
             loop.quit()
             return False
         if time.monotonic() - core.last_activity > SETUP_TIMEOUT:
-            log(f"inactive {SETUP_TIMEOUT:.0f}s -> leaving setup mode")
-            loop.quit()
-            return False
+            if wifi_provisioned(core.run):
+                log(f"inactive {SETUP_TIMEOUT:.0f}s -> leaving setup mode")
+                loop.quit()
+                return False
+            # Unprovisioned: leaving setup mode would strand the device —
+            # nothing re-arms it until a reboot (v1.9.0-rc2 lesson). Stay
+            # discoverable and keep spinning until someone provisions us.
+            log(f"inactive {SETUP_TIMEOUT:.0f}s but unprovisioned -> staying in setup mode")
+            core.last_activity = time.monotonic()
         return True
 
     GLib.timeout_add_seconds(15, _idle_check)

@@ -1,7 +1,10 @@
 [Unit]
 Description=Nexus Q BT WiFi-provisioning (setup mode)
-# BT + LED + NM must exist; none is a hard dep (setupd degrades gracefully).
-After=bluetooth.service nexusqd.service NetworkManager.service
+# BT + NM must exist; none is a hard dep (setupd degrades gracefully).
+# NO After=nexusqd.service: nexusqd is After=multi-user.target, so ordering on
+# it from a WantedBy=multi-user.target unit creates a cycle and systemd DELETES
+# this unit's start job (bit us in v1.9.0-rc1; see HANDOFF 2026-07-13).
+After=bluetooth.service NetworkManager.service
 Wants=bluetooth.service
 
 [Service]
