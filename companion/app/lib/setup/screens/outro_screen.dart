@@ -44,6 +44,14 @@ class _OutroScreenState extends State<OutroScreen> {
           v.dispose();
           return;
         }
+        // Preroll one frame before showing the widget: seeking to 0 and letting
+        // the first frame decode avoids the black/transparent flash that a bare
+        // swap from the static image to a not-yet-painted VideoPlayer produces.
+        await v.seekTo(Duration.zero);
+        if (!mounted) {
+          v.dispose();
+          return;
+        }
         setState(() => _video = v);
         await v.play();
         if (!mounted) return;
@@ -91,10 +99,24 @@ class _OutroScreenState extends State<OutroScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          if (v != null && v.value.isInitialized)
-            AspectRatio(aspectRatio: v.value.aspectRatio, child: VideoPlayer(v))
-          else
-            stockImage('setup_static.png', height: 200, fallback: Icons.check_circle_outline),
+          // Black backdrop + a short cross-fade from the static image to the
+          // video kills the flash/flicker at the swap (the VideoPlayer paints
+          // transparent for a beat otherwise).
+          ColoredBox(
+            color: Colors.black,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
+              child: (v != null && v.value.isInitialized)
+                  ? AspectRatio(
+                      key: const ValueKey('video'),
+                      aspectRatio: v.value.aspectRatio,
+                      child: VideoPlayer(v))
+                  : stockImage('setup_static.png',
+                      key: const ValueKey('static'),
+                      height: 200,
+                      fallback: Icons.check_circle_outline),
+            ),
+          ),
           const SizedBox(height: 32),
           Text('${widget.flow.deviceName} is ready',
               style: const TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),

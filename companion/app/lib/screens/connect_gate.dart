@@ -5,6 +5,7 @@ import '../protocol/mock_client.dart';
 import '../protocol/tcp_client.dart';
 import '../setup/setup_flow.dart';
 import '../state/device_controller.dart';
+import '../build_info.dart';
 import '../theme/nexusq_theme.dart';
 import '../widgets/glowing_ring.dart';
 import 'home_screen.dart';
@@ -81,10 +82,29 @@ class _ConnectGateState extends State<ConnectGate> {
     }
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: Stack(
+          children: [
+            // Build stamp, bottom-centre: confirms which build is installed
+            // (the app's versionName is a static 1.0.0).
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: const Text(kBuildLabel,
+                    style: TextStyle(color: NexusQColors.dim, fontSize: 10)),
+              ),
+            ),
+            // Positioned.fill: a NON-positioned Stack child is given LOOSE
+            // constraints and parked at the Stack's alignment (default
+            // topStart) — so this Column shrink-wrapped to its intrinsic width
+            // and sat against the LEFT edge instead of centring. Filling the
+            // Stack gives it the full width back, so the ring centres again.
+            Positioned.fill(
+              child: Padding(
           padding: const EdgeInsets.all(NexusQSpace.standardMargin * 2),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               SizedBox(
                 height: 160,
@@ -113,6 +133,9 @@ class _ConnectGateState extends State<ConnectGate> {
               if (_phase == _Phase.needInput) ..._fallback(),
             ],
           ),
+              ),
+            ),
+          ],
         ),
       ),
     );

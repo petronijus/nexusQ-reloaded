@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../theme/nexusq_theme.dart';
+import '../../widgets/glowing_ring.dart';
 import '../bt_setup_client.dart';
 import '../setup_flow.dart';
 
@@ -77,26 +78,72 @@ class _FindDeviceScreenState extends State<FindDeviceScreen> {
       padding: const EdgeInsets.all(32),
       child: Column(
         children: [
-          const SizedBox(height: 16),
-          const Text('Looking for your Q…',
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
-          const SizedBox(height: 8),
-          Text(_error ?? 'Make sure the ring is spinning blue (setup mode).',
-              style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
-          const SizedBox(height: 16),
-          if (_scanning) const LinearProgressIndicator(minHeight: 2),
+          // Hero: a centered, slowly-rotating glow while we search — echoes the
+          // ring the user is looking at on the device.
+          //
+          // Centre when the content is short, SCROLL when it is not: the found-
+          // device list is unbounded, and a Column cannot scroll, so a busy RF
+          // environment (many phones/headphones/TVs in range) overflowed the
+          // viewport and painted Flutter's yellow overflow stripes. minHeight =
+          // the viewport keeps the glow optically centred while nothing (or
+          // little) has been found, which is the whole point of this layout.
           Expanded(
-            child: ListView(
-              children: [
-                for (final d in devices)
-                  ListTile(
-                    leading: const Icon(Icons.bluetooth, color: NexusQColors.accent),
-                    title: Text(d.name.isEmpty ? d.mac : d.name,
-                        style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(d.mac, style: const TextStyle(color: NexusQColors.dim)),
-                    onTap: () => _pick(d),
+            child: LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                  SizedBox(
+                    width: 160,
+                    height: 160,
+                    child: GlowingRing(
+                      // volume 0: no equator arc — just the dim sphere outline
+                      // and the slow rotating highlight tick, our "searching…"
+                      // motion. Dims out if a permission/scan error is showing.
+                      volume: 0.0,
+                      muted: _error != null,
+                    ),
                   ),
-              ],
+                  const SizedBox(height: 32),
+                  const Text('Looking for your Q…',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: NexusQColors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w300)),
+                  const SizedBox(height: 8),
+                  Text(_error ?? 'Make sure the ring is spinning blue (setup mode).',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
+                  if (_scanning && devices.isEmpty) ...[
+                    const SizedBox(height: 20),
+                    const SizedBox(
+                      width: 120,
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  ],
+                      // Found devices appear directly under the glow, still
+                      // centred. The Q sorts to the top (see the sort above).
+                      for (final d in devices)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: ListTile(
+                            leading: const Icon(Icons.bluetooth,
+                                color: NexusQColors.accent),
+                            title: Text(d.name.isEmpty ? d.mac : d.name,
+                                style: const TextStyle(color: NexusQColors.white)),
+                            subtitle: Text(d.mac,
+                                style: const TextStyle(color: NexusQColors.dim)),
+                            onTap: () => _pick(d),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
           Row(

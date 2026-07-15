@@ -20,10 +20,21 @@ class StockAssets {
 
 /// A stock drawable by basename, or [fallback] icon when unavailable.
 Widget stockImage(String name,
-    {double? width, double? height, IconData fallback = Icons.image, Color? color}) {
+    {Key? key,
+    double? width,
+    double? height,
+    IconData fallback = Icons.image,
+    Color? color}) {
   if (!StockAssets.available) {
-    return Icon(fallback, size: width ?? height ?? 48, color: color);
+    return Icon(key: key, fallback, size: width ?? height ?? 48, color: color);
   }
   return Image.asset('assets/stock/drawable/$name',
-      width: width, height: height, fit: BoxFit.contain);
+      key: key,
+      width: width,
+      height: height,
+      fit: BoxFit.contain,
+      // gaplessPlayback: keep the current frame on screen until the next one
+      // has decoded, instead of blanking between swaps — kills the flicker on
+      // the frame-by-frame welcome sphere animation.
+      gaplessPlayback: true);
 }
