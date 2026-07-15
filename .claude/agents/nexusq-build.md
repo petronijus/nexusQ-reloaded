@@ -273,13 +273,37 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
-- **onboarding stack (device r44+ / nexusq-setupd, first ships v1.9.0-rc1,
-  added 2026-07-13)**: `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
-  exist; `nexusq-setupd.service` installed and its `enable` line present in the
+- **onboarding stack (v1.9.0-rc4 = device **r47** / nexusqd r10 / firmware r2 /
+  setupd **r3** / **nexusq-btagent r0**, 2026-07-15 — hardware-ACCEPTED, still
+  uncommitted + NOT tagged)**: `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
+  + **`usr/bin/nexusq-btagent`** exist; `nexusq-setupd.service` **and
+  `nexusq-btagent.service`** installed with their `enable` lines in the
   `nexusq.preset`; `py3-dbus` + `py3-gobject3` in `lib/apk/db/installed`;
-  `nexusq-nfc.service` contains **NO** `NQ_NFC_MESSAGE` line (a set value
-  overrides the dynamic connection-info payload and dead-ends tap-to-onboard);
-  `/var/lib/systemd/linger/root` present (v1.8.2 device r40 bake).
+  **`/etc/xdg/nexusq/autostart/blueman.desktop` present with `Hidden=true`** (the
+  blueman *package* stays — only the applet is suppressed); `/etc/bluetooth/main.conf`
+  has **`Class = 0x200428`**; `nexusq-nfc.service` contains **NO** `NQ_NFC_MESSAGE`
+  line (a set value overrides the dynamic connection-info payload and dead-ends
+  tap-to-onboard); `/var/lib/systemd/linger/root` present (v1.8.2 device r40 bake);
+  `+iw +ethtool +iproute2-minimal +tzdata` installed; `/etc/localtime` →
+  `Europe/Prague`.
+  **Firmware:** the staged `bcm4330.hcd` must be the stock steelhead **Phantasm
+  BCM4330B1 build 0749** (md5 `7e5bb859e33142e94052c76fba23b9e6`, 51813 B) — NOT the
+  wrong `Proxima … NoExtLNA` build-0482 blob (md5 `16db686…`) that shipped through
+  v1.8.2.
+  ⚠️ **BUILD PHASE ORDER IS LOAD-BEARING: `nexusq-btagent` (Phase 7c3) MUST be
+  checksummed + built BEFORE `nexusq-setupd` (Phase 7c4)**, which now `depends=` on
+  it. The reverse order fails **every clean build** with `nexusq-btagent is missing in
+  checksums`. `docker-build.sh` also `--force`s the
+  nexusqd/nexusq-control/nexusq-btagent/nexusq-setupd builds (warm-volume stale-apk
+  trap).
+  ⚠️ **BT pairing was root-caused 2026-07-15 as TWO userspace bugs** (blueman's
+  DisplayYesNo agent hijacking SSP + the app bonding on demand) — **NOT** a BCM4330
+  limit; that claim is RETRACTED. See
+  `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
+  ⚠️ **Dev images BAKE Petr's WiFi** (`private/access/wifi.nmconnection`) → a
+  fresh-flashed dev image **self-provisions and setup mode never arms**. That is
+  EXPECTED, not an onboarding bug. `PUBLIC_RELEASE=1` does not bake it. (A
+  `NEXUSQ_NO_WIFI=1` flag to skip only the wifi bake is an **open, unwritten** task.)
 - **boot.img sane**: parse the Android v0 header — `ramdisk_size == 0` and total
   size ≤ 8388608 bytes.
 - **fstab is boot-safe** (this one bites hard): `etc/fstab` must NOT contain a

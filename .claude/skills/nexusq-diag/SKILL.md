@@ -232,6 +232,39 @@ Findings are tagged by `kind`; interpret them like this:
   regressed. NOT coexistence, NOT HFP/SCO (both earlier wrong guesses). Verified live
   (boot.img); v1.8.0 tagged 2026-07-10.
   See `docs/2026-07-09-bluetooth-uart-max-speed-and-crackle-isolation.md`.
+- **BT PAIRING: ROOT-CAUSED + FIXED 2026-07-15 (v1.9.0-rc4) — TWO userspace bugs, NOT
+  a BCM4330 HW limit.** ⚠️ **"The BCM4330 cannot complete SSP bonding" is RETRACTED**
+  — bonding + A2DP verified 2026-07-09 AND 2026-07-15. **Never re-derive a hardware
+  limit from a userspace symptom.** If pairing breaks, check these FIRST:
+  1. **A second BlueZ agent — almost always `blueman-applet`.** SSP picks its model
+     from BOTH ends' IO caps: phone DisplayYesNo + Q `NoInputNoOutput` = **Just
+     Works** (silent bond); phone DisplayYesNo + Q **DisplayYesNo** = **Numeric
+     Comparison** = a Confirm/Deny dialog on the HDMI desktop **nothing attached to
+     the Q can click** → every bond times out with **mgmt `0x0e`**. Also
+     `RequestDefaultAgent` is **last-writer-wins** → the applet steals the default
+     agent. Suppressed since **device r47** (`/etc/xdg/nexusq/autostart/blueman.desktop`,
+     `Hidden=true`; the blueman *package* stays). **Starting `blueman-applet` by hand
+     re-breaks pairing.** Healthy Just-Works tell in the journal:
+     `user_confirm_request_callback ... confirm_hint 1`.
+  2. **The phone bonding on demand from the socket.** Android's implicit bond from
+     `createRfcommSocketToServiceRecord` against an unbonded Just-Works peer collapses
+     (`bonding_attempt_complete status 0x5` → `0x0e`), no link key written, and it
+     surfaces as a **misleading "incorrect PIN"** toast — *no PIN exists in Just
+     Works*. The app must `createBond()` + await `BOND_BONDED` **before** connecting.
+  **Expected healthy state:** `nexusq-btagent` registered as the **default agent**
+  (permanent, `NoInputNoOutput`), blueman-applet **absent**, `nexusq-setupd`
+  registering **NO** agent, profile `RequireAuthentication=True` on **channel 22**,
+  bonds marked **`Trusted`**, Class **`0x006c0428`** (post-install sets `0x200428`;
+  bluez 5 ORs in its own service bits), and **`Pairable == Discoverable`** (btagent's
+  invariant — **`Pairable`, not `Discoverable`, gates bonding**; ring spinning blue ⇔
+  the Q is pairable). **Correct BT firmware = stock steelhead
+  `Google Phantasm BCM4330B1`, build 0749, md5 `7e5bb859e33142e94052c76fba23b9e6`,
+  51813 B** (a WRONG `Proxima … NoExtLNA` build-0482 blob, md5 `16db686…`, shipped
+  through v1.8.2 — check `bluetoothctl show`/`dmesg` for the loaded patchram build).
+  **Known OPEN flake:** pairing may need ~2 failed attempts before succeeding (not
+  root-caused; suspect the app's 30 s `ensureBonded` timeout and/or a stale
+  phone-side bond). See
+  `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 - **Crackle ("lupance") CLOSED 2026-07-12 — two independent kernel fixes (r41 + r42),
   verified clean playback on `#43-postmarketOS`.** (a) Load-correlated drops =
   bus/DMA contention → kernel **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on the

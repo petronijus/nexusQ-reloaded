@@ -19,6 +19,24 @@ Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware lo
 ... failed ... -2` and there is **no WiFi**; without `BCM4330B1.hcd` it logs
 `BCM: firmware Patch file not found` and there is **no Bluetooth**.
 
+> ⚠️ **Use the STEELHEAD `.hcd`, not just any BCM4330B1 blob (corrected 2026-07-14).**
+> A wrong board blob was staged through v1.8.2 — *"Proxima BCM4330B1 NoExtLNA"*, build
+> 0482, md5 `16db686…` (a different BCM4330B1 board's patchram). The correct Nexus Q
+> blob is the **stock steelhead** *"Google Phantasm BCM4330B1"*: **build 0749**, md5
+> **`7e5bb859e33142e94052c76fba23b9e6`**, **51813 B**. `bcm4330.hcd` in this overlay
+> (and `private/firmware/`) is now the Phantasm blob;
+> `firmware-google-steelhead` is **r2**. (The correct blob did not by itself fix the
+> BT setup-pairing bug — that was **two userspace bugs**, root-caused 2026-07-15:
+> `blueman-applet`'s DisplayYesNo agent hijacking SSP + the app bonding on demand;
+> see `../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`
+> — but it IS the right patchram for this device.)
+
+> ℹ️ **The BCM4330 is not the pairing suspect.** SSP bonding + A2DP are verified
+> working on this controller (2026-07-09, re-verified 2026-07-15). Any future
+> "pairing is broken" symptom is **userspace until proven otherwise** — check for a
+> second BlueZ agent (`blueman-applet`) before touching firmware. *Never re-derive a
+> hardware limit from a userspace symptom.*
+
 > ⚠️ `firmware-aosp-broadcom-wlan` (a build dependency) ships the *bcmdhd*-style
 > `fw_bcm4330_*.bin` images. **brcmfmac cannot use those** — they are kept only for
 > parity. The WiFi firmware that actually loads is `brcmfmac4330-sdio.bin` above.
@@ -41,11 +59,18 @@ brcmfmac also probes board-specific and optional firmware names. These logged
 
 > ℹ️ **The nvram `macaddr=` is IGNORED by brcmfmac/the firmware** (proven by a
 > live driver-reload test 2026-07-03): the chip's OTP MAC
-> (`14:7d:c5:3a:35:b5` on the reference unit) always wins, and the `macaddr=`
-> in `bcmdhd.cal` is a Broadcom placeholder anyway (stock injected the factory
-> `f8:8f:ca:20:48:e1` outside the firmware path). Do NOT try to set the MAC
-> here — the WiFi identity is pinned at the **NetworkManager layer**
-> (`cloned-mac-address` in the baked profile, `scripts/gen-wifi-profile.sh`).
+> (`14:7d:c5:3a:35:b5` on the reference unit, Murata OUI) always wins, and the
+> `macaddr=` in `bcmdhd.cal` (`00:90:4c:c5:12:38`) is a Broadcom placeholder
+> anyway (stock injected the factory `f8:8f:ca:20:48:e1` outside the firmware
+> path). Do NOT try to set the MAC here.
+>
+> ⚠️ **OPEN (found 2026-07-15): the factory MAC `f8:8f:ca:20:48:e1` is injected
+> NOWHERE.** wlan0 runs the **OTP MAC** on air, and its DHCP lease carries an
+> **empty hostname**. (Was documented here as "the WiFi identity is pinned at the
+> **NetworkManager layer**" via `cloned-mac-address` in the baked profile /
+> `scripts/gen-wifi-profile.sh` — that pinning is **not in effect** on the live
+> device as of 2026-07-15, so the claim is retired pending a fix.) The **BT** MAC is
+> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues.
 
 `bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
 redistributable**, so they are **not committed** (gitignored). You provide them

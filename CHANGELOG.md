@@ -4,17 +4,33 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — onboarding step 1 (targets v1.9.0; rc1 build + HW acceptance pending on the Linux machine)
+## [Unreleased] — onboarding step 1 (targets v1.9.0; **built + flashed as v1.9.0-rc4 2026-07-15, ACCEPTED on hardware, NOT tagged, all uncommitted**)
 
 > **App-driven WiFi onboarding for the display-less Q, implemented end-to-end
 > 2026-07-13** (plan `docs/superpowers/plans/2026-07-13-onboarding-step1.md`,
 > 13/13 coding tasks, commits `ae8f499..cb03cf7`, subagent-driven with per-task
 > + final whole-branch reviews). Flow: NFC tap → BT RFCOMM provisioning →
 > WiFi join → name/room/theme → outro, with the original stock imagery.
-> **Nothing here is flashed yet** — the device runs v1.8.2; build/flash/HW
-> acceptance = plan Task 14, continues on the Linux machine (see HANDOFF.md
-> "WHERE TO CONTINUE"). Full write-up:
-> `docs/2026-07-13-onboarding-step1-implementation.md`.
+> Full write-up: `docs/2026-07-13-onboarding-step1-implementation.md`.
+>
+> **✅ Status 2026-07-15 (v1.9.0-rc4, built + flashed): BT onboarding WORKS
+> autonomously from a fresh flash — root-caused, fixed, user-accepted.** It was
+> **TWO independent bugs, BOTH ours, NEITHER hardware**: (1) `blueman-applet`'s
+> **DisplayYesNo** agent forced SSP into **Numeric Comparison**, raising a
+> Confirm/Deny dialog on the HDMI desktop that **nothing attached to the Q can
+> click** (every bond timed out, mgmt `0x0e`) — and `RequestDefaultAgent` being
+> last-writer-wins let it steal the default agent too; (2) the app let the RFCOMM
+> socket **bond on demand**, and Android's implicit bond against an unbonded
+> Just-Works peer collapses (`bonding_attempt_complete status 0x5` → `0x0e`),
+> surfacing as the misleading **"incorrect PIN"** toast. **v1.9.0 is not tagged;
+> everything is uncommitted.** Full record:
+> `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`
+> (supersedes `docs/2026-07-14-bt-onboarding-state-as-is.md`).
+>
+> **⚠️ RETRACTED: "the BCM4330 cannot complete SSP bonding."** That claim was
+> WRONG. Pairing + A2DP worked 2026-07-09 (after the v1.8.0 BT-UART `max-speed`
+> fix) and were **re-verified 2026-07-15**. **Lesson: never re-derive a hardware
+> limit from a userspace symptom.**
 
 ### Added
 
@@ -24,8 +40,9 @@ All notable changes to Nexus Q Reloaded. Format follows
   (getDeviceInfo/confirmColor/scanNetworks/setWifi/getNetworkState/setName/
   setTheme/finishSetup; error codes `wrong_password`/`not_found`/`timeout`;
   the psk is never logged), BlueZ Profile1 RFCOMM transport (service UUID
-  `8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`, channel 3, Just-Works agent —
-  accepted risk documented in PROTOCOL.md §8, 600 s idle timeout),
+  `8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`; **shipped as channel 22, bonded
+  (`RequireAuthentication=True`), agent-less** — see the 07-14/07-15 entries
+  below for how it got there; 600 s idle timeout),
   `ExecCondition=/usr/bin/nexusq-setup-needed` (runs only unprovisioned or
   when `/run/nexusq-setup.force` is armed). Deps `py3-dbus` + `py3-gobject3`
   (setupd only). 23 host tests.
@@ -68,6 +85,155 @@ All notable changes to Nexus Q Reloaded. Format follows
   never poisoned (verified byte-exact from a Linux container — earlier
   "poisoned blob" claims were msys pipe-translation measurement artifacts);
   the LF policy now lives in the repo, not machine config.
+
+### Added (2026-07-14, v1.9.0-rc3)
+
+- **`nexusqd` `spin R G B [rev_per_s]`** (r10) — optional 5th token sets the
+  rotation speed (revolutions/s, float, 0<s≤20; omitted/≤0 = default 0.75). Plumbed
+  through `spinner_render`; setupd uses it for LED state feedback (CONNECTING slow
+  blue, WiFi-joined SUCCESS fast green, join ERROR slow red). **User-confirmed on
+  device.** `pmos/nexusqd` r9→**r10**.
+- **device r44→r46** — `+iw +ethtool +iproute2-minimal +tzdata`; **Europe/Prague**
+  timezone (post-install symlinks `/etc/localtime`+`/etc/timezone`).
+
+### Changed (2026-07-14, v1.9.0-rc3)
+
+- **Correct BT firmware** — `firmware/bcm4330.hcd` (+ `private/firmware/`) replaced
+  the WRONG board blob (*"Proxima BCM4330B1 NoExtLNA"*, md5 `16db686…`) with the
+  stock steelhead *"Google Phantasm BCM4330B1"* (md5
+  `7e5bb859e33142e94052c76fba23b9e6`, 51813 B, build 0749).
+  `firmware-google-steelhead` r1→**r2**.
+- **`nexusq-setupd` RFCOMM channel 3→22** (r0→**r2**) — channel 3 collided with the
+  Headset profile (`rfcomm_bind` "Address in use" → server never started). Lesson: a
+  BlueZ server-role ext profile only starts its RFCOMM listener when a `Channel` is
+  given; 22 is clear of the Q's audio/PBAP stack (3,9,10,13–17).
+- **`nexusq-setupd` transport set INSECURE/unbonded** (`RequireAuthentication=False`)
+  + app `createInsecureRfcommSocketToServiceRecord` — ⚠️ **REVERTED 2026-07-15**
+  (see below): it was a workaround for a misdiagnosed "hardware limit", and the
+  cleartext-PSK + no-BT-audio costs are gone with it.
+- **`docker-build.sh`** — `--force` on the `nexusqd`/`nexusq-control`/`nexusq-setupd`
+  builds (fixed a warm-volume STALE-apk trap that shipped an old setupd); `timezone =
+  Europe/Prague` (pmbootstrap was overriding the post-install symlink with GMT).
+- **Companion app polish** — NFC-tap dedup guard (the Q re-emits the payload ~8 s →
+  wizard was restarting), BT permission requested inside `connect()`, confirm-color
+  retry, centered/rotating find-device glow, outro de-flicker, welcome sphere
+  (gaplessPlayback+precache+original-size+centered), build stamp
+  (`lib/build_info.dart` via `--dart-define BUILD_TAG`).
+
+### Fixed (2026-07-14, v1.9.0-rc3)
+
+- **BT adapter MAC via D-Bus/bluetoothctl fallback** — mainline 6.x has no
+  `/sys/class/bluetooth/hci0/address`; the empty MAC broke the NFC tap payload
+  (`"bt":""`) and `confirmColor`. setupd falls back to BlueZ `Adapter1.Address`;
+  `nexusq-nfc-send` falls back to `bluetoothctl show`. `confirmColor` now raises
+  `unavailable` on an unknown MAC instead of crashing.
+- **Setup mode stays armed while unprovisioned** — the 600 s inactivity timeout no
+  longer leaves setup mode when there is still no WiFi profile (would strand the
+  device with nothing to re-arm it until a reboot).
+
+### Added (2026-07-15, v1.9.0-rc4)
+
+- **NEW package `nexusq-btagent` 0.1.0-r0** (`userspace/nexusq-btagent/` +
+  `pmos/nexusq-btagent/APKBUILD` + docker-build.sh staging/build + preset enable) —
+  the appliance's **single, PERMANENT** BlueZ `Agent1`: `NoInputNoOutput`
+  auto-accept, marks new bonds **`Trusted`**. Permanent (not setup-scoped) because
+  **BT audio/A2DP needs a bond long after setupd exits**. Full rationale +
+  interfaces: `userspace/nexusq-btagent/README.md`.
+- **`Pairable == Discoverable` invariant** (btagent) — KEY INSIGHT: **`Pairable`,
+  not `Discoverable`, gates bonding** (discovery only affects *inquiry*, and bluez
+  leaves `Pairable=true` forever), so a ring tied to `Discoverable` alone would be a
+  **LIE** — dark while still bondable. Now **ring spins blue ⇔ anyone can pair**
+  (a user requirement: security visibility). `led_plan()` is a pure, unit-tested
+  function; btagent never releases a ring it did not take (so it can't wipe
+  setupd's applied theme).
+
+### Changed (2026-07-15, v1.9.0-rc4)
+
+- **`nexusq-setupd` r2→r3 — bonded, agent-less setup link.** Registers **NO agent**
+  (two agents is exactly how this broke) and hard-`depends=` nexusq-btagent; profile
+  **`RequireAuthentication=True`** (was `False`) → bonded + encrypted setup link →
+  **the WiFi PSK no longer crosses the air in cleartext** (0 PSK lines in the
+  journal, verified). This **retires** the 07-14 "insecure RFCOMM workaround to
+  revisit" — which was itself **stock parity** (stock never bonded during onboarding
+  and accepted a cleartext PSK); we moved **beyond** stock deliberately.
+- **`device-google-steelhead` r46→r47** — `depends=` +nexusq-btagent; preset enables
+  it; **`/etc/xdg/nexusq/autostart/blueman.desktop`** (`Hidden=true`) suppresses
+  `blueman-applet` via the existing XDG_CONFIG_DIRS shadow trick (the blueman
+  **package stays** — `blueman-manager` on demand); post-install sets bluez
+  **`Class = 0x200428`** (Audio/Video / HiFi Audio — live reads `0x006c0428`, bluez 5
+  ORs in its own service bits; **cosmetic identity only** — stock's own scanner
+  ignored CoD and matched SDP UUIDs, and so does our app).
+- **Companion app 1.0.0+1 → 1.1.0+2** — secure `createRfcommSocketToServiceRecord` +
+  **explicit bond-first**; find-device list overflow fixed (a `Column` can't scroll →
+  yellow overflow stripes with many BT devices); connect-gate ring re-centred (a
+  non-positioned `Stack` child gets loose constraints and parks at `topStart` →
+  `Positioned.fill`); new `companion/app/build-apk.sh`; version shown in UI
+  (`kBuildLabel`). ⚠️ **The app is versioned on its OWN INDEPENDENT TRACK —
+  deliberately NOT aligned to the device image releases** (device compatibility is a
+  PROTOCOL concern, not a version-number one).
+- **`docker-build.sh`** — nexusq-btagent wired into validation, staging, dos2unix and
+  the build phases. ⚠️ **Phase ORDER IS LOAD-BEARING**: btagent (**7c3**) must be
+  checksummed + built **BEFORE** setupd (**7c4**), which now depends on it — the
+  reverse order fails **every clean build** with `nexusq-btagent is missing in
+  checksums`.
+
+### Fixed (2026-07-15, v1.9.0-rc4)
+
+- **BT onboarding now works autonomously from a fresh flash** — TWO independent
+  bugs, BOTH ours, NEITHER hardware (see the status note at the top of this
+  release):
+  - **`blueman-applet` hijacked the SSP pairing model.** SSP picks its model from
+    BOTH ends' IO capabilities: phone DisplayYesNo + Q `NoInputNoOutput` = **Just
+    Works** (no prompt); phone DisplayYesNo + Q **DisplayYesNo** = **Numeric
+    Comparison** (both ends must confirm). blueman registers a DisplayYesNo agent →
+    bluetoothd raised a Confirm/Deny dialog on the HDMI desktop that **nothing
+    attached to the Q can click** (no keyboard/mouse/touch) → every bond timed out
+    (mgmt `0x0e`). Live proof with blueman gone: `user_confirm_request_callback …
+    confirm_hint 1` (= Just Works) and a Pixel 9 Pro Fold bonded **instantly, zero
+    agent callbacks**.
+  - **The app let the RFCOMM socket bond on demand.** Android's implicit bond from
+    `createRfcommSocketToServiceRecord` against an unbonded Just-Works peer forms
+    and immediately collapses (`bonding_attempt_complete status 0x5` = auth failed,
+    then `0x0e` = disconnected); no link key is written and RFCOMM never reaches
+    setupd. Android surfaces this as the **misleading "incorrect PIN"** toast —
+    **no PIN exists in a Just-Works flow.** Fix: explicit `createBond()` + wait for
+    `BOND_BONDED` **before** opening the socket.
+- **`finishSetup` no longer strands the device** (setupd r3) — it is now REFUSED
+  (`bad_request`) unless wifi is provisioned. Accepting it unprovisioned made setupd
+  exit 0, so `Restart=on-failure` did **not** restart it and nothing re-armed setup
+  mode until a reboot. The app reached this state live 2026-07-15.
+
+### Acceptance (v1.9.0-rc4, fresh flash, 2026-07-15) — PASS
+
+Cold boot from a fresh flash → setupd armed itself (`setup mode active:
+discoverable`), btagent registered as default, blueman absent, Class `0x006c0428`,
+no bonds. App (NFC tap path) → bond + `Trusted` + **A2DP authorized** (`0000110d`) →
+RFCOMM → **WiFi joined** (192.168.20.149) → `finishSetup` → btagent auto-closed the
+pairing window (`enforcing Pairable=False`). **PSK: 0 lines in the journal.** A2DP
+live: `bluez_source…a2dp_source s24le 2ch 48000Hz` + PA loopback. Also
+user-verified: wrong WiFi password → **ring turns red**; **NFC tap goes straight to
+pairing** (the BT device list is only the no-NFC fallback).
+
+### Known issues / open (v1.9.0-rc4)
+
+- **Pairing needed 2 failed attempts before succeeding** on the fresh-flash run
+  (user-reported). **NOT root-caused.** Suspicion only: the app's 30 s
+  `ensureBonded` timeout (phone log shows a ~27 s gap before the successful bond)
+  and/or a stale phone-side bond. **OPEN.**
+- **The dev image BAKES Petr's WiFi** (`private/access/wifi.nmconnection`), so a
+  fresh-flashed **dev** image self-provisions and `nexusq-setup-needed` correctly
+  reports "not needed" → **setup mode never arms**. This — not an onboarding bug —
+  is why the fresh 07-14 build "wouldn't come up". `PUBLIC_RELEASE=1` images do not
+  bake it, so real users get onboarding. Today's acceptance required manually
+  deleting the baked profile. **Open task: a `NEXUSQ_NO_WIFI=1` build flag** (skip
+  only the wifi bake, keep ssh keys) — promised, **NOT yet written**.
+- **The factory WiFi MAC `f8:8f:ca:20:48:e1` is injected NOWHERE** — wlan0 runs the
+  chip OTP MAC (`14:7d:c5:3a:35:b5`, Murata OUI; nvram `bcmdhd.cal` says
+  `00:90:4c:c5:12:38`) and its DHCP lease carries an **empty hostname**. BT MAC is
+  fine (DTS `local-bd-address`). **Open task**, unrelated to onboarding.
+- ⚠️ **Starting `blueman-applet` by hand breaks pairing again** until it exits.
+- **Everything uncommitted; v1.9.0 not tagged.** Full record:
+  `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 
 ## [1.8.2] — 2026-07-13 — idle power: conservative governor + pid-1 churn killed (kernel r43, device r40)
 

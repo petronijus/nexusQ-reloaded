@@ -23,6 +23,27 @@ flutter run --dart-define=NEXUSQ_HOST=192.168.x.y
 `flutter test` runs the test suite (protocol/controller smoke test + the setup-wizard,
 BT-client and pairing-color tests — 14 as of 2026-07-13); `flutter analyze` is clean.
 
+## Build an APK
+
+```sh
+./build-apk.sh          # stamps the UI build label from pubspec.yaml
+```
+
+Use it rather than a bare `flutter build apk`, so the in-app version stamp
+(`kBuildLabel`, shown on the connect gate + welcome) cannot drift from `pubspec.yaml`.
+
+> ⚠️ **The app is versioned on its OWN INDEPENDENT TRACK — deliberately NOT aligned
+> to the Nexus Q image/firmware releases** (`v1.8.2`, `v1.9.0`, …). An app-only fix
+> must be shippable without implying a firmware release, and a firmware release must
+> not force a fake app bump. **Device compatibility is a PROTOCOL concern**
+> (`../PROTOCOL.md`) — not something to express by fusing version numbers.
+>
+> **Bump the build number (`+N`) on EVERY apk handed to the phone**: Android refuses a
+> downgrade, and it is how builds are told apart. (It sat at `1.0.0+1` for dozens of
+> builds and made "is this the fixed one?" unanswerable — hence `1.1.0+2`, the BT
+> setup onboarding release.) Gradle reads versionName/versionCode straight from
+> `pubspec.yaml`.
+
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side targets v1.9.0)
 
 `lib/setup/` ships an 8-screen wizard (welcome / cables / find / confirm-color /
@@ -34,6 +55,34 @@ via the shared vectors `../pairing-color-vectors.json`. Entry points: an **NFC
 tap** (the payload is connection-info JSON, §7 — an unprovisioned device routes
 into the wizard with the MAC prefilled) and **"Set up new device"** on the connect
 gate.
+
+**✅ Status 2026-07-15 (app 1.1.0+2, device v1.9.0-rc4 — hardware-accepted):** BT
+onboarding works end-to-end from a fresh flash (NFC tap → bond → RFCOMM → WiFi join
+→ `finishSetup`).
+
+> ⚠️ **Bond FIRST, then open the socket.** The app calls `createBond()` and waits for
+> `BOND_BONDED` **before** `createRfcommSocketToServiceRecord` (the **secure**
+> variant; the device profile is `RequireAuthentication=True`, so the PSK is
+> encrypted in flight). Letting the socket bond **on demand** is a trap: Android's
+> implicit bond against an unbonded Just-Works peer forms and immediately collapses
+> (`bonding_attempt_complete status 0x5` → `0x0e`), RFCOMM never reaches the daemon,
+> and Android shows a **misleading "incorrect PIN"** toast — *there is no PIN in a
+> Just-Works flow*. This was one of the two root causes found 2026-07-15 (the other
+> was device-side: `blueman-applet`'s DisplayYesNo agent hijacking SSP).
+
+Also this session: find-device **list overflow fixed** (a `Column` can't scroll →
+yellow overflow stripes with many BT devices); connect-gate **ring re-centred** (a
+non-positioned `Stack` child gets loose constraints and parks at `topStart` →
+`Positioned.fill`). Earlier (2026-07-14): NFC-tap dedup guard (the Q re-emits the
+payload ~8 s → the wizard was restarting), BT permission requested inside
+`connect()`, confirm-color retry, outro de-flicker, welcome-sphere polish, and a
+**build stamp** (`lib/build_info.dart`, shown on the connect gate + welcome).
+
+**Known flake (OPEN):** pairing needed **2 failed attempts before succeeding** on the
+fresh-flash run. Not root-caused; suspicion only — the 30 s `ensureBonded` timeout
+(the phone log shows a ~27 s gap before the successful bond) and/or a stale
+phone-side bond. See
+`../../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 
 **Stock imagery:** the original Google setup assets are copyrighted and
 gitignored — run `../../scripts/extract-stock-assets.sh` (needs the private stock

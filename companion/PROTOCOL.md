@@ -202,12 +202,34 @@ platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
 
 ### 8.1 Transport
 
+> ✅ **Bonded + encrypted (2026-07-15, v1.9.0-rc4 — hardware-accepted).** The
+> transport requires authentication: the setup link is a **bonded, encrypted** ACL,
+> so the **WiFi PSK never crosses the air in cleartext** (verified: 0 PSK lines in
+> the journal). The bond is created by the phone **before** the socket opens
+> (§8.6) and **also serves A2DP** — one pairing for both.
+>
+> _(History: rc3, 2026-07-14, briefly ran **insecure/unbonded**
+> `RequireAuthentication=False` as a workaround for a pairing failure **wrongly**
+> attributed to a BCM4330 hardware limit. That attribution was WRONG — bonding +
+> A2DP work on this controller — and the workaround is **retired**. It was in fact
+> **stock parity**: stock never bonded during onboarding and accepted a cleartext
+> PSK. We moved beyond stock deliberately. See
+> `../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.)_
+
 - **BlueZ Profile1 RFCOMM server.** `nexusq-setupd` registers `org.bluez.Profile1`
   with `ProfileManager1.RegisterProfile`, UUID **`8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a`**,
-  fixed **channel 3**, `Role: server`, `RequireAuthentication: true`,
-  `RequireAuthorization: false`. `RequireAuthentication` means BlueZ requires
-  link-layer **encryption** on the ACL link (established by the Just-Works pairing
-  below) before it hands the daemon the connection — not an app-layer credential.
+  fixed **channel 22**, `Role: server`, **`RequireAuthentication: true`**,
+  `RequireAuthorization: false`.
+  - **Channel 22** (was 3): a server-role ext profile only starts its RFCOMM
+    listener when a `Channel` is given; **channel 3 collided with the Headset
+    profile** (`rfcomm_bind` "Address in use" → the server never started). 22 is clear
+    of the Q's audio/PBAP stack (3,9,10,13–17). The app resolves the channel via SDP
+    by UUID, so the exact number only has to be free and stable.
+  - **`RequireAuthentication: true`** means BlueZ only hands the daemon the RFCOMM
+    fd over an **encrypted, bonded** ACL link — established by the Just-Works
+    pairing of §8.6. The phone connects with the **secure**
+    `createRfcommSocketToServiceRecord`, and **must already be bonded** when it does
+    (§8.6 — letting the socket bond on demand is a documented trap).
 - BlueZ delivers each incoming connection as a **file descriptor** via
   `Profile1.NewConnection(device, fd, properties)`; the daemon wraps it in a
   `socket.socket(fileno=...)` and runs one reader thread per connection
@@ -219,9 +241,10 @@ platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
   fire-and-forget (no response line), matching §3. There is no `event` push channel
   in v1 of the setup transport — every result is a direct response.
 - No app-layer auth beyond the BT link encryption above: v1 trust model is
-  "whatever paired over BT during the setup window," mirroring §1's "trusted LAN,
+  "whatever bonded over BT during the setup window," mirroring §1's "trusted LAN,
   no auth" for the same reason (single-user appliance, time-boxed exposure — see
-  the accepted-risk note in §8.6).
+  the accepted-risk note in §8.6). No app-layer ECDH is needed for the PSK: the
+  bonded link already encrypts it.
 
 ### 8.2 When it runs
 
@@ -246,7 +269,11 @@ and exits 1 (skip) otherwise. Two entry points follow from this:
   timeout or `finishSetup`); a crash leaves it for the restart to consume.
 - **Inactivity timeout**: `NEXUSQ_SETUP_TIMEOUT` (default **600 s**) since the last
   `core.touch()` (i.e. the last handled request) → the GLib main loop quits and the
-  daemon exits cleanly.
+  daemon exits cleanly — **but only if the device is already WiFi-provisioned**. If
+  it is still unprovisioned when the timeout fires, leaving setup mode would strand
+  the device (nothing re-arms it until a reboot), so the daemon **stays discoverable
+  and keeps spinning** and resets its activity clock instead of exiting (v1.9.0-rc3,
+  2026-07-14).
 - **Clean-exit cleanup** (in the `finally` around `loop.run()`, always runs):
   `Discoverable` set back to `false`; the LED ring returns to `auto` **unless** a
   theme was chosen via `setTheme` during this session (in which case `finishSetup`
@@ -271,7 +298,14 @@ WiFi-join failures.
 | `getNetworkState` | — | `{ "state": "idle"\|"associating"\|"online", "ip"? }` — `ip` present only when `state:"online"` | — |
 | `setName` | `{ name, room?: string }` | `{ name, room, hostname, mdns }` — `hostname` is the sanitized form of `name` (§8.5), `mdns` is `"<hostname>.local"`; also sets the system hostname and restarts `nexusq-control`(+`librespot` if the user session exists) so the new name is re-advertised | `bad_request` (missing/blank name, or non-string room), `internal` (hostname change failed) |
 | `setTheme` | `{ theme: "blue"\|"warm"\|"cool"\|"rose"\|"smoke"\|"off" }` | `{ theme }` — applies the color theme's `breathe`/`off` nexusqd command immediately and remembers it for `finishSetup` | `bad_request` (unknown theme), `unavailable` (nexusqd rejected the command) |
-| `finishSetup` | — | `{ done: true }` — green success breathe, 2 s hold, then the chosen theme (or `auto` if none was set) via nexusqd; marks the session finished, which ends the RFCOMM loop and triggers the clean-exit lifecycle (§8.2) | — |
+| `finishSetup` | — | `{ done: true }` — green success breathe, 2 s hold, then the chosen theme (or `auto` if none was set) via nexusqd; marks the session finished, which ends the RFCOMM loop and triggers the clean-exit lifecycle (§8.2) | `bad_request` (**not wifi-provisioned yet** — see below) |
+
+> **`finishSetup` is REFUSED unless WiFi is already joined** (v1.9.0-rc4). Accepting
+> it unprovisioned was a trap: `finished` makes the daemon exit **0**, so
+> `Restart=on-failure` does **not** restart it and nothing re-arms setup mode until a
+> reboot — **the device is stranded off-network with the wizard gone**. (Same hazard
+> the idle-timeout path already guards, §8.2. The app reached this state live on
+> 2026-07-15.)
 
 `setWifi` validates everything (ssid/psk/security) **before** any side effect
 (LED, profile delete/create), so a malformed request can never destroy an
@@ -294,40 +328,81 @@ octets pick a fully-saturated hue around the color wheel.
 
 ### 8.5 LED choreography
 
+The `spin` command takes an optional rotation speed (`spin R G B [rev_per_s]`,
+nexusqd r10) so setup phases read as distinct rates (default 0.75 rev/s).
+
 | Phase | Command | Trigger |
 |---|---|---|
-| Setup mode active / joining WiFi | `spin 0 153 204` (stock `#0099CC` "starting up" rotating dot) | daemon start (`_run_transport`), and again at the top of `setWifi` (resumes the spinner after `confirmColor` left a solid color) |
+| Setup mode active / idle-waiting | `spin 0 153 204` (stock `#0099CC` "starting up" rotating dot, default rate) | daemon start (`_run_transport`) |
 | Pairing confirmation | `set R G B` (solid, the pairing color) | `confirmColor` |
+| Joining WiFi ("working on it") | `spin 0 153 204 0.4` (same blue, **slow**) | top of `setWifi` |
+| WiFi joined ("got it!") | `spin 0 220 60 1.6` (**fast green**), briefly, before the wizard moves on | `setWifi` success |
+| WiFi join failed | `spin 220 30 30 0.5` (**slow red**, persists until the next attempt re-sends the slow-blue) | any `setWifi` join failure (`_fail_join`) |
 | Theme chosen mid-wizard | `breathe R G B` / `off` (per `THEME_CMDS`) | `setTheme` |
 | Setup complete | `breathe 0 200 0` (green), held 2 s, then the chosen theme or `auto` | `finishSetup` |
 | Setup abandoned (idle timeout, no `finishSetup`) | `auto` | clean-exit cleanup (§8.2) |
+| **Pairable OUTSIDE setup** (a manual/anomalous exposure) | `spin 0 153 204` / `auto` | **`nexusq-btagent`**, not setupd (v1.9.0-rc4) |
 
-### 8.6 Accepted risk: Just-Works auto-pairing during setup mode
+> **The pairing-exposure indicator** (`nexusq-btagent`, 2026-07-15). The invariant
+> is **`Pairable == Discoverable`**, so the ring is honest device-wide:
+> **spinning blue ⇔ anyone can pair with this Q.** (`Pairable`, not `Discoverable`,
+> gates bonding — discovery only affects *inquiry*, and anyone who already knows the
+> address can bond a non-discoverable but pairable adapter.) **Ownership rule:**
+> btagent only touches the ring when **it** took it — i.e. the adapter became
+> discoverable while setupd was *not* running — and never releases a ring it did not
+> take, so it cannot wipe the theme `finishSetup` applied. During setup the table
+> above (setupd) owns the ring.
 
-While setup mode is active, `nexusq-setupd` registers a **`NoInputNoOutput`**
-BlueZ agent (`org.bluez.Agent1`) and calls `RequestDefaultAgent`, making it the
-system's default pairing agent for that window. This agent **auto-accepts**
-everything it is asked: `RequestConfirmation` (Just-Works pairing) and
-`RequestAuthorization`/`AuthorizeService` (incoming connections/service use) are
-all no-ops that return success without any user interaction on the device. This
-is deliberate, not an oversight, and is accepted as-is:
+### 8.6 Pairing: Just-Works, bond-first — and the accepted risk
 
-- It is **window-limited**: the agent only exists while `nexusq-setupd` runs
-  (setup mode only), the adapter is discoverable only for that window, the
-  session self-terminates after 600 s of inactivity (§8.2), and `Discoverable`
-  is forced off again on every exit path.
-- It is **stock-parity behavior** — the original Nexus Q onboarding flow used the
-  same Just-Works, no-PIN pairing model; this is not a regression.
-- It is **acceptable for a single-user appliance**: there is no persistent
-  multi-user trust boundary to protect on this device outside the setup window.
-- **The residual risk**: a hostile actor within BT range during an active setup
-  window could initiate pairing and have it silently accepted, since the agent
-  never prompts or checks anything. This is mitigated in practice by (a) the
-  **LED visual-confirm step** (§8.4/`confirmColor`) — the legitimate user compares
-  the ring color against the app before proceeding, so a rogue device that pairs
-  but can't also produce the matching LED color is caught at that step — and (b)
-  the **short exposure window** (idle timeout, and discoverable is normally only
-  on for the duration of one onboarding session).
+**`nexusq-setupd` registers NO agent.** The system's single, **permanent**
+`NoInputNoOutput` BlueZ `Agent1` is **`nexusq-btagent`** (a separate package,
+running for the whole uptime — A2DP needs a bond long after setup exits). Full
+rationale: `../userspace/nexusq-btagent/README.md`.
+
+**Why not a setup-scoped agent (2026-07-15 root cause).** SSP picks its pairing
+model from **both** ends' IO capabilities:
+
+| Phone | Nexus Q | Model | Prompt? |
+|---|---|---|---|
+| DisplayYesNo | `NoInputNoOutput` | **Just Works** | none — bonds silently |
+| DisplayYesNo | `DisplayYesNo` | **Numeric Comparison** | **both ends must confirm** |
+
+`blueman-applet` registered a **DisplayYesNo** agent → the second row → an
+unanswerable Confirm/Deny dialog on the HDMI desktop (**nothing attached to the Q
+can click it**) → every bond timed out (mgmt `0x0e`). And because
+`RequestDefaultAgent` is **last-writer-wins**, two agents race for the default
+slot. Hence: exactly **one** agent, device-wide (blueman-applet is suppressed since
+device r47), and setupd defers to it.
+
+> ⚠️ **Client contract: the phone MUST bond BEFORE opening the socket.**
+> Call `createBond()` and wait for `BOND_BONDED`, *then*
+> `createRfcommSocketToServiceRecord`. Letting the socket bond **on demand** fails:
+> Android's implicit bond against an unbonded Just-Works peer forms and immediately
+> collapses (`bonding_attempt_complete status 0x5` → `0x0e`), no link key is ever
+> written, RFCOMM never reaches setupd — and Android reports the **misleading
+> "incorrect PIN"** toast, *even though no PIN exists in a Just-Works flow*.
+
+**Accepted risk.** The agent auto-accepts everything (`RequestConfirmation`,
+`RequestAuthorization`/`AuthorizeService` are no-ops returning success) — for an
+input-less appliance that is the only workable model. Accepted as-is:
+
+- **The exposure window is bounded and VISIBLE.** btagent holds
+  **`Pairable == Discoverable`**, and the ring spins blue exactly while the Q is
+  pairable. (`Pairable`, **not** `Discoverable`, is what gates bonding — bluez
+  leaves `Pairable=true` forever by default, so a ring driven by `Discoverable`
+  alone would be a *lie*: dark while still bondable.) The setup session
+  self-terminates after 600 s of inactivity (§8.2) and `finishSetup` closes the
+  window (`enforcing Pairable=False`).
+- It is **beyond stock parity, not a regression**: the original Nexus Q onboarding
+  never bonded at all and sent the PSK in cleartext. We bond and encrypt.
+- It is **acceptable for a single-user appliance**: no persistent multi-user trust
+  boundary outside the setup window.
+- **The residual risk**: a hostile actor within BT range during an active pairing
+  window could bond silently, since the agent never prompts. Mitigated by (a) the
+  **LED visual-confirm step** (§8.4/`confirmColor`) — a rogue device that pairs but
+  can't produce the matching ring color is caught there — and (b) the **short,
+  now visibly-indicated exposure window**.
 
 ### 8.7 Relationship to NFC (§7)
 

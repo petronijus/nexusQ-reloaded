@@ -97,7 +97,13 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   v1.8.0) so `hci_bcm` syncs both ends to 3 Mbaud. Before 0040 this produced tx
   timeouts, a phantom "Connected" state, and A2DP in corrupt bursts → count MUST be
   0 now. It was **NOT** WiFi/BT coexistence and **NOT** HFP/SCO. For A2DP, check the
-  PA `bluez_source` appears (`pactl list short sources`) while a phone is connected.
+  PA `bluez_source` appears (`pactl list short sources`) while a phone is connected
+  (healthy: `bluez_source…a2dp_source s24le 2ch 48000Hz` + the PA loopback).
+  **Pairing broken?** It is **userspace until proven otherwise** — check for a second
+  BlueZ agent (`blueman-applet`) before suspecting the controller; see the setup-mode
+  entry below. Loaded patchram must be **Phantasm build 0749** (md5
+  `7e5bb859e33142e94052c76fba23b9e6`), not the wrong `Proxima … NoExtLNA` build-0482
+  blob that shipped through v1.8.2.
 - **WiFi** (BCM4330, `brcmfmac`): `dmesg | grep -i brcmfmac` — did
   `brcm/brcmfmac4330-sdio.bin` load or fail "-2"? `iw dev` → does `wlan0` exist?
   `sudo iw dev wlan0 scan | grep -iE 'SSID|freq'` → does it SEE 5 GHz APs (freq
@@ -158,19 +164,34 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   wedges the pn544 HCI state until reboot (known fragility). See
   `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
-- 🆕 **Setup mode / `nexusq-setupd` (device r44+ images, targets v1.9.0 — NOT on
-  flashed ≤ v1.8.2):** a BT RFCOMM WiFi-provisioning daemon
-  (`nexusq-setupd.service`, `ExecCondition=/usr/bin/nexusq-setup-needed`).
+- 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (v1.9.0-rc4 = device r47 /
+  setupd r3 / btagent r0 — NOT on flashed ≤ v1.8.2):** a BT RFCOMM
+  WiFi-provisioning daemon (`nexusq-setupd.service`,
+  `ExecCondition=/usr/bin/nexusq-setup-needed`) plus the **permanent** pairing agent
+  (`nexusq-btagent.service`, `Restart=always` — runs the WHOLE uptime, since A2DP
+  needs a bond long after setupd exits).
   **Expected states:** provisioned boot (a WiFi NM profile exists, no
-  `/run/nexusq-setup.force`) → the unit is **inactive with the condition
-  failed** — an ACTIVE setupd on a provisioned boot is a fault (device
-  discoverable + LED spinner when it shouldn't be). Unprovisioned boot (or the
-  force flag armed via the bridge's `startSetupMode`) → setupd active, ring
-  runs the `spin` animation (blue rotating dot), `bluetoothctl show` =
-  Discoverable yes; it exits after `finishSetup` or 600 s idle. The psk must
-  NEVER appear in its journal (a psk in a log line = a critical bug). See
-  `companion/PROTOCOL.md` §8 +
-  `docs/2026-07-13-onboarding-step1-implementation.md`.
+  `/run/nexusq-setup.force`) → **setupd inactive with the condition failed** — an
+  ACTIVE setupd on a provisioned boot is a fault (device discoverable + LED spinner
+  when it shouldn't be) — while **btagent is ACTIVE regardless**. Unprovisioned boot
+  (or the force flag armed via the bridge's `startSetupMode`) → setupd active
+  (`setup mode active: discoverable`), ring runs the `spin` animation (blue rotating
+  dot), `bluetoothctl show` = Discoverable yes; it exits after `finishSetup` or 600 s
+  idle. The psk must NEVER appear in its journal (a psk in a log line = a critical
+  bug — expected: **0 PSK lines**).
+  **Pairing health (root-caused 2026-07-15):** `nexusq-btagent` must be the
+  **default agent**, `blueman-applet` must be **ABSENT** (its DisplayYesNo agent
+  forces SSP → Numeric Comparison → an unanswerable HDMI dialog → every bond times out
+  with mgmt `0x0e`; `RequestDefaultAgent` is last-writer-wins so it also steals the
+  default agent), setupd registers **NO** agent, bonds come out **`Trusted`**, Class =
+  **`0x006c0428`**, and **`Pairable == Discoverable`** (btagent's invariant —
+  `Pairable`, NOT `Discoverable`, gates bonding; ring spinning blue ⇔ pairable).
+  ⚠️ **"The BCM4330 can't complete SSP bonding" is RETRACTED** — never re-derive a
+  hardware limit from a userspace symptom.
+  ⚠️ **A dev image BAKES Petr's WiFi** → a fresh-flashed dev image self-provisions and
+  **setup mode never arms**. That is EXPECTED, not a bug (`PUBLIC_RELEASE=1` doesn't
+  bake it). See `companion/PROTOCOL.md` §8 +
+  `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
 - **CPU 1.2 GHz** (OMAP4460 MPU): `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies`
   (expect `350000 700000 920000 1200000`), `scaling_governor` (expected:
   **`conservative`** since the 2026-07-13 v1.8.2 flash / kernel r43 —

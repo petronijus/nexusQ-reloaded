@@ -42,7 +42,18 @@ fresh clones fall back gracefully) provisions the Q's WiFi over **BT RFCOMM**
 an **NFC tap** — the tap payload is now live connection-info JSON (§7), so a
 provisioned tap auto-connects and an unprovisioned one jumps into the wizard — or
 "Set up new device" in the app. See
-`../docs/2026-07-13-onboarding-step1-implementation.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+`../docs/2026-07-13-onboarding-step1-implementation.md`.
+**✅ Status 2026-07-15 (built + flashed as v1.9.0-rc4, hardware-ACCEPTED; all
+UNCOMMITTED, NOT tagged): BT onboarding works autonomously from a fresh flash.**
+It was two independent bugs, both ours: `blueman-applet`'s **DisplayYesNo** agent
+forced SSP into **Numeric Comparison** (an unanswerable dialog on the Q's HDMI
+desktop → every bond timed out), and the app let the RFCOMM socket **bond on
+demand** (Android's implicit bond collapses → the misleading "incorrect PIN"
+toast). Now: the device runs one **permanent** `NoInputNoOutput` agent
+(`nexusq-btagent`) and the app **bonds explicitly first**, then opens a **secure**
+RFCOMM socket (channel 22, `RequireAuthentication=True`) — so the **WiFi PSK is
+encrypted in flight** and the same bond serves **A2DP**. Record:
+`../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

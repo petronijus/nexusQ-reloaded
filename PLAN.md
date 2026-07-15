@@ -3,6 +3,40 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-15 — ✅ ONBOARDING STEP 1 SHIPPED-QUALITY: BT onboarding ROOT-CAUSED +
+> FIXED, v1.9.0-rc4 flashed + ACCEPTED on hardware (NOT tagged, all uncommitted).**
+> **TWO independent bugs, BOTH ours, NEITHER hardware:** (1) `blueman-applet`'s
+> **DisplayYesNo** agent forced SSP into **Numeric Comparison** → a Confirm/Deny
+> dialog on the HDMI desktop that **nothing attached to the Q can click** (every bond
+> timed out, mgmt `0x0e`); `RequestDefaultAgent` is last-writer-wins, so it also stole
+> the default agent. (2) The app let the RFCOMM socket **bond on demand** — Android's
+> implicit bond against an unbonded Just-Works peer collapses (`status 0x5` → `0x0e`)
+> and surfaces as the misleading **"incorrect PIN"** toast. Fixes: **NEW
+> `nexusq-btagent`** (single **permanent** `NoInputNoOutput` agent — A2DP needs a bond
+> long after setupd exits — holding **`Pairable == Discoverable`** so the ring is
+> honest: **`Pairable`, not `Discoverable`, gates bonding**), **setupd r3**
+> (agent-less, **`RequireAuthentication=True`** → **PSK no longer in the clear**,
+> `finishSetup` refused unprovisioned), **device r47** (blueman-applet suppressed —
+> package stays; bluez `Class = 0x200428`), **app 1.1.0+2** (bond-first + secure
+> RFCOMM). ⚠️ **RETRACTED: "the BCM4330 cannot complete SSP bonding"** — pairing +
+> A2DP worked 07-09 and were **re-verified 07-15**; *never re-derive a hardware limit
+> from a userspace symptom*. Acceptance: fresh flash → bond + `Trusted` + A2DP
+> (`0000110d`) → WiFi joined → `finishSetup` → pairing window auto-closed; **0 PSK
+> lines in the journal**. **OPEN:** `NEXUSQ_NO_WIFI=1` build flag (the dev image bakes
+> WiFi → self-provisions → setup mode never arms; **this, not onboarding, is why the
+> 07-14 fresh build "wouldn't come up"**), a 2-failed-attempts pairing flake (not
+> root-caused), factory WiFi MAC injected nowhere. Full record:
+> `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
+>
+> **2026-07-14 — v1.9.0-rc3 built + flashed; "NOT autonomous" ⛔ SUPERSEDED by
+> 2026-07-15 (above).** The dual-agent hypothesis was RIGHT; the insecure/unbonded
+> RFCOMM "workaround to REVISIT" is **RETIRED** — it was **stock parity** (stock never
+> bonded during onboarding and accepted a cleartext PSK), and we deliberately moved
+> **beyond** stock. Keepers that still stand: Phantasm BT firmware (r2), RFCOMM ch
+> 3→22, BT-MAC D-Bus fallback, setup-stays-armed, nexusqd r10 spin-speed + LED
+> feedback, device deps/timezone. Record (superseded):
+> `docs/2026-07-14-bt-onboarding-state-as-is.md`.
+>
 > **2026-07-13 — ONBOARDING STEP 1 IMPLEMENTED (13/13 coding tasks, commits
 > `ae8f499..cb03cf7`, pushed; targets v1.9.0 — build/flash/acceptance = plan
 > Task 14, continues on the LINUX machine).** App-driven WiFi onboarding for
@@ -314,7 +348,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 | WiFi (BCM4330) | ✅ works | _(Corrected 2026-07-02)_ the same-day "dead on the live unit" verdict was **wrong** — the DHCP **IP had moved** (NM randomized locally-administered MAC → fresh lease per boot; device was up at `192.168.20.142`). The v1.5.0 `mpc=0` fix cured the idle loss/latency. _(Characterized 2026-07-07: 5 GHz is **healthy, NOT flaky** — −48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss; bulk **~34 Mbit/s is a HARDWARE CEILING** of the 2010-era 1×1 802.11n chip on SDIO, not a bug — same cipher does ~80 over ethernet so the crypto/CPU ceiling ≈80 and WiFi is the limit; 2 streams aggregate to less; `powersave=2` no change; ~100× the appliance's need. 2.4 GHz retested = also stable/not flaky but strictly worse (~13–16 Mbit). See `docs/2026-07-07-wifi-characterization-and-ethernet-default.md`.)_ _(Verified 2026-07-03 on `#27`:)_ `wifi-stable-mac.conf` holds — auto-joins the baked profile, stable IP `192.168.20.175` (on-air MAC = the chip's OTP `14:7d:c5:3a:35:b5`, not the factory `f8:8f:ca:20:48:e1` — _resolved in batch 2b, **verified on `#29` 2026-07-03**: NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin, since brcmfmac ignores nvram `macaddr=`; the **factory MAC is on air** and the **final IP is `192.168.20.195`**_); the CLK32KG stock-parity clock fix + `CONFIG_CLK_TWL=y` retired the ~25 s pwrseq defer (B17 — pwrseq @4.31 s). clm_blob still missing (B4). `docs/2026-07-02-boot-error-inventory.md` |
 | USB gadget network | ✅ works | RNDIS 172.16.42.1, SSH via nexus-diag.service. _(2026-07-07: demoted to FALLBACK — the direct-cable **ethernet path `10.42.0.2` is now the default** deploy/control transport: ~80 Mbit/s, 0.62 ms, fixed IP; the gadget's `enx*` renames per boot.)_ |
 | **TAS5713 amplifier** | ✅ works | _(Updated 2026-07-07, v1.6.13/v1.6.15)_ sound card (ALSA card `NexusQSpeaker`, McBSP2 I2S → TAS5713) plays at **correct pitch/speed** (v1.6.0 2× bug fixed by patch 0022). **⚠️ physically SILENT until v1.6.13** — `mcbsp2_pins` muxed the wrong balls (`abe_dmic_*`), so the amp got no clock/data/frame (`aplay` rc=0); fixed to stock pads `0x0f6/0x0fa/0x0fc` MUX_MODE0 → user-confirmed audible. Since **v1.6.15** it is one selectable **PulseAudio** output (was direct ALSA); librespot feeds PA as an input. **Playback crackle diagnosed 2026-07-08** as **memory-bus / DMA contention** (McBSP2 SDMA FIFO underflows in HW under L3/EMIF contention — not a PA/CPU/network underrun). _(**CLOSED 2026-07-12:** two independent layers, both fixed — kernel **r41** patch 0041 (sDMA read priority; killed the load-correlated part) + **r42** patch 0042 (DPLL_ABE relocked from sys_clkin at 98.304 MHz — the metronomic ~1/s click was two free-running crystals). Hardware-verified, user-confirmed perfectly clean playback. See the 2026-07-12 note at the top + `docs/2026-07-12-audio-crackle-closed-sdma-priority-and-dpll-abe.md`.)_ See `docs/2026-06-29-spotify-connect-and-tas5713-2x-speed.md` + `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md` + `docs/2026-07-08-audio-crackle-dma-contention.md` |
-| Bluetooth (BCM4330) | ✅ works | _(Updated 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot (`Proxima - BCM4330B1 37.4 MHz Class 1.5`, build 0482). **BD_ADDR is now the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
+| Bluetooth (BCM4330) | ✅ works | _(firmware corrected 2026-07-14; BD_ADDR/config 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot. **The BT firmware was the WRONG board blob (`Proxima - BCM4330B1 NoExtLNA`, build 0482, md5 `16db686…`) through v1.8.2 — replaced 2026-07-14 with the stock steelhead `Google Phantasm BCM4330B1` (build 0749, md5 `7e5bb859…`, 51813 B; firmware-google-steelhead r2).** **BD_ADDR is the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
@@ -454,9 +488,11 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       _(Deferred: ~~send IP/mDNS as the payload for tap-to-onboard~~ — **DONE
       2026-07-13** (commit `0307430`, device r44): the payload is now live
       connection-info JSON `{"v":1,"bt","host","ip","prov"}` rebuilt per tap,
-      part of onboarding step 1 (targets v1.9.0, not yet flashed — see
-      `docs/2026-07-13-onboarding-step1-implementation.md`); still deferred:
-      C-rewrite the Python reader.)_
+      part of onboarding step 1 (targets v1.9.0; **flashed + hardware-accepted
+      2026-07-15 as v1.9.0-rc4** — an NFC tap goes straight to pairing, the BT
+      device list is only the no-NFC fallback — see
+      `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`);
+      still deferred: C-rewrite the Python reader.)_
 
 ### 7. TOSLINK / SPDIF output (audio)  ✅ DONE 2026-07-07 (v1.6.13 kernel / v1.6.15 output)
 Optical out is driven by the OMAP4's own McASP block -- fully independent of

@@ -4,7 +4,99 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-13 (latest): **ONBOARDING STEP 1 IMPLEMENTED — 13/13 coding tasks, pushed (ae8f499..cb03cf7); Task 14 (build v1.9.0-rc1 → flash → HW acceptance → tag) continues on the LINUX machine**
+## Session 2026-07-15 (latest): **BT onboarding ROOT-CAUSED + FIXED — v1.9.0-rc4 flashed + ACCEPTED on hardware. NOT tagged, ALL UNCOMMITTED.**
+
+Full record:
+`docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`
+(**supersedes** `docs/2026-07-14-bt-onboarding-state-as-is.md`). Base: v1.8.2
+(`1504ef3`, kernel r43 `#44`).
+Memory: [[nexusq-bt-onboarding-pairing]], [[never-conclude-dead-hardware]].
+
+✅ **Onboarding works autonomously from a fresh flash, user-accepted.** It was
+**TWO independent bugs, BOTH ours, NEITHER hardware**:
+
+1. **`blueman-applet` hijacked the SSP pairing model.** SSP picks its model from
+   **both** ends' IO capabilities — phone DisplayYesNo + Q `NoInputNoOutput` =
+   **Just Works** (no prompt); phone DisplayYesNo + Q **DisplayYesNo** = **Numeric
+   Comparison** (both ends must confirm). blueman registers a DisplayYesNo agent,
+   so bluetoothd raised a Confirm/Deny dialog on the HDMI desktop that **nothing
+   attached to the Q can click** → every bond timed out (mgmt `0x0e`). Also
+   `RequestDefaultAgent` is **last-writer-wins**, so it stole the default agent.
+   Live proof with blueman gone: `user_confirm_request_callback … confirm_hint 1`
+   (= Just Works) and a Pixel 9 Pro Fold bonded **instantly, zero agent callbacks**.
+2. **The app let the RFCOMM socket bond on demand.** Android's implicit bond from
+   `createRfcommSocketToServiceRecord` against an unbonded Just-Works peer forms
+   and immediately collapses (`bonding_attempt_complete status 0x5` → `0x0e`); no
+   link key is written, RFCOMM never reaches setupd. Android shows the
+   **misleading "incorrect PIN"** toast — **no PIN exists in Just Works**. Fix:
+   explicit `createBond()` + wait for `BOND_BONDED` **before** opening the socket.
+
+⚠️ **RETRACTED: "the BCM4330 cannot complete SSP bonding."** WRONG. Pairing + A2DP
+worked 2026-07-09 (after the v1.8.0 BT-UART `max-speed` fix) and were **re-verified
+2026-07-15**. **Never re-derive a hardware limit from a userspace symptom**
+([[never-conclude-dead-hardware]]).
+
+**SHIPPED (v1.9.0-rc4):** NEW **`nexusq-btagent`** r0 — the appliance's single
+**permanent** BlueZ `Agent1` (`NoInputNoOutput` auto-accept, bonds marked
+`Trusted`; permanent because **A2DP needs a bond long after setupd exits**), which
+also holds **`Pairable == Discoverable`** so the ring is honest (**`Pairable`, not
+`Discoverable`, gates bonding** — a ring on `Discoverable` alone would be a LIE:
+dark while still bondable). Rationale: `userspace/nexusq-btagent/README.md`.
+**setupd r3** — registers **NO agent**, hard-deps btagent,
+**`RequireAuthentication=True`** (PSK no longer in the clear), `finishSetup`
+refused unless wifi is provisioned (it could strand the device out of setup mode
+forever). **device r47** — +btagent dep, preset enable, blueman-applet suppressed
+via `/etc/xdg/nexusq/autostart/blueman.desktop` (the **package stays**), bluez
+`Class = 0x200428` (live `0x006c0428`). **App 1.1.0+2** — bond-first + secure
+RFCOMM, find-list overflow, ring re-centred, `build-apk.sh`. **docker-build.sh** —
+btagent wired in; ⚠️ **phase order load-bearing: btagent (7c3) BEFORE setupd
+(7c4)**, else every clean build fails `nexusq-btagent is missing in checksums`.
+
+**KEEPERS from 2026-07-14** (still stand): Phantasm BT firmware (r2, md5
+`7e5bb859…`, build 0749), RFCOMM **channel 22**, BT MAC D-Bus fallback, setup stays
+armed while unprovisioned, nexusqd **r10** spin-speed + LED feedback, device
++iw/+ethtool/+iproute2-minimal/+tzdata + Europe/Prague, docker-build `--force`.
+
+### WHERE TO CONTINUE (priority)
+
+1. **`NEXUSQ_NO_WIFI=1` build flag — promised, NOT written.** The dev image bakes
+   Petr's WiFi (`private/access/wifi.nmconnection`), so a fresh-flashed dev image
+   **self-provisions and setup mode never arms** — this, not an onboarding bug, is
+   why the 07-14 fresh build "wouldn't come up". `PUBLIC_RELEASE=1` doesn't bake
+   it. The flag should skip **only** the wifi bake, keep ssh keys.
+2. **The 2-failed-attempts-before-success pairing flake** (fresh-flash run,
+   user-reported, **NOT root-caused**). Suspicion only: the app's 30 s
+   `ensureBonded` timeout (~27 s gap before the successful bond in the phone log)
+   and/or a stale phone-side bond. **OPEN.**
+3. **Factory WiFi MAC `f8:8f:ca:20:48:e1` is injected NOWHERE** — wlan0 runs the
+   chip OTP MAC (`14:7d:c5:3a:35:b5`, Murata OUI; nvram says `00:90:4c:c5:12:38`),
+   DHCP lease has an **empty hostname**. BT MAC is fine (DTS `local-bd-address`).
+   Separate open bug.
+4. **Commit + tag** — nothing committed; propose **v1.9.0** only with user approval.
+
+⚠️ **Gotcha: starting `blueman-applet` by hand breaks pairing again** until it exits.
+
+---
+
+## Session 2026-07-14: **v1.9.0-rc3 built + flashed — NOT autonomous** ⛔ SUPERSEDED by 2026-07-15 (above)
+
+Kept as the record of what was known then; the conclusions were overtaken the next
+day. Record: `docs/2026-07-14-bt-onboarding-state-as-is.md` (carries the same
+superseded banner).
+
+- **"BT onboarding does NOT work autonomously"** — no longer true (fixed 07-15).
+- The **dual-agent hypothesis was RIGHT**; root cause confirmed as blueman's
+  DisplayYesNo agent + a second, independent app-side bond-on-demand bug.
+- **"Insecure/unbonded RFCOMM = a workaround to REVISIT"** — **RETIRED**. It was in
+  fact **stock parity** (stock never bonded during onboarding, accepted a cleartext
+  PSK); we deliberately moved **beyond** stock: bonded + encrypted, one bond also
+  serving A2DP.
+- The **keepers** listed there (firmware r2, channel 22, MAC fallback, setup stays
+  armed, nexusqd r10, device deps/timezone, docker-build `--force`) all stand.
+
+---
+
+## Session 2026-07-13: **ONBOARDING STEP 1 IMPLEMENTED — 13/13 coding tasks, pushed (ae8f499..cb03cf7); Task 14 (build v1.9.0-rc1 → flash → HW acceptance → tag) continues on the LINUX machine**
 
 Full write-up: `docs/2026-07-13-onboarding-step1-implementation.md`. Plan:
 `docs/superpowers/plans/2026-07-13-onboarding-step1.md` (spec approved 2026-07-13).

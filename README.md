@@ -51,7 +51,8 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote → `nexusq-control` (TCP 45015, mDNS): volume · breathing LED theme + brightness · **visualisation picker** · now-playing · v1.6.3 · reachable over WiFi · v1.6.5 · **output selector** (Holo-dark segmented control) + volume/mute now act on the active PA sink · v1.6.15 · **NFC tap-to-send receiver** (HCE — the Q taps a message onto the phone, shown as a SnackBar) + **auto-reconnect on resume/drop** (no more app-kill after backgrounding) · v1.7.0 · **two-way volume sync** — the app slider now tracks the **physical dome dial** and the LXQt applet (bridge `pactl subscribe` → `volumeChanged`) · v1.7.3 (verified live, not yet in a flashed image) |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | labwc + Pixman renderer · **desktop audio sink fixed v1.6.12** (the red-cross no-sink tray icon: PA now starts via a native systemd USER unit — Alpine ships none and the XDG autostart never fires under systemd+Wayland — and the sole sink is the TAS5713 speaker) |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | NetworkManager, factory MAC pinned at the NM layer (stable on-air MAC since v1.6.6 — but the router can still reassign the DHCP lease, seen 2026-07-12: find the device by hostname `steelhead`/MAC, don't hardcode the IP). **Characterized 2026-07-07: 5 GHz is healthy — NOT flaky** (−48 dBm, 0 discarded/retry pkts, 2.6 ms jitter, 0 % loss); bulk **~34 Mbit/s is a hardware ceiling** of the 2010-era 1×1 802.11n BCM4330 (not a bug — same cipher does ~80 over ethernet, so WiFi is the limit; ~100× the appliance's need). Use **ethernet for bulk** |
-| 🔵 **Bluetooth** + **A2DP audio** (BCM4330) | ✅ | **A2DP sink reliable since v1.8.0** — pair a phone and stream to the Q (`phone → BT → PulseAudio bluez_source s24le/48 kHz → TAS5713`). Root cause of every past "won't stay connected / phantom Connected / corrupt-burst audio" was a **missing BT HCI UART `max-speed`**: the BCM4330 HCI runs over UART2 and `hci_bcm` left `oper_speed=0`, never syncing the host UART to the firmware baud → `hci0: Frame reassembly failed (-84)` (EILSEQ) + tx timeouts. Kernel **patch 0040** sets `max-speed = <3000000>` (stock ran 3 Mbaud); verified live — reassembly failures 0 (was 26+), controller addr correct. (NOT coexistence, NOT HFP/SCO — both earlier wrong guesses.) Per-device **BD_ADDR** `F8:8F:CA:20:49:E5` since v1.6.10 (DTS `local-bd-address` + btbcm patch 0036) |
+| 🔵 **Bluetooth** + **A2DP audio** (BCM4330) | ✅ | **A2DP sink reliable since v1.8.0** — pair a phone and stream to the Q (`phone → BT → PulseAudio bluez_source s24le/48 kHz → TAS5713`). Root cause of every past "won't stay connected / phantom Connected / corrupt-burst audio" was a **missing BT HCI UART `max-speed`**: the BCM4330 HCI runs over UART2 and `hci_bcm` left `oper_speed=0`, never syncing the host UART to the firmware baud → `hci0: Frame reassembly failed (-84)` (EILSEQ) + tx timeouts. Kernel **patch 0040** sets `max-speed = <3000000>` (stock ran 3 Mbaud); verified live — reassembly failures 0 (was 26+), controller addr correct. (NOT coexistence, NOT HFP/SCO — both earlier wrong guesses.) **Pairing is `NoInputNoOutput` Just-Works via `nexusq-btagent`** (the Q's single **permanent** agent — nothing attached to it can answer a prompt; bonds are marked `Trusted`, and the ring spins blue **⇔** the Q is pairable). ⚠️ `blueman-applet` must stay out of the session: its **DisplayYesNo** agent forces SSP into **Numeric Comparison** → an unanswerable HDMI dialog → every bond times out (root-caused 2026-07-15; suppressed since device r47 — the *package* stays). Per-device **BD_ADDR** `F8:8F:CA:20:49:E5` since v1.6.10 (DTS `local-bd-address` + btbcm patch 0036) |
+| 📲 **App-driven onboarding** (NFC tap → BT → WiFi) | 🟠 | **works end-to-end from a fresh flash — hardware-accepted 2026-07-15 as `v1.9.0-rc4`, but NOT tagged/released yet** (everything uncommitted; the table says 🟠 for that reason alone, not for a functional gap). Tap the phone on the dome → bonded, **encrypted** BT RFCOMM (`nexusq-setupd`, `RequireAuthentication=True` — the WiFi PSK never crosses the air in cleartext) → WiFi join → name/room/theme → outro, with the original stock imagery. Verified: bond + `Trusted` + A2DP authorized → WiFi joined → `finishSetup` → the pairing window auto-closes; wrong password → ring turns red. See `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md` |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
@@ -155,14 +156,16 @@ One command, fully dockerized (pmbootstrap under the hood):
 
 It builds the kernel (mainline 6.12.12 + **42 patches** in `kernel/patches/`), the
 local `python3` override, the device daemons (`nexusqd` · `nexusq-control` ·
-`nexusq-setupd`), and a full systemd rootfs, then repacks a ramdisk-less boot
-image and verifies the result by **mounting** it. Build notes and the hard-won
-gotchas live in `HANDOFF.md`.
+`nexusq-btagent` · `nexusq-setupd`), and a full systemd rootfs, then repacks a
+ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
+the hard-won gotchas live in `HANDOFF.md`. (⚠️ The daemon build **phase order is
+load-bearing**: `nexusq-btagent` must build *before* `nexusq-setupd`, which depends
+on it — the reverse order fails every clean build on checksums.)
 
 ```
 kernel/      dts · defconfig · 42 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
-pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-setupd · python3
-userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-setupd (BT WiFi provisioning)
+pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-btagent · nexusq-setupd · python3
+userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-btagent (BT pairing agent) · nexusq-setupd (BT WiFi provisioning)
 companion/   Flutter companion app + PROTOCOL.md (built on the phone, not in the image)
 reverse-eng/ ground truth extracted from the factory kernel
 scripts/     diagnostics (nq-healthd, nq-collect, …)
@@ -197,7 +200,8 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.7.0 ── ✦ NFC tap-to-send (reverse-HCE, Q → phone) · companion auto-reconnect   2026-07-08
 1.8.0 ── ✦ Bluetooth A2DP reliable (BT UART max-speed, patch 0040) · crackle isolated to output path   2026-07-10
 1.8.1 ── ✦ playback crackle CLOSED — sDMA read-priority (r41) + DPLL_ABE sys_clkin relock (r42)   hardware-verified 2026-07-12
-1.8.2 ── ✦ idle power — conservative governor + healthd/pid-1 churn fixes (idle settles at 350 MHz)   2026-07-13   ← latest
+1.8.2 ── ✦ idle power — conservative governor + healthd/pid-1 churn fixes (idle settles at 350 MHz)   2026-07-13   ← latest release
+1.9.0 ── ✦ app-driven onboarding (NFC → bonded BT → WiFi)   hardware-accepted 2026-07-15 as rc4 — NOT tagged yet
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>
