@@ -173,11 +173,26 @@ stopBtScan         →  btagent: Adapter1.StopDiscovery
 
 - `startBtScan` → `{ scanning: true, timeout: <s> }` — MUST self-stop (a
   permanently scanning radio hurts BT/WiFi coexistence on this shared antenna).
-- `listBtScanResults` → `{ "devices": [ {mac, name, cls, rssi, paired} ] }`
-  where `cls` is derived from the Class of Device so the app can show
-  *mouse / keyboard / headphones / phone / other* with the right icon and words.
-  This matters: "pair a device" with a list of bare MACs is unusable on an
+- `listBtScanResults` → `{ "devices": [ {mac, name, kind, rssi, paired} ] }`.
+  `kind` (*mouse / keyboard / headphones / phone / computer / other*) drives the
+  icon and the words. This matters: a list of bare MACs is unusable on an
   appliance with no screen to cross-check against.
+
+  **⚠️ Do NOT derive `kind` from Class of Device alone** — that was this spec's
+  first draft and it is wrong. **BLE peripherals have no Class of Device**; the
+  MX Keys reports `class=<none>` and would have been invisible in the app. Use
+  BlueZ's own already-resolved fields, which cover both worlds:
+
+  | Device | Class | Icon | Appearance |
+  |---|---|---|---|
+  | Pixel 9 Pro Fold (BR/EDR) | `0x005a420c` | `phone` | — |
+  | **MX Keys (BLE)** | **none** | **`input-keyboard`** | **`0x03c1`** |
+
+  `Icon` is the right primary source (BlueZ derives it from CoD *or* Appearance);
+  fall back to `Appearance`, then `Class`. A device with none of the three is
+  anonymous BLE noise — a 25 s scan returned **38** devices, most of them exactly
+  that, so the app must filter to things with a real identity or it shows the
+  user a wall of MAC addresses.
 - `pairBtDevice` `{ mac }` → `{ paired, connected }`. Errors: `not_found`,
   `timeout`, `unavailable`, plus a `pair_failed` for a refused/failed bond.
   **Pair → Trust → Connect is one operation** from the user's point of view;
@@ -348,11 +363,50 @@ Only a session-scoped pairing was created. **For the mouse/keyboard use case thi
 is fatal**: a keyboard that must be re-paired after every reboot is not a
 feature.
 
-Do NOT conclude this is a general defect — it may well be Android-specific (the
-phone declining to persist a bond it did not initiate; we saw the same half-bond
-shape, `bredr_linkkey_known:F`, earlier on 2026-07-15). An inbound bond from the
-same phone persists fine and survives reboots. **Only a real peripheral can tell
-these apart.**
+**⛔ CONFIRMED GENERAL — the "Android-specific" theory is DISPROVEN (real BLE
+keyboard, 2026-07-15).** Tested with Petr's **Logitech MX Keys** in pairing mode:
+
+```
+pair  →  "Attempting to pair"…            Paired: yes   Bonded: no
+trust →  succeeded                        Trusted: yes
+connect → "Connection successful"         Connected: yes
+kernel:  input: MX Keys Keyboard as …/uhid/0005:046D:B35B.0001/input/input2
+         hid-generic …: BLUETOOTH HID v0.13 Keyboard [MX Keys]   → it really works
+
+/var/lib/bluetooth/<adapter>/E9:12:…/info:
+    SupportedTechnologies=LE;  Trusted=true  Services=…00001812… (HID over GATT)
+    NO [LongTermKey], NO [IdentityResolvingKey]      ← nothing to resume with
+
+systemctl restart bluetooth  →  Paired: no   Connected: no   (never came back)
+```
+
+So outbound pairing does not persist for **either** a phone (BR/EDR, no
+`[LinkKey]`) **or** a BLE keyboard (no `[LongTermKey]`). **This blocks the entire
+outbound half — the mouse/keyboard use case that is step 2's whole point.**
+
+The asymmetry is sharp and rules a lot out:
+
+| Direction | Keys stored | Survives restart |
+|---|---|---|
+| **Inbound** (phone → Q) | ✅ | ✅ verified repeatedly |
+| **Outbound** (Q → keyboard) | ❌ | ❌ |
+
+BlueZ **can** write to `/var/lib/bluetooth` (the info file with `Name`/`Trusted`
+is there) and **can** store keys (inbound does). So the keys never reach BlueZ
+from an outgoing pair at all. Do NOT guess past this point — it is the same class
+of mystery as the blueman/observe-mode hunts, and both of those punished
+theorising. Candidate directions, none verified: the AuthReq *bonding* bit on our
+outgoing pairing request; our agent's IO capability interacting with BLE SMP;
+`nexusq-btagent` setting `Trusted` mid-pairing; the kernel's mgmt key events.
+
+**Good news buried in the same test** — these were open questions and are now
+answered:
+- ✅ `Pairable: no` does not block an outgoing pair (again — keyboard too).
+- ✅ **A keyboard completes Just-Works against our NoInputNoOutput agent** — no
+  typed passkey demanded. That risk is gone.
+- ✅ HID works end to end: `/dev/uhid` → real `/dev/input/event*` nodes.
+- ✅ BLE identity: BlueZ hands us `Icon: input-keyboard` +
+  `Appearance: 0x03c1` — **but see §4.2's corrected device-type rule.**
 
 **Still open — must be answered before this becomes a plan:**
 - **Does an outbound bond persist against a REAL peripheral** (see the NEW
