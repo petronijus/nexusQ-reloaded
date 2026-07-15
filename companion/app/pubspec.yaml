@@ -19,7 +19,21 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+# The app is versioned on its OWN INDEPENDENT TRACK — deliberately NOT aligned
+# with the Nexus Q image/firmware releases (v1.8.2, v1.9.0, ...). App changes are
+# tracked separately: an app-only fix must be shippable without implying a
+# firmware release, and a firmware release must not force a fake app bump.
+# Compatibility with the device is a PROTOCOL concern (see companion/PROTOCOL.md),
+# not something to express by fusing version numbers.
+#
+# Gradle takes versionName/versionCode straight from here
+# (android/app/build.gradle.kts). Bump the build number (+N) on EVERY apk handed
+# to the phone: Android refuses a downgrade, and it is how we tell builds apart.
+# This sat at 1.0.0+1 for dozens of builds and made "is this the fixed one?"
+# unanswerable. Build with ./build-apk.sh so the UI stamp cannot drift from this.
+#
+# 1.1.0 — BT setup onboarding (explicit bond-then-connect, secure RFCOMM).
+version: 1.1.0+2
 
 environment:
   sdk: ^3.12.0
