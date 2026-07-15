@@ -23,11 +23,20 @@ def load_daemon():
 
 
 class TestLedPlan(unittest.TestCase):
+    """The ring keys off PAIRABLE — the only property that gates pairing.
+
+    It used to key off Discoverable (with Pairable mirrored onto it). That was
+    the wrong property and it silently broke outbound bonding: Pairable off at
+    rest means no SMP bonding bit (HCI_BONDABLE), so the kernel marks the key
+    non-persistent and bluez discards it — "successful" pairings that vanish on
+    restart. Measured on a real MX Master 4, 2026-07-15.
+    """
+
     def setUp(self):
         self.mod = load_daemon()
 
     def test_takes_ring_when_pairable_outside_setup(self):
-        cmd, owns = self.mod.led_plan(discoverable=True, owns_led=False,
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
                                       setup_running=False)
         self.assertEqual(cmd, self.mod.DISCOVERABLE_CMD)
         self.assertTrue(owns)
@@ -35,13 +44,13 @@ class TestLedPlan(unittest.TestCase):
     def test_does_not_take_ring_while_setupd_owns_it(self):
         # setupd already spins its own blue and, on success, leaves the chosen
         # theme up — stomping on that is the bug this guard exists to prevent.
-        cmd, owns = self.mod.led_plan(discoverable=True, owns_led=False,
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
                                       setup_running=True)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
     def test_releases_ring_when_no_longer_pairable(self):
-        cmd, owns = self.mod.led_plan(discoverable=False, owns_led=True,
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True,
                                       setup_running=False)
         self.assertEqual(cmd, self.mod.RELEASE_CMD)
         self.assertFalse(owns)
@@ -49,13 +58,13 @@ class TestLedPlan(unittest.TestCase):
     def test_never_releases_a_ring_it_does_not_own(self):
         # The setup-success path: setupd applied a theme and exited, then turned
         # Discoverable off. We must not send "auto" and wipe that theme.
-        cmd, owns = self.mod.led_plan(discoverable=False, owns_led=False,
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False,
                                       setup_running=False)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
     def test_idempotent_while_already_showing(self):
-        cmd, owns = self.mod.led_plan(discoverable=True, owns_led=True,
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True,
                                       setup_running=False)
         self.assertIsNone(cmd)
         self.assertTrue(owns)
@@ -67,7 +76,7 @@ class TestLedPlan(unittest.TestCase):
         # when setup finished — applying a theme and turning discovery off — we
         # would then "release" and send "auto", wiping that theme.
         # Yield to setupd, and yield SILENTLY: no command, no ownership.
-        cmd, owns = self.mod.led_plan(discoverable=True, owns_led=True,
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True,
                                       setup_running=True)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
@@ -75,7 +84,7 @@ class TestLedPlan(unittest.TestCase):
     def test_setup_end_does_not_wipe_the_applied_theme(self):
         # The tail of that same scenario: setup finished, left its theme up, and
         # turned discovery off. Having yielded, we own nothing -> send nothing.
-        cmd, owns = self.mod.led_plan(discoverable=False, owns_led=False,
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False,
                                       setup_running=False)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
@@ -143,9 +152,45 @@ class TestConstants(unittest.TestCase):
         # forces SSP into a model needing a prompt no attached device can answer.
         self.assertEqual(self.mod.AGENT_CAPABILITY, "NoInputNoOutput")
 
+    def test_window_timeout_is_stock_parity(self):
+        # 120 s = stock steelhead's own DiscoverableTimeout. Enforced by bluez's
+        # timer, not ours, so a killed daemon cannot leave the Q pairable.
+        self.assertEqual(self.mod.WINDOW_TIMEOUT, 120)
+
     def test_discoverable_cmd_matches_setupd_idle_spin(self):
         # "Open for pairing" must look the same whoever is driving the ring.
         self.assertEqual(self.mod.DISCOVERABLE_CMD, "spin 0 153 204")
+
+
+class TestPairableIsTheGate(unittest.TestCase):
+    """Regression guards for the rule that replaced `Pairable == Discoverable`.
+
+    The old mirror held Pairable off at rest, which made every OUTBOUND bond
+    temporary — no keys on disk, gone after a bluetoothd restart, so a mouse or
+    keyboard would need re-pairing every boot. Measured chain (see the daemon
+    header): Pairable -> HCI_BONDABLE -> SMP bonding bit -> kernel store_hint ->
+    bluez persists the key.
+    """
+
+    def setUp(self):
+        self.mod = load_daemon()
+
+    def test_ring_follows_pairable_even_when_not_discoverable(self):
+        # The exact case the old rule got wrong. An outbound pair needs Pairable
+        # WITHOUT announcing us to the room — someone CAN pair us, so the ring
+        # must be on, and nothing may force Pairable back off under whoever
+        # opened the window.
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
+                                      setup_running=False)
+        self.assertEqual(cmd, self.mod.DISCOVERABLE_CMD)
+        self.assertTrue(owns)
+
+    def test_ring_dark_means_nobody_can_pair(self):
+        # The one safety property this daemon exists for.
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True,
+                                      setup_running=False)
+        self.assertEqual(cmd, self.mod.RELEASE_CMD)
+        self.assertFalse(owns)
 
 
 if __name__ == "__main__":

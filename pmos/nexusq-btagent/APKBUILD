@@ -5,7 +5,7 @@
 # nexusq-setupd has exited. See userspace/nexusq-btagent/README.md.
 pkgname=nexusq-btagent
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Nexus Q Bluetooth Just-Works pairing agent + pairing-exposure LED"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"

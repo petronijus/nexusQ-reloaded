@@ -25,21 +25,50 @@ because a bond is needed for BT AUDIO (A2DP) too, not only WiFi provisioning:
 `nexusq-setupd` runs for minutes and exits, which would leave the appliance with
 no agent and no way to pair a phone for music.
 
-THE Pairable == Discoverable INVARIANT
---------------------------------------
-An auto-accept Just-Works agent bonds ANY phone that asks, with no confirmation
-anywhere. That is the correct trade for an input-less appliance, but it means
-"pairable" is a real exposure window, so it must be VISIBLE and must not outlive
-its purpose. bluez leaves Pairable=true permanently by default, and Pairable —
-not Discoverable — is what actually gates bonding (discovery only affects
-inquiry; anyone who already knows the address can bond a non-discoverable but
-pairable adapter). A ring tied to Discoverable alone would therefore be a LIE:
-dark while still bondable.
-
-So this daemon holds Pairable == Discoverable. Then the LED ring is honest:
+THE INVARIANT: ring <=> Pairable
+--------------------------------
+An auto-accept Just-Works agent bonds ANY device that asks, with no confirmation
+anywhere. That is the correct trade for an input-less appliance, but it makes
+"pairable" a real exposure window, so it must be VISIBLE and must not outlive its
+purpose. bluez leaves Pairable=true permanently by default. The property we hold:
 
     ring spinning blue  ==  someone can pair with this Q
     ring not spinning   ==  nobody can
+
+`Pairable` is the ONLY thing that gates pairing — `Discoverable` merely governs
+inquiry (anyone who already knows the address can pair a non-discoverable but
+pairable adapter). So the ring keys off `Pairable`, and `Pairable` is off at rest,
+turned on only for as long as someone asked for a pairing window.
+
+Pairable is forced OFF outside a window, and a window is open exactly while the
+adapter is discoverable — that is how setup asks for one. bluez's own default is
+Pairable=true FOREVER, so without this the Q sits permanently bondable by anyone
+in range.
+
+PAIRABLE ALSO DECIDES WHETHER A BOND LASTS — the trap
+-----------------------------------------------------
+`Pairable` is not only "may someone pair with us". It is also what makes a bond
+DURABLE, in both directions. Measured 2026-07-15 (A/B on a real MX Master 4, same
+agent, one variable):
+
+    Pairable: no   -> pair "succeeds", Bonded: no,  NO keys stored, gone on restart
+    Pairable: yes  -> pair succeeds,   Bonded: yes, [PeripheralLongTermKey] +
+                      [IdentityResolvingKey] on disk, survives restart
+
+The chain, from `bluetoothd -d` rather than from reading source: the key DOES
+arrive (`new_long_term_key_callback() … new LTK … enc_size 16`), but bluez only
+PERSISTS a key the kernel marked `store_hint`; the kernel only marks it so when
+both sides set the SMP *bonding* bit; and our side only sets that bit under
+`HCI_BONDABLE` — which is exactly `Adapter1.Pairable`.
+
+So an OUTBOUND pair (we pair a mouse/keyboard) attempted at rest reports
+"Pairing successful", connects, genuinely works — and evaporates on the next
+restart, because no key was ever stored. INBOUND never had this problem: setup
+opens a window first, so Pairable was on.
+
+**Therefore: an outbound pair MUST open a window too.** Do not "fix" this by
+leaving Pairable on at rest — that trades a real exposure for a convenience, and
+the ring would sit lit forever, which is the same as no indicator at all.
 
 LED OWNERSHIP
 -------------
@@ -76,6 +105,12 @@ DISCOVERABLE_CMD = "spin 0 153 204"
 RELEASE_CMD = "auto"
 
 RECONCILE_SECS = 10
+
+# How long a pairing window may stay open, in seconds. 120 = stock steelhead's
+# own DiscoverableTimeout (verified in its /system/etc/bluetooth/main.conf).
+# Enforced by BLUEZ's timer, not ours, so the window still closes if this daemon
+# is killed mid-window.
+WINDOW_TIMEOUT = 120
 
 
 def log(*a):
@@ -124,11 +159,13 @@ def setupd_active(run=None):
         return False
 
 
-def led_plan(discoverable, owns_led, setup_running):
+def led_plan(pairable, owns_led, setup_running):
     """Pure decision: what to do with the ring. Returns (command, owns_after).
 
-    Split out from the D-Bus plumbing so the ownership rules — the part that is
-    easy to get subtly wrong — are unit-testable without a Bluetooth stack.
+    Keyed on PAIRABLE, not Discoverable: pairable is the only thing that gates
+    pairing, so it is the only honest thing to show. Split out from the D-Bus
+    plumbing so these rules — the part that is easy to get subtly wrong — are
+    unit-testable without a Bluetooth stack.
     """
     if setup_running:
         # setupd owns the ring OUTRIGHT while it runs: it spins its own blue and
@@ -138,9 +175,9 @@ def led_plan(discoverable, owns_led, setup_running):
         # here would wipe what setupd is showing). Yielding silently is also what
         # keeps us from "releasing" at the end of setup and erasing that theme.
         return None, False
-    if discoverable and not owns_led:
+    if pairable and not owns_led:
         return DISCOVERABLE_CMD, True
-    if not discoverable and owns_led:
+    if not pairable and owns_led:
         return RELEASE_CMD, False
     return None, owns_led        # nothing to do; keep current ownership
 
@@ -217,6 +254,30 @@ def _run():
         def _set(self, name, value, path=ADAPTER_PATH, iface=ADAPTER_IFACE):
             self._props(path).Set(iface, name, value)
 
+        def arm_window_timeout(self):
+            """Make the pairing window close ITSELF, in bluez, not in us.
+
+            bluez expires Pairable/Discoverable on its own timers. Setting them
+            once means a window shuts even if this daemon is killed mid-window —
+            the fail-safe direction. A timer of ours would die with us and leave
+            the Q pairable forever, which is the whole failure this ring exists
+            to make impossible.
+
+            setupd deliberately sets both timeouts to 0 (never expire) for the
+            duration of onboarding, because a wizard that goes non-pairable
+            halfway through is worse than a longer window; it closes them on the
+            way out. So only arm defaults when setup is NOT running.
+            """
+            if setupd_active():
+                return
+            try:
+                for prop in ("PairableTimeout", "DiscoverableTimeout"):
+                    if int(self._get(prop)) != WINDOW_TIMEOUT:
+                        self._set(prop, dbus.UInt32(WINDOW_TIMEOUT))
+                        log(f"{prop} -> {WINDOW_TIMEOUT}s (window self-closes)")
+            except dbus.DBusException as e:
+                log("could not arm window timeouts:", e)
+
         def register(self):
             """(Re)register with bluetoothd. Idempotent and safe to retry:
             bluetoothd drops every agent when it restarts, and it may well start
@@ -246,24 +307,36 @@ def _run():
 
         def reconcile(self):
             try:
-                discoverable = bool(self._get("Discoverable"))
                 pairable = bool(self._get("Pairable"))
+                discoverable = bool(self._get("Discoverable"))
             except dbus.DBusException:
                 return True  # no adapter (yet); the tick / signals retry
 
+            # A pairing window is OPEN exactly while the adapter is discoverable:
+            # that is how setup asks for one, and (until the bridge gains an
+            # explicit request) how anything else must ask too — including an
+            # outbound pair, which needs Pairable to produce a DURABLE bond.
+            #
+            # Outside a window we force Pairable OFF. bluez's default is
+            # Pairable=true forever, so without this the Q would sit permanently
+            # bondable by anyone in range, with the ring honestly but uselessly
+            # lit the whole time. Closing it is the point.
             if pairable != discoverable:
-                # Discoverable is the intent; Pairable is derived from it. Never
-                # the other way round: promoting a stray Pairable into
-                # Discoverable would widen the exposure instead of closing it.
                 log(f"enforcing Pairable={discoverable} (was {pairable})")
                 try:
                     self._set("Pairable", dbus.Boolean(discoverable))
+                    pairable = discoverable
                 except dbus.DBusException as e:
                     log("could not set Pairable:", e)
 
-            cmd, owns = led_plan(discoverable, self.owns_led, setupd_active())
+            # The ring keys off PAIRABLE, not Discoverable — Pairable is the only
+            # property that gates pairing, so it is the only honest thing to
+            # show. (They track each other today; keying off the real gate means
+            # the ring stays correct when the bridge learns to open a window
+            # without announcing us.)
+            cmd, owns = led_plan(pairable, self.owns_led, setupd_active())
             if cmd is not None:
-                log("ring ON: adapter is pairable — anyone can pair" if owns
+                log("ring ON: adapter is PAIRABLE — anyone can pair" if owns
                     else "ring released: adapter no longer pairable")
                 if led_send(cmd) or not owns:
                     # Only claim ownership if nexusqd actually took the command;
@@ -302,6 +375,7 @@ def _run():
         def _tick(self):
             if not self.registered:
                 self.register()
+            self.arm_window_timeout()
             self.reconcile()
             return True
 
@@ -319,6 +393,7 @@ def _run():
                 signal_name="NameOwnerChanged", arg0=BLUEZ)
 
             self.register()
+            self.arm_window_timeout()
             self.reconcile()
             # Backstop only: the signals above do the work; this covers a missed
             # signal, a late adapter, or a bluetoothd that outlives our agent.

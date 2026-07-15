@@ -346,6 +346,41 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > `onboard`/`blueman`/`sleep-inhibitor`/`gdb` are no longer down. Plus zram swap and
 > user namespaces. See `CHANGELOG.md` and `docs/2026-06-28-session-findings.md`.
 
+## Open work (2026-07-15) — the repo IS the tracker
+
+> Findings and follow-ups live here, not in a task app.
+
+### ⛔ btagent invariant is based on the wrong property — fix first
+`nexusq-btagent` (v1.9.0) holds `Pairable == Discoverable`. Measured A/B on a real
+MX Master 4: `Pairable: no` → pairing "succeeds" but **stores no keys** and dies
+on restart; `Pairable: yes` → `[PeripheralLongTermKey]` + `[IdentityResolvingKey]`
+on disk, survives. Chain (from `bluetoothd -d`, not from source): `Pairable` →
+`HCI_BONDABLE` → SMP bonding bit → kernel `store_hint` → BlueZ persists. So the
+invariant silently kills **outbound** bond persistence (mouse/keyboard re-pair
+every boot). Inbound always worked because setup makes the adapter discoverable.
+**Fix:** the safety property is "ring dark ⇒ nobody can pair", and `Pairable` —
+not `Discoverable` — gates pairing. Re-base on `ring ⇔ Pairable`, `Pairable` off
+at rest, opened only for a bounded window or an outbound pair. Touches btagent +
+its tests + README + PROTOCOL §8.5. Full record:
+`docs/superpowers/specs/2026-07-15-step2-bt-pairing-via-app.md` §4.2.
+
+### Desktop on demand (Petr's idea) — app button toggles the HDMI desktop
+The desktop idles the GPU/display path and heats the sphere; it should be
+on-request. Architecture is ready: the desktop is **`tinydm.service`** (a system
+service → start/stop-able) in `session-c1.scope`, while PulseAudio and librespot
+live in `user@10000.service` — a *different* cgroup, so audio and desktop are not
+entangled.
+**⚠️ BLOCKER, fix first:** `/var/lib/systemd/linger/` holds **only `root`, not
+`user`** — so `user@10000` (where audio lives) exists only because of the desktop
+session. Stopping the desktop would tear down the user manager and **kill audio**.
+`loginctl enable-linger user`, baked into the device package, decouples them —
+then **verify live** that audio survives `systemctl stop tinydm`.
+Then: `setDesktop {on|off}`/`getDesktop` in the bridge + a toggle in the app, and
+measure the thermal delta (that also answers the idle-heat question). Supersedes
+the older "HDMI desktop idle policy" item below once done.
+Composes with step 2: pair a keyboard+mouse, switch the desktop on → the
+appliance is a computer.
+
 ## Hardware Map
 
 | Subsystem | Status | Detail |
