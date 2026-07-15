@@ -193,5 +193,41 @@ class TestPairableIsTheGate(unittest.TestCase):
         self.assertFalse(owns)
 
 
+class TestDeviceKind(unittest.TestCase):
+    """Device typing must work for BLE, which has NO Class of Device.
+
+    Measured on Petr's gear 2026-07-15: MX Keys and MX Master report class=None
+    and identify only via Icon/Appearance. A CoD-only rule — this spec's first
+    draft — would have hidden his keyboard and mouse from the app entirely.
+    """
+
+    def setUp(self):
+        self.mod = load_daemon()
+
+    def test_ble_keyboard_by_icon(self):
+        # MX Keys as BlueZ actually reports it.
+        self.assertEqual(
+            self.mod.device_kind("input-keyboard", 0x03c1, None), "keyboard")
+
+    def test_ble_mouse_by_icon(self):
+        # MX Master 4 as BlueZ actually reports it.
+        self.assertEqual(
+            self.mod.device_kind("input-mouse", 0x03c2, None), "mouse")
+
+    def test_ble_falls_back_to_appearance_without_icon(self):
+        self.assertEqual(self.mod.device_kind("", 0x03c1, None), "keyboard")
+        self.assertEqual(self.mod.device_kind("", 0x03c2, None), "mouse")
+
+    def test_classic_phone_by_icon(self):
+        # Pixel 9 Pro Fold: class=0x005a420c, icon=phone.
+        self.assertEqual(self.mod.device_kind("phone", None, 0x005a420c), "phone")
+
+    def test_class_major_fallback(self):
+        self.assertEqual(self.mod.device_kind("", None, 0x005a420c), "phone")
+
+    def test_anonymous_is_other(self):
+        self.assertEqual(self.mod.device_kind("", None, None), "other")
+
+
 if __name__ == "__main__":
     unittest.main()

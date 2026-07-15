@@ -83,6 +83,7 @@ NB dbus/gi are imported inside _run() (same pattern as nexusq-setupd) so the
 pure logic below stays importable — and unit-testable — on a host with no BlueZ.
 """
 
+import json
 import os
 import socket
 import subprocess
@@ -98,6 +99,18 @@ AGENT_CAPABILITY = "NoInputNoOutput"
 
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 SETUPD_UNIT = "nexusq-setupd.service"
+
+# Our own control socket. `nexusq-control` (the LAN bridge the app talks to) is
+# stdlib-only by standing rule and so cannot speak D-Bus; BlueZ knowledge lives
+# here, in the one component that owns it. Newline-JSON, same envelope style as
+# nexusqd's socket:
+#     {"m":"openWindow","secs":120}  ->  {"ok":true,"secs":120}
+# Root-only (0600): opening a pairing window is a privileged act.
+CONTROL_SOCK = os.environ.get("NEXUSQ_BTAGENT_SOCK", "/run/nexusq-btagent.sock")
+
+# A discovery scan must self-stop: a permanently scanning radio hurts BT/WiFi
+# coexistence on this shared BCM4330 antenna, and WiFi is the app's own transport.
+SCAN_SECS = 25
 
 # Same stock #0099CC blue + default rate as setupd's idle spin: "open for
 # pairing" must look identical whether setupd is driving it or we are.
@@ -157,6 +170,42 @@ def setupd_active(run=None):
     except (OSError, subprocess.SubprocessError) as e:
         log("systemctl is-active failed; taking the ring so it cannot lie:", e)
         return False
+
+
+def device_kind(icon, appearance, cls):
+    """Human-facing device type for the app's list.
+
+    Deliberately NOT derived from Class of Device alone: **BLE peripherals have
+    no CoD**. Petr's MX Keys and MX Master report `Class: <none>` and would have
+    been invisible in an app that filtered on it — measured 2026-07-15, twice,
+    because my own scan filter hid them from me first.
+
+    BlueZ has already done this work: `Icon` is derived from CoD *or* from the
+    BLE Appearance, so it is the right primary source. Fall back to Appearance
+    (0x03c1 keyboard / 0x03c2 mouse), then to the CoD major class.
+    """
+    icon = (icon or "").lower()
+    for needle, kind in (("keyboard", "keyboard"), ("mouse", "mouse"),
+                         ("headset", "headphones"), ("headphones", "headphones"),
+                         ("audio", "audio"), ("phone", "phone"),
+                         ("computer", "computer")):
+        if needle in icon:
+            return kind
+
+    if appearance:
+        # BLE Appearance: the top 10 bits are the category.
+        cat = (int(appearance) >> 6) & 0x3FF
+        if cat == 15:  # HID
+            sub = int(appearance) & 0x3F
+            return {1: "keyboard", 2: "mouse"}.get(sub, "input")
+        if cat in (2, 3):
+            return "phone"
+
+    if cls:
+        major = (int(cls) >> 8) & 0x1F
+        return {1: "computer", 2: "phone", 4: "audio", 5: "input"}.get(major, "other")
+
+    return "other"
 
 
 def led_plan(pairable, owns_led, setup_running):
@@ -377,7 +426,215 @@ def _run():
                 self.register()
             self.arm_window_timeout()
             self.reconcile()
+            self.start_control()
             return True
+
+        # --- control socket (the LAN bridge's only way into BlueZ) ----------
+        def _devices(self, paired_only=False):
+            """Snapshot of known devices, already typed for the app."""
+            out = []
+            try:
+                om = dbus.Interface(self.bus.get_object(BLUEZ, "/"),
+                                    "org.freedesktop.DBus.ObjectManager")
+                objs = om.GetManagedObjects()
+            except dbus.DBusException:
+                return out
+            for path, ifaces in objs.items():
+                d = ifaces.get(DEVICE_IFACE)
+                if not d:
+                    continue
+                if paired_only and not d.get("Paired"):
+                    continue
+                name = str(d.get("Name", "") or d.get("Alias", "") or "")
+                icon = str(d.get("Icon", "") or "")
+                appearance = d.get("Appearance")
+                cls = d.get("Class")
+                # Anonymous BLE beacons are noise — a 25 s scan sees ~38 of them
+                # (measured). A wall of bare MACs is unusable on a screenless
+                # appliance, so only surface things with a real identity.
+                if not paired_only and not (name or icon or appearance):
+                    continue
+                out.append({
+                    "mac": str(d.get("Address", "")),
+                    "name": name,
+                    "kind": device_kind(icon, appearance, cls),
+                    "rssi": int(d.get("RSSI", 0)) if d.get("RSSI") is not None else None,
+                    "paired": bool(d.get("Paired", False)),
+                    "bonded": bool(d.get("Bonded", False)),
+                    "connected": bool(d.get("Connected", False)),
+                })
+            out.sort(key=lambda x: (not x["paired"], x["kind"] == "other",
+                                    -(x["rssi"] or -200)))
+            return out
+
+        def _dev_path(self, mac):
+            return f"{ADAPTER_PATH}/dev_" + mac.upper().replace(":", "_")
+
+        def _open_window(self, secs):
+            """Open a pairing window: discoverable + (via reconcile) pairable.
+
+            This is the ONE mechanism for both directions. An OUTBOUND pair needs
+            it too — not to be allowed (Pairable: no does not block an outgoing
+            Pair()), but to be DURABLE: Pairable -> HCI_BONDABLE -> the SMP
+            bonding bit -> the kernel marks the key persistent -> bluez stores it.
+            Without it a mouse pairs, works, and is gone after a reboot.
+            """
+            secs = max(1, min(int(secs or WINDOW_TIMEOUT), 600))
+            self._set("DiscoverableTimeout", dbus.UInt32(secs))
+            self._set("PairableTimeout", dbus.UInt32(secs))
+            self._set("Discoverable", dbus.Boolean(True))
+            self.reconcile()
+            return secs
+
+        def _close_window(self):
+            self._set("Discoverable", dbus.Boolean(False))
+            self.reconcile()
+
+        def _ctl(self, req, reply):
+            """Handle one control request. `reply` may be called later (async)."""
+            m = req.get("m")
+            mac = req.get("mac")
+
+            if m == "openWindow":
+                secs = self._open_window(req.get("secs", WINDOW_TIMEOUT))
+                return reply({"ok": True, "secs": secs})
+            if m == "closeWindow":
+                self._close_window()
+                return reply({"ok": True})
+            if m == "windowState":
+                return reply({"open": bool(self._get("Pairable")),
+                              "discoverable": bool(self._get("Discoverable"))})
+            if m == "startScan":
+                secs = max(5, min(int(req.get("secs", SCAN_SECS)), 60))
+                try:
+                    dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                                   ADAPTER_IFACE).StartDiscovery()
+                except dbus.DBusException as e:
+                    if "InProgress" not in str(e):
+                        return reply({"error": "unavailable", "message": str(e)})
+                # Self-stopping: a scan that outlives the request would keep the
+                # radio busy behind the user's back.
+                GLib.timeout_add_seconds(secs, self._stop_scan_once)
+                return reply({"ok": True, "secs": secs})
+            if m == "stopScan":
+                self._stop_scan_once()
+                return reply({"ok": True})
+            if m == "scanResults":
+                return reply({"devices": self._devices()})
+            if m == "listPaired":
+                return reply({"devices": self._devices(paired_only=True)})
+            if m == "remove":
+                try:
+                    dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                                   ADAPTER_IFACE).RemoveDevice(self._dev_path(mac))
+                    return reply({"removed": True})
+                except dbus.DBusException as e:
+                    return reply({"error": "not_found", "message": str(e)})
+            if m in ("connect", "disconnect"):
+                try:
+                    dev = dbus.Interface(self.bus.get_object(BLUEZ, self._dev_path(mac)),
+                                         DEVICE_IFACE)
+                    (dev.Connect if m == "connect" else dev.Disconnect)(timeout=30)
+                    return reply({"ok": True})
+                except dbus.DBusException as e:
+                    return reply({"error": "unavailable", "message": str(e)})
+            if m == "pair":
+                return self._pair_async(mac, reply)
+            return reply({"error": "unknown_method", "message": str(m)})
+
+        def _stop_scan_once(self):
+            try:
+                dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                               ADAPTER_IFACE).StopDiscovery()
+            except dbus.DBusException:
+                pass  # already stopped
+            return False  # one-shot timer
+
+        def _pair_async(self, mac, reply):
+            """Pair -> Trust -> Connect, without blocking the main loop.
+
+            Pair() takes seconds and our Agent1 must answer DURING it — a
+            synchronous call would deadlock the very agent that completes the
+            pairing. Hence reply_handler/error_handler.
+
+            The window is opened first and left to bluez's timer: that is what
+            makes the bond durable (see _open_window).
+            """
+            try:
+                self._open_window(WINDOW_TIMEOUT)
+                dev = dbus.Interface(self.bus.get_object(BLUEZ, self._dev_path(mac)),
+                                     DEVICE_IFACE)
+            except dbus.DBusException as e:
+                return reply({"error": "not_found", "message": str(e)})
+
+            def done():
+                try:
+                    self._set("Trusted", dbus.Boolean(True),
+                              path=self._dev_path(mac), iface=DEVICE_IFACE)
+                except dbus.DBusException:
+                    pass
+                try:
+                    dev.Connect(timeout=30)
+                except dbus.DBusException as e:
+                    log("paired but connect failed:", e)
+                info = next((d for d in self._devices() if d["mac"].upper() == mac.upper()), {})
+                # `bonded` is the honest answer to "will this survive a reboot?" —
+                # `paired` alone lies (it is true for a session-only pairing).
+                log(f"paired {mac} bonded={info.get('bonded')}")
+                reply({"paired": True, "bonded": bool(info.get("bonded")),
+                       "connected": bool(info.get("connected"))})
+
+            def failed(e):
+                log("pair failed:", e)
+                reply({"error": "pair_failed", "message": str(e)})
+
+            dev.Pair(reply_handler=done, error_handler=failed, timeout=90)
+
+        def _serve(self, sock, _cond):
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return True
+            conn.settimeout(5)
+            try:
+                data = conn.recv(4096).decode(errors="replace").strip()
+                req = json.loads(data) if data else {}
+            except (OSError, ValueError):
+                conn.close()
+                return True
+
+            replied = [False]
+
+            def reply(obj):
+                if replied[0]:
+                    return
+                replied[0] = True
+                try:
+                    conn.sendall((json.dumps(obj) + "\n").encode())
+                finally:
+                    conn.close()
+
+            try:
+                self._ctl(req, reply)
+            except dbus.DBusException as e:
+                reply({"error": "unavailable", "message": str(e)})
+            except Exception as e:  # noqa: BLE001 — a bad request must not kill the agent
+                log("control error:", e)
+                reply({"error": "internal", "message": str(e)})
+            return True
+
+        def start_control(self):
+            try:
+                os.unlink(CONTROL_SOCK)
+            except OSError:
+                pass
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.bind(CONTROL_SOCK)
+            os.chmod(CONTROL_SOCK, 0o600)  # opening a pairing window is privileged
+            s.listen(4)
+            s.setblocking(False)
+            GLib.io_add_watch(s, GLib.IO_IN, self._serve)
+            log("control socket:", CONTROL_SOCK)
 
         def run(self):
             self.bus.add_signal_receiver(
@@ -395,6 +652,7 @@ def _run():
             self.register()
             self.arm_window_timeout()
             self.reconcile()
+            self.start_control()
             # Backstop only: the signals above do the work; this covers a missed
             # signal, a late adapter, or a bluetoothd that outlives our agent.
             GLib.timeout_add_seconds(RECONCILE_SECS, self._tick)
