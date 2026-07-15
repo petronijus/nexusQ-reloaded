@@ -21,7 +21,11 @@ flutter run --dart-define=NEXUSQ_HOST=192.168.x.y
 ```
 
 `flutter test` runs the test suite (protocol/controller smoke test + the setup-wizard,
-BT-client and pairing-color tests — 14 as of 2026-07-13); `flutter analyze` is clean.
+BT-client and pairing-color tests — **still 14 as of 2026-07-15**); `flutter analyze`
+is clean.
+
+> ⚠️ **`lib/screens/devices_screen.dart` (1.2.0+7) has NO tests of its own** — the 14
+> predate it and none cover it. It was verified on hardware only (Petr, 2026-07-15).
 
 ## Build an APK
 
@@ -41,8 +45,30 @@ Use it rather than a bare `flutter build apk`, so the in-app version stamp
 > **Bump the build number (`+N`) on EVERY apk handed to the phone**: Android refuses a
 > downgrade, and it is how builds are told apart. (It sat at `1.0.0+1` for dozens of
 > builds and made "is this the fixed one?" unanswerable — hence `1.1.0+2`, the BT
-> setup onboarding release; `1.1.1+5` ships with device **v1.9.0**.) Gradle reads
+> setup onboarding release; `1.1.1+5` shipped alongside device **v1.9.0**, and
+> **`1.2.0+7`** — the Devices screen — alongside device **v1.10.0**.) Gradle reads
 > versionName/versionCode straight from `pubspec.yaml`.
+
+## Devices screen (step 2, added 2026-07-15 — device side released in v1.10.0)
+
+**The Q has no screen and no input device, so this screen IS the Q's Bluetooth
+settings panel** — there is no other way to pair anything to it. Reachable from the
+home app bar; speaks `../PROTOCOL.md` **§9** (Bluetooth) and **§10** (Desktop).
+
+| | |
+|---|---|
+| **Pair a phone** | *inbound* — `startPairing` opens a bounded **120 s** window (the ring spins blue exactly while it is open); the phone does the rest |
+| **Add a mouse or keyboard** | *outbound* — `startBtScan` → pick → `pairBtDevice`. **A different flow, not a variant**: a mouse never connects TO us, so the Q must discover it and call `Pair()` on it |
+| **Paired list** + *Forget* | `listPairedDevices` / `removePairedDevice`; `pairedDevicesChanged` refreshes it |
+| **HDMI desktop toggle** | `setDesktop`/`getDesktop` (§10) — pair a keyboard + mouse, switch the desktop on → the appliance is a computer |
+
+> ⚠️ **Show `bonded`, never `paired`.** `paired: true` + `bonded: false` is a device
+> that pairs, connects, genuinely types — and is **gone on reboot**. `paired` alone
+> **LIES** (PROTOCOL §9.2).
+
+> ⚠️ **No design review yet (2026-07-15).** Petr tested this screen **functionally**;
+> the copy is unreviewed and the layout has not been through the Holo-dark design
+> pass the setup wizard got (`../../docs/2026-06-30-companion-design-language.md`).
 
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 

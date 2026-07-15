@@ -273,9 +273,11 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
-- **onboarding stack (**v1.9.0**, released 2026-07-15 = device **r47** / nexusqd r10
-  / firmware r2 / setupd **r4** / **nexusq-btagent r1** / kernel r43 `#44`; built
-  from `v1.9.0-rc5`, flashed + hardware-ACCEPTED)**:
+- **onboarding + BT-pairing stack (**v1.10.0**, released 2026-07-15 = device **r48** /
+  nexusqd r10 / firmware r2 / setupd **r4** / **nexusq-btagent r3** /
+  **nexusq-control r10** / kernel r43 `#44`; hardware-verified + user-ACCEPTED.
+  Companion app is on its **own independent track** at **1.2.0+7** — **never** align
+  it to the image version)**:
   `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
   + **`usr/bin/nexusq-btagent`** exist; `nexusq-setupd.service` **and
   `nexusq-btagent.service`** installed with their `enable` lines in the
@@ -284,7 +286,10 @@ Check and REPORT each (PASS/FAIL + evidence):
   blueman *package* stays — only the applet is suppressed); `/etc/bluetooth/main.conf`
   has **`Class = 0x200428`**; `nexusq-nfc.service` contains **NO** `NQ_NFC_MESSAGE`
   line (a set value overrides the dynamic connection-info payload and dead-ends
-  tap-to-onboard); `/var/lib/systemd/linger/root` present (v1.8.2 device r40 bake);
+  tap-to-onboard); `/var/lib/systemd/linger/root` present (v1.8.2 device r40 bake)
+  **AND `/var/lib/systemd/linger/user` present (v1.10.0 device r48 bake — LOAD-BEARING:
+  without it, stopping the HDMI desktop tears down `user@10000.service` and KILLS
+  PA + librespot; gate on it)**;
   `+iw +ethtool +iproute2-minimal +tzdata` installed; `/etc/localtime` →
   `Europe/Prague`.
   **Firmware:** the staged `bcm4330.hcd` must be the stock steelhead **Phantasm
@@ -301,6 +306,15 @@ Check and REPORT each (PASS/FAIL + evidence):
   DisplayYesNo agent hijacking SSP + the app bonding on demand) — **NOT** a BCM4330
   limit; that claim is RETRACTED. See
   `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
+  ⚠️ **v1.10.0 (btagent r3): `Pairable` is OFF AT REST and the ring keys off
+  `Pairable`** *(was `Pairable == Discoverable` in v1.9.0 — the wrong property; it
+  silently broke OUTBOUND bond persistence: `Pairable` → `HCI_BONDABLE` → the SMP
+  bonding bit → the kernel's `store_hint` → bluez persists. Without it a mouse pairs,
+  connects, genuinely types, and is **gone on reboot**)*. **Do not "harden" this back
+  toward always-off `Pairable`** — turning it on for a window is what makes a bond
+  durable. Also **do not add D-Bus to `nexusq-control`**: it is stdlib-only by
+  standing rule and reaches BlueZ only via btagent's `/run/nexusq-btagent.sock`
+  (0600). See `docs/2026-07-15-step2-bt-pairing-implemented.md`.
   ⚠️ **Dev images BAKE Petr's WiFi** (`private/access/wifi.nmconnection`) → a
   fresh-flashed dev image **self-provisions and setup mode never arms**. That is
   EXPECTED, not an onboarding bug. `PUBLIC_RELEASE=1` does not bake it. (A

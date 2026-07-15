@@ -18,9 +18,12 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.9.0** (kernel `#44`/r43 —
-unchanged from v1.8.2 — device r47, setupd r4, btagent r1, nexusqd r10, firmware r2;
-flashed 2026-07-15; eth profiles baked since r21). ⚠️ **wlan0's on-air MAC is the
+"connect like this: `<cmd>`". The device runs **v1.10.0** (kernel `#44`/r43 —
+unchanged from v1.8.2 — device r48, btagent r3, nexusq-control r10, setupd r4,
+nexusqd r10, firmware r2; flashed 2026-07-15; eth profiles baked since r21).
+⚠️ **A ~1-minute ssh-auth stall right after an HDMI-desktop toggle is EXPECTED, not
+a dead device** — stopping `tinydm` churns logind and `pam_systemd` hangs before
+recovering on its own (v1.10.0). Wait it out; never assume frozen. ⚠️ **wlan0's on-air MAC is the
 chip OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI) and its DHCP lease has an **empty
 hostname** — look leases up by that MAC; the older `f8:8f:ca:20:48:e1` is **stale**
 (it is injected nowhere). **eth-direct now works from a cold boot —

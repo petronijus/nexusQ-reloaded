@@ -72,7 +72,20 @@ brcmfmac also probes board-specific and optional firmware names. These logged
 > device as of 2026-07-15, so the claim is retired pending a fix.) **Look DHCP leases
 > up by the OTP MAC `14:7d:c5:3a:35:b5`** — `f8:8f:ca:20:48:e1` is stale, and the
 > empty hostname means you cannot find it by name either. The **BT** MAC is
-> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues (v1.9.0).
+> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues (v1.9.0 +
+> v1.10.0).
+>
+> **Root cause (2026-07-15) — still NOT fixed as of v1.10.0.**
+> `scripts/gen-wifi-profile.sh` pins `cloned-mac-address` into the **BAKED dev
+> profile ONLY**. The profile `nexusq-setupd` creates during onboarding via
+> `nmcli connection add` does **not** carry it, so NM falls back to `permanent` =
+> the OTP MAC. The pinning was never wrong *in the baked path* — it simply has **no
+> reach** over an onboarded profile. **The device has no source for the factory MAC
+> at all**: nvram's `macaddr=` is a generic Broadcom default (above), and nothing
+> else on the box knows `f8:8f:ca:20:48:e1`. **The proper fix mirrors BT**: a
+> `local-mac-address` in the **DTS wifi node** — after a stock audit
+> (`stock-parity-auditor`), since stock injected it from outside the firmware path
+> and we do not yet know from where.
 
 `bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
 redistributable**, so they are **not committed** (gitignored). You provide them

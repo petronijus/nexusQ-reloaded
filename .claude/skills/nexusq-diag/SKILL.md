@@ -259,9 +259,13 @@ Findings are tagged by `kind`; interpret them like this:
   (permanent, `NoInputNoOutput`), blueman-applet **absent**, `nexusq-setupd`
   registering **NO** agent, profile `RequireAuthentication=True` on **channel 22**,
   bonds marked **`Trusted`**, Class **`0x006c0428`** (post-install sets `0x200428`;
-  bluez 5 ORs in its own service bits), and **`Pairable == Discoverable`** (btagent's
-  invariant — **`Pairable`, not `Discoverable`, gates bonding**; ring spinning blue ⇔
-  the Q is pairable). **Correct BT firmware = stock steelhead
+  bluez 5 ORs in its own service bits), and — **since v1.10.0 / btagent r3** —
+  **`ring ⇔ Pairable`, with `Pairable: no` AT REST** *(was `Pairable ==
+  Discoverable` in v1.9.0 — that invariant was keyed on the WRONG property and
+  silently broke OUTBOUND bond persistence; see §"BT pairing from the app" below)*.
+  ⚠️ **At rest `Pairable: no` + ring not spinning is HEALTHY, not a fault.**
+  `Pairable: yes` outside an open window is the anomaly worth reporting.
+  **Correct BT firmware = stock steelhead
   `Google Phantasm BCM4330B1`, build 0749, md5 `7e5bb859e33142e94052c76fba23b9e6`,
   51813 B** (a WRONG `Proxima … NoExtLNA` build-0482 blob, md5 `16db686…`, shipped
   through v1.8.2 — check `bluetoothctl show`/`dmesg` for the loaded patchram build).
@@ -269,6 +273,41 @@ Findings are tagged by `kind`; interpret them like this:
   root-caused; suspect the app's 30 s `ensureBonded` timeout and/or a stale
   phone-side bond). See
   `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.
+- **BT PAIRING FROM THE APP — both directions (v1.10.0, btagent r3 / control r10).**
+  The Q has no screen/input, so **the app IS its Bluetooth settings panel**.
+  **Inbound** = a phone pairs for A2DP. **Outbound** = the Q scans for and pairs a
+  **mouse/keyboard** — a *different flow*: a mouse never connects TO us.
+  **⛔ The v1.9.0 `Pairable == Discoverable` invariant was keyed on the WRONG
+  property and silently broke OUTBOUND bonding.** A/B (MX Master 4, same agent, one
+  variable): `Pairable: no` → pair "succeeds", **`Bonded: no`, NO keys stored, gone
+  on restart**; `Pairable: yes` → **`Bonded: yes`**, `[PeripheralLongTermKey]` +
+  `[IdentityResolvingKey]` on disk, survives. Chain from `bluetoothd -d`: the LTK
+  **arrives** (`new_long_term_key_callback() … enc_size 16`), but bluez only persists
+  a key the kernel marked **`store_hint`**, which needs the SMP **bonding bit**,
+  which our side only sets under **`HCI_BONDABLE`** = **`Adapter1.Pairable`**.
+  **Do not "re-minimise" `Pairable` — it is what makes a bond durable.**
+  ⚠️ **Read `bonded`, NEVER `paired` — `paired` alone LIES** (`paired: true` +
+  `bonded: false` = pairs, connects, types, **gone on reboot**).
+  **Healthy tells:** `/run/nexusq-btagent.sock` present (0600); the bridge forwards
+  all BT calls to it (**the bridge is stdlib-only — no D-Bus in it, by design**);
+  a paired mouse yields **3 key sections** in
+  `/var/lib/bluetooth/<adapter>/<dev>/info` and a `/dev/input/event*` via **uhid**.
+  **Non-faults:** BLE peers report **`class=none`** (they have **no CoD** — type
+  comes from `Icon`→`Appearance` 0x03c1/0x03c2); `Alias` is **synthesised from the
+  address** when unnamed, so it never proves identity; BLE addresses **rotate**
+  between pairings/channels. A scan showing ~38 anonymous beacons in 25 s is normal
+  radio noise, not a bug. See `docs/2026-07-15-step2-bt-pairing-implemented.md`.
+- **HDMI DESKTOP ON DEMAND (v1.10.0, control r10 + device r48).** `setDesktop`/
+  `getDesktop` → `tinydm.service`. **`/var/lib/systemd/linger/user` MUST be present**
+  (device r48 bakes it, alongside the older `linger/root`) — PA + librespot are user
+  units under `user@10000.service`, the desktop is `tinydm` → labwc in
+  `session-c1.scope`; **without linger the user manager exists only because of the
+  graphical session, so stopping the desktop KILLS THE MUSIC**. **Healthy tell:**
+  with the desktop stopped, `pulseaudio` + `librespot` still **active** and **both
+  sinks present**. ⚠️ **Not a fault:** stopping the desktop **churns logind** hard
+  enough that ssh auth (`pam_systemd`) can **hang ~a minute** before recovering on
+  its own — `set_desktop` allows 60 s. **Do not power-cycle** on that stall
+  ([[never-conclude-dead-hardware]] applies to the box being "frozen" too).
 - **Crackle ("lupance") CLOSED 2026-07-12 — two independent kernel fixes (r41 + r42),
   verified clean playback on `#43-postmarketOS`.** (a) Load-correlated drops =
   bus/DMA contention → kernel **r41** patch **0041** (sDMA `CCR_READ_PRIORITY` on the

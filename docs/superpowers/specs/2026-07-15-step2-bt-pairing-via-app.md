@@ -1,9 +1,29 @@
 # Step 2 — BT pairing via the app: design
 
-**Date:** 2026-07-15 · **Status:** design agreed (open questions answered
-2026-07-15) — ready to become a plan
+**Date:** 2026-07-15 · **Status:** ✅ **IMPLEMENTED — released as v1.10.0**
+(2026-07-15; device r48 / btagent r3 / control r10, app 1.2.0+7). *(was "design
+agreed — ready to become a plan")*
 **Scope:** step 2 of the software/ease-of-use phase
 (`2026-07-13-onboarding-and-companion-phase-design.md`).
+
+> **⚠️ This is the DESIGN record, kept as written. For what actually shipped —
+> including where the design was wrong — read
+> `docs/2026-07-15-step2-bt-pairing-implemented.md` and `companion/PROTOCOL.md`
+> §9/§10.**
+>
+> **§4.1's `Pairable == Discoverable` invariant is SUPERSEDED.** It was keyed on the
+> **wrong property** and silently broke OUTBOUND bond *persistence*: `Pairable` →
+> `HCI_BONDABLE` → the SMP bonding bit → the kernel's `store_hint` → bluez persists.
+> With `Pairable: no` a mouse pairs, connects, genuinely types — and is **gone on
+> reboot** (measured A/B, MX Master 4). **The shipped rule is `ring ⇔ Pairable`,
+> `Pairable` off at rest, and an outbound pair opens a window like everything
+> else.** §9 below already records the discovery; §4.1's prose predates it.
+>
+> **§4.1's "no new daemon, no IPC" also did not survive contact:** discovery only
+> lives while a client holds it, so it had to live in btagent (D-Bus, long-lived) —
+> hence btagent r3's **control socket** `/run/nexusq-btagent.sock` (0600), which is
+> now the stdlib-only bridge's only way into BlueZ. See §4.2's own
+> "MEASURED 2026-07-15" note, which caught this during design.
 
 The phase spec defined step 2 narrowly:
 
@@ -91,6 +111,12 @@ playing: `nowPlaying.source` is the hardcoded string `"spotify"`.
 ## 4. Design
 
 ### 4.1 Opening the pairing window — `startPairing`
+
+> ⚠️ **SUPERSEDED as of v1.10.0** — see the banner at the top. The invariant below
+> is keyed on the wrong property (`Discoverable`); the shipped rule is
+> **`ring ⇔ Pairable`**, and the window is opened via btagent's control socket
+> (`openWindow`), not `bluetoothctl`. Kept as the design record. Corrected text:
+> `companion/PROTOCOL.md` §9.3/§9.7.
 
 **The bridge only has to flip `Discoverable`; everything else already follows.**
 `nexusq-btagent` holds `Pairable == Discoverable` and drives the ring, so a single

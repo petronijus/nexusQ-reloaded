@@ -3,6 +3,30 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-15 — ✅ SOFTWARE-PHASE STEP 2 SHIPPED: BT pairing from the app, BOTH
+> directions, + the HDMI desktop on demand — RELEASED as v1.10.0** (device r48 /
+> btagent r3 / control r10 / setupd r4 / nexusqd r10 / kernel r43 / firmware r2;
+> app on its own track at **1.2.0+7**). **The framing that matters** (Petr's
+> correction, which reframed the whole step): the Q has **no screen and no input
+> device**, so **the app is the ONLY way to pair anything to it — it IS the Q's
+> Bluetooth settings panel**. The original phase spec only imagined "let a phone
+> pair for music"; it missed the half **only the app can do** — **outbound**, where
+> the *Q* scans for and pairs a **mouse/keyboard**. That is a **different flow, not
+> a variant**: a mouse never connects TO us; we must discover it and call `Pair()`
+> on it. Shipped: **btagent r3** (control socket `/run/nexusq-btagent.sock`, 0600 —
+> the stdlib-only bridge's only way into BlueZ; async `pair` that owns its own
+> discovery), **control r10** (PROTOCOL §9 Bluetooth + §10 Desktop), **device r48**
+> (bakes `/var/lib/systemd/linger/user` — load-bearing, or stopping the desktop
+> kills the music), **app 1.2.0+7** (Devices screen). **Root cause it is built on:
+> v1.9.0's `Pairable == Discoverable` invariant was keyed on the WRONG property**
+> and silently broke OUTBOUND bonding — `Pairable` → `HCI_BONDABLE` → SMP bonding
+> bit → kernel `store_hint` → bluez persists; without it a mouse pairs, connects,
+> genuinely types, and **evaporates on reboot**. Now **ring ⇔ `Pairable`**, off at
+> rest. ⚠️ **`bonded`, not `paired`** — `paired` alone LIES. Full record:
+> `docs/2026-07-15-step2-bt-pairing-implemented.md`. Known-open: the v1.9.0 pairing
+> flake, the factory WiFi MAC, **102.8 °C** under load, and no design review of the
+> Devices screen — see "Open work".
+>
 > **2026-07-15 — ✅ ONBOARDING STEP 1 SHIPPED: BT onboarding ROOT-CAUSED + FIXED,
 > RELEASED as v1.9.0** (built from `v1.9.0-rc5`, flashed + hardware-accepted;
 > device r47 / setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2).
@@ -350,36 +374,76 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 > Findings and follow-ups live here, not in a task app.
 
-### ⛔ btagent invariant is based on the wrong property — fix first
-`nexusq-btagent` (v1.9.0) holds `Pairable == Discoverable`. Measured A/B on a real
-MX Master 4: `Pairable: no` → pairing "succeeds" but **stores no keys** and dies
-on restart; `Pairable: yes` → `[PeripheralLongTermKey]` + `[IdentityResolvingKey]`
-on disk, survives. Chain (from `bluetoothd -d`, not from source): `Pairable` →
-`HCI_BONDABLE` → SMP bonding bit → kernel `store_hint` → BlueZ persists. So the
-invariant silently kills **outbound** bond persistence (mouse/keyboard re-pair
-every boot). Inbound always worked because setup makes the adapter discoverable.
-**Fix:** the safety property is "ring dark ⇒ nobody can pair", and `Pairable` —
-not `Discoverable` — gates pairing. Re-base on `ring ⇔ Pairable`, `Pairable` off
-at rest, opened only for a bounded window or an outbound pair. Touches btagent +
-its tests + README + PROTOCOL §8.5. Full record:
+### ✅ DONE (v1.10.0, 2026-07-15) — btagent invariant re-based on `Pairable`
+*(was "⛔ btagent invariant is based on the wrong property — fix first")*
+**Shipped in btagent r3.** `nexusq-btagent` (v1.9.0) held `Pairable ==
+Discoverable`. Measured A/B on a real MX Master 4: `Pairable: no` → pairing
+"succeeds" but **stores no keys** and dies on restart; `Pairable: yes` →
+`[PeripheralLongTermKey]` + `[IdentityResolvingKey]` on disk, survives. Chain (from
+`bluetoothd -d`, not from source): `Pairable` → `HCI_BONDABLE` → SMP bonding bit →
+kernel `store_hint` → BlueZ persists. So the invariant silently killed **outbound**
+bond persistence (mouse/keyboard re-pair every boot). Inbound always worked because
+setup makes the adapter discoverable.
+**Fixed as planned:** re-based on **`ring ⇔ Pairable`**, `Pairable` **off at rest**,
+opened only for a bounded window — and an **outbound pair now opens a window like
+everything else**, so there is one mechanism for both directions. Landed in btagent
++ its tests + README + PROTOCOL (the corrected rule lives in the **new §9.7**;
+§8.6 carries a superseded-by pointer). Records:
+`docs/2026-07-15-step2-bt-pairing-implemented.md` +
 `docs/superpowers/specs/2026-07-15-step2-bt-pairing-via-app.md` §4.2.
 
-### Desktop on demand (Petr's idea) — app button toggles the HDMI desktop
-The desktop idles the GPU/display path and heats the sphere; it should be
-on-request. Architecture is ready: the desktop is **`tinydm.service`** (a system
-service → start/stop-able) in `session-c1.scope`, while PulseAudio and librespot
-live in `user@10000.service` — a *different* cgroup, so audio and desktop are not
-entangled.
-**⚠️ BLOCKER, fix first:** `/var/lib/systemd/linger/` holds **only `root`, not
-`user`** — so `user@10000` (where audio lives) exists only because of the desktop
-session. Stopping the desktop would tear down the user manager and **kill audio**.
-`loginctl enable-linger user`, baked into the device package, decouples them —
-then **verify live** that audio survives `systemctl stop tinydm`.
-Then: `setDesktop {on|off}`/`getDesktop` in the bridge + a toggle in the app, and
-measure the thermal delta (that also answers the idle-heat question). Supersedes
-the older "HDMI desktop idle policy" item below once done.
-Composes with step 2: pair a keyboard+mouse, switch the desktop on → the
-appliance is a computer.
+### ✅ DONE (v1.10.0, 2026-07-15) — desktop on demand, app-toggled
+*(was "Desktop on demand (Petr's idea) — app button toggles the HDMI desktop")*
+**Shipped**: `setDesktop {on|off}`/`getDesktop` + event `desktopChanged` in
+`nexusq-control` **r10** (PROTOCOL §10), and a toggle on the app's new **Devices**
+screen (1.2.0+7). The desktop is **`tinydm.service`** (a system service →
+start/stop-able) in `session-c1.scope`, while PulseAudio and librespot live in
+`user@10000.service` — a *different* cgroup.
+**The BLOCKER is cleared:** `/var/lib/systemd/linger/` held **only `root`, not
+`user`**, so `user@10000` (where audio lives) existed only because of the desktop
+session — stopping the desktop would have **killed audio**. **device r48 now bakes
+`/var/lib/systemd/linger/user`.** **Verified live 2026-07-15**: with linger,
+`systemctl stop tinydm` leaves **pulseaudio + librespot active, both sinks
+present**. Composes with the row above: pair a keyboard + mouse, switch the desktop
+on → the appliance is a computer.
+**⚠️ Still open from this item:** the **thermal delta was never measured** — the
+desktop-vs-headless idle-heat question the toggle was supposed to answer is
+unanswered. A diag sweep did measure **102.8 °C under sustained load** (above the
+documented 94–99 °C envelope) and 72–75 °C at true idle; see below.
+**Also learned:** stopping the desktop **churns logind** hard enough that ssh auth
+(`pam_systemd`) hung for ~a minute during testing (it recovered on its own) — hence
+`set_desktop`'s 60 s deadline. This still supersedes the older "HDMI desktop idle
+policy" item below.
+
+### 🌡 Thermal: 102.8 °C under sustained load — above the documented envelope
+A 2026-07-15 diag sweep measured **102.8 °C** under sustained load, **above the
+94–99 °C envelope** documented elsewhere in this file. True idle is **72–75 °C /
+52 % at 350 MHz**. Not root-caused, not acted on. The desktop-on-demand toggle
+(above) is the obvious first lever to measure against.
+
+### ⚠️ Factory WiFi MAC — ROOT-CAUSED, NOT fixed
+`gen-wifi-profile.sh` pins `cloned-mac-address` into the **BAKED dev profile
+only**. The profile `nexusq-setupd` creates via `nmcli connection add` does **not**,
+so NM falls back to `permanent` = the chip's **OTP MAC `14:7d:c5:3a:35:b5`** (not
+the factory `f8:8f:ca:20:48:e1`). **The device has no source for the factory MAC at
+all** — nvram carries a generic Broadcom default. **Proper fix mirrors BT**: a
+`local-mac-address` in the **DTS wifi node**, after a stock audit
+([[verify-hypothesis-against-stock]]). Until then: **use the OTP MAC for lease
+lookups**. This is a *regression in reach*, not in the baked path — a dev image
+still gets the pinned MAC.
+
+### Carried forward, not root-caused
+- **v1.9.0 onboarding pairing flake** — 1 run × 2 failed attempts; 3+ runs first-try
+  since. Unexplained.
+- **contactless-payment link UNPROVEN** — app 1.1.1 scoped its NFC claim, but the
+  telemetry **never showed our uid toggling observe mode**. The fix may be correct;
+  it is not demonstrated.
+- **librespot boot race** — 5 restarts, self-heals.
+- **`onboard` SIGSEGVs every boot** — its native `osk` module. **NOT** the old flash
+  corruption ([[fix-errors-dont-mask]] — do not mask it).
+- **`NEXUSQ_NO_WIFI=1` build flag** — still promised-but-unwritten.
+- **The Devices screen has had no design review** — functional test only; the copy is
+  unreviewed and it has no Flutter tests of its own.
 
 ## Hardware Map
 

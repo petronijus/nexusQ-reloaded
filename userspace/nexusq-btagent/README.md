@@ -58,12 +58,16 @@ none of its own (two agents is exactly how this broke).
 Newly bonded devices are marked **`Trusted`** so their profiles reconnect later
 without re-asking for service authorization.
 
-## The `Pairable == Discoverable` invariant
+## The `ring ⇔ Pairable` invariant
 
-An auto-accept Just-Works agent bonds **any** phone that asks, with no
-confirmation anywhere. For an input-less appliance that is the only workable
-model — but it makes "pairable" a real exposure window, so the window must be
-visible and must not outlive its purpose.
+> **(was `Pairable == Discoverable` in v1.9.0 — corrected 2026-07-15, btagent r3.
+> The old invariant was keyed on the wrong property and silently broke OUTBOUND
+> bonding. See "The invariant bug" below.)**
+
+An auto-accept Just-Works agent bonds **any** peer that asks, with no confirmation
+anywhere. For an input-less appliance that is the only workable model — but it
+makes "pairable" a real exposure window, so the window must be visible and must
+not outlive its purpose.
 
 Two facts make the naive version wrong:
 
@@ -73,14 +77,113 @@ Two facts make the naive version wrong:
   non-discoverable but pairable adapter.
 
 So a ring driven by `Discoverable` alone would be a **lie**: dark while still
-bondable. This daemon holds `Pairable == Discoverable` (Discoverable is the
-intent; Pairable is derived from it — never the reverse, which would *widen* the
-exposure). Then the ring is honest:
+bondable. This daemon therefore keys the ring on **`Pairable`** — the only
+property that gates pairing, and so the only honest thing to show. `Pairable` is
+**off at rest**; a window (inbound *or* outbound, §"the control socket") is the
+only thing that turns it on, and **bluez's own timer** closes it. Then the ring is
+honest:
 
 ```
 ring spinning blue  ==  someone can pair with this Q
 ring not spinning   ==  nobody can
 ```
+
+`led_plan()` is a pure function of `(pairable, owns_led, setup_running)` so this —
+the part that is easy to get subtly wrong — is unit-tested without a BT stack.
+
+## The invariant bug: `Pairable` is what makes a bond DURABLE (2026-07-15)
+
+The v1.9.0 invariant mirrored `Pairable` onto `Discoverable`, so at rest the
+adapter was `Pairable: no`. `Pairable: no` does **not** block an *outgoing*
+`Pair()` — so an outbound pair appeared to work. It did not **persist**.
+
+A/B on a real Logitech MX Master 4, same agent, **one variable**:
+
+```
+Pairable: no   ->  pair "succeeds", Bonded: no,  NO keys stored, gone on restart
+Pairable: yes  ->  pair succeeds,   Bonded: yes, [PeripheralLongTermKey] +
+                   [IdentityResolvingKey] on disk, SURVIVES restart
+```
+
+The chain, **measured from `bluetoothd -d`** — not read from source:
+
+1. The key **ARRIVES**: `new_long_term_key_callback() … new LTK … enc_size 16`.
+2. bluez only **persists** a key the kernel marked **`store_hint`**.
+3. The kernel only marks it so when **both** sides set the SMP **bonding bit**.
+4. Our side only sets that bit under **`HCI_BONDABLE`** — which is exactly
+   **`Adapter1.Pairable`**.
+
+So a mouse paired at rest reports success, connects, **genuinely types**, and is
+gone after a reboot. **Inbound never hit this** because setup opens a window first.
+
+> **Turning `Pairable` on is not a concession to minimise — it is what makes a
+> bond durable.** An outbound `pair` therefore **opens a window like everything
+> else**: one mechanism for both directions, and the ring stays honest throughout.
+
+## The control socket — the bridge's only way into BlueZ
+
+`nexusq-control` (the LAN bridge the app talks to) is **stdlib-only by standing
+rule**, so it cannot speak D-Bus. That rule is right: **BlueZ knowledge belongs in
+the one component that owns BlueZ**. The bridge is the app's endpoint, not a second
+Bluetooth stack.
+
+| | |
+|---|---|
+| Path | `/run/nexusq-btagent.sock` (`$NEXUSQ_BTAGENT_SOCK`) |
+| Mode | **0600** — opening a pairing window is a privileged act |
+| Framing | newline-JSON, nexusqd's envelope style: `{"m":"openWindow","secs":120}` → `{"ok":true,"secs":120}` |
+
+| Method | Notes |
+|---|---|
+| `openWindow` / `closeWindow` / `windowState` | `secs` clamped 1–600, default **120** = stock steelhead's own `DiscoverableTimeout` (verified in its `/system/etc/bluetooth/main.conf`) |
+| `startScan` / `stopScan` / `scanResults` | scan self-stops (25 s, clamped 5–60) |
+| `pair` / `remove` / `connect` / `disconnect` | `pair` is **async** |
+| `listPaired` | |
+
+Errors use the LAN protocol's vocabulary directly (`not_found`, `pair_failed`,
+`unavailable`, `unknown_method`), so the bridge passes them straight through.
+
+**bluez owns the window timer, not us.** The window closes even if this daemon is
+killed mid-window. Verified 2026-07-15: `openWindow(30)` → open at t+10/t+20,
+**CLOSED at t+30/t+40**. This was FALSE before r3 — the 10 s reconcile tick rewrote
+`DiscoverableTimeout` every pass and **restarted the countdown**.
+
+**`pair` owns its own discovery**, and is async for a reason:
+
+* BlueZ **forgets an unpaired device object** shortly after discovery stops, so by
+  the time the user taps "Pair" in the app the object from their scan is usually
+  **gone** (measured: `Pair` → `UnknownObject`). `pair` re-discovers the target
+  itself (25 s) rather than trusting a previous scan.
+* `Pair()` takes seconds and **our own `Agent1` must answer DURING it** — a
+  synchronous call would **deadlock the very agent that completes the pairing**.
+* **Discovery only lives while a client holds it**: a fire-and-forget
+  `bluetoothctl scan on` dies instantly (`Discovering: no`, 0 devices). That is why
+  discovery lives here (D-Bus, long-lived), not in the bridge.
+
+### Two measured traps in `device_kind()` / the scan filter
+
+* **BLE peripherals have NO Class of Device.** The MX Keys and MX Master report
+  `Class: <none>`. A CoD-based rule — the first draft — would have made Petr's
+  keyboard and mouse **invisible in the app**. `device_kind()` reads
+  **`Icon` → `Appearance`** (0x03c1 keyboard / 0x03c2 mouse) **→ `Class`**: bluez
+  already derives `Icon` from CoD *or* the BLE Appearance, so it is the right
+  primary source.
+* **`Alias` can never answer "does this have an identity".** bluez **synthesises
+  `Alias` from the ADDRESS** (`"6B-64-CB-F3-81-98"`) when a device has no name, so
+  it is never empty. Only a real `Name` counts (or an alias differing from the
+  address = user-set). Without this a 25 s scan surfaces **~38 anonymous BLE
+  beacons** (measured), mostly the neighbours'.
+* **A scan MAC is not a stable identity** — BLE devices change address between
+  pairings/channels (the MX Master exposed `…74:F4`, `:F5`, `:F6`, `:F7`).
+
+### Hardware-verified (2026-07-15)
+
+* Mouse paired from the app: `{"paired":true,"bonded":true,"connected":true}`,
+  **3 key sections on disk**, kernel created **`MX Master 4 Mouse`** on
+  `/dev/input/…` via **uhid**.
+* A real BLE keyboard (MX Keys) completes **Just Works** against our
+  `NoInputNoOutput` agent — **no typed passkey**; HID works end to end
+  (`/dev/uhid` → `/dev/input/event*`).
 
 ## LED ownership
 
@@ -120,7 +223,10 @@ Two deliberate, documented divergences from stock:
   exist regardless, and reusing it encrypts the PSK for free.
 
 Do **not** copy stock's `DisablePlugins = audio,network,input`: it is a BlueZ 4
-mechanism, and its `audio` entry would disable the very A2DP we want.
+mechanism, its `audio` entry would disable the very A2DP we want — and, proven
+2026-07-15, its **`input` entry is exactly BlueZ's HID plugin**, i.e. the thing
+that makes a paired mouse or keyboard reach `/dev/uhid` → `/dev/input/event*`.
+Copying stock here would have silently disabled outbound peripherals altogether.
 
 ## Interfaces
 
@@ -128,6 +234,7 @@ mechanism, and its `audio` entry would disable the very A2DP we want.
 |---|---|
 | D-Bus object | `/org/nexusq/btagent` on the system bus |
 | Capability | `NoInputNoOutput` (auto-accept) |
+| Control socket | `/run/nexusq-btagent.sock` (`$NEXUSQ_BTAGENT_SOCK`), 0600, newline-JSON — the LAN bridge's only way into BlueZ |
 | LED | `spin 0 153 204` / `auto` via `/run/nexusqd.sock` (`$NEXUSQD_SOCK`) |
 | Unit | `nexusq-btagent.service`, `Restart=always`, enabled via `95-nexusq.preset` |
 

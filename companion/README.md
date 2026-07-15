@@ -53,7 +53,17 @@ toast). Now: the device runs one **permanent** `NoInputNoOutput` agent
 (`nexusq-btagent`) and the app **bonds explicitly first**, then opens a **secure**
 RFCOMM socket (channel 22, `RequireAuthentication=True`) — so the **WiFi PSK is
 encrypted in flight** and the same bond serves **A2DP**. Record:
-`../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+`../docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`.)_
+_(**Step 2 shipped in v1.10.0 (2026-07-15) — app 1.2.0+7:** a **Devices** screen
+([`PROTOCOL.md`](PROTOCOL.md) **§9** Bluetooth + **§10** Desktop). **The Q has no
+screen and no input device, so the app is the ONLY way to pair anything to it — it
+IS the Q's Bluetooth settings panel.** Two *different* flows: **inbound** (a phone
+pairs for A2DP) and **outbound** (the Q scans for and pairs a **mouse / keyboard** —
+a mouse never connects TO us, so the Q must discover it and call `Pair()`). Plus an
+**HDMI desktop toggle** (`setDesktop`) — pair a keyboard + mouse, switch the desktop
+on → the appliance is a computer. ⚠️ **Read `bonded`, never `paired` — `paired`
+alone LIES** (§9.2). Record:
+`../docs/2026-07-15-step2-bt-pairing-implemented.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 
@@ -69,5 +79,9 @@ JSON on TCP 45015, mDNS `_nexusq._tcp`), bridged to `nexusqd` + ALSA softvol +
 `librespot --onevent` by `nexusq-control`.
 
 **Transport (play/pause/next) is `unavailable` in v1** (librespot has no local transport API —
-control happens from the Spotify app). Deferred to a future protocol revision (PROTOCOL.md §5):
-output routing (HDMI/analog/S-PDIF), fixed-volume line-out, A/V sync delay, pairing/auth.
+control happens from the Spotify app). Still deferred to a future protocol revision
+(PROTOCOL.md §5): fixed-volume line-out, A/V sync delay, and the **client↔bridge
+`hello`/auth handshake + token** (that is *client authentication* — **not** the
+**Bluetooth** pairing of §9, which shipped in v1.10.0). _(**Output routing**
+— speaker/optical/HDMI — is no longer deferred: it shipped in **v1.6.15** as
+`listOutputs`/`setOutput`.)_

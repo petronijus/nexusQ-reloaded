@@ -400,13 +400,17 @@ device r47), and setupd defers to it.
 `RequestAuthorization`/`AuthorizeService` are no-ops returning success) — for an
 input-less appliance that is the only workable model. Accepted as-is:
 
-- **The exposure window is bounded and VISIBLE.** btagent holds
-  **`Pairable == Discoverable`**, and the ring spins blue exactly while the Q is
-  pairable. (`Pairable`, **not** `Discoverable`, is what gates bonding — bluez
-  leaves `Pairable=true` forever by default, so a ring driven by `Discoverable`
-  alone would be a *lie*: dark while still bondable.) The setup session
+- **The exposure window is bounded and VISIBLE.** The ring spins blue exactly while
+  the Q is pairable. (`Pairable`, **not** `Discoverable`, is what gates bonding —
+  bluez leaves `Pairable=true` forever by default, so a ring driven by
+  `Discoverable` alone would be a *lie*: dark while still bondable.) The setup session
   self-terminates after 600 s of inactivity (§8.2) and `finishSetup` closes the
   window (`enforcing Pairable=False`).
+
+  > **(was `Pairable == Discoverable` in v1.9.0, now `ring ⇔ Pairable` as of
+  > v1.10.0 / 2026-07-15)** — the mirrored invariant was keyed on the wrong
+  > property and silently broke OUTBOUND bond persistence. `Pairable` is now off
+  > at rest and the ring keys off it directly. See **§9.7**.
 - It is **beyond stock parity, not a regression**: the original Nexus Q onboarding
   never bonded at all and sent the PSK in cleartext. We bond and encrypt.
 - It is **acceptable for a single-user appliance**: no persistent multi-user trust
@@ -425,3 +429,172 @@ decodes `{"v":1,"bt":"<BT MAC>","host":..., "ip":..., "prov": bool}` and when
 this §8 transport to run the setup wizard; when `prov` is `true` it instead
 connects over the LAN using §1–§4. NFC itself carries no setup-transport
 traffic — it only hands the app the address to dial.
+
+## 9. Bluetooth (pairing, both directions) — v1.10.0
+
+The Q has **no screen and no input device**. The app is therefore not a convenience
+on top of a settings panel — **it IS the Q's Bluetooth settings panel**. There is no
+other way to pair anything to this device.
+
+Two directions, and they are **different flows, not variants of one**:
+
+| Direction | Who initiates | Example | Method |
+|---|---|---|---|
+| **Inbound** | the phone | a phone pairs for music (A2DP) | `startPairing` → the phone does the rest |
+| **Outbound** | **the Q** | the Q pairs a **mouse / keyboard** | `startBtScan` → `pairBtDevice` |
+
+A mouse never connects *to* us: nothing about waiting makes it appear. We must
+discover it and call `Pair()` on it. Hence the separate scan/pair vocabulary.
+
+### 9.1 Wiring
+
+`nexusq-control` is **stdlib-only by standing rule** and cannot speak D-Bus, so every
+method below is forwarded over a Unix socket to **`nexusq-btagent`**
+(`/run/nexusq-btagent.sock`, mode **0600**, newline-JSON), the one component that
+owns BlueZ. The bridge is the app's endpoint, not a second Bluetooth stack. btagent's
+error codes are already this protocol's vocabulary (`not_found`, `pair_failed`,
+`unavailable`, `unknown_method`) and pass straight through; an unreachable socket is
+`unavailable`.
+
+### 9.2 `bonded` vs `paired` — **`paired` alone LIES**
+
+> ⚠️ **Read `bonded`, never `paired`, to answer "will this survive a reboot?"**
+
+Measured A/B on a real Logitech MX Master 4, same agent, one variable (2026-07-15):
+
+```
+Pairable: no   ->  pair "succeeds", Bonded: no,  NO keys stored, gone on restart
+Pairable: yes  ->  pair succeeds,   Bonded: yes, [PeripheralLongTermKey] +
+                   [IdentityResolvingKey] on disk, SURVIVES restart
+```
+
+`Paired: true` with `Bonded: false` is a device that pairs, connects, genuinely
+types — and evaporates on reboot. `pairBtDevice` returns both; the app must treat
+`bonded: false` as a failure to persist. Full chain: §9.7 and
+`../userspace/nexusq-btagent/README.md`.
+
+### 9.3 The pairing window
+
+`startPairing` opens a **bounded, visible** window: the adapter goes `Pairable` +
+`Discoverable`, and the ring spins stock blue exactly while it is open.
+
+- **Default 120 s** (`WINDOW_TIMEOUT`) — stock steelhead's own `DiscoverableTimeout`,
+  verified in its `/system/etc/bluetooth/main.conf`. `secs` is clamped to 1–600.
+- **bluez's own timer closes it**, not ours — so the window still closes if btagent
+  is killed mid-window. (Verified 2026-07-15: `openWindow(30)` → open at t+10/t+20,
+  **CLOSED at t+30/t+40**. This was FALSE earlier: our own 10 s reconcile tick
+  rewrote `DiscoverableTimeout` and restarted the countdown each pass — fixed.)
+- **`Pairable` is off at rest.** An outbound pair OPENS A WINDOW like everything
+  else — one mechanism for both directions (§9.7).
+
+### 9.4 Methods — inbound
+
+| Method | Params | Result |
+|---|---|---|
+| `startPairing` | `{ secs?: 120 }` | `{ pairing: true, timeout }` — opens the window; emits `pairingChanged` |
+| `stopPairing` | — | `{ pairing: false }` — closes it early; emits `pairingChanged` |
+| `getPairingState` | — | `{ pairing: bool }` — reads `Adapter1.Pairable` live (not a cached flag) |
+
+### 9.5 Methods — outbound (scan / pair a peripheral)
+
+| Method | Params | Result |
+|---|---|---|
+| `startBtScan` | `{ secs?: 25 }` | `{ scanning: true, timeout }` — clamped 5–60 |
+| `stopBtScan` | — | `{ scanning: false }` |
+| `listBtScanResults` | — | `{ devices: [Device] }` |
+| `pairBtDevice` | `{ mac }` | `{ paired, bonded, connected }` — **async**, up to ~100 s |
+| `removePairedDevice` | `{ mac }` | `{ removed: true }` — emits `pairedDevicesChanged` |
+| `connectBtDevice` / `disconnectBtDevice` | `{ mac }` | `{ ok: true }` — emits `pairedDevicesChanged` |
+| `listPairedDevices` | — | `{ devices: [Device] }` |
+
+**`Device`**: `{ mac, name, kind, paired, bonded, connected }`, where `kind` ∈
+`keyboard` · `mouse` · `input` · `headphones` · `audio` · `phone` · `computer` ·
+`other`.
+
+**A scan self-stops.** A permanently scanning radio hurts BT/WiFi coexistence on this
+shared BCM4330 antenna — and WiFi is the app's own transport. Discovery also cannot
+be fire-and-forget: it **only lives while a client holds it** (measured: a detached
+`bluetoothctl scan on` dies instantly — `Discovering: no`, 0 devices). That is why
+discovery lives in btagent (long-lived, on D-Bus), not in the bridge.
+
+**`pairBtDevice` owns its own discovery.** BlueZ forgets an unpaired device object
+shortly after discovery stops, so the object from the user's scan is usually **gone**
+by the time they tap Pair (measured: `Pair` → `UnknownObject`). `pair` therefore
+re-discovers the target itself (25 s) rather than trusting a previous scan. It is
+async because `Pair()` takes seconds and **our own `Agent1` must answer DURING it** —
+a synchronous call would deadlock the very agent that completes the pairing.
+
+### 9.6 What the app may show — two measured traps
+
+- **BLE peripherals have NO Class of Device.** The MX Keys / MX Master report
+  `class=none`. A CoD-based device-type rule — this design's first draft — would have
+  hidden Petr's keyboard and mouse from the app **entirely**. `device_kind()` reads
+  **`Icon` → `Appearance` (0x03c1 keyboard / 0x03c2 mouse) → `Class`**, in that order:
+  BlueZ already derives `Icon` from CoD *or* the BLE Appearance, so it is the right
+  primary source.
+- **`Alias` can never answer "does this have an identity".** BlueZ **synthesises
+  `Alias` from the ADDRESS** (`"6B-64-CB-F3-81-98"`) when a device has no name, so it
+  is never empty. Only a real `Name` counts (or an alias that differs from the
+  address = user-set). Without this filter a scan returns a wall of the neighbours'
+  anonymous BLE beacons (**~38 in 25 s**, measured).
+- **A scan MAC is not a stable identity.** BLE devices change address between
+  pairings/channels — the MX Master exposed `…74:F4`, `:F5`, `:F6`, `:F7` on different
+  channels. Do not persist a scan MAC as a device's identity.
+
+### 9.7 Why `Pairable` must be ON for an outbound pair (root cause, 2026-07-15)
+
+The `Pairable == Discoverable` invariant shipped in v1.9.0 was based on the **wrong
+property** and silently broke **outbound** bonding. Chain, measured from
+`bluetoothd -d` (not read from source):
+
+1. The key **ARRIVES** — `new_long_term_key_callback() … new LTK … enc_size 16`.
+2. BlueZ only **persists** a key the kernel marked **`store_hint`**.
+3. The kernel only marks it so when **both** sides set the SMP **bonding bit**.
+4. Our side only sets that bit under **`HCI_BONDABLE`** — which is exactly
+   **`Adapter1.Pairable`**.
+
+So a mouse paired at rest (`Pairable: no`) reports success, connects, genuinely
+types, and is **gone after a reboot**. Inbound never hit this because setup opens a
+window first.
+
+> **Turning `Pairable` on is not a concession to minimise — it is what makes a bond
+> durable.** The ring now keys off `Pairable` (the only property that gates pairing),
+> `Pairable` is off at rest, and an outbound pair opens a window like everything else.
+
+This **supersedes** §8.6's `Pairable == Discoverable` wording and the spec's §4.1.
+
+### 9.8 Errors
+
+`pair_failed` (BlueZ refused/aborted the bond, or the target never appeared within
+the 25 s discovery deadline — usually "is it in pairing mode?"), `not_found`
+(unknown MAC on remove), `unavailable` (btagent socket unreachable, bluetoothd down,
+or Connect/Disconnect refused), `bad_params` (missing/invalid `mac`).
+
+## 10. Desktop on demand — v1.10.0
+
+The HDMI desktop idles the GPU/display path and heats the sphere, so it is
+**on-request**, not always-on. Composed with §9: pair a keyboard + mouse, switch the
+desktop on → the appliance is a computer.
+
+| Method | Params | Result |
+|---|---|---|
+| `getDesktop` | — | `{ desktop: bool }` — live `systemctl is-active tinydm.service` |
+| `setDesktop` | `{ on: bool }` | `{ desktop: bool }` — emits `desktopChanged` |
+
+### 10.1 The `user` linger is a PREREQUISITE, not a detail
+
+The desktop is `tinydm.service` → labwc in **`session-c1.scope`**. PulseAudio and
+librespot are **user units under `user@10000.service`** — a *different* cgroup.
+
+> Without linger, the user manager exists **only because of the graphical session** —
+> so stopping the desktop would **kill the music**.
+
+`device-google-steelhead` **r48** bakes `/var/lib/systemd/linger/user`, which
+decouples them. Verified live 2026-07-15: with linger, `systemctl stop tinydm` leaves
+**pulseaudio + librespot active, both sinks present**.
+
+### 10.2 `setDesktop` uses a 60 s deadline
+
+Stopping the desktop **churns logind** hard enough that ssh auth (`pam_systemd`) hung
+for ~a minute during 2026-07-15 testing. It recovered on its own — but a snappy
+timeout here would report a false failure, so `set_desktop` allows 60 s.

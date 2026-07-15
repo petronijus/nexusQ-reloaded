@@ -13,6 +13,8 @@ the work out to the subsystems that already run on the device:
 | discovery | mDNS `_nexusq._tcp` via `avahi-publish-service` (best-effort); TXT carries `name=` + `room=` from the identity file |
 | device identity _(2026-07-13, r9)_ | `/etc/nexusq/device.json` `{"name","room"}` — written by `nexusq-setupd`'s `setName`, read via `load_identity()` (fallback `NEXUSQ_NAME` env → "Nexus Q"); feeds `getDeviceInfo`, the mDNS TXT, and the librespot wrapper's Spotify name |
 | setup re-entry _(2026-07-13, r9)_ | `startSetupMode` method: arms `/run/nexusq-setup.force` + `systemctl start nexusq-setupd.service` (re-provisioning while already on WiFi); every failure shape maps to error `unavailable`. See `../nexusq-setupd/` + `../../companion/PROTOCOL.md` §8 |
+| **Bluetooth** _(2026-07-15, r10)_ | **`nexusq-btagent`'s control socket** `/run/nexusq-btagent.sock` (0600, newline-JSON) — this daemon is **stdlib-only by standing rule** and cannot speak D-Bus, so **all** of it forwards: `startPairing`/`stopPairing`/`getPairingState`, `startBtScan`/`stopBtScan`/`listBtScanResults`, `pairBtDevice`/`removePairedDevice`/`connectBtDevice`/`disconnectBtDevice`, `listPairedDevices`; events `pairingChanged`, `pairedDevicesChanged`. btagent's error codes already speak this protocol (`not_found`/`pair_failed`/`unavailable`/`unknown_method`) and pass through; an unreachable socket = `unavailable`. See `../nexusq-btagent/` + PROTOCOL §9 |
+| **HDMI desktop on demand** _(2026-07-15, r10)_ | `setDesktop {on}` / `getDesktop` → `systemctl start/stop/is-active **tinydm.service**`; event `desktopChanged`. See PROTOCOL §10 |
 
 Pure Python 3 (stdlib only — the device ships `python3`). Threaded: TCP accept loop, a unix
 accept loop for the librespot hook, one handler thread per client; shared state under a lock;
@@ -36,6 +38,32 @@ for the amp toggle), `NEXUSQ_AMP_CTRL` (Speaker), `NEXUSQ_PULSE_SERVER`
 `NEXUSQD_SOCK` (/run/nexusqd.sock), `NEXUSQ_HOOK_SOCK` (/run/nexusq-control.sock),
 `NEXUSQ_IDENTITY` (/etc/nexusq/device.json), `NEXUSQ_NAME` ("Nexus Q" — fallback
 when the identity file is absent).
+
+## Bluetooth + desktop (r10, 2026-07-15) — three things that bite
+
+**The app is the Q's Bluetooth settings panel.** The device has no screen and no
+input device, so there is no other way to pair anything to it. Two *different*
+flows, not variants: **inbound** (a phone pairs to us for A2DP — `startPairing`,
+then the phone does the rest) and **outbound** (the Q discovers and calls `Pair()`
+on a mouse/keyboard — `startBtScan` → `pairBtDevice`).
+
+- **`bonded`, not `paired`.** `pairBtDevice` returns `{paired, bonded, connected}`.
+  **`paired` alone LIES**: `paired: true` + `bonded: false` is a device that pairs,
+  connects, genuinely types — and is **gone on reboot** (no keys on disk). Only
+  `bonded` answers "will this survive a restart?". Root cause + the `Pairable` →
+  `HCI_BONDABLE` → SMP bonding bit → `store_hint` chain: `../nexusq-btagent/README.md`.
+- **`pairBtDevice` is slow by nature** — the btagent call gets a **100 s** deadline
+  (peer + agent + SMP + btagent's own 25 s re-discovery), `connect`/`disconnect` 45 s.
+  Do not "tighten" these into false failures.
+- **The `user` linger is a PREREQUISITE of `setDesktop`,** baked by
+  `device-google-steelhead` **r48** (`/var/lib/systemd/linger/user`). PA + librespot
+  are user units under `user@10000.service`; the desktop is `tinydm` → labwc in
+  `session-c1.scope`. **Without linger the user manager exists only because of the
+  graphical session — stopping the desktop would kill the music.** Verified live
+  2026-07-15: with linger, `systemctl stop tinydm` leaves pulseaudio + librespot
+  active, both sinks present.
+- **`set_desktop` allows 60 s.** Stopping the desktop churns logind hard enough that
+  ssh auth (`pam_systemd`) hung for ~a minute during testing; it recovered on its own.
 
 ## v1 limitations
 - **Transport (play/pause/next/previous) is `unavailable`** — librespot is a Spotify-Connect

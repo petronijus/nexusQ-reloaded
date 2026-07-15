@@ -4,7 +4,125 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-15 (latest): **BT onboarding ROOT-CAUSED + FIXED — RELEASED as v1.9.0** (built from `v1.9.0-rc5`, flashed + hardware-accepted; committed + pushed on `main`, tagged 2026-07-15)
+## Session 2026-07-15 (latest): **STEP 2 — BT pairing from the app, BOTH directions, + HDMI desktop on demand — RELEASED as v1.10.0** (hardware-verified + user-accepted; committed on `main`, tagged 2026-07-15)
+
+Full record: `docs/2026-07-15-step2-bt-pairing-implemented.md`. Spec:
+`docs/superpowers/specs/2026-07-15-step2-bt-pairing-via-app.md` (**its §4.1
+invariant is superseded** — see below). Base: v1.9.0.
+
+### Current state
+
+**v1.10.0 = device r48 / btagent r3 / control r10 / setupd r4 / nexusqd r10 /
+kernel r43 `#44` (unchanged since v1.8.2) / firmware r2.** App on its **own
+independent track** at **1.2.0+7** — *never* aligned to image releases.
+
+**The framing that matters** (Petr's correction — it reframed the whole step): the Q
+has **no screen and no input device**, so **the app is the ONLY way to pair anything
+to it — it IS the Q's Bluetooth settings panel**. The phase spec only imagined "let
+a phone pair for music" and missed the half only the app can do:
+
+| Direction | Who initiates | Example |
+|---|---|---|
+| Inbound | the phone | pairs for music (A2DP) |
+| **Outbound** | **the Q** | scans for and pairs a **mouse / keyboard** |
+
+**Outbound is a different flow, not a variant** — a mouse never connects TO us; we
+must discover it and call `Pair()` on it.
+
+### ⛔ THE ROOT CAUSE this release is built on
+
+**v1.9.0's `Pairable == Discoverable` invariant was keyed on the WRONG property and
+silently broke OUTBOUND bonding.** A/B on a real MX Master 4, same agent, one
+variable:
+
+```
+Pairable: no   ->  pair "succeeds", Bonded: no,  NO keys stored, gone on restart
+Pairable: yes  ->  pair succeeds,   Bonded: yes, [PeripheralLongTermKey] +
+                   [IdentityResolvingKey] on disk, SURVIVES restart
+```
+
+Chain, **measured from `bluetoothd -d`** (not read from source): the key **ARRIVES**
+(`new_long_term_key_callback() … new LTK … enc_size 16`), but bluez only **persists**
+a key the kernel marked **`store_hint`**; the kernel only marks it so when **both**
+sides set the SMP **bonding bit**; our side only sets that bit under
+**`HCI_BONDABLE`** = **`Adapter1.Pairable`**. So a mouse paired at rest reports
+success, connects, **genuinely types**, and evaporates on reboot. **Inbound never hit
+it** because setup opens a window first.
+
+**Fix (btagent r3):** ring keys off **`Pairable`**, `Pairable` **off at rest**, and an
+outbound pair **OPENS A WINDOW like everything else** — one mechanism for both
+directions. *Turning `Pairable` on is not a concession to minimise; it is what makes
+a bond durable.*
+
+### ⚠️ `bonded`, not `paired` — **`paired` alone LIES**
+
+`paired: true` + `bonded: false` = a device that pairs, connects, types, and is
+**gone on reboot**. Any caller reading `paired` is reading a lie.
+
+### What works (v1.10.0, hardware-verified)
+
+- **Mouse paired from the app**: `{"paired":true,"bonded":true,"connected":true}`,
+  **3 key sections on disk**, kernel created **`MX Master 4 Mouse`** on
+  `/dev/input/…` via **uhid**.
+- **A real BLE keyboard (MX Keys) completes Just Works** against our
+  `NoInputNoOutput` agent — **no typed passkey**; HID end to end
+  (`/dev/uhid` → `/dev/input/event*`). **Good thing we never copied stock's
+  `DisablePlugins = audio,network,input`** — that **`input` is BlueZ's HID plugin**.
+- **Desktop on demand**: `setDesktop`/`getDesktop` → `tinydm.service`. **device r48
+  bakes `/var/lib/systemd/linger/user`** — **load-bearing**: PA + librespot are user
+  units under `user@10000.service`, the desktop is `tinydm` → labwc in
+  `session-c1.scope`; **without linger, stopping the desktop would kill the music**.
+  Verified: with linger, `systemctl stop tinydm` leaves pulseaudio + librespot
+  active, both sinks present.
+- **Petr confirmed from the app**: mouse listed with the right icon, desktop toggle
+  both ways, phone paired, mouse forgotten and re-paired.
+
+### Gotchas that will bite the next session
+
+- **Discovery only lives while a client holds it** — a fire-and-forget
+  `bluetoothctl scan on` dies instantly (`Discovering: no`, 0 devices). Hence
+  discovery lives in **btagent** (D-Bus, long-lived), and the stdlib-only bridge
+  reaches it via **`/run/nexusq-btagent.sock`** (0600, newline-JSON). **Do not add
+  D-Bus to the bridge** — BlueZ knowledge belongs in the component that owns BlueZ.
+- **`pair` must own its own discovery**: bluez forgets an unpaired device object
+  shortly after discovery stops, so the object from the user's scan is usually gone
+  by the time they tap Pair (`Pair` → `UnknownObject`).
+- **`pair` must be async**: `Pair()` takes seconds and **our own `Agent1` must answer
+  DURING it** — a sync call deadlocks the agent that completes the pairing.
+- **BLE peripherals have NO Class of Device** — MX Keys/MX Master report
+  `class=none`. A CoD-based rule **would have hidden Petr's keyboard and mouse
+  entirely**. `device_kind()` = **Icon → Appearance (0x03c1/0x03c2) → Class**.
+- **`Alias` is synthesised from the ADDRESS** ("6B-64-CB-F3-81-98") when there is no
+  name, so it can **never** answer "does this have an identity". Only a real `Name`
+  counts — else a scan returns **~38 anonymous BLE beacons in 25 s**.
+- **A scan MAC is not a stable identity** — BLE addresses rotate between
+  pairings/channels (MX Master: `…74:F4/:F5/:F6/:F7`).
+- **The window self-closes on bluez's timer** (`openWindow(30)` → CLOSED at t+30/t+40).
+  This was FALSE before r3: our own **10 s reconcile tick rewrote
+  `DiscoverableTimeout` and restarted the countdown**. Don't reintroduce it.
+- **Stopping the desktop churns logind** — ssh auth (`pam_systemd`) **hung ~a minute**
+  during testing before recovering on its own. Hence `set_desktop`'s **60 s deadline**.
+  Don't panic-reboot if ssh stalls right after a desktop toggle.
+
+### WHERE TO CONTINUE (v1.10.0 → next)
+
+Nothing from step 2 is blocking. The open list is **carried forward unchanged** from
+v1.9.0 plus two new items — see the v1.9.0 block's "WHERE TO CONTINUE" below, which
+still stands, and:
+
+1. **The desktop toggle's thermal delta was NEVER measured** — the idle-heat question
+   the toggle was built to answer is still open. Obvious first experiment now that
+   the toggle exists.
+2. **The Devices screen has had NO design review** — Petr tested it **functionally**
+   only; the copy is unreviewed and the screen has **no Flutter tests of its own**
+   (the suite is still 14, all predating it).
+3. **The contactless-payment link is UNPROVEN** — app 1.1.1 scoped its NFC claim, but
+   the telemetry **never showed our uid toggling observe mode**. The fix may be
+   correct; it is **not demonstrated**.
+
+---
+
+## Session 2026-07-15: **BT onboarding ROOT-CAUSED + FIXED — RELEASED as v1.9.0** (built from `v1.9.0-rc5`, flashed + hardware-accepted; committed + pushed on `main`, tagged 2026-07-15)
 
 Full record:
 `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md`

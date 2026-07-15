@@ -4,6 +4,162 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.10.0] — 2026-07-15 — Bluetooth pairing from the app, BOTH directions · HDMI desktop on demand (device r48, btagent r3, control r10, setupd r4, nexusqd r10, kernel r43, firmware r2)
+
+> **Step 2 of the software phase**, built on v1.9.0's BlueZ infrastructure.
+> Hardware-verified and user-accepted 2026-07-15. App on its own track at
+> **1.2.0+7**. Full record: `docs/2026-07-15-step2-bt-pairing-implemented.md`.
+>
+> **The framing that matters:** the Q has **no screen and no input device**, so the
+> **app is the ONLY way to pair anything to it — it IS the Q's Bluetooth settings
+> panel**. The original phase spec only imagined "let a phone pair for music"; it
+> missed the half that **only the app can do**:
+>
+> | Direction | Who initiates | Example |
+> |---|---|---|
+> | Inbound | the phone | pairs for music (A2DP) |
+> | **Outbound** | **the Q** | scans for and pairs a **mouse / keyboard** |
+>
+> Outbound is a **different flow, not a variant**: a mouse never connects TO us; we
+> must discover it and call `Pair()` on it.
+>
+> ⚠️ **Read "Known issues / open" at the end of this release before relying on it** —
+> the v1.9.0 onboarding flake is still un-root-caused, the factory WiFi MAC is
+> root-caused but NOT fixed, a diag sweep measured **102.8 °C** under sustained load,
+> and the new Devices screen has had **no design review**.
+
+### Fixed
+
+- **⛔ ROOT CAUSE — the `Pairable == Discoverable` invariant shipped in v1.9.0 was
+  based on the WRONG property and silently broke OUTBOUND bonding.** A/B on a real
+  Logitech MX Master 4, same agent, **one variable**:
+
+  ```
+  Pairable: no   ->  pair "succeeds", Bonded: no,  NO keys stored, gone on restart
+  Pairable: yes  ->  pair succeeds,   Bonded: yes, [PeripheralLongTermKey] +
+                     [IdentityResolvingKey] on disk, SURVIVES restart
+  ```
+
+  Chain, **measured from `bluetoothd -d`** (not read from source): the key **ARRIVES**
+  (`new_long_term_key_callback() … new LTK … enc_size 16`), but bluez only
+  **persists** a key the kernel marked **`store_hint`**; the kernel only marks it so
+  when **both** sides set the SMP **bonding bit**; and our side only sets that bit
+  under **`HCI_BONDABLE`** — which is exactly **`Adapter1.Pairable`**. So a mouse
+  paired at rest reports success, connects, genuinely types, and **evaporates on
+  reboot**. **Inbound never hit it** because setup opens a window first.
+  **Fix (btagent r3):** the ring now keys off **`Pairable`** (the only property that
+  gates pairing), `Pairable` is **off at rest**, and an outbound pair **OPENS A
+  WINDOW like everything else** — one mechanism for both directions. *Turning
+  `Pairable` on is not a concession to minimise; it is what makes a bond durable.*
+- **A pairing window now self-closes via bluez's own timer** (btagent r3). Verified:
+  `openWindow(30)` → open at t+10/t+20, **CLOSED at t+30/t+40**. This was FALSE
+  before: our own 10 s reconcile tick rewrote `DiscoverableTimeout` and **restarted
+  the countdown** every pass, so a window could stay open indefinitely. bluez owning
+  the timer also means the window still closes if btagent is killed mid-window.
+- **`pair` now owns its own discovery** (btagent r3). BlueZ forgets an unpaired
+  device object shortly after discovery stops, so the object from the user's scan is
+  usually **gone** by the time they tap Pair (measured: `Pair` → `UnknownObject`).
+
+### Added
+
+- **`nexusq-btagent` r3 — a control socket** (`/run/nexusq-btagent.sock`, **0600**,
+  newline-JSON): the LAN bridge's **only** way into BlueZ. The bridge is stdlib-only
+  by standing rule, and that rule is right — **BlueZ knowledge belongs in the
+  component that owns BlueZ**, not in a second Bluetooth stack. Methods:
+  `openWindow`/`closeWindow`/`windowState`, `startScan`/`stopScan`/`scanResults`,
+  `pair`/`remove`/`connect`/`disconnect`, `listPaired`. **`pair` is async** — `Pair()`
+  takes seconds and our own `Agent1` **must answer DURING it**, so a synchronous call
+  would deadlock the very agent that completes the pairing.
+- **`nexusq-control` r10 — Bluetooth + desktop methods** (PROTOCOL §9/§10):
+  `startPairing`/`stopPairing`/`getPairingState`, `startBtScan`/`stopBtScan`/
+  `listBtScanResults`, `pairBtDevice`/`removePairedDevice`/`connectBtDevice`/
+  `disconnectBtDevice`, `listPairedDevices`; events **`pairingChanged`**,
+  **`pairedDevicesChanged`**. Plus **`setDesktop`/`getDesktop`** + event
+  **`desktopChanged`**. All BT calls forward to btagent's socket; its error codes
+  (`not_found`/`pair_failed`/`unavailable`/`unknown_method`) already speak this
+  protocol's vocabulary and pass through.
+- **HDMI desktop on demand** — `setDesktop {on|off}` starts/stops `tinydm.service`.
+  **`device-google-steelhead` r48 bakes `/var/lib/systemd/linger/user`**, which is
+  **load-bearing**: PA + librespot are user units under `user@10000.service`, the
+  desktop is `tinydm` → labwc in `session-c1.scope`; **without linger the user
+  manager exists only because of the graphical session, so stopping the desktop would
+  kill the music**. Verified: with linger, `systemctl stop tinydm` leaves pulseaudio +
+  librespot **active, both sinks present**.
+- **Companion app 1.2.0+7** (own **independent** version track — **NEVER** aligned to
+  image releases): a new **Devices** screen — *Pair a phone* / *Add a mouse or
+  keyboard* / paired list with *Forget* / **HDMI desktop toggle** — reachable from the
+  home app bar.
+- **PROTOCOL.md §9 "Bluetooth"** (both directions, the methods, `pairingChanged`/
+  `pairedDevicesChanged`, error codes incl. `pair_failed`, the 120 s window, and the
+  **`bonded` vs `paired`** distinction) and **§10 "Desktop"** (`setDesktop`/
+  `getDesktop`/`desktopChanged` + the linger prerequisite). These methods existed
+  **only in code** until this release.
+
+### Changed
+
+- **`bonded`, not `paired`, is the honest answer to "will this survive a reboot?"**
+  `pairBtDevice` returns both; `paired: true` + `bonded: false` is a device that
+  pairs, connects, genuinely types — and is **gone on reboot**. **`paired` alone
+  LIES.** Documented in PROTOCOL §9.2.
+- **`device_kind()` reads `Icon` → `Appearance` → `Class`, in that order** — because
+  **BLE peripherals have NO Class of Device**. The MX Keys / MX Master report
+  `class=none` and identify via BlueZ's `Icon` (`input-keyboard`/`input-mouse`) +
+  `Appearance` (0x03c1/0x03c2). **A CoD-based device-type rule — this spec's first
+  draft — would have hidden Petr's keyboard and mouse from the app entirely.**
+- **Scan results are filtered on a real `Name`, never `Alias`.** BlueZ
+  **synthesises `Alias` from the ADDRESS** (`"6B-64-CB-F3-81-98"`) when a device has
+  no name, so `Alias` is never empty and **can never answer "does this have an
+  identity"**. Without this, a scan returns a wall of the neighbours' anonymous BLE
+  beacons (**~38 in 25 s**, measured).
+- **`set_desktop` uses a 60 s deadline** — stopping the desktop **churns logind** hard
+  enough that ssh auth (`pam_systemd`) hung for ~a minute during testing. It recovered
+  on its own; a snappy timeout would report a false failure.
+- **A scan self-stops** (25 s default, clamped 5–60): a permanently scanning radio
+  hurts BT/WiFi coexistence on the shared BCM4330 antenna — and **WiFi is the app's
+  own transport**.
+
+### Verified (hardware)
+
+- **Mouse paired from the app**: `pairBtDevice` → `{"paired":true,"bonded":true,
+  "connected":true}`, **3 key sections on disk**, and the kernel created
+  **`MX Master 4 Mouse`** on `/dev/input/…` via **uhid**.
+- **A real BLE keyboard (MX Keys) completes Just Works** against our
+  `NoInputNoOutput` agent — **no typed passkey**. HID works end to end
+  (`/dev/uhid` → `/dev/input/event*`). **Good thing we never copied stock's
+  `DisablePlugins = audio,network,input`** — that `input` is exactly **BlueZ's HID
+  plugin**.
+- **Discovery only lives while a client holds it**: a fire-and-forget
+  `bluetoothctl scan on` dies instantly (`Discovering: no`, 0 devices). This is why
+  discovery lives in btagent (D-Bus, long-lived), not in the bridge.
+- **BLE devices change address between pairings/channels** — the MX Master exposed
+  `…74:F4`, `:F5`, `:F6`, `:F7` on different channels. **A scan MAC is not a stable
+  identity.**
+- **Petr confirmed from the app**: mouse listed with the right icon, desktop toggle
+  works both ways, phone paired to the Q, mouse forgotten and re-paired.
+
+### Known issues / open
+
+- **The v1.9.0 onboarding pairing flake is still un-root-caused** — 1 run × 2 failed
+  attempts; 3+ runs first-try since. Carried forward unchanged.
+- **The contactless-payment link is UNPROVEN.** App 1.1.1 scoped its NFC claim, but
+  the telemetry **never showed our uid toggling observe mode**. The fix may be
+  correct; it is not demonstrated.
+- **Factory WiFi MAC: ROOT-CAUSED but NOT fixed.** `gen-wifi-profile.sh` pins
+  `cloned-mac-address` into the **BAKED dev profile only**; the profile setupd creates
+  via `nmcli connection add` does **not**, so NM falls back to `permanent` = the chip
+  **OTP MAC `14:7d:c5:3a:35:b5`**. **The device has no source for the factory MAC at
+  all** (nvram carries a generic Broadcom default). Proper fix mirrors BT: a
+  **`local-mac-address` in the DTS wifi node**, after a stock audit. **Use the OTP MAC
+  for lease lookups.**
+- **Thermal: 102.8 °C** under sustained load — **above the documented 94–99 °C
+  envelope**. True idle 72–75 °C / 52 % at 350 MHz.
+- **librespot boot race** — 5 restarts, self-heals.
+- **`onboard` SIGSEGVs every boot** — its native `osk` module. **NOT** the old flash
+  corruption.
+- **`NEXUSQ_NO_WIFI=1` build flag: still promised-but-unwritten.**
+- **The Devices screen has had NO design review.** Petr tested it **functionally**
+  2026-07-15; the copy is unreviewed.
+
 ## [1.9.0] — 2026-07-15 — app-driven onboarding: NFC tap → bonded BT → WiFi (device r47, setupd r4, btagent r1, nexusqd r10, kernel r43, firmware r2)
 
 > **App-driven WiFi onboarding for the display-less Q, implemented end-to-end
