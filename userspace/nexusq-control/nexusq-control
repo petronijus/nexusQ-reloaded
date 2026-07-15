@@ -391,6 +391,44 @@ def btagent_call(req, timeout=15):
     return r
 
 
+DESKTOP_UNIT = "tinydm.service"
+
+
+def desktop_active():
+    """Is the HDMI desktop up? `tinydm.service` starts labwc + the LXQt session."""
+    try:
+        r = subprocess.run(["systemctl", "is-active", DESKTOP_UNIT],
+                           capture_output=True, text=True, timeout=8)
+        return (r.stdout or "").strip() in ("active", "activating")
+    except (OSError, subprocess.SubprocessError):
+        raise Err("unavailable", "cannot query the desktop")
+
+
+def set_desktop(on):
+    """Start/stop the HDMI desktop.
+
+    Safe to stop only because `user` has systemd linger baked in (device pkg):
+    PulseAudio and librespot live in user@10000.service, the desktop in
+    session-c1.scope. Without linger the user manager exists only because of the
+    graphical session, so stopping the desktop would take the MUSIC with it.
+    Verified live 2026-07-15: with linger, stopping tinydm leaves pulseaudio and
+    librespot active and both sinks present.
+
+    The desktop is off by default on an appliance; this is how it comes back.
+    """
+    try:
+        # `start` is synchronous-ish and cheap; `stop` tears down a graphical
+        # session and briefly churns logind (it has wedged ssh auth for ~a minute
+        # when hammered), so give it room rather than a snappy deadline.
+        subprocess.run(["systemctl", "start" if on else "stop", DESKTOP_UNIT],
+                       capture_output=True, text=True, timeout=60, check=True)
+    except subprocess.CalledProcessError as e:
+        raise Err("unavailable", f"desktop {'start' if on else 'stop'} failed: "
+                                 f"{(e.stderr or '').strip()[:120]}")
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "desktop did not respond")
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -624,6 +662,15 @@ class Bridge:
             btagent_call({"m": "connect" if method == "connectBtDevice" else "disconnect",
                           "mac": _require_mac(p)}, timeout=45)
             return {"ok": True}, [("pairedDevicesChanged", {})]
+
+        # --- HDMI desktop on demand (PROTOCOL §10) --------------------------
+        if method == "getDesktop":
+            return {"desktop": desktop_active()}, []
+        if method == "setDesktop":
+            on = bool(p.get("on"))
+            set_desktop(on)
+            st = {"desktop": on}
+            return st, [("desktopChanged", st)]
 
         raise Err("unknown_method", method)
 

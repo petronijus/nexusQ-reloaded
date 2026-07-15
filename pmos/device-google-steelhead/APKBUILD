@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=47
+pkgrel=48
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -320,6 +320,17 @@ package() {
 	# boot cost. logind reads this dir; an empty file named after the user is
 	# the whole mechanism (`loginctl enable-linger root` creates exactly this).
 	install -Dm644 /dev/null "$pkgdir"/var/lib/systemd/linger/root
+
+	# Same for `user` (uid 10000) — but for a DIFFERENT and load-bearing reason:
+	# it decouples AUDIO from the HDMI desktop. PulseAudio and librespot are user
+	# units under user@10000.service, while the desktop is tinydm -> labwc in
+	# session-c1.scope — different cgroups, but without linger the user manager
+	# exists only BECAUSE of that graphical session, so stopping the desktop tears
+	# down the manager and kills the music with it.
+	# With linger, verified live 2026-07-15: `systemctl stop tinydm` leaves
+	# user@10000 active, pulseaudio active, librespot active, both sinks present.
+	# This is the prerequisite for the app's desktop toggle (PLAN.md "Open work").
+	install -Dm644 /dev/null "$pkgdir"/var/lib/systemd/linger/user
 
 	# Spotify Connect (librespot) — one INPUT into the PulseAudio hub (PA-centric
 	# audio design). It runs as a systemd USER unit (uid-10000 `user` session, so
