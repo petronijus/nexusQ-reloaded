@@ -445,17 +445,27 @@ def _run():
                     continue
                 if paired_only and not d.get("Paired"):
                     continue
-                name = str(d.get("Name", "") or d.get("Alias", "") or "")
+                addr = str(d.get("Address", ""))
+                # NB: BlueZ synthesises `Alias` from the ADDRESS ("6B-64-CB-F3-81-98")
+                # when a device has no name, so `Alias` is never empty and cannot
+                # be used to test "does this have an identity". Only a real `Name`
+                # counts; anything else is anonymous.
+                name = str(d.get("Name", "") or "")
+                if not name:
+                    alias = str(d.get("Alias", "") or "")
+                    if alias.replace("-", ":").upper() != addr.upper():
+                        name = alias  # a user-set alias IS an identity
                 icon = str(d.get("Icon", "") or "")
                 appearance = d.get("Appearance")
                 cls = d.get("Class")
                 # Anonymous BLE beacons are noise — a 25 s scan sees ~38 of them
-                # (measured). A wall of bare MACs is unusable on a screenless
-                # appliance, so only surface things with a real identity.
+                # (measured), most of them the neighbours'. A wall of bare MACs is
+                # unusable on a screenless appliance, so only surface things with
+                # a real identity.
                 if not paired_only and not (name or icon or appearance):
                     continue
                 out.append({
-                    "mac": str(d.get("Address", "")),
+                    "mac": addr,
                     "name": name,
                     "kind": device_kind(icon, appearance, cls),
                     "rssi": int(d.get("RSSI", 0)) if d.get("RSSI") is not None else None,

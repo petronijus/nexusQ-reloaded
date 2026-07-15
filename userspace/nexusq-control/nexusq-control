@@ -343,6 +343,54 @@ def nexusqd_send(line):
         return False
 
 
+BTAGENT_SOCK = os.environ.get("NEXUSQ_BTAGENT_SOCK", "/run/nexusq-btagent.sock")
+
+MAC_RE = re.compile(r"(?i)^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
+
+
+def _require_mac(p):
+    """Validate at the boundary — a MAC from the app is untrusted input, and it
+    ends up in a BlueZ object path."""
+    mac = str(p.get("mac", ""))
+    if not MAC_RE.match(mac):
+        raise Err("bad_request", "mac required, format AA:BB:CC:DD:EE:FF")
+    return mac.upper()
+
+
+def btagent_call(req, timeout=15):
+    """One request/response against nexusq-btagent's unix socket.
+
+    Every Bluetooth method goes through here. btagent owns BlueZ (it has dbus and
+    the agent); this daemon is stdlib-only by standing rule and is the app's
+    endpoint, not a second Bluetooth stack.
+
+    btagent being down must read as a clean `unavailable` to the app — never a
+    traceback, and never a silent success.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(BTAGENT_SOCK)
+            s.sendall((json.dumps(req) + "\n").encode())
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+    except OSError as e:
+        raise Err("unavailable", f"bluetooth agent unreachable: {e.strerror or e}")
+    try:
+        r = json.loads(buf.decode(errors="replace").strip() or "{}")
+    except ValueError:
+        raise Err("internal", "bluetooth agent sent malformed json")
+    if isinstance(r, dict) and r.get("error"):
+        # Pass btagent's own error code through: it already speaks our vocabulary
+        # (not_found / pair_failed / unavailable / unknown_method).
+        raise Err(str(r["error"]), str(r.get("message", "")))
+    return r
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -536,6 +584,47 @@ class Bridge:
             raise Err("unavailable", "transport control not available in v1")
         if method == "startSetupMode":
             return start_setup_mode(), []
+
+        # --- Bluetooth (PROTOCOL §9) ---------------------------------------
+        # All of it is forwarded to nexusq-btagent over its unix socket. This
+        # daemon is stdlib-only (no py3-dbus) by standing rule, and that rule is
+        # right: BlueZ knowledge belongs in the one component that owns BlueZ.
+        # We are the app's endpoint, not a second Bluetooth stack.
+        if method == "startPairing":
+            r = btagent_call({"m": "openWindow", "secs": p.get("secs", 120)})
+            st = {"pairing": True, "timeout": r.get("secs", 120)}
+            return st, [("pairingChanged", st)]
+        if method == "stopPairing":
+            btagent_call({"m": "closeWindow"})
+            st = {"pairing": False}
+            return st, [("pairingChanged", st)]
+        if method == "getPairingState":
+            r = btagent_call({"m": "windowState"})
+            return {"pairing": bool(r.get("open"))}, []
+        if method == "startBtScan":
+            r = btagent_call({"m": "startScan", "secs": p.get("secs", 25)})
+            return {"scanning": True, "timeout": r.get("secs", 25)}, []
+        if method == "stopBtScan":
+            btagent_call({"m": "stopScan"})
+            return {"scanning": False}, []
+        if method == "listBtScanResults":
+            return btagent_call({"m": "scanResults"}), []
+        if method == "listPairedDevices":
+            return btagent_call({"m": "listPaired"}), []
+        if method == "pairBtDevice":
+            mac = _require_mac(p)
+            # Pair can take tens of seconds (the peer, the agent, SMP), so the
+            # btagent call is given a long deadline rather than a snappy one.
+            r = btagent_call({"m": "pair", "mac": mac}, timeout=100)
+            return r, [("pairedDevicesChanged", {})]
+        if method == "removePairedDevice":
+            btagent_call({"m": "remove", "mac": _require_mac(p)})
+            return {"removed": True}, [("pairedDevicesChanged", {})]
+        if method in ("connectBtDevice", "disconnectBtDevice"):
+            btagent_call({"m": "connect" if method == "connectBtDevice" else "disconnect",
+                          "mac": _require_mac(p)}, timeout=45)
+            return {"ok": True}, [("pairedDevicesChanged", {})]
+
         raise Err("unknown_method", method)
 
     def _volume_cmd(self, method, p):
