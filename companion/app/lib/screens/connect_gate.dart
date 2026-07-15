@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../nfc/tap_capture.dart';
 import '../protocol/client.dart';
 import '../protocol/discovery.dart';
 import '../protocol/mock_client.dart';
@@ -35,18 +36,27 @@ class _ConnectGateState extends State<ConnectGate> {
     if (widget.initialClient != null) {
       _use(widget.initialClient!);
     } else {
+      // This screen IS the "waiting to be tapped" state: no Q yet, so a tap on
+      // the dome is exactly what we expect. Claiming NFC priority here (and
+      // nowhere else) is what lets the Q's reader through — see TapCapture.
+      TapCapture.set(true);
       _discover();
     }
   }
 
   @override
   void dispose() {
+    // Never leave the claim behind us.
+    TapCapture.set(false);
     _hostCtrl.dispose();
     _controller?.dispose();
     super.dispose();
   }
 
   void _use(NexusQClient client) {
+    // Connected: no tap expected any more. Hand NFC back before we even build
+    // the home screen — the app has no business holding it while playing music.
+    TapCapture.set(false);
     final c = DeviceController(client)..start();
     setState(() {
       _controller = c;
@@ -55,6 +65,8 @@ class _ConnectGateState extends State<ConnectGate> {
   }
 
   Future<void> _discover() async {
+    // Back to waiting for a Q — a tap is expected again.
+    TapCapture.set(true);
     setState(() => _phase = _Phase.discovering);
     final found = await discoverNexusQ();
     if (!mounted) return;

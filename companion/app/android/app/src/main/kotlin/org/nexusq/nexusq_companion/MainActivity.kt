@@ -3,6 +3,7 @@ package org.nexusq.nexusq_companion
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
+import android.nfc.cardemulation.CardEmulation
 import android.nfc.NfcAdapter
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -18,30 +19,37 @@ import io.flutter.plugin.common.MethodChannel
  *   - MethodChannel "nexusq/hce" exposes "getLastMessage" (resume/cold-start
  *     fallback) and "isNfcAvailable".
  *
- * NFC EXISTS FOR THIS APP ONLY WHILE ITS UI IS IN THE FOREGROUND.
+ * NFC IS SCOPED TO THE MOMENT A TAP IS ACTUALLY EXPECTED — two layers:
  *
- * [NqHceService] ships `android:enabled="false"` and is switched on in onResume
- * / off in onPause (see [setHceServiceEnabled]). A disabled component is absent
- * from the NFC routing table entirely, so an installed-but-unopened app has zero
- * NFC surface. A tap only ever worked with this UI foregrounded anyway, so this
- * costs nothing.
+ *  1. [NqHceService] ships `android:enabled="false"` and is switched on in
+ *     onResume / off in onPause. A disabled component is absent from the NFC
+ *     routing table entirely, so an installed-but-unopened app has ZERO NFC
+ *     surface.
+ *  2. `CardEmulation.setPreferredService()` is claimed only when Dart asks via
+ *     the "setTapCapture" method (see [setTapCapture]) — i.e. while the UI is on
+ *     a screen waiting for the user to touch the phone to the dome — and is
+ *     released as soon as that screen goes away, or on onPause.
  *
- * Why it is written this way — this app broke the user's contactless payment
- * twice, only ever after a dev session (2026-07-15). The previous design claimed
- * `CardEmulation.setPreferredService()` on every onResume and released it on
- * onPause, which is wrong in both halves:
+ * Why the preferred-service claim is needed AT ALL (measured 2026-07-15, after I
+ * removed it on the wrong theory and broke the tap): routing alone is not
+ * enough. The phone sits in Android 15 OBSERVE MODE — it detects the reader's
+ * field but deliberately does not answer it (`MSG_RF_FIELD_ACTIVATED` /
+ * `..._DEACTIVATED` cycling with no APDU ever reaching us). The platform turns
+ * observe mode off for the preferred service when that service declares
+ * `shouldDefaultToObserveMode="false"`, which ours does. So claiming preferred
+ * IS the mechanism that lets the Q's tap through; without it the tap is silent.
  *
- *  - it grabbed foreground NFC routing priority merely because the app was open,
- *    with no tap expected, and the NFC stack toggled global observe mode at that
- *    moment;
- *  - the release hung off onPause, which NEVER RUNS when the process is killed
- *    outright (`pm clear`, `adb install -r`, a crash) — all routine during
- *    development — leaving routing claimed by a dead app.
+ * Why it must NOT be a blanket onResume claim: this app broke the user's
+ * contactless payment twice, only ever after a dev session. The old code claimed
+ * routing merely because the app was open — no tap expected — and released it
+ * from onPause, which NEVER RUNS when the process is killed outright
+ * (`pm clear`, `adb install -r`, a crash), all routine during development.
  *
- * Toggling the component instead fails SAFE: the platform persists a component's
- * enabled state across process death, so being killed leaves NFC OFF, not stuck
- * on. A companion app for a speaker has no business influencing how this phone
- * pays for groceries. Do not re-add a blanket onResume routing claim.
+ * Honest state of knowledge: the payment link is NOT proven. The NFC telemetry
+ * shows observe mode being toggled only by com.android.nfc / com.google.android
+ * .gms — never by our uid — and it returns to true on its own. So this scoping
+ * is risk reduction, not a confirmed fix. If payment fails again, capture
+ * `dumpsys nfc` AT THE MOMENT OF FAILURE.
  */
 class MainActivity : FlutterActivity() {
 
@@ -52,6 +60,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private var btSetup: BtSetupChannel? = null
+    private var cardEmulation: CardEmulation? = null
+
+    /** Dart's answer to "is a tap expected right now?". Re-applied on resume. */
+    private var tapExpected = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -88,6 +100,13 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "isNfcAvailable" -> result.success(NfcAdapter.getDefaultAdapter(this) != null)
+                // Dart tells us when a tap is actually expected (a screen that
+                // asks the user to touch the phone to the dome). We claim NFC
+                // priority only for that window — never for "the app is open".
+                "setTapCapture" -> {
+                    setTapCapture(call.arguments as? Boolean ?: false)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -105,9 +124,14 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         setHceServiceEnabled(true)
+        // Re-assert whatever Dart last asked for: setPreferredService only holds
+        // while the Activity is resumed, so it must be re-claimed after a resume.
+        if (tapExpected) claimPreferred(true)
     }
 
     override fun onPause() {
+        // Release BOTH, always — never leave NFC influenced by a backgrounded app.
+        claimPreferred(false)
         setHceServiceEnabled(false)
         super.onPause()
     }
@@ -115,6 +139,44 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         btSetup?.dispose()
         super.onDestroy()
+    }
+
+    /**
+     * Dart-facing switch: "a tap is expected now" / "it is not".
+     *
+     * Claiming preferred is what makes the platform drop observe mode for us, so
+     * this is the difference between the Q's tap being heard and silently
+     * ignored. Keep the window as small as the UI honestly needs.
+     */
+    private fun setTapCapture(expected: Boolean) {
+        if (tapExpected == expected) return
+        tapExpected = expected
+        claimPreferred(expected)
+    }
+
+    /** Claim/release foreground NFC priority. Requires a resumed Activity. */
+    private fun claimPreferred(preferred: Boolean) {
+        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return
+        val emulation = cardEmulation ?: run {
+            try {
+                CardEmulation.getInstance(adapter)
+            } catch (e: Exception) {
+                Log.w(TAG, "CardEmulation unavailable", e)
+                return
+            }.also { cardEmulation = it }
+        }
+        val component = ComponentName(this, NqHceService::class.java)
+        try {
+            if (preferred) {
+                emulation.setPreferredService(this, component)
+                Log.d(TAG, "NFC: claimed preferred (tap expected)")
+            } else {
+                emulation.unsetPreferredService(this)
+                Log.d(TAG, "NFC: released preferred")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "setPreferredService($preferred) failed", e)
+        }
     }
 
     /**
