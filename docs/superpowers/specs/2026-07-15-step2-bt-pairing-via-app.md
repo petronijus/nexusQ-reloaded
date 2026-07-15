@@ -319,13 +319,47 @@ by this button — which is exactly what we want.
   `bluetoothctl scan on` dies with its client (`Discovering: no`, 0 found). This
   moved discovery into btagent + an IPC; see §4.2. Found by testing, not reasoning.
 
-**Still open — must be answered before this becomes a plan:**
+- ✅ **Does `Pairable: no` block an outgoing `Pair()`?** **No.** Tested against
+  Petr's own phone (bond cleared both sides, Android BT settings open so it was
+  discoverable — never test against hardware we do not own):
 
-- **Does BlueZ allow an outgoing `Device1.Pair()` while `Pairable: no`?** Our
-  invariant makes that the resting state. If it blocks, §4.2 needs a scoped
-  exception (open the window for the duration of the outbound pair, ring and
-  all) — and that exception must never become "just leave Pairable on".
-  *Not yet testable end-to-end: it needs a real peripheral in pairing mode.*
+  ```
+  before: Pairable: no
+  bluetoothctl pair 08:8B:C8:2F:29:24  →  "Pairing successful"
+  after:  Pairable: no        # the invariant never moved
+  btagent: bonded -> Trusted  # the agent handled it, no window needed
+  ```
+
+  `Pairable` gates INCOMING requests only. **§4.2 needs no scoped exception and
+  the ring stays honest** — it spins only when someone can reach *us*. This was
+  the design risk that would have forced an ugly compromise; it is gone.
+  `pair → trust → connect` all work outbound (`Connected: yes`).
+
+**⚠️ NEW problem, found by that same test — outbound pairing did NOT persist:**
+
+```
+/var/lib/bluetooth/<adapter>/08:8B:.../info  →  Name=…, Class=…   and NO [LinkKey]
+after `systemctl restart bluetooth`          →  Paired: no        (gone)
+```
+
+`bluetoothctl pair` reported **"Pairing successful"** while storing **no link
+key**; `Bonded: no` (next to `Paired: yes`) was the tell, not a cosmetic quirk.
+Only a session-scoped pairing was created. **For the mouse/keyboard use case this
+is fatal**: a keyboard that must be re-paired after every reboot is not a
+feature.
+
+Do NOT conclude this is a general defect — it may well be Android-specific (the
+phone declining to persist a bond it did not initiate; we saw the same half-bond
+shape, `bredr_linkkey_known:F`, earlier on 2026-07-15). An inbound bond from the
+same phone persists fine and survives reboots. **Only a real peripheral can tell
+these apart.**
+
+**Still open — must be answered before this becomes a plan:**
+- **Does an outbound bond persist against a REAL peripheral** (see the NEW
+  problem above), or is the missing `[LinkKey]` an Android-only artefact? This is
+  now the single most important unknown in step 2: if outbound bonds never
+  persist, "pair your mouse from the app" cannot be built as specified and the
+  whole outbound half needs rethinking. **Needs a physical BT mouse or keyboard.**
 - **Does a real Bluetooth keyboard complete Just-Works against our
   NoInputNoOutput agent**, or does it insist on a passkey typed on the keyboard
   (our agent answers `RequestPasskey` with 0, which such a keyboard rejects)?
