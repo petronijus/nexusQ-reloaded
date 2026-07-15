@@ -112,6 +112,10 @@ CONTROL_SOCK = os.environ.get("NEXUSQ_BTAGENT_SOCK", "/run/nexusq-btagent.sock")
 # coexistence on this shared BCM4330 antenna, and WiFi is the app's own transport.
 SCAN_SECS = 25
 
+# How long `pair` waits for the target to show up before giving a clean
+# "is it in pairing mode?" rather than BlueZ's raw UnknownObject.
+PAIR_DISCOVER_SECS = 25
+
 # Same stock #0099CC blue + default rate as setupd's idle spin: "open for
 # pairing" must look identical whether setupd is driving it or we are.
 DISCOVERABLE_CMD = "spin 0 153 204"
@@ -570,35 +574,70 @@ def _run():
             The window is opened first and left to bluez's timer: that is what
             makes the bond durable (see _open_window).
             """
+            self._open_window(WINDOW_TIMEOUT)
+
+            # BlueZ forgets an unpaired device object shortly after discovery
+            # stops, so by the time the user taps "Pair" in the app the object
+            # from their scan is usually GONE (measured: Pair -> UnknownObject).
+            # Own the discovery here instead of trusting a previous scan.
             try:
-                self._open_window(WINDOW_TIMEOUT)
-                dev = dbus.Interface(self.bus.get_object(BLUEZ, self._dev_path(mac)),
-                                     DEVICE_IFACE)
+                dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                               ADAPTER_IFACE).StartDiscovery()
             except dbus.DBusException as e:
-                return reply({"error": "not_found", "message": str(e)})
+                if "InProgress" not in str(e):
+                    log("pair: could not start discovery:", e)
 
-            def done():
+            deadline = [PAIR_DISCOVER_SECS]
+
+            def attempt():
                 try:
-                    self._set("Trusted", dbus.Boolean(True),
-                              path=self._dev_path(mac), iface=DEVICE_IFACE)
+                    # Probe by READING A PROPERTY. (Introspect() is not a Device1
+                    # method — using it here made this test throw every time and
+                    # report "not advertising" for a device that was right there.)
+                    self._get("Address", path=self._dev_path(mac), iface=DEVICE_IFACE)
+                    dev = dbus.Interface(
+                        self.bus.get_object(BLUEZ, self._dev_path(mac)), DEVICE_IFACE)
                 except dbus.DBusException:
-                    pass
-                try:
-                    dev.Connect(timeout=30)
-                except dbus.DBusException as e:
-                    log("paired but connect failed:", e)
-                info = next((d for d in self._devices() if d["mac"].upper() == mac.upper()), {})
-                # `bonded` is the honest answer to "will this survive a reboot?" —
-                # `paired` alone lies (it is true for a session-only pairing).
-                log(f"paired {mac} bonded={info.get('bonded')}")
-                reply({"paired": True, "bonded": bool(info.get("bonded")),
-                       "connected": bool(info.get("connected"))})
+                    deadline[0] -= 1
+                    if deadline[0] > 0:
+                        return True  # keep waiting for it to advertise
+                    self._stop_scan_once()
+                    reply({"error": "not_found",
+                           "message": "device not advertising — is it in pairing mode?"})
+                    return False
+                _pair_now(dev)
+                return False
 
-            def failed(e):
-                log("pair failed:", e)
-                reply({"error": "pair_failed", "message": str(e)})
+            def _pair_now(dev):
 
-            dev.Pair(reply_handler=done, error_handler=failed, timeout=90)
+                def done():
+                    self._stop_scan_once()
+                    try:
+                        self._set("Trusted", dbus.Boolean(True),
+                                  path=self._dev_path(mac), iface=DEVICE_IFACE)
+                    except dbus.DBusException:
+                        pass
+                    try:
+                        dev.Connect(timeout=30)
+                    except dbus.DBusException as e:
+                        log("paired but connect failed:", e)
+                    info = next((d for d in self._devices()
+                                 if d["mac"].upper() == mac.upper()), {})
+                    # `bonded` is the honest answer to "will this survive a
+                    # reboot?" — `paired` alone LIES: it is true for a
+                    # session-only pairing that evaporates on restart.
+                    log(f"paired {mac} bonded={info.get('bonded')}")
+                    reply({"paired": True, "bonded": bool(info.get("bonded")),
+                           "connected": bool(info.get("connected"))})
+
+                def failed(e):
+                    self._stop_scan_once()
+                    log("pair failed:", e)
+                    reply({"error": "pair_failed", "message": str(e)})
+
+                dev.Pair(reply_handler=done, error_handler=failed, timeout=90)
+
+            GLib.timeout_add_seconds(1, attempt)
 
         def _serve(self, sock, _cond):
             try:
