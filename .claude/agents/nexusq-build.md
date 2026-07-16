@@ -273,11 +273,11 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
-- **onboarding + BT-pairing stack (**v1.10.0**, released 2026-07-15 = device **r48** /
-  nexusqd r10 / firmware r2 / setupd **r4** / **nexusq-btagent r3** /
-  **nexusq-control r10** / kernel r43 `#44`; hardware-verified + user-ACCEPTED.
-  Companion app is on its **own independent track** at **1.2.0+7** — **never** align
-  it to the image version)**:
+- **onboarding + BT-pairing stack (**v1.10.1**, released 2026-07-16 = device **r49** /
+  nexusqd r10 / firmware r2 / setupd **r4** / **nexusq-btagent r4** /
+  **nexusq-control r10** / kernel **r44** `#45`; bug-fix release over v1.10.0,
+  hardware-verified. Companion app is on its **own independent track** at **1.3.1+9** —
+  **never** align it to the image version)**:
   `usr/bin/nexusq-setupd` + `usr/bin/nexusq-setup-needed`
   + **`usr/bin/nexusq-btagent`** exist; `nexusq-setupd.service` **and
   `nexusq-btagent.service`** installed with their `enable` lines in the
@@ -319,6 +319,21 @@ Check and REPORT each (PASS/FAIL + evidence):
   fresh-flashed dev image **self-provisions and setup mode never arms**. That is
   EXPECTED, not an onboarding bug. `PUBLIC_RELEASE=1` does not bake it. (A
   `NEXUSQ_NO_WIFI=1` flag to skip only the wifi bake is an **open, unwritten** task.)
+  🆕 **v1.10.1 (kernel r44 `#45`) — factory WiFi MAC pinned in the DTS** (patch
+  **0043**, `local-mac-address = [f8 8f ca 20 48 e1]` on `wifi@1`, mirroring the BT
+  `local-bd-address`). **DTB gate:** the built DTB's `wifi@1` node MUST carry
+  `local-mac-address` — decompile the packed boot.img DTB and check it (same class as
+  the r42 DTS-via-patch trap: a DTS-only edit is a silent no-op). On device the settle
+  check is `ethtool -P wlan0` == `f8:8f:ca:20:48:e1` PERMANENT (was the OTP
+  `14:7d:c5:3a:35:b5`). brcmfmac programs the DT MAC over OTP via `brcmf_of_probe()`.
+  🆕 **v1.10.1 device r49 also fixes onboard (SIGSEGV every boot — the apk trigger now
+  neuters onboard's `/etc/xdg/lxqt-tablet/autostart/` file `Hidden=true`) and the
+  librespot boot-race storm (the wrapper's wlan0-IPv4 wait is 30→180 s).**
+  🆕 **v1.10.1 nexusq-btagent r4 fixes an fd leak** — `start_control()` was called from
+  the 10 s `_tick` too, leaking one fd per tick until btagent exhausted them (~1024) and
+  crashed with its socket removed → the app saw "bluetooth agent unreachable" every 3 s.
+  `_tick` no longer opens the socket; `start_control()` is idempotent. Do not
+  reintroduce a per-tick socket open. See `docs/2026-07-16-v1.10.1-bugfixes.md`.
 - **boot.img sane**: parse the Android v0 header — `ramdisk_size == 0` and total
   size ≤ 8388608 bytes.
 - **fstab is boot-safe** (this one bites hard): `etc/fstab` must NOT contain a

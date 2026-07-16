@@ -456,6 +456,13 @@ error codes are already this protocol's vocabulary (`not_found`, `pair_failed`,
 `unavailable`, `unknown_method`) and pass straight through; an unreachable socket is
 `unavailable`.
 
+> ℹ️ **Reliability (v1.10.1, btagent r4):** the listening socket is opened **once** at
+> startup, not per reconcile tick. A prior bug reopened it every 10 s, leaking one fd
+> per tick until btagent exhausted its fds (~1024) and crashed with the socket file
+> removed — the app then saw every BT call fail as `unavailable`
+> (*"bluetooth agent unreachable: No such file or directory"*) every ~3 s while the
+> TCP connection itself stayed healthy. `start_control()` is now idempotent.
+
 ### 9.2 `bonded` vs `paired` — **`paired` alone LIES**
 
 > ⚠️ **Read `bonded`, never `paired`, to answer "will this survive a reboot?"**

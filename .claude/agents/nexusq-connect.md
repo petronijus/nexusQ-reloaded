@@ -18,15 +18,19 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.10.0** (kernel `#44`/r43 —
-unchanged from v1.8.2 — device r48, btagent r3, nexusq-control r10, setupd r4,
-nexusqd r10, firmware r2; flashed 2026-07-15; eth profiles baked since r21).
+"connect like this: `<cmd>`". The device runs **v1.10.1** (kernel `#45`/**r44** —
+patch 0043 factory-WiFi-MAC over v1.10.0's r43 — device **r49**, **btagent r4**,
+nexusq-control r10, setupd r4, nexusqd r10, firmware r2; flashed 2026-07-16; eth
+profiles baked since r21).
 ⚠️ **A ~1-minute ssh-auth stall right after an HDMI-desktop toggle is EXPECTED, not
 a dead device** — stopping `tinydm` churns logind and `pam_systemd` hangs before
-recovering on its own (v1.10.0). Wait it out; never assume frozen. ⚠️ **wlan0's on-air MAC is the
-chip OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI) and its DHCP lease has an **empty
-hostname** — look leases up by that MAC; the older `f8:8f:ca:20:48:e1` is **stale**
-(it is injected nowhere). **eth-direct now works from a cold boot —
+recovering on its own (v1.10.0). Wait it out; never assume frozen. ⚠️ **WiFi MAC —
+version boundary at v1.10.1:** on **v1.10.1+** wlan0's on-air/permanent MAC is the
+**factory `f8:8f:ca:20:48:e1`** again (kernel patch 0043 pins `local-mac-address` in
+the DTS; `ethtool -P wlan0` shows it as PERMANENT) and the DHCP lease carries the
+`steelhead` hostname — **look leases up by the factory MAC**. On **≤ v1.10.0** images
+wlan0 ran the chip **OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI) with an **empty
+hostname** — look those up by the OTP MAC. **eth-direct now works from a cold boot —
 task #17 is FULLY CLOSED (2026-07-06):** the "enumeration intermittency" was an
 unmuxed `gpio_1` NENABLE pad (`kpd_col2` @ `0x186`), fixed by a DTS pad mux in
 `#33`; a true cold power-cycle enumerates `eth0` 100Mbps/Full. The old "flap"
@@ -84,16 +88,20 @@ link-local, mDNS, OPNsense lease lookup).
   hostname/MAC. **Never hardcode the WiFi IP.**
 - **WiFi on-air MAC — depends on the flashed image** (which one is on the
   device: check `uname -r`/`#N` or just match both MACs in leases):
-  - **currently flashed (`#29`+ through the current `#44`/v1.8.2)**: the
-    **factory `f8:8f:ca:20:48:e1`** — the baked profile pins
-    `cloned-mac-address=F8:8F:CA:20:48:E1` at the NM layer (verified on air;
-    lease `.195` 2026-07-03→07-12, then `.184`).
-  - the interim `#27` image used the chip's **OTP `14:7d:c5:3a:35:b5`**
-    (`wifi-stable-mac.conf` `cloned-mac-address=permanent`; brcmfmac never
-    reads the factory-cal MAC, and a live driver-reload test proved it ignores
-    the nvram `macaddr=` too) — lease was `.175`.
-  - OPNsense lease matching: hostname `steelhead`, or the MAC per the image
-    above.
+  - **v1.10.1+ (`#45`/kernel r44)**: the **factory `f8:8f:ca:20:48:e1`**, now
+    pinned in the **DTS** (`local-mac-address`, kernel patch 0043) — it is the
+    interface **PERMANENT** MAC (`ethtool -P wlan0`), so it survives any profile
+    incl. the onboarding one; the DHCP lease carries the `steelhead` hostname
+    again. Match by the factory MAC **or** hostname.
+  - the `#29`+ through `#44` (v1.6.6–v1.10.0) images ran the chip's **OTP
+    `14:7d:c5:3a:35:b5`** on air (the NM `cloned-mac-address=F8:8F:CA:20:48:E1`
+    pin only reached the *baked* profile and did NOT hold on the live device —
+    found 2026-07-15; the DHCP lease had an **empty hostname**). Leases: `.195`
+    2026-07-03→07-12, then `.184`. Match by the OTP MAC.
+  - the interim `#27` image also used the chip's **OTP `14:7d:c5:3a:35:b5`**
+    (`wifi-stable-mac.conf` `cloned-mac-address=permanent`) — lease was `.175`.
+  - OPNsense lease matching: hostname `steelhead` (v1.10.1+), or the MAC per the
+    image above.
 - **`root@` key-based ssh WORKS again** (verified 2026-07-03 over both the
   gadget and WiFi — the image bakes `private/access/authorized_keys` into
   `/root/.ssh`). Fallback login: user **`user` / `147147`** (baked in, not a
@@ -171,9 +179,11 @@ to get a shell" and stop. Otherwise probe the transports below.
   `opnsense-api GET /api/dhcpv4/leases/searchLease` (ISC) — if that 404s, try the
   Kea/dnsmasq equivalent (`/api/kea/leases4/search`, `/api/dnsmasq/leases/search`).
   Match on hostname `steelhead`, or by MAC per the flashed image: **factory
-  `f8:8f:ca:20:48:e1` on `#29`+** (NM-pinned), OTP
-  `14:7d:c5:3a:35:b5` on the interim `#27` (on the older v1.6.5 image the MAC
-  was per-boot randomized — hostname-match only).
+  `f8:8f:ca:20:48:e1` on v1.10.1+ (`#45`/r44, DTS-pinned)**; OTP
+  `14:7d:c5:3a:35:b5` on `#29`–`#44` (v1.6.6–v1.10.0 — the NM pin only reached the
+  baked profile, so on-air was the OTP MAC with an empty hostname) and on the
+  interim `#27`; on the older v1.6.5 image the MAC was per-boot randomized
+  (hostname-match only).
 - Then `ping` + `ssh root@<ip>`. NB this host's own LAN subnet may not route into
   vlan20 — if ping/ssh time out despite a valid lease, say so and prefer A/B.
 

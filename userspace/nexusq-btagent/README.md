@@ -143,6 +143,16 @@ Bluetooth stack.
 Errors use the LAN protocol's vocabulary directly (`not_found`, `pair_failed`,
 `unavailable`, `unknown_method`), so the bridge passes them straight through.
 
+> ⚠️ **Open the listening socket ONCE (r4, 2026-07-16).** `start_control()` sets up the
+> listening socket + its GLib watch and is called from `run()` **only** — it is
+> **idempotent** and must **never** be called from the reconcile `_tick`. Before r4 it
+> was: the 10 s tick reopened the socket every pass, leaking **one fd per tick** until
+> the process exhausted its ~1024 fds and crashed mid-tick with the socket file
+> removed. Symptom: btagent shows `active` but every BT call fails `unavailable`
+> (*"bluetooth agent unreachable: No such file or directory"*) every ~3 s while the
+> link is otherwise healthy; the journal repeats `[Errno 24] No file descriptors
+> available`. Verified fixed: fd count flat at 8 across ticks.
+
 **bluez owns the window timer, not us.** The window closes even if this daemon is
 killed mid-window. Verified 2026-07-15: `openWindow(30)` → open at t+10/t+20,
 **CLOSED at t+30/t+40**. This was FALSE before r3 — the 10 s reconcile tick rewrote

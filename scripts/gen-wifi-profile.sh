@@ -58,7 +58,13 @@ band=a
 # OTP MAC 14:7d:c5:3a:35:b5 — but the device's real factory identity is
 # f8:8f:ca:20:48:e1 (Google OUI; stock injected it outside the fw path).
 # brcmfmac/fw IGNORES the nvram macaddr= (verified live 2026-07-03 by a
-# clean driver-reload test), so NM cloning is the correct layer to set it.
+# clean driver-reload test).
+# NOTE (v1.10.1, 2026-07-16): the factory MAC is now pinned at the DRIVER via
+# the DTS (kernel patch 0043, local-mac-address on wifi@1 → brcmf_of_probe
+# programs it over OTP), so wlan0's PERMANENT MAC is already f8:8f:ca:20:48:e1
+# on every profile — this cloned-mac-address line is now REDUNDANT on v1.10.1+
+# (it was the only pin ≤v1.10.0, and reached only THIS baked profile, never the
+# one nexusq-setupd created during onboarding). Kept as a harmless belt-and-braces.
 cloned-mac-address=F8:8F:CA:20:48:E1
 
 [wifi-security]

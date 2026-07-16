@@ -21,11 +21,12 @@ flutter run --dart-define=NEXUSQ_HOST=192.168.x.y
 ```
 
 `flutter test` runs the test suite (protocol/controller smoke test + the setup-wizard,
-BT-client and pairing-color tests — **still 14 as of 2026-07-15**); `flutter analyze`
-is clean.
+BT-client and pairing-color tests — **still 14 as of 2026-07-16**; no new tests through
+v1.10.1); `flutter analyze` is clean.
 
 > ⚠️ **`lib/screens/devices_screen.dart` (1.2.0+7) has NO tests of its own** — the 14
-> predate it and none cover it. It was verified on hardware only (Petr, 2026-07-15).
+> predate it and none cover it, nor the 1.3.1 debug-mode / poll-error changes. It was
+> verified on hardware only (Petr, 2026-07-15 / 07-16).
 
 ## Build an APK
 
@@ -45,8 +46,9 @@ Use it rather than a bare `flutter build apk`, so the in-app version stamp
 > **Bump the build number (`+N`) on EVERY apk handed to the phone**: Android refuses a
 > downgrade, and it is how builds are told apart. (It sat at `1.0.0+1` for dozens of
 > builds and made "is this the fixed one?" unanswerable — hence `1.1.0+2`, the BT
-> setup onboarding release; `1.1.1+5` shipped alongside device **v1.9.0**, and
-> **`1.2.0+7`** — the Devices screen — alongside device **v1.10.0**.) Gradle reads
+> setup onboarding release; `1.1.1+5` shipped alongside device **v1.9.0**, `1.2.0+7` —
+> the Devices screen — alongside device **v1.10.0**, and **`1.3.1+9`** — debug mode +
+> the Devices poll-error fix — alongside device **v1.10.1**.) Gradle reads
 > versionName/versionCode straight from `pubspec.yaml`.
 
 ## Devices screen (step 2, added 2026-07-15 — device side released in v1.10.0)
@@ -69,6 +71,23 @@ home app bar; speaks `../PROTOCOL.md` **§9** (Bluetooth) and **§10** (Desktop)
 > ⚠️ **No design review yet (2026-07-15).** Petr tested this screen **functionally**;
 > the copy is unreviewed and the layout has not been through the Holo-dark design
 > pass the setup wizard got (`../../docs/2026-06-30-companion-design-language.md`).
+
+### Debug mode + poll-error fix (1.3.1+9, 2026-07-16 — alongside device v1.10.1)
+
+**Debug mode** (Devices → Developer) reveals an **always-on** in-app connection log.
+**Collection is always on** (a 600-entry ring of short strings); the toggle only
+reveals the viewer — a collect-only-when-enabled log would always miss the event it
+exists for, because the history leading up to a flicker must already be there when the
+user reaches for the switch. It records the banner switch (connection UP/DOWN), DROP
+causes (peer-closed vs socket-error vs supervisor-disconnect on a failed probe), probe
+latency, call timeouts with pending-queue depth, slow/late responses, and lifecycle
+transitions (resumed/inactive/paused). **Method names only, never params** (`setWifi`
+carries the PSK). This log is what found the device-side **btagent fd leak** on the
+first try (v1.10.1 fix; the phone saw "bluetooth agent unreachable" every ~3 s while
+the connection itself was healthy).
+
+The **Devices background poll no longer flashes the red error bar**: the 3 s poll now
+**logs** a failure instead; only user-initiated actions surface a visible error.
 
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 

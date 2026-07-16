@@ -3,6 +3,29 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-16 — ✅ v1.10.1 BUG-FIX RELEASE (5 fixes) — built, flashed,
+> hardware-verified** (device **r49** / btagent **r4** / kernel **r44** `#45` /
+> control r10 / setupd r4 / nexusqd r10 / firmware r2; app on its own track at
+> **1.3.1+9**). (1) **Factory WiFi MAC FIXED** — kernel patch **0043** pins
+> `local-mac-address = [f8 8f ca 20 48 e1]` on the DTS `wifi@1` node (mirrors the BT
+> `local-bd-address`); `ethtool -P wlan0` now reports the factory MAC as PERMANENT
+> (was the chip OTP `14:7d:c5:3a:35:b5`). Stock sourced it from the bootloader cmdline
+> (efs/factory) — unreproducible; nvram is a placeholder brcmfmac ignores (chip has a
+> MAC in OTP); the only route is DT (`brcmf_of_probe()` programs it over OTP). Also
+> closes the onboarding-profile gap (NM `permanent` == factory MAC now). **Lease
+> lookups on v1.10.1+ return to the factory MAC / `steelhead` hostname.** (2) **btagent
+> fd leak FIXED** (r3 → r4) — `start_control()` was called from the 10 s `_tick` too,
+> leaking one fd/tick until exhaustion (~1024) → crash with the socket removed → the app
+> saw "bluetooth agent unreachable" every 3 s; `_tick` no longer opens it (fd flat at
+> 8). (3) **onboard SIGSEGV every boot FIXED** (device r48 → r49) — the apk trigger now
+> neuters onboard's `/etc/xdg/lxqt-tablet/autostart/` file (`Hidden=true`); 0 coredumps.
+> (4) **librespot boot-race storm FIXED** (device r48 → r49) — wrapper wlan0-IPv4 wait
+> 30 → 180 s; 0 restarts. (5) **App debug mode + Devices poll-error fix** (1.3.1+9, own
+> track) — an always-on in-app connection log (method names only, never params) that
+> found fix #2 on the first try, and the 3 s Devices poll now logs failures instead of
+> flashing the red bar. Full record: `docs/2026-07-16-v1.10.1-bugfixes.md`. Open items
+> carry forward — see "Open work".
+>
 > **2026-07-15 — ✅ SOFTWARE-PHASE STEP 2 SHIPPED: BT pairing from the app, BOTH
 > directions, + the HDMI desktop on demand — RELEASED as v1.10.0** (device r48 /
 > btagent r3 / control r10 / setupd r4 / nexusqd r10 / kernel r43 / firmware r2;
@@ -421,26 +444,43 @@ A 2026-07-15 diag sweep measured **102.8 °C** under sustained load, **above the
 52 % at 350 MHz**. Not root-caused, not acted on. The desktop-on-demand toggle
 (above) is the obvious first lever to measure against.
 
-### ⚠️ Factory WiFi MAC — ROOT-CAUSED, NOT fixed
-`gen-wifi-profile.sh` pins `cloned-mac-address` into the **BAKED dev profile
-only**. The profile `nexusq-setupd` creates via `nmcli connection add` does **not**,
-so NM falls back to `permanent` = the chip's **OTP MAC `14:7d:c5:3a:35:b5`** (not
-the factory `f8:8f:ca:20:48:e1`). **The device has no source for the factory MAC at
-all** — nvram carries a generic Broadcom default. **Proper fix mirrors BT**: a
-`local-mac-address` in the **DTS wifi node**, after a stock audit
-([[verify-hypothesis-against-stock]]). Until then: **use the OTP MAC for lease
-lookups**. This is a *regression in reach*, not in the baked path — a dev image
-still gets the pinned MAC.
+### ✅ DONE (v1.10.1, 2026-07-16) — factory WiFi MAC pinned in the DTS
+*(was "⚠️ Factory WiFi MAC — ROOT-CAUSED, NOT fixed")*
+The NM `cloned-mac-address` pin (`gen-wifi-profile.sh`) only reached the **baked dev
+profile**; the profile `nexusq-setupd` created via `nmcli connection add` fell back to
+`permanent` = the chip **OTP MAC `14:7d:c5:3a:35:b5`**, and the device had no runtime
+source for the factory `f8:8f:ca:20:48:e1` (nvram is a generic Broadcom placeholder
+brcmfmac ignores). **Fixed as planned — mirror BT:** kernel patch **0043** pins
+`local-mac-address = [f8 8f ca 20 48 e1]` on the DTS `wifi@1` node
+([[verify-hypothesis-against-stock]] confirmed stock sourced it from the bootloader
+cmdline / efs-factory, which we can't reproduce). `brcmf_of_probe()` programs it over
+OTP → `ethtool -P wlan0` = the factory MAC as **PERMANENT** on every profile, so no
+per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory MAC /
+`steelhead` hostname.** `docs/2026-07-16-v1.10.1-bugfixes.md`.
+
+### ✅ DONE (v1.10.1, 2026-07-16) — librespot boot race + onboard SIGSEGV + btagent fd leak
+- **librespot boot race** *(was "5 restarts, self-heals")* — the wrapper's wlan0-IPv4
+  wait was 30 s but BCM4330 cold-boot association takes longer → 5× Restart storm; the
+  USER-manager `network-online.target` is not wired to real connectivity so the poll IS
+  the gate. **Fixed: wait 30 → 180 s (device r49); 0 restarts.**
+- **`onboard` SIGSEGVs every boot** *(was open — NOT the old flash corruption)* — its
+  native `osk` module, useless on a screenless/inputless appliance. Its autostart is in
+  `/etc/xdg/lxqt-tablet/autostart/` (not the plain `autostart/` our XDG shadow covers),
+  so **the apk trigger now neuters onboard's own file there** (`Hidden=true`, device
+  r49); 0 coredumps. ([[fix-errors-dont-mask]] — neutered its autostart, did not mask
+  the crash.)
+- **btagent fd leak** — `start_control()` was called from the 10 s `_tick` as well as
+  `run()`, leaking one fd/tick until btagent exhausted them (~1024) and crashed with its
+  socket removed → the app saw "bluetooth agent unreachable" every 3 s. **Fixed (btagent
+  r4): `_tick` no longer opens the socket; `start_control()` is idempotent; fd flat at
+  8.** Found on the first try by the app's new debug log.
 
 ### Carried forward, not root-caused
 - **v1.9.0 onboarding pairing flake** — 1 run × 2 failed attempts; 3+ runs first-try
-  since. Unexplained.
+  since. Unexplained (has not recurred).
 - **contactless-payment link UNPROVEN** — app 1.1.1 scoped its NFC claim, but the
   telemetry **never showed our uid toggling observe mode**. The fix may be correct;
   it is not demonstrated.
-- **librespot boot race** — 5 restarts, self-heals.
-- **`onboard` SIGSEGVs every boot** — its native `osk` module. **NOT** the old flash
-  corruption ([[fix-errors-dont-mask]] — do not mask it).
 - **`NEXUSQ_NO_WIFI=1` build flag** — still promised-but-unwritten.
 - **The Devices screen has had no design review** — functional test only; the copy is
   unreviewed and it has no Flutter tests of its own.

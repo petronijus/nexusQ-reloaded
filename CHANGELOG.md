@@ -4,6 +4,68 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.10.1] — 2026-07-16 — bug-fix release (factory WiFi MAC · btagent fd leak · onboard · librespot boot race · app debug mode) (device r49, btagent r4, kernel r44, control r10, setupd r4, nexusqd r10, firmware r2)
+
+> Five faults, each root-caused with evidence; built, flashed, and hardware-verified
+> on a fresh v1.10.1 flash. App on its own track at **1.3.1+9** (NOT part of the
+> image). Full record: `docs/2026-07-16-v1.10.1-bugfixes.md`. Base: v1.10.0.
+
+### Fixed
+
+- **Factory WiFi MAC — now pinned in the DTS** (kernel patch
+  `0043-ARM-dts-omap4-steelhead-wifi-local-mac-address.patch`, r43 → **r44**).
+  `local-mac-address = [f8 8f ca 20 48 e1]` on the `wifi@1` node, mirroring the BT
+  `local-bd-address`. **Hardware-verified:** `ethtool -P wlan0` now reports PERMANENT
+  `f8:8f:ca:20:48:e1` (was the chip OTP MAC `14:7d:c5:3a:35:b5`, Murata OUI). Stock
+  sourced it from the bootloader cmdline (`androidboot.wifi_macaddr=`, from the
+  efs/factory partition) — a path we can't reproduce (U-Boot doesn't pass it,
+  `CONFIG_CMDLINE_FORCE=y` discards it); the nvram macaddr is a generic Broadcom
+  placeholder and **brcmfmac ignores it** because the chip has a MAC in OTP (verified
+  live 2026-07-16: overriding nvram + reloading the module left the permanent MAC at
+  OTP). The only route is DT — `brcmf_of_probe()` reads `local-mac-address` into
+  `settings->mac` and programs it over OTP. **This closes the onboarding-profile gap
+  too:** the setupd-created profile no longer needs a `cloned-mac-address` pin since NM
+  `permanent` == the factory MAC now. *(Was "ROOT-CAUSED but NOT fixed" in v1.9.0 /
+  v1.10.0 known issues.)*
+- **btagent fd leak → the app "kept disconnecting"** (btagent r3 → **r4**). The phone's
+  Devices screen showed BT calls failing every 3 s with **"bluetooth agent unreachable:
+  No such file or directory"** while the connection itself was healthy. On device
+  btagent was `active` but **its control-socket file was GONE** and the journal repeated
+  `[Errno 24] No file descriptors available`. Cause: `start_control()` (listening socket
+  + GLib watch) was called from the **10 s `_tick`** as well as `run()`, leaking one fd
+  per tick until it exhausted them (~1024) and crashed mid-tick with the socket removed.
+  Fix: `_tick` no longer calls it; `start_control()` is guarded idempotent. **Verified:
+  fd count flat at 8 across ticks.** *(Found on the first try by the app's new in-app
+  debug log — below.)*
+- **`onboard` SIGSEGV every boot** (device r48 → **r49**). The on-screen keyboard
+  crashed in its native `osk` module every boot — useless on an appliance with no
+  touchscreen/input. Its autostart lives in `/etc/xdg/lxqt-tablet/autostart/` (not the
+  plain `autostart/` our XDG shadow covers), so the apk **trigger** now also fires there
+  and neuters onboard's own file (`Hidden=true`). **Verified: 0 onboard coredumps on the
+  fresh v1.10.1 boot.** *(Was a v1.9.0/v1.10.0 known-open item.)*
+- **librespot boot-race storm** (device r48 → **r49**, same package). The wrapper waited
+  **30 s** for wlan0's DHCP IPv4 before starting librespot; BCM4330 cold-boot
+  association routinely takes longer, so the first start gave up → systemd `Restart` → a
+  **5× storm**. `After=network-online.target` doesn't help (the USER-manager-level target
+  isn't wired to real connectivity). Extended the wait **30 → 180 s** (exit 1 stays for a
+  genuinely dead radio). **Verified: 0 restarts.** *(Was a v1.9.0/v1.10.0 known-open
+  item.)*
+- **Companion app — Devices red-bar flicker** (app 1.2.0 → **1.3.1**). The Devices
+  screen's 3 s background poll now **logs** failures instead of flashing the red error
+  bar; only user-initiated actions show a visible error.
+
+### Added
+
+- **Companion app — "Debug mode"** (Devices → Developer, app **1.3.1+9**, own version
+  track — NOT part of the image). Reveals an **always-on** in-app connection log:
+  collection is always on (a 600-entry ring of short strings), the toggle only reveals
+  the viewer, so the history leading up to a flicker is already captured. Records the
+  banner switch (connection UP/DOWN), DROP causes (peer-closed vs socket-error vs
+  supervisor-disconnect on a failed probe), probe latency, call timeouts with
+  pending-queue depth, slow/late responses, and lifecycle transitions. **Method names
+  only, never params** (`setWifi` carries the PSK). **This log is what found the btagent
+  fd leak (above) on the first try.**
+
 ## [1.10.0] — 2026-07-15 — Bluetooth pairing from the app, BOTH directions · HDMI desktop on demand (device r48, btagent r3, control r10, setupd r4, nexusqd r10, kernel r43, firmware r2)
 
 > **Step 2 of the software phase**, built on v1.9.0's BlueZ infrastructure.
@@ -150,12 +212,13 @@ All notable changes to Nexus Q Reloaded. Format follows
   **OTP MAC `14:7d:c5:3a:35:b5`**. **The device has no source for the factory MAC at
   all** (nvram carries a generic Broadcom default). Proper fix mirrors BT: a
   **`local-mac-address` in the DTS wifi node**, after a stock audit. **Use the OTP MAC
-  for lease lookups.**
+  for lease lookups.** *(FIXED in v1.10.1 — DTS patch 0043; wlan0 permanent MAC is
+  the factory `f8:8f:ca:20:48:e1` again.)*
 - **Thermal: 102.8 °C** under sustained load — **above the documented 94–99 °C
   envelope**. True idle 72–75 °C / 52 % at 350 MHz.
-- **librespot boot race** — 5 restarts, self-heals.
+- **librespot boot race** — 5 restarts, self-heals. *(FIXED in v1.10.1 — wait 30→180 s.)*
 - **`onboard` SIGSEGVs every boot** — its native `osk` module. **NOT** the old flash
-  corruption.
+  corruption. *(FIXED in v1.10.1 — trigger neuters its lxqt-tablet autostart.)*
 - **`NEXUSQ_NO_WIFI=1` build flag: still promised-but-unwritten.**
 - **The Devices screen has had NO design review.** Petr tested it **functionally**
   2026-07-15; the copy is unreviewed.

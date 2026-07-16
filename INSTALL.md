@@ -1,4 +1,4 @@
-# Nexus Q Reloaded -- Install Guide (v1.10.0)
+# Nexus Q Reloaded -- Install Guide (v1.10.1)
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,18 +12,22 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.10.0.img` (~5.3 MiB), `nexusq-rootfs-v1.10.0-sparse.img.zst`
+- release artifacts: `nexusq-boot-v1.10.1.img` (~5.3 MiB), `nexusq-rootfs-v1.10.1-sparse.img.zst`
   (~2.1 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.10.0.sha256`
-  - **The v1.10.0 kernel is UNCHANGED from v1.8.2/v1.9.0** (`6.12.12-r43`, `#44`; 42
-    patches through 0042 -- incl. the crackle fixes 0041/0042 and the 0040 BT UART
-    `max-speed` fix -- plus the `conservative` default-governor defconfig). v1.10.0 is
-    a **userspace** release: BT pairing from the app in **both** directions + the
-    HDMI desktop on demand (device **r48**, **btagent r3**, **nexusq-control r10**,
-    setupd r4, nexusqd r10, firmware r2). At ~5.3 MiB the boot image is still **well
-    under the 8 MB boot partition**. Coming from **v1.8.2 or v1.9.0** you strictly
-    only need `userdata`; coming from **any earlier release** flash **both**. Flashing
-    both is always safe. Verify against `nexusq-v1.10.0.sha256`.
+  decompress it, see step 2), `nexusq-v1.10.1.sha256`
+  - **The v1.10.1 kernel bumps to `6.12.12-r44` (`#45`; 43 patches through 0043)** --
+    the only kernel change from v1.10.0's r43 is **patch 0043**, which pins the factory
+    WiFi MAC in the DTS (`local-mac-address = [f8 8f ca 20 48 e1]` on `wifi@1`, mirroring
+    the BT `local-bd-address`) -- on top of the crackle fixes 0041/0042, the 0040 BT UART
+    `max-speed` fix, and the `conservative` default-governor defconfig. v1.10.1 is a
+    **bug-fix** release over v1.10.0: factory WiFi MAC + a btagent fd leak (the app
+    "kept disconnecting") + the `onboard` boot SIGSEGV + the librespot boot-race storm
+    (device **r49**, **btagent r4**, kernel **r44**; control r10, setupd r4, nexusqd r10,
+    firmware r2 unchanged). At ~5.3 MiB the boot image is still **well under the 8 MB
+    boot partition**. Because the kernel changed, **coming from v1.10.0 flash BOTH `boot`
+    and `userdata`** (a userdata-only flash would keep the r43 boot.img and miss the WiFi
+    MAC fix); coming from any earlier release flash both regardless. Flashing both is
+    always safe. Verify against `nexusq-v1.10.1.sha256`.
 
 ## 1. Enter fastboot mode
 
@@ -38,10 +42,11 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 ```bash
 # Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# The v1.10.0 kernel is UNCHANGED from v1.8.2/v1.9.0 (~5.3 MiB; 42 patches through
-# 0042 + the conservative-governor defconfig). Flashing it is a no-op from v1.8.2 or
-# v1.9.0, required from anything older, and always safe.
-fastboot flash boot nexusq-boot-v1.10.0.img
+# The v1.10.1 kernel is r44 (~5.3 MiB; 43 patches through 0043 + the
+# conservative-governor defconfig). The only change from v1.10.0's r43 is patch 0043
+# (factory WiFi MAC in the DTS), so flashing boot is REQUIRED from v1.10.0 too, and
+# always safe.
+fastboot flash boot nexusq-boot-v1.10.1.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -50,8 +55,8 @@ fastboot flash boot nexusq-boot-v1.10.0.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
-zstd -d nexusq-rootfs-v1.10.0-sparse.img.zst   # -> nexusq-rootfs-v1.10.0-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.10.0-sparse.img
+zstd -d nexusq-rootfs-v1.10.1-sparse.img.zst   # -> nexusq-rootfs-v1.10.1-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.10.1-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -159,23 +164,25 @@ optional -- find the device on your LAN as hostname `steelhead`.
 > never reads the factory calibration MAC (a live driver-reload test proved it
 > ignores the nvram `macaddr=` too).
 >
-> ⚠️ **Correction (2026-07-15): the factory MAC is NOT pinned.** This note used to
-> claim the v1.6.6 image pins the **factory MAC** at the NM layer instead
-> (`cloned-mac-address=F8:8F:CA:20:48:E1` in the baked profile /
-> `scripts/gen-wifi-profile.sh`), "verified on air 2026-07-03". A v1.9.0 diag sweep
-> found that MAC is **injected nowhere**: wlan0 runs the **OTP MAC**
-> `14:7d:c5:3a:35:b5` (Murata OUI), and the DHCP lease carries an **empty
-> hostname**. **Look your lease up by the OTP MAC** — `f8:8f:ca:20:48:e1` is stale.
-> (The **BT** MAC is fine — pinned in the DTS via `local-bd-address`.) **Open bug**,
-> tracked under CHANGELOG v1.9.0 + v1.10.0 known issues.
+> ✅ **FIXED in v1.10.1: the factory MAC is now pinned in the DTS.** On **v1.10.1+**
+> images wlan0's PERMANENT MAC is the factory `f8:8f:ca:20:48:e1` again — kernel patch
+> **0043** adds `local-mac-address` to the DTS `wifi@1` node (exactly as the BT node
+> pins `local-bd-address`), and brcmfmac programs it over the chip OTP MAC.
+> `ethtool -P wlan0` confirms it, and your DHCP lease now carries the `steelhead`
+> hostname — **find it by hostname or the factory MAC**. On **≤ v1.10.0** images wlan0
+> ran the chip **OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI) with an **empty hostname**
+> (the earlier NM `cloned-mac-address=F8:8F:CA:20:48:E1` pin only reached the baked dev
+> profile, not the profile onboarding created — so on air it fell back to OTP; found
+> 2026-07-15). Look those leases up by the OTP MAC. (The **BT** MAC has always been
+> fine — pinned in the DTS via `local-bd-address`.)
 >
-> **Root cause (2026-07-15, still NOT fixed as of v1.10.0):**
-> `scripts/gen-wifi-profile.sh` pins `cloned-mac-address` into the **BAKED dev
-> profile only**. The profile `nexusq-setupd` creates during onboarding via
-> `nmcli connection add` does **not**, so NM falls back to `permanent` = the OTP MAC.
-> **The device has no source for the factory MAC at all** (nvram carries a generic
-> Broadcom default). The proper fix mirrors BT: a `local-mac-address` in the DTS wifi
-> node, after a stock audit.
+> **Why the DTS is the only route:** stock sourced the WiFi MAC from the bootloader
+> cmdline (`androidboot.wifi_macaddr=`, from the efs/factory partition) — a path we
+> cannot reproduce (our U-Boot doesn't pass it, `CONFIG_CMDLINE_FORCE=y` discards it);
+> nvram carries a generic Broadcom placeholder that brcmfmac ignores because the chip
+> has a MAC in OTP. The DTS `local-mac-address` is the only on-device source, and it
+> also fixes the onboarding profile (NM `permanent` == the factory MAC now, no clone
+> needed). Tracked under CHANGELOG [1.10.1].
 
 ## What works
 
@@ -183,7 +190,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 |-----------|--------|
 | HDMI video + **LXQt / Wayland** desktop (labwc + Pixman) | ✅ **on demand since v1.10.0** — toggle it from the app's Devices screen (`setDesktop`); it idles the GPU/display path and heats the sphere, so it is on-request. Audio survives a desktop stop (device **r48** bakes the `user` linger — without it, stopping the desktop would kill PA + librespot). _(This row said "XFCE4" until 2026-07-15; the desktop has been LXQt/Wayland since v1.6.12.)_ |
 | **BT pairing from the app — both directions** | ✅ **v1.10.0** — the Q has no screen or input device, so **the app is its Bluetooth settings panel**. **Inbound**: pair a phone for music. **Outbound**: the Q scans for and pairs a **mouse / keyboard** (verified on a Logitech MX Master 4 + MX Keys — Just Works, no passkey; HID reaches `/dev/input` via uhid). Pair a keyboard + mouse and switch the desktop on → the appliance is a computer |
-| WiFi (BCM4330, original calibration) | ✅ working, stable IP since v1.6.6 (stable on-air MAC = the chip's **OTP MAC** `14:7d:c5:3a:35:b5`; the "factory MAC pinned at the NM layer" claim is **retired-pending-fix** — that MAC is injected nowhere, and the lease has an empty hostname, so look it up by the OTP MAC · 2026-07-15). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
+| WiFi (BCM4330, original calibration) | ✅ working (factory MAC `f8:8f:ca:20:48:e1` **pinned in the DTS since v1.10.1** — patch 0043, `local-mac-address`, mirrors the BT node; `ethtool -P wlan0` PERMANENT and the lease hostname is `steelhead`, so find it by hostname or the factory MAC. ≤v1.10.0 ran the chip **OTP MAC** `14:7d:c5:3a:35:b5` with an empty hostname — the old "factory MAC pinned at the NM layer" only reached the baked profile). **Characterized 2026-07-07: 5 GHz is healthy, not flaky** (0 % loss, 2.6 ms jitter); bulk **~34 Mbit/s is a HW ceiling** of the 1×1 802.11n chip, not a bug — use ethernet (`10.42.0.2`) for bulk transfers |
 | App-driven onboarding (NFC → BT → WiFi) | ✅ **v1.9.0** — an unprovisioned device arms setup mode itself; tap the phone on the dome → bonded/encrypted BT RFCOMM → WiFi join → name/room/theme. See §5a. ⚠️ a **dev** image self-provisions (baked WiFi) and will NOT onboard; `PUBLIC_RELEASE=1` images do |
 | Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |

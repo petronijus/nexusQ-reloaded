@@ -53,15 +53,17 @@ ping -c1 -W2 172.16.42.1
   works even with no net; **WiFi** vlan20 — last-known lease
   **`192.168.20.184`** (2026-07-12; the lease is NOT stable — never hardcode the
   WiFi IP).
-  ⚠️ **Look leases up by the chip OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI).
-  The long-documented "the image pins the **factory MAC** `f8:8f:ca:20:48:e1`"
-  is **FALSE** — a 2026-07-15 (v1.9.0) sweep found that MAC is **injected
-  nowhere**; wlan0 has always been on the OTP MAC on air, and the DHCP lease
-  carries an **empty hostname**, so **hostname-matching `steelhead` will NOT find
-  it either**. (v1.6.5 and older randomized the MAC per boot.) **Open bug.**
-  If it moved, find the lease in OPNsense Kea
-  (`opnsense-api GET /api/kea/leases4/search`) by the **OTP MAC**. This host may
-  not route into vlan20.
+  ⚠️ **WiFi MAC — version boundary at v1.10.1.** On **v1.10.1+** wlan0's
+  permanent MAC is the **factory `f8:8f:ca:20:48:e1`** (kernel patch 0043 pins
+  `local-mac-address` in the DTS; `ethtool -P wlan0` confirms) and the lease
+  carries the `steelhead` hostname — **match by the factory MAC or hostname**. On
+  **≤ v1.10.0** wlan0 ran the chip **OTP MAC `14:7d:c5:3a:35:b5`** (Murata OUI)
+  with an **empty hostname** (the NM `cloned-mac-address` pin only reached the
+  baked profile — found 2026-07-15; the factory MAC was injected nowhere at
+  runtime) — match those by the OTP MAC. (v1.6.5 and older randomized the MAC per
+  boot.) If it moved, find the lease in OPNsense Kea
+  (`opnsense-api GET /api/kea/leases4/search`) by the MAC appropriate to the
+  image. This host may not route into vlan20.
 - If NOTHING answers on any transport after a few minutes, STOP and report that
   (likely the black-screen boot quirk → needs a re-reboot). Don't loop forever.
 
@@ -113,6 +115,14 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   radio/firmware working from network not configured.) brcmfmac wants
   `brcm/brcmfmac4330-sdio.bin` + nvram `brcm/brcmfmac4330-sdio.txt` (NOT the bcmdhd
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).
+  🆕 **WiFi PERMANENT MAC (v1.10.1+, kernel patch 0043):** `ethtool -P wlan0` (or
+  `cat /sys/class/net/wlan0/address`) MUST report the **factory
+  `f8:8f:ca:20:48:e1`** on a v1.10.1+ image. If it reads the chip **OTP
+  `14:7d:c5:3a:35:b5`** (Murata OUI) on a v1.10.1+ image, patch 0043 regressed
+  (the DTS `local-mac-address` on `wifi@1` is missing from the built DTB, or the
+  wrong kernel is flashed) — report it. On ≤ v1.10.0 the OTP MAC is EXPECTED (the
+  fix predates them). brcmfmac programs the DT MAC over OTP via `brcmf_of_probe()`;
+  the nvram `macaddr=` is ignored either way.
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
   ✅ **task #17 FULLY CLOSED 2026-07-06 — enumerates from a cold boot on `#33`+
   (v1.6.8).** The old "enumeration intermittency" was NOT a race — it was an

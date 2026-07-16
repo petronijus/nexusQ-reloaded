@@ -38,9 +38,12 @@ serial console as a fallback), and **WiFi** (last-known lease
 lease, the router reassigned `.195`→`.184`; try the last-known IP but **never
 hardcode it** — else look the lease up in OPNsense
 via the `opnsense-api` helper, matching hostname `steelhead` or the MAC per the
-flashed image: the **factory `f8:8f:ca:20:48:e1` on `#29`+** (NM-pinned,
-verified on air), the chip's OTP `14:7d:c5:3a:35:b5` on the interim `#27`
-(lease `.175`); on the older v1.6.5 image the lease MAC is
+flashed image: the **factory `f8:8f:ca:20:48:e1` on v1.10.1+** (`#45`/kernel r44
+— DTS-pinned `local-mac-address`, patch 0043, `ethtool -P wlan0` PERMANENT, and
+the lease hostname is populated again), the chip's **OTP `14:7d:c5:3a:35:b5` on
+`#29`–`#44`** (v1.6.6–v1.10.0 — the NM pin only reached the baked profile, so
+on-air was the OTP MAC with an **empty hostname**; found 2026-07-15) and on the
+interim `#27` (lease `.175`); on the older v1.6.5 image the lease MAC is
 randomized per boot and the IP wanders, hostname-match only). It
 verifies the winner with a real `ssh` probe and returns the single best connect
 command + fallbacks. It does NOT change anything on the device (the one allowed

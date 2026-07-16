@@ -58,34 +58,36 @@ brcmfmac also probes board-specific and optional firmware names. These logged
   instead of an error. See `../docs/2026-07-02-boot-error-inventory.md` (B4).
 
 > ℹ️ **The nvram `macaddr=` is IGNORED by brcmfmac/the firmware** (proven by a
-> live driver-reload test 2026-07-03): the chip's OTP MAC
-> (`14:7d:c5:3a:35:b5` on the reference unit, Murata OUI) always wins, and the
-> `macaddr=` in `bcmdhd.cal` (`00:90:4c:c5:12:38`) is a Broadcom placeholder
-> anyway (stock injected the factory `f8:8f:ca:20:48:e1` outside the firmware
-> path). Do NOT try to set the MAC here.
+> live driver-reload test 2026-07-03, re-confirmed 2026-07-16): the chip's OTP MAC
+> (`14:7d:c5:3a:35:b5` on the reference unit, Murata OUI) always wins over nvram, and
+> the `macaddr=` in `bcmdhd.cal` (`00:90:4c:c5:12:38`) is a Broadcom placeholder
+> anyway. Do NOT try to set the MAC via nvram — **it is set in the DTS instead** (see
+> below).
 >
-> ⚠️ **OPEN (found 2026-07-15): the factory MAC `f8:8f:ca:20:48:e1` is injected
-> NOWHERE.** wlan0 runs the **OTP MAC** on air, and its DHCP lease carries an
-> **empty hostname**. (Was documented here as "the WiFi identity is pinned at the
-> **NetworkManager layer**" via `cloned-mac-address` in the baked profile /
-> `scripts/gen-wifi-profile.sh` — that pinning is **not in effect** on the live
-> device as of 2026-07-15, so the claim is retired pending a fix.) **Look DHCP leases
-> up by the OTP MAC `14:7d:c5:3a:35:b5`** — `f8:8f:ca:20:48:e1` is stale, and the
-> empty hostname means you cannot find it by name either. The **BT** MAC is
-> fine (DTS `local-bd-address`). Tracked in `CHANGELOG.md` known issues (v1.9.0 +
-> v1.10.0).
+> ✅ **FIXED in v1.10.1 (2026-07-16) — the factory WiFi MAC is now pinned in the DTS.**
+> Kernel patch `0043-ARM-dts-omap4-steelhead-wifi-local-mac-address.patch` (r43 → r44)
+> adds `local-mac-address = [f8 8f ca 20 48 e1]` to the `wifi@1` node, **exactly as the
+> BT node pins `local-bd-address`**. brcmfmac's `brcmf_of_probe()` reads it via
+> `of_get_mac_address()` into `settings->mac` and **programs it over the OTP MAC**, so
+> the factory MAC becomes wlan0's **permanent** address at the driver level.
+> **Hardware-verified:** `ethtool -P wlan0` reports `f8:8f:ca:20:48:e1` as PERMANENT
+> (was the OTP `14:7d:c5:3a:35:b5`). **Lease lookups:** after a **v1.10.1+** flash look
+> wlan0 up by the factory `f8:8f:ca:20:48:e1` (router hostname is populated again); on
+> **≤ v1.10.0** images the on-air MAC was the OTP `14:7d:c5:3a:35:b5` with an empty
+> hostname. Tracked in `CHANGELOG.md` [1.10.1].
 >
-> **Root cause (2026-07-15) — still NOT fixed as of v1.10.0.**
-> `scripts/gen-wifi-profile.sh` pins `cloned-mac-address` into the **BAKED dev
-> profile ONLY**. The profile `nexusq-setupd` creates during onboarding via
-> `nmcli connection add` does **not** carry it, so NM falls back to `permanent` =
-> the OTP MAC. The pinning was never wrong *in the baked path* — it simply has **no
-> reach** over an onboarded profile. **The device has no source for the factory MAC
-> at all**: nvram's `macaddr=` is a generic Broadcom default (above), and nothing
-> else on the box knows `f8:8f:ca:20:48:e1`. **The proper fix mirrors BT**: a
-> `local-mac-address` in the **DTS wifi node** — after a stock audit
-> (`stock-parity-auditor`), since stock injected it from outside the firmware path
-> and we do not yet know from where.
+> **Why DT is the only route (stock-parity chain, 2026-07-15 → fixed 07-16).** Stock got
+> the WiFi MAC from the **bootloader cmdline** (`androidboot.wifi_macaddr=`, from the
+> per-device efs/factory partition) — a path we cannot reproduce (our U-Boot doesn't
+> pass it, `CONFIG_CMDLINE_FORCE=y` discards it). nvram's `macaddr=` is a generic
+> Broadcom default (above) and brcmfmac ignores it because the chip has a MAC in OTP.
+> So the device has no *runtime* source for the factory MAC — the DTS is it.
+> This also **closes the onboarding-profile gap**: the NetworkManager
+> `cloned-mac-address` pin (`scripts/gen-wifi-profile.sh`) only reached the **baked dev
+> profile**; the profile `nexusq-setupd` creates during onboarding fell back to
+> `permanent` = the OTP MAC. With the MAC pinned at the driver, NM `permanent` == the
+> factory MAC on **every** profile, so no per-profile clone is needed. The factory MACs
+> are consecutive: BT `…49:e5`, WiFi `…48:e1`.
 
 `bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
 redistributable**, so they are **not committed** (gitignored). You provide them

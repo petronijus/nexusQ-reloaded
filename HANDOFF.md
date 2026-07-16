@@ -4,7 +4,59 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-15 (latest): **STEP 2 — BT pairing from the app, BOTH directions, + HDMI desktop on demand — RELEASED as v1.10.0** (hardware-verified + user-accepted; committed on `main`, tagged 2026-07-15)
+## Session 2026-07-16 (latest): **v1.10.1 — bug-fix release (5 fixes) — RELEASED** (built, flashed, hardware-verified; committed + pushed on `main`, tagged 2026-07-16)
+
+Full record: `docs/2026-07-16-v1.10.1-bugfixes.md`. Base: v1.10.0.
+
+**v1.10.1 = device r49 / btagent r4 / kernel r44 `#45` / control r10 (unchanged) /
+setupd r4 (unchanged) / nexusqd r10 (unchanged) / firmware r2 (unchanged).** App on
+its **own track** at **1.3.1+9** (NOT part of the image).
+
+Five faults, each root-caused with evidence:
+
+1. **Factory WiFi MAC — FIXED** (kernel patch `0043`, r43 → r44): `local-mac-address =
+   [f8 8f ca 20 48 e1]` on the DTS `wifi@1` node, mirroring the BT `local-bd-address`.
+   **Hardware-verified:** `ethtool -P wlan0` now reports PERMANENT `f8:8f:ca:20:48:e1`
+   (was the chip OTP `14:7d:c5:3a:35:b5`). Stock got it from the bootloader cmdline
+   (`androidboot.wifi_macaddr=`, efs/factory) — unreproducible for us; nvram is a
+   generic placeholder and brcmfmac ignores it (chip has a MAC in OTP, verified live).
+   The only route is DT — `brcmf_of_probe()` programs `local-mac-address` over OTP. This
+   also **closes the onboarding-profile gap** (NM `permanent` == factory MAC now, so the
+   setupd-created profile needs no `cloned-mac-address` pin). **Lease lookups on
+   v1.10.1+ go back to the factory MAC / `steelhead` hostname.**
+2. **btagent fd leak → app "kept disconnecting"** (btagent r3 → r4). App showed BT calls
+   failing every 3 s ("bluetooth agent unreachable") while the link was healthy; on
+   device btagent was `active` but its control socket was GONE and the journal repeated
+   `[Errno 24] No file descriptors available`. `start_control()` was called from the
+   10 s `_tick` as well as `run()`, leaking one fd/tick until exhaustion (~1024) → crash
+   mid-tick. Fix: `_tick` no longer calls it; `start_control()` idempotent. **Verified:
+   fd count flat at 8.** *(Found on the first try by the app's new debug log — #5.)*
+3. **onboard SIGSEGV every boot** (device r48 → r49). Autostart lives in
+   `/etc/xdg/lxqt-tablet/autostart/` (not the plain `autostart/` our XDG shadow covers),
+   so the apk trigger now also neuters onboard's own file there (`Hidden=true`).
+   **Verified: 0 coredumps.**
+4. **librespot boot-race storm** (device r48 → r49). Wrapper waited 30 s for wlan0's
+   DHCP IPv4; BCM4330 cold-boot association takes longer → give up → systemd Restart →
+   5× storm. `After=network-online.target` doesn't help (USER-manager target not wired
+   to real connectivity). Extended 30 → 180 s. **Verified: 0 restarts.**
+5. **App debug mode + Devices red-bar flicker** (app 1.2.0 → 1.3.1, own track). New
+   "Debug mode" toggle (Devices → Developer) reveals an **always-on** in-app connection
+   log (collection always on; the toggle only reveals the viewer) — banner switches,
+   DROP causes, probe latency, timeouts, lifecycle transitions; **method names only,
+   never params** (setWifi carries the PSK). The Devices 3 s background poll now logs
+   failures instead of flashing the red error bar.
+
+### WHERE TO CONTINUE (v1.10.1 → next)
+Open list carried forward (see the v1.10.0/v1.9.0 blocks below): the **v1.9.0 pairing
+flake** (un-root-caused, not recurred since), the **UNPROVEN contactless-payment link**,
+**thermal 102.8 °C** under sustained load + the never-measured desktop-toggle thermal
+delta, the **Devices screen** design review + Flutter tests, and the unwritten
+**`NEXUSQ_NO_WIFI=1`** build flag. The factory-WiFi-MAC, onboard, librespot-boot-race,
+and btagent-fd-leak items are **DONE**.
+
+---
+
+## Session 2026-07-15: **STEP 2 — BT pairing from the app, BOTH directions, + HDMI desktop on demand — RELEASED as v1.10.0** (hardware-verified + user-accepted; committed on `main`, tagged 2026-07-15)
 
 Full record: `docs/2026-07-15-step2-bt-pairing-implemented.md`. Spec:
 `docs/superpowers/specs/2026-07-15-step2-bt-pairing-via-app.md` (**its §4.1
