@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=43
+pkgrel=44
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -73,6 +73,7 @@ source="
 	0040-ARM-dts-omap4-steelhead-bt-uart-max-speed-3M.patch
 	0041-dma-omap-high-read-priority-for-cyclic-audio-channel.patch
 	0042-ARM-dts-omap4-steelhead-abe-dpll-ref-sys-clkin.patch
+	0043-ARM-dts-omap4-steelhead-wifi-local-mac-address.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -152,4 +153,5 @@ SKIP  0039-nfc-hci-shdlc-silence-frame-hexdumps-steelhead.patch
 SKIP  0040-ARM-dts-omap4-steelhead-bt-uart-max-speed-3M.patch
 SKIP  0041-dma-omap-high-read-priority-for-cyclic-audio-channel.patch
 SKIP  0042-ARM-dts-omap4-steelhead-abe-dpll-ref-sys-clkin.patch
+SKIP  0043-ARM-dts-omap4-steelhead-wifi-local-mac-address.patch
 "

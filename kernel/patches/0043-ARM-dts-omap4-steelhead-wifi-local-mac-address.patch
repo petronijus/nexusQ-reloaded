@@ -1,0 +1,46 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] ARM: dts: omap4-steelhead: pin the factory WiFi MAC in DT
+
+The BCM4330 WiFi (brcmfmac, SDIO) has no on-device source for its per-device
+factory MAC. Stock got it from the bootloader kernel command line
+(androidboot.wifi_macaddr=, parsed by a board callback into the bcmdhd platform
+data) which read it from the per-device efs/factory partition — a path we cannot
+reproduce: our U-Boot does not pass it and CONFIG_CMDLINE_FORCE=y would discard
+it anyway. The shipped nvram (brcmfmac4330-sdio.txt) carries only a generic
+Broadcom placeholder macaddr=00:90:4c:c5:12:38, and brcmfmac ignores it because
+the chip has a MAC burned in OTP (verified live 2026-07-16: overriding the nvram
+macaddr and reloading the module left the permanent MAC at the OTP value
+14:7d:c5:3a:35:b5, Murata OUI).
+
+So wlan0 came up on the chip OTP MAC instead of the factory f8:8f:ca:20:48:e1,
+which made its DHCP lease wander and show an empty hostname on the router (the
+NetworkManager cloned-mac-address pin only patched the baked profile; a profile
+created by nexusq-setupd during onboarding lost it and fell back to the OTP MAC).
+
+This is the exact problem already solved for Bluetooth, whose factory MAC is
+hardcoded in this DTS as `local-bd-address` for the same reason. Mirror it for
+WiFi: brcmfmac's brcmf_of_probe() reads `local-mac-address` via
+of_get_mac_address() into settings->mac and programs it over the OTP MAC, so the
+per-device factory MAC becomes the interface's permanent address at the driver
+level — no per-profile clone needed. The factory MACs are consecutive:
+BT f8:8f:ca:20:49:e5, WiFi f8:8f:ca:20:48:e1.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -694,6 +694,10 @@
+ 		reg = <1>;
+ 		interrupt-parent = <&gpio2>;
+ 		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>; /* gpio_53 */
+ 		interrupt-names = "host-wake";
++		/* Per-device factory WiFi MAC. brcmfmac has no on-device source for
++		 * it (nvram is a placeholder; OTP holds a generic Murata MAC), so pin
++		 * it here exactly as the BT node pins local-bd-address. (2026-07-16.) */
++		local-mac-address = [f8 8f ca 20 48 e1];
+ 	};
+ };
+

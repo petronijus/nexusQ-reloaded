@@ -658,6 +658,10 @@
 		interrupt-parent = <&gpio2>;
 		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>; /* gpio_53 */
 		interrupt-names = "host-wake";
+		/* Per-device factory WiFi MAC (patch 0043). brcmfmac has no on-device
+		 * source for it (nvram is a placeholder; OTP holds a generic Murata
+		 * MAC), so pin it here just as the BT node pins local-bd-address. */
+		local-mac-address = [f8 8f ca 20 48 e1];
 	};
 };
 
