@@ -297,6 +297,7 @@ def _run():
             self.agent = None
             self.owns_led = False
             self.registered = False
+            self._control_sock = None
 
         def _props(self, path=ADAPTER_PATH):
             return dbus.Interface(self.bus.get_object(BLUEZ, path), PROPS_IFACE)
@@ -438,7 +439,14 @@ def _run():
                 self.register()
             self.arm_window_timeout()
             self.reconcile()
-            self.start_control()
+            # NB: start_control() is deliberately NOT here. It belongs to run(),
+            # once. It was accidentally added to this 10 s tick too, and since it
+            # opens a fresh listening socket + GLib watch every call without
+            # closing the old one, it leaked a file descriptor every 10 s until
+            # the process ran out (~1024) and CRASHED mid-tick with ENOENT'd
+            # socket removed — the control socket vanished and every app
+            # Bluetooth call failed "agent unreachable" (found 2026-07-16 via the
+            # app's debug log). start_control() is now also guarded below.
             return True
 
         # --- control socket (the LAN bridge's only way into BlueZ) ----------
@@ -699,6 +707,12 @@ def _run():
             return True
 
         def start_control(self):
+            # Idempotent: create the listening socket exactly once. Even if a
+            # caller invokes this twice, we never open a second socket/watch (the
+            # bug above leaked one per call). Held on self so it lives as long as
+            # the daemon.
+            if getattr(self, "_control_sock", None) is not None:
+                return
             try:
                 os.unlink(CONTROL_SOCK)
             except OSError:
@@ -708,6 +722,7 @@ def _run():
             os.chmod(CONTROL_SOCK, 0o600)  # opening a pairing window is privileged
             s.listen(4)
             s.setblocking(False)
+            self._control_sock = s
             GLib.io_add_watch(s, GLib.IO_IN, self._serve)
             log("control socket:", CONTROL_SOCK)
 
