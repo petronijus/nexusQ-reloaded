@@ -52,13 +52,21 @@ class _DevicesScreenState extends State<DevicesScreen> {
     super.dispose();
   }
 
-  Future<T?> _call<T>(String method, [Map<String, dynamic>? params]) async {
+  /// [silent] — a background poll failure is logged but does NOT flash the red
+  /// error bar. Only user-initiated actions (pair, forget, toggle) deserve a
+  /// visible error; a 3 s poll blipping on a transient network hiccup should not
+  /// scream red. This alone stops the flicker; the log tells us why it blipped.
+  Future<T?> _call<T>(String method,
+      [Map<String, dynamic>? params, bool silent = false]) async {
+    final sw = Stopwatch()..start();
     try {
       final r = await widget.client.call(method, params);
-      if (mounted) setState(() => _error = null);
+      if (mounted && !silent) setState(() => _error = null);
       return r as T?;
     } catch (e) {
-      if (mounted) setState(() => _error = _humanError(e));
+      AppLog.add('devices', '$method failed after ${sw.elapsedMilliseconds}ms: $e',
+          warn: true);
+      if (mounted && !silent) setState(() => _error = _humanError(e));
       return null;
     }
   }
@@ -84,9 +92,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   Future<void> _refreshQuiet() async {
-    final paired = await _call<Map<String, dynamic>>('listPairedDevices');
-    final pairing = await _call<Map<String, dynamic>>('getPairingState');
-    final desktop = await _call<Map<String, dynamic>>('getDesktop');
+    // silent: this is the 3 s background poll — errors go to the log, not the bar.
+    final paired = await _call<Map<String, dynamic>>('listPairedDevices', null, true);
+    final pairing = await _call<Map<String, dynamic>>('getPairingState', null, true);
+    final desktop = await _call<Map<String, dynamic>>('getDesktop', null, true);
     if (!mounted) return;
     setState(() {
       if (paired != null) {
@@ -96,7 +105,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       if (desktop != null) _desktop = desktop['desktop'] == true;
     });
     if (_scanning) {
-      final r = await _call<Map<String, dynamic>>('listBtScanResults');
+      final r = await _call<Map<String, dynamic>>('listBtScanResults', null, true);
       if (r != null && mounted) {
         setState(() => _found = (r['devices'] as List? ?? [])
             .cast<Map<String, dynamic>>()
