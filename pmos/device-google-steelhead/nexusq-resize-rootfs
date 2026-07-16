@@ -1,0 +1,38 @@
+#!/bin/sh
+# Grow the root ext4 to fill its partition — once, after a flash.
+#
+# The flashed rootfs image is ~2.1 GB, but it is written to mmcblk0p13, a
+# 14.1 GB partition on the 15.8 GB eMMC. ext4 does NOT grow into the partition on
+# its own, so a fresh flash boots with the fs pinned at ~2 GB and only tens of MB
+# free — dangerously tight for any apk op, and far too small for the glibc chroot
+# the Roon/Tidal services need. resize2fs grows a MOUNTED ext4 online, so this is
+# safe to run against the live root.
+#
+# Idempotent: the unit's ConditionPathExists guards the flag, and this also
+# skips if the fs already fills the partition, so a stale flag or a hand-run does
+# no harm.
+set -e
+
+ROOT_DEV=/dev/mmcblk0p13
+FLAG=/var/lib/nexusq/.rootfs-resized
+
+mkdir -p /var/lib/nexusq
+
+# Partition size (512-byte sectors -> bytes) vs current fs size (blocks * bs).
+part_bytes=$(( $(cat /sys/class/block/mmcblk0p13/size) * 512 ))
+bs=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block size/{gsub(/ /,"",$2);print $2}')
+fs_blocks=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block count/{gsub(/ /,"",$2);print $2}')
+fs_bytes=$(( bs * fs_blocks ))
+
+# Leave a small margin (256 MB) — if the fs is already within it of the
+# partition, there is nothing meaningful to reclaim.
+if [ "$(( part_bytes - fs_bytes ))" -lt 268435456 ]; then
+	echo "nexusq-resize-rootfs: fs already fills the partition (${fs_bytes} of ${part_bytes} B)" >&2
+	touch "$FLAG"
+	exit 0
+fi
+
+echo "nexusq-resize-rootfs: growing $ROOT_DEV ext4 from ${fs_bytes} to ${part_bytes} B" >&2
+resize2fs "$ROOT_DEV"
+touch "$FLAG"
+echo "nexusq-resize-rootfs: done" >&2

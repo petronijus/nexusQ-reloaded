@@ -31,3 +31,4 @@ enable nexusq-usb-gadget.service
 enable nexusq-nfc.service
 enable nexusq-setupd.service
 enable nexusq-btagent.service
+enable nexusq-resize-rootfs.service

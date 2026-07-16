@@ -6,6 +6,25 @@ the design. Evidence is from live tests on the device + current web research; th
 verdict is **feasible for Roon, conditional for Tidal, with one shared prerequisite
 and one shared blocker (now solved).**
 
+> **UPDATE 2026-07-17 — Roon PROVEN on-device, end to end.** The "single unproven
+> step" below (does Roon's Mono run in a real glibc chroot vs. segfaulting under
+> gcompat?) was validated live. On the running v1.10.1 device: grew the rootfs with
+> `resize2fs` (2.0 GB → 12.7 GB, 9.8 GB free), staged a Debian bookworm armhf glibc
+> rootfs at `/opt/glibc-rt`, ran the official `RoonBridge_linuxarmv7hf` under
+> `bwrap --bind /opt/glibc-rt /`. Results:
+> - `mono-sgen --version` → **"Mono JIT compiler version 6.10.0.104", exit 0**
+>   (under gcompat it segfaulted). Arch `armel,vfp+hard`.
+> - Roon's own `check.sh` → **STATUS: SUCCESS** — Binary Compatibility **OK**
+>   (was FAILED under gcompat) + ALSA Libraries **OK** (after
+>   `apt-get install libasound2 libasound2-plugins` inside the rootfs).
+> - `start.sh` actually launched: `Initializing → Starting RoonBridgeHelper →
+>   RAATServer Running`. Mono ran Roon's real daemon + audio server in the chroot.
+> The only open detail is audio-device plumbing (`opendir` misses because `/dev/snd`
+> + `/proc/asound` weren't bound; production routes through the PA `pulse` plugin) —
+> an implementation detail, not a feasibility question. **Roon is a build task now,
+> not a research question.** The first-boot `resize2fs` is already baked (device
+> pkg r51: `nexusq-resize-rootfs` + `.service` + `95-nexusq.preset` enable).
+
 ## TL;DR
 
 | | Roon Bridge | Tidal Connect |
@@ -73,9 +92,9 @@ bwrap --bind /opt/glibc-rt / --dev /dev --proc /proc \
    in).
 5. USER unit + firewall for the RAAT ports.
 
-**Single unproven step to validate FIRST in implementation:** does Roon's
-`mono-sgen` actually run inside the glibc chroot (vs. segfaulting under gcompat)?
-Everything downstream depends on it. Cheap to test once the rootfs is staged.
+**~~Single unproven step~~ — PROVEN 2026-07-17 (see the UPDATE at the top):** Roon's
+`mono-sgen` runs inside the glibc chroot (v6.10.0.104, exit 0), `check.sh` →
+SUCCESS, and `start.sh` brings RAATServer up. No blocker remains before build.
 
 ## Tidal Connect — POSSIBLE, but recommend deferring
 
@@ -94,13 +113,32 @@ Everything downstream depends on it. Cheap to test once the rootfs is staged.
 Roon glibc-chroot infrastructure already proving the pattern (Tidal reuses it with
 an older rootfs).
 
-## Open questions for Petr
+## Decisions (2026-07-17)
 
-1. **Roon**: proceed to build the glibc-chroot + Roon Bridge? (It is the clean,
-   official one — the strong candidate.)
-2. **Tidal**: acceptable to run an extracted vendor binary, or drop it? Do you
-   have a Roon account / Tidal HiFi to test against?
-3. **Disk**: bake the first-boot `resize2fs` now (independently useful), yes?
+1. **Roon**: GO — build the glibc-chroot + Roon Bridge. Live-proven feasible
+   (above); this is the clean, official candidate.
+2. **Tidal**: DEFERRED — grey-area extracted binary + Debian-9 glibc. Revisit as a
+   follow-up once the Roon glibc-chroot pattern is shipped (Tidal reuses it).
+3. **Disk**: DONE — first-boot `resize2fs` baked (device pkg r51).
+
+## Roon build plan (the remaining work)
+
+1. ~~First-boot resize~~ — DONE (r51).
+2. **Bake the glibc rootfs into the image**: stage `/opt/glibc-rt` (Debian bookworm
+   armhf + `libasound2` + `libasound2-plugins`) as a build artifact rather than a
+   first-boot download, so it is reproducible and offline. Decide: ship the ~250 MB
+   populated tree in the apk, or a first-boot debootstrap/tarball fetch. Leaning
+   toward a baked tarball unpacked by a oneshot unit (deterministic, no build-host
+   debootstrap needed if we pin the linuxcontainers image by digest).
+3. **Ship RoonBridge** (official tarball) into the glibc root at a fixed path.
+4. **Audio**: `asound.conf` in the root defaulting to `pulse`; bind the uid-10000 PA
+   socket + `XDG_RUNTIME_DIR`/`PULSE_SERVER` into the sandbox; bind `/dev/snd` +
+   `/proc/asound` so RAATServer's device scan is happy. Output/volume stay in PA.
+5. **systemd USER unit** (uid-10000 session, like librespot/shairport) that runs
+   `bwrap … start.sh`; `Restart=on-failure`.
+6. **Firewall**: RAAT + RAATServer ports (drop-in like `61_airplay.nft`).
+7. **Validate against a real Roon Core** (needs Petr's Roon account) — pair the
+   bridge, play a track, confirm it appears as a PA input and audio comes out.
 
 ## Sources
 - Roon Linux install / platform + glibc note — https://help.roonlabs.com/portal/en/kb/articles/linux-install

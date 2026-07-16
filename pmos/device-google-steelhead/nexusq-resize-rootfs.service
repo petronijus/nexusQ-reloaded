@@ -1,0 +1,18 @@
+# Grow the root ext4 to fill its 14 GB partition, once, after a flash.
+# See /usr/bin/nexusq-resize-rootfs for why (flashed fs is ~2 GB in a 14 GB part).
+[Unit]
+Description=Grow root filesystem to fill its partition (once, post-flash)
+DefaultDependencies=no
+After=systemd-remount-fs.service local-fs.target
+Before=sysinit.target
+# Run only until it has succeeded once; the script also self-skips if the fs
+# already fills the partition, so this is belt-and-suspenders.
+ConditionPathExists=!/var/lib/nexusq/.rootfs-resized
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nexusq-resize-rootfs
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

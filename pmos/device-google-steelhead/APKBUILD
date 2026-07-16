@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=50
+pkgrel=51
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -34,6 +34,7 @@ depends="
 	gdb
 	python3-dbg
 	i2c-tools
+	e2fsprogs
 	gptfdisk
 	iw
 	ethtool
@@ -96,6 +97,8 @@ source="
 	55_nexusq-control.nft
 	asound.conf
 	snd-aloop.conf
+	nexusq-resize-rootfs
+	nexusq-resize-rootfs.service
 	nexusq.preset
 	$pkgname.post-install
 "
@@ -385,6 +388,14 @@ package() {
 	install -Dm644 "$srcdir"/61_airplay.nft \
 		"$pkgdir"/etc/nftables.d/61_airplay.nft
 
+	# First-boot rootfs grow: the flashed ext4 (~2 GB) is pinned inside its 14 GB
+	# partition until resize2fs runs. Local unit (lives in /etc) enabled via the
+	# 95-nexusq preset; runs once early (sysinit.target) then self-guards.
+	install -Dm755 "$srcdir"/nexusq-resize-rootfs \
+		"$pkgdir"/usr/bin/nexusq-resize-rootfs
+	install -Dm644 "$srcdir"/nexusq-resize-rootfs.service \
+		"$pkgdir"/etc/systemd/system/nexusq-resize-rootfs.service
+
 	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
@@ -479,6 +490,8 @@ SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft
 SKIP  asound.conf
 SKIP  snd-aloop.conf
+SKIP  nexusq-resize-rootfs
+SKIP  nexusq-resize-rootfs.service
 SKIP  nexusq.preset
 SKIP  device-google-steelhead.post-install
 "
