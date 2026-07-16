@@ -17,12 +17,20 @@
 # wlan0 via allow-interfaces= in the post-install.)
 set -e
 
-for i in $(seq 1 30); do
+# Wait for wlan0's IPv4 (DHCP completes only after association). The ceiling is
+# generous on purpose: BCM4330 cold-boot association routinely takes longer than
+# 30 s, and the old 30 s wait made the first start give up -> systemd Restart ->
+# a boot-time restart storm (5x "wlan0 has no IPv4" on v1.9.0-rc4). A longer wait
+# catches the association on the FIRST process, so there is nothing to restart.
+# The user unit's After=network-online.target does not help here: at the USER
+# manager level that target is not wired to real connectivity, so this poll IS
+# the gate. exit 1 stays for a genuinely dead radio.
+for i in $(seq 1 180); do
 	WIP=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
 	[ -n "$WIP" ] && break
 	sleep 1
 done
-[ -n "$WIP" ] || { echo "librespot-nexusq: wlan0 has no IPv4 after 30s" >&2; exit 1; }
+[ -n "$WIP" ] || { echo "librespot-nexusq: wlan0 has no IPv4 after 180s" >&2; exit 1; }
 
 # Device name: read from the same identity file the nexusq-control bridge uses
 # (/etc/nexusq/device.json, written by nexusq-setupd's setName), so Spotify

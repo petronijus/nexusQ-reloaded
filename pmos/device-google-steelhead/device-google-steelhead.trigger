@@ -31,4 +31,18 @@ for dir in "$@"; do
 	sed -i 's/^load-module module-udev-detect$/load-module module-udev-detect tsched=0/' "$dp"
 done
 
+# Stop the on-screen keyboard (onboard) autostarting. It SIGSEGVs in its native
+# osk module on every boot (systemd-coredump), and an on-screen keyboard has no
+# purpose on an appliance with no touchscreen and no attached input device. The
+# autostart file lives in an lxqt-tablet subdir, not the plain autostart/ dir our
+# XDG_CONFIG_DIRS shadow covers, so a trigger neuters onboard's OWN file — the one
+# that is certainly read — rather than relying on XDG merge semantics for that
+# subpath. `Hidden=true` means the XDG autostart spec treats the entry as absent.
+# Idempotent; re-applies if onboard is ever upgraded.
+for dir in "$@"; do
+	oa="$dir/onboard-autostart.desktop"
+	[ -f "$oa" ] || continue
+	grep -q '^Hidden=true' "$oa" || printf '\nHidden=true\n' >> "$oa"
+done
+
 exit 0
