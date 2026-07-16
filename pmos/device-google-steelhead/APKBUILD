@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=49
+pkgrel=50
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -27,6 +27,7 @@ depends="
 	nexusq-setupd
 	nexusq-btagent
 	librespot
+	shairport-sync
 	pulseaudio
 	openssh-server
 	openssh-client
@@ -87,6 +88,10 @@ source="
 	nq-healthd.service
 	librespot.service
 	librespot-nexusq
+	shairport-sync.service
+	shairport-nexusq
+	shairport-sync.conf
+	61_airplay.nft
 	60_spotify.nft
 	55_nexusq-control.nft
 	asound.conf
@@ -356,6 +361,30 @@ package() {
 		"$pkgdir"/usr/lib/systemd/user/librespot.service
 	ln -sf ../librespot.service \
 		"$pkgdir"/usr/lib/systemd/user/default.target.wants/librespot.service
+
+	# AirPlay 1 (shairport-sync) — a second PA INPUT alongside librespot, wired the
+	# same way: a USER unit in the uid-10000 session (shares PulseAudio), enabled
+	# via the default.target.wants symlink. The wrapper takes the device name from
+	# /etc/nexusq/device.json; the conf routes the alsa backend to the ALSA `pulse`
+	# PCM (the Alpine build has no native pa backend). NB the unit must NOT depend
+	# on avahi-daemon (a SYSTEM service) — a user unit that Requires a system unit
+	# refuses to start; see the unit's own header. IMPLEMENTED but UNTESTED for
+	# actual playback (2026-07-16): advertised + listening on RTSP 5000 verified
+	# live, but no Apple device was on hand to confirm audio.
+	install -Dm755 "$srcdir"/shairport-nexusq \
+		"$pkgdir"/usr/bin/shairport-nexusq
+	install -Dm644 "$srcdir"/shairport-sync.conf \
+		"$pkgdir"/etc/shairport-sync.conf
+	install -Dm644 "$srcdir"/shairport-sync.service \
+		"$pkgdir"/usr/lib/systemd/user/shairport-sync.service
+	ln -sf ../shairport-sync.service \
+		"$pkgdir"/usr/lib/systemd/user/default.target.wants/shairport-sync.service
+	# AirPlay ports on WiFi (input policy is default-drop): RTSP 5000/tcp + the
+	# three AirPlay-1 UDP streams 6001-6010 (pinned in shairport-sync.conf). mDNS
+	# (5353) is already opened by 60_spotify.nft.
+	install -Dm644 "$srcdir"/61_airplay.nft \
+		"$pkgdir"/etc/nftables.d/61_airplay.nft
+
 	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
@@ -442,6 +471,10 @@ SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
 SKIP  librespot.service
 SKIP  librespot-nexusq
+SKIP  shairport-sync.service
+SKIP  shairport-nexusq
+SKIP  shairport-sync.conf
+SKIP  61_airplay.nft
 SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft
 SKIP  asound.conf

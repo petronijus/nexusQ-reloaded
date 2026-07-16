@@ -1,0 +1,27 @@
+#!/bin/sh
+# shairport-sync (AirPlay 1) as a PulseAudio INPUT for the Nexus Q.
+#
+# Mirrors the librespot-nexusq wrapper: runs in the `user` (uid 10000) systemd
+# USER session so it shares that session's PulseAudio, and takes the AirPlay
+# service name from the same identity file the bridge and librespot use
+# (/etc/nexusq/device.json, written by nexusq-setupd's setName). So the AirPlay
+# picker shows whatever the user named the device in onboarding, falling back to
+# "Nexus Q" before first setup.
+#
+# The audio path (alsa -> the ALSA `pulse` PCM -> PulseAudio) is in
+# /etc/shairport-sync.conf; see that file for why the alsa backend is used rather
+# than a native pa backend (the Alpine build has none).
+set -e
+
+# Read the device name; never let a missing/corrupt identity file block AirPlay.
+NQ_NAME="$(python3 - <<'EOF' 2>/dev/null || echo "Nexus Q"
+import json
+print(json.load(open("/etc/nexusq/device.json"))["name"])
+EOF
+)"
+[ -n "$NQ_NAME" ] || NQ_NAME="Nexus Q"
+
+# -a overrides the (unset) config name. shairport-sync advertises via avahi, which
+# re-announces on interface changes, so no explicit wlan0-IP wait is needed here
+# (unlike librespot's libmdns, which had to be pinned to the wlan0 address).
+exec /usr/bin/shairport-sync -c /etc/shairport-sync.conf -a "$NQ_NAME"

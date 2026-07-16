@@ -1,0 +1,31 @@
+# shairport-sync — AirPlay 1 receiver, a systemd USER unit (runs in the uid-10000
+# `user` session so it shares that session's PulseAudio). Installed to
+# /usr/lib/systemd/user/ and auto-started via a default.target.wants symlink —
+# the same mechanism as pulseaudio.service and librespot.service.
+#
+# AirPlay is one PA INPUT alongside librespot (Spotify Connect); OUTPUT selection
+# (TAS5713 / SPDIF / HDMI) and volume live in PulseAudio. The name, the alsa->pulse
+# routing and the args are in /usr/bin/shairport-nexusq + /etc/shairport-sync.conf.
+[Unit]
+Description=shairport-sync — AirPlay (Nexus Q, PulseAudio input)
+Documentation=https://github.com/mikebrady/shairport-sync
+# Only USER-manager units may be named here. avahi-daemon is a SYSTEM service, so
+# it must NOT appear as After=/Requires= — a user unit that Requires a system
+# unit fails to resolve and refuses to start (that bug kept this from launching
+# on boot, 2026-07-16). avahi is always up long before the autologin session
+# reaches this unit, and shairport re-advertises when the interface appears, so no
+# ordering on it is needed. Mirror librespot.service exactly.
+After=pulseaudio.service network-online.target
+Wants=pulseaudio.service network-online.target
+# Enabled globally (default.target.wants); pin to the appliance user so it never
+# starts in another user's manager and fights for the RTSP port. (Same guard as
+# librespot.service.)
+ConditionUser=10000
+
+[Service]
+ExecStart=/usr/bin/shairport-nexusq
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
