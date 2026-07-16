@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
+import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../protocol/models.dart';
 
@@ -60,6 +61,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _onConnection(bool up) {
     if (_disposed) return;
+    // This is THE banner switch: connected=false is the exact moment the UI
+    // shows "Disconnected". Everything above it in the log is the why.
+    AppLog.add('ctrl', up ? 'connection UP' : 'connection DOWN → banner shows',
+        warn: !up);
     state.connected = up;
     if (up) {
       _attempt = 0;
@@ -85,7 +90,8 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await _client.connect();
       // success is signalled via the connection stream → _onConnection(true)
-    } catch (_) {
+    } catch (e) {
+      AppLog.add('ctrl', 'connect attempt failed: $e', warn: true);
       ok = false;
     } finally {
       _connectInFlight = false;
@@ -106,6 +112,7 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     final delay = Duration(
         seconds: math.min(1 << math.min(_attempt, 4), _maxBackoff.inSeconds));
     _attempt++;
+    AppLog.add('ctrl', 'reconnect in ${delay.inSeconds}s (attempt $_attempt)');
     _retryTimer = Timer(delay, () {
       _retryTimer = null;
       _connect();
@@ -130,13 +137,20 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   Future<bool> _probe() async {
     if (_disposed || _probeInFlight || !state.connected) return state.connected;
     _probeInFlight = true;
+    final sw = Stopwatch()..start();
     try {
       final s = await _client.call('getState').timeout(_probeTimeout);
       if (_disposed) return false;
+      AppLog.add('ctrl', 'probe ok ${sw.elapsedMilliseconds}ms');
       state.applyJson(s); // the probe doubles as a free state refresh
       notifyListeners();
       return true;
-    } catch (_) {
+    } catch (e) {
+      // A probe failure is the app UNILATERALLY declaring the link dead — the
+      // subsequent DROP/DOWN entries are consequences of this line, not causes.
+      AppLog.add('ctrl',
+          'probe FAILED after ${sw.elapsedMilliseconds}ms ($e) → tearing the link down',
+          warn: true);
       if (!_disposed) _client.disconnect();
       return false;
     } finally {
@@ -148,6 +162,11 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // NB: the parameter shadows our [state] field (the override signature
     // demands the name); this method touches only timers, never DeviceState.
+    //
+    // Logged because lifecycle is a prime suspect for banner flicker: screen
+    // off/doze half-opens the socket, and the resume probe then tears it down
+    // and redials — a real (if brief) disconnect the user sees as a blink.
+    AppLog.add('ctrl', 'lifecycle: ${state.name}');
     switch (state) {
       case AppLifecycleState.resumed:
         _inForeground = true;

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
+import 'debug_log_screen.dart';
 
 /// "Devices": Bluetooth pairing + the HDMI desktop toggle.
 ///
@@ -287,6 +289,43 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 'in. Pair a mouse and keyboard above to actually use it. Music '
                 'keeps playing either way.',
                 style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+              ),
+            ),
+          ),
+
+          // --- developer -----------------------------------------------------
+          const SizedBox(height: 20),
+          _sectionTitle('Developer'),
+          Card(
+            color: NexusQColors.surface,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: AppLog.enabled,
+              builder: (context, on, _) => Column(
+                children: [
+                  SwitchListTile(
+                    value: on,
+                    onChanged: (v) => AppLog.enabled.value = v,
+                    title: const Text('Debug mode',
+                        style: TextStyle(color: NexusQColors.white)),
+                    subtitle: const Text(
+                      // The log records regardless; the toggle only reveals it —
+                      // so when something misbehaves, the history leading up to
+                      // it is already captured.
+                      'Shows the connection log (recording is always on, this '
+                      'just unlocks the viewer).',
+                      style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+                    ),
+                  ),
+                  if (on)
+                    ListTile(
+                      leading: const Icon(Icons.receipt_long, color: NexusQColors.dim),
+                      title: const Text('View log',
+                          style: TextStyle(color: NexusQColors.white)),
+                      trailing: const Icon(Icons.chevron_right, color: NexusQColors.dim),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const DebugLogScreen())),
+                    ),
+                ],
               ),
             ),
           ),

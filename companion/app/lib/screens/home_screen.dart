@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import '../debug/app_log.dart';
 import '../protocol/models.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
 import '../widgets/device_sphere.dart';
+import 'debug_log_screen.dart';
 import 'devices_screen.dart';
 
 /// Faithful to the original Nexus Q app: the black "drop ball" sphere as the
@@ -24,6 +26,20 @@ class HomeScreen extends StatelessWidget {
           appBar: AppBar(
             title: Text(s.deviceName.toUpperCase()),
             actions: [
+              // Debug mode (Devices → Developer): quick access to the connection
+              // log, right where the "Disconnected" banner appears — so the user
+              // can open the evidence the moment they see the symptom.
+              ValueListenableBuilder<bool>(
+                valueListenable: AppLog.enabled,
+                builder: (context, on, _) => on
+                    ? IconButton(
+                        icon: const Icon(Icons.bug_report_outlined),
+                        tooltip: 'Debug log',
+                        onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => const DebugLogScreen())),
+                      )
+                    : const SizedBox.shrink(),
+              ),
               // Bluetooth pairing + the HDMI desktop. The app is the Q's only
               // input device, so this is its Bluetooth settings panel — there is
               // no other way to pair a mouse or keyboard to a screenless box.
