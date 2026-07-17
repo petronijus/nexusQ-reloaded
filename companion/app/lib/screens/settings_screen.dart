@@ -283,9 +283,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Color _serviceColor(String? id) {
     switch (id) {
       case 'spotify':
-        return SimpleIconColors.spotify; // Spotify green
+        return SimpleIconColors.spotify; // Spotify green — reads fine on dark
       case 'roon':
-        return SimpleIconColors.roon;    // Roon blue
+        // Roon's true blue (#2039f3) is too dark on the #252525 surface — barely
+        // visible. Lighten it (~35 % toward white) so it stays recognisably Roon
+        // blue but has contrast on the dark theme.
+        return const Color(0xFF6374F7);
       case 'airplay':
         return NexusQColors.white;       // AirPlay has no signature colour
       default:
