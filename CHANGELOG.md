@@ -9,7 +9,8 @@ All notable changes to Nexus Q Reloaded. Format follows
 > **2026-07-17 late session: Roon VALIDATED END-TO-END against Petr's ROCK Core
 > (Proxmox VM, 192.168.20.105) — all three inputs (Spotify, AirPlay, Roon) play.**
 > The v1.10.2-dev-r53 image was flashed (first-boot resize worked: 2.0→12.7 GB);
-> Roon was then brought up live and every fix baked as device r54:
+> Roon was then brought up live and every fix baked as device r54 (+ r55: the
+> loopback cushion bumped 100→250 ms to match the value proven smooth live):
 > - glibc base gaps: `/tmp` missing from the base tarball broke unprivileged bwrap
 >   (mountpoint must pre-exist) → recreated at package time (+ apt dirs).
 > - `--tmpfs /run` (bind target for `/run/user/10000` in a root-owned baked /run).

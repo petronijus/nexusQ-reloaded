@@ -79,11 +79,14 @@ NQ_HOST="$(printf '%s' "$NQ_NAME" | tr -c 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$
 # below, so Roon audio follows the app's output choice like every other input.
 # The PA source holds the loopback at s16le/48k FIRST, which constrains Roon's
 # playback side to 48 kHz (RAAT reads the capability and converts itself).
+# latency_msec=250: the loopback cushion proven smooth in the live bring-up
+# (2026-07-17). Together with RAAT's own RT scheduling (user@10000 LimitRTPRIO)
+# and the Core-side Device Setup "Buffer Size", this is the anti-choppiness set.
 pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {
 	pactl load-module module-alsa-source device=hw:RoonLoop,1,0 \
 		source_name=roon_in source_properties=device.description=RoonBridge \
 		rate=48000 channels=2 format=s16le >/dev/null
-	pactl load-module module-loopback source=roon_in latency_msec=100 >/dev/null
+	pactl load-module module-loopback source=roon_in latency_msec=250 >/dev/null
 }
 
 exec bwrap \

@@ -273,6 +273,23 @@ Check and REPORT each (PASS/FAIL + evidence):
 - **device services**: `etc/systemd/system/` has `nexusqd`/`nq-healthd`/
   `nexusq-usb-gadget` (or current device-pkg units) with their `.wants` enable
   symlinks.
+- **step-3 streaming services (device r50-r55, 2026-07-17, in source — first flashed
+  image `v1.11.0-rc1` pending):** verify on the mounted rootfs —
+  `/opt/glibc-rt/bin/bash` exists + `/opt/glibc-rt/etc/asound.conf` = `pulse`;
+  `/opt/glibc-rt/opt` **and** `/opt/glibc-rt/home/roon` owned **10000:10000**;
+  `/opt/glibc-rt/tmp` mode **1777**; `/opt/glibc-rt/opt/RoonBridge` **ABSENT**
+  (lazy-fetched at runtime, must NOT be baked); `/usr/bin/roon-nexusq` (755)
+  contains `--tmpfs /run`, `--ro-bind /sys`, `--hostname`, `module-alsa-source`,
+  `RoonLoop`, `latency_msec=250`; `roon.service` present but **NO
+  `*wants*/roon.service` symlink anywhere** (Roon is default-OFF); `snd-aloop-options.conf`
+  has `index=0,7`; `user@10000.service.d/rtprio.conf` = `LimitRTPRIO=50`;
+  `62_roon.nft` (udp 9003 + tcp 9100-9200 + tcp/udp 32768-60999); `91-pulseaudio…rules`
+  ignores `snd_aloop.1`; **AirPlay**: `shairport-sync.service` user unit WITH its
+  `default.target.wants` symlink (default-ON), conf at `/etc/nexusq/shairport-sync.conf`;
+  **resize**: `/usr/bin/nexusq-resize-rootfs` (755) + `.service` + `enable
+  nexusq-resize-rootfs.service` in the preset + `e2fsprogs` + `bubblewrap` deps.
+  ⚠️ The `glibc-rt-…tar.xz` source is a GitHub **release asset** (125 MB fetch) —
+  a build needs network + the asset present. See `docs/2026-07-17-roon-bring-up.md`.
 - **onboarding + BT-pairing stack (**v1.10.1**, released 2026-07-16 = device **r49** /
   nexusqd r10 / firmware r2 / setupd **r4** / **nexusq-btagent r4** /
   **nexusq-control r10** / kernel **r44** `#45`; bug-fix release over v1.10.0,

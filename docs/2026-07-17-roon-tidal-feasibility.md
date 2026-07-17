@@ -6,6 +6,16 @@ the design. Evidence is from live tests on the device + current web research; th
 verdict is **feasible for Roon, conditional for Tidal, with one shared prerequisite
 and one shared blocker (now solved).**
 
+> **UPDATE 2 (2026-07-17 late) — SHIPPED. Roon VALIDATED END-TO-END against Petr's
+> real ROCK Core and every fix baked as device r54** (`51b2f7d`; packaging r52,
+> build gates r53). All build-plan steps below are DONE except the companion-app
+> service-toggle feature (future). The firewall is no longer deferred —
+> **`62_roon.nft` is measured and baked** (udp 9003 SOOD, tcp 9100-9200 jsonserver,
+> tcp+udp 32768-60999 dynamic zone/clock ports, all observed live). The audio step
+> shipped DIFFERENTLY than planned (Roon does not speak PulseAudio — see the note
+> at plan step 4). Full live-debugging record + evidence:
+> **`docs/2026-07-17-roon-bring-up.md`**.
+
 > **UPDATE 2026-07-17 — Roon PROVEN on-device, end to end.** The "single unproven
 > step" below (does Roon's Mono run in a real glibc chroot vs. segfaulting under
 > gcompat?) was validated live. On the running v1.10.1 device: grew the rootfs with
@@ -133,27 +143,41 @@ service (resource policy — the companion app will later toggle services per-us
    apt caches) was captured as `nexusq-glibc-rt-bookworm-armhf.tar.xz` (125 MB xz,
    sha512 pinned in the APKBUILD) and is unpacked into `/opt/glibc-rt` at build
    time. **Hosting: a GitHub release asset** on this repo, tag
-   `glibc-rt-bookworm-armhf-1` (a build asset, NOT a device release). ⚠️ The upload
-   itself is the one open action — the automated release-create was permission-
-   blocked; Petr uploads it (command in the handoff), then the build can fetch it.
+   `glibc-rt-bookworm-armhf-1` (a build asset, NOT a device release). ~~⚠️ The upload
+   itself is the one open action~~ — **CLOSED (r53)**: the asset is live and the
+   download + sha512 pin were verified against it; the r53 build fetched it.
+   ⚠️ r53 build gates learned baking it: `makedepends=+xz` (abuild's tar shells out
+   to the xz binary), `options=+!fhs +!tracedeps` (foreign-libc tree under /opt;
+   abuild's ELF tracer chokes on `ld-linux-armhf.so.3`), suid/sgid stripped from
+   the Debian base, and the base tarball ships NO `/tmp` — `package()` recreates it
+   (1777) because **unprivileged bwrap cannot create mountpoints in a root-owned
+   `/`** (hit live, r54).
 3. **RoonBridge app** — fetched on first Roon start by `roon-nexusq` (lazy, only if
    the user turns Roon on) into a uid-10000-owned dir so both the fetch and Roon's
    own self-updater can write. We never pin/manage the app version.
-4. **Audio** — **DONE**: `roon-asound.conf` in the rootfs defaults ALSA to `pulse`;
-   the wrapper binds the uid-10000 PA socket + `XDG_RUNTIME_DIR`/`PULSE_SERVER`.
-   `/dev/snd` is deliberately NOT bound (pulse-only path, so Roon can't grab hw and
-   fight PA). Output/volume stay in PA. The harmless `opendir` device-scan warnings
-   remain; revisit only if RAATServer needs a bound `/proc/asound`.
+4. **Audio** — **DONE, but SHIPPED DIFFERENTLY (r54)**: the pulse-only plan here
+   (ALSA default = `pulse`, no `/dev/snd` bound) turned out not to work — **Roon
+   does not speak PulseAudio**, and with zero ALSA devices RAATServer answers
+   `enumerate_devices` with `[]` (the Core shows no output). Shipped design: a
+   dedicated second `snd-aloop` card **`RoonLoop`** (index pinned 7,
+   `snd-aloop-options.conf`), the sandbox dev-binds ONLY its nodes (so Roon can
+   never grab TAS5713 hw), and the wrapper loads `module-alsa-source`
+   (`hw:RoonLoop,1,0` @48 kHz, holds the pair so RAAT converts) + `module-loopback`
+   to the default sink — Roon follows the app's output switch like every input.
+   `roon-asound.conf` (default = pulse) still ships but is not the RAAT path.
+   Details: `docs/2026-07-17-roon-bring-up.md`.
 5. **systemd USER unit** — **DONE**: `roon.service` (uid-10000, like
    librespot/shairport), `Restart=on-failure`, **not** auto-enabled (off by
    default; `systemctl --user enable --now roon` to turn on).
-6. **Firewall** — **DEFERRED to live validation**: RAAT uses UDP 9003 (discovery) +
-   dynamic RAATServer TCP ports. Rather than guess the range, measure the actual
-   listening ports with `netstat`/`ss` while the Bridge runs against a real Core,
-   then write `62_roon.nft`. (Web lookup of Roon's port list was permission-blocked.)
-7. **Validate against a real Roon Core** (needs Petr's Roon account) — pair the
-   bridge, play a track, confirm it appears as a PA input and audio comes out; then
-   finalize step 6.
+6. **Firewall** — **DONE (r54, measured — no longer deferred)**: `62_roon.nft`,
+   every port observed live against the real Core: udp 9003 (SOOD), tcp 9100-9200
+   (jsonserver, observed 9200), tcp 32768-60999 (dynamic zone device ports 38717/
+   42117 + audio_port_tcp 37933), udp 32768-60999 (clock sync, observed 36787 —
+   blocked clock = tracks "skip"; blocked device port = UI hangs at "Enabling").
+7. **Validate against a real Roon Core** — **DONE 2026-07-17**: enabled against
+   Petr's ROCK Core (Proxmox VM, 192.168.20.105), tracks play through the app's
+   selected output alongside Spotify + AirPlay. Choppiness root-caused (RTPRIO for
+   RAAT + Core-side Buffer Size). Full record: `docs/2026-07-17-roon-bring-up.md`.
 
 ## Companion-app service toggles (next feature, Petr's request 2026-07-17)
 

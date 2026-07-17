@@ -4,7 +4,70 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-16 (latest): **v1.10.1 — bug-fix release (5 fixes) — RELEASED** (built, flashed, hardware-verified; committed + pushed on `main`, tagged 2026-07-16)
+## Session 2026-07-17 (latest): **STEP 3 — streaming services: AirPlay + Roon Bridge, plus first-boot rootfs resize** (Roon validated END-TO-END against a real Core; in source, NOT yet released)
+
+Full records: `docs/2026-07-17-roon-tidal-feasibility.md` (design) +
+`docs/2026-07-17-roon-bring-up.md` (live validation). Base: v1.10.1.
+
+**State = device r55, kernel r44 `#45` (unchanged).** All three streaming inputs
+now play: **Spotify (librespot) · AirPlay (shairport-sync) · Roon (glibc/bwrap
+sandbox)** — the last two are new. Committed + pushed on `main`
+(`9cb2f60`→`51b2f7d` + the r55 250 ms loopback tweak). **NOT tagged / no flashed
+release yet** — `v1.11.0-rc1` build did not run (the build subagent hit a
+usage-credits API error 2026-07-17; retry the build on a credited model).
+
+### Current device state
+- **v1.10.2-dev-r53 flashed** (first-boot resize proved itself: `/` grew
+  2.0 → 12.7 GB), then **r54/r55 fixes hand-applied live** — the on-device content
+  is identical to the r55 source. WiFi lease **192.168.20.120** (kea:
+  `/api/kea/leases4/search`, MAC `f8:8f:ca:20:48:e1`).
+- Roon is **enabled** right now (`systemctl --machine=user@.host --user enable
+  --now roon.service`); default in the image is **OFF**.
+
+### What shipped (in source)
+- **AirPlay** (device r50): shairport-sync user unit, `alsa`→`pulse`, avahi
+  `_raop._tcp`, `61_airplay.nft`. **User-tested playing.** Conf lives at
+  `/etc/nexusq/shairport-sync.conf` (the shairport-sync package owns
+  `/etc/shairport-sync.conf` — file-conflict, moved).
+- **First-boot rootfs resize** (device r51): `nexusq-resize-rootfs` + `.service`,
+  enabled via `95-nexusq.preset`, `e2fsprogs` dep. Online-grows the ~2 GB flashed
+  ext4 to fill the 14 GB partition, once, self-guarded.
+- **Roon Bridge** (device r52→r55): glibc/Mono can't run on musl (gcompat
+  segfaults it — measured), so it runs in a **bwrap sandbox over a baked
+  Debian-bookworm-armhf glibc base** at `/opt/glibc-rt`. Base is a sha512-pinned
+  GitHub release asset (`glibc-rt-bookworm-armhf-1`), unpacked at build time; only
+  the base is baked — RoonBridge is **lazy-fetched on first start** into a
+  uid-10000-owned dir and **self-updates**. Audio: a dedicated 2nd `snd-aloop`
+  card (`RoonLoop`, idx 7) → `module-alsa-source roon_in` → `module-loopback`
+  (250 ms) → default sink. `roon.service` is a **default-OFF** user unit.
+  Firewall `62_roon.nft` (measured live). RTPRIO via `user@10000.service.d/`.
+
+### Gotchas the next session must know
+- **Roon Buffer Size is a CORE-side Device Setup setting** (Petr raised it to cure
+  choppiness) — it lives on the Core and survives our reflashes; nothing to bake.
+- Roon UI shows **two "Loopback PCM" devices** — enable the one that works
+  (`DEV=1` fails fast by design; can't hide it, control-level enumeration).
+- The `glibc-rt-bookworm-armhf-1` release asset upload had to be done BY PETR
+  (`gh release create` is permission-blocked for the agent). If the base tarball
+  ever changes, re-pin sha512 + re-upload.
+- **The 6 bwrap/RAAT gotchas** (pre-existing mountpoints, `--tmpfs /run`,
+  `--ro-bind /sys` for Mono NICs, PULSE_IGNORE new aloop cards, dynamic-port
+  firewall, HOME writable) are in `docs/2026-07-17-roon-bring-up.md` — Tidal will
+  reuse the whole pattern.
+
+### WHERE TO CONTINUE (step 3 → next)
+1. **Build `v1.11.0-rc1`** from `main` (device r55) on a credited model, flash,
+   full diag sweep — confirm baked == the live-validated content, then tag.
+2. **Companion-app per-service toggles** (agreed next feature): `nexusq-control`
+   `listServices` / `setService(name,on)` (start/stop the uid-10000 user units +
+   persist), app shows a toggle per service (Spotify/AirPlay/Roon/desktop). Roon is
+   already built to drop in; librespot/shairport get folded in there (no midnight
+   refactor of working services).
+3. Carry-open: AirPlay now-playing **MPRIS metadata** (session-bus, not system);
+   **Tidal** (deferred — grey-area extracted binary, needs a Debian-9 root reusing
+   the Roon pattern).
+
+## Session 2026-07-16: **v1.10.1 — bug-fix release (5 fixes) — RELEASED** (built, flashed, hardware-verified; committed + pushed on `main`, tagged 2026-07-16)
 
 Full record: `docs/2026-07-16-v1.10.1-bugfixes.md`. Base: v1.10.0.
 
