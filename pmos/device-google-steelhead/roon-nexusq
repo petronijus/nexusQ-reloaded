@@ -44,13 +44,60 @@ fi
 XRT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 PA_SOCK="$XRT/pulse/native"
 
+# Roon shows the BRIDGE under the sandbox hostname. Take the onboarding name
+# (/etc/nexusq/device.json, same source as AirPlay), sanitized to hostname-safe
+# (alnum + '-'; spaces become '-', so "Nexus Q" -> "Nexus-Q"), and set it via
+# --unshare-uts --hostname so the Core lists the user's device name instead of
+# the OS hostname "steelhead".
+NQ_NAME="$(python3 - <<'EOF' 2>/dev/null || echo "Nexus Q"
+import json
+print(json.load(open("/etc/nexusq/device.json"))["name"])
+EOF
+)"
+[ -n "$NQ_NAME" ] || NQ_NAME="Nexus Q"
+NQ_HOST="$(printf '%s' "$NQ_NAME" | tr -c 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$//; s/--*/-/g')"
+[ -n "$NQ_HOST" ] || NQ_HOST="Nexus-Q"
+
 # The base tarball ships an empty /etc/resolv.conf placeholder so this bind (the
 # host's live DNS, for Roon's cloud + self-update) has a target to land on.
+# --tmpfs /run BEFORE the XRT bind: the baked /run is root-owned, so unprivileged
+# bwrap could not mkdir the /run/user/10000 mountpoint inside it ("Can't mkdir
+# /run/user/10000", hit live 2026-07-17). A fresh tmpfs /run belongs to the userns
+# user, so bwrap creates the bind target itself.
+# --ro-bind /sys: Mono's NetworkInterface reads interface state from
+# /sys/class/net; without it EVERY iface enumerates as "not up", RoonBridge skips
+# them all and never SOOD-announces on the LAN — invisible to the Core (hit live
+# 2026-07-17, "[ipaddresses] SKIPPED wlan0: not up").
+#
+# AUDIO: Roon does not speak PulseAudio, and with no audio devices RAATServer
+# answers enumerate_devices with [] and the Core shows nothing. So the sandbox
+# gets EXACTLY ONE ALSA card: the dedicated RoonLoop snd-aloop card (index 7, see
+# the modprobe.d file). Only its control + playback nodes (+ /dev/snd/timer) are
+# dev-bound — the real cards (TAS5713/SPDIF/HDMI) have no nodes inside, so Roon
+# can never grab hw and fight PulseAudio. PA reads the capture side
+# (hw:RoonLoop,1,0 -> roon_in source -> module-loopback -> default sink), loaded
+# below, so Roon audio follows the app's output choice like every other input.
+# The PA source holds the loopback at s16le/48k FIRST, which constrains Roon's
+# playback side to 48 kHz (RAAT reads the capability and converts itself).
+pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {
+	pactl load-module module-alsa-source device=hw:RoonLoop,1,0 \
+		source_name=roon_in source_properties=device.description=RoonBridge \
+		rate=48000 channels=2 format=s16le >/dev/null
+	pactl load-module module-loopback source=roon_in latency_msec=100 >/dev/null
+}
+
 exec bwrap \
 	--bind "$ROOT" / \
+	--unshare-uts \
+	--hostname "$NQ_HOST" \
 	--dev /dev \
 	--proc /proc \
+	--ro-bind /sys /sys \
+	--dev-bind /dev/snd/controlC7 /dev/snd/controlC7 \
+	--dev-bind /dev/snd/pcmC7D0p /dev/snd/pcmC7D0p \
+	--dev-bind /dev/snd/timer /dev/snd/timer \
 	--tmpfs /tmp \
+	--tmpfs /run \
 	--bind "$XRT" "$XRT" \
 	--ro-bind /etc/resolv.conf /etc/resolv.conf \
 	--setenv XDG_RUNTIME_DIR "$XRT" \

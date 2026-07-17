@@ -37,3 +37,11 @@ SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="omap-hdmi-audio.1.auto", ENV{PULS
 # Same platform-name match rationale as HDMI above (card index is unstable:
 # Loopback has been card0 with tas5713/HDMI shuffling around it across boots).
 SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="snd_aloop.0", ENV{PULSE_IGNORE}="1"
+
+# And the SECOND aloop instance (snd_aloop.1 = the RoonLoop card, index 7): it is
+# Roon's private playback device inside the bwrap sandbox; PulseAudio touches it
+# ONLY via the explicit module-alsa-source on its capture side (loaded by
+# roon-nexusq). Without this ignore, PA's udev-detect auto-loads module-alsa-card
+# on it and HOLDS the playback substream — RAATServer then gets EBUSY and reports
+# DeviceOpenFailed for every enable attempt (hit live 2026-07-17).
+SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="snd_aloop.1", ENV{PULSE_IGNORE}="1"

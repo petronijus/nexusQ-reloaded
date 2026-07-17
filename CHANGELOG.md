@@ -6,6 +6,38 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased] — step 3: streaming services (AirPlay shipped-in-source · rootfs resize · Roon packaged)
 
+> **2026-07-17 late session: Roon VALIDATED END-TO-END against Petr's ROCK Core
+> (Proxmox VM, 192.168.20.105) — all three inputs (Spotify, AirPlay, Roon) play.**
+> The v1.10.2-dev-r53 image was flashed (first-boot resize worked: 2.0→12.7 GB);
+> Roon was then brought up live and every fix baked as device r54:
+> - glibc base gaps: `/tmp` missing from the base tarball broke unprivileged bwrap
+>   (mountpoint must pre-exist) → recreated at package time (+ apt dirs).
+> - `--tmpfs /run` (bind target for `/run/user/10000` in a root-owned baked /run).
+> - `--ro-bind /sys` — Mono reads iface state from /sys/class/net; without it all
+>   ifaces enumerate "not up" and the bridge never SOOD-announces (invisible).
+> - `--unshare-uts --hostname` from the onboarding name (device.json) — Roon
+>   lists "Nexus-Q", not "steelhead" (Petr's request).
+> - PA grabbed the RoonLoop card (udev-detect) and held its playback substream →
+>   RAAT `DeviceOpenFailed`; fixed by extending the PULSE_IGNORE udev rule to
+>   `snd_aloop.1`.
+> - Audio architecture: Roon can't speak PulseAudio → dedicated 2nd aloop card
+>   `RoonLoop` (index 7 pinned; `snd-aloop-options.conf`), sandbox sees ONLY its
+>   nodes (can never grab TAS5713 hw), wrapper loads `module-alsa-source`
+>   (hw:RoonLoop,1,0 @48k, holds the pair at 48 kHz so RAAT converts) +
+>   `module-loopback` (250 ms) to the default sink — Roon follows the app's
+>   output switch like every input.
+> - Firewall `62_roon.nft` — measured packet-by-packet: udp 9003 (SOOD),
+>   tcp 9100-9200 (jsonserver), tcp+udp 32768-60999 (dynamic zone device/audio +
+>   clock-sync ports; blocked clock = zone enables but tracks "skip").
+> - Choppy playback fixed by: RTPRIO for RAAT (`user@10000.service.d/rtprio.conf`,
+>   LimitRTPRIO=50 — its sched_setscheduler was failing in the sandbox), the
+>   250 ms loopback cushion, and Core-side Device Setup → **Buffer Size** (Petr
+>   set it up; RAAT's default 40 ms buffer is too tight for this chain).
+> Known cosmetics: RAAT enumerates the RoonLoop card as TWO "Loopback PCM"
+> devices (control-level, can't hide DEV=1 — it fails fast if enabled; enable the
+> one that succeeds); a PA restart restores stale device volume (live-session
+> artifact only). RoonBridge itself: lazy first-run fetch + Roon self-updates.
+
 ### Added
 - **AirPlay input (shairport-sync)** — device r50. A systemd USER unit in the
   uid-10000 session (like librespot); `alsa`→`pulse` routing so AirPlay is one

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=53
+pkgrel=54
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -106,6 +106,9 @@ source="
 	roon-nexusq
 	roon.service
 	roon-asound.conf
+	snd-aloop-options.conf
+	user-rtprio.conf
+	62_roon.nft
 	nexusq-glibc-rt-bookworm-armhf.tar.xz::https://github.com/petronijus/nexusQ-reloaded/releases/download/glibc-rt-bookworm-armhf-1/nexusq-glibc-rt-bookworm-armhf.tar.xz
 	60_spotify.nft
 	55_nexusq-control.nft
@@ -443,6 +446,13 @@ package() {
 	# (measured), so give it its own uid-10000 home.
 	install -dm755 "$pkgdir"/opt/glibc-rt/home/roon
 	chown 10000:10000 "$pkgdir"/opt/glibc-rt/home/roon
+	# The base tarball excludes ./tmp (and the apt caches) — recreate them so the
+	# tree is a complete Debian root. A missing /tmp broke unprivileged bwrap
+	# ("Can't mkdir /tmp: Permission denied", hit live 2026-07-17): the mountpoint
+	# for --tmpfs /tmp must pre-exist, uid 10000 can't create it in a root-owned /.
+	install -dm1777 "$pkgdir"/opt/glibc-rt/tmp
+	install -dm755 "$pkgdir"/opt/glibc-rt/var/cache/apt/archives \
+		"$pkgdir"/opt/glibc-rt/var/lib/apt/lists
 	# Launcher + USER unit. NO default.target.wants symlink and NO preset entry:
 	# Roon is OFF by default (resource policy) and enabled on demand
 	# (`systemctl --user enable --now roon`), later via the app's service toggle.
@@ -450,6 +460,17 @@ package() {
 		"$pkgdir"/usr/bin/roon-nexusq
 	install -Dm644 "$srcdir"/roon.service \
 		"$pkgdir"/usr/lib/systemd/user/roon.service
+	# Second aloop card (RoonLoop, index 7) — Roon's private playback device;
+	# see the modprobe file header for the index pinning rationale.
+	install -Dm644 "$srcdir"/snd-aloop-options.conf \
+		"$pkgdir"/etc/modprobe.d/snd-aloop-options.conf
+	# RTPRIO for the uid-10000 user manager so RAAT's audio threads get realtime
+	# scheduling (anti-choppiness; see the drop-in header).
+	install -Dm644 "$srcdir"/user-rtprio.conf \
+		"$pkgdir"/etc/systemd/system/user@10000.service.d/rtprio.conf
+	# Roon firewall — every port measured live (see the nft file header).
+	install -Dm644 "$srcdir"/62_roon.nft \
+		"$pkgdir"/etc/nftables.d/62_roon.nft
 
 	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
 	# phone (Spotify controller) can discover "Nexus Q".
@@ -544,6 +565,9 @@ SKIP  61_airplay.nft
 SKIP  roon-nexusq
 SKIP  roon.service
 SKIP  roon-asound.conf
+SKIP  snd-aloop-options.conf
+SKIP  user-rtprio.conf
+SKIP  62_roon.nft
 a53c1f7c4cd15e73de53873b9d845333013cc57457d0aa08d3b5d1c4624a67a26f7e94d9212a1ceaa6259e3aa868f6db0fccfa41d7c94c2f255e9da0ece2956f  nexusq-glibc-rt-bookworm-armhf.tar.xz
 SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft

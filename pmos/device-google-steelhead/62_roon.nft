@@ -1,0 +1,23 @@
+#!/usr/sbin/nft -f
+# Roon (RAAT) on the WiFi LAN. Input policy is default-drop; every port here was
+# MEASURED live against a real Roon Core 2026-07-17 (packet-by-packet, tcpdump):
+#  - udp 9003: SOOD discovery — the Core's queries and unicast probes arrive
+#    here; without it the bridge is invisible.
+#  - tcp 9100-9200: RAATServer's fixed jsonserver port (observed 9200) — the
+#    Core's device-enumeration channel; 9100-9200 is Roon's documented range.
+#  - tcp 32768-60999: each ENABLED zone gets a dynamic RAAT device port (observed
+#    38717/42117) + a dynamic audio_port_tcp (observed 37933). Blocked = the
+#    Roon UI hangs at "Enabling" (Core SYN-retries into the drop).
+#  - udp 32768-60999: the zone's dynamic clock-sync port (observed 36787).
+#    Blocked = zone enables but every track "skips" — audio can't start without
+#    clock sync.
+# The dynamic ranges are Linux's ephemeral-port span; RAAT offers no way to pin
+# them. WiFi-ingress only, like every other service drop-in.
+table inet filter {
+	chain input {
+		iifname "wlan*" udp dport 9003 accept comment "Roon SOOD discovery"
+		iifname "wlan*" tcp dport 9100-9200 accept comment "Roon RAATServer jsonserver"
+		iifname "wlan*" tcp dport 32768-60999 accept comment "Roon RAAT zone device/audio (dynamic)"
+		iifname "wlan*" udp dport 32768-60999 accept comment "Roon RAAT zone clock sync (dynamic)"
+	}
+}
