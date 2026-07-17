@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:simple_icons/simple_icons.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
@@ -142,9 +143,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onChanged: _busyService.contains(s['id'])
                             ? null
                             : (v) => _toggleService(s['id'] as String, v),
+                        // Official brand mark, in the brand colour when on and
+                        // greyed when off.
                         secondary: Icon(_serviceIcon(s['id'] as String?),
                             color: s['on'] == true
-                                ? NexusQColors.accent
+                                ? _serviceColor(s['id'] as String?)
                                 : NexusQColors.dim),
                         title: Text(s['name'] as String? ?? s['id'] as String,
                             style: const TextStyle(color: NexusQColors.white)),
@@ -260,16 +263,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontWeight: FontWeight.w300)),
       );
 
+  // Official service marks. Spotify + Roon come from simple_icons (a CC0 brand-icon
+  // set); AirPlay is Material's own `Icons.airplay` (the standard AirPlay glyph —
+  // simple_icons has no AirPlay). Unknown ids fall back to a neutral speaker.
   IconData _serviceIcon(String? id) {
     switch (id) {
       case 'spotify':
-        return Icons.music_note;
+        return SimpleIcons.spotify;
       case 'airplay':
         return Icons.airplay;
       case 'roon':
-        return Icons.library_music;
+        return SimpleIcons.roon;
       default:
         return Icons.speaker;
+    }
+  }
+
+  // The brand colour, used when the service is on.
+  Color _serviceColor(String? id) {
+    switch (id) {
+      case 'spotify':
+        return SimpleIconColors.spotify; // Spotify green
+      case 'roon':
+        return SimpleIconColors.roon;    // Roon blue
+      case 'airplay':
+        return NexusQColors.white;       // AirPlay has no signature colour
+      default:
+        return NexusQColors.accent;
     }
   }
 
