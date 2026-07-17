@@ -6,6 +6,22 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles)
 
+### Fixed — service-state read was stalling the whole connection (`nexusq-control` r13)
+- `listServices` read each unit's state with `systemctl --machine=user@.host
+  --user is-active` — **~2 s per call** (the `--machine` transport is the only one
+  allowed; the local user bus refuses a root connection). The Settings screen
+  polls `listServices` every 3 s, so that latency made the app↔bridge connection
+  look unhealthy and the app dropped it → **"No Nexus Q found"** (2026-07-17).
+  Now `on` is read directly from the unit's **cgroup** (`…/user@10000.service/
+  app.slice/<unit>/cgroup.procs` non-empty) — an **instant** filesystem read
+  (measured: 2–3 s → 0.00 s). Same active/inactive answer, no systemctl in the
+  poll path. Enable/mask still use systemctl (one-off, latency is fine).
+
+### Changed — app 1.6.0+14
+- Roon icon rendered **white** (its brand blue is too dark on the dark theme).
+- **Debug mode defaults ON** during bring-up (the connection log's value is being
+  there before a symptom shows).
+
 ### Added — Settings screen + per-service logs (`nexusq-control` r12, app 1.5.0+11)
 - **New Settings screen** (app bar → gear): the streaming-service toggles, the
   HDMI desktop toggle, and Debug mode moved here out of Devices. **Devices is now

@@ -460,18 +460,30 @@ def _systemctl_user(*args, timeout=15):
     )
 
 
+# A user unit runs under this cgroup; it is ACTIVE iff its cgroup has processes.
+# We read that directly instead of `systemctl --machine=user@.host --user
+# is-active`: the --machine transport is the ONLY one allowed (the local user bus
+# refuses a root connection), and it costs ~2 s PER CALL — with the Settings
+# screen polling listServices every 3 s, that latency made the whole app<->bridge
+# connection look unhealthy and the app dropped it ("no Nexus Q found",
+# 2026-07-17). The cgroup read is instant. uid 10000 is fixed (the appliance user).
+_USER_CGROUP = ("/sys/fs/cgroup/user.slice/user-10000.slice/"
+                "user@10000.service/app.slice")
+
+
 def _service_on(unit):
-    """Is a streaming input ON? = is-active. This is the reliable signal, and it
-    tracks the persistent choice across reboots because our on/off is enable/mask:
-    `is-enabled` cannot be used — it reports `disabled` for BOTH a vendor-enabled
-    running unit (librespot/shairport, enabled via a /usr/lib default.target.wants
-    symlink) AND a genuinely-off unit (roon at rest), so it can't tell them apart;
-    only `is-active` distinguishes them (measured 2026-07-17)."""
+    """Is a streaming input ON? = its user-unit cgroup has live processes.
+
+    Instant filesystem read (see _USER_CGROUP). is-active is the right signal —
+    it tracks the persistent choice across reboots because our on/off is
+    enable/mask; `is-enabled` can't be used (it reports `disabled` for BOTH a
+    vendor-enabled running unit and a genuinely-off one). The cgroup's procs give
+    the same active/inactive answer without the systemctl latency."""
     try:
-        r = _systemctl_user("is-active", unit, timeout=8)
-    except (OSError, subprocess.SubprocessError):
-        raise Err("unavailable", "cannot query services")
-    return (r.stdout or "").strip() in ("active", "activating", "reloading")
+        with open(f"{_USER_CGROUP}/{unit}/cgroup.procs") as f:
+            return any(line.strip() for line in f)
+    except OSError:
+        return False  # no cgroup dir → the unit is not running
 
 
 def list_services():

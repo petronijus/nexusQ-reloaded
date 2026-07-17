@@ -46,8 +46,10 @@ class AppLog {
 
   /// Debug mode: reveals the log viewer in the UI. Session-only on purpose —
   /// the log itself is session-only too, so persisting the switch would
-  /// suggest history that does not exist.
-  static final enabled = ValueNotifier<bool>(false);
+  /// suggest history that does not exist. DEFAULT ON during active
+  /// development/bring-up (the log's whole value is being there before a symptom
+  /// shows); flip to false to hide the debug surface once things are stable.
+  static final enabled = ValueNotifier<bool>(true);
 
   static void add(String tag, String message, {bool warn = false}) {
     final e = AppLogEntry(tag, message, warn: warn);
