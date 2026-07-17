@@ -16,6 +16,10 @@
 # fetched here on first run and thereafter keeps itself current via Roon's own
 # updater. Its directory therefore lives under a uid-10000-owned path so both this
 # first fetch and every later self-update can write to it.
+#
+# HOME must be /home/roon (uid-10000-owned, created at package time): this unit
+# runs as uid 10000 and Roon persists its state ($HOME/.RoonBridge) — /root inside
+# the chroot is root-owned 0700 and NOT writable (measured 2026-07-17).
 set -e
 
 ROOT=/opt/glibc-rt
@@ -51,5 +55,5 @@ exec bwrap \
 	--ro-bind /etc/resolv.conf /etc/resolv.conf \
 	--setenv XDG_RUNTIME_DIR "$XRT" \
 	--setenv PULSE_SERVER "$PA_SOCK" \
-	--setenv HOME /root \
+	--setenv HOME /home/roon \
 	/bin/bash -c 'cd /opt/RoonBridge && exec ./start.sh'

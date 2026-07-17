@@ -954,6 +954,10 @@ if [ $BUILD_RC -ne 0 ]; then
     tail -150 "$WORK/log.txt" 2>/dev/null
     echo ""
     echo "=== END LOG ==="
+    # A failed package build MUST abort the pipeline with a nonzero exit —
+    # falling through used to reach "=== BUILD COMPLETE ===" and exit 0,
+    # masking the failure from any caller that (correctly) trusts the rc.
+    exit 1
 fi
 
 if [ $BUILD_RC -eq 0 ]; then

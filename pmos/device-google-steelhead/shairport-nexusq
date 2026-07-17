@@ -9,8 +9,10 @@
 # "Nexus Q" before first setup.
 #
 # The audio path (alsa -> the ALSA `pulse` PCM -> PulseAudio) is in
-# /etc/shairport-sync.conf; see that file for why the alsa backend is used rather
-# than a native pa backend (the Alpine build has none).
+# /etc/nexusq/shairport-sync.conf (device-specific path — the shairport-sync
+# package owns /etc/shairport-sync.conf itself, so we must not ship that file);
+# see the conf for why the alsa backend is used rather than a native pa backend
+# (the Alpine build has none).
 set -e
 
 # Read the device name; never let a missing/corrupt identity file block AirPlay.
@@ -24,4 +26,4 @@ EOF
 # -a overrides the (unset) config name. shairport-sync advertises via avahi, which
 # re-announces on interface changes, so no explicit wlan0-IP wait is needed here
 # (unlike librespot's libmdns, which had to be pinned to the wlan0 address).
-exec /usr/bin/shairport-sync -c /etc/shairport-sync.conf -a "$NQ_NAME"
+exec /usr/bin/shairport-sync -c /etc/nexusq/shairport-sync.conf -a "$NQ_NAME"

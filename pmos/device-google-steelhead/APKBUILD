@@ -3,11 +3,18 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=52
+pkgrel=53
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
-options="!check !archcheck"
+# !fhs: the Roon glibc sandbox base is deliberately baked under /opt/glibc-rt
+# (it is a foreign-libc rootfs, not FHS-participating host software).
+# !tracedeps: abuild's ELF dep tracer chokes on the glibc-rt binaries
+# ("ld-linux-armhf.so.3: path not found" — a glibc interpreter no Alpine
+# package provides). All runtime deps are explicit in depends= and this
+# package ships no musl ELF of its own (scripts only), so auto-tracing
+# adds nothing.
+options="!check !archcheck !fhs !tracedeps"
 depends="
 	linux-google-steelhead
 	mesa-dri-gallium
@@ -42,7 +49,9 @@ depends="
 	iproute2-minimal
 	tzdata
 "
-makedepends="devicepkg-dev"
+# xz: abuild unpacks the sha512-pinned glibc-rt .tar.xz (Roon base) at build
+# time — GNU tar shells out to the xz binary, absent from the bare buildroot.
+makedepends="devicepkg-dev xz"
 install="$pkgname.post-install"
 # apk trigger: patch pulseaudio's tas5713 mixer path AFTER pulseaudio is unpacked
 # (.post-install runs too early — it fires before late-unpacked deps' files exist).
@@ -381,8 +390,12 @@ package() {
 	# live, but no Apple device was on hand to confirm audio.
 	install -Dm755 "$srcdir"/shairport-nexusq \
 		"$pkgdir"/usr/bin/shairport-nexusq
+	# Device-specific path (/etc/nexusq/): the shairport-sync package itself
+	# owns /etc/shairport-sync.conf, and apk refuses a cross-package overwrite
+	# ("trying to overwrite etc/shairport-sync.conf" — broke the rootfs
+	# install). The wrapper passes it explicitly via -c.
 	install -Dm644 "$srcdir"/shairport-sync.conf \
-		"$pkgdir"/etc/shairport-sync.conf
+		"$pkgdir"/etc/nexusq/shairport-sync.conf
 	install -Dm644 "$srcdir"/shairport-sync.service \
 		"$pkgdir"/usr/lib/systemd/user/shairport-sync.service
 	ln -sf ../shairport-sync.service \
@@ -413,6 +426,11 @@ package() {
 	# Empty placeholder so roon-nexusq can ro-bind the host's live /etc/resolv.conf
 	# over it at runtime (the base tarball deliberately omits a host-specific one).
 	: > "$pkgdir"/opt/glibc-rt/etc/resolv.conf
+	# Strip every suid/sgid bit from the Debian base (su/sudo/passwd/&c.):
+	# bubblewrap runs the sandbox nosuid in a userns, so the bits are dead
+	# weight on-device — and abuild (rightly) refuses to package suid root
+	# executables without the "suid" option, which we'd rather not grant.
+	find "$pkgdir"/opt/glibc-rt -type f -perm /6000 -exec chmod ug-s {} +
 	# Default ALSA device inside the rootfs = pulse (Roon becomes a PA input).
 	install -Dm644 "$srcdir"/roon-asound.conf \
 		"$pkgdir"/opt/glibc-rt/etc/asound.conf
@@ -420,6 +438,11 @@ package() {
 	# first-run fetch and every later Roon self-update.
 	install -dm755 "$pkgdir"/opt/glibc-rt/opt
 	chown 10000:10000 "$pkgdir"/opt/glibc-rt/opt
+	# Roon's HOME inside the sandbox (state in $HOME/.RoonBridge). The unit runs
+	# as uid 10000; /root in the chroot is 0700 root-owned and NOT writable
+	# (measured), so give it its own uid-10000 home.
+	install -dm755 "$pkgdir"/opt/glibc-rt/home/roon
+	chown 10000:10000 "$pkgdir"/opt/glibc-rt/home/roon
 	# Launcher + USER unit. NO default.target.wants symlink and NO preset entry:
 	# Roon is OFF by default (resource policy) and enabled on demand
 	# (`systemctl --user enable --now roon`), later via the app's service toggle.

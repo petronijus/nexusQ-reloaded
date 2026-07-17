@@ -1,7 +1,7 @@
 #!/usr/sbin/nft -f
 # AirPlay 1 (shairport-sync) on the WiFi LAN. The input policy is default-drop,
 # so without this an Apple device finds "Nexus Q" via mDNS but cannot connect.
-# Ports are PINNED in /etc/shairport-sync.conf: RTSP control 5000/tcp, and the
+# Ports are PINNED in /etc/nexusq/shairport-sync.conf: RTSP control 5000/tcp, and the
 # three AirPlay-1 UDP streams (audio/control/timing) in udp_port_base..+range =
 # 6001-6010. mDNS (5353) is already opened by the librespot drop-in.
 table inet filter {

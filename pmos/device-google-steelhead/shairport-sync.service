@@ -5,7 +5,8 @@
 #
 # AirPlay is one PA INPUT alongside librespot (Spotify Connect); OUTPUT selection
 # (TAS5713 / SPDIF / HDMI) and volume live in PulseAudio. The name, the alsa->pulse
-# routing and the args are in /usr/bin/shairport-nexusq + /etc/shairport-sync.conf.
+# routing and the args are in /usr/bin/shairport-nexusq +
+# /etc/nexusq/shairport-sync.conf.
 [Unit]
 Description=shairport-sync — AirPlay (Nexus Q, PulseAudio input)
 Documentation=https://github.com/mikebrady/shairport-sync
