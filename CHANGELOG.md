@@ -4,6 +4,31 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased] — step 3: streaming services (AirPlay shipped-in-source · rootfs resize · Roon packaged)
+
+### Added
+- **AirPlay input (shairport-sync)** — device r50. A systemd USER unit in the
+  uid-10000 session (like librespot); `alsa`→`pulse` routing so AirPlay is one
+  more PulseAudio input; name from `/etc/nexusq/device.json`; pinned ports
+  (RTSP 5000/tcp, UDP 6001-6010) opened by `61_airplay.nft`.
+  **User-tested 2026-07-17 on the live device (hand-copied files): works great.**
+  Not yet built into a flashed image.
+- **First-boot rootfs grow** — device r51. `nexusq-resize-rootfs` (+ `.service`,
+  enabled via `95-nexusq.preset`): online-grows the flashed ~2 GB ext4 to fill the
+  14 GB partition, once, self-guarded. Live-verified: 2.0 GB → 12.7 GB.
+- **Roon Bridge packaged** — device r52. Roon's Mono cannot run on musl (gcompat
+  segfaults it), so the Bridge runs in a bwrap sandbox over a baked, sha512-pinned
+  Debian bookworm armhf glibc base at `/opt/glibc-rt` (proven live end-to-end:
+  `check.sh` SUCCESS, RAATServer running — `docs/2026-07-17-roon-tidal-feasibility.md`).
+  Only the base is baked; `roon-nexusq` lazily fetches RoonBridge on first start
+  into a uid-10000-owned dir and Roon self-updates from there. `roon.service` is a
+  **default-OFF** user unit (`systemctl --user enable --now roon`) — the resource
+  policy is that only user-enabled services run; the companion app gets per-service
+  toggles as a follow-up feature. Tidal deferred (grey-area extracted binary).
+  Open: upload the base tarball as the `glibc-rt-bookworm-armhf-1` GitHub release
+  asset (automation was permission-blocked); RAAT firewall drop-in measured during
+  live validation against a Roon Core.
+
 ## [1.10.1] — 2026-07-16 — bug-fix release (factory WiFi MAC · btagent fd leak · onboard · librespot boot race · app debug mode) (device r49, btagent r4, kernel r44, control r10, setupd r4, nexusqd r10, firmware r2)
 
 > Five faults, each root-caused with evidence; built, flashed, and hardware-verified

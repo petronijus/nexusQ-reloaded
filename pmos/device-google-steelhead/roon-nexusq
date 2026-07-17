@@ -1,0 +1,55 @@
+#!/bin/sh
+# Roon Bridge launcher for the Nexus Q.
+#
+# Roon ships as glibc/.NET (Mono) armv7 binaries that do NOT run on musl (even
+# gcompat segfaults on its Mono). So the Bridge runs inside a bubblewrap sandbox
+# over a baked minimal Debian bookworm armhf glibc rootfs at /opt/glibc-rt (see
+# docs/2026-07-17-roon-tidal-feasibility.md — proven on-device). Roon is just one
+# more PulseAudio INPUT, like librespot/shairport: OUTPUT + volume live in PA and
+# follow the app's default-sink choice.
+#
+# Started ON DEMAND by the roon.service USER unit (uid 10000). It is NEVER
+# auto-enabled — the resource policy is that only the services the user turns on
+# actually run (Mono is not free). Default: off.
+#
+# THE APP LAYER SELF-UPDATES. Only the glibc BASE is baked; RoonBridge itself is
+# fetched here on first run and thereafter keeps itself current via Roon's own
+# updater. Its directory therefore lives under a uid-10000-owned path so both this
+# first fetch and every later self-update can write to it.
+set -e
+
+ROOT=/opt/glibc-rt
+APPDIR="$ROOT/opt/RoonBridge"
+RB_URL="https://download.roonlabs.com/builds/RoonBridge_linuxarmv7hf.tar.bz2"
+
+[ -x "$ROOT/bin/bash" ] || { echo "roon-nexusq: glibc base missing at $ROOT" >&2; exit 1; }
+
+# Lazy provisioning: fetch RoonBridge the first time Roon is turned on (needs the
+# network — if it is not up yet the unit's Restart=on-failure retries).
+if [ ! -x "$APPDIR/start.sh" ]; then
+	echo "roon-nexusq: RoonBridge not present — fetching (first run)..." >&2
+	mkdir -p "$ROOT/opt"
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	wget -q -O "$tmp/rb.tar.bz2" "$RB_URL"
+	tar -xjf "$tmp/rb.tar.bz2" -C "$ROOT/opt"
+	[ -x "$APPDIR/start.sh" ] || { echo "roon-nexusq: fetch/extract failed" >&2; exit 1; }
+	echo "roon-nexusq: RoonBridge staged at $APPDIR" >&2
+fi
+
+XRT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+PA_SOCK="$XRT/pulse/native"
+
+# The base tarball ships an empty /etc/resolv.conf placeholder so this bind (the
+# host's live DNS, for Roon's cloud + self-update) has a target to land on.
+exec bwrap \
+	--bind "$ROOT" / \
+	--dev /dev \
+	--proc /proc \
+	--tmpfs /tmp \
+	--bind "$XRT" "$XRT" \
+	--ro-bind /etc/resolv.conf /etc/resolv.conf \
+	--setenv XDG_RUNTIME_DIR "$XRT" \
+	--setenv PULSE_SERVER "$PA_SOCK" \
+	--setenv HOME /root \
+	/bin/bash -c 'cd /opt/RoonBridge && exec ./start.sh'

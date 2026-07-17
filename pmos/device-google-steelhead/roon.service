@@ -1,0 +1,33 @@
+# Roon Bridge — a systemd USER unit (uid-10000 `user` session, so it shares that
+# session's PulseAudio, exactly like librespot.service / shairport-sync.service).
+#
+# DELIBERATELY NOT AUTO-ENABLED. Unlike pulseaudio/librespot/shairport there is no
+# default.target.wants symlink and no preset entry, so Roon is OFF by default and
+# consumes nothing until turned on. That is the resource policy: the user (today
+# by hand, later via the companion app's per-service toggle) enables only the
+# services they want — `systemctl --user enable --now roon`. Turning it off:
+# `systemctl --user disable --now roon`.
+#
+# Roon is one PA INPUT; OUTPUT (TAS5713 / SPDIF / HDMI) + volume live in
+# PulseAudio. The sandbox, the glibc rootfs and the lazy first-run fetch are all
+# in /usr/bin/roon-nexusq.
+[Unit]
+Description=Roon Bridge (Nexus Q, PulseAudio input, glibc sandbox)
+Documentation=https://roonlabs.com
+Documentation=file:///../docs/2026-07-17-roon-tidal-feasibility.md
+After=pulseaudio.service network-online.target
+Wants=pulseaudio.service network-online.target
+# Pin to the appliance user, and refuse to start if the baked glibc base is
+# somehow absent (rather than fail obscurely inside bwrap).
+ConditionUser=10000
+ConditionPathExists=/opt/glibc-rt/bin/bash
+
+[Service]
+ExecStart=/usr/bin/roon-nexusq
+# First run has to fetch RoonBridge over the network; if that (or the Bridge)
+# fails, back off and retry rather than give up.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

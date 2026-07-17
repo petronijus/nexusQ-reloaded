@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=51
+pkgrel=52
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -28,6 +28,7 @@ depends="
 	nexusq-btagent
 	librespot
 	shairport-sync
+	bubblewrap
 	pulseaudio
 	openssh-server
 	openssh-client
@@ -93,6 +94,10 @@ source="
 	shairport-nexusq
 	shairport-sync.conf
 	61_airplay.nft
+	roon-nexusq
+	roon.service
+	roon-asound.conf
+	nexusq-glibc-rt-bookworm-armhf.tar.xz::https://github.com/petronijus/nexusQ-reloaded/releases/download/glibc-rt-bookworm-armhf-1/nexusq-glibc-rt-bookworm-armhf.tar.xz
 	60_spotify.nft
 	55_nexusq-control.nft
 	asound.conf
@@ -396,6 +401,33 @@ package() {
 	install -Dm644 "$srcdir"/nexusq-resize-rootfs.service \
 		"$pkgdir"/etc/systemd/system/nexusq-resize-rootfs.service
 
+	# --- Roon Bridge (glibc/Mono in a bwrap sandbox) ------------------------
+	# Roon can't run on musl (even gcompat segfaults its Mono), so it runs inside
+	# a baked minimal Debian bookworm armhf glibc rootfs. Proven on-device, see
+	# docs/2026-07-17-roon-tidal-feasibility.md. Only the BASE is baked; the
+	# RoonBridge app is fetched on first use and self-updates (see roon-nexusq).
+	#
+	# Unpack the pinned base (sha512 below) into /opt/glibc-rt.
+	install -dm755 "$pkgdir"/opt/glibc-rt
+	tar -xJf "$srcdir"/nexusq-glibc-rt-bookworm-armhf.tar.xz -C "$pkgdir"/opt/glibc-rt
+	# Empty placeholder so roon-nexusq can ro-bind the host's live /etc/resolv.conf
+	# over it at runtime (the base tarball deliberately omits a host-specific one).
+	: > "$pkgdir"/opt/glibc-rt/etc/resolv.conf
+	# Default ALSA device inside the rootfs = pulse (Roon becomes a PA input).
+	install -Dm644 "$srcdir"/roon-asound.conf \
+		"$pkgdir"/opt/glibc-rt/etc/asound.conf
+	# The app dir must be writable by the appliance user (uid 10000) for both the
+	# first-run fetch and every later Roon self-update.
+	install -dm755 "$pkgdir"/opt/glibc-rt/opt
+	chown 10000:10000 "$pkgdir"/opt/glibc-rt/opt
+	# Launcher + USER unit. NO default.target.wants symlink and NO preset entry:
+	# Roon is OFF by default (resource policy) and enabled on demand
+	# (`systemctl --user enable --now roon`), later via the app's service toggle.
+	install -Dm755 "$srcdir"/roon-nexusq \
+		"$pkgdir"/usr/bin/roon-nexusq
+	install -Dm644 "$srcdir"/roon.service \
+		"$pkgdir"/usr/lib/systemd/user/roon.service
+
 	# Open mDNS (5353) + the librespot zeroconf HTTP port (37879) on WiFi so the
 	# phone (Spotify controller) can discover "Nexus Q".
 	install -Dm644 "$srcdir"/60_spotify.nft \
@@ -486,6 +518,10 @@ SKIP  shairport-sync.service
 SKIP  shairport-nexusq
 SKIP  shairport-sync.conf
 SKIP  61_airplay.nft
+SKIP  roon-nexusq
+SKIP  roon.service
+SKIP  roon-asound.conf
+a53c1f7c4cd15e73de53873b9d845333013cc57457d0aa08d3b5d1c4624a67a26f7e94d9212a1ceaa6259e3aa868f6db0fccfa41d7c94c2f255e9da0ece2956f  nexusq-glibc-rt-bookworm-armhf.tar.xz
 SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft
 SKIP  asound.conf

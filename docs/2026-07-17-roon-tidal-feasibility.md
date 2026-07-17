@@ -121,24 +121,50 @@ an older rootfs).
    follow-up once the Roon glibc-chroot pattern is shipped (Tidal reuses it).
 3. **Disk**: DONE — first-boot `resize2fs` baked (device pkg r51).
 
-## Roon build plan (the remaining work)
+## Roon build plan (progress)
 
-1. ~~First-boot resize~~ — DONE (r51).
-2. **Bake the glibc rootfs into the image**: stage `/opt/glibc-rt` (Debian bookworm
-   armhf + `libasound2` + `libasound2-plugins`) as a build artifact rather than a
-   first-boot download, so it is reproducible and offline. Decide: ship the ~250 MB
-   populated tree in the apk, or a first-boot debootstrap/tarball fetch. Leaning
-   toward a baked tarball unpacked by a oneshot unit (deterministic, no build-host
-   debootstrap needed if we pin the linuxcontainers image by digest).
-3. **Ship RoonBridge** (official tarball) into the glibc root at a fixed path.
-4. **Audio**: `asound.conf` in the root defaulting to `pulse`; bind the uid-10000 PA
-   socket + `XDG_RUNTIME_DIR`/`PULSE_SERVER` into the sandbox; bind `/dev/snd` +
-   `/proc/asound` so RAATServer's device scan is happy. Output/volume stay in PA.
-5. **systemd USER unit** (uid-10000 session, like librespot/shairport) that runs
-   `bwrap … start.sh`; `Restart=on-failure`.
-6. **Firewall**: RAAT + RAATServer ports (drop-in like `61_airplay.nft`).
+Decisions made 2026-07-17: bake a **pinned tarball** for the glibc base; RoonBridge
+**fetched first-run + self-updates**; Roon is an **on-demand, default-OFF** user
+service (resource policy — the companion app will later toggle services per-user).
+
+1. ~~First-boot resize~~ — **DONE** (device r51).
+2. **Glibc base baked** — **DONE** (device r52). The proven `/opt/glibc-rt` base
+   (Debian bookworm armhf + `libasound2` + `libasound2-plugins`, minus the app and
+   apt caches) was captured as `nexusq-glibc-rt-bookworm-armhf.tar.xz` (125 MB xz,
+   sha512 pinned in the APKBUILD) and is unpacked into `/opt/glibc-rt` at build
+   time. **Hosting: a GitHub release asset** on this repo, tag
+   `glibc-rt-bookworm-armhf-1` (a build asset, NOT a device release). ⚠️ The upload
+   itself is the one open action — the automated release-create was permission-
+   blocked; Petr uploads it (command in the handoff), then the build can fetch it.
+3. **RoonBridge app** — fetched on first Roon start by `roon-nexusq` (lazy, only if
+   the user turns Roon on) into a uid-10000-owned dir so both the fetch and Roon's
+   own self-updater can write. We never pin/manage the app version.
+4. **Audio** — **DONE**: `roon-asound.conf` in the rootfs defaults ALSA to `pulse`;
+   the wrapper binds the uid-10000 PA socket + `XDG_RUNTIME_DIR`/`PULSE_SERVER`.
+   `/dev/snd` is deliberately NOT bound (pulse-only path, so Roon can't grab hw and
+   fight PA). Output/volume stay in PA. The harmless `opendir` device-scan warnings
+   remain; revisit only if RAATServer needs a bound `/proc/asound`.
+5. **systemd USER unit** — **DONE**: `roon.service` (uid-10000, like
+   librespot/shairport), `Restart=on-failure`, **not** auto-enabled (off by
+   default; `systemctl --user enable --now roon` to turn on).
+6. **Firewall** — **DEFERRED to live validation**: RAAT uses UDP 9003 (discovery) +
+   dynamic RAATServer TCP ports. Rather than guess the range, measure the actual
+   listening ports with `netstat`/`ss` while the Bridge runs against a real Core,
+   then write `62_roon.nft`. (Web lookup of Roon's port list was permission-blocked.)
 7. **Validate against a real Roon Core** (needs Petr's Roon account) — pair the
-   bridge, play a track, confirm it appears as a PA input and audio comes out.
+   bridge, play a track, confirm it appears as a PA input and audio comes out; then
+   finalize step 6.
+
+## Companion-app service toggles (next feature, Petr's request 2026-07-17)
+
+Petr wants per-service enable/disable from the app: one user runs only Spotify,
+another only Roon, another Roon+AirPlay — nothing runs unless turned on (resource
+policy). Design: `nexusq-control` gains `listServices` / `setService(name, on)`
+(start/stop the uid-10000 user units + persist enabled-state); the app shows a
+toggle per service (Spotify/librespot, AirPlay/shairport, Roon, HDMI desktop).
+Roon is already built to drop in (default-off user unit). librespot/shairport stay
+as-is for now and get folded under the same toggle in that dedicated feature (no
+midnight refactor of working services).
 
 ## Sources
 - Roon Linux install / platform + glibc note — https://help.roonlabs.com/portal/en/kb/articles/linux-install
