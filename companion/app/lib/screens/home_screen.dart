@@ -6,6 +6,7 @@ import '../theme/nexusq_theme.dart';
 import '../widgets/device_sphere.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
+import 'settings_screen.dart';
 
 /// Faithful to the original Nexus Q app: the black "drop ball" sphere as the
 /// device, over a Holo-dark settings list (volume, brightness, light theme),
@@ -40,14 +41,21 @@ class HomeScreen extends StatelessWidget {
                       )
                     : const SizedBox.shrink(),
               ),
-              // Bluetooth pairing + the HDMI desktop. The app is the Q's only
-              // input device, so this is its Bluetooth settings panel — there is
-              // no other way to pair a mouse or keyboard to a screenless box.
+              // Bluetooth pairing. The app is the Q's only input device, so this
+              // is its Bluetooth settings panel — there is no other way to pair a
+              // mouse or keyboard to a screenless box.
               IconButton(
                 icon: const Icon(Icons.devices_other),
                 tooltip: 'Devices',
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                     builder: (_) => DevicesScreen(client: controller.client))),
+              ),
+              // Settings: streaming-service toggles, the HDMI desktop, debug mode.
+              IconButton(
+                icon: const Icon(Icons.settings_outlined),
+                tooltip: 'Settings',
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => SettingsScreen(client: controller.client))),
               ),
               Padding(
                 padding: const EdgeInsets.only(right: NexusQSpace.standardMargin),

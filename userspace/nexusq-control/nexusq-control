@@ -504,6 +504,32 @@ def set_service(sid, on):
     return {"id": sid, "name": s["name"], "on": _service_on(unit)}
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def service_log(sid, lines=200):
+    """Recent journal for a streaming input, newest last, ANSI stripped.
+
+    Read from the SYSTEM journal by the unit's `_SYSTEMD_USER_UNIT` field — a root
+    system service cannot attach to the uid-10000 user journal directly
+    (`journalctl --machine=user@.host --user` refuses non-root), but the user
+    unit's records land in the system journal tagged with this field."""
+    s = _SERVICE_BY_ID.get(sid)
+    if not s:
+        raise Err("bad_request", f"unknown service '{sid}'")
+    n = max(1, min(1000, int(lines)))
+    try:
+        r = subprocess.run(
+            ["journalctl", f"_SYSTEMD_USER_UNIT={s['unit']}", "-n", str(n),
+             "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=12)
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "journal did not respond")
+    out = [_ANSI_RE.sub("", ln).rstrip()
+           for ln in (r.stdout or "").splitlines()]
+    return {"id": sid, "name": s["name"], "lines": out}
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -757,6 +783,11 @@ class Bridge:
             st = set_service(sid, bool(p.get("on")))
             # Push the full list so every client's toggles reconcile at once.
             return st, [("servicesChanged", list_services())]
+        if method == "serviceLog":
+            sid = p.get("id")
+            if not isinstance(sid, str) or not sid:
+                raise Err("bad_request", "id required")
+            return service_log(sid, p.get("lines", 200)), []
 
         raise Err("unknown_method", method)
 

@@ -3,21 +3,19 @@ import 'package:flutter/material.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
-import 'debug_log_screen.dart';
 
-/// "Devices": Bluetooth pairing + the HDMI desktop toggle.
+/// "Devices": Bluetooth pairing only.
 ///
 /// This screen is the Q's Bluetooth settings panel. That is not a figure of
 /// speech: the Q has no screen and no input device, so **the app is the only way
 /// to pair anything to it** — a phone for music, or a mouse and keyboard to use
-/// the desktop. Hence both halves live here:
+/// the desktop:
 ///
 ///   * inbound  — "Pair a phone": open a 120 s window, the phone comes to us.
 ///   * outbound — scan, and pair a mouse/keyboard ourselves.
 ///
-/// The desktop toggle sits alongside on purpose: pairing a keyboard is what makes
-/// the desktop worth switching on, and switching the desktop off is what keeps an
-/// idle appliance from heating the sphere for nothing.
+/// Configuration that isn't pairing — the streaming-service toggles, the HDMI
+/// desktop, and the debug log — moved to the Settings screen.
 class DevicesScreen extends StatefulWidget {
   const DevicesScreen({super.key, required this.client});
   final NexusQClient client;
@@ -31,9 +29,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<Map<String, dynamic>> _found = [];
   bool _pairing = false;      // an inbound window is open
   bool _scanning = false;
-  bool _desktop = false;
-  List<Map<String, dynamic>> _services = [];  // streaming inputs + their on/off
-  final Set<String> _busyService = {};        // a toggle is in flight for this id
   String? _busyMac;           // a pair/forget is in flight for this device
   String? _error;
   Timer? _poll;
@@ -97,28 +92,12 @@ class _DevicesScreenState extends State<DevicesScreen> {
     // silent: this is the 3 s background poll — errors go to the log, not the bar.
     final paired = await _call<Map<String, dynamic>>('listPairedDevices', null, true);
     final pairing = await _call<Map<String, dynamic>>('getPairingState', null, true);
-    final desktop = await _call<Map<String, dynamic>>('getDesktop', null, true);
-    final services = await _call<Map<String, dynamic>>('listServices', null, true);
     if (!mounted) return;
     setState(() {
       if (paired != null) {
         _paired = (paired['devices'] as List? ?? []).cast<Map<String, dynamic>>();
       }
       if (pairing != null) _pairing = pairing['pairing'] == true;
-      if (desktop != null) _desktop = desktop['desktop'] == true;
-      // Don't let a poll clobber a service the user is mid-toggle on (the poll
-      // may still read the old value while the systemctl call is running).
-      if (services != null) {
-        final fresh = (services['services'] as List? ?? [])
-            .cast<Map<String, dynamic>>();
-        _services = [
-          for (final s in fresh)
-            _busyService.contains(s['id'])
-                ? _services.firstWhere((o) => o['id'] == s['id'],
-                    orElse: () => s)
-                : s
-        ];
-      }
     });
     if (_scanning) {
       final r = await _call<Map<String, dynamic>>('listBtScanResults', null, true);
@@ -134,23 +113,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> _togglePairing() async {
     await _call(_pairing ? 'stopPairing' : 'startPairing');
     await _refresh();
-  }
-
-  Future<void> _toggleService(String id, bool on) async {
-    setState(() {                       // optimistic; the poll/response corrects us
-      _busyService.add(id);
-      final i = _services.indexWhere((s) => s['id'] == id);
-      if (i >= 0) _services[i] = {..._services[i], 'on': on};
-    });
-    final r = await _call<Map<String, dynamic>>('setService', {'id': id, 'on': on});
-    if (!mounted) return;
-    setState(() {
-      _busyService.remove(id);
-      if (r != null) {
-        final i = _services.indexWhere((s) => s['id'] == id);
-        if (i >= 0) _services[i] = {..._services[i], 'on': r['on'] == true};
-      }
-    });
   }
 
   Future<void> _scan() async {
@@ -312,102 +274,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 : Column(children: [for (final d in _paired) _deviceTile(d, paired: true)]),
           ),
 
-          // --- streaming services --------------------------------------------
-          if (_services.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionTitle('Streaming services'),
-            Card(
-              color: NexusQColors.surface,
-              child: Column(
-                children: [
-                  for (final s in _services)
-                    SwitchListTile(
-                      value: s['on'] == true,
-                      onChanged: _busyService.contains(s['id'])
-                          ? null
-                          : (v) => _toggleService(s['id'] as String, v),
-                      secondary: Icon(_serviceIcon(s['id'] as String?),
-                          color: s['on'] == true
-                              ? NexusQColors.accent
-                              : NexusQColors.dim),
-                      title: Text(s['name'] as String? ?? s['id'] as String,
-                          style: const TextStyle(color: NexusQColors.white)),
-                      subtitle: Text(_serviceHint(s['id'] as String?),
-                          style: const TextStyle(
-                              color: NexusQColors.dim, fontSize: 12)),
-                    ),
-                ],
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(top: 6, left: 4, right: 4),
-              child: Text(
-                'Only the services you switch on run — off ones use no memory or '
-                'CPU. Your choice sticks across restarts.',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 11),
-              ),
-            ),
-          ],
-
-          // --- the desktop ---------------------------------------------------
-          const SizedBox(height: 20),
-          _sectionTitle('HDMI desktop'),
-          Card(
-            color: NexusQColors.surface,
-            child: SwitchListTile(
-              value: _desktop,
-              onChanged: (v) async {
-                setState(() => _desktop = v);  // optimistic; the poll corrects us
-                await _call('setDesktop', {'on': v});
-                await _refresh();
-              },
-              title: const Text('Show the desktop on HDMI',
-                  style: TextStyle(color: NexusQColors.white)),
-              subtitle: const Text(
-                'Off by default — it costs power and heat with nothing plugged '
-                'in. Pair a mouse and keyboard above to actually use it. Music '
-                'keeps playing either way.',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 12),
-              ),
-            ),
-          ),
-
-          // --- developer -----------------------------------------------------
-          const SizedBox(height: 20),
-          _sectionTitle('Developer'),
-          Card(
-            color: NexusQColors.surface,
-            child: ValueListenableBuilder<bool>(
-              valueListenable: AppLog.enabled,
-              builder: (context, on, _) => Column(
-                children: [
-                  SwitchListTile(
-                    value: on,
-                    onChanged: (v) => AppLog.enabled.value = v,
-                    title: const Text('Debug mode',
-                        style: TextStyle(color: NexusQColors.white)),
-                    subtitle: const Text(
-                      // The log records regardless; the toggle only reveals it —
-                      // so when something misbehaves, the history leading up to
-                      // it is already captured.
-                      'Shows the connection log (recording is always on, this '
-                      'just unlocks the viewer).',
-                      style: TextStyle(color: NexusQColors.dim, fontSize: 12),
-                    ),
-                  ),
-                  if (on)
-                    ListTile(
-                      leading: const Icon(Icons.receipt_long, color: NexusQColors.dim),
-                      title: const Text('View log',
-                          style: TextStyle(color: NexusQColors.white)),
-                      trailing: const Icon(Icons.chevron_right, color: NexusQColors.dim),
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => const DebugLogScreen())),
-                    ),
-                ],
-              ),
-            ),
-          ),
           const SizedBox(height: 24),
         ],
       ),
@@ -420,34 +286,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
             style: const TextStyle(
                 color: NexusQColors.white, fontSize: 15, fontWeight: FontWeight.w300)),
       );
-
-  // Per-service presentation. Unknown ids still render (name from the device,
-  // a neutral icon + hint) so a service added on the device needs no app update.
-  IconData _serviceIcon(String? id) {
-    switch (id) {
-      case 'spotify':
-        return Icons.music_note;
-      case 'airplay':
-        return Icons.airplay;
-      case 'roon':
-        return Icons.library_music;
-      default:
-        return Icons.speaker;
-    }
-  }
-
-  String _serviceHint(String? id) {
-    switch (id) {
-      case 'spotify':
-        return 'Cast from Spotify to "Nexus Q".';
-      case 'airplay':
-        return 'Stream from an Apple device (AirPlay).';
-      case 'roon':
-        return 'A Roon Ready endpoint for your Roon Core.';
-      default:
-        return 'A streaming input.';
-    }
-  }
 
   Widget _errorBar() => Padding(
         padding: const EdgeInsets.only(bottom: 12),

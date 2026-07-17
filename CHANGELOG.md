@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles)
 
+### Added — Settings screen + per-service logs (`nexusq-control` r12, app 1.5.0+11)
+- **New Settings screen** (app bar → gear): the streaming-service toggles, the
+  HDMI desktop toggle, and Debug mode moved here out of Devices. **Devices is now
+  Bluetooth-only** (pair a phone / mouse / keyboard) — a task screen, not settings.
+- **Per-service logs**: each service in Settings has a *Log* button →
+  `serviceLog {id, lines?}` returns that unit's recent journal (read from the
+  system journal by `_SYSTEMD_USER_UNIT`, newest last, ANSI-stripped). A
+  monospace viewer with copy + refresh. Answers "what is this service doing / why
+  is it down" right next to its switch. **Verified live 2026-07-17.**
+- Measured the toggles' actual relief on-device: **Roon off frees ~80 MB RAM +
+  ~1.8 % idle CPU** (3 Mono processes → 0); AirPlay ~2.5 MB, Spotify ~1.2 MB.
+  Confirms the resource policy — an off service truly costs nothing.
+
 ### Added — companion-app per-service toggles (`nexusq-control` r11, app 1.4.0+10)
 - **Turn each streaming input on/off from the app** (Devices → *Streaming
   services*): Spotify / AirPlay / Roon, each an independent switch. The resource

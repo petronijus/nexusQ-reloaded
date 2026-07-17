@@ -617,6 +617,11 @@ memory or CPU). The choice is **persistent** across reboots.
 |---|---|---|
 | `listServices` | — | `{ services: [{ id, name, on }] }` |
 | `setService` | `{ id: string, on: bool }` | `{ id, name, on }` — emits `servicesChanged` (the full list) |
+| `serviceLog` | `{ id: string, lines?: int (≤1000, default 200) }` | `{ id, name, lines: [string] }` — recent journal, newest last, ANSI stripped |
+
+`serviceLog` reads the SYSTEM journal by `_SYSTEMD_USER_UNIT=<unit>` (a root
+service can't attach to the uid-10000 user journal — `journalctl --machine …
+--user` refuses non-root — but the user unit's records are tagged there).
 
 Service ids → units: `spotify` → `librespot.service`, `airplay` →
 `shairport-sync.service`, `roon` → `roon.service`. (The HDMI desktop stays on its
