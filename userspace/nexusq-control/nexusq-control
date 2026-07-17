@@ -429,6 +429,81 @@ def set_desktop(on):
         raise Err("timeout", "desktop did not respond")
 
 
+# --- streaming service toggles (PROTOCOL §11) ------------------------------
+# Each streaming INPUT is a uid-10000 systemd USER unit. The app turns them on/off
+# per-user so only the wanted services run (the resource policy — one box may run
+# only Spotify, another only Roon; nothing runs unless enabled). The state is
+# PERSISTENT and survives reboots.
+#
+# ON  = `unmask` (clear any prior off) then `enable --now` → runs now AND on boot.
+# OFF = `mask --now` → stops now AND won't start on boot. mask (not disable) is
+#       deliberate: librespot/shairport ship default-ON via a /usr/lib vendor
+#       `default.target.wants` symlink that a plain `disable` cannot remove — a
+#       mask in the user's own config (/home/user/.config/systemd/user) wins over
+#       it. A reflash resets everything to the image defaults.
+SERVICES = [
+    {"id": "spotify", "unit": "librespot.service",      "name": "Spotify Connect"},
+    {"id": "airplay", "unit": "shairport-sync.service", "name": "AirPlay"},
+    {"id": "roon",    "unit": "roon.service",           "name": "Roon"},
+]
+_SERVICE_BY_ID = {s["id"]: s for s in SERVICES}
+
+
+def _systemctl_user(*args, timeout=15):
+    """systemctl against the uid-10000 `user` manager from this root system service.
+
+    `user@.host` is the local user named `user` (= uid 10000); linger keeps that
+    manager up independently of any graphical session (see set_desktop)."""
+    return subprocess.run(
+        ["systemctl", "--machine=user@.host", "--user", *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def _service_on(unit):
+    """Is a streaming input ON? = is-active. This is the reliable signal, and it
+    tracks the persistent choice across reboots because our on/off is enable/mask:
+    `is-enabled` cannot be used — it reports `disabled` for BOTH a vendor-enabled
+    running unit (librespot/shairport, enabled via a /usr/lib default.target.wants
+    symlink) AND a genuinely-off unit (roon at rest), so it can't tell them apart;
+    only `is-active` distinguishes them (measured 2026-07-17)."""
+    try:
+        r = _systemctl_user("is-active", unit, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        raise Err("unavailable", "cannot query services")
+    return (r.stdout or "").strip() in ("active", "activating", "reloading")
+
+
+def list_services():
+    """All toggleable streaming inputs and whether each is currently ON."""
+    return {"services": [
+        {"id": s["id"], "name": s["name"], "on": _service_on(s["unit"])}
+        for s in SERVICES
+    ]}
+
+
+def set_service(sid, on):
+    """Turn a streaming input on (enable+start, persistent) or off (mask+stop)."""
+    s = _SERVICE_BY_ID.get(sid)
+    if not s:
+        raise Err("bad_request", f"unknown service '{sid}'")
+    unit = s["unit"]
+    try:
+        if on:
+            # unmask FIRST — `enable` refuses a masked unit.
+            _systemctl_user("unmask", unit, timeout=15)
+            r = _systemctl_user("enable", "--now", unit, timeout=45)
+        else:
+            r = _systemctl_user("mask", "--now", unit, timeout=30)
+        if r.returncode != 0:
+            raise Err("unavailable",
+                      f"turning {sid} {'on' if on else 'off'} failed: "
+                      f"{(r.stderr or '').strip()[:120]}")
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", f"service {sid} did not respond")
+    return {"id": sid, "name": s["name"], "on": _service_on(unit)}
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -671,6 +746,17 @@ class Bridge:
             set_desktop(on)
             st = {"desktop": on}
             return st, [("desktopChanged", st)]
+
+        # --- streaming service toggles (PROTOCOL §11) ----------------------
+        if method == "listServices":
+            return list_services(), []
+        if method == "setService":
+            sid = p.get("id")
+            if not isinstance(sid, str) or not sid:
+                raise Err("bad_request", "id required")
+            st = set_service(sid, bool(p.get("on")))
+            # Push the full list so every client's toggles reconcile at once.
+            return st, [("servicesChanged", list_services())]
 
         raise Err("unknown_method", method)
 

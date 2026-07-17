@@ -4,7 +4,27 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — step 3: streaming services (AirPlay shipped-in-source · rootfs resize · Roon packaged)
+## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles)
+
+### Added — companion-app per-service toggles (`nexusq-control` r11, app 1.4.0+10)
+- **Turn each streaming input on/off from the app** (Devices → *Streaming
+  services*): Spotify / AirPlay / Roon, each an independent switch. The resource
+  policy Petr asked for — one box runs only Spotify, another only Roon+AirPlay;
+  an off service uses **no** memory or CPU. The choice is **persistent** across
+  reboots (a reflash resets to defaults: Spotify + AirPlay on, Roon off).
+- Protocol §11 (`companion/PROTOCOL.md`): `listServices` → `{services:[{id,name,on}]}`,
+  `setService {id,on}` → emits `servicesChanged`. `on` = `systemctl --user
+  is-active` (NOT `is-enabled` — it reports `disabled` for both a vendor-enabled
+  *running* unit and a genuinely-off one, measured 2026-07-17). ON = `unmask` +
+  `enable --now`; OFF = `mask --now` (mask, not disable — it overrides the
+  `/usr/lib` vendor `default.target.wants` symlink that keeps librespot/shairport
+  default-on). Root bridge reaches the uid-10000 manager via
+  `systemctl --machine=user@.host --user`. **Tested live 2026-07-17.**
+- HDMI desktop stays on its own §10 `setDesktop` (system unit, non-persistent).
+- NOT in v1.11.0-rc1 (which built from before this change, control r10); folds
+  into the eventual v1.11.0 release build (control r11).
+
+
 
 > **2026-07-17 late session: Roon VALIDATED END-TO-END against Petr's ROCK Core
 > (Proxmox VM, 192.168.20.105) — all three inputs (Spotify, AirPlay, Roon) play.**

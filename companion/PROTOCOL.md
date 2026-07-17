@@ -605,3 +605,45 @@ decouples them. Verified live 2026-07-15: with linger, `systemctl stop tinydm` l
 Stopping the desktop **churns logind** hard enough that ssh auth (`pam_systemd`) hung
 for ~a minute during 2026-07-15 testing. It recovered on its own — but a snappy
 timeout here would report a false failure, so `set_desktop` allows 60 s.
+
+## 11. Streaming service toggles — v1.11.0
+
+Each streaming INPUT is an independent uid-10000 systemd USER unit, so the box can
+run only what its owner wants — one runs only Spotify, another only Roon+AirPlay —
+and nothing runs unless switched on (the resource policy: an off service costs no
+memory or CPU). The choice is **persistent** across reboots.
+
+| Method | Params | Result |
+|---|---|---|
+| `listServices` | — | `{ services: [{ id, name, on }] }` |
+| `setService` | `{ id: string, on: bool }` | `{ id, name, on }` — emits `servicesChanged` (the full list) |
+
+Service ids → units: `spotify` → `librespot.service`, `airplay` →
+`shairport-sync.service`, `roon` → `roon.service`. (The HDMI desktop stays on its
+own §10 `setDesktop` — a system unit with different, non-persistent semantics.)
+
+### 11.1 `on` is `is-active`, not `is-enabled`
+
+`on` is the unit's **`systemctl --user is-active`**. `is-enabled` is deliberately
+NOT used: it reports `disabled` for BOTH a vendor-enabled *running* unit
+(`librespot`/`shairport`, enabled via a `/usr/lib` `default.target.wants` symlink)
+AND a genuinely-off unit (`roon` at rest) — it cannot tell them apart. Only
+`is-active` distinguishes them (measured 2026-07-17). Because the on/off actions
+below keep active-state and boot-state in sync, `is-active` also reflects the
+persistent choice after a reboot.
+
+### 11.2 ON = `enable --now`, OFF = `mask --now`
+
+- **ON**: `systemctl --user unmask <u>` (clear any prior off — `enable` refuses a
+  masked unit) then `enable --now`. Runs now AND on boot.
+- **OFF**: `systemctl --user mask --now`. Stops now AND won't start on boot.
+  `mask` (not `disable`) is required: `librespot`/`shairport` ship **default-ON**
+  via a `/usr/lib/systemd/user/default.target.wants` **vendor** symlink that a
+  plain `disable` cannot remove; a `mask` in the user's own config
+  (`/home/user/.config/systemd/user`) overrides it. A reflash resets all services
+  to the image defaults (Spotify + AirPlay on, Roon off).
+
+The control bridge runs as root and reaches the uid-10000 manager via
+`systemctl --machine=user@.host --user` (linger keeps that manager up — §10.1).
+Toggling a service that is mid-playback stops it (expected — turning it off means
+off); a Roon zone re-announces and reconnects when switched back on.

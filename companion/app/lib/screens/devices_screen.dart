@@ -32,6 +32,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
   bool _pairing = false;      // an inbound window is open
   bool _scanning = false;
   bool _desktop = false;
+  List<Map<String, dynamic>> _services = [];  // streaming inputs + their on/off
+  final Set<String> _busyService = {};        // a toggle is in flight for this id
   String? _busyMac;           // a pair/forget is in flight for this device
   String? _error;
   Timer? _poll;
@@ -96,6 +98,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final paired = await _call<Map<String, dynamic>>('listPairedDevices', null, true);
     final pairing = await _call<Map<String, dynamic>>('getPairingState', null, true);
     final desktop = await _call<Map<String, dynamic>>('getDesktop', null, true);
+    final services = await _call<Map<String, dynamic>>('listServices', null, true);
     if (!mounted) return;
     setState(() {
       if (paired != null) {
@@ -103,6 +106,19 @@ class _DevicesScreenState extends State<DevicesScreen> {
       }
       if (pairing != null) _pairing = pairing['pairing'] == true;
       if (desktop != null) _desktop = desktop['desktop'] == true;
+      // Don't let a poll clobber a service the user is mid-toggle on (the poll
+      // may still read the old value while the systemctl call is running).
+      if (services != null) {
+        final fresh = (services['services'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
+        _services = [
+          for (final s in fresh)
+            _busyService.contains(s['id'])
+                ? _services.firstWhere((o) => o['id'] == s['id'],
+                    orElse: () => s)
+                : s
+        ];
+      }
     });
     if (_scanning) {
       final r = await _call<Map<String, dynamic>>('listBtScanResults', null, true);
@@ -118,6 +134,23 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> _togglePairing() async {
     await _call(_pairing ? 'stopPairing' : 'startPairing');
     await _refresh();
+  }
+
+  Future<void> _toggleService(String id, bool on) async {
+    setState(() {                       // optimistic; the poll/response corrects us
+      _busyService.add(id);
+      final i = _services.indexWhere((s) => s['id'] == id);
+      if (i >= 0) _services[i] = {..._services[i], 'on': on};
+    });
+    final r = await _call<Map<String, dynamic>>('setService', {'id': id, 'on': on});
+    if (!mounted) return;
+    setState(() {
+      _busyService.remove(id);
+      if (r != null) {
+        final i = _services.indexWhere((s) => s['id'] == id);
+        if (i >= 0) _services[i] = {..._services[i], 'on': r['on'] == true};
+      }
+    });
   }
 
   Future<void> _scan() async {
@@ -279,6 +312,43 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 : Column(children: [for (final d in _paired) _deviceTile(d, paired: true)]),
           ),
 
+          // --- streaming services --------------------------------------------
+          if (_services.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionTitle('Streaming services'),
+            Card(
+              color: NexusQColors.surface,
+              child: Column(
+                children: [
+                  for (final s in _services)
+                    SwitchListTile(
+                      value: s['on'] == true,
+                      onChanged: _busyService.contains(s['id'])
+                          ? null
+                          : (v) => _toggleService(s['id'] as String, v),
+                      secondary: Icon(_serviceIcon(s['id'] as String?),
+                          color: s['on'] == true
+                              ? NexusQColors.accent
+                              : NexusQColors.dim),
+                      title: Text(s['name'] as String? ?? s['id'] as String,
+                          style: const TextStyle(color: NexusQColors.white)),
+                      subtitle: Text(_serviceHint(s['id'] as String?),
+                          style: const TextStyle(
+                              color: NexusQColors.dim, fontSize: 12)),
+                    ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 6, left: 4, right: 4),
+              child: Text(
+                'Only the services you switch on run — off ones use no memory or '
+                'CPU. Your choice sticks across restarts.',
+                style: TextStyle(color: NexusQColors.dim, fontSize: 11),
+              ),
+            ),
+          ],
+
           // --- the desktop ---------------------------------------------------
           const SizedBox(height: 20),
           _sectionTitle('HDMI desktop'),
@@ -350,6 +420,34 @@ class _DevicesScreenState extends State<DevicesScreen> {
             style: const TextStyle(
                 color: NexusQColors.white, fontSize: 15, fontWeight: FontWeight.w300)),
       );
+
+  // Per-service presentation. Unknown ids still render (name from the device,
+  // a neutral icon + hint) so a service added on the device needs no app update.
+  IconData _serviceIcon(String? id) {
+    switch (id) {
+      case 'spotify':
+        return Icons.music_note;
+      case 'airplay':
+        return Icons.airplay;
+      case 'roon':
+        return Icons.library_music;
+      default:
+        return Icons.speaker;
+    }
+  }
+
+  String _serviceHint(String? id) {
+    switch (id) {
+      case 'spotify':
+        return 'Cast from Spotify to "Nexus Q".';
+      case 'airplay':
+        return 'Stream from an Apple device (AirPlay).';
+      case 'roon':
+        return 'A Roon Ready endpoint for your Roon Core.';
+      default:
+        return 'A streaming input.';
+    }
+  }
 
   Widget _errorBar() => Padding(
         padding: const EdgeInsets.only(bottom: 12),
