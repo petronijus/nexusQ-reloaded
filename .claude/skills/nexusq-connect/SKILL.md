@@ -17,7 +17,10 @@ Delegate device discovery to the **`nexusq-connect` subagent** (Agent tool,
 of the main context. Pass any hint the user gave (a last-known IP, "use USB",
 "it's on wifi").
 
-The agent owns: checking fastboot/adb state, then probing **eth-direct**
+The agent owns: checking fastboot/adb state (and, on a **booted v1.11.0+ /
+`#46`+** device, it can put it *into* fastboot for a flash via
+`systemctl reboot --reboot-argument=bootloader` — patch 0044, no power-cycle;
+must be `systemctl`, not busybox `reboot`), then probing **eth-direct**
 (**the DEFAULT path** — ~80 Mbit/s, 0.6 ms, stable, fixed IP; measured
 2026-07-07 to beat both WiFi ~34 Mbit/s and the USB gadget. NM layer resolved
 2026-07-04 and baked since v1.6.7 — flashed 2026-07-05: host has the persistent

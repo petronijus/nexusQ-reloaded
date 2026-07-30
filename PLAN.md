@@ -3,6 +3,30 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-07-30 — ✅ FASTBOOT OVER SSH (kernel patch 0044) + v1.11.0 FLASHED and
+> live; the device DIED (blown mains fuse) and was repaired.**
+> **`systemctl reboot --reboot-argument=bootloader`** now drops the device into
+> fastboot in ~15 s (`fastboot reboot` returns to Linux, no loop) — no more
+> mains power-cycle. Root cause: mainline `omap44xx_restart()` carried the TODO
+> `/* XXX Should save 'cmd' into scratchpad */` and dropped the reboot command, so
+> `reboot bootloader` never reached the stock u-boot. RE'd from `vmlinux.bin`
+> (`steelhead_reboot_notifier_handler` via `reverse-eng/tools/nqdis.py`): stock
+> u-boot reads a NUL-terminated reason string from **SAR RAM `0x4A326A0C`**
+> (`"normal"`/`"bootloader"`/`"recovery"`/`"recovery:wipe_data"`) which survives
+> the warm reset. Fix = **patch 0044** (kernel r44 → **r45**, uname `#46`),
+> guarded to `google,steelhead`, byte-for-byte stock. ⚠️ must be `systemctl` —
+> busybox `reboot` doesn't forward the arg. **v1.11.0 flashed** — rootfs
+> `v1.11.0-rc3` + boot `v1.11.0-rc4` (kernel `#46`, 44 patches), first v1.11.0 on
+> the hardware (rc1–rc3 never flashed — the device died first); carries step-3
+> streaming + Settings + brand icons + 0044; app 1.5.2 (own track). **Hardware:**
+> the unit went dead-cold (LED dark, no enumerate) = **BLOWN MAINS FUSE**, nothing
+> downstream shorted (fuse OL; 400 V cap rail + amp 470 µF caps all OL). The Q has
+> an integrated **~35 W mains SMPS (85–265 VAC)**, power board PCB `2400-00053-4`;
+> **micro-USB is service-only, cannot power it**. Correct fuse: **Schurter
+> `0034.6614` — T800 mA/250 VAC slow-blow (T), TR5 radial, 5.08 mm** (GME 1511926);
+> a fast fuse nuisance-blows on inrush. Repaired, **zero collateral damage**.
+> Full record: `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md`.
+>
 > **2026-07-16 — ✅ v1.10.1 BUG-FIX RELEASE (5 fixes) — built, flashed,
 > hardware-verified** (device **r49** / btagent **r4** / kernel **r44** `#45` /
 > control r10 / setupd r4 / nexusqd r10 / firmware r2; app on its own track at
@@ -489,7 +513,7 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
 
 | Subsystem | Status | Detail |
 |-----------|--------|--------|
-| Kernel + boot | ✅ works | mainline 6.12.12, ≤8 MB image; flaky boot ~1 in 3 (retry helps). _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ |
+| Kernel + boot | ✅ works | mainline 6.12.12, ≤8 MB image; flaky boot ~1 in 3 (retry helps). _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ _(2026-07-30, v1.11.0: **fastboot is enterable over ssh** — `systemctl reboot --reboot-argument=bootloader` (kernel patch **0044** writes the stock reboot-reason to SAR RAM `0x4A326A0C`); no more mains power-cycle. Must be `systemctl`, not busybox `reboot`.)_ |
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | HDMI audio | 🟠 needs audio-EDID sink | _(Updated 2026-07-02)_ the ALSA card registers, but with no audio-capable EDID sink PulseAudio can't build a profile for `platform-omap-hdmi-audio.1.auto` (item U4). Speaker path (TAS5713) is the working audio output |
 | eMMC + rootfs | ✅ works | postmarketOS (systemd variant) on userdata |

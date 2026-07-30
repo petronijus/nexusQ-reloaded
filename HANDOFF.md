@@ -4,7 +4,71 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-17 (latest): **STEP 3 — streaming services: AirPlay + Roon Bridge, plus first-boot rootfs resize** (Roon validated END-TO-END against a real Core; in source, NOT yet released)
+## Session 2026-07-30 (latest): **Fastboot over ssh (kernel patch 0044) · the device DIED (blown mains fuse) + was repaired · v1.11.0 FLASHED and live**
+
+Full record: `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md`.
+
+### Current device state
+- **v1.11.0 is FLASHED and live** — rootfs **`v1.11.0-rc3`** + boot
+  **`v1.11.0-rc4`** (kernel **`#46`**, pkgrel 45, **44 patches** through 0044).
+  This is the **first** v1.11.0 to reach the hardware (rc1–rc3 were never flashed
+  — the device died first). It carries the step-3 streaming services (Spotify /
+  AirPlay / Roon + per-service app toggles + logs), the Settings-screen
+  restructure, the official brand icons, and **patch 0044**. Companion app at
+  **1.5.2** (own track).
+- Artifacts: `output/nexusq-boot-v1.11.0-rc4.img` (sha256
+  `8d40e429502a6fda28b6a07454a6542edecb8e6b4426f8a0768997336ade32ed`) +
+  `output/nexusq-rootfs-v1.11.0-rc3-sparse.img`. **Not yet tagged.**
+- Working tree: `pmos/linux-google-steelhead/APKBUILD` bumped 44 → 45 +
+  `kernel/patches/0044-…patch` added (uncommitted at time of writing).
+
+### 1. Fastboot over ssh — new capability, VERIFIED
+- **`systemctl reboot --reboot-argument=bootloader`** now lands the device in
+  fastboot in **~15 s**; `fastboot reboot` returns to Linux with **no loop**
+  (u-boot clears the flag). ⚠️ **must be `systemctl`** — busybox/util-linux
+  `reboot` does **not** forward the argument.
+- Root cause: mainline `omap44xx_restart()` carried the TODO
+  `/* XXX Should save 'cmd' into scratchpad */` and dropped the reboot command, so
+  `reboot bootloader` never reached the stock u-boot's fastboot path. RE'd from
+  `reverse-eng/vmlinux.bin` (`steelhead_reboot_notifier_handler`, via
+  `reverse-eng/tools/nqdis.py`): the stock u-boot reads a NUL-terminated reason
+  string from **SAR RAM `0x4A326A0C`** (`0x4A326000 + 0xA0C`) — `"normal"`
+  (default) / `"bootloader"` / `"recovery"` / `"recovery:wipe_data"` — which
+  survives the PRM global warm SW reset.
+- Fix: **patch 0044**, reimplements the stock write in `omap44xx_restart()`,
+  guarded to `of_machine_is_compatible("google,steelhead")`, using
+  `omap4_get_sar_ram_base()`; offset/clear-size/strings match stock byte-for-byte.
+- **This removes the only reason to mains-power-cycle the box** — which matters
+  because of §2. The `nexusq-connect` agent can now put the device into fastboot
+  for a flash hands-free.
+
+### 2. Hardware death + fuse repair — no collateral damage
+- The reference unit died **completely** (~2026-07-30): LED dark, no USB
+  enumerate, dead-cold. Root cause: **BLOWN MAINS FUSE** — nothing downstream
+  shorted (multimeter: fuse OL; primary **400 V cap rail** and amp **470 µF caps**
+  all OL / no-short).
+- Power facts (for the next repair): the Q has an **integrated ~35 W mains SMPS
+  (85–265 VAC)** on power board PCB **`2400-00053-4`**; **micro-USB is
+  service/debug ONLY — it CANNOT power the device** (a dead supply = the whole
+  unit is dark); amp board = TAS5713 → banana jacks.
+- Correct replacement fuse: **Schurter `0034.6614` — T800 mA / 250 VAC, TIME-LAG
+  (T / slow-blow), TR5 radial, MST 250 series, 5.08 mm pitch** (GME **1511926**).
+  ⚠️ It **must be slow-blow** — a fast fuse **nuisance-blows on the SMPS inrush**.
+- Repair **succeeded**; a full post-repair diag sweep found **ZERO collateral
+  damage** — the unit is fully healthy.
+
+### WHERE TO CONTINUE (2026-07-30 → next)
+1. **Tag v1.11.0** once the flashed rc3/rc4 pair passes a full diag sweep on the
+   repaired unit (user approves the tag; never tag unasked).
+2. Commit the working tree (patch 0044 + APKBUILD bump) — repo email
+   `petronijus@bastla.com` only.
+3. The step-3 / v1.10.1 / v1.9.0 open lists below still stand (thermal watch,
+   `NEXUSQ_NO_WIFI=1` flag, pairing flake, contactless-payment link, AirPlay MPRIS
+   metadata, Tidal).
+
+---
+
+## Session 2026-07-17: **STEP 3 — streaming services: AirPlay + Roon Bridge, plus first-boot rootfs resize** (Roon validated END-TO-END against a real Core; in source, NOT yet released)
 
 Full records: `docs/2026-07-17-roon-tidal-feasibility.md` (design) +
 `docs/2026-07-17-roon-bring-up.md` (live validation). Base: v1.10.1.

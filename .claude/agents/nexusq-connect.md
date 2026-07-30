@@ -126,6 +126,13 @@ link-local, mDNS, OPNsense lease lookup).
 there is NO network path — report "device is in fastboot, not booted; reboot it
 to get a shell" and stop. Otherwise probe the transports below.
 
+**Putting a booted device INTO fastboot (v1.11.0+ / kernel `#46`+, patch 0044):**
+`ssh <path> systemctl reboot --reboot-argument=bootloader` → fastboot in ~15 s
+(`fastboot reboot` returns to Linux, no loop). ⚠️ **must be `systemctl`** —
+busybox/util-linux `reboot` does NOT forward the argument. This means you no
+longer need a hands-on mains power-cycle to flash — do it yourself over ssh (only
+a *fresh/unbooted* or pre-0044 device still needs the mute-LED power-cycle).
+
 ## Transport A — eth-direct cable (host `enp7s0` ↔ device eth0)
 - ✅ **Enumerates from a cold boot on `#33`+ (v1.6.8, task #17 CLOSED
   2026-07-06):** the old "enumeration intermittency" was an unmuxed `gpio_1`

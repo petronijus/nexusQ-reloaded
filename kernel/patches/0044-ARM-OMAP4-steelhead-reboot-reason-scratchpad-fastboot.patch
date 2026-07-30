@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000044 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Thu, 30 Jul 2026 22:00:00 +0200
+Subject: [PATCH] ARM: OMAP4: steelhead: write reboot reason to SAR scratchpad
+
+The immutable stock OMAP4460 bootloader on the Google Nexus Q (steelhead)
+enters fastboot or recovery on a warm reboot by reading a NUL-terminated
+ASCII reason string from SAR RAM at offset 0xA0C.  SAR RAM is in the
+always-on power domain and survives the PRM global warm SW reset issued by
+omap_prm_reset_system(), so a string written there by Linux is still present
+when u-boot runs on the next boot.
+
+The stock 3.0.8 kernel populated this from a reboot notifier
+(steelhead_reboot_notifier_handler): on SYS_RESTART it zeroed 0x20 bytes at
+SAR+0xA0C, wrote the default "normal", then overrode it with "bootloader",
+"recovery" or "recovery:wipe_data" according to the reboot command string.
+Mainline never carried this -- omap44xx_restart() literally carries an
+"XXX Should save 'cmd' into scratchpad" TODO and drops @cmd on the floor --
+so "reboot bootloader" was ignored and the box could only be put into the
+bootloader by physically pulling mains power (undesirable on an appliance
+with an integrated mains SMPS and a single slow-blow fuse).
+
+Implement the stock write, guarded to the steelhead machine, right where the
+mainline TODO asked for it: just before the warm reset, in process context
+via the machine .restart hook, touching only the already-mapped SAR RAM
+(no allocation, safe with IRQs off).  The offset (0xA0C), the buffer clear
+(0x20) and the four reason strings match the stock u-boot/kernel byte for
+byte, so "systemctl reboot bootloader" over ssh now lands the device in
+fastboot with no hands on the power cord.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/arch/arm/mach-omap2/omap4-restart.c
++++ b/arch/arm/mach-omap2/omap4-restart.c
+@@ -5,9 +5,54 @@
+ 
+ #include <linux/types.h>
+ #include <linux/reboot.h>
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/string.h>
+ #include "common.h"
+ #include "prm.h"
+ 
++/*
++ * steelhead (Google Nexus Q) reboot-reason handoff to the stock u-boot.
++ *
++ * The immutable stock OMAP4460 bootloader decides whether to enter fastboot
++ * or recovery on a warm reboot by reading a NUL-terminated ASCII reason
++ * string from SAR RAM at offset 0xA0C.  SAR RAM lives in the always-on
++ * domain and survives the PRM global *warm* SW reset that
++ * omap_prm_reset_system() issues, so the string set here is still there when
++ * u-boot runs.  The stock 3.0.8 kernel wrote it from a reboot notifier
++ * (steelhead_reboot_notifier_handler); mainline dropped it -- this is the
++ * "XXX Should save 'cmd' into scratchpad" TODO below, implemented -- so
++ * "reboot bootloader" never reached fastboot and the box could only be put
++ * into the bootloader by pulling mains power.  Reproduce the stock write so
++ * it can be done over ssh with "systemctl reboot bootloader".  The strings
++ * ("normal" default, "bootloader", "recovery", "recovery:wipe_data") and the
++ * 0xA0C offset match the stock u-boot / kernel exactly.
++ */
++#define STEELHEAD_SAR_REBOOT_REASON	0xA0C
++
++static void steelhead_set_reboot_reason(const char *cmd)
++{
++	void __iomem *sar = omap4_get_sar_ram_base();
++	void __iomem *reason;
++	const char *s = "normal";
++
++	if (!sar)
++		return;
++	reason = sar + STEELHEAD_SAR_REBOOT_REASON;
++
++	/* Match stock: clear 0x20 bytes, default "normal", override by cmd. */
++	memset_io(reason, 0, 0x20);
++	if (cmd) {
++		if (!strcmp(cmd, "bootloader"))
++			s = "bootloader";
++		else if (!strcmp(cmd, "recovery"))
++			s = "recovery";
++		else if (!strcmp(cmd, "recovery:wipe_data"))
++			s = "recovery:wipe_data";
++	}
++	memcpy_toio(reason, s, strlen(s) + 1);
++}
++
+ /**
+  * omap44xx_restart - trigger a software restart of the SoC
+  * @mode: the "reboot mode", see arch/arm/kernel/{setup,process}.c
+@@ -18,6 +63,7 @@
+  */
+ void omap44xx_restart(enum reboot_mode mode, const char *cmd)
+ {
+-	/* XXX Should save 'cmd' into scratchpad for use after reboot */
++	if (of_machine_is_compatible("google,steelhead"))
++		steelhead_set_reboot_reason(cmd);
+ 	omap_prm_reset_system();
+ }

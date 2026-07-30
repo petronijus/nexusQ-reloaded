@@ -31,6 +31,30 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 
 ## 1. Enter fastboot mode
 
+### 1a. Over ssh (v1.11.0+, no power-cycle) — preferred if the device is booted
+
+On a **booted, reachable v1.11.0+** device just reboot it into the bootloader:
+
+```bash
+ssh root@<device> systemctl reboot --reboot-argument=bootloader
+```
+
+The device enters fastboot in **~15 s**; the LED ring turns **solid red**.
+`fastboot reboot` afterwards returns it straight to Linux (no reboot loop —
+u-boot clears the flag). This spares the device its mains power-cycle, which
+stresses the integrated ~35 W SMPS and its single slow-blow fuse.
+
+> ⚠️ It **must be `systemctl reboot --reboot-argument=bootloader`** — the plain
+> busybox/util-linux `reboot` command does **not** forward the argument. (Kernel
+> patch `0044`, new in v1.11.0, writes the stock reboot-reason string to SAR RAM
+> where the stock u-boot reads it; pre-v1.11.0 images cannot do this and must use
+> the power-cycle below.)
+
+### 1b. Mute-LED power-cycle — fallback + first-time bootstrap
+
+The only route on a fresh/unbooted device, on any pre-v1.11.0 image, or when you
+have no shell:
+
 1. Unplug power.
 2. Put your palm over the top dome so you **cover the mute LED sensor**.
 3. Plug power in while keeping the sensor covered.
@@ -224,8 +248,9 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
 - **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
-- Kernel: mainline 6.12.12 + the patches in `kernel/patches/` (42 as of kernel
-  r43, 2026-07-13), config `kernel/configs/steelhead_defconfig`.
+- Kernel: mainline 6.12.12 + the patches in `kernel/patches/` (**44 as of kernel
+  r45 / `#46`, 2026-07-30** — through 0044, the fastboot reboot-reason patch),
+  config `kernel/configs/steelhead_defconfig`.
   ⚠️ The steelhead DTS enters the kernel tree **via those patches** (0003 +
   follow-ups) — `kernel/dts/omap4-steelhead.dts` is the reference copy; editing it
   alone does NOT change the built DTB.

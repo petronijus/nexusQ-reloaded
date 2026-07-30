@@ -59,6 +59,7 @@ where mainline fell short, and bringing the orb back as something genuinely usef
 | 🖱 **BT pairing from the app** — **both directions** | ✅ | **v1.10.0** — the Q has no screen and no input device, so **the app IS the Q's Bluetooth settings panel**; there is no other way to pair anything to it. **Inbound**: a phone pairs for music (A2DP). **Outbound**: the Q *scans for and pairs* a **mouse / keyboard** — a different flow, not a variant (a mouse never connects TO us; we must discover it and call `Pair()` on it). Hardware-verified 2026-07-15: `pairBtDevice` → `{"paired":true,"bonded":true,"connected":true}`, 3 key sections on disk, kernel created `MX Master 4 Mouse` on `/dev/input/…` via **uhid**; a real BLE keyboard (MX Keys) completes **Just Works** against our `NoInputNoOutput` agent with **no typed passkey**. ⚠️ **`bonded`, not `paired`, is the honest answer to "will this survive a reboot?"** — `paired` alone LIES. Root cause this release is built on: v1.9.0's **`Pairable == Discoverable` invariant was keyed on the WRONG property** and silently broke OUTBOUND bonding (`Pairable: no` → pair "succeeds", **no keys stored**, gone on restart; `Pairable: yes` → `[PeripheralLongTermKey]` + `[IdentityResolvingKey]` on disk, survives). Chain measured from `bluetoothd -d`: the LTK **arrives**, but bluez only persists a key the kernel marked `store_hint`, which needs the SMP **bonding bit**, which our side only sets under **`HCI_BONDABLE`** = `Adapter1.Pairable`. Now: **ring ⇔ `Pairable`**, off at rest, and an outbound pair **opens a window like everything else**. See `docs/2026-07-15-step2-bt-pairing-implemented.md` + PROTOCOL §9 |
 | 📲 **App-driven onboarding** (NFC tap → BT → WiFi) | ✅ | **works end-to-end from a fresh flash · v1.9.0** — hardware-accepted 2026-07-15. Tap the phone on the dome → bonded, **encrypted** BT RFCOMM (`nexusq-setupd`, `RequireAuthentication=True` — the WiFi PSK never crosses the air in cleartext) → WiFi join → name/room/theme → outro, with the original stock imagery. Final acceptance on a fresh `v1.9.0-rc5` flash: tap delivered → **bond first try (0 failed attempts)** → RFCOMM → WiFi joined → `finishSetup` → pairing window auto-closes (PSK: 0 log lines); wrong password → ring turns red. The pairing window **fails CLOSED** (a transient NetworkManager wobble can no longer drop a provisioned device into a discoverable+pairable setup mode). `startSetupMode` re-provisioning tested + passing. ⚠️ **Known-open**: a pairing flake seen once (2 failed attempts, then 3 runs first-try — **NOT root-caused**); a fresh **dev** image does **not** arm setup mode (it bakes a WiFi profile — `PUBLIC_RELEASE=1` images do onboard). See `docs/2026-07-15-bt-onboarding-root-caused-blueman-agent-and-bond-first.md` |
 | 🔐 **SSH** (USB-gadget + WiFi) | ✅ | RNDIS net `172.16.42.1` + ACM console. On v1.6.5 only `user@` works; key-based `root@` is baked in + verified 2026-07-03 (ships in v1.6.6) |
+| ⚡ **Fastboot over ssh** (no power-cycle) | ✅ | **v1.11.0** — `systemctl reboot --reboot-argument=bootloader` drops the device into fastboot in ~15 s (`fastboot reboot` returns to Linux, no loop). Kernel **patch 0044** reimplements the stock reboot-reason write mainline had left as a TODO (`omap44xx_restart()` dropped the command): the string goes to **SAR RAM `0x4A326A0C`** which survives the warm reset, and the stock u-boot reads it (`"bootloader"`/`"recovery"`/…). ⚠️ must be `systemctl` — busybox `reboot` doesn't forward the arg. Saves the mains power-cycle that stresses the ~35 W SMPS + slow-blow fuse. See `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md` |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | **tap-to-send shipped v1.7.0** (2026-07-08, verified on device): tap a phone on the dome → the Q pushes a short text over NFC, shown in the companion app. **Reverse-HCE** — the PN544 can't host-card-emulate (no SE) and Android Beam is gone, so the phone runs the HCE service and the **Q is the ISO-DEP reader** (`nexusq-nfc-send` daemon, AID `F0010203040506`). Key enabler: kernel **patch 0037** RATS-activates any ISO-DEP target (was DESFire-only), so a modern HCE phone (SAK 0x20) is finally reachable. The chip itself was **fixed 2026-07-03** (v1.6.6) — the DTS had muxed the wrong pads (dpm_emu debug pads instead of `usbb2_ulpitll_dat1/2/3`), found via a stock RAM-boot probe. See `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
@@ -118,8 +119,10 @@ plays. The Flutter app is installed on the phone, **not** in the device image.
 Grab the [latest release](https://github.com/petronijus/nexusQ-reloaded/releases/latest), then:
 
 ```bash
-# 1. Enter fastboot: unplug power, cover the top mute-LED sensor with your palm,
-#    plug power back in. The ring turns solid red.
+# 1. Enter fastboot. On a booted v1.11.0+ device just:
+#      ssh root@<Q> systemctl reboot --reboot-argument=bootloader   # → fastboot in ~15 s
+#    First-time / unbooted / pre-v1.11.0: unplug power, cover the top mute-LED
+#    sensor with your palm, plug power back in. The ring turns solid red.
 
 # 2. Decompress the rootfs and flash
 zstd -d nexusq-rootfs-v*-sparse.img.zst
@@ -159,7 +162,7 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **43 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.12.12 + **44 patches** in `kernel/patches/`), the
 local `python3` override, the device daemons (`nexusqd` · `nexusq-control` ·
 `nexusq-btagent` · `nexusq-setupd`), and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
@@ -168,7 +171,7 @@ load-bearing**: `nexusq-btagent` must build *before* `nexusq-setupd`, which depe
 on it — the reverse order fails every clean build on checksums.)
 
 ```
-kernel/      dts · defconfig · 43 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
+kernel/      dts · defconfig · 44 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-btagent · nexusq-setupd · python3
 userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-btagent (BT pairing agent) · nexusq-setupd (BT WiFi provisioning)
 companion/   Flutter companion app + PROTOCOL.md (built on the phone, not in the image)
@@ -208,9 +211,9 @@ raw2simg.py  byte-exact all-RAW Android-sparse converter
 1.8.2 ── ✦ idle power — conservative governor + healthd/pid-1 churn fixes (idle settles at 350 MHz)   2026-07-13
 1.9.0 ── ✦ app-driven onboarding (NFC → bonded BT → WiFi) · pairing window fails CLOSED   2026-07-15
 1.10.0 ─ ✦ BT pairing from the app, BOTH directions (phone in · mouse/keyboard out) · HDMI desktop on demand   2026-07-15
-1.10.1 ─ ✦ bug-fix: factory WiFi MAC pinned in DT (patch 0043) · btagent fd leak · onboard · librespot boot race · app debug mode   2026-07-16   ← latest release
+1.10.1 ─ ✦ bug-fix: factory WiFi MAC pinned in DT (patch 0043) · btagent fd leak · onboard · librespot boot race · app debug mode   2026-07-16   ← latest tag
         ┊
- (dev)  ─ ✦ step 3 · streaming services: AirPlay (shairport-sync) · first-boot rootfs resize · Roon Bridge (glibc/bwrap, validated vs a real Core)   2026-07-17   ← in source (r55), v1.11.0-rc1 pending
+1.11.0 ─ ✦ step 3 · streaming services: AirPlay (shairport-sync) · first-boot rootfs resize · Roon Bridge (glibc/bwrap, validated vs a real Core) · Settings screen + per-service toggles/logs · fastboot over ssh (patch 0044)   2026-07-30   ← FLASHED + live (rootfs rc3 + boot rc4, kernel #46); not yet tagged
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

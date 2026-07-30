@@ -4,7 +4,44 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles)
+## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
+
+### Added — enter fastboot over ssh, no power-cycle (kernel patch 0044, `linux` r44 → r45)
+- **`systemctl reboot --reboot-argument=bootloader` now lands the device in
+  fastboot** (verified 2026-07-30: ~15 s to fastboot; `fastboot reboot` returns to
+  Linux with **no loop** — u-boot clears the flag). Removes the only reason to
+  mains-power-cycle the box, which stresses its integrated ~35 W SMPS + single
+  slow-blow fuse. Root cause: mainline `omap44xx_restart()` carried the TODO
+  `/* XXX Should save 'cmd' into scratchpad */` and **dropped the reboot command**,
+  so `reboot bootloader` never reached the stock u-boot's fastboot path.
+  Reverse-engineered from `reverse-eng/vmlinux.bin`
+  (`steelhead_reboot_notifier_handler`, via `reverse-eng/tools/nqdis.py`): the
+  stock u-boot reads a NUL-terminated reason string from **SAR RAM at
+  `0x4A326A0C`** (`0x4A326000 + 0xA0C`) — `"normal"` (default), `"bootloader"`,
+  `"recovery"`, `"recovery:wipe_data"` — and SAR RAM survives the PRM global warm
+  SW reset. Patch **0044** reimplements the stock write in `omap44xx_restart()`,
+  guarded to `of_machine_is_compatible("google,steelhead")`, using mainline's
+  `omap4_get_sar_ram_base()`; offset/clear-size/strings match stock byte-for-byte.
+  ⚠️ **must be `systemctl`** — busybox/util-linux `reboot` does NOT forward the
+  argument. See `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md`.
+
+> **2026-07-30 — v1.11.0 FLASHED + LIVE (first v1.11.0 on the device), after a
+> hardware death + fuse repair.** The reference unit died completely (LED dark, no
+> enumerate, dead-cold) — root cause a **blown mains fuse**, nothing downstream
+> shorted (multimeter: fuse OL; primary 400 V cap rail + amp 470 µF caps all OL /
+> no-short). The Q has an **integrated ~35 W mains SMPS (85–265 VAC)** on power
+> board PCB `2400-00053-4`; **micro-USB is service/debug ONLY and cannot power it**;
+> amp board = TAS5713 → banana jacks. Correct replacement fuse: **Schurter
+> `0034.6614` — T800 mA/250 VAC, TIME-LAG (slow-blow), TR5 radial, 5.08 mm pitch**
+> (GME 1511926) — a **fast** fuse nuisance-blows on the SMPS inrush. Repair
+> succeeded; a full post-repair diag found **ZERO collateral damage**.
+> Then **v1.11.0 was flashed** — rootfs **`v1.11.0-rc3`** + boot **`v1.11.0-rc4`**
+> (kernel `#46`, pkgrel 45, 44 patches through 0044). rc1–rc3 were never flashed
+> because the device died first. It carries the step-3 streaming services + the
+> Settings restructure + brand icons + **patch 0044**; companion app at **1.5.2**
+> (own track). Artifacts: `output/nexusq-boot-v1.11.0-rc4.img` (sha256
+> `8d40e429502a6fda28b6a07454a6542edecb8e6b4426f8a0768997336ade32ed`) + its pair
+> `output/nexusq-rootfs-v1.11.0-rc3-sparse.img`.
 
 ### Fixed — service-state read was stalling the whole connection (`nexusq-control` r13)
 - `listServices` read each unit's state with `systemctl --machine=user@.host
