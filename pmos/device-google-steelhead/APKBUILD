@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=55
+pkgrel=56
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -71,6 +71,7 @@ source="
 	eth-no-auto-default.conf
 	brcmfmac-no-p2p.conf
 	brcmfmac-mpc-off.conf
+	brcmfmac-roamoff.conf
 	pipewire-autostart-off.desktop
 	wireplumber-autostart-off.desktop
 	blueman-autostart-off.desktop
@@ -303,6 +304,13 @@ package() {
 	install -Dm644 "$srcdir"/brcmfmac-mpc-off.conf \
 		"$pkgdir"/etc/modprobe.d/brcmfmac-mpc-off.conf
 
+	# Disable in-firmware roaming (roamoff=1): the BCM4330 fails the background
+	# roam scans (brcmf_escan_timeout floods) and eventually wedges the associated
+	# data path — link "up", zero throughput. The Q never roams (one fixed AP), so
+	# firmware roaming is pure downside. Fixes intermittent Wi-Fi death (2026-07-31).
+	install -Dm644 "$srcdir"/brcmfmac-roamoff.conf \
+		"$pkgdir"/etc/modprobe.d/brcmfmac-roamoff.conf
+
 	# USB gadget: own it deterministically as a COMPOSITE RNDIS net
 	# (172.16.42.1 + ssh) + ACM console, every boot, from configfs. This replaces
 	# the old pmOS-RNDIS + RNDIS->ACM-swap chain, which on the full-rootfs image
@@ -531,6 +539,7 @@ SKIP  eth-direct.nmconnection
 SKIP  eth-no-auto-default.conf
 SKIP  brcmfmac-no-p2p.conf
 SKIP  brcmfmac-mpc-off.conf
+SKIP  brcmfmac-roamoff.conf
 SKIP  pipewire-autostart-off.desktop
 SKIP  wireplumber-autostart-off.desktop
 SKIP  pulseaudio.service

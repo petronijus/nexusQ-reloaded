@@ -6,6 +6,37 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
 
+### Fixed — app "connection lost" flapping: bridge head-of-line blocking + WiFi escan wedge (`nexusq-control` r14, app 1.6.1+15, device r56)
+- **Bridge no longer head-of-line-blocks (`nexusq-control` r14).** Each request on
+  a connection was handled synchronously in the read loop, so one slow call froze
+  every request behind it. On this armv7 `systemctl --user unmask` alone is **~9 s**
+  (user-manager reload), making `setService` ON run 10-18 s — during which the
+  app's 3 s `getState` liveness probe timed out → supervisor tore the link down →
+  "connection lost", and the toggle itself blew the app's 5 s call timeout →
+  "something went wrong". Now each request runs on its **own thread** with a
+  per-connection send lock (replies are id-correlated and may return out of order);
+  proven on-device: 6 `getState` answered in 0.5-3 s *while* a `setService` was
+  still running. getState over the bridge measures ~1 ms.
+- **App slow-method timeout 5 s → 60 s** (app 1.6.1+15) for the calls that
+  legitimately shell out on the device (`setService`, `serviceLog`, `setDesktop`,
+  BT pair/connect, WiFi scan/join). Polls and the liveness probe keep the tight
+  5 s so a genuinely dead link is still caught fast.
+- **WiFi escan-timeout wedge (`brcmfmac roamoff=1`, device r56).** After hours of
+  uptime wlan0 would stay associated at good signal but pass zero traffic (100%
+  loss to the gateway) with `brcmf_escan_timeout` flooding every ~58 s — the
+  BCM4330 failing in-firmware background *roam* scans. Disabled firmware roaming
+  (`brcmfmac-roamoff.conf`); verified **0 escan timeouts in 120 s** after. The Q is
+  bolted to one AP and never roams. Live recovery when wedged:
+  `nmcli device disconnect/connect wlan0`.
+
+> **Known issue (WiFi, open):** separate from the escan wedge above, the device's
+> **5 GHz TX** degrades intermittently (2026-07-31) — associated at −48 dBm with
+> perfect RX but 70-100% packet loss on transmit, worsening over the session and
+> not cleared by a reboot; the phone on the same AP is unaffected. Ruled out:
+> the bridge, the escan flood, regulatory domain, power-save, BT coexistence.
+> Looks environmental / AP-side on ch36 (or marginal RF). Under investigation;
+> eth-direct (`10.42.0.2`) is the reliable management path meanwhile.
+
 ### Added — enter fastboot over ssh, no power-cycle (kernel patch 0044, `linux` r44 → r45)
 - **`systemctl reboot --reboot-argument=bootloader` now lands the device in
   fastboot** (verified 2026-07-30: ~15 s to fastboot; `fastboot reboot` returns to

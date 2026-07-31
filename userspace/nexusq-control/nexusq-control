@@ -654,24 +654,38 @@ class Bridge:
         with self.lock:
             cid = self._next_id
             self._next_id += 1
-            self.clients[cid] = sock
+            # Per-connection send lock: request replies now run on their own
+            # worker threads (see client_thread) and can race a broadcast to the
+            # same socket, so every sendall to a client is serialized through it.
+            self.clients[cid] = {"sock": sock, "send": threading.Lock()}
         return cid
 
     def remove_client(self, cid):
         with self.lock:
             self.clients.pop(cid, None)
 
+    def send_to(self, cid, msg):
+        """Write one framed message to client `cid`, serialized per-connection so
+        concurrent request replies and event broadcasts never interleave bytes on
+        the wire. Drops the client on a dead socket. Never holds self.lock during
+        the sendall, so one stalled socket can't freeze the whole bridge."""
+        with self.lock:
+            c = self.clients.get(cid)
+        if c is None:
+            return
+        try:
+            with c["send"]:
+                c["sock"].sendall(msg)
+        except OSError:
+            with self.lock:
+                self.clients.pop(cid, None)
+
     def broadcast(self, event, data):
         msg = (json.dumps({"event": event, "data": data}) + "\n").encode()
         with self.lock:
-            dead = []
-            for cid, sock in self.clients.items():
-                try:
-                    sock.sendall(msg)
-                except OSError:
-                    dead.append(cid)
-            for cid in dead:
-                self.clients.pop(cid, None)
+            cids = list(self.clients)
+        for cid in cids:
+            self.send_to(cid, msg)
 
     # --- request dispatch ------------------------------------------------
     def handle(self, method, params):
@@ -977,28 +991,42 @@ def client_thread(bridge, sock, addr):
     cid = bridge.add_client(sock)
     log("client connected:", addr)
 
-    def handle_obj(obj):
+    def run_request(obj):
         method = obj.get("method")
         rid = obj.get("id")
-        if not isinstance(method, str):
-            return
         events = []
         try:
             result, events = bridge.handle(method, obj.get("params"))
             if rid is not None:
-                sock.sendall((json.dumps({"id": rid, "ok": True, "result": result}) + "\n").encode())
+                bridge.send_to(cid, (json.dumps(
+                    {"id": rid, "ok": True, "result": result}) + "\n").encode())
         except Err as e:
             if rid is not None:
-                sock.sendall((json.dumps({"id": rid, "ok": False,
-                                          "error": {"code": e.code, "message": e.message}}) + "\n").encode())
+                bridge.send_to(cid, (json.dumps(
+                    {"id": rid, "ok": False,
+                     "error": {"code": e.code, "message": e.message}}) + "\n").encode())
         except Exception as e:  # noqa: BLE001
             log("handler error:", method, e)
             if rid is not None:
-                sock.sendall((json.dumps({"id": rid, "ok": False,
-                                          "error": {"code": "internal", "message": str(e)}}) + "\n").encode())
-        # broadcast side-effect events only after the ack has been written
+                bridge.send_to(cid, (json.dumps(
+                    {"id": rid, "ok": False,
+                     "error": {"code": "internal", "message": str(e)}}) + "\n").encode())
+        # broadcast side-effect events only after this request's ack is written
         for name, data in events:
             bridge.broadcast(name, data)
+
+    def handle_obj(obj):
+        if not isinstance(obj.get("method"), str):
+            return
+        # Run each request on its OWN thread so a slow call never head-of-line-
+        # blocks the fast ones multiplexed on this single connection. On this
+        # armv7 the systemd user manager is ~9 s to reload, so setService
+        # (unmask+enable) can take 10-18 s and serviceLog's journalctl up to
+        # ~12 s; handled synchronously they froze the app's 3 s polls long
+        # enough that the supervisor declared the link dead and dropped it.
+        # Replies are id-correlated and may complete out of order (the app
+        # matches by id); send_to serializes the socket writes.
+        threading.Thread(target=run_request, args=(obj,), daemon=True).start()
 
     try:
         read_json_lines(sock, handle_obj)

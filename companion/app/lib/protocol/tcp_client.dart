@@ -113,6 +113,22 @@ class TcpClient implements NexusQClient {
     }
   }
 
+  // Calls that shell out to systemd / journalctl / bluetoothd or drive a WiFi
+  // scan on the device legitimately take many seconds — on this armv7 box the
+  // systemd *user* manager alone is ~9 s to reload, so setService (unmask +
+  // enable) runs 10–18 s, setDesktop starts a whole session, serviceLog runs
+  // journalctl, and the BT / WiFi calls wait on external radios. These get a
+  // long ceiling. Everything else — the 3 s Settings poll and the supervisor's
+  // liveness probe (getState) — keeps the tight 5 s so a genuinely dead link is
+  // still detected fast. (The bridge now handles each request on its own thread,
+  // so a slow call no longer head-of-line-blocks these fast ones.)
+  static const _slowMethods = <String>{
+    'setService', 'serviceLog', 'setDesktop',
+    'pairBtDevice', 'connectBtDevice', 'disconnectBtDevice', 'removePairedDevice',
+    'startPairing', 'stopPairing',
+    'scanNetworks', 'setWifi', 'finishSetup',
+  };
+
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) {
     final s = _socket;
@@ -123,11 +139,13 @@ class TcpClient implements NexusQClient {
     // NB the log gets the METHOD NAME ONLY, never params — setWifi carries the
     // WiFi PSK, and credentials never reach any log (standing rule).
     final sw = Stopwatch()..start();
+    final timeout =
+        _slowMethods.contains(method) ? const Duration(seconds: 60) : const Duration(seconds: 5);
     s.write('${jsonEncode({'id': id, 'method': method, 'params': ?params})}\n');
-    return c.future.timeout(const Duration(seconds: 5), onTimeout: () {
+    return c.future.timeout(timeout, onTimeout: () {
       _pending.remove(id);
       AppLog.add('tcp',
-          '$method timeout after 5s (id $id, ${_pending.length} still pending)',
+          '$method timeout after ${timeout.inSeconds}s (id $id, ${_pending.length} still pending)',
           warn: true);
       throw NexusQError('internal', 'timeout');
     }).then((r) {
