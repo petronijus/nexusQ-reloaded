@@ -4,7 +4,9 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
+## [Unreleased]
+
+## [1.11.0] — 2026-07-31 — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
 
 ### Fixed — app "connection lost" flapping: bridge head-of-line blocking + WiFi escan wedge (`nexusq-control` r14, app 1.6.1+15, device r56)
 - **Bridge no longer head-of-line-blocks (`nexusq-control` r14).** Each request on
