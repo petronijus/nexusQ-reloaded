@@ -1,0 +1,122 @@
+#!/bin/sh
+# nexusq-wifi-watchdog — keep the BCM4330 5 GHz link alive on a marginal 2013
+# combo chip, and record its health over time.
+#
+# Two jobs (see brcmfmac-roamoff.conf and docs/2026-07-31-* WiFi investigation):
+#
+#   1. HEAL — the chip can WEDGE: it stays associated at good signal with RX
+#      still working, but TX silently collapses to ~0 (the gateway becomes
+#      unreachable). NetworkManager never notices — the link is still
+#      "connected" — so nothing recovers it. A `nmcli device disconnect/connect
+#      wlan0` reliably un-wedges it (measured 2026-07-31). So: ping the wlan0
+#      default gateway every INTERVAL; after FAILS_TO_HEAL consecutive failures,
+#      bounce the connection (rate-limited by HEAL_COOLDOWN so it can't storm).
+#
+#   2. LOG — append one compact JSONL health line per check (loss %, signal)
+#      plus distinct heal / heal_result events, co-located with nq-healthd's
+#      logs so the diag suite (nq-collect) picks them up. This is how we tell
+#      IF and WHEN the link still degrades and whether roamoff=1 is enough.
+#
+# Scope: ONLY ever touches wlan0. If wlan0 is not associated (WiFi off, or
+# mid-(re)connect), it does nothing — NM owns (re)association; the watchdog only
+# heals the associated-but-dead wedge that NM cannot see.
+#
+# Env overrides: NQ_WIFI_INTERVAL, NQ_WIFI_FAILS, NQ_WIFI_COOLDOWN,
+# NQ_WIFI_BADLOSS, NQ_LOGDIR, NQ_WIFI_LOGCAP.
+set -u
+
+IFACE=wlan0
+INTERVAL="${NQ_WIFI_INTERVAL:-30}"       # seconds between checks
+FAILS_TO_HEAL="${NQ_WIFI_FAILS:-3}"      # consecutive bad checks before a bounce
+HEAL_COOLDOWN="${NQ_WIFI_COOLDOWN:-180}" # min seconds between bounces (anti-storm)
+BAD_LOSS="${NQ_WIFI_BADLOSS:-75}"        # packet-loss % that counts as "bad"
+HEARTBEAT_EVERY="${NQ_WIFI_HEARTBEAT:-10}" # thin the steady "ok" stream to one line
+                                         # per Nth check (~5 min at 30 s). EVERY
+                                         # non-ok check and EVERY state change is
+                                         # still logged in full, so a degradation is
+                                         # never thinned away.
+LOGDIR="${NQ_LOGDIR:-/var/log/nq-health}"
+LOG="$LOGDIR/wifi-watchdog.jsonl"
+CAP="${NQ_WIFI_LOGCAP:-20000}"           # keep at most this many log lines (weeks of
+                                         # data; a steady day is only ~300 lines now)
+
+mkdir -p "$LOGDIR"
+
+mono()   { cut -d. -f1 /proc/uptime; }
+emit()   { printf '%s\n' "$1" >> "$LOG"; }
+assoc()  { iw dev "$IFACE" link 2>/dev/null | grep -q "Connected to"; }
+signal() { iw dev "$IFACE" link 2>/dev/null | awk '/signal:/{print $2; exit}'; }
+gw()     { ip route show default dev "$IFACE" 2>/dev/null | awk '/default/{print $3; exit}'; }
+
+# integer packet-loss % pinging $1 over wlan0 (100 if unpingable)
+loss_to() {
+	ping -I "$IFACE" -c4 -W2 "$1" 2>/dev/null \
+		| grep -oE '[0-9]+% packet loss' | grep -oE '^[0-9]+' || echo 100
+}
+
+# keep the log bounded without rewriting it every line
+cap_log() {
+	lines=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+	if [ "$lines" -gt "$CAP" ]; then
+		tail -n $((CAP / 2)) "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+	fi
+}
+
+heal() {
+	loss="$1"; sig=$(signal)
+	emit "{\"t\":$(mono),\"ev\":\"heal\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"note\":\"bounce wlan0 after $FAILS_TO_HEAL bad checks\"}"
+	nmcli device disconnect "$IFACE" >/dev/null 2>&1
+	sleep 2
+	nmcli device connect "$IFACE" >/dev/null 2>&1
+	sleep 8
+	g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
+	emit "{\"t\":$(mono),\"ev\":\"heal_result\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+}
+
+fails=0
+last_heal=0
+prev_st=""
+tick=0
+emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"heartbeat_every\":$HEARTBEAT_EVERY}"
+
+while :; do
+	tick=$((tick + 1))
+	sig=$(signal)
+	loss=-1
+	if ! assoc; then
+		st=down; fails=0
+		line="{\"t\":$(mono),\"st\":\"down\",\"sig\":\"${sig:-?}\"}"
+	else
+		g=$(gw)
+		if [ -z "$g" ]; then
+			st=nogw; fails=0
+			line="{\"t\":$(mono),\"st\":\"nogw\",\"sig\":\"${sig:-?}\"}"
+		else
+			loss=$(loss_to "$g")
+			if [ "$loss" -ge "$BAD_LOSS" ]; then
+				fails=$((fails + 1)); st=bad
+			else
+				fails=0; st=ok
+			fi
+			line="{\"t\":$(mono),\"st\":\"$st\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"fails\":$fails}"
+		fi
+	fi
+
+	# Log every non-ok check and every state change in full; thin only the
+	# steady "ok" stream to one heartbeat per HEARTBEAT_EVERY checks.
+	if [ "$st" != ok ] || [ "$st" != "$prev_st" ] || [ $((tick % HEARTBEAT_EVERY)) -eq 0 ]; then
+		emit "$line"
+	fi
+	prev_st="$st"
+
+	if [ "$st" = bad ] && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
+		now=$(mono)
+		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
+			heal "$loss"
+			last_heal=$(mono)
+			fails=0
+		fi
+	fi
+	cap_log
+	sleep "$INTERVAL"
+done

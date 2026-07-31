@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — WiFi watchdog (`device` r57)
+- **`nexusq-wifi-watchdog`** — an on-device systemd service that keeps the
+  marginal BCM4330 5 GHz link alive and records its health. Every 30 s it pings
+  the wlan0 gateway; after 3 consecutive failures (the "associated but TX-dead"
+  wedge NetworkManager can't see) it bounces the connection
+  (`nmcli disconnect/connect wlan0`, rate-limited) to auto-heal — no PC needed.
+  It logs per-check health (loss %, signal) plus heal events to
+  `/var/log/nq-health/wifi-watchdog.jsonl` (steady "ok" thinned to one line per
+  5 min, every degradation logged in full; capped at 20 000 lines ≈ weeks), so we
+  can see whether the `roamoff=1` fix is holding and characterise any remaining
+  intermittent 5 GHz TX degradation (the open Asus+Mercusys same-channel-mesh
+  known-issue). Enabled by default via `nexusq.preset`.
+
 ## [1.11.0] — 2026-07-31 — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
 
 ### Fixed — app "connection lost" flapping: bridge head-of-line blocking + WiFi escan wedge (`nexusq-control` r14, app 1.6.1+15, device r56)

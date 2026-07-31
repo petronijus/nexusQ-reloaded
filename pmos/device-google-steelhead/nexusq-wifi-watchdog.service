@@ -1,0 +1,20 @@
+[Unit]
+Description=Nexus Q WiFi watchdog (BCM4330 wedge auto-heal + health log)
+Documentation=file:///usr/bin/nexusq-wifi-watchdog
+# NetworkManager owns wlan0; we only heal the associated-but-dead wedge it can't see.
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nexusq-wifi-watchdog
+# Self-heal: the watchdog itself must never die silently.
+Restart=always
+RestartSec=10
+# Stay out of the way on this dual-core OMAP4.
+Nice=10
+IOSchedulingClass=idle
+# Logs live under /var/log/nq-health (self-rotated, capped).
+
+[Install]
+WantedBy=multi-user.target

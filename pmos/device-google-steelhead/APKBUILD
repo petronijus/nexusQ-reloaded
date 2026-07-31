@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=56
+pkgrel=57
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -98,6 +98,8 @@ source="
 	nq-healthd
 	nq-diag-snapshot
 	nq-healthd.service
+	nexusq-wifi-watchdog
+	nexusq-wifi-watchdog.service
 	librespot.service
 	librespot-nexusq
 	shairport-sync.service
@@ -346,6 +348,17 @@ package() {
 	ln -sf ../nq-healthd.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nq-healthd.service
 
+	# WiFi watchdog: the BCM4330 can wedge (associated, RX ok, TX dead) with NM
+	# none the wiser; this pings the gateway and bounces wlan0 to un-wedge it,
+	# and logs per-check health to /var/log/nq-health/wifi-watchdog.jsonl so we
+	# can see whether the roamoff=1 fix is holding. (docs/2026-07-31 WiFi.)
+	install -Dm755 "$srcdir"/nexusq-wifi-watchdog \
+		"$pkgdir"/usr/bin/nexusq-wifi-watchdog
+	install -Dm644 "$srcdir"/nexusq-wifi-watchdog.service \
+		"$pkgdir"/etc/systemd/system/nexusq-wifi-watchdog.service
+	ln -sf ../nexusq-wifi-watchdog.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-wifi-watchdog.service
+
 	# Keep root's user manager resident (logind linger). Without it every ssh
 	# login builds and tears down the whole user@0 session — ~7.5 s CPU per
 	# login/logout cycle plus the cgroup/bpf destroy churn in pid 1 (measured
@@ -565,6 +578,8 @@ SKIP  nexusq-usb-gadget.service
 SKIP  nq-healthd
 SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
+SKIP  nexusq-wifi-watchdog
+SKIP  nexusq-wifi-watchdog.service
 SKIP  librespot.service
 SKIP  librespot-nexusq
 SKIP  shairport-sync.service
