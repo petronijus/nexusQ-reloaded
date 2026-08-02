@@ -666,6 +666,24 @@ def check_nexus_update():
         raise Err("timeout", "apk did not respond")
 
 
+def _apk_changed(r):
+    """Names of packages an `apk add/upgrade` actually changed. Parses BOTH streams
+    because apk-tools writes its '(N/M) Upgrading <name> (...)' progress lines to
+    STDERR, not stdout — reading only stdout silently missed every upgrade (so the
+    reboot-recommended check never fired on a systemd/base bump)."""
+    text = (r.stdout or "") + "\n" + (r.stderr or "")
+    names = []
+    for line in text.splitlines():
+        for verb in ("Upgrading ", "Installing ", "Reinstalling "):
+            i = line.find(verb)
+            if i >= 0:
+                rest = line[i + len(verb):].split()
+                if rest:
+                    names.append(rest[0])
+                break
+    return names
+
+
 def install_nexus_update():
     """Upgrade our daemons from the OTA repo. Returns which packages actually
     changed; the caller (the bridge) handles the LED animation + the restarts,
@@ -677,11 +695,11 @@ def install_nexus_update():
         if r.returncode != 0:
             raise Err("unavailable",
                       f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
-        out = r.stdout or ""
-        upgraded = [p for p in OTA_PACKAGES
-                    if f"Upgrading {p} " in out or f"Installing {p} " in out]
+        changed = _apk_changed(r)
+        upgraded = [p for p in OTA_PACKAGES if p in changed]
         return {"ok": True, "upgraded": upgraded,
-                "restarting": bool(upgraded), "output": out.strip()[-400:]}
+                "restarting": bool(upgraded),
+                "output": ((r.stdout or "") + (r.stderr or "")).strip()[-400:]}
     except (OSError, subprocess.SubprocessError):
         raise Err("timeout", "apk upgrade did not respond")
 
@@ -760,18 +778,13 @@ def install_system_update():
         if r.returncode != 0:
             raise Err("unavailable",
                       f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
-        out = r.stdout or ""
-        changed = []
-        for line in out.splitlines():
-            line = line.strip()
-            for verb in ("Upgrading ", "Installing "):
-                if line.startswith("(") and verb in line:
-                    changed.append(line.split(verb, 1)[1].split()[0])
+        changed = _apk_changed(r)
         daemons = [p for p in ("nexusqd", "nexusq-btagent", "nexusq-setupd",
                                "nexusq-control") if p in changed]
         reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
         return {"ok": True, "changed": changed, "daemons": daemons,
-                "rebootRecommended": reboot, "output": out.strip()[-500:]}
+                "rebootRecommended": reboot,
+                "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:]}
     except (OSError, subprocess.SubprocessError):
         raise Err("timeout", "apk upgrade did not respond")
 
@@ -1096,15 +1109,16 @@ class Bridge:
                 raise Err("busy", "an update is already installing")
             try:
                 nexusqd_send("mblink stop")
-                prog = _OtaProgress().start()
+                # A full-system upgrade is slow and of UNKNOWN length (downloads +
+                # triggers like mkinitfs), so the determinate bar would ease to its
+                # cap and sit there looking frozen. Use the INDETERMINATE spinner
+                # instead — it keeps moving for the whole install.
+                nexusqd_send("spin 0 153 204 2")
                 try:
                     r = install_system_update()
                 except Err:
-                    prog.cancel()
                     self._led_restore_theme()
                     raise
-                prog.finish()
-                time.sleep(0.35)
                 theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"),
                                                  ["auto"]))
                 self._finish_system_update(r.get("daemons", []),
@@ -1171,17 +1185,20 @@ class Bridge:
                         pass
             if restarted_nexusqd:
                 time.sleep(1.5)
-            nexusqd_send("set 0 255 0")   # green success
+            nexusqd_send("set 0 255 0")   # green success (this also stops the spinner)
             time.sleep(2.5)
-            for c in theme_cmds:
-                nexusqd_send(c)
             if reboot:
+                # base libc/init changed — reboot to apply it cleanly. Stay GREEN
+                # (don't flip to the theme first) so the last thing seen is success,
+                # then the device reboots; the app reconnects when it's back.
                 try:
                     subprocess.run(["systemctl", "reboot"],
                                    capture_output=True, timeout=10)
                 except (OSError, subprocess.SubprocessError):
                     pass
                 return
+            for c in theme_cmds:
+                nexusqd_send(c)
             if "nexusq-control" in daemons:
                 try:
                     subprocess.run(
