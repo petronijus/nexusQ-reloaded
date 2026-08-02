@@ -76,7 +76,7 @@ mkdir -p "$G/functions/acm.usb0" 2>/dev/null || true
 
 # UAC2 audio function: turn the Q into a USB DAC/speaker. The host plays audio ->
 # it arrives over USB -> shows up on the device as an ALSA CAPTURE stream on the
-# "UAC2Gadget" card, which nexusq-uac2-route loopbacks into the TAS5713 amp. This
+# "UAC2Gadget" card, which nexusq-uac2-in loopbacks into the TAS5713 amp. This
 # is the no-solder / no-Bluetooth audio INPUT (the Q has no optical/HDMI/line in).
 #   c_* = the CAPTURE direction = host -> gadget, i.e. the host plays and the Q
 #   receives (the Q is a USB *speaker*; on the device this is a capture PCM

@@ -123,6 +123,18 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   wrong kernel is flashed) — report it. On ≤ v1.10.0 the OTP MAC is EXPECTED (the
   fix predates them). brcmfmac programs the DT MAC over OTP via `brcmf_of_probe()`;
   the nvram `macaddr=` is ignored either way.
+  🆕 **5 GHz TX-dead wedge — FIXED by `roamoff=1`, watchdog-monitored (2026-08-02).**
+  On long uptimes the BCM4330 could stay associated at good signal but pass **zero
+  traffic** (100 % loss to the gateway) with `brcmf_escan_timeout` flooding every
+  ~58 s — the chip failing in-firmware background *roam* scans. Fixed by
+  **`brcmfmac roamoff=1`** (`brcmfmac-roamoff.conf`, device r56 — the Q never roams).
+  A **`nexusq-wifi-watchdog.service`** (device r57, default-ON) gateway-pings every
+  30 s and auto-bounces `wlan0` after 3 failures, logging health to
+  **`/var/log/nq-health/wifi-watchdog.jsonl`** (check it for `heal` events / loss %).
+  **Healthy tell:** `modprobe -c | grep brcmfmac` shows `roamoff=1`; the watchdog log
+  is steady "ok" with no heals (a 29 h clean run 2026-08-01 confirmed the fix). Any
+  return of `brcmf_escan_timeout` in `dmesg`, or repeated watchdog heals, = a
+  regression. The old "5 GHz TX degrades intermittently, open" verdict is **retired**.
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
   ✅ **task #17 FULLY CLOSED 2026-07-06 — enumerates from a cold boot on `#33`+
   (v1.6.8).** The old "enumeration intermittency" was NOT a race — it was an
@@ -175,6 +187,26 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   wedges the pn544 HCI state until reboot (known fragility). See
   `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
+- 🆕 **Streaming inputs + per-service app toggles (v1.11.0 step 3; USB audio
+  post-v1.11.0 dev).** The Q has **four** audio inputs, all mixing into the default
+  PulseAudio sink (TAS5713): **Spotify** (librespot) + **AirPlay** (shairport-sync)
+  are **vendor-default-ON**; **Roon** (`roon.service`, glibc/bwrap) + **USB Audio**
+  (`nexusq-uac2-in.service`) are **default-OFF**. `nexusq-control` **r16** exposes each
+  as an app switch (`SERVICES`: spotify/airplay/roon/usbaudio). ⚠️ **An INACTIVE
+  default-OFF unit (roon, usbaudio) is NORMAL, not a `failed_unit`.** ⚠️ **`set_service`
+  OFF uses `disable --now` for the default-OFF units and `mask --now` only for the
+  vendor-default-ON ones** (a new `vendor_on` flag) — because `mask --now` `/dev/null`s
+  a unit before stopping it, dropping `KillMode`/`ExecStop`, so a module-owning service
+  like `nexusq-uac2-in` (holds PA loopback modules that outlive its process) would
+  **leak its loopback** on OFF. **USB Audio input** (the Q as a USB DAC): kernel r46
+  `CONFIG_USB_CONFIGFS_F_UAC2` + a `uac2.0` function on the composite gadget
+  (`c_chmask=3`, `p_chmask=0` = a USB speaker, not a mic) surface the host audio as the
+  `UAC2Gadget` ALSA capture card; `nexusq-uac2-in` loopbacks it into the default sink.
+  **Healthy tell when ON:** the `UAC2Gadget` capture card present + `nexusq-uac2-in`
+  active + the TAS5713 sink **RUNNING** while the host plays; **OFF:** the unit inactive
+  and its PA loopback modules **unloaded (0)**. The Q has **no optical/HDMI/line input**
+  (all ports are OUTPUTS) — USB is the only no-solder digital audio in. See
+  `docs/2026-08-02-usb-audio-input.md`.
 - 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (**v1.9.0** = device r47 /
   setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2 — NOT on flashed
   ≤ v1.8.2):** a BT RFCOMM

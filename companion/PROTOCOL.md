@@ -606,12 +606,14 @@ Stopping the desktop **churns logind** hard enough that ssh auth (`pam_systemd`)
 for ~a minute during 2026-07-15 testing. It recovered on its own — but a snappy
 timeout here would report a false failure, so `set_desktop` allows 60 s.
 
-## 11. Streaming service toggles — v1.11.0
+## 11. Streaming service toggles — v1.11.0 (USB Audio added post-v1.11.0)
 
 Each streaming INPUT is an independent uid-10000 systemd USER unit, so the box can
 run only what its owner wants — one runs only Spotify, another only Roon+AirPlay —
 and nothing runs unless switched on (the resource policy: an off service costs no
-memory or CPU). The choice is **persistent** across reboots.
+memory or CPU). The choice is **persistent** across reboots. As of the post-v1.11.0
+dev line there are **four** inputs: Spotify, AirPlay, Roon, and **USB Audio** (the Q
+as a USB DAC).
 
 | Method | Params | Result |
 |---|---|---|
@@ -624,8 +626,11 @@ service can't attach to the uid-10000 user journal — `journalctl --machine …
 --user` refuses non-root — but the user unit's records are tagged there).
 
 Service ids → units: `spotify` → `librespot.service`, `airplay` →
-`shairport-sync.service`, `roon` → `roon.service`. (The HDMI desktop stays on its
-own §10 `setDesktop` — a system unit with different, non-persistent semantics.)
+`shairport-sync.service`, `roon` → `roon.service`, `usbaudio` →
+`nexusq-uac2-in.service` (the UAC2 USB-DAC loopback; **post-v1.11.0**). (The HDMI
+desktop stays on its own §10 `setDesktop` — a system unit with different,
+non-persistent semantics.) Each entry carries a **`vendor_on`** flag: `spotify` and
+`airplay` are vendor-default-ON; `roon` and `usbaudio` are default-OFF (see §11.2).
 
 ### 11.1 `on` is `is-active`, not `is-enabled`
 

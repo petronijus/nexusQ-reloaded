@@ -109,6 +109,24 @@ blind to nexusqd's writes — see the bug note below).
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and
 `/sys/fs/pstore` (survives a *warm* reboot only).
 
+**WiFi (BCM4330)** — `iw dev wlan0 link` + gateway reachability. Ground truth as of
+**2026-08-02**: the long-uptime **5 GHz TX-dead wedge** (associated but 0 traffic,
+`brcmf_escan_timeout` flooding ~58 s — the chip failing in-firmware background *roam*
+scans) is **fixed by `brcmfmac roamoff=1`** (device r56); the on-device
+**`nexusq-wifi-watchdog.service`** (device r57) gateway-pings every 30 s and
+auto-bounces `wlan0` after 3 failures, logging per-check health (loss %, signal) +
+heal events to **`/var/log/nq-health/wifi-watchdog.jsonl`** (steady "ok" thinned to
+1 line/5 min, capped ~20 000 lines). Read it to confirm the fix holds (a 29 h clean
+run 2026-08-01 did); any `brcmf_escan_timeout` return or repeated heals = regression.
+
+**Audio inputs** — four inputs mix into the default PulseAudio sink (TAS5713):
+Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON; Roon
+(`roon.service`) + **USB Audio** (`nexusq-uac2-in.service`, the Q as a UAC2 USB DAC —
+kernel r46 `CONFIG_USB_CONFIGFS_F_UAC2`) are **default-OFF**, so an inactive one is
+**normal, not a `failed_unit`**. When USB Audio is ON: the `UAC2Gadget` ALSA capture
+card is present and `nexusq-uac2-in` loopbacks it into the sink (TAS5713 RUNNING).
+The Q has **no optical/HDMI/line input** — every port is an OUTPUT.
+
 ## Finding kinds (from `nq-health-report`)
 
 `nexusqd_hang`, `led_frozen`, `led_static`, `nexusqd_no_progress`,

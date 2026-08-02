@@ -4,7 +4,67 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-07-30 (latest): **Fastboot over ssh (kernel patch 0044) · the device DIED (blown mains fuse) + was repaired · v1.11.0 FLASHED and live**
+## Session 2026-08-02 (latest): **USB Audio input (the Q as a toggleable USB DAC) · WiFi watchdog + 5 GHz TX RESOLVED · v1.11.0 tagged**
+
+Full record: `docs/2026-08-02-usb-audio-input.md`. Base: v1.11.0 (tagged 2026-07-31).
+
+### Current device state
+- **Running dev build `v1.11.3`** (untagged) — kernel **`#47` / linux r46** (UAC2
+  added), device **r60**, **`nexusq-control` r16**, WiFi watchdog **r57**+ with
+  `roamoff=1`, patch 0044. Companion app at **1.7.0+16** (own track).
+- Artifacts: `output/nexusq-boot-v1.11.3.img` + `output/nexusq-rootfs-v1.11.3-sparse.img`.
+- **The last public tag / release is still `v1.11.0`** — v1.11.1/1.11.2/**1.11.3**
+  are dev builds, not tagged.
+
+### 1. USB Audio input — the Q as a USB DAC (HEAD `0565977`, VERIFIED)
+- **The Nexus Q has NO optical/HDMI/line audio INPUT — every port is an OUTPUT.**
+  Confirmed: the DTS runs McASP0 in DIT/TX mode (`spdif-dit`), and the OMAP4 HDMI is
+  DSS output-only through the TPD12S015A (TI docs + a teardown). **USB is the only
+  no-solder / no-Bluetooth digital audio IN.**
+- **How:** kernel **r46** gains `CONFIG_USB_CONFIGFS_F_UAC2` (module `usb_f_uac2`).
+  `nexusq-usb-gadget.sh` adds a `uac2.0` function to the composite gadget with
+  `c_chmask=3` / `c_srate=48000` / `c_ssize=2` / `p_chmask=0` — **host→device capture
+  = the Q is a USB *speaker*, not a mic** (verified on-device: `p_chmask` made it a
+  mic). The host audio arrives as the `UAC2Gadget` ALSA capture card (pcm0c);
+  **`nexusq-uac2-in`** (a long-running user service, `KillMode=mixed`, SIGTERM trap
+  unloads) loopbacks it into the default PulseAudio sink (TAS5713) — **mixes with
+  Spotify / AirPlay / Roon**.
+- **App toggle:** a **4th per-service switch** "USB Audio" (`Icons.usb`) next to
+  Spotify/AirPlay/Roon; `nexusq-control` **r16** `SERVICES` gained
+  `{"id":"usbaudio","unit":"nexusq-uac2-in.service"}`, **default-OFF**. App at
+  **1.7.0+16**.
+- ⚠️ **`set_service` OFF behaviour changed — `disable --now` vs `mask --now`.**
+  `mask --now` `/dev/null`s the unit *before* stopping it, dropping its
+  `KillMode`/`ExecStop`, so a module-owning service (`nexusq-uac2-in` holds PA
+  loopback modules that outlive its process) **leaks its loopback** on OFF. So OFF now
+  `disable`s the **default-OFF** units (roon, usbaudio) — keeping the unit intact so
+  its SIGTERM trap runs — and only `mask`s the **vendor-default-ON** ones
+  (spotify/airplay), gated by a new `vendor_on` flag.
+- **Source note:** a TV's optical/HDMI **cannot** feed it (that needs a hardware
+  receiver-chip mod); a computer/phone with USB-audio out can.
+- **Verified end-to-end on a clean v1.11.3 dev flash:** toggle ON loads the loopback
+  (host audio → TAS5713 **RUNNING**), OFF cleanly unloads (**0 modules**).
+
+### 2. WiFi watchdog + 5 GHz TX degradation RESOLVED
+- **`nexusq-wifi-watchdog`** (device r57) pings the wlan0 gateway every 30 s and, after
+  3 consecutive failures (the "associated but TX-dead" wedge NM can't see), bounces
+  `wlan0` to auto-heal, logging health to `/var/log/nq-health/wifi-watchdog.jsonl`.
+- **The v1.11.0 "5 GHz TX degrades, open" known-issue is RESOLVED** — it was the same
+  in-firmware background-roam-scan failure as the escan wedge; **`brcmfmac roamoff=1`**
+  (device r56) fixes both, and the watchdog logged a **29 h clean run (2026-08-01)**
+  with no wedge and no heal bounces. WiFi is a reliable path again; eth-direct
+  (`10.42.0.2`) stays fastest for bulk.
+
+### WHERE TO CONTINUE (2026-08-02 → next)
+1. USB Audio input is verified on-device and baked; the v1.11.x dev line is ready to
+   **tag when the user approves** (never tag unasked). A full diag sweep on the
+   flashed v1.11.3 before any tag.
+2. The standing open lists below still stand (thermal watch, `NEXUSQ_NO_WIFI=1` flag,
+   pairing flake, contactless-payment link, AirPlay MPRIS metadata, Tidal).
+
+---
+
+## Session 2026-07-30: **Fastboot over ssh (kernel patch 0044) · the device DIED (blown mains fuse) + was repaired · v1.11.0 FLASHED and live**
 
 Full record: `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md`.
 
@@ -58,13 +118,15 @@ Full record: `docs/2026-07-30-fastboot-over-ssh-and-mains-fuse-repair.md`.
   damage** — the unit is fully healthy.
 
 ### WHERE TO CONTINUE (2026-07-30 → next)
-1. **Tag v1.11.0** once the flashed rc3/rc4 pair passes a full diag sweep on the
-   repaired unit (user approves the tag; never tag unasked).
-2. Commit the working tree (patch 0044 + APKBUILD bump) — repo email
-   `petronijus@bastla.com` only.
+1. ✅ **DONE — v1.11.0 tagged + released** (2026-07-31, commit `758696e`
+   `chore(release): v1.11.0`).
+2. ✅ **DONE — working tree committed** (patch 0044 + APKBUILD bump landed as
+   `08aa4d1`).
 3. The step-3 / v1.10.1 / v1.9.0 open lists below still stand (thermal watch,
    `NEXUSQ_NO_WIFI=1` flag, pairing flake, contactless-payment link, AirPlay MPRIS
-   metadata, Tidal).
+   metadata, Tidal). ⚠️ **The WiFi "5 GHz TX degrades" item raised here is
+   RESOLVED** — see the 2026-08-02 session at the top (`roamoff=1`, 29 h clean
+   watchdog run 2026-08-01).
 
 ---
 

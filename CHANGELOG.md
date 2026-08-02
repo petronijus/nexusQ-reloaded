@@ -44,6 +44,18 @@ All notable changes to Nexus Q Reloaded. Format follows
   intermittent 5 GHz TX degradation (the open Asus+Mercusys same-channel-mesh
   known-issue). Enabled by default via `nexusq.preset`.
 
+### Fixed — WiFi 5 GHz TX degradation RESOLVED (`brcmfmac roamoff=1` holds; watchdog-proven)
+- The intermittent **5 GHz TX degradation** flagged open at v1.11.0 (associated at
+  −48 dBm with good RX but 70-100 % packet loss on transmit, worsening over a
+  session) is **resolved by `roamoff=1`**. The `nexusq-wifi-watchdog` telemetry
+  logged a **29 h continuous clean run (2026-08-01)** — no TX-dead wedge, no heal
+  bounces triggered — confirming the disabled-firmware-roaming fix holds over the
+  long uptimes that used to surface the fault. The earlier "environmental / AP-side
+  on ch36" hypothesis is retired: it was the same in-firmware background-roam-scan
+  failure as the escan wedge, and pinning the Q to its single AP cures both.
+  WiFi is now a reliable management/streaming path again (eth-direct `10.42.0.2`
+  remains the fastest for bulk).
+
 ## [1.11.0] — 2026-07-31 — step 3: streaming services (AirPlay · rootfs resize · Roon · per-service app toggles) · fastboot over ssh
 
 ### Fixed — app "connection lost" flapping: bridge head-of-line blocking + WiFi escan wedge (`nexusq-control` r14, app 1.6.1+15, device r56)
@@ -69,13 +81,14 @@ All notable changes to Nexus Q Reloaded. Format follows
   bolted to one AP and never roams. Live recovery when wedged:
   `nmcli device disconnect/connect wlan0`.
 
-> **Known issue (WiFi, open):** separate from the escan wedge above, the device's
-> **5 GHz TX** degrades intermittently (2026-07-31) — associated at −48 dBm with
-> perfect RX but 70-100% packet loss on transmit, worsening over the session and
-> not cleared by a reboot; the phone on the same AP is unaffected. Ruled out:
-> the bridge, the escan flood, regulatory domain, power-save, BT coexistence.
-> Looks environmental / AP-side on ch36 (or marginal RF). Under investigation;
-> eth-direct (`10.42.0.2`) is the reliable management path meanwhile.
+> **Known issue (WiFi) — ✅ RESOLVED 2026-08-01 (see [Unreleased] above):** at
+> v1.11.0 the device's **5 GHz TX** was seen to degrade intermittently (2026-07-31)
+> — associated at −48 dBm with perfect RX but 70-100% packet loss on transmit,
+> worsening over the session and not cleared by a reboot; the phone on the same AP
+> was unaffected. Ruled out at the time: the bridge, the escan flood, regulatory
+> domain, power-save, BT coexistence. **`roamoff=1` fixed it** — the WiFi watchdog
+> then logged a 29 h clean run (2026-08-01) with no wedge; eth-direct
+> (`10.42.0.2`) stays the fastest management path for bulk.
 
 ### Added — enter fastboot over ssh, no power-cycle (kernel patch 0044, `linux` r44 → r45)
 - **`systemctl reboot --reboot-argument=bootloader` now lands the device in
