@@ -132,7 +132,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _installingNexus = true; // UI shows "Installing…" until verified
       _nexusError = null;
-      _nexusCheck = null;
+      // keep _nexusCheck: its package list is what the UI shows as "what's
+      // installing"; clearing it hid the whole install block (it was gated on
+      // _nexusUpdateAvailable) so the app showed no feedback during an install.
     });
     // Installing upgrades the daemons and RESTARTS them — including the control
     // bridge, which necessarily drops THIS connection. So a null/timeout from
@@ -462,21 +464,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _nexusUpdateAvailable
-                            ? Icons.system_update_alt
-                            : Icons.memory,
-                        color: _nexusUpdateAvailable
+                        _installingNexus
+                            ? Icons.downloading
+                            : (_nexusUpdateAvailable
+                                ? Icons.system_update_alt
+                                : Icons.memory),
+                        color: (_installingNexus || _nexusUpdateAvailable)
                             ? NexusQColors.accent
                             : NexusQColors.dim),
                     title: Text(
-                        _nexusUpdateAvailable
-                            ? 'Device update available'
-                            : 'Device software',
+                        _installingNexus
+                            ? 'Installing device update…'
+                            : (_nexusUpdateAvailable
+                                ? 'Device update available'
+                                : 'Device software'),
                         style: const TextStyle(color: NexusQColors.white)),
                     subtitle: Text(_nexusStatusLine(),
                         style: const TextStyle(
                             color: NexusQColors.dim, fontSize: 12)),
-                    trailing: _checkingNexus
+                    trailing: (_checkingNexus || _installingNexus)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -494,24 +500,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: const TextStyle(
                               color: Colors.orangeAccent, fontSize: 12)),
                     ),
-                  if (_nexusUpdateAvailable)
+                  if (_installingNexus)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          // Indeterminate: apk reports no percentage, so the
+                          // determinate bar lives on the LED ring; here we just
+                          // show liveness. The subtitle lists what's installing.
+                          ClipRRect(
+                            borderRadius: BorderRadius.all(Radius.circular(4)),
+                            child: LinearProgressIndicator(
+                              minHeight: 8,
+                              color: NexusQColors.accent,
+                              backgroundColor: NexusQColors.divider,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Installing on the device — the Q restarts its '
+                            'services and the app reconnects. This is normal.',
+                            style:
+                                TextStyle(color: NexusQColors.dim, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_nexusUpdateAvailable)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
-                          onPressed:
-                              _installingNexus ? null : _installNexusUpdate,
-                          icon: _installingNexus
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2))
-                              : const Icon(Icons.download, size: 18),
-                          label: Text(_installingNexus
-                              ? 'Installing… (the Q reconnects)'
-                              : 'Install device update'),
+                          onPressed: _installNexusUpdate,
+                          icon: const Icon(Icons.download, size: 18),
+                          label: const Text('Install device update'),
                         ),
                       ),
                     ),

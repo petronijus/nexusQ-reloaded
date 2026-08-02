@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.9.4",
-  "versionCode": 23,
-  "notes": "Fix: the in-app update download bar now visibly fills (explicit dim track vs bright accent) — before, the Material default track blended with the blue fill so it read as one static blue strip while only the % text moved.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.9.4/nexusq-companion-1.9.4.apk",
+  "version": "1.9.5",
+  "versionCode": 24,
+  "notes": "Device update now shows in-app feedback while installing (Installing… title, what is upgrading, an activity bar, and a note that the Q restarts and the app reconnects) instead of a blank section.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.9.5/nexusq-companion-1.9.5.apk",
   "minAndroidSdk": 21
 }
