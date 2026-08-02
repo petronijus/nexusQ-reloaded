@@ -89,8 +89,13 @@ while :; do
 	else
 		g=$(gw)
 		if [ -z "$g" ]; then
-			st=nogw; fails=0
-			line="{\"t\":$(mono),\"st\":\"nogw\",\"sig\":\"${sig:-?}\"}"
+			# Associated but NO default route/gateway: NetworkManager wedged in
+			# "getting IP configuration" (DHCP got no lease), so wlan0 has an IP
+			# but no route and the LAN is unreachable. This IS the associated-
+			# but-dead wedge — count it like a bad check so the heal fires; the
+			# old code held fails=0 here and so NEVER healed this exact case.
+			fails=$((fails + 1)); st=nogw
+			line="{\"t\":$(mono),\"st\":\"nogw\",\"sig\":\"${sig:-?}\",\"fails\":$fails}"
 		else
 			loss=$(loss_to "$g")
 			if [ "$loss" -ge "$BAD_LOSS" ]; then
@@ -109,7 +114,7 @@ while :; do
 	fi
 	prev_st="$st"
 
-	if [ "$st" = bad ] && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
+	if { [ "$st" = bad ] || [ "$st" = nogw ]; } && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
 		now=$(mono)
 		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
 			heal "$loss"
