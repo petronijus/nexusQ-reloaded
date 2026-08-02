@@ -28,6 +28,7 @@
 #define SOCK "/run/nexusqd.sock"
 #define THEMES_DIR "/etc/nexusqd/themes"
 #define VOL_STEP 2          /* master-volume % per rotary detent (the ring emits many events/turn) */
+#define MUTE_BLINK_S 0.5    /* mute-LED blink half-period for "update available" (CTL_MBLINK) */
 
 /* AVR keepalive: the AVR firmware stops lighting the ring if the host stops
  * sending frame commits for too long. That happens once the idle screensaver
@@ -64,9 +65,18 @@
  * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
 
 /* --- manual override layer (priority 8) ----------------------------------- */
-struct manual_ctx { int rgb[3]; int breathe; int spin; double spin_speed; };
+struct manual_ctx { int rgb[3]; int breathe; int spin; double spin_speed; int progress; };
 static int manual_render(void *c, double t, struct frame *out) {
     struct manual_ctx *m = c;
+    if (m->progress >= 0) {
+        /* determinate bar: the first pct% of the ring bright, the rest a dim track */
+        int k = (m->progress * RING + 50) / 100;
+        for (int i = 0; i < RING; i++) {
+            if (i < k) frame_set(out, i, m->rgb[0], m->rgb[1], m->rgb[2]);
+            else       frame_set(out, i, m->rgb[0]/12, m->rgb[1]/12, m->rgb[2]/12);
+        }
+        return 0;
+    }
     if (m->spin) { spinner_render(m->rgb, t, m->spin_speed, out); return 0; }
     if (m->breathe) {
         /* companion color theme: pulse in the hue using the SAME throb envelope
@@ -113,9 +123,14 @@ int main(void) {
     double start = now_s();
     struct reaction rx = {0};
     struct screensaver ss; screensaver_init(&ss, start);
-    struct manual_ctx manual = { { 0, 0, 0 }, 0, 0, 0.0 };
+    struct manual_ctx manual = { { 0, 0, 0 }, 0, 0, 0.0, -1 };
     int volume = 50;            /* virtual master volume for the reaction overlay (volume keys) */
     int muted = 0;
+    /* autonomous mute-LED blink (CTL_MBLINK): "software update available". The daemon
+     * toggles the mute LED on/off every MUTE_BLINK_S; any real mute/volume action
+     * clears it so the physical mute state always wins. */
+    int mute_blink = 0, mute_blink_on = 0, mute_blink_rgb[3] = { 0, 0, 0 };
+    double mute_blink_next = 0.0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
                                  * (companion `brightness N` over the control socket) */
 
@@ -226,6 +241,7 @@ int main(void) {
                 screensaver_on_activity(&ss, now);          /* wake the ring from blank */
                 if (ev[i].code == KEY_MUTE) {
                     muted = !muted; apply_mute_led(muted);
+                    if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; }   /* unmuted -> resume the update blink */
                 } else if (ev[i].code == KEY_VOLUMEUP || ev[i].code == KEY_VOLUMEDOWN) {
                     volume += (ev[i].code == KEY_VOLUMEUP) ? VOL_STEP : -VOL_STEP;
                     if (volume > 100) volume = 100;
@@ -241,13 +257,22 @@ int main(void) {
                 char line[128] = {0}; int r = (int)read(c, line, sizeof(line)-1);
                 struct ctl_cmd cmd;
                 if (r > 0 && ctl_parse(line, &cmd) == 0) {
-                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; }
-                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; }
+                    if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; manual.progress = -1; comp.layers[manual_idx].active = 1; }
+                    else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; manual.spin = 0; manual.progress = -1; comp.layers[manual_idx].active = 1; }
+                    else if (cmd.kind == CTL_PROGRESS) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; manual.progress = cmd.value; comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_AUTO) { comp.layers[manual_idx].active = 0; }   /* resume screensaver/music */
                     else if (cmd.kind == CTL_SCENE) { music_set_scene(&music, cmd.value); }
-                    else if (cmd.kind == CTL_MUTE) avr_set_mute(cmd.rgb[0],cmd.rgb[1],cmd.rgb[2]);
-                    else if (cmd.kind == CTL_MTOGGLE) { muted = !muted; apply_mute_led(muted); screensaver_on_activity(&ss, now_s()); }
-                    else if (cmd.kind == CTL_SETMUTED) { muted = cmd.value; apply_mute_led(muted); screensaver_on_activity(&ss, now_s()); }
+                    else if (cmd.kind == CTL_MUTE) { mute_blink = 0; avr_set_mute(cmd.rgb[0],cmd.rgb[1],cmd.rgb[2]); }  /* explicit LED override wins */
+                    else if (cmd.kind == CTL_MTOGGLE) { muted = !muted; apply_mute_led(muted); if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; } screensaver_on_activity(&ss, now_s()); }
+                    else if (cmd.kind == CTL_SETMUTED) { muted = cmd.value; apply_mute_led(muted); if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; } screensaver_on_activity(&ss, now_s()); }
+                    else if (cmd.kind == CTL_MBLINK) {
+                        if (cmd.value) {
+                            mute_blink = 1; memcpy(mute_blink_rgb, cmd.rgb, sizeof(mute_blink_rgb));
+                            mute_blink_on = 0; mute_blink_next = 0.0;   /* fire immediately on the next tick */
+                        } else {
+                            mute_blink = 0; apply_mute_led(muted);      /* restore the real mute state */
+                        }
+                    }
                     else if (cmd.kind == CTL_VOL) {
                         double now = now_s();
                         volume = cmd.value;
@@ -265,7 +290,7 @@ int main(void) {
                          * (over the visualizer, over a blanked/idle screensaver), so
                          * picking a color always lights the ring. `auto` clears it. */
                         memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
-                        manual.breathe = 1; manual.spin = 0; comp.layers[manual_idx].active = 1;
+                        manual.breathe = 1; manual.spin = 0; manual.progress = -1; comp.layers[manual_idx].active = 1;
                     }
                     else if (cmd.kind == CTL_SPIN) {
                         /* setup-mode rotating dot (stock "starting up" visual):
@@ -274,7 +299,7 @@ int main(void) {
                          * (rev/s, 0 = default) lets setupd vary the rate per
                          * phase — slower while joining, faster on success. */
                         memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb));
-                        manual.breathe = 0; manual.spin = 1;
+                        manual.breathe = 0; manual.spin = 1; manual.progress = -1;
                         manual.spin_speed = cmd.speed;
                         comp.layers[manual_idx].active = 1;
                     }
@@ -291,6 +316,20 @@ int main(void) {
         }
 
         double now = now_s();
+
+        /* autonomous mute-LED blink ("update available"): a PERSISTENT indicator that
+         * survives everything on the ring (theme/colour change, music visualiser,
+         * screensaver — none of which touch the mute LED). It is only SUPPRESSED while
+         * the mute LED is needed for its real job (actual mute, or a volume overlay
+         * that borrows the LED) and resumes the moment that ends. Toggles every
+         * MUTE_BLINK_S; the deadline gate keeps AVR writes to ~2x/s. Only `mblink stop`
+         * (or an explicit `mute R G B` override) clears the flag. */
+        if (mute_blink && !muted && !reaction_overlay_active(&rx, now) && now >= mute_blink_next) {
+            mute_blink_on = !mute_blink_on;
+            if (mute_blink_on) avr_set_mute(mute_blink_rgb[0], mute_blink_rgb[1], mute_blink_rgb[2]);
+            else               avr_set_mute(0, 0, 0);
+            mute_blink_next = now + MUTE_BLINK_S;
+        }
 
         /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND.
          * Runs on every wake (cheap: copy + rate-limited segment hand-off) so the
@@ -377,7 +416,12 @@ int main(void) {
         }
 
         int cur_overlay = reaction_overlay_active(&rx, now);
-        if (prev_overlay && !cur_overlay) apply_mute_led(muted);  /* overlay timed out -> restore mute LED */
+        if (prev_overlay && !cur_overlay) {
+            /* overlay timed out -> hand the mute LED back: resume the update blink if
+             * one is pending (and we're not muted), else restore the steady mute state */
+            if (mute_blink && !muted) { mute_blink_next = 0; mute_blink_on = 0; }
+            else apply_mute_led(muted);
+        }
         prev_overlay = cur_overlay;
 
         struct frame f; comp_render(&comp, now, &f); frame_pack(&f, pk);

@@ -37,6 +37,21 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
         }
         return 0;
     }
+    /* progress <pct> [R G B] — a DETERMINATE ring bar: lights pct% of the 32-LED
+     * ring in the colour (default #0099CC blue), the rest a dim track. */
+    if (!strcmp(tok[0], "progress") && (n == 2 || n == 5)) {
+        char *e; long v = strtol(tok[1], &e, 10);
+        if (*e != 0 || v < 0 || v > 100) return -1;
+        out->kind = CTL_PROGRESS; out->value = (int)v;
+        if (n == 5) { if (rgb3(tok[2], tok[3], tok[4], out->rgb) != 0) return -1; }
+        else { out->rgb[0] = 0; out->rgb[1] = 153; out->rgb[2] = 204; }
+        return 0;
+    }
+    /* mblink R G B | mblink stop — autonomously BLINK the dedicated mute LED in the
+     * given colour (used for "software update available"), or stop and restore it to
+     * the current muted state. The daemon owns the on/off cadence. */
+    if (!strcmp(tok[0], "mblink") && n == 4) { out->kind = CTL_MBLINK; out->value = 1; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
+    if (!strcmp(tok[0], "mblink") && n == 2 && !strcmp(tok[1], "stop")) { out->kind = CTL_MBLINK; out->value = 0; return 0; }
     if (!strcmp(tok[0], "mute") && n == 4) { out->kind = CTL_MUTE; return rgb3(tok[1],tok[2],tok[3], out->rgb); }
     if (!strcmp(tok[0], "off") && n == 1)    { out->kind = CTL_OFF; return 0; }
     if (!strcmp(tok[0], "status") && n == 1) { out->kind = CTL_STATUS; return 0; }

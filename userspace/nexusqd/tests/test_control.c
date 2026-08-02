@@ -27,6 +27,17 @@ static void test_ok(void) {
           && c.rgb[1]==200 && c.speed == 1.5);
     CHECK(ctl_parse("spin 204 0 0 0.4", &c) == 0 && c.kind == CTL_SPIN
           && c.rgb[0]==204 && c.speed == 0.4);
+    /* progress <pct>: default colour #0099CC blue */
+    CHECK(ctl_parse("progress 0", &c) == 0 && c.kind == CTL_PROGRESS
+          && c.value == 0 && c.rgb[0]==0 && c.rgb[1]==153 && c.rgb[2]==204);
+    CHECK(ctl_parse("progress 100", &c) == 0 && c.kind == CTL_PROGRESS && c.value == 100);
+    /* progress <pct> R G B: explicit colour */
+    CHECK(ctl_parse("progress 50 10 20 30", &c) == 0 && c.kind == CTL_PROGRESS
+          && c.value == 50 && c.rgb[0]==10 && c.rgb[1]==20 && c.rgb[2]==30);
+    /* mblink R G B starts the mute-LED blink; mblink stop ends it */
+    CHECK(ctl_parse("mblink 255 140 0", &c) == 0 && c.kind == CTL_MBLINK
+          && c.value == 1 && c.rgb[0]==255 && c.rgb[1]==140 && c.rgb[2]==0);
+    CHECK(ctl_parse("mblink stop", &c) == 0 && c.kind == CTL_MBLINK && c.value == 0);
 }
 static void test_bad(void) {
     struct ctl_cmd c;
@@ -34,7 +45,11 @@ static void test_bad(void) {
                          "vol", "vol 101", "vol -1", "vol x", "vol 5 5", "mtoggle x",
                          "scene", "scene 5", "scene -1", "scene x",
                          "spin 0 153", "spin 0 153 204 x", "spin 0 153 204 0",
-                         "spin 0 153 204 -1", "spin 0 153 204 99", NULL};
+                         "spin 0 153 204 -1", "spin 0 153 204 99",
+                         "progress", "progress 101", "progress -1", "progress x",
+                         "progress 50 10 20", "progress 50 10 20 999",
+                         "mblink", "mblink 255 140", "mblink 255 140 999",
+                         "mblink go", "mblink stop now", NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }
