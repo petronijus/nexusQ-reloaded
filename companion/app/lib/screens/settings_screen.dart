@@ -440,9 +440,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
-            // --- app updates -------------------------------------------------
+            // --- Update cluster: App / Device / System -----------------------
             const SizedBox(height: 20),
-            _sectionTitle('App'),
+            _sectionTitle('Update'),
             Card(
               color: NexusQColors.surface,
               child: Column(
@@ -457,7 +457,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             : NexusQColors.dim),
                     title: Text(
                         _update != null
-                            ? 'Update available — v${_update!.version}'
+                            ? 'App update available — v${_update!.version}'
                             : 'App is up to date',
                         style: const TextStyle(color: NexusQColors.white)),
                     subtitle: Text(
@@ -531,9 +531,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
-            // --- Nexus Q system update ---------------------------------------
-            const SizedBox(height: 20),
-            _sectionTitle('Nexus Q'),
+            // Device (daemon) update — second item in the Update cluster
+            const SizedBox(height: 10),
             Card(
               color: NexusQColors.surface,
               child: Column(
@@ -619,9 +618,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
-            // --- System (kernel + all packages, apt-like) --------------------
-            const SizedBox(height: 20),
-            _sectionTitle('System'),
+            // System (kernel + all packages) — third item in the Update cluster
+            const SizedBox(height: 10),
             Card(
               color: NexusQColors.surface,
               child: Column(
