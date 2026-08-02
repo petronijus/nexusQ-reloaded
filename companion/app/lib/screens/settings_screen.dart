@@ -40,13 +40,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _downloadBytes = 0; // bytes received so far (shown when length unknown)
   String? _updateError;
 
-  // --- Nexus Q (device) system-update state ---
+  // --- Nexus Q (device) daemon-update state ---
   Map<String, dynamic>? _nexusCheck; // result of checkNexusUpdate
   bool _checkingNexus = false;
   bool _installingNexus = false;
   String? _nexusError;
 
   bool get _nexusUpdateAvailable => _nexusCheck?['updateAvailable'] == true;
+
+  // --- full-system (apt-like) update state; checked on demand (heavier) ---
+  Map<String, dynamic>? _systemCheck; // result of checkSystemUpdate
+  bool _checkingSystem = false;
+  bool _installingSystem = false;
+  String? _systemError;
+
+  bool get _systemUpdateAvailable => _systemCheck?['updateAvailable'] == true;
 
   @override
   void initState() {
@@ -189,6 +197,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ctrl = pkgs.firstWhere((p) => p['name'] == 'nexusq-control',
         orElse: () => {'installed': '?'});
     return 'Up to date (nexusq-control ${ctrl['installed']})';
+  }
+
+  // --- full-system update (checked on demand — apk version -l is heavier) ---
+  Future<void> _checkSystemUpdate() async {
+    if (_checkingSystem || _installingSystem) return;
+    setState(() {
+      _checkingSystem = true;
+      _systemError = null;
+    });
+    final r = await _call('checkSystemUpdate', null, false);
+    if (!mounted) return;
+    setState(() {
+      _checkingSystem = false;
+      _systemCheck = r;
+    });
+  }
+
+  Future<void> _installSystemUpdate() async {
+    if (_installingSystem) return;
+    setState(() {
+      _installingSystem = true;
+      _systemError = null;
+    });
+    // Like the daemon install, a full-system upgrade restarts the daemons — and
+    // may REBOOT the Q (base libc/init churn) — so the call's disconnect is
+    // expected, not a failure. Confirm by re-checking after the device settles
+    // (longer window: a reboot takes ~30-60 s).
+    await _call('installSystemUpdate', null, false);
+    if (!mounted) return;
+    await Future.delayed(const Duration(seconds: 12));
+    await _verifySystemInstall();
+  }
+
+  Future<void> _verifySystemInstall() async {
+    for (var attempt = 0; attempt < 8; attempt++) {
+      if (!mounted) return;
+      final r = await _call('checkSystemUpdate', null, false);
+      if (!mounted) return;
+      if (r != null) {
+        final stillPending = r['updateAvailable'] == true;
+        setState(() {
+          _installingSystem = false;
+          _systemCheck = r;
+          _systemError =
+              stillPending ? 'System update failed. Try again.' : null;
+        });
+        return;
+      }
+      await Future.delayed(const Duration(seconds: 5)); // device still rebooting
+    }
+    if (mounted) {
+      setState(() {
+        _installingSystem = false;
+        _systemError = 'Update sent — reopen Settings to confirm.';
+      });
+    }
+  }
+
+  String _systemStatusLine() {
+    final c = _systemCheck;
+    if (c == null) return 'Tap ⟳ to check the kernel + all system packages.';
+    final kernel = c['kernel'] ?? '?';
+    final pkgs = (c['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    if (_systemUpdateAvailable) {
+      return 'Kernel $kernel · ${pkgs.length} package'
+          '${pkgs.length == 1 ? '' : 's'} can be updated';
+    }
+    return 'Kernel $kernel · up to date';
   }
 
   @override
@@ -536,6 +612,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onPressed: _installNexusUpdate,
                           icon: const Icon(Icons.download, size: 18),
                           label: const Text('Install device update'),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // --- System (kernel + all packages, apt-like) --------------------
+            const SizedBox(height: 20),
+            _sectionTitle('System'),
+            Card(
+              color: NexusQColors.surface,
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(
+                        _installingSystem
+                            ? Icons.downloading
+                            : (_systemUpdateAvailable
+                                ? Icons.system_update_alt
+                                : Icons.dns),
+                        color: (_installingSystem || _systemUpdateAvailable)
+                            ? NexusQColors.accent
+                            : NexusQColors.dim),
+                    title: Text(
+                        _installingSystem
+                            ? 'Installing system update…'
+                            : (_systemUpdateAvailable
+                                ? 'System update available'
+                                : 'System software'),
+                        style: const TextStyle(color: NexusQColors.white)),
+                    subtitle: Text(_systemStatusLine(),
+                        style: const TextStyle(
+                            color: NexusQColors.dim, fontSize: 12)),
+                    trailing: (_checkingSystem || _installingSystem)
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : IconButton(
+                            icon: const Icon(Icons.refresh,
+                                color: NexusQColors.dim),
+                            tooltip: 'Check for system updates',
+                            onPressed: _checkSystemUpdate),
+                  ),
+                  if (_systemError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(_systemError!,
+                          style: const TextStyle(
+                              color: Colors.orangeAccent, fontSize: 12)),
+                    ),
+                  if (_installingSystem)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          ClipRRect(
+                            borderRadius: BorderRadius.all(Radius.circular(4)),
+                            child: LinearProgressIndicator(
+                              minHeight: 8,
+                              color: NexusQColors.accent,
+                              backgroundColor: NexusQColors.divider,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Upgrading all packages on the device. The Q may '
+                            'restart services or reboot to finish; the app '
+                            'reconnects when it is back.',
+                            style:
+                                TextStyle(color: NexusQColors.dim, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_systemUpdateAvailable)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _installSystemUpdate,
+                          icon: const Icon(Icons.download, size: 18),
+                          label: const Text('Update system'),
                         ),
                       ),
                     ),

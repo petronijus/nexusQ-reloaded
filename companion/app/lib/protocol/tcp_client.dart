@@ -129,6 +129,7 @@ class TcpClient implements NexusQClient {
     'scanNetworks', 'setWifi', 'finishSetup',
     // system OTA: apk update/upgrade over the network takes many seconds
     'checkNexusUpdate', 'installNexusUpdate',
+    'checkSystemUpdate', 'installSystemUpdate',
   };
 
   @override
