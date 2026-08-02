@@ -686,6 +686,96 @@ def install_nexus_update():
         raise Err("timeout", "apk upgrade did not respond")
 
 
+# --- full-system OTA (PROTOCOL §12b) --------------------------------------
+# The DEVICE track above upgrades only our four daemons. The SYSTEM track here is
+# the "apt upgrade" of the whole appliance: every package with a newer candidate
+# (base musl/systemd/python from the Alpine·pmOS mirrors + our config + daemons
+# from the OTA repo). The KERNEL (linux-google-steelhead) is never touched — no
+# repo the device reads offers a newer one, and applying a kernel is a
+# boot-partition flash (phase 2), not an apk upgrade. `apk version -l '<'` reports
+# what is upgradable; the running kernel is shown read-only.
+_KERNEL_PKG = "linux-google-steelhead"
+# Base packages whose upgrade only fully takes effect after a reboot (libc/init).
+_REBOOT_HINTS = ("musl", "systemd", "kmod", "eudev", "busybox", "openrc")
+
+
+def _uname_r():
+    try:
+        return subprocess.run(["uname", "-r"], capture_output=True, text=True,
+                              timeout=5).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _pkg_name(spec):
+    """Split an apk identifier 'name-1.2.3-r4' into just 'name'. Names may contain
+    hyphens; the version starts at the first '-' immediately followed by a digit."""
+    i = 0
+    while True:
+        j = spec.find("-", i)
+        if j < 0:
+            return spec
+        if j + 1 < len(spec) and spec[j + 1].isdigit():
+            return spec[:j]
+        i = j + 1
+
+
+def check_system_update():
+    """Refresh the index and report EVERY upgradable package (minus the kernel)
+    plus the running kernel version. Installs nothing."""
+    _ensure_ota_repo()
+    try:
+        _apk("update", timeout=60)
+        out = _apk("version", "-l", "<", timeout=60).stdout or ""
+        pkgs = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or "<" not in line or line.lower().startswith("installed"):
+                continue
+            left, _, right = line.partition("<")
+            lt, rt = left.split(), right.split()
+            if not lt or not rt:
+                continue
+            spec, newv = lt[0], rt[0]
+            name = _pkg_name(spec)
+            if name == _KERNEL_PKG:
+                continue  # kernel is flash-only (phase 2)
+            pkgs.append({"name": name, "installed": spec[len(name) + 1:],
+                         "available": newv})
+        return {"packages": pkgs, "updateAvailable": len(pkgs) > 0,
+                "kernel": _uname_r(), "repo": NEXUSQ_OTA_REPO}
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "apk did not respond")
+
+
+def install_system_update():
+    """`apk upgrade --available` across the whole system EXCEPT the kernel (which
+    is never offered over OTA). Returns which packages changed, which of our
+    daemons need a restart, and whether a reboot is advisable (base libc/init
+    churn)."""
+    _ensure_ota_repo()
+    try:
+        _apk("update", timeout=60)
+        r = _apk("upgrade", "--available", timeout=600)
+        if r.returncode != 0:
+            raise Err("unavailable",
+                      f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+        out = r.stdout or ""
+        changed = []
+        for line in out.splitlines():
+            line = line.strip()
+            for verb in ("Upgrading ", "Installing "):
+                if line.startswith("(") and verb in line:
+                    changed.append(line.split(verb, 1)[1].split()[0])
+        daemons = [p for p in ("nexusqd", "nexusq-btagent", "nexusq-setupd",
+                               "nexusq-control") if p in changed]
+        reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
+        return {"ok": True, "changed": changed, "daemons": daemons,
+                "rebootRecommended": reboot, "output": out.strip()[-500:]}
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "apk upgrade did not respond")
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -994,6 +1084,36 @@ class Bridge:
             finally:
                 _nexus_install_lock.release()
 
+        # --- full-system OTA (the "apt upgrade", PROTOCOL §12b) --------------
+        # Distinct from the daemon track above: checkSystemUpdate does NOT blink
+        # the mute LED (that stays the daemon-"available" indicator); it only feeds
+        # the app's System section. The install narrates on the RING (progress bar
+        # -> green) and may reboot if base libc/init churned.
+        if method == "checkSystemUpdate":
+            return check_system_update(), []
+        if method == "installSystemUpdate":
+            if not _nexus_install_lock.acquire(blocking=False):
+                raise Err("busy", "an update is already installing")
+            try:
+                nexusqd_send("mblink stop")
+                prog = _OtaProgress().start()
+                try:
+                    r = install_system_update()
+                except Err:
+                    prog.cancel()
+                    self._led_restore_theme()
+                    raise
+                prog.finish()
+                time.sleep(0.35)
+                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"),
+                                                 ["auto"]))
+                self._finish_system_update(r.get("daemons", []),
+                                           r.get("rebootRecommended", False),
+                                           theme_cmds)
+                return r, []
+            finally:
+                _nexus_install_lock.release()
+
         raise Err("unknown_method", method)
 
     def _led_restore_theme(self):
@@ -1024,6 +1144,45 @@ class Bridge:
             for c in theme_cmds:
                 nexusqd_send(c)           # back to the user's theme
             if "nexusq-control" in upgraded:
+                try:
+                    subprocess.run(
+                        ["systemctl", "--no-block", "restart", "nexusq-control"],
+                        capture_output=True, timeout=10)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _finish_system_update(self, daemons, reboot, theme_cmds):
+        """Off-thread tail of a full-system install: restart changed daemons, flash
+        the ring green, then either REBOOT (base libc/init churned — a reboot is
+        the clean way to apply it; also restarts the bridge, so the app reconnects
+        when the Q comes back) or restore the theme + restart the bridge if it was
+        among the upgraded ones."""
+        def _do():
+            time.sleep(0.4)
+            restarted_nexusqd = False
+            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
+                if svc in daemons:
+                    try:
+                        subprocess.run(["systemctl", "restart", svc],
+                                       capture_output=True, timeout=30)
+                        restarted_nexusqd = restarted_nexusqd or svc == "nexusqd"
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+            if restarted_nexusqd:
+                time.sleep(1.5)
+            nexusqd_send("set 0 255 0")   # green success
+            time.sleep(2.5)
+            for c in theme_cmds:
+                nexusqd_send(c)
+            if reboot:
+                try:
+                    subprocess.run(["systemctl", "reboot"],
+                                   capture_output=True, timeout=10)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                return
+            if "nexusq-control" in daemons:
                 try:
                     subprocess.run(
                         ["systemctl", "--no-block", "restart", "nexusq-control"],
