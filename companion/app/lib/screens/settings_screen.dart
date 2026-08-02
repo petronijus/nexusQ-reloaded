@@ -53,7 +53,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
-    _checkUpdate(); // silent auto-check on open
+    _checkUpdate(); // silent auto-check on open (app track)
+    _checkNexusUpdate(); // and the device track — else the section reads empty
+    // every time Settings is reopened until you tap Check again.
   }
 
   Future<void> _checkUpdate() async {
@@ -62,11 +64,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _checkingUpdate = true;
       _updateError = null;
     });
-    final rel = await AppUpdate.checkForUpdate();
+    // fetchLatest (not checkForUpdate) so a network/parse failure is DISTINCT from
+    // "up to date": returning null from checkForUpdate meant both, so a failed
+    // check silently read as up-to-date. Here null == fetch failed -> show it.
+    final rel = await AppUpdate.fetchLatest();
     if (!mounted) return;
     setState(() {
       _checkingUpdate = false;
-      _update = rel;
+      if (rel == null) {
+        _update = null;
+        _updateError = 'Update check failed — check your connection.';
+      } else if (rel.versionCode <= AppUpdate.currentVersionCode) {
+        _update = null; // genuinely up to date
+      } else {
+        _update = rel;
+      }
     });
   }
 

@@ -64,7 +64,15 @@ class AppUpdate {
   static Future<AppRelease?> fetchLatest() async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final req = await client.getUrl(Uri.parse(manifestUrl));
+      // Cache-bust: raw.githubusercontent is fronted by Fastly with max-age=300,
+      // so a freshly-pushed manifest can read as stale for up to 5 min — which
+      // made a just-published release show as "up to date". A per-request query
+      // param is a distinct cache key, and we also ask upstream not to serve a
+      // cached copy. An update CHECK must always see the real latest.
+      final bust = DateTime.now().millisecondsSinceEpoch;
+      final req = await client.getUrl(Uri.parse('$manifestUrl?t=$bust'));
+      req.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+      req.headers.set(HttpHeaders.pragmaHeader, 'no-cache');
       final resp = await req.close().timeout(const Duration(seconds: 15));
       if (resp.statusCode != 200) {
         AppLog.add('update', 'manifest HTTP ${resp.statusCode}', warn: true);
@@ -120,11 +128,27 @@ class AppUpdate {
       var received = 0;
       onProgress(total > 0 ? 0.0 : null, 0); // prime the bar (0 % or indeterminate)
       final sink = file.openWrite();
+      // THROTTLE: a 54 MB apk arrives in ~10 000 chunks; firing setState on every
+      // one pegs the UI thread rebuilding so the bar only ever paints once, at the
+      // end (looked like a static full bar). Emit only when the integer percent
+      // moves (≤101 updates), or every 256 KB when the length is unknown.
+      var lastPct = -1;
+      var lastReported = 0;
       await for (final chunk in resp) {
         received += chunk.length;
         sink.add(chunk);
-        onProgress(total > 0 ? received / total : null, received);
+        if (total > 0) {
+          final pct = received * 100 ~/ total;
+          if (pct != lastPct) {
+            lastPct = pct;
+            onProgress(received / total, received);
+          }
+        } else if (received - lastReported >= 262144) {
+          lastReported = received;
+          onProgress(null, received);
+        }
       }
+      onProgress(total > 0 ? 1.0 : null, received); // settle at 100 %
       await sink.close();
       AppLog.add('update', 'downloaded ${rel.version} ($received bytes)');
       return file.path;
