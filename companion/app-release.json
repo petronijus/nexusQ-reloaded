@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.9.5",
-  "versionCode": 24,
-  "notes": "Device update now shows in-app feedback while installing (Installing… title, what is upgrading, an activity bar, and a note that the Q restarts and the app reconnects) instead of a blank section.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.9.5/nexusq-companion-1.9.5.apk",
+  "version": "1.10.0",
+  "versionCode": 25,
+  "notes": "New System section: full-system (apt-like) device update — kernel version + apk upgrade --available across the appliance (except the kernel). Requires device software r21+.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.10.0/nexusq-companion-1.10.0.apk",
   "minAndroidSdk": 21
 }
