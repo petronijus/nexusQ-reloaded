@@ -6,23 +6,74 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Added — OTA device (daemon) updates: the Q updates its own software (`nexusq-control` r17, app 1.9.0+19)
+### Added — OTA device (daemon) updates: the Q updates its own software (`nexusq-control` r20, `nexusqd` r11, app 1.9.5)
 - **The Nexus Q updates its own daemons over the air** — no reflash. A signed apk
   repo on GitHub Pages (`gh-pages` → `petronijus.github.io/nexusQ-reloaded/nexusq`)
   hosts the device software (`nexusq-control`, `nexusqd`, `nexusq-btagent`,
   `nexusq-setupd`); the device already trusts the `pmos@local-6a42e957` build key
   (baked in `/etc/apk/keys`), so `apk` installs our signed packages straight from
-  it — no new key, no reflash. `nexusq-control` r17 adds `checkNexusUpdate`
+  it — no new key, no reflash. `nexusq-control` `checkNexusUpdate`
   (adds the repo, `apk update`, reports upgradable daemons) and `installNexusUpdate`
   (`apk upgrade` them, then restarts — nexusq-control restarts itself via
-  `--no-block`, the app reconnects). The companion app 1.9.0 gets a **"Nexus Q"**
+  `--no-block`, the app reconnects). The companion app gets a **"Nexus Q"**
   Settings section to check + install. Republish after a build with
-  `scripts/publish-ota-repo.sh`.
+  `scripts/publish-ota-repo.sh`. **PROTOCOL §12.**
+- ✅ **PROVEN END-TO-END on hardware (2026-08-02):** the reference Q was taken
+  **`nexusqd` r10 / `nexusq-control` r16 → r11 / r19** entirely via the app's update
+  button — no reflash, no adb, no ssh. The gh-pages repo currently serves
+  **nexusqd r11 + nexusq-control r19** (r20 pending a republish); images **v1.11.5**
+  and **v1.11.6** were baked (v1.11.6 = control r19 + the WiFi-watchdog fix), and
+  **v1.11.7** (control r20 + nexusqd r11) is building.
+- **LED narration + install lock (`nexusq-control` r20, `nexusqd` r11).** The LEDs
+  narrate the flow, and an update that merely *waits* is signalled **only on the mute
+  LED** — the ring stays on the user's theme. `checkNexusUpdate` blinks the **mute LED
+  amber** (`mblink 255 140 0`) when an update is available, else `mblink stop`.
+  `installNexusUpdate` clears the blink, shows a **determinate ring progress bar**
+  (`progress`) while `apk upgrade` runs, flashes the ring **green** on success, then
+  restores the theme; the changed daemons (incl. the bridge itself) restart
+  **off-thread so the ack ships first**. A **`_nexus_install_lock`** rejects a
+  concurrent install (`Err "busy"`) instead of racing a second `apk upgrade` — a flaky
+  link had the app resend the call, and the second upgrade got killed = `Terminated`.
+  Two new nexusqd LED primitives back this (r11): **`progress <pct> [R G B]`** (a
+  determinate 32-LED ring bar, default `#0099CC`, cleared by any other manual mode)
+  and **`mblink R G B | mblink stop`** (an autonomous blink of the dedicated mute LED,
+  daemon-owned 0.5 s cadence; a *persistent* "update available" indicator that
+  survives ring activity and is suppressed only while the mute LED does its real job —
+  actual mute or a volume overlay — resuming the moment that ends). Parser + range
+  tests added (`test_control.c`).
+- **Companion app 1.9.1 → 1.9.5** (own track; manifest `version 1.9.5` /
+  `versionCode 24`): download progress bar fixed in stages (handle a missing
+  `Content-Length` on GitHub's redirected asset → indeterminate + MB; **throttle** to
+  ~100 updates, was ~10 000 `setState`/download pegging the UI thread; and **explicit
+  colours** — dim track vs bright accent — since the Material-3 default track blended
+  with the blue fill so a partial bar read as one static strip). Update check now
+  **bypasses GitHub's CDN cache** (`no-cache` + `?t=`, was stale up to Fastly's 5 min);
+  a failed check **shows an error** instead of reading as "up to date"; Settings
+  **auto-checks the device track on open** (was only the app track). Device OTA **no
+  longer shows a false "failed"** — the install restarts the daemons (incl. the
+  bridge), so the call's disconnect is expected; success is confirmed by reconnecting
+  and re-checking the version — and the install now shows in-app feedback (Installing…
+  title, the upgrading package list, an activity bar, a reconnect note).
 - **Scope:** only the small daemons. `device-google-steelhead` is ~191 MB (it
   bundles the unpacked glibc-rt Roon base) — over GitHub's 100 MB file limit — so
   device-config OTA waits on splitting glibc-rt into its own package; the **kernel**
   stays a fastboot flash (fastboot-over-ssh). This is the "Nexus apps" track; full
-  "System" (kernel + base OS) OTA is the next phase.
+  "System" (kernel + base OS) OTA is the next phase. See
+  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
+
+### Fixed — WiFi watchdog now heals the associated-but-dead `nogw` wedge (`device` r61)
+- **Live-caught + healed 2026-08-02.** A new wedge shape: `wlan0` **associated** at
+  strong signal but NetworkManager stuck in *"getting IP configuration"* — DHCP got no
+  lease, so the interface has an IP but **no default route** and the LAN is unreachable
+  (the app just says "reconnecting"). `nexusq-wifi-watchdog` detects wedges by pinging
+  the **default gateway**, but with no route there **is** no gateway — so it hit the
+  `nogw` branch, which held **`fails=0`** and therefore **never healed this exact case,
+  the one it was built for.** Now an associated `nogw` **counts like a bad check**
+  (heal condition fires on `st = bad` *or* `st = nogw` once `fails ≥ FAILS_TO_HEAL`),
+  triggering the same `nmcli disconnect/connect wlan0` heal that re-runs DHCP and
+  restores the route; the health line carries `"fails"` for `nogw` too. Complements the
+  `brcmfmac roamoff=1` escan/roam fix — a different failure mode the watchdog now also
+  covers. See `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
 
 ### Added — OTA app updates (companion app 1.8.0+17)
 - **The companion app updates itself over the air** — no more `adb install`. On

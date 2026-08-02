@@ -105,6 +105,16 @@ blind to nexusqd's writes — see the bug note below).
 >   suspect the keepalive stopped (check `nexusqd` is up and the render loop is ticking)
 >   rather than a design blank. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
 
+> **The mute LED blinking amber is NOT a fault — it means "OTA update available".**
+> Since `nexusqd` **r11** / `nexusq-control` **r20** (device OTA, PROTOCOL §12) the
+> bridge drives two LED states that a sweep must not mis-read: the dedicated **mute
+> LED blinks amber** (`mblink 255 140 0`) when a daemon OTA is pending (a *persistent*
+> indicator, cleared only by installing or `mblink stop`), and the **ring shows a
+> determinate `progress` bar** (then a brief green `set 0 255 0`) **during an
+> install** — a transient, expected state, not a stuck frame. The install restarts the
+> daemons (incl. `nexusq-control`), so a **brief `nexusqd`/bridge restart right after
+> an OTA is expected**, not a `nexusqd_restart` fault.
+
 **Crashes / kernel** — new error lines in `dmesg`
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and
 `/sys/fs/pstore` (survives a *warm* reboot only).
@@ -118,6 +128,13 @@ auto-bounces `wlan0` after 3 failures, logging per-check health (loss %, signal)
 heal events to **`/var/log/nq-health/wifi-watchdog.jsonl`** (steady "ok" thinned to
 1 line/5 min, capped ~20 000 lines). Read it to confirm the fix holds (a 29 h clean
 run 2026-08-01 did); any `brcmf_escan_timeout` return or repeated heals = regression.
+Since **device r61** (2026-08-02) the watchdog also heals the **associated-but-no-route
+`nogw` wedge** — `wlan0` associated at good signal but NM stuck in "getting IP
+configuration" (DHCP got no lease → an IP but **no default route/gateway**, LAN
+unreachable). A `"st":"nogw"` line now carries `"fails"` and, once it reaches
+`FAILS_TO_HEAL`, triggers the same `nmcli disconnect/connect` heal (the pre-r61 code
+held `fails=0` in that branch and never healed it). Repeated `nogw` heals in the log =
+a DHCP/AP problem worth chasing.
 
 **Audio inputs** — four inputs mix into the default PulseAudio sink (TAS5713):
 Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON; Roon

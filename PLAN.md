@@ -3,6 +3,35 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-08-02 — ✅ DEVICE (DAEMON) OTA PROVEN END-TO-END + LED-narrated updates +
+> WiFi `nogw` heal.** The Nexus Q **updates its own software over the air, no
+> reflash** — a **signed apk repo on GitHub Pages** (`gh-pages`,
+> `petronijus.github.io/nexusQ-reloaded/nexusq`) hosts the four small daemons
+> (`nexusq-control`, `nexusqd`, `nexusq-btagent`, `nexusq-setupd`); the device already
+> trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs our
+> signed packages straight from it (no new key). `nexusq-control` **r20**
+> `checkNexusUpdate`/`installNexusUpdate` (PROTOCOL **§12**), driven from the app's
+> **Nexus Q** Settings section. **PROVEN LIVE** — took the reference Q `nexusqd` r10 /
+> control r16 **→ r11 / r19** from the app, no cable. **LED-narrated** (nexusqd
+> **r11**, two new primitives `progress`/`mblink`): the **mute LED blinks amber** =
+> "update available" while the ring stays on the user's theme; a **determinate ring
+> progress bar** while installing; a **green** flash on success. ⚠️ the install
+> restarts `nexusq-control` itself so **the app link drops — EXPECTED, not a failure**
+> (the app reconnects + re-checks the version). A `_nexus_install_lock` refuses a
+> concurrent install (`busy`) rather than racing a second `apk upgrade`. **Scope:**
+> daemons only — `device-google-steelhead` is ~191 MB (glibc-rt Roon base), over
+> GitHub's 100 MB limit → config OTA waits on a glibc-rt split; the **kernel** stays a
+> fastboot flash (the "System" track, next phase). **Companion app self-updates** on
+> its own track → **1.9.5** (`versionCode 24`; download-bar + CDN-cache + false-fail
+> fixes). Images **v1.11.5**/**v1.11.6** baked (v1.11.6 = control r19 + watchdog fix);
+> **v1.11.7** (control r20 + nexusqd r11) building; OTA repo serves r11/r19, r20
+> pending republish. **WiFi:** the watchdog now also heals the **associated-but-no-route
+> `nogw` wedge** (device **r61**, live-caught 2026-08-02) — NM stuck in "getting IP
+> configuration" leaves an IP but no default route/gateway; the old code held `fails=0`
+> in the `nogw` branch and **never healed the exact case it was built for**, now it
+> counts as a bad check and bounces `wlan0`. Full record:
+> `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
+>
 > **2026-08-02 — ✅ USB AUDIO INPUT (the Q as a toggleable USB DAC) + WiFi 5 GHz
 > RESOLVED; v1.11.0 tagged.** The Nexus Q has **no optical/HDMI/line audio INPUT** —
 > every port is an OUTPUT (DTS McASP0 = DIT/TX → `spdif-dit`; OMAP4 HDMI = DSS

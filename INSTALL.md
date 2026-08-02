@@ -29,9 +29,25 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
     `nexusq-v1.11.0.sha256`.
-  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** — are **not tagged/released**:
-    they add the WiFi watchdog + `roamoff=1` and **USB Audio input** (the Q as a
-    toggleable USB DAC, kernel r46 `#47`). Not part of this guide until tagged.)_
+  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.7** — are **not
+    tagged/released**: they add the WiFi watchdog (`roamoff=1` + the `nogw` heal),
+    **USB Audio input** (the Q as a toggleable USB DAC, kernel r46 `#47`), and
+    **device (daemon) OTA** (§1c). Not part of this guide until tagged.)_
+
+### 1c. Updating without a reflash (post-v1.11.0)
+
+A full reflash (the steps below) is only needed for a **kernel** change or a
+first install. Since the post-v1.11.0 dev line, the Q's own **daemons**
+(`nexusq-control` · `nexusqd` · `nexusq-btagent` · `nexusq-setupd`) **update
+themselves over the air** — no fastboot, no cable. A **signed apk repo on GitHub
+Pages** (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch) hosts
+them; the device already trusts the `pmos@local` build key baked in `/etc/apk/keys`,
+so `apk` installs our signed packages straight from it. Trigger it from the companion
+app's **Nexus Q** Settings section (Check / Install), which calls the bridge's
+`checkNexusUpdate`/`installNexusUpdate` (PROTOCOL §12); the ring shows a progress bar
+and the install restarts the daemons (the app link drops briefly and reconnects — that
+is expected). The **kernel** and the ~191 MB `device-google-steelhead` config package
+are **not** OTA'd — those still need the fastboot flash below.
 
 ## 1. Enter fastboot mode
 

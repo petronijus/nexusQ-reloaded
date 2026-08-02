@@ -135,6 +135,12 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   is steady "ok" with no heals (a 29 h clean run 2026-08-01 confirmed the fix). Any
   return of `brcmf_escan_timeout` in `dmesg`, or repeated watchdog heals, = a
   regression. The old "5 GHz TX degrades intermittently, open" verdict is **retired**.
+  🆕 **`nogw` heal (device r61, 2026-08-02):** the watchdog also heals a second wedge —
+  `wlan0` associated at good signal but NM stuck in "getting IP configuration" (DHCP got
+  no lease → an IP but **no default route/gateway**, LAN unreachable). A `"st":"nogw"`
+  line now carries `"fails"` and triggers the same `wlan0` bounce once it reaches the
+  heal threshold (pre-r61 it held `fails=0` and never healed the exact case it was built
+  for). Repeated `nogw` heals in the log = a DHCP/AP problem worth chasing.
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
   ✅ **task #17 FULLY CLOSED 2026-07-06 — enumerates from a cold boot on `#33`+
   (v1.6.8).** The old "enumeration intermittency" was NOT a race — it was an
@@ -432,6 +438,14 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   ring/AVR/nexusqd hang). Expect `led_static` info lines on idle captures;
   they are healthy. (Only a device running healthd ≤ r20 still shows the old
   idle false CRIT.)
+  ⚠️ **OTA LED states are NOT faults (nexusqd r11 / control r20, device OTA — PROTOCOL
+  §12).** The bridge drives two states a sweep must not mis-read: the **mute LED blinks
+  amber** (`mblink 255 140 0`) = a daemon OTA is available — a *persistent* indicator,
+  not a stuck/frozen frame; and the **ring shows a determinate `progress` bar** then a
+  brief green `set 0 255 0` **while installing** — transient + expected. The install
+  restarts the daemons (incl. `nexusq-control` and possibly `nexusqd`), so a **brief
+  nexusqd/bridge restart right after an OTA is expected**, not `nexusqd_restart`. See
+  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old

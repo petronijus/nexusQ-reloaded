@@ -4,7 +4,81 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-02 (latest): **USB Audio input (the Q as a toggleable USB DAC) · WiFi watchdog + 5 GHz TX RESOLVED · v1.11.0 tagged**
+## Session 2026-08-02 (latest): **Device (daemon) OTA proven end-to-end · LED-narrated updates (nexusqd r11 / control r20) · WiFi `nogw` heal (device r61) · app self-update 1.9.5**
+
+Full record: `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`. Base: post-v1.11.0
+dev line (device ran USB-audio dev build v1.11.3 → OTA'd live). Commits `46ad5ef`
+(nexusqd r11), `f8477e9` (control r20), `6cb6dc5` (watchdog r61).
+
+### Current device state
+- OTA repo (**gh-pages**, `petronijus.github.io/nexusQ-reloaded/nexusq`) currently
+  serves **`nexusqd` r11 + `nexusq-control` r19**; **r20 pending a republish**
+  (`scripts/publish-ota-repo.sh`). The reference Q was taken **r10/r16 → r11/r19 LIVE
+  via the app's OTA** — no reflash. Images **v1.11.5** + **v1.11.6** baked (v1.11.6 =
+  control r19 + the WiFi-watchdog fix); **v1.11.7** (control r20 + nexusqd r11) building.
+- Companion app at **1.9.5** (own track; `versionCode 24`).
+- Last public tag = **v1.11.0** (2026-07-31); the whole v1.11.x line is untagged.
+
+### 1. Device (daemon) OTA — the Q self-updates (PROVEN end-to-end)
+- **Signed apk repo on GitHub Pages** hosts the four small daemons (`nexusq-control`,
+  `nexusqd`, `nexusq-btagent`, `nexusq-setupd`); the device already trusts the
+  `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs our signed
+  packages straight from it — **no new key, no reflash**. `checkNexusUpdate` /
+  `installNexusUpdate` (`nexusq-control` r20). PROTOCOL **§12**.
+- **LED narration (nexusqd r11):** `checkNexusUpdate` blinks the **mute LED amber**
+  (`mblink 255 140 0`) = "update available" — the **ring stays on the user's theme**;
+  `installNexusUpdate` clears it, shows a **determinate ring `progress` bar** while
+  `apk upgrade` runs, flashes the ring **green** on success, restores the theme, and
+  restarts the changed daemons (incl. the bridge) **off-thread so the ack ships
+  first**. Two new nexusqd primitives back this: `progress <pct> [R G B]` +
+  `mblink R G B | mblink stop`.
+- ⚠️ **The install DROPS the app link — EXPECTED, not a failure.** The upgrade restarts
+  `nexusq-control` itself (last, `--no-block`); the app confirms success by
+  **reconnecting + re-checking the version** (no pending update == done), never by
+  reading the disconnect as an error.
+- **`_nexus_install_lock`** rejects a concurrent install (`Err "busy"`) — a flaky link
+  had the app resend the call, racing a second `apk upgrade` that got killed
+  (`Terminated`).
+- **Scope:** small daemons only. `device-google-steelhead` is ~191 MB (bundles the
+  glibc-rt Roon base) — over GitHub's 100 MB limit → config OTA waits on a glibc-rt
+  split; the **kernel** stays a fastboot flash (fastboot-over-ssh, the "System" track).
+
+### 2. Companion app self-update 1.9.1 → 1.9.5 (own track)
+- App-OTA **download progress bar** fixed in stages: handle a missing `Content-Length`
+  on GitHub's redirected asset (indeterminate + MB); **throttle** to ~100 updates (was
+  ~10 000 `setState`/download pegging the UI thread → only painted full at the end);
+  **explicit colours** (dim track vs bright accent) — the Material-3 default track
+  blended with the blue fill so a partial bar read as one static strip.
+- Update check **bypasses GitHub's CDN cache** (`no-cache` + `?t=`) — a freshly-pushed
+  manifest read stale up to Fastly's 5 min. A failed check **shows an error** (not
+  "up to date"). Settings **auto-checks the device track on open** (was only the app
+  track). Device OTA **no longer shows a false "failed"** (the disconnect is expected;
+  reconnect + re-check confirms) and shows in-app install feedback. Manifest
+  `companion/app-release.json` = `1.9.5` / `versionCode 24`.
+
+### 3. WiFi watchdog `nogw` heal (device r61) — live-caught + healed
+- A new wedge shape: `wlan0` **associated** at strong signal but NM stuck in "getting
+  IP configuration" — DHCP got no lease, so the iface has an IP but **no default
+  route**, LAN unreachable (app just "reconnecting"). The watchdog detects wedges by
+  pinging the **default gateway**; with no route there IS no gateway, so it hit the
+  `nogw` branch which held **`fails=0`** and **never healed this exact case, the one it
+  was built for**. Now an associated `nogw` **counts as a bad check** (heal fires on
+  `bad` *or* `nogw`), triggering the same `nmcli disconnect/connect wlan0` heal
+  (re-runs DHCP, restores the route). Complements `brcmfmac roamoff=1`.
+
+### WHERE TO CONTINUE (2026-08-02 OTA → next)
+1. **Republish the OTA repo** with `nexusq-control` r20 + confirm the app picks it up
+   (repo currently serves r19). Then a full diag sweep on a flashed v1.11.7.
+2. Tag the v1.11.x dev line **when the user approves** (never tag unasked).
+3. **"System" (kernel + base OS) OTA** is the next phase — blocked on splitting the
+   glibc-rt Roon base out of `device-google-steelhead` (the 100 MB file limit); the
+   kernel stays a fastboot flash.
+4. The standing open lists below still stand (thermal watch, `NEXUSQ_NO_WIFI=1` flag,
+   pairing flake, contactless-payment link, AirPlay MPRIS metadata, Tidal).
+
+---
+
+## Session 2026-08-02: **USB Audio input (the Q as a toggleable USB DAC) · WiFi watchdog + 5 GHz TX RESOLVED · v1.11.0 tagged**
 
 Full record: `docs/2026-08-02-usb-audio-input.md`. Base: v1.11.0 (tagged 2026-07-31).
 

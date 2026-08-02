@@ -108,6 +108,14 @@ Findings are tagged by `kind`; interpret them like this:
   unnecessary.) Confirm on device with `python3 -S -c ''; echo rc=$?` — rc 139 = a
   pre-v1.6.0 corrupt python is flashed (needs a v1.6.0 all-RAW image), rc 0 = fixed. See
   `docs/2026-06-28-session-findings.md`.
+  ⚠️ **OTA LED states are NOT faults (nexusqd r11 / control r20, device OTA — PROTOCOL
+  §12, 2026-08-02).** During/after a daemon OTA the bridge drives: the **mute LED
+  blinks amber** (`mblink 255 140 0`) = "update available" (a persistent indicator, not
+  a stuck frame), and the **ring shows a determinate `progress` bar** then a brief green
+  `set 0 255 0` while installing (transient, expected). The install restarts the daemons
+  (incl. `nexusq-control`/`nexusqd`), so a **brief nexusqd/bridge restart just after an
+  OTA is expected**, not a `nexusqd_restart` fault. See
+  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
   ⚠️ **`ls_active`/`ls_restarts` are UNTRUSTWORTHY in captures from device

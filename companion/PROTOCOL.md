@@ -112,6 +112,11 @@ switched off for `spdif`/`hdmi`.
 | `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
 | `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` — a software scalar applied in nexusqd |
 
+> nexusqd's LED-command vocabulary (over `/run/nexusqd.sock`) also carries the OTA
+> primitives **`progress <pct> [R G B]`** (a determinate ring bar) and
+> **`mblink R G B | mblink stop`** (an autonomous mute-LED blink) — driven by the
+> bridge during a system update, see **§12.3**. They are not app-facing methods.
+
 ### Now-playing  (→ librespot `--onevent`, see §6)
 | Method | params | result | Event |
 |---|---|---|---|
@@ -657,3 +662,73 @@ The control bridge runs as root and reaches the uid-10000 manager via
 `systemctl --machine=user@.host --user` (linger keeps that manager up — §10.1).
 Toggling a service that is mid-playback stops it (expected — turning it off means
 off); a Roon zone re-announces and reconnects when switched back on.
+
+## 12. System OTA — the Q updates its own daemons — v1.11.x (dev)
+
+The Nexus Q **updates its own software over the air**, no reflash, no adb, no ssh.
+This is the **"Nexus apps" track**: only the four small daemons — `nexusq-control`,
+`nexusqd`, `nexusq-btagent`, `nexusq-setupd` (`OTA_PACKAGES`). The full **"System"**
+track (kernel + base OS) is a separate, later phase.
+
+> ✅ **Proven end-to-end on hardware 2026-08-02** — the reference Q was taken
+> `nexusqd` r10 / `nexusq-control` r16 → r11 / r19 entirely from the app's *Nexus Q*
+> Settings section. Record: `../docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
+
+### 12.1 Trust model — the signed apk repo (no new key)
+
+A signed **apk repository on GitHub Pages** hosts the device packages:
+`https://petronijus.github.io/nexusQ-reloaded/nexusq` (the `gh-pages` branch,
+republished after a build with `scripts/publish-ota-repo.sh`). The device **already
+trusts the `pmos@local` build key** (baked in `/etc/apk/keys` at image build), which
+signs every one of our packages — so `apk` installs them straight from the repo with
+**no new key and no reflash**. `nexusq-control` adds the repo to
+`/etc/apk/repositories` idempotently on first check.
+
+**Scope limit:** `device-google-steelhead` (~191 MB — it bundles the unpacked
+glibc-rt Roon base) is over GitHub's 100 MB file limit, so device-config OTA waits on
+splitting glibc-rt into its own package. The **kernel** stays a fastboot flash
+(fastboot-over-ssh, §—see INSTALL).
+
+### 12.2 Methods
+
+| Method | Params | Result |
+|---|---|---|
+| `checkNexusUpdate` | — | `{ packages: [{ name, installed, available, upgradable }], updateAvailable: bool, repo }` — `apk update` + `list --upgradable`/`--installed`; installs nothing |
+| `installNexusUpdate` | — | `{ ok: true, upgraded: [name], restarting: bool, output }` — `apk upgrade`s the daemons, animates the LEDs, then restarts the changed daemons (incl. this bridge) off-thread |
+
+`installNexusUpdate` is guarded by an **install lock**: a concurrent install is
+refused with error **`busy`** ("an update is already installing") rather than racing a
+second `apk upgrade`. (A flaky link had the app resend the call; with per-request
+threads that launched a second upgrade over the first, and the first got killed =
+`Terminated` when control restarted itself.) Other errors: `unavailable`
+(`apk upgrade` failed / cannot edit `/etc/apk/repositories`), `timeout` (apk did not
+respond).
+
+> **The install DROPS the app link — that is EXPECTED, not a failure.** The upgrade
+> restarts `nexusq-control` itself (last, via `systemctl --no-block`), so the TCP
+> connection closes mid-call. The client confirms success by **reconnecting and
+> re-checking the version** (`checkNexusUpdate` with no pending update == success),
+> never by treating the disconnect as an error.
+
+### 12.3 LED narration (→ nexusqd `progress` / `mblink`, see §4/§6)
+
+An update that merely **waits** is signalled **only on the dedicated mute LED** — the
+ring stays on the user's colour theme. The mute LED "software update available" blink
+is a **persistent** indicator (it survives a theme change or the music visualiser),
+suppressed only while the mute LED is doing its real job (an actual mute or a volume
+overlay) and resuming the moment that ends.
+
+| Phase | LED |
+|---|---|
+| Update available (`checkNexusUpdate`) | mute LED **blinks amber** — `mblink 255 140 0` (else `mblink stop` when nothing is pending) |
+| Installing (`installNexusUpdate`) | mute-LED blink cleared (`mblink stop`); the RING shows a **determinate progress bar** — `progress <pct>` in `#0099CC`, eased toward a soft cap while `apk upgrade` runs, snapped to 100 % on finish |
+| Success | ring flashes **green** (`set 0 255 0`), held ~2.5 s, then back to the theme |
+| Failure | ring restored straight to the theme; the mute LED is not re-lit |
+
+These use two nexusqd LED primitives (r11), also listed in the §4 LED-ring table:
+- **`progress <pct> [R G B]`** — a determinate ring bar: lights `pct`% of the 32-LED
+  ring in the colour (default `#0099CC`), the rest a dim track. A manual mode, cleared
+  by `set` / `off` / `breathe` / `spin` / `auto`.
+- **`mblink R G B | mblink stop`** — an autonomous blink of the **mute LED** in the
+  given colour; the daemon owns the on/off cadence. `mblink stop` clears it and
+  restores the mute LED to the current muted state.
