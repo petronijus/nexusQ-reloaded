@@ -19,6 +19,7 @@ echo ""
 echo "=== Phase 2: Validate APKBUILD structure ==="
 for apkbuild in \
     "$SRC/pmos/device-google-steelhead/APKBUILD" \
+    "$SRC/pmos/nexusq-glibc-rt/APKBUILD" \
     "$SRC/pmos/linux-google-steelhead/APKBUILD" \
     "$SRC/pmos/firmware-google-steelhead/APKBUILD" \
     "$SRC/pmos/nexusqd/APKBUILD" \
@@ -113,7 +114,7 @@ export PMB_CHANNELS_CFG="$PMAPORTS/channels.cfg"
 
 echo ""
 echo "=== Phase 6: Install device packages into pmaports ==="
-for pkg in device-google-steelhead linux-google-steelhead firmware-google-steelhead; do
+for pkg in device-google-steelhead nexusq-glibc-rt linux-google-steelhead firmware-google-steelhead; do
     target_dir="$PMAPORTS/device/testing/$pkg"
     mkdir -p "$target_dir"
     cp -r "$SRC/pmos/$pkg/"* "$target_dir/"
@@ -656,6 +657,8 @@ pmbootstrap checksum linux-google-steelhead 2>&1 || {
 }
 echo "Generating checksums for device package..."
 pmbootstrap checksum device-google-steelhead 2>&1 || true
+echo "Generating checksums for glibc-rt package..."
+pmbootstrap checksum nexusq-glibc-rt 2>&1 || true
 echo "Generating checksums for firmware package..."
 pmbootstrap checksum firmware-google-steelhead 2>&1 || true
 

@@ -1,0 +1,69 @@
+# Maintainer: Petr Parkan Janda <petronijus@bastla.com>
+# The Roon glibc sandbox BASE — a minimal Debian bookworm armhf glibc rootfs baked
+# under /opt/glibc-rt so RoonBridge (glibc/Mono, cannot run on musl — even gcompat
+# segfaults its Mono) runs inside a bubblewrap sandbox. See
+# docs/2026-07-17-roon-tidal-feasibility.md.
+#
+# SPLIT OUT of device-google-steelhead (2026-08-02) so the device CONFIG package
+# stays under GitHub Pages' 100 MB limit and is therefore OTA-upgradable. This
+# ~180 MB rootfs is a PINNED, STATIC base: it is versioned independently and does
+# NOT change between device releases, so it is intentionally NOT published to the
+# gh-pages OTA repo (it would not fit anyway) — it ships baked in the flashed
+# image, and `apk upgrade` leaves it untouched because no newer version is offered.
+# Only the BASE is baked here; the RoonBridge app self-updates (see roon-nexusq,
+# which stays in device-google-steelhead).
+pkgname=nexusq-glibc-rt
+pkgver=1.0
+pkgrel=0
+pkgdesc="Roon glibc sandbox base (Debian bookworm armhf rootfs at /opt/glibc-rt)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+license="MIT"
+arch="armv7"
+# !fhs: a foreign-libc rootfs under /opt, not FHS-participating host software.
+# !tracedeps: abuild's ELF dep tracer chokes on the glibc interpreter
+# ("ld-linux-armhf.so.3: path not found" — no Alpine package provides it); this
+# package ships no musl ELF of its own, so auto-tracing adds nothing.
+# !check/!archcheck: no tests; the payload is armhf glibc binaries by design.
+options="!check !archcheck !fhs !tracedeps"
+makedepends="xz"
+source="
+	nexusq-glibc-rt-bookworm-armhf.tar.xz::https://github.com/petronijus/nexusQ-reloaded/releases/download/glibc-rt-bookworm-armhf-1/nexusq-glibc-rt-bookworm-armhf.tar.xz
+	roon-asound.conf
+"
+
+package() {
+	# Unpack the pinned Debian bookworm armhf base (sha512 below) into /opt/glibc-rt.
+	install -dm755 "$pkgdir"/opt/glibc-rt
+	tar -xJf "$srcdir"/nexusq-glibc-rt-bookworm-armhf.tar.xz -C "$pkgdir"/opt/glibc-rt
+	# Empty placeholder so roon-nexusq can ro-bind the host's live /etc/resolv.conf
+	# over it at runtime (the base tarball deliberately omits a host-specific one).
+	: > "$pkgdir"/opt/glibc-rt/etc/resolv.conf
+	# Strip every suid/sgid bit from the Debian base (su/sudo/passwd/&c.): bubblewrap
+	# runs the sandbox nosuid in a userns, so the bits are dead weight on-device —
+	# and abuild (rightly) refuses to package suid root executables.
+	find "$pkgdir"/opt/glibc-rt -type f -perm /6000 -exec chmod ug-s {} +
+	# Default ALSA device inside the rootfs = pulse (Roon becomes a PA input).
+	install -Dm644 "$srcdir"/roon-asound.conf \
+		"$pkgdir"/opt/glibc-rt/etc/asound.conf
+	# The app dir must be writable by the appliance user (uid 10000) for both the
+	# first-run fetch and every later Roon self-update.
+	install -dm755 "$pkgdir"/opt/glibc-rt/opt
+	chown 10000:10000 "$pkgdir"/opt/glibc-rt/opt
+	# Roon's HOME inside the sandbox (state in $HOME/.RoonBridge). The unit runs as
+	# uid 10000; /root in the chroot is 0700 root-owned and NOT writable (measured),
+	# so give it its own uid-10000 home.
+	install -dm755 "$pkgdir"/opt/glibc-rt/home/roon
+	chown 10000:10000 "$pkgdir"/opt/glibc-rt/home/roon
+	# The base tarball excludes ./tmp (and the apt caches) — recreate them so the
+	# tree is a complete Debian root. A missing /tmp broke unprivileged bwrap (the
+	# --tmpfs /tmp mountpoint must pre-exist; uid 10000 can't mkdir it in a
+	# root-owned /).
+	install -dm1777 "$pkgdir"/opt/glibc-rt/tmp
+	install -dm755 "$pkgdir"/opt/glibc-rt/var/cache/apt/archives \
+		"$pkgdir"/opt/glibc-rt/var/lib/apt/lists
+}
+
+sha512sums="
+a53c1f7c4cd15e73de53873b9d845333013cc57457d0aa08d3b5d1c4624a67a26f7e94d9212a1ceaa6259e3aa868f6db0fccfa41d7c94c2f255e9da0ece2956f  nexusq-glibc-rt-bookworm-armhf.tar.xz
+a2da3623706c772b6e301303471db196ebc195261f4f95a75f95cddf3e07e0bf90ef1d73385904fdc0c9ac2f39d0d35995c86609aa24e96a534a8d1a23e708b4  roon-asound.conf
+"

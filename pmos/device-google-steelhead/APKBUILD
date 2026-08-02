@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=61
+pkgrel=62
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -36,6 +36,7 @@ depends="
 	librespot
 	shairport-sync
 	bubblewrap
+	nexusq-glibc-rt
 	pulseaudio
 	openssh-server
 	openssh-client
@@ -49,9 +50,7 @@ depends="
 	iproute2-minimal
 	tzdata
 "
-# xz: abuild unpacks the sha512-pinned glibc-rt .tar.xz (Roon base) at build
-# time — GNU tar shells out to the xz binary, absent from the bare buildroot.
-makedepends="devicepkg-dev xz"
+makedepends="devicepkg-dev"
 install="$pkgname.post-install"
 # apk trigger: patch pulseaudio's tas5713 mixer path AFTER pulseaudio is unpacked
 # (.post-install runs too early — it fires before late-unpacked deps' files exist).
@@ -110,11 +109,9 @@ source="
 	roon.service
 	nexusq-uac2-in
 	nexusq-uac2-in.service
-	roon-asound.conf
 	snd-aloop-options.conf
 	user-rtprio.conf
 	62_roon.nft
-	nexusq-glibc-rt-bookworm-armhf.tar.xz::https://github.com/petronijus/nexusQ-reloaded/releases/download/glibc-rt-bookworm-armhf-1/nexusq-glibc-rt-bookworm-armhf.tar.xz
 	60_spotify.nft
 	55_nexusq-control.nft
 	asound.conf
@@ -441,41 +438,11 @@ package() {
 		"$pkgdir"/etc/systemd/system/nexusq-resize-rootfs.service
 
 	# --- Roon Bridge (glibc/Mono in a bwrap sandbox) ------------------------
-	# Roon can't run on musl (even gcompat segfaults its Mono), so it runs inside
-	# a baked minimal Debian bookworm armhf glibc rootfs. Proven on-device, see
-	# docs/2026-07-17-roon-tidal-feasibility.md. Only the BASE is baked; the
-	# RoonBridge app is fetched on first use and self-updates (see roon-nexusq).
-	#
-	# Unpack the pinned base (sha512 below) into /opt/glibc-rt.
-	install -dm755 "$pkgdir"/opt/glibc-rt
-	tar -xJf "$srcdir"/nexusq-glibc-rt-bookworm-armhf.tar.xz -C "$pkgdir"/opt/glibc-rt
-	# Empty placeholder so roon-nexusq can ro-bind the host's live /etc/resolv.conf
-	# over it at runtime (the base tarball deliberately omits a host-specific one).
-	: > "$pkgdir"/opt/glibc-rt/etc/resolv.conf
-	# Strip every suid/sgid bit from the Debian base (su/sudo/passwd/&c.):
-	# bubblewrap runs the sandbox nosuid in a userns, so the bits are dead
-	# weight on-device — and abuild (rightly) refuses to package suid root
-	# executables without the "suid" option, which we'd rather not grant.
-	find "$pkgdir"/opt/glibc-rt -type f -perm /6000 -exec chmod ug-s {} +
-	# Default ALSA device inside the rootfs = pulse (Roon becomes a PA input).
-	install -Dm644 "$srcdir"/roon-asound.conf \
-		"$pkgdir"/opt/glibc-rt/etc/asound.conf
-	# The app dir must be writable by the appliance user (uid 10000) for both the
-	# first-run fetch and every later Roon self-update.
-	install -dm755 "$pkgdir"/opt/glibc-rt/opt
-	chown 10000:10000 "$pkgdir"/opt/glibc-rt/opt
-	# Roon's HOME inside the sandbox (state in $HOME/.RoonBridge). The unit runs
-	# as uid 10000; /root in the chroot is 0700 root-owned and NOT writable
-	# (measured), so give it its own uid-10000 home.
-	install -dm755 "$pkgdir"/opt/glibc-rt/home/roon
-	chown 10000:10000 "$pkgdir"/opt/glibc-rt/home/roon
-	# The base tarball excludes ./tmp (and the apt caches) — recreate them so the
-	# tree is a complete Debian root. A missing /tmp broke unprivileged bwrap
-	# ("Can't mkdir /tmp: Permission denied", hit live 2026-07-17): the mountpoint
-	# for --tmpfs /tmp must pre-exist, uid 10000 can't create it in a root-owned /.
-	install -dm1777 "$pkgdir"/opt/glibc-rt/tmp
-	install -dm755 "$pkgdir"/opt/glibc-rt/var/cache/apt/archives \
-		"$pkgdir"/opt/glibc-rt/var/lib/apt/lists
+	# The glibc sandbox BASE (the ~180 MB Debian bookworm armhf rootfs at
+	# /opt/glibc-rt) is now its OWN package — nexusq-glibc-rt (see depends= above),
+	# split out 2026-08-02 so THIS config package stays under GitHub Pages' 100 MB
+	# OTA limit. What stays here is the Roon launcher + user unit + the
+	# always-optional audio wiring below; the base arrives via the dependency.
 	# Launcher + USER unit. NO default.target.wants symlink and NO preset entry:
 	# Roon is OFF by default (resource policy) and enabled on demand
 	# (`systemctl --user enable --now roon`), later via the app's service toggle.
@@ -600,11 +567,9 @@ SKIP  roon-nexusq
 SKIP  roon.service
 SKIP  nexusq-uac2-in
 SKIP  nexusq-uac2-in.service
-SKIP  roon-asound.conf
 SKIP  snd-aloop-options.conf
 SKIP  user-rtprio.conf
 SKIP  62_roon.nft
-a53c1f7c4cd15e73de53873b9d845333013cc57457d0aa08d3b5d1c4624a67a26f7e94d9212a1ceaa6259e3aa868f6db0fccfa41d7c94c2f255e9da0ece2956f  nexusq-glibc-rt-bookworm-armhf.tar.xz
 SKIP  60_spotify.nft
 SKIP  55_nexusq-control.nft
 SKIP  asound.conf

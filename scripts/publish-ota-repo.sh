@@ -12,15 +12,23 @@
 # Run it AFTER a build that bumped any of the OTA packages. `apk upgrade` on the
 # device (or the app's "Nexus Q" update) then pulls the new versions.
 #
-# ONLY the small daemons are shipped here: device-google-steelhead is ~191 MB (it
-# bundles the unpacked glibc-rt Roon base) — over GitHub's 100 MB file limit — so
-# its config OTA waits on a glibc-rt split; the kernel stays a fastboot flash.
+# The daemons + the device config now fit: the ~180 MB glibc-rt Roon base was
+# split into its own package (nexusq-glibc-rt, 2026-08-02), so device-google-
+# steelhead dropped under GitHub's 100 MB limit and its config is OTA-shippable.
+# nexusq-glibc-rt (still big, static) and the kernel stay flash-only.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VOL=nexusq-workdir
 KEY=pmos@local-6a42e957
-OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd)
+# The four daemons + the device CONFIG package (device-google-steelhead) and its
+# firmware subpackage — all now under GitHub's 100 MB limit after the glibc-rt
+# split (2026-08-02). This is what the app's SYSTEM update pulls (the base
+# packages come from the Alpine/pmOS mirrors; the ~180 MB nexusq-glibc-rt base and
+# the kernel are deliberately NOT here — flash-only). A size guard below refuses
+# to publish anything ≥99 MB so a mistaken big apk can never break the push.
+OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd \
+              device-google-steelhead device-google-steelhead-nonfree-firmware)
 
 STAGE="$(mktemp -d)"
 trap 'sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
@@ -36,7 +44,13 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
   mkdir -p /out/nexusq/armv7; cd /out/nexusq/armv7
   for pkg in '"${OTA_PACKAGES[*]}"'; do
     f=$(ls -1 $REPO/${pkg}-[0-9]*.apk 2>/dev/null | sort -V | tail -1)
-    [ -n "$f" ] && cp "$f" . && echo "  + $(basename "$f")"
+    [ -n "$f" ] || continue
+    sz=$(stat -c%s "$f")
+    if [ "$sz" -ge 103809024 ]; then
+      echo "  !! SKIP $(basename "$f") — ${sz} bytes >= 99 MB (GitHub limit); NOT publishing" >&2
+      continue
+    fi
+    cp "$f" . && echo "  + $(basename "$f") ($((sz/1024/1024)) MB)"
   done
   apk index --rewrite-arch armv7 -o APKINDEX.tar.gz *.apk >/dev/null 2>&1
   abuild-sign -k $HOME/.abuild/'"$KEY"'.rsa APKINDEX.tar.gz
