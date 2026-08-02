@@ -124,8 +124,8 @@ the watchdog now also covers.
 
 ## State summary
 
-- OTA repo (gh-pages): **nexusqd r11 + nexusq-control r19** live; **r20 pending
-  republish**.
+- OTA repo (gh-pages): **nexusqd r11 + nexusq-control r20** live; the device was
+  upgraded r19 → r20 via the app (verified the in-app install feedback).
 - Baked images this session: **v1.11.5**, **v1.11.6** (control r19 + watchdog fix);
   **v1.11.7** (control r20 + nexusqd r11) building.
 - App track: **1.9.5** (versionCode 24).

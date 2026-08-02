@@ -24,8 +24,8 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > fastboot flash (the "System" track, next phase). **Companion app self-updates** on
 > its own track → **1.9.5** (`versionCode 24`; download-bar + CDN-cache + false-fail
 > fixes). Images **v1.11.5**/**v1.11.6** baked (v1.11.6 = control r19 + watchdog fix);
-> **v1.11.7** (control r20 + nexusqd r11) building; OTA repo serves r11/r19, r20
-> pending republish. **WiFi:** the watchdog now also heals the **associated-but-no-route
+> **v1.11.7** (control r20 + nexusqd r11) baked; OTA repo serves **r11/r20** (live,
+> device upgraded to r20 via the app). **WiFi:** the watchdog now also heals the **associated-but-no-route
 > `nogw` wedge** (device **r61**, live-caught 2026-08-02) — NM stuck in "getting IP
 > configuration" leaves an IP but no default route/gateway; the old code held `fails=0`
 > in the `nogw` branch and **never healed the exact case it was built for**, now it

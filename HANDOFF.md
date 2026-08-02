@@ -11,10 +11,11 @@ dev line (device ran USB-audio dev build v1.11.3 → OTA'd live). Commits `46ad5
 (nexusqd r11), `f8477e9` (control r20), `6cb6dc5` (watchdog r61).
 
 ### Current device state
-- OTA repo (**gh-pages**, `petronijus.github.io/nexusQ-reloaded/nexusq`) currently
-  serves **`nexusqd` r11 + `nexusq-control` r19**; **r20 pending a republish**
-  (`scripts/publish-ota-repo.sh`). The reference Q was taken **r10/r16 → r11/r19 LIVE
-  via the app's OTA** — no reflash. Images **v1.11.5** + **v1.11.6** baked (v1.11.6 =
+- OTA repo (**gh-pages**, `petronijus.github.io/nexusQ-reloaded/nexusq`) now
+  serves **`nexusqd` r11 + `nexusq-control` r20** (published via
+  `scripts/publish-ota-repo.sh`). The reference Q was taken **r10/r16 → r11/r19 →
+  r20 LIVE via the app's OTA** — no reflash — and the r19→r20 step verified the
+  in-app install feedback. Images **v1.11.5** + **v1.11.6** baked (v1.11.6 =
   control r19 + the WiFi-watchdog fix); **v1.11.7** (control r20 + nexusqd r11) building.
 - Companion app at **1.9.5** (own track; `versionCode 24`).
 - Last public tag = **v1.11.0** (2026-07-31); the whole v1.11.x line is untagged.
@@ -67,8 +68,8 @@ dev line (device ran USB-audio dev build v1.11.3 → OTA'd live). Commits `46ad5
   (re-runs DHCP, restores the route). Complements `brcmfmac roamoff=1`.
 
 ### WHERE TO CONTINUE (2026-08-02 OTA → next)
-1. **Republish the OTA repo** with `nexusq-control` r20 + confirm the app picks it up
-   (repo currently serves r19). Then a full diag sweep on a flashed v1.11.7.
+1. **Done: OTA repo republished with `nexusq-control` r20**; the app picked it up
+   and the device is on r20. Next: a full diag sweep on a flashed **v1.11.7**.
 2. Tag the v1.11.x dev line **when the user approves** (never tag unasked).
 3. **"System" (kernel + base OS) OTA** is the next phase — blocked on splitting the
    glibc-rt Roon base out of `device-google-steelhead` (the 100 MB file limit); the

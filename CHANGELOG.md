@@ -20,10 +20,11 @@ All notable changes to Nexus Q Reloaded. Format follows
   `scripts/publish-ota-repo.sh`. **PROTOCOL §12.**
 - ✅ **PROVEN END-TO-END on hardware (2026-08-02):** the reference Q was taken
   **`nexusqd` r10 / `nexusq-control` r16 → r11 / r19** entirely via the app's update
-  button — no reflash, no adb, no ssh. The gh-pages repo currently serves
-  **nexusqd r11 + nexusq-control r19** (r20 pending a republish); images **v1.11.5**
-  and **v1.11.6** were baked (v1.11.6 = control r19 + the WiFi-watchdog fix), and
-  **v1.11.7** (control r20 + nexusqd r11) is building.
+  button — no reflash, no adb, no ssh. The gh-pages repo now serves
+  **nexusqd r11 + nexusq-control r20**; the reference Q was then taken **r19 → r20
+  live via the app** too, which verified the in-app install feedback (Installing…
+  title + package list + activity bar). Images **v1.11.5**/**v1.11.6**/**v1.11.7**
+  baked (v1.11.6 = control r19 + WiFi-watchdog fix; v1.11.7 = control r20).
 - **LED narration + install lock (`nexusq-control` r20, `nexusqd` r11).** The LEDs
   narrate the flow, and an update that merely *waits* is signalled **only on the mute
   LED** — the ring stays on the user's theme. `checkNexusUpdate` blinks the **mute LED
