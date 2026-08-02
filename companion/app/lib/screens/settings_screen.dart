@@ -130,23 +130,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _installNexusUpdate() async {
     if (_installingNexus) return;
     setState(() {
-      _installingNexus = true;
+      _installingNexus = true; // UI shows "Installing…" until verified
       _nexusError = null;
+      _nexusCheck = null;
     });
-    final r = await _call('installNexusUpdate', null, false);
+    // Installing upgrades the daemons and RESTARTS them — including the control
+    // bridge, which necessarily drops THIS connection. So a null/timeout from
+    // the call is EXPECTED, not a failure: the device may well have succeeded.
+    // We confirm the real outcome by reconnecting and re-checking the version,
+    // never by this call's return value (which used to be read as "failed").
+    await _call('installNexusUpdate', null, false);
     if (!mounted) return;
-    setState(() {
-      _installingNexus = false;
+    await Future.delayed(const Duration(seconds: 8)); // daemons restart + relink
+    await _verifyNexusInstall();
+  }
+
+  /// Confirm an install by re-checking the device: no update pending == success;
+  /// still pending after a few retries == genuinely failed. Retries because the
+  /// device may still be settling and the link still reconnecting.
+  Future<void> _verifyNexusInstall() async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (!mounted) return;
+      final r = await _call('checkNexusUpdate', null, false);
+      if (!mounted) return;
       if (r != null) {
-        _nexusCheck = null; // daemons restarting; re-check after it settles
-      } else {
-        _nexusError = 'Device update failed. Try again.';
+        final stillPending = r['updateAvailable'] == true;
+        setState(() {
+          _installingNexus = false;
+          _nexusCheck = r;
+          _nexusError =
+              stillPending ? 'Device update failed. Try again.' : null;
+        });
+        return;
       }
-    });
-    // nexusq-control restarts itself — the link drops and reconnects; re-check.
-    Future.delayed(const Duration(seconds: 8), () {
-      if (mounted) _checkNexusUpdate();
-    });
+      await Future.delayed(const Duration(seconds: 3)); // link not back yet, retry
+    }
+    // Couldn't reach the device after retries — inconclusive, not a hard failure.
+    if (mounted) {
+      setState(() {
+        _installingNexus = false;
+        _nexusError = 'Update sent — reopen Settings to confirm.';
+      });
+    }
   }
 
   String _nexusStatusLine() {
