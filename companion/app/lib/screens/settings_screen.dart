@@ -56,6 +56,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool get _systemUpdateAvailable => _systemCheck?['updateAvailable'] == true;
 
+  // The "App update" card merges the phone app AND the device daemons: ONE
+  // indicator, one button. It's "available" when EITHER the app or a device
+  // daemon has a newer build; the install does whichever is needed (device
+  // daemons first, then the app — the app install restarts the phone, so it goes
+  // last, onto an already-updated device).
+  bool get _companionUpdateAvailable => _update != null || _nexusUpdateAvailable;
+  bool get _companionBusy => _downloading || _installingNexus;
+
   @override
   void initState() {
     super.initState();
@@ -184,21 +192,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  String _nexusStatusLine() {
-    final pkgs =
-        (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    if (pkgs.isEmpty) return 'Tap ⟳ to check for device software updates.';
-    if (_nexusUpdateAvailable) {
-      final up = pkgs.where((p) => p['upgradable'] == true).map((p) =>
-          '${p['name']} → ${p['available']}');
-      return up.join(', ');
-    }
-    // up to date — show the installed control version as the anchor
-    final ctrl = pkgs.firstWhere((p) => p['name'] == 'nexusq-control',
-        orElse: () => {'installed': '?'});
-    return 'Up to date (nexusq-control ${ctrl['installed']})';
-  }
-
   // --- full-system update (checked on demand — apk version -l is heavier) ---
   Future<void> _checkSystemUpdate() async {
     if (_checkingSystem || _installingSystem) return;
@@ -265,6 +258,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
           '${pkgs.length == 1 ? '' : 's'} can be updated';
     }
     return 'Kernel $kernel · up to date';
+  }
+
+  // --- the merged "App update" (phone app + device daemons) ----------------
+  Future<void> _checkCompanion() async {
+    await Future.wait([_checkUpdate(), _checkNexusUpdate()]);
+  }
+
+  /// One "Update" action for the whole companion. Device daemons go FIRST (the
+  /// app drives that over the link, and installing the app restarts the phone),
+  /// then the phone app. Whichever side has no update is simply skipped.
+  Future<void> _installCompanion() async {
+    if (_companionBusy) return;
+    if (_nexusUpdateAvailable) {
+      await _installNexusUpdate(); // ring narration + verify-by-recheck
+    }
+    if (!mounted) return;
+    if (_update != null) {
+      await _installUpdate(); // download + hand to the OS installer (restarts app)
+    }
+  }
+
+  /// Merged release notes: the app's notes + which device daemons are upgrading.
+  String _companionStatusLine() {
+    final parts = <String>[];
+    if (_update != null) {
+      parts.add(_update!.notes.isNotEmpty
+          ? 'App v${_update!.version} — ${_update!.notes}'
+          : 'App v${_update!.version}');
+    }
+    if (_nexusUpdateAvailable) {
+      final pkgs =
+          (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final up = pkgs
+          .where((p) => p['upgradable'] == true)
+          .map((p) => '${p['name']} → ${p['available']}');
+      parts.add('Device software: ${up.join(', ')}');
+    }
+    if (parts.isNotEmpty) return parts.join('\n');
+    // up to date — anchor on both installed versions
+    final ctrl = ((_nexusCheck?['packages'] as List?)
+                ?.cast<Map<String, dynamic>>() ??
+            [])
+        .firstWhere((p) => p['name'] == 'nexusq-control',
+            orElse: () => {'installed': '?'});
+    return 'App v$kAppVersion · device nexusq-control ${ctrl['installed']}';
   }
 
   @override
@@ -449,24 +487,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _update != null
-                            ? Icons.system_update
-                            : Icons.check_circle_outline,
-                        color: _update != null
+                        _companionBusy
+                            ? Icons.downloading
+                            : (_companionUpdateAvailable
+                                ? Icons.system_update
+                                : Icons.check_circle_outline),
+                        color: (_companionUpdateAvailable || _companionBusy)
                             ? NexusQColors.accent
                             : NexusQColors.dim),
                     title: Text(
-                        _update != null
-                            ? 'App update available — v${_update!.version}'
-                            : 'App is up to date',
+                        _companionBusy
+                            ? 'Updating…'
+                            : (_companionUpdateAvailable
+                                ? 'App update available'
+                                : 'App is up to date'),
                         style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(
-                        _update != null && _update!.notes.isNotEmpty
-                            ? _update!.notes
-                            : 'Installed v$kAppVersion',
+                    subtitle: Text(_companionStatusLine(),
                         style: const TextStyle(
                             color: NexusQColors.dim, fontSize: 12)),
-                    trailing: _checkingUpdate
+                    trailing: (_checkingUpdate ||
+                            _checkingNexus ||
+                            _companionBusy)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -475,115 +516,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: const Icon(Icons.refresh,
                                 color: NexusQColors.dim),
                             tooltip: 'Check for updates',
-                            onPressed: _checkUpdate),
+                            onPressed: _checkCompanion),
                   ),
-                  if (_updateError != null)
+                  if (_updateError != null || _nexusError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_updateError!,
+                      child: Text(_updateError ?? _nexusError!,
                           style: const TextStyle(
                               color: Colors.orangeAccent, fontSize: 12)),
                     ),
-                  if (_update != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: !_downloading
-                          ? SizedBox(
-                              width: double.infinity,
-                              child: FilledButton.icon(
-                                onPressed: _installUpdate,
-                                icon: const Icon(Icons.download, size: 18),
-                                label: Text(
-                                    'Download & install v${_update!.version}'),
-                              ),
-                            )
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // value:null -> animated indeterminate bar (used
-                                // when the server sent no Content-Length).
-                                // EXPLICIT colours: the M3 default track colour is
-                                // close enough to the blue accent fill that a
-                                // half-filled bar read as one solid blue strip that
-                                // "never moved" even as the % text counted up. A
-                                // dim track vs the bright accent makes progress
-                                // unmistakable.
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: LinearProgressIndicator(
-                                    value: _downloadProgress,
-                                    minHeight: 8,
-                                    color: NexusQColors.accent,
-                                    backgroundColor: NexusQColors.divider,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                    _downloadProgress != null
-                                        ? 'Downloading… ${(_downloadProgress! * 100).round()}%'
-                                        : 'Downloading… ${(_downloadBytes / 1048576).toStringAsFixed(1)} MB',
-                                    style: const TextStyle(
-                                        color: NexusQColors.dim, fontSize: 11)),
-                              ],
-                            ),
-                    ),
-                ],
-              ),
-            ),
-
-            // Device (daemon) update — second item in the Update cluster
-            const SizedBox(height: 10),
-            Card(
-              color: NexusQColors.surface,
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: Icon(
-                        _installingNexus
-                            ? Icons.downloading
-                            : (_nexusUpdateAvailable
-                                ? Icons.system_update_alt
-                                : Icons.memory),
-                        color: (_installingNexus || _nexusUpdateAvailable)
-                            ? NexusQColors.accent
-                            : NexusQColors.dim),
-                    title: Text(
-                        _installingNexus
-                            ? 'Installing device update…'
-                            : (_nexusUpdateAvailable
-                                ? 'Device update available'
-                                : 'Device software'),
-                        style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(_nexusStatusLine(),
-                        style: const TextStyle(
-                            color: NexusQColors.dim, fontSize: 12)),
-                    trailing: (_checkingNexus || _installingNexus)
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : IconButton(
-                            icon: const Icon(Icons.refresh,
-                                color: NexusQColors.dim),
-                            tooltip: 'Check for device updates',
-                            onPressed: _checkNexusUpdate),
-                  ),
-                  if (_nexusError != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_nexusError!,
-                          style: const TextStyle(
-                              color: Colors.orangeAccent, fontSize: 12)),
-                    ),
+                  // Progress area — device daemons first (activity bar), then the
+                  // phone app download (determinate bar), then the Update button.
                   if (_installingNexus)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: const [
-                          // Indeterminate: apk reports no percentage, so the
-                          // determinate bar lives on the LED ring; here we just
-                          // show liveness. The subtitle lists what's installing.
                           ClipRRect(
                             borderRadius: BorderRadius.all(Radius.circular(4)),
                             child: LinearProgressIndicator(
@@ -594,23 +543,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           SizedBox(height: 6),
                           Text(
-                            'Installing on the device — the Q restarts its '
-                            'services and the app reconnects. This is normal.',
+                            'Updating the device — the Q restarts its services '
+                            'and the app reconnects. This is normal.',
                             style:
                                 TextStyle(color: NexusQColors.dim, fontSize: 11),
                           ),
                         ],
                       ),
                     )
-                  else if (_nexusUpdateAvailable)
+                  else if (_downloading)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Explicit colours: the M3 default track sits close to
+                          // the blue accent fill, so a partial bar read as one
+                          // solid blue strip that "never moved". Dim track vs
+                          // bright accent makes progress unmistakable.
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: _downloadProgress,
+                              minHeight: 8,
+                              color: NexusQColors.accent,
+                              backgroundColor: NexusQColors.divider,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                              _downloadProgress != null
+                                  ? 'Downloading app… ${(_downloadProgress! * 100).round()}%'
+                                  : 'Downloading app… ${(_downloadBytes / 1048576).toStringAsFixed(1)} MB',
+                              style: const TextStyle(
+                                  color: NexusQColors.dim, fontSize: 11)),
+                        ],
+                      ),
+                    )
+                  else if (_companionUpdateAvailable)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
-                          onPressed: _installNexusUpdate,
+                          onPressed: _installCompanion,
                           icon: const Icon(Icons.download, size: 18),
-                          label: const Text('Install device update'),
+                          label: const Text('Update'),
                         ),
                       ),
                     ),
