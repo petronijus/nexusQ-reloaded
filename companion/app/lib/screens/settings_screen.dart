@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:simple_icons/simple_icons.dart';
+import '../build_info.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
+import '../update/app_update.dart';
 import 'debug_log_screen.dart';
 import 'service_log_screen.dart';
 
@@ -30,11 +32,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _error;
   Timer? _poll;
 
+  // --- app update state ---
+  bool _checkingUpdate = false;
+  AppRelease? _update; // non-null = a newer app version is available
+  double? _downloadProgress; // non-null while downloading (0..1)
+  String? _updateError;
+
   @override
   void initState() {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+    _checkUpdate(); // silent auto-check on open
+  }
+
+  Future<void> _checkUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() {
+      _checkingUpdate = true;
+      _updateError = null;
+    });
+    final rel = await AppUpdate.checkForUpdate();
+    if (!mounted) return;
+    setState(() {
+      _checkingUpdate = false;
+      _update = rel;
+    });
+  }
+
+  Future<void> _installUpdate() async {
+    final rel = _update;
+    if (rel == null || _downloadProgress != null) return;
+    setState(() {
+      _downloadProgress = 0;
+      _updateError = null;
+    });
+    try {
+      final path = await AppUpdate.downloadApk(
+          rel, (p) => mounted ? setState(() => _downloadProgress = p) : null);
+      await AppUpdate.install(path); // OS installer takes over
+      if (mounted) setState(() => _downloadProgress = null);
+    } catch (e) {
+      AppLog.add('update', 'install failed: $e', warn: true);
+      if (mounted) {
+        setState(() {
+          _downloadProgress = null;
+          _updateError = 'Update failed. Try again.';
+        });
+      }
+    }
   }
 
   @override
@@ -207,6 +253,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Music keeps playing either way.',
                   style: TextStyle(color: NexusQColors.dim, fontSize: 12),
                 ),
+              ),
+            ),
+
+            // --- app updates -------------------------------------------------
+            const SizedBox(height: 20),
+            _sectionTitle('App'),
+            Card(
+              color: NexusQColors.surface,
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(
+                        _update != null
+                            ? Icons.system_update
+                            : Icons.check_circle_outline,
+                        color: _update != null
+                            ? NexusQColors.accent
+                            : NexusQColors.dim),
+                    title: Text(
+                        _update != null
+                            ? 'Update available — v${_update!.version}'
+                            : 'App is up to date',
+                        style: const TextStyle(color: NexusQColors.white)),
+                    subtitle: Text(
+                        _update != null && _update!.notes.isNotEmpty
+                            ? _update!.notes
+                            : 'Installed v$kAppVersion',
+                        style: const TextStyle(
+                            color: NexusQColors.dim, fontSize: 12)),
+                    trailing: _checkingUpdate
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : IconButton(
+                            icon: const Icon(Icons.refresh,
+                                color: NexusQColors.dim),
+                            tooltip: 'Check for updates',
+                            onPressed: _checkUpdate),
+                  ),
+                  if (_updateError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(_updateError!,
+                          style: const TextStyle(
+                              color: Colors.orangeAccent, fontSize: 12)),
+                    ),
+                  if (_update != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: _downloadProgress == null
+                          ? SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed: _installUpdate,
+                                icon: const Icon(Icons.download, size: 18),
+                                label: Text(
+                                    'Download & install v${_update!.version}'),
+                              ),
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                LinearProgressIndicator(
+                                    value: _downloadProgress),
+                                const SizedBox(height: 4),
+                                Text(
+                                    'Downloading… ${((_downloadProgress ?? 0) * 100).round()}%',
+                                    style: const TextStyle(
+                                        color: NexusQColors.dim, fontSize: 11)),
+                              ],
+                            ),
+                    ),
+                ],
               ),
             ),
 

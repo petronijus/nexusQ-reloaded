@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- OTA app updates: install the downloaded apk via the OS package installer
+         (the user still confirms). See lib/update/app_update.dart. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:label="nexusQ-reloaded"
         android:name="${applicationName}"

@@ -6,6 +6,18 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — OTA app updates (companion app 1.8.0+17)
+- **The companion app updates itself over the air** — no more `adb install`. On
+  the Settings screen it checks GitHub for a newer build (a small manifest
+  `companion/app-release.json` fetched from raw.githubusercontent, compared by
+  Android versionCode), shows "Update available — vX.Y.Z", and on tap downloads
+  the apk and hands it to the OS package installer (needs the new
+  `REQUEST_INSTALL_PACKAGES` permission; the user still confirms). Kept
+  dependency-light: the fetch + download use dart:io's HttpClient; only the final
+  install uses a plugin (`open_filex` + `path_provider`). The apk is published as
+  a GitHub release asset `app-vX.Y.Z`. This is the **app** update track — the
+  Nexus Q **system** update (apk-repo OTA) is a separate, follow-up track.
+
 ### Added — USB Audio input: the Q as a USB DAC (`linux` r46 · `device` r60 · `nexusq-control` r16 · app 1.7.0+16)
 - **The Nexus Q can now take audio IN over USB** — no soldering, no Bluetooth.
   Plug a computer or phone into the micro-USB and the Q enumerates as a **USB
