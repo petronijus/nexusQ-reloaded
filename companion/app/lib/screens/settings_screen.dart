@@ -423,9 +423,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 // value:null -> animated indeterminate bar (used
-                                // when the server sent no Content-Length)
-                                LinearProgressIndicator(
-                                    value: _downloadProgress),
+                                // when the server sent no Content-Length).
+                                // EXPLICIT colours: the M3 default track colour is
+                                // close enough to the blue accent fill that a
+                                // half-filled bar read as one solid blue strip that
+                                // "never moved" even as the % text counted up. A
+                                // dim track vs the bright accent makes progress
+                                // unmistakable.
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: _downloadProgress,
+                                    minHeight: 8,
+                                    color: NexusQColors.accent,
+                                    backgroundColor: NexusQColors.divider,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Text(
                                     _downloadProgress != null
