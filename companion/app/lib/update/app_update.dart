@@ -96,26 +96,34 @@ class AppUpdate {
     return rel;
   }
 
-  /// Download the apk to app storage, reporting 0..1 progress. Returns the file
-  /// path, or throws on failure (the caller shows the error).
+  /// Download the apk to app storage, reporting progress. The callback gets
+  /// `(fraction, receivedBytes)` — `fraction` is 0..1 when the server sent a
+  /// Content-Length, or `null` when it did NOT (GitHub release assets 302-redirect
+  /// to objects.githubusercontent.com and the final response often omits the
+  /// length, which is why the bar used to sit at 0 %). `receivedBytes` is always
+  /// live, so the UI can show an indeterminate bar with a running MB counter.
+  /// Returns the file path, or throws on failure (the caller shows the error).
   static Future<String> downloadApk(
-      AppRelease rel, void Function(double) onProgress) async {
+      AppRelease rel, void Function(double? fraction, int received) onProgress) async {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/nexusq-companion-${rel.version}.apk');
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     try {
       final req = await client.getUrl(Uri.parse(rel.apkUrl));
+      req.followRedirects = true; // github.com -> objects.githubusercontent.com
       final resp = await req.close();
       if (resp.statusCode != 200) {
         throw HttpException('download HTTP ${resp.statusCode}');
       }
-      final total = resp.contentLength;
+      final total = resp.contentLength; // -1 when unknown (redirected asset)
+      AppLog.add('update', 'download start: contentLength=$total');
       var received = 0;
+      onProgress(total > 0 ? 0.0 : null, 0); // prime the bar (0 % or indeterminate)
       final sink = file.openWrite();
       await for (final chunk in resp) {
         received += chunk.length;
         sink.add(chunk);
-        if (total > 0) onProgress(received / total);
+        onProgress(total > 0 ? received / total : null, received);
       }
       await sink.close();
       AppLog.add('update', 'downloaded ${rel.version} ($received bytes)');

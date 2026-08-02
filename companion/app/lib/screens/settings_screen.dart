@@ -35,7 +35,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // --- app update state ---
   bool _checkingUpdate = false;
   AppRelease? _update; // non-null = a newer app version is available
-  double? _downloadProgress; // non-null while downloading (0..1)
+  bool _downloading = false; // true for the whole download (gates the UI)
+  double? _downloadProgress; // 0..1 when length known; null = indeterminate
+  int _downloadBytes = 0; // bytes received so far (shown when length unknown)
   String? _updateError;
 
   // --- Nexus Q (device) system-update state ---
@@ -70,21 +72,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _installUpdate() async {
     final rel = _update;
-    if (rel == null || _downloadProgress != null) return;
+    if (rel == null || _downloading) return;
     setState(() {
+      _downloading = true;
       _downloadProgress = 0;
+      _downloadBytes = 0;
       _updateError = null;
     });
     try {
-      final path = await AppUpdate.downloadApk(
-          rel, (p) => mounted ? setState(() => _downloadProgress = p) : null);
+      final path = await AppUpdate.downloadApk(rel, (frac, received) {
+        if (mounted) {
+          setState(() {
+            _downloadProgress = frac;
+            _downloadBytes = received;
+          });
+        }
+      });
       await AppUpdate.install(path); // OS installer takes over
-      if (mounted) setState(() => _downloadProgress = null);
+      if (mounted) setState(() => _downloading = false);
     } catch (e) {
       AppLog.add('update', 'install failed: $e', warn: true);
       if (mounted) {
         setState(() {
-          _downloadProgress = null;
+          _downloading = false;
           _updateError = 'Update failed. Try again.';
         });
       }
@@ -362,7 +372,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (_update != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: _downloadProgress == null
+                      child: !_downloading
                           ? SizedBox(
                               width: double.infinity,
                               child: FilledButton.icon(
@@ -375,11 +385,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           : Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // value:null -> animated indeterminate bar (used
+                                // when the server sent no Content-Length)
                                 LinearProgressIndicator(
                                     value: _downloadProgress),
                                 const SizedBox(height: 4),
                                 Text(
-                                    'Downloading… ${((_downloadProgress ?? 0) * 100).round()}%',
+                                    _downloadProgress != null
+                                        ? 'Downloading… ${(_downloadProgress! * 100).round()}%'
+                                        : 'Downloading… ${(_downloadBytes / 1048576).toStringAsFixed(1)} MB',
                                     style: const TextStyle(
                                         color: NexusQColors.dim, fontSize: 11)),
                               ],
