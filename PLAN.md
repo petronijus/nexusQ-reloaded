@@ -3,6 +3,26 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-08-02 — ✅ FULL-SYSTEM OTA (Phase 1) + glibc-rt SPLIT + app Update-UX.** On top
+> of the daemon-OTA milestone below, the Q now upgrades its **whole system** over the air
+> — the "apt upgrade" of the appliance. `nexusq-control` (**r21→r25**)
+> `checkSystemUpdate`/`installSystemUpdate` (PROTOCOL **§12b**): `apk upgrade --available`
+> for **every** package (base musl/systemd/python from the Alpine·pmOS mirrors + our
+> config + daemons from the OTA repo) **MINUS the kernel** (no repo offers a newer one;
+> applying a kernel is a boot-partition flash = **Phase 2**, not done). It **reboots when
+> base libc/init churns** (musl/systemd/…) and narrates on the ring with the
+> **indeterminate spinner** (a slow/unknown-length upgrade froze the determinate bar at
+> its ~92 % cap). **Proven live** upgrading systemd **261.1 → 261.2**. Unblocked by the
+> **glibc-rt split**: the ~180 MB Roon glibc base moved out of `device-google-steelhead`
+> into a new standalone aport **`nexusq-glibc-rt`** (`1.0-r0`, flash-only) — the config
+> apk dropped **~191 MB → 58 KB** and is now OTA-shippable (device **r62**; `nexusq-glibc-rt`
+> + the kernel stay flash-only). ⚠️ adopting the split needs **one reflash** (a pre-split
+> device can't OTA config r62 without the flash-only glibc dep) — done via
+> fastboot-over-ssh (**v1.11.9**). **App Update-UX** (companion **1.10.0 → 1.11.0**): the
+> Settings **Update cluster is now two items — App update** (phone app + device daemons
+> merged into one, install order device-then-app) **and System** (kernel read-only + every
+> package). Full record: `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
+>
 > **2026-08-02 — ✅ DEVICE (DAEMON) OTA PROVEN END-TO-END + LED-narrated updates +
 > WiFi `nogw` heal.** The Nexus Q **updates its own software over the air, no
 > reflash** — a **signed apk repo on GitHub Pages** (`gh-pages`,

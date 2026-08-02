@@ -64,17 +64,25 @@ a mouse never connects TO us, so the Q must discover it and call `Pair()`). Plus
 on → the appliance is a computer. ⚠️ **Read `bonded`, never `paired` — `paired`
 alone LIES** (§9.2). Record:
 `../docs/2026-07-15-step2-bt-pairing-implemented.md`.)_
-_(**OTA self-update (post-v1.11.0 dev):** a **Nexus Q** Settings section updates BOTH
-tracks over the air. The **app** self-updates on its own track (checks a manifest on
-raw.githubusercontent, compares Android `versionCode`, downloads + installs the apk —
-now **1.9.5** / `versionCode 24`). The **device daemons** update via
-`checkNexusUpdate`/`installNexusUpdate` ([`PROTOCOL.md`](PROTOCOL.md) **§12**) against
-a **signed apk repo on GitHub Pages** the Q already trusts (`pmos@local` key in
-`/etc/apk/keys`) — no reflash. **Proven end-to-end live 2026-08-02** (took the Q
-`nexusqd` r10 / control r16 → r11 / r19 from the app). ⚠️ the device install restarts
-the control bridge, so the app link **drops — that is expected**; the app confirms
-success by reconnecting + re-checking the version, never by reading the disconnect as
-a failure. See `../docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+_(**OTA self-update (post-v1.11.0 dev):** the Settings **Update cluster** has **two
+items**. **App update** — the phone app **and** the four device daemons, versioned
+together as the companion system: the app checks a manifest on raw.githubusercontent
+(compares Android `versionCode`, downloads + installs the apk — now **1.11.0** /
+`versionCode 28`), the daemons update via `checkNexusUpdate`/`installNexusUpdate`
+([`PROTOCOL.md`](PROTOCOL.md) **§12a**, `nexusq-control` **r25**); one indicator + one
+button covers whichever side is newer, install order = **device daemons first, then the
+phone app** (installing the app restarts the phone). **System** — the whole-appliance
+*apt upgrade* (`checkSystemUpdate`/`installSystemUpdate`, **§12b**): `apk upgrade
+--available` for every package **minus the kernel**, reboot-aware. Both hit a **signed
+apk repo on GitHub Pages** the Q already trusts (`pmos@local` key in `/etc/apk/keys`) —
+no reflash. The **glibc-rt split** (`nexusq-glibc-rt`, `device-google-steelhead` r62)
+made the device config OTA-shippable (~191 MB → 58 KB). **Proven end-to-end live
+2026-08-02** (daemons `nexusqd` r10 / control r16 → r11 / r19 from the app; system OTA
+upgraded systemd 261.1→261.2). ⚠️ the device/system install restarts the control bridge
+(or reboots), so the app link **drops — that is expected**; the app confirms success by
+reconnecting + re-checking the version, never by reading the disconnect as a failure.
+See `../docs/2026-08-02-full-system-ota-and-glibc-rt-split.md` +
+`../docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

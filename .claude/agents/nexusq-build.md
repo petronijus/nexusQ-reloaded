@@ -290,6 +290,18 @@ Check and REPORT each (PASS/FAIL + evidence):
   nexusq-resize-rootfs.service` in the preset + `e2fsprogs` + `bubblewrap` deps.
   ⚠️ The `glibc-rt-…tar.xz` source is a GitHub **release asset** (125 MB fetch) —
   a build needs network + the asset present. See `docs/2026-07-17-roon-bring-up.md`.
+  ⚠️ **glibc-rt was SPLIT into its own aport 2026-08-02** (`pmos/nexusq-glibc-rt`,
+  `1.0-r0`, versioned independently): `/opt/glibc-rt` no longer ships inside
+  `device-google-steelhead` (now **r62**, a 58 KB apk — was ~191 MB) but arrives via a
+  `depends=nexusq-glibc-rt`. On the mounted rootfs `/opt/glibc-rt` looks identical
+  (owned by `nexusq-glibc-rt` in `lib/apk/db/installed`); `docker-build.sh` builds the
+  new aport as a device dependency (Phase 2 validate / Phase 6 copy / Phase 7b checksum),
+  kept OUT of the `--force` list so its 180 MB isn't re-unpacked each build.
+  `nexusq-glibc-rt` (~182 MB) + the kernel are **flash-only** (never in the OTA repo);
+  `publish-ota-repo.sh` ships the daemons + `device-google-steelhead` + its firmware
+  subpackage with a **size guard ≥ 99 MB → skip**. A pre-split device can't OTA the
+  config (needs the flash-only glibc dep) → **one reflash** to adopt. See
+  `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
 - **onboarding + BT-pairing stack (**v1.10.1**, released 2026-07-16 = device **r49** /
   nexusqd r10 / firmware r2 / setupd **r4** / **nexusq-btagent r4** /
   **nexusq-control r10** / kernel **r44** `#45`; bug-fix release over v1.10.0,

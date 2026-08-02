@@ -29,25 +29,39 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
     `nexusq-v1.11.0.sha256`.
-  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.7** — are **not
+  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9** — are **not
     tagged/released**: they add the WiFi watchdog (`roamoff=1` + the `nogw` heal),
-    **USB Audio input** (the Q as a toggleable USB DAC, kernel r46 `#47`), and
-    **device (daemon) OTA** (§1c). Not part of this guide until tagged.)_
+    **USB Audio input** (the Q as a toggleable USB DAC, kernel r46 `#47`),
+    **device (daemon) OTA** and **full-system OTA** + the **glibc-rt split** (§1c).
+    Not part of this guide until tagged.)_
 
 ### 1c. Updating without a reflash (post-v1.11.0)
 
 A full reflash (the steps below) is only needed for a **kernel** change or a
-first install. Since the post-v1.11.0 dev line, the Q's own **daemons**
-(`nexusq-control` · `nexusqd` · `nexusq-btagent` · `nexusq-setupd`) **update
-themselves over the air** — no fastboot, no cable. A **signed apk repo on GitHub
-Pages** (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch) hosts
-them; the device already trusts the `pmos@local` build key baked in `/etc/apk/keys`,
-so `apk` installs our signed packages straight from it. Trigger it from the companion
-app's **Nexus Q** Settings section (Check / Install), which calls the bridge's
-`checkNexusUpdate`/`installNexusUpdate` (PROTOCOL §12); the ring shows a progress bar
-and the install restarts the daemons (the app link drops briefly and reconnects — that
-is expected). The **kernel** and the ~191 MB `device-google-steelhead` config package
-are **not** OTA'd — those still need the fastboot flash below.
+first install. Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
+no fastboot, no cable — from a **signed apk repo on GitHub Pages**
+(`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch); the device
+already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs
+our signed packages straight from it. Two Settings items in the companion app:
+
+- **App update** — the phone app **and** the four device daemons (`nexusq-control` ·
+  `nexusqd` · `nexusq-btagent` · `nexusq-setupd`), versioned together. On the device
+  side this calls `checkNexusUpdate`/`installNexusUpdate` (PROTOCOL §12a); the ring shows
+  a progress bar and the install restarts the daemons (the app link drops briefly and
+  reconnects — that is **expected**).
+- **System** — the whole-appliance *apt upgrade* (`checkSystemUpdate`/
+  `installSystemUpdate`, PROTOCOL §12b): `apk upgrade --available` for **every** package
+  (base musl/systemd/python + our config + daemons) **minus the kernel**. It **reboots**
+  when base libc/init churns (musl/systemd/…). The **`device-google-steelhead` config
+  package is now OTA'd too** — the ~180 MB glibc-rt Roon base was **split** into its own
+  flash-only package (`nexusq-glibc-rt`), dropping the config apk from ~191 MB to 58 KB.
+
+⚠️ **The glibc-rt split needs ONE reflash to adopt.** A **pre-split** device (any image
+≤ the first split build, v1.11.9) can't OTA the config package — it would need the
+flash-only `nexusq-glibc-rt` and `apk` refuses the unsatisfiable dependency. Reflash
+once (the steps below, or fastboot-over-ssh) to establish the split layout; after that,
+System OTA of the config is incremental. The **kernel** and **`nexusq-glibc-rt`** itself
+are **never** OTA'd — those always need the fastboot flash below.
 
 ## 1. Enter fastboot mode
 

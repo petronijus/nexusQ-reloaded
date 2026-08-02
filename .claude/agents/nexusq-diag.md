@@ -444,8 +444,13 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   not a stuck/frozen frame; and the **ring shows a determinate `progress` bar** then a
   brief green `set 0 255 0` **while installing** — transient + expected. The install
   restarts the daemons (incl. `nexusq-control` and possibly `nexusqd`), so a **brief
-  nexusqd/bridge restart right after an OTA is expected**, not `nexusqd_restart`. See
-  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
+  nexusqd/bridge restart right after an OTA is expected**, not `nexusqd_restart`. A
+  **full-system OTA** (`installSystemUpdate`, PROTOCOL §12b, control r21+) narrates with
+  the **indeterminate `spin` spinner** (not the bar) and may **reboot the device** when
+  base libc/init churns (musl/systemd/…) — a reboot / fresh uptime right after a System
+  update is **expected**, not a hang/crash. See
+  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md` +
+  `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old

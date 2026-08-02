@@ -114,8 +114,12 @@ Findings are tagged by `kind`; interpret them like this:
   a stuck frame), and the **ring shows a determinate `progress` bar** then a brief green
   `set 0 255 0` while installing (transient, expected). The install restarts the daemons
   (incl. `nexusq-control`/`nexusqd`), so a **brief nexusqd/bridge restart just after an
-  OTA is expected**, not a `nexusqd_restart` fault. See
-  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.
+  OTA is expected**, not a `nexusqd_restart` fault. A **full-system OTA**
+  (`installSystemUpdate`, §12b, control r21+) uses the **indeterminate `spin` spinner**
+  (not the bar) and may **reboot** when base libc/init churns — a reboot/fresh uptime
+  right after a System update is expected. See
+  `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md` +
+  `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
   ⚠️ **`ls_active`/`ls_restarts` are UNTRUSTWORTHY in captures from device

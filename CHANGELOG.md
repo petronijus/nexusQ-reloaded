@@ -6,6 +6,73 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — Full-system OTA (Phase 1): the "apt upgrade" of the whole appliance (`nexusq-control` r21→r25, app 1.10.0→1.11.0)
+- **The Q upgrades its whole system over the air, not just its daemons.** New
+  `checkSystemUpdate` / `installSystemUpdate` (**PROTOCOL §12b**), distinct from the
+  daemon track (§12a). `checkSystemUpdate` reports the **running kernel version** (read-
+  only, `uname -r`) + **every upgradable package MINUS the kernel** (parsed from
+  `apk version -l '<'`); it does **not** blink the mute LED (that stays the daemon
+  "update available" indicator). `installSystemUpdate` runs **`apk upgrade --available`
+  across the system EXCEPT the kernel** — base musl/systemd/python from the Alpine·pmOS
+  mirrors + our config/daemons from the OTA repo. Guarded by the same
+  `_nexus_install_lock`. **Proven live:** upgraded systemd **261.1 → 261.2** + base
+  packages.
+- **The kernel is never OTA'd** — no repo the device reads offers a newer one, and
+  applying a kernel is a **boot-partition flash = Phase 2** (not done; the kernel stays
+  a fastboot flash / fastboot-over-ssh).
+- **Reboots when base libc/init churned.** `rebootRecommended` fires when any changed
+  package starts with `musl` / `systemd` / `kmod` / `eudev` / `busybox` / `openrc`;
+  the ring holds **green** and the Q `systemctl reboot`s (the app reconnects when it's
+  back).
+- **LED: the INDETERMINATE spinner, not the determinate bar.** A full-system upgrade is
+  slow and of unknown length (downloads + triggers like mkinitfs), so the determinate
+  bar eased to its ~92 % cap and looked frozen; the system install now narrates with
+  `spin 0 153 204 2` → **green** on success. (r23 fix.)
+- **Reboot-detection bug fixed (r23):** apk-tools writes its `(N/M) Upgrading <name>`
+  lines to **STDERR**, so the old stdout-only parser never saw an upgrade and
+  `rebootRecommended` never fired on a systemd/base bump. New `_apk_changed()` reads
+  **both streams** (the daemon parser uses it too).
+- **App Update-UX (companion 1.10.0 → 1.11.0):** 1.10.0 added a **System** section
+  (kernel version + `apk upgrade --available`, reboot-aware verify); 1.10.1 grouped the
+  update options into one **Update** cluster; 1.10.2 fixed a false "Something went wrong"
+  (the OTA RPCs were `silent=false` so the generic error banner fired on the **expected**
+  control-bridge restart — now silent + verify-by-recheck). **1.11.0 MERGED App + Device
+  into ONE "App update" item** (the phone app and the on-device daemons version together
+  as the companion system): one "App update available" indicator + one Update button
+  covering whichever side is newer (app / device / both) with **merged release notes**;
+  install order = **device daemons first, then the phone app** (installing the app
+  restarts the phone, so it goes last, onto an already-updated device). So the Settings
+  **Update cluster is now two items: App update + System.** Manifest `1.11.0` /
+  `versionCode 28` (own track). `publish-ota-repo.sh` now serves `nexusq-control` **r25**,
+  `nexusqd` **r11**, `device-google-steelhead` **r62**. See
+  `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
+
+### Changed — glibc-rt split out of the device config → device-config OTA-shippable (new aport `nexusq-glibc-rt`, `device-google-steelhead` r62)
+- **The ~180 MB glibc-rt Roon base moved into its own package.** It was baked into
+  `device-google-steelhead`, making that apk **~191 MB** — over GitHub Pages' 100 MB
+  limit, so the device config could not be OTA'd. The unpacked Debian-bookworm armhf
+  sandbox base (`/opt/glibc-rt`) now lives in a **new standalone aport
+  `pmos/nexusq-glibc-rt`** (`pkgver 1.0-r0`, versioned independently — a pinned static
+  base). `device-google-steelhead` (**r62**) `depends=` on it; the base arrives via the
+  dependency and is baked into the flashed image exactly as before.
+- **device-config apk dropped ~191 MB → 58 KB** — now under 100 MB and **OTA-shippable**
+  (it ships in the full-system OTA above). `nexusq-glibc-rt` (~182 MB) stays
+  **FLASH-ONLY** (kept out of the OTA repo, not bumped, so `apk upgrade` never touches
+  it); the kernel stays flash-only too.
+- `docker-build.sh` builds the new aport as a device dependency (Phase 2 validate,
+  Phase 6 copy loop, Phase 7b checksum), kept out of `--force` so 180 MB isn't
+  re-unpacked each build. `publish-ota-repo.sh` now also ships
+  `device-google-steelhead` + its firmware subpackage, with a **size guard refusing any
+  apk ≥ 99 MB**.
+- **Verified on-device (reflash to v1.11.9):** `/opt/glibc-rt` intact and owned by
+  `nexusq-glibc-rt`, Roon not regressed, full diag clean.
+- ⚠️ **Adopting the split needs ONE reflash.** A pre-split device can't OTA
+  `device-google-steelhead` r62 — it would need the flash-only `nexusq-glibc-rt` and
+  `apk` refuses the unsatisfiable dependency. The layout is established once by a
+  reflash (v1.11.9, via fastboot-over-ssh this session); afterward, system OTA of the
+  config is incremental. Images built this session: v1.11.5 / v1.11.6 / v1.11.7 /
+  v1.11.8 / v1.11.9.
+
 ### Added — OTA device (daemon) updates: the Q updates its own software (`nexusq-control` r20, `nexusqd` r11, app 1.9.5)
 - **The Nexus Q updates its own daemons over the air** — no reflash. A signed apk
   repo on GitHub Pages (`gh-pages` → `petronijus.github.io/nexusQ-reloaded/nexusq`)

@@ -663,12 +663,25 @@ The control bridge runs as root and reaches the uid-10000 manager via
 Toggling a service that is mid-playback stops it (expected — turning it off means
 off); a Roon zone re-announces and reconnects when switched back on.
 
-## 12. System OTA — the Q updates its own daemons — v1.11.x (dev)
+## 12. OTA — the Q updates its own software — v1.11.x (dev)
 
 The Nexus Q **updates its own software over the air**, no reflash, no adb, no ssh.
-This is the **"Nexus apps" track**: only the four small daemons — `nexusq-control`,
-`nexusqd`, `nexusq-btagent`, `nexusq-setupd` (`OTA_PACKAGES`). The full **"System"**
-track (kernel + base OS) is a separate, later phase.
+There are **two tracks**, surfaced in the app's Settings as **two Update items**:
+
+- **§12a — App update (daemons):** the four small daemons — `nexusq-control`,
+  `nexusqd`, `nexusq-btagent`, `nexusq-setupd` (`OTA_PACKAGES`) — versioned together
+  with the phone app as the "companion system" (`checkNexusUpdate` /
+  `installNexusUpdate`). This is what the phone-app **App update** item drives on the
+  device side.
+- **§12b — System:** the "apt upgrade" of the whole appliance — **every** upgradable
+  package (base musl/systemd/python + our config + daemons), **minus the kernel**
+  (`checkSystemUpdate` / `installSystemUpdate`).
+
+> The app's **Update cluster is two items**: **App update** (phone app + device daemons,
+> whichever is newer, merged notes) and **System** (kernel version read-only + every
+> package). Install order for App update = **device daemons first, then the phone app**
+> (installing the app restarts the phone, so it goes last, onto an already-updated
+> device).
 
 > ✅ **Proven end-to-end on hardware 2026-08-02** — the reference Q was taken
 > `nexusqd` r10 / `nexusq-control` r16 → r11 / r19 entirely from the app's *Nexus Q*
@@ -684,12 +697,16 @@ signs every one of our packages — so `apk` installs them straight from the rep
 **no new key and no reflash**. `nexusq-control` adds the repo to
 `/etc/apk/repositories` idempotently on first check.
 
-**Scope limit:** `device-google-steelhead` (~191 MB — it bundles the unpacked
-glibc-rt Roon base) is over GitHub's 100 MB file limit, so device-config OTA waits on
-splitting glibc-rt into its own package. The **kernel** stays a fastboot flash
-(fastboot-over-ssh, §—see INSTALL).
+**Scope (updated 2026-08-02):** the four daemons **and** `device-google-steelhead` +
+its firmware subpackage are now published — the ~180 MB glibc-rt Roon base was **split
+into its own aport `nexusq-glibc-rt`** (flash-only), so the config apk dropped from
+~191 MB to 58 KB and fits the 100 MB limit. `publish-ota-repo.sh` refuses any apk
+≥ 99 MB. **Flash-only (never OTA'd):** `nexusq-glibc-rt` (~182 MB) and the **kernel**
+(a boot-partition flash / fastboot-over-ssh — §—see INSTALL). ⚠️ A pre-split device
+must be **reflashed once** to adopt the split (it can't OTA config r62 without the
+flash-only glibc-rt dep); afterward the config is incremental.
 
-### 12.2 Methods
+### 12a.1 Methods — App update (daemons)
 
 | Method | Params | Result |
 |---|---|---|
@@ -732,3 +749,34 @@ These use two nexusqd LED primitives (r11), also listed in the §4 LED-ring tabl
 - **`mblink R G B | mblink stop`** — an autonomous blink of the **mute LED** in the
   given colour; the daemon owns the on/off cadence. `mblink stop` clears it and
   restores the mute LED to the current muted state.
+
+### 12b. System — the whole-appliance "apt upgrade" (`nexusq-control` r21+)
+
+The **System** track upgrades **every** upgradable package (base musl/systemd/python
+from the Alpine·pmOS mirrors + our config + daemons from the OTA repo) — the
+"apt upgrade" of the appliance — **except the kernel**.
+
+| Method | Params | Result |
+|---|---|---|
+| `checkSystemUpdate` | — | `{ packages: [{ name, installed, available }], updateAvailable: bool, kernel, repo }` — `apk update` + `apk version -l '<'`, **minus the kernel**; `kernel` is the running `uname -r` (read-only). Installs nothing. Does **NOT** blink the mute LED (that stays the §12a "daemon available" indicator). |
+| `installSystemUpdate` | — | `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons off-thread, **reboots if base libc/init churned**. |
+
+**Kernel is never OTA'd.** No repo the device reads offers a newer kernel, and applying
+a kernel is a **boot-partition flash = Phase 2** (fastboot / fastboot-over-ssh, see
+INSTALL). `checkSystemUpdate` skips `linux-google-steelhead`; `installSystemUpdate`
+runs `--available` (which the mirrors never offer a newer kernel for).
+
+**Reboot contract.** `rebootRecommended` (and the actual `systemctl reboot`) fire when
+any changed package name starts with **`musl` / `systemd` / `kmod` / `eudev` /
+`busybox` / `openrc`** — base libc/init that only fully takes effect after a reboot.
+On reboot the ring stays **green** (last thing seen = success); the app reconnects when
+the Q is back. Otherwise the theme is restored and only changed daemons restart.
+
+**LED: the INDETERMINATE spinner, not the determinate bar.** A full-system upgrade is
+slow and of unknown length (downloads + triggers like mkinitfs), so the determinate
+`progress` bar would ease to its ~92 % cap and sit there looking frozen. The system
+install narrates with **`spin 0 153 204 2`** (fast blue) → **green** `set 0 255 0` on
+success (which also stops the spin). The daemon track (§12.3) keeps the determinate bar
+— its upgrade is small and short. Guarded by the same install lock (`Err "busy"`); the
+install can drop the app link (bridge restart / reboot) — that is **expected**, success
+is confirmed by reconnect + re-check.

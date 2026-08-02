@@ -4,7 +4,63 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-02 (latest): **Device (daemon) OTA proven end-to-end · LED-narrated updates (nexusqd r11 / control r20) · WiFi `nogw` heal (device r61) · app self-update 1.9.5**
+## Session 2026-08-02 (latest): **Full-system OTA (Phase 1) · glibc-rt package split · app Update-UX (merged "App update" + "System") · reflashed v1.11.9**
+
+Full record: `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`. Same-day
+continuation of the daemon-OTA milestone below. Commits `dade0a2` (glibc-rt split),
+`89039dc` (control r21 full-system OTA), `459f811` (r23 reboot-detect/spinner/green),
+`f5b12d1`/`3e4ad63`/`d91de3b`/`7b0c5a2`/`59f8e8f` (app 1.10.0 → 1.11.0). OTA repo now
+serves `nexusq-control` **r25**, `nexusqd` **r11**, `device-google-steelhead` **r62**.
+App **1.11.0** (`versionCode 28`). Device **reflashed to v1.11.9**.
+
+### 1. glibc-rt split — device config is now OTA-shippable (commit `dade0a2`)
+- The ~180 MB glibc-rt Roon base (`/opt/glibc-rt`) was baked into
+  `device-google-steelhead` → ~191 MB apk, over GitHub's 100 MB limit. Moved into a
+  **new standalone aport `pmos/nexusq-glibc-rt`** (`1.0-r0`, versioned independently);
+  `device-google-steelhead` (**r62**) now just `depends=` on it. **Config apk: ~191 MB
+  → 58 KB.** `nexusq-glibc-rt` (~182 MB) + the kernel stay **flash-only**.
+- `docker-build.sh` builds it as a device dependency (Phase 2/6/7b), kept out of
+  `--force`. `publish-ota-repo.sh` now also ships the config + firmware subpackage, with
+  a **size guard refusing any apk ≥ 99 MB**.
+- Verified on-device (v1.11.9): `/opt/glibc-rt` intact, owned by `nexusq-glibc-rt`, Roon
+  not regressed, diag clean.
+- ⚠️ **Adopting the split needs ONE reflash** — a pre-split device can't OTA config r62
+  (needs the flash-only glibc-rt dep). Done this session via fastboot-over-ssh (v1.11.9);
+  afterward system OTA is incremental.
+
+### 2. Full-system OTA (Phase 1) — checkSystemUpdate / installSystemUpdate (control r21→r25)
+- **The "apt upgrade" of the whole appliance** (PROTOCOL §12b), distinct from the daemon
+  track. `checkSystemUpdate`: `apk update` + every upgradable package from
+  `apk version -l '<'` **minus the kernel** + the running kernel version (read-only);
+  does NOT blink the mute LED. `installSystemUpdate`: `apk upgrade --available` **except
+  the kernel** (base musl/systemd/python from the mirrors + our config/daemons from the
+  OTA repo). **Proven live** upgrading systemd **261.1 → 261.2** + base packages.
+- **Kernel is never OTA'd** — applying one is a boot-partition flash = Phase 2 (not done).
+- **Reboots when base libc/init churned** (`rebootRecommended` on musl/systemd/kmod/
+  eudev/busybox/openrc); ring holds green through the reboot.
+- **r23 fixes:** (a) `_apk_changed()` now reads BOTH stdout+STDERR — apk writes its
+  `Upgrading <name>` lines to stderr, so the old stdout-only parser never fired the
+  reboot check; (b) the system install uses the **indeterminate spinner** (`spin`) not
+  the determinate bar (a slow/unknown-length upgrade froze at the ~92 % cap); (c) green
+  stays lit through the reboot.
+
+### 3. App Update-UX — companion 1.10.0 → 1.11.0
+- 1.10.0 added a **System** section; 1.10.1 grouped updates into one **Update** cluster;
+  1.10.2 fixed a false "Something went wrong" (OTA RPCs now silent + verify-by-recheck,
+  not the generic error banner on the expected bridge restart).
+- **1.11.0 MERGED App + Device into ONE "App update" item** — one indicator + one Update
+  button covering whichever side is newer (app/device/both), merged notes; install order
+  = **device daemons first, then the phone app** (the app install restarts the phone).
+  So the Update cluster is now two items: **App update** + **System**. Manifest `1.11.0`
+  / `versionCode 28`.
+
+### 4. Reflash path
+- v1.11.9 (control r21 + the split) built + flashed via **fastboot-over-ssh** (patch
+  0044) — no hands-on. Images this session: **v1.11.5–v1.11.9**.
+
+---
+
+## Session 2026-08-02: **Device (daemon) OTA proven end-to-end · LED-narrated updates (nexusqd r11 / control r20) · WiFi `nogw` heal (device r61) · app self-update 1.9.5**
 
 Full record: `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`. Base: post-v1.11.0
 dev line (device ran USB-audio dev build v1.11.3 → OTA'd live). Commits `46ad5ef`
@@ -71,9 +127,9 @@ dev line (device ran USB-audio dev build v1.11.3 → OTA'd live). Commits `46ad5
 1. **Done: OTA repo republished with `nexusq-control` r20**; the app picked it up
    and the device is on r20. Next: a full diag sweep on a flashed **v1.11.7**.
 2. Tag the v1.11.x dev line **when the user approves** (never tag unasked).
-3. **"System" (kernel + base OS) OTA** is the next phase — blocked on splitting the
-   glibc-rt Roon base out of `device-google-steelhead` (the 100 MB file limit); the
-   kernel stays a fastboot flash.
+3. **"System" (kernel + base OS) OTA** — ✅ **DONE this same day** (see the session
+   block above): the glibc-rt split unblocked the config apk and `checkSystemUpdate`/
+   `installSystemUpdate` shipped. The **kernel** still stays a fastboot flash (Phase 2).
 4. The standing open lists below still stand (thermal watch, `NEXUSQ_NO_WIFI=1` flag,
    pairing flake, contactless-payment link, AirPlay MPRIS metadata, Tidal).
 
