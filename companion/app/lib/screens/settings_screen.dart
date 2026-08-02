@@ -127,7 +127,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _checkingNexus = true;
       _nexusError = null;
     });
-    final r = await _call('checkNexusUpdate', null, false);
+    final r = await _call('checkNexusUpdate', null, true);
     if (!mounted) return;
     setState(() {
       _checkingNexus = false;
@@ -149,7 +149,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // the call is EXPECTED, not a failure: the device may well have succeeded.
     // We confirm the real outcome by reconnecting and re-checking the version,
     // never by this call's return value (which used to be read as "failed").
-    await _call('installNexusUpdate', null, false);
+    await _call('installNexusUpdate', null, true);
     if (!mounted) return;
     await Future.delayed(const Duration(seconds: 8)); // daemons restart + relink
     await _verifyNexusInstall();
@@ -161,7 +161,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _verifyNexusInstall() async {
     for (var attempt = 0; attempt < 4; attempt++) {
       if (!mounted) return;
-      final r = await _call('checkNexusUpdate', null, false);
+      final r = await _call('checkNexusUpdate', null, true);
       if (!mounted) return;
       if (r != null) {
         final stillPending = r['updateAvailable'] == true;
@@ -206,7 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _checkingSystem = true;
       _systemError = null;
     });
-    final r = await _call('checkSystemUpdate', null, false);
+    final r = await _call('checkSystemUpdate', null, true);
     if (!mounted) return;
     setState(() {
       _checkingSystem = false;
@@ -224,7 +224,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // may REBOOT the Q (base libc/init churn) — so the call's disconnect is
     // expected, not a failure. Confirm by re-checking after the device settles
     // (longer window: a reboot takes ~30-60 s).
-    await _call('installSystemUpdate', null, false);
+    await _call('installSystemUpdate', null, true);
     if (!mounted) return;
     await Future.delayed(const Duration(seconds: 12));
     await _verifySystemInstall();
@@ -233,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _verifySystemInstall() async {
     for (var attempt = 0; attempt < 8; attempt++) {
       if (!mounted) return;
-      final r = await _call('checkSystemUpdate', null, false);
+      final r = await _call('checkSystemUpdate', null, true);
       if (!mounted) return;
       if (r != null) {
         final stillPending = r['updateAvailable'] == true;
