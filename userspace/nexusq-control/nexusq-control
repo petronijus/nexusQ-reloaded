@@ -436,15 +436,24 @@ def set_desktop(on):
 # PERSISTENT and survives reboots.
 #
 # ON  = `unmask` (clear any prior off) then `enable --now` → runs now AND on boot.
-# OFF = `mask --now` → stops now AND won't start on boot. mask (not disable) is
-#       deliberate: librespot/shairport ship default-ON via a /usr/lib vendor
-#       `default.target.wants` symlink that a plain `disable` cannot remove — a
-#       mask in the user's own config (/home/user/.config/systemd/user) wins over
-#       it. A reflash resets everything to the image defaults.
+# OFF depends on how the unit ships (the `vendor_on` flag):
+#   vendor_on=True  (librespot/shairport ship default-ON via a /usr/lib vendor
+#                    `default.target.wants` symlink): OFF = `mask --now`. A plain
+#                    disable can't remove the vendor symlink; a mask in the user's
+#                    own config (/home/user/.config/systemd/user) wins over it.
+#   vendor_on=False (roon/usbaudio ship default-OFF, no vendor symlink): OFF =
+#                    `disable --now`. mask must NOT be used here — `mask --now`
+#                    replaces the unit with /dev/null BEFORE stopping it, which
+#                    loses the unit's KillMode/ExecStop, so a service that owns
+#                    external state (nexusq-uac2-in loads PulseAudio modules that
+#                    outlive its process) would leak the loopback on OFF. disable
+#                    leaves the unit intact so its SIGTERM trap unloads cleanly.
+# The state is PERSISTENT and survives reboots. A reflash resets to image defaults.
 SERVICES = [
-    {"id": "spotify", "unit": "librespot.service",      "name": "Spotify Connect"},
-    {"id": "airplay", "unit": "shairport-sync.service", "name": "AirPlay"},
-    {"id": "roon",    "unit": "roon.service",           "name": "Roon"},
+    {"id": "spotify",  "unit": "librespot.service",       "name": "Spotify Connect", "vendor_on": True},
+    {"id": "airplay",  "unit": "shairport-sync.service",  "name": "AirPlay",         "vendor_on": True},
+    {"id": "roon",     "unit": "roon.service",            "name": "Roon",            "vendor_on": False},
+    {"id": "usbaudio", "unit": "nexusq-uac2-in.service",  "name": "USB Audio",       "vendor_on": False},
 ]
 _SERVICE_BY_ID = {s["id"]: s for s in SERVICES}
 
@@ -495,18 +504,26 @@ def list_services():
 
 
 def set_service(sid, on):
-    """Turn a streaming input on (enable+start, persistent) or off (mask+stop)."""
+    """Turn a streaming input on (enable+start) or off (persistent). OFF uses
+    mask for vendor-default-ON units and disable for default-OFF ones — see the
+    SERVICES `vendor_on` note."""
     s = _SERVICE_BY_ID.get(sid)
     if not s:
         raise Err("bad_request", f"unknown service '{sid}'")
     unit = s["unit"]
     try:
         if on:
-            # unmask FIRST — `enable` refuses a masked unit.
+            # unmask FIRST — `enable` refuses a masked unit (harmless no-op /
+            # "not masked" for a merely-disabled unit).
             _systemctl_user("unmask", unit, timeout=15)
             r = _systemctl_user("enable", "--now", unit, timeout=45)
-        else:
+        elif s.get("vendor_on"):
+            # default-ON vendor unit: only a mask overrides the /usr/lib symlink.
             r = _systemctl_user("mask", "--now", unit, timeout=30)
+        else:
+            # default-OFF unit: disable stops it cleanly (mask --now would /dev/
+            # null the unit before stop and leak a module-owning service).
+            r = _systemctl_user("disable", "--now", unit, timeout=30)
         if r.returncode != 0:
             raise Err("unavailable",
                       f"turning {sid} {'on' if on else 'off'} failed: "

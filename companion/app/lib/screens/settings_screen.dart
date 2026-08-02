@@ -274,6 +274,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Icons.airplay;
       case 'roon':
         return SimpleIcons.roon;
+      case 'usbaudio':
+        return Icons.usb;
       default:
         return Icons.speaker;
     }
@@ -288,6 +290,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return NexusQColors.white;       // Roon blue reads too dark on the theme
       case 'airplay':
         return NexusQColors.white;       // AirPlay has no signature colour
+      case 'usbaudio':
+        return NexusQColors.white;       // generic USB input, no brand colour
       default:
         return NexusQColors.accent;
     }
@@ -301,6 +305,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'Stream from an Apple device (AirPlay).';
       case 'roon':
         return 'A Roon Ready endpoint for your Roon Core.';
+      case 'usbaudio':
+        return 'Play from a USB-connected computer or phone (Q as a USB DAC).';
       default:
         return 'A streaming input.';
     }

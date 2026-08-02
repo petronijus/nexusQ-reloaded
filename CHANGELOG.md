@@ -6,6 +6,31 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — USB Audio input: the Q as a USB DAC (`linux` r46 · `device` r60 · `nexusq-control` r16 · app 1.7.0+16)
+- **The Nexus Q can now take audio IN over USB** — no soldering, no Bluetooth.
+  Plug a computer or phone into the micro-USB and the Q enumerates as a **USB
+  speaker** ("Nexus Q"); whatever the host plays comes out the TAS5713 amp. The Q
+  has **no optical/HDMI/line input** (all its ports are OUTPUTS — verified in the
+  DTS and confirmed by TI docs); USB was the only no-solder / no-BT digital input.
+- **How:** kernel gains `CONFIG_USB_CONFIGFS_F_UAC2` (module `usb_f_uac2`); the USB
+  composite gadget (`nexusq-usb-gadget.sh`) adds a `uac2.0` function with
+  `c_chmask` set (host→device capture = a speaker, not a mic). The host's audio
+  arrives on the device as the `UAC2Gadget` capture card, and `nexusq-uac2-in`
+  loopbacks it into the default PulseAudio sink — it **mixes with Spotify /
+  AirPlay / Roon** like any other input.
+- **App toggle:** it is a **4th per-service switch** ("USB Audio") next to
+  Spotify / AirPlay / Roon (`nexusq-control` SERVICES `usbaudio` →
+  `nexusq-uac2-in.service`, a default-OFF user unit). OFF frees the always-on
+  alsa-source + loopback CPU — same resource policy as Roon.
+- **`setService` OFF now `disable`s default-OFF units** (roon, usbaudio) instead
+  of masking them, and only `mask`s the vendor-default-ON ones (spotify/airplay).
+  `mask --now` replaces the unit with `/dev/null` *before* stopping it, which
+  drops the unit's `KillMode`/`ExecStop`, so a service that owns external state —
+  `nexusq-uac2-in` loads PulseAudio modules that outlive its process — would leak
+  its loopback on OFF. The unit is a long-running process (`KillMode=mixed`) that
+  unloads its modules in a SIGTERM trap; `disable` keeps the unit intact so that
+  trap actually runs.
+
 ### Added — WiFi watchdog (`device` r57)
 - **`nexusq-wifi-watchdog`** — an on-device systemd service that keeps the
   marginal BCM4330 5 GHz link alive and records its health. Every 30 s it pings

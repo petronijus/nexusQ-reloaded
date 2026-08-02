@@ -74,9 +74,33 @@ echo 5162001 > "$G/functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_i
 # ACM function: a serial console on the same composite gadget (/dev/ttyACM0 host).
 mkdir -p "$G/functions/acm.usb0" 2>/dev/null || true
 
-# Link both functions into the single config (idempotent).
+# UAC2 audio function: turn the Q into a USB DAC/speaker. The host plays audio ->
+# it arrives over USB -> shows up on the device as an ALSA CAPTURE stream on the
+# "UAC2Gadget" card, which nexusq-uac2-route loopbacks into the TAS5713 amp. This
+# is the no-solder / no-Bluetooth audio INPUT (the Q has no optical/HDMI/line in).
+#   c_* = the CAPTURE direction = host -> gadget, i.e. the host plays and the Q
+#   receives (the Q is a USB *speaker*; on the device this is a capture PCM
+#   pcm0c). p_chmask=0 = no gadget->host mic. (f_uac2 names are host-relative:
+#   "c"=host captures... no — measured on-device: c_* gives the device a capture
+#   PCM that receives the host's audio, which is exactly what a speaker needs.)
+# Needs the kernel's UAC2 configfs function (CONFIG_USB_CONFIGFS_F_UAC2, module
+# usb_f_uac2). If it's unavailable the gadget still comes up as rndis+acm.
+modprobe usb_f_uac2 2>/dev/null || true
+if [ ! -d "$G/functions/uac2.0" ]; then
+	if mkdir -p "$G/functions/uac2.0" 2>/dev/null; then
+		echo 3     > "$G/functions/uac2.0/c_chmask" 2>/dev/null || true  # stereo, host->device
+		echo 48000 > "$G/functions/uac2.0/c_srate"  2>/dev/null || true  # 48 kHz
+		echo 2     > "$G/functions/uac2.0/c_ssize"  2>/dev/null || true  # 16-bit
+		echo 0     > "$G/functions/uac2.0/p_chmask" 2>/dev/null || true  # no mic back to host
+	else
+		log "uac2 function unavailable (no CONFIG_USB_CONFIGFS_F_UAC2?) — rndis+acm only"
+	fi
+fi
+
+# Link the functions into the single config (idempotent).
 [ -e "$CFG/rndis.usb0" ] || ln -s "$G/functions/rndis.usb0" "$CFG/" 2>/dev/null || true
 [ -e "$CFG/acm.usb0" ]   || ln -s "$G/functions/acm.usb0"   "$CFG/" 2>/dev/null || true
+[ -d "$G/functions/uac2.0" ] && { [ -e "$CFG/uac2.0" ] || ln -s "$G/functions/uac2.0" "$CFG/" 2>/dev/null || true; }
 [ -e "$G/os_desc/c.1" ]  || ln -s "$CFG" "$G/os_desc/c.1"           2>/dev/null || true
 
 # Bind to the UDC -> host enumerates the composite device.

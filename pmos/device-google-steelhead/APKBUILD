@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=57
+pkgrel=60
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -108,6 +108,8 @@ source="
 	61_airplay.nft
 	roon-nexusq
 	roon.service
+	nexusq-uac2-in
+	nexusq-uac2-in.service
 	roon-asound.conf
 	snd-aloop-options.conf
 	user-rtprio.conf
@@ -481,6 +483,14 @@ package() {
 		"$pkgdir"/usr/bin/roon-nexusq
 	install -Dm644 "$srcdir"/roon.service \
 		"$pkgdir"/usr/lib/systemd/user/roon.service
+	# USB Audio input: UAC2 gadget capture -> PA loopback -> TAS5713 amp. OFF by
+	# default (NO default.target.wants symlink, like Roon) — the app's "usbaudio"
+	# toggle enables it on demand. The gadget's UAC2 function itself lives in
+	# nexusq-usb-gadget.sh; this is just the always-optional PA wiring.
+	install -Dm755 "$srcdir"/nexusq-uac2-in \
+		"$pkgdir"/usr/bin/nexusq-uac2-in
+	install -Dm644 "$srcdir"/nexusq-uac2-in.service \
+		"$pkgdir"/usr/lib/systemd/user/nexusq-uac2-in.service
 	# Second aloop card (RoonLoop, index 7) — Roon's private playback device;
 	# see the modprobe file header for the index pinning rationale.
 	install -Dm644 "$srcdir"/snd-aloop-options.conf \
@@ -588,6 +598,8 @@ SKIP  shairport-sync.conf
 SKIP  61_airplay.nft
 SKIP  roon-nexusq
 SKIP  roon.service
+SKIP  nexusq-uac2-in
+SKIP  nexusq-uac2-in.service
 SKIP  roon-asound.conf
 SKIP  snd-aloop-options.conf
 SKIP  user-rtprio.conf
