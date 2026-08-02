@@ -38,6 +38,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double? _downloadProgress; // non-null while downloading (0..1)
   String? _updateError;
 
+  // --- Nexus Q (device) system-update state ---
+  Map<String, dynamic>? _nexusCheck; // result of checkNexusUpdate
+  bool _checkingNexus = false;
+  bool _installingNexus = false;
+  String? _nexusError;
+
+  bool get _nexusUpdateAvailable => _nexusCheck?['updateAvailable'] == true;
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +89,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
       }
     }
+  }
+
+  Future<void> _checkNexusUpdate() async {
+    if (_checkingNexus || _installingNexus) return;
+    setState(() {
+      _checkingNexus = true;
+      _nexusError = null;
+    });
+    final r = await _call('checkNexusUpdate', null, false);
+    if (!mounted) return;
+    setState(() {
+      _checkingNexus = false;
+      _nexusCheck = r;
+    });
+  }
+
+  Future<void> _installNexusUpdate() async {
+    if (_installingNexus) return;
+    setState(() {
+      _installingNexus = true;
+      _nexusError = null;
+    });
+    final r = await _call('installNexusUpdate', null, false);
+    if (!mounted) return;
+    setState(() {
+      _installingNexus = false;
+      if (r != null) {
+        _nexusCheck = null; // daemons restarting; re-check after it settles
+      } else {
+        _nexusError = 'Device update failed. Try again.';
+      }
+    });
+    // nexusq-control restarts itself — the link drops and reconnects; re-check.
+    Future.delayed(const Duration(seconds: 8), () {
+      if (mounted) _checkNexusUpdate();
+    });
+  }
+
+  String _nexusStatusLine() {
+    final pkgs =
+        (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    if (pkgs.isEmpty) return 'Tap ⟳ to check for device software updates.';
+    if (_nexusUpdateAvailable) {
+      final up = pkgs.where((p) => p['upgradable'] == true).map((p) =>
+          '${p['name']} → ${p['available']}');
+      return up.join(', ');
+    }
+    // up to date — show the installed control version as the anchor
+    final ctrl = pkgs.firstWhere((p) => p['name'] == 'nexusq-control',
+        orElse: () => {'installed': '?'});
+    return 'Up to date (nexusq-control ${ctrl['installed']})';
   }
 
   @override
@@ -325,6 +384,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         color: NexusQColors.dim, fontSize: 11)),
                               ],
                             ),
+                    ),
+                ],
+              ),
+            ),
+
+            // --- Nexus Q system update ---------------------------------------
+            const SizedBox(height: 20),
+            _sectionTitle('Nexus Q'),
+            Card(
+              color: NexusQColors.surface,
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(
+                        _nexusUpdateAvailable
+                            ? Icons.system_update_alt
+                            : Icons.memory,
+                        color: _nexusUpdateAvailable
+                            ? NexusQColors.accent
+                            : NexusQColors.dim),
+                    title: Text(
+                        _nexusUpdateAvailable
+                            ? 'Device update available'
+                            : 'Device software',
+                        style: const TextStyle(color: NexusQColors.white)),
+                    subtitle: Text(_nexusStatusLine(),
+                        style: const TextStyle(
+                            color: NexusQColors.dim, fontSize: 12)),
+                    trailing: _checkingNexus
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : IconButton(
+                            icon: const Icon(Icons.refresh,
+                                color: NexusQColors.dim),
+                            tooltip: 'Check for device updates',
+                            onPressed: _checkNexusUpdate),
+                  ),
+                  if (_nexusError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(_nexusError!,
+                          style: const TextStyle(
+                              color: Colors.orangeAccent, fontSize: 12)),
+                    ),
+                  if (_nexusUpdateAvailable)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed:
+                              _installingNexus ? null : _installNexusUpdate,
+                          icon: _installingNexus
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2))
+                              : const Icon(Icons.download, size: 18),
+                          label: Text(_installingNexus
+                              ? 'Installing… (the Q reconnects)'
+                              : 'Install device update'),
+                        ),
+                      ),
                     ),
                 ],
               ),

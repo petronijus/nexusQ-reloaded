@@ -127,6 +127,8 @@ class TcpClient implements NexusQClient {
     'pairBtDevice', 'connectBtDevice', 'disconnectBtDevice', 'removePairedDevice',
     'startPairing', 'stopPairing',
     'scanNetworks', 'setWifi', 'finishSetup',
+    // system OTA: apk update/upgrade over the network takes many seconds
+    'checkNexusUpdate', 'installNexusUpdate',
   };
 
   @override

@@ -6,6 +6,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — OTA device (daemon) updates: the Q updates its own software (`nexusq-control` r17, app 1.9.0+19)
+- **The Nexus Q updates its own daemons over the air** — no reflash. A signed apk
+  repo on GitHub Pages (`gh-pages` → `petronijus.github.io/nexusQ-reloaded/nexusq`)
+  hosts the device software (`nexusq-control`, `nexusqd`, `nexusq-btagent`,
+  `nexusq-setupd`); the device already trusts the `pmos@local-6a42e957` build key
+  (baked in `/etc/apk/keys`), so `apk` installs our signed packages straight from
+  it — no new key, no reflash. `nexusq-control` r17 adds `checkNexusUpdate`
+  (adds the repo, `apk update`, reports upgradable daemons) and `installNexusUpdate`
+  (`apk upgrade` them, then restarts — nexusq-control restarts itself via
+  `--no-block`, the app reconnects). The companion app 1.9.0 gets a **"Nexus Q"**
+  Settings section to check + install. Republish after a build with
+  `scripts/publish-ota-repo.sh`.
+- **Scope:** only the small daemons. `device-google-steelhead` is ~191 MB (it
+  bundles the unpacked glibc-rt Roon base) — over GitHub's 100 MB file limit — so
+  device-config OTA waits on splitting glibc-rt into its own package; the **kernel**
+  stays a fastboot flash (fastboot-over-ssh). This is the "Nexus apps" track; full
+  "System" (kernel + base OS) OTA is the next phase.
+
 ### Added — OTA app updates (companion app 1.8.0+17)
 - **The companion app updates itself over the air** — no more `adb install`. On
   the Settings screen it checks GitHub for a newer build (a small manifest

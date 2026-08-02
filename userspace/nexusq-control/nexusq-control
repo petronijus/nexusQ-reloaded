@@ -559,6 +559,108 @@ def service_log(sid, lines=200):
     return {"id": sid, "name": s["name"], "lines": out}
 
 
+# --- system OTA: update the Nexus Q's OWN daemons from our GitHub-Pages apk repo -
+# The device already trusts the `pmos@local` build key (it is in /etc/apk/keys
+# from the image build), so it can install our signed packages straight from the
+# repo — no new key, no reflash. Only the small daemons are OTA'd here: the 191 MB
+# device-google-steelhead package (it bundles the unpacked glibc-rt Roon base) is
+# over GitHub's 100 MB file limit, so config OTA waits on a glibc-rt split. The
+# KERNEL is not here either — that stays a fastboot flash (the "System" track).
+NEXUSQ_OTA_REPO = "https://petronijus.github.io/nexusQ-reloaded/nexusq"
+OTA_PACKAGES = ["nexusq-control", "nexusqd", "nexusq-btagent", "nexusq-setupd"]
+_APK_REPOS = "/etc/apk/repositories"
+
+
+def _apk(*args, timeout=90):
+    return subprocess.run(["apk", *args], capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def _ensure_ota_repo():
+    """Idempotently add our OTA repo to /etc/apk/repositories."""
+    try:
+        with open(_APK_REPOS) as f:
+            body = f.read()
+        if NEXUSQ_OTA_REPO in body:
+            return
+        with open(_APK_REPOS, "a") as f:
+            f.write(("" if body.endswith("\n") else "\n") + NEXUSQ_OTA_REPO + "\n")
+        log("added OTA repo:", NEXUSQ_OTA_REPO)
+    except OSError as e:
+        raise Err("unavailable", f"cannot edit {_APK_REPOS}: {e}")
+
+
+def _apk_list_version(output, pkg):
+    """Pull the version out of `apk list` lines like
+    'nexusq-control-0.1.0-r16 armv7 {nexusq-control} (...) [installed]'."""
+    pre = pkg + "-"
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith(pre) and len(line) > len(pre) and line[len(pre)].isdigit():
+            return line.split()[0][len(pre):]  # "0.1.0-r16"
+    return None
+
+
+def check_nexus_update():
+    """Refresh the index and report which of our daemons have a newer build in the
+    OTA repo. Installs nothing."""
+    _ensure_ota_repo()
+    try:
+        _apk("update", timeout=60)
+        upgradable = _apk("list", "--upgradable", timeout=45).stdout
+        pkgs = []
+        any_up = False
+        for p in OTA_PACKAGES:
+            installed = _apk_list_version(
+                _apk("list", "--installed", p, timeout=30).stdout, p)
+            avail = _apk_list_version(upgradable, p)  # only listed if newer exists
+            up = avail is not None and installed is not None
+            any_up = any_up or up
+            pkgs.append({"name": p, "installed": installed,
+                         "available": avail or installed, "upgradable": up})
+        return {"packages": pkgs, "updateAvailable": any_up,
+                "repo": NEXUSQ_OTA_REPO}
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "apk did not respond")
+
+
+def _restart_after_upgrade():
+    """Restart the just-upgraded daemons AFTER the response is sent. nexusq-control
+    upgrades itself, so it restarts LAST and via --no-block (systemd owns the swap;
+    the app reconnects to the new instance)."""
+    def _do():
+        time.sleep(1.5)
+        for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
+            try:
+                subprocess.run(["systemctl", "restart", svc],
+                               capture_output=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        try:
+            subprocess.run(["systemctl", "--no-block", "restart", "nexusq-control"],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def install_nexus_update():
+    """Upgrade our daemons from the OTA repo, then restart them. The app should
+    expect the connection to drop briefly while nexusq-control itself restarts."""
+    _ensure_ota_repo()
+    try:
+        _apk("update", timeout=60)
+        r = _apk("upgrade", *OTA_PACKAGES, timeout=150)
+        if r.returncode != 0:
+            raise Err("unavailable",
+                      f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+        _restart_after_upgrade()
+        return {"ok": True, "restarting": True,
+                "output": (r.stdout or "").strip()[-400:]}
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "apk upgrade did not respond")
+
+
 def start_setup_mode():
     """Re-provisioning entry point: arm the force flag (the unit's ExecCondition
     honors it even when a WiFi profile exists) and start nexusq-setupd. The setup
@@ -831,6 +933,12 @@ class Bridge:
             if not isinstance(sid, str) or not sid:
                 raise Err("bad_request", "id required")
             return service_log(sid, p.get("lines", 200)), []
+
+        # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
+        if method == "checkNexusUpdate":
+            return check_nexus_update(), []
+        if method == "installNexusUpdate":
+            return install_nexus_update(), []
 
         raise Err("unknown_method", method)
 
