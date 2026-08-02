@@ -343,6 +343,43 @@ def nexusqd_send(line):
         return False
 
 
+class _OtaProgress:
+    """Drive nexusqd's determinate ring bar (`progress <pct>`) during an OTA install.
+
+    apk exposes no machine-readable percentage, so a background thread eases the bar
+    asymptotically toward a soft cap while the (blocking) install runs — covering a
+    fixed fraction of the remaining gap each tick, so it decelerates and never quite
+    fills. finish() snaps it to 100%; cancel() stops it silently (e.g. on error)."""
+
+    def __init__(self, rgb=(0, 153, 204), cap=92, tick=0.4):
+        self._rgb = rgb
+        self._cap = cap
+        self._tick = tick
+        self._pct = 0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        nexusqd_send("progress 0 %d %d %d" % self._rgb)
+        self._t.start()
+        return self
+
+    def _run(self):
+        while not self._stop.wait(self._tick):
+            self._pct += max(1, (self._cap - self._pct) * 18 // 100)
+            if self._pct >= self._cap:
+                self._pct = self._cap
+            nexusqd_send("progress %d %d %d %d" % ((self._pct,) + self._rgb))
+
+    def cancel(self):
+        self._stop.set()
+        self._t.join(timeout=1.0)
+
+    def finish(self):
+        self.cancel()
+        nexusqd_send("progress 100 %d %d %d" % self._rgb)
+
+
 BTAGENT_SOCK = os.environ.get("NEXUSQ_BTAGENT_SOCK", "/run/nexusq-btagent.sock")
 
 MAC_RE = re.compile(r"(?i)^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
@@ -569,6 +606,11 @@ def service_log(sid, lines=200):
 NEXUSQ_OTA_REPO = "https://petronijus.github.io/nexusQ-reloaded/nexusq"
 OTA_PACKAGES = ["nexusq-control", "nexusqd", "nexusq-btagent", "nexusq-setupd"]
 _APK_REPOS = "/etc/apk/repositories"
+# One install at a time: a flaky link can make the app resend installNexusUpdate,
+# and with per-request threads that would launch a SECOND `apk upgrade` over the
+# first (the first got killed = "Terminated" when control then restarts). This
+# lock makes a concurrent install fail fast instead of racing apk.
+_nexus_install_lock = threading.Lock()
 
 
 def _apk(*args, timeout=90):
@@ -624,29 +666,10 @@ def check_nexus_update():
         raise Err("timeout", "apk did not respond")
 
 
-def _restart_after_upgrade():
-    """Restart the just-upgraded daemons AFTER the response is sent. nexusq-control
-    upgrades itself, so it restarts LAST and via --no-block (systemd owns the swap;
-    the app reconnects to the new instance)."""
-    def _do():
-        time.sleep(1.5)
-        for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
-            try:
-                subprocess.run(["systemctl", "restart", svc],
-                               capture_output=True, timeout=30)
-            except (OSError, subprocess.SubprocessError):
-                pass
-        try:
-            subprocess.run(["systemctl", "--no-block", "restart", "nexusq-control"],
-                           capture_output=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    threading.Thread(target=_do, daemon=True).start()
-
-
 def install_nexus_update():
-    """Upgrade our daemons from the OTA repo, then restart them. The app should
-    expect the connection to drop briefly while nexusq-control itself restarts."""
+    """Upgrade our daemons from the OTA repo. Returns which packages actually
+    changed; the caller (the bridge) handles the LED animation + the restarts,
+    because it knows the current LED theme to restore afterwards."""
     _ensure_ota_repo()
     try:
         _apk("update", timeout=60)
@@ -654,9 +677,11 @@ def install_nexus_update():
         if r.returncode != 0:
             raise Err("unavailable",
                       f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
-        _restart_after_upgrade()
-        return {"ok": True, "restarting": True,
-                "output": (r.stdout or "").strip()[-400:]}
+        out = r.stdout or ""
+        upgraded = [p for p in OTA_PACKAGES
+                    if f"Upgrading {p} " in out or f"Installing {p} " in out]
+        return {"ok": True, "upgraded": upgraded,
+                "restarting": bool(upgraded), "output": out.strip()[-400:]}
     except (OSError, subprocess.SubprocessError):
         raise Err("timeout", "apk upgrade did not respond")
 
@@ -935,12 +960,77 @@ class Bridge:
             return service_log(sid, p.get("lines", 200)), []
 
         # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
+        # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;
+        # the ring shows a determinate PROGRESS bar while installing; green flash =
+        # done (then back to the theme). The ring is left on the user's theme while an
+        # update merely waits, so "available" is signalled only on the mute LED.
         if method == "checkNexusUpdate":
-            return check_nexus_update(), []
+            r = check_nexus_update()
+            if r.get("updateAvailable"):
+                nexusqd_send("mblink 255 140 0")     # amber blink on the mute LED
+            else:
+                nexusqd_send("mblink stop")          # nothing pending -> steady mute LED
+            return r, []
         if method == "installNexusUpdate":
-            return install_nexus_update(), []
+            # Refuse a second concurrent install (flaky-link resend) rather than
+            # racing a second apk upgrade over the first.
+            if not _nexus_install_lock.acquire(blocking=False):
+                raise Err("busy", "an update is already installing")
+            try:
+                nexusqd_send("mblink stop")          # clear the "update available" blink
+                prog = _OtaProgress().start()        # determinate ring bar
+                try:
+                    r = install_nexus_update()
+                except Err:
+                    prog.cancel()
+                    self._led_restore_theme()
+                    raise
+                prog.finish()                        # snap the bar to 100%
+                time.sleep(0.35)
+                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"),
+                                                 ["auto"]))
+                self._finish_nexus_update(r.get("upgraded", []), theme_cmds)
+                return r, []
+            finally:
+                _nexus_install_lock.release()
 
         raise Err("unknown_method", method)
+
+    def _led_restore_theme(self):
+        """Put the ring back to the user's current colour theme (or auto)."""
+        for c in THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]):
+            nexusqd_send(c)
+
+    def _finish_nexus_update(self, upgraded, theme_cmds):
+        """Off-thread tail of an OTA install (so the ack ships first): restart any
+        changed non-control daemon, flash the ring GREEN (success, like a good
+        pairing), restore the theme, then restart nexusq-control — which drops the
+        link; the app reconnects to the new build."""
+        def _do():
+            time.sleep(0.4)
+            restarted_nexusqd = False
+            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
+                if svc in upgraded:
+                    try:
+                        subprocess.run(["systemctl", "restart", svc],
+                                       capture_output=True, timeout=30)
+                        restarted_nexusqd = restarted_nexusqd or svc == "nexusqd"
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+            if restarted_nexusqd:
+                time.sleep(1.5)  # let the ring daemon come back before we drive it
+            nexusqd_send("set 0 255 0")   # green success
+            time.sleep(2.5)
+            for c in theme_cmds:
+                nexusqd_send(c)           # back to the user's theme
+            if "nexusq-control" in upgraded:
+                try:
+                    subprocess.run(
+                        ["systemctl", "--no-block", "restart", "nexusq-control"],
+                        capture_output=True, timeout=10)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        threading.Thread(target=_do, daemon=True).start()
 
     def _volume_cmd(self, method, p):
         # Volume/mute always act on the *active output's* PA sink, so the knob is
