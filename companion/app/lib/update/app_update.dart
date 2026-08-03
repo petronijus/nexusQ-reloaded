@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -46,6 +47,13 @@ class AppRelease {
 /// manifest lives next to the app source, NOT in the Nexus Q image releases.
 class AppUpdate {
   AppUpdate._();
+
+  /// The whole self-update mechanism is an apk hand-off to the Android package
+  /// installer — no other OS lets an app replace itself. On iOS the binary
+  /// comes from the outside (Xcode/TestFlight), so the app-track is skipped
+  /// there and the merged "App update" card carries only the device daemons.
+  static bool get selfUpdateSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// Raw manifest on the default branch — no API token, no rate limit that
   /// matters for an occasional check.

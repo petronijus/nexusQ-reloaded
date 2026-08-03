@@ -4,6 +4,7 @@ import '../protocol/client.dart';
 import '../protocol/discovery.dart';
 import '../protocol/mock_client.dart';
 import '../protocol/tcp_client.dart';
+import '../setup/bt_setup_client.dart';
 import '../setup/setup_flow.dart';
 import '../state/device_controller.dart';
 import '../build_info.dart';
@@ -178,10 +179,24 @@ class _ConnectGateState extends State<ConnectGate> {
           ],
         ),
         const SizedBox(height: 12),
-        TextButton(
-          onPressed: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const SetupFlow())),
-          child: const Text('Set up new device'),
-        ),
+        // The wizard's transport is BT Classic RFCOMM — Android-only (see
+        // BtSetupClient.supported). Elsewhere, say so instead of offering a
+        // button that dies on the first platform-channel call.
+        if (BtSetupClient.supported)
+          TextButton(
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SetupFlow())),
+            child: const Text('Set up new device'),
+          )
+        else
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              'Setting up a brand-new Nexus Q uses Bluetooth, which only the '
+              'Android app can do. Once the device is on WiFi it works here too.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+            ),
+          ),
       ];
 }

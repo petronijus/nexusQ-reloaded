@@ -51,6 +51,39 @@ Use it rather than a bare `flutter build apk`, so the in-app version stamp
 > the Devices poll-error fix — alongside device **v1.10.1**.) Gradle reads
 > versionName/versionCode straight from `pubspec.yaml`.
 
+## iOS (runs since 2026-08-03 — verified on the iPhone 17 simulator, iOS 26.5)
+
+The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios
+--release --no-codesign` → 18.8 MB Runner.app). Full record:
+`../../docs/2026-08-03-ios-companion-port.md`. What differs from Android:
+
+- **Discovery is native Bonjour, not `multicast_dns`.** iOS 14+ refuses raw
+  port-5353 sockets without the restricted
+  `com.apple.developer.networking.multicast` entitlement (Apple grants it on
+  request only), so `ios/Runner/BonjourDiscovery.swift` browses `_nexusq._tcp`
+  with **NWBrowser** and resolves via a throwaway NWConnection (remote IPv4+port
+  read once `.ready` — doubles as a reachability check), exposed as the
+  **`nexusq/bonjour`** MethodChannel (`discover {timeoutMs} -> {name, host, port}
+  | nil`). `lib/protocol/discovery.dart` branches: iOS → channel, everywhere
+  else → `multicast_dns` unchanged. `NSBonjourServices` +
+  `NSLocalNetworkUsageDescription` are in Info.plist.
+- **First-time setup is Android-only** (`BtSetupClient.supported`): the wizard's
+  transport is BT Classic RFCOMM, which iOS has no public API for (SPP is
+  MFi-gated). The connect gate shows an explanatory note on iOS instead of
+  "Set up new device" — **once the Q is on WiFi, iOS works fully**. Phase-2
+  idea: a BLE GATT setup transport (device-side BlueZ) would lift this.
+- **No self-update on iOS** (`AppUpdate.selfUpdateSupported`): the apk hand-off
+  is Android-only; the merged "App update" card degrades to the device-daemon
+  track alone (the iOS binary comes from Xcode/TestFlight).
+- **CocoaPods, not SPM:** `open_filex` has no Swift-Package-Manager support, so
+  `ios/Podfile` + `Podfile.lock` + `macos/Podfile` exist and are tracked.
+- **Release mode is not supported on iOS simulators** — run debug on the sim;
+  release is for the physical device. Deploying to the physical iPhone is still
+  pending (cable + Developer Mode).
+- ⚠️ `test/connect_gate_setup_entry_test.dart` does **real mDNS I/O** and fails
+  on some networks with `SocketException: No route to host` — pre-existing and
+  environment-dependent, not an iOS regression (fails on a clean checkout too).
+
 ## Devices screen (step 2, added 2026-07-15 — device side released in v1.10.0)
 
 **The Q has no screen and no input device, so this screen IS the Q's Bluetooth
@@ -166,11 +199,15 @@ gitignored — run `../../scripts/extract-stock-assets.sh` (needs the private st
 APKs) to populate `assets/stock/`; without it the wizard still builds and runs
 (tracked `.keep` placeholders + icon fallbacks).
 
-**mDNS notes:** discovery works on Android/iOS/desktop on the same subnet (perms are
-configured: Android multicast, iOS/macOS Bonjour + local-network usage). On **web** there are no
-raw sockets, so discovery is skipped — use the manual host field or `NEXUSQ_MOCK`. On **sandboxed
-macOS** mDNS also needs Apple's `com.apple.developer.networking.multicast` entitlement (a
-provisioning-profile add-on); without it, use the manual host field (direct TCP works).
+**mDNS notes:** discovery works on Android/iOS/desktop on the same subnet. On **Android/desktop**
+it is `package:multicast_dns` (Android multicast perm configured). On **iOS** it is **NOT**
+`multicast_dns` — iOS 14+ refuses the raw port-5353 socket without the restricted
+`com.apple.developer.networking.multicast` entitlement (was wrongly claimed working here;
+corrected 2026-08-03) — discovery goes through the native Bonjour channel instead (see the iOS
+section above). On **web** there are no raw sockets, so discovery is skipped — use the manual
+host field or `NEXUSQ_MOCK`. On **sandboxed macOS** mDNS also needs that same multicast
+entitlement (a provisioning-profile add-on); without it, use the manual host field (direct TCP
+works).
 
 ## Layout (`lib/`)
 

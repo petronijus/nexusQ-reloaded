@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class BtScanResult {
@@ -21,6 +22,13 @@ class BtSetupError implements Exception {
 class BtSetupClient {
   static const _method = MethodChannel('nexusq/btsetup');
   static const _events = EventChannel('nexusq/btsetup/events');
+
+  /// First-time setup runs over Bluetooth Classic RFCOMM (the Q's stock
+  /// pairing transport), and iOS exposes no public API for that — SPP is
+  /// MFi-gated. So the wizard exists only where the platform channel does:
+  /// Android. Entry points hide behind this instead of failing mid-flow.
+  static bool get supported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   BtSetupClient() {
     // In tests there is no platform implementation behind the EventChannel,

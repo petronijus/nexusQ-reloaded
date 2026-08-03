@@ -75,6 +75,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _checkUpdate() async {
+    // No app-track outside Android (see AppUpdate.selfUpdateSupported): _update
+    // stays null, so the merged card degrades to the device-daemon track alone.
+    if (!AppUpdate.selfUpdateSupported) return;
     if (_checkingUpdate) return;
     setState(() {
       _checkingUpdate = true;
