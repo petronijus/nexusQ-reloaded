@@ -168,6 +168,11 @@ blue, and the adapter goes discoverable + pairable. Then, from the companion app
 The BT setup link is **bonded and encrypted** (`RequireAuthentication=True`), so
 the WiFi PSK never crosses the air in cleartext, and it is never logged.
 
+> ⚠️ **First-time setup needs the ANDROID app.** The wizard's transport is
+> Bluetooth Classic RFCOMM, which iOS has no public API for (SPP is MFi-gated) —
+> the iOS app (runs since 2026-08-03) shows a note instead of the wizard. Once
+> the Q is on WiFi, the iOS app controls it fully.
+
 > ⚠️ **A fresh flash of a DEV image does NOT arm setup mode.** `docker-build.sh`
 > bakes `private/access/wifi.nmconnection` into dev images, so the device
 > **self-provisions** and `nexusq-setup-needed` correctly reports "not needed".

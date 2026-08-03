@@ -27,6 +27,9 @@ both ends on a trusted LAN.
   (default `"Nexus Q"`), TXT records: `proto=1`, `name=<device name>`, `model=steelhead`,
   `room=<room>`, `id=<stable device id>`.
 - The companion browses `_nexusq._tcp` and connects to the resolved host:port.
+  (Client note, 2026-08-03: on **iOS** the browse is native Bonjour — NWBrowser via the
+  app's `nexusq/bonjour` channel — because raw-socket mDNS needs a restricted Apple
+  entitlement; the wire protocol is identical DNS-SD, nothing changes device-side.)
 - (Optional/bonus, not v1) also answer the stock §1 UDP beacon so the *original* app could discover
   the device. Deferred.
 
@@ -204,6 +207,11 @@ WiFi profile: the companion app carries the device through WiFi join + naming ov
 **Bluetooth RFCOMM** instead of the LAN TCP socket of §1. Implementation:
 `userspace/nexusq-setupd/nexusq-setupd` (device side); the app's Kotlin BT RFCOMM
 platform channel is the client (see the onboarding plan, Task 5/Task 9–10).
+
+> **Client availability (2026-08-03):** RFCOMM restricts this transport to the
+> **Android** app — iOS has no public BT Classic RFCOMM API (SPP is MFi-gated), so
+> the iOS app hides the setup entry point. A future **BLE GATT** carrier for the
+> same envelope (device-side BlueZ) is the recorded candidate to lift that.
 
 ### 8.1 Transport
 

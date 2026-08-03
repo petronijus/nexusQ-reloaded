@@ -4,7 +4,63 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-02 (latest): **Full-system OTA (Phase 1) · glibc-rt package split · app Update-UX (merged "App update" + "System") · reflashed v1.11.9**
+## Session 2026-08-03 (latest): **Companion app runs on iOS — native Bonjour discovery + platform gating (UNCOMMITTED in `companion/app/`)**
+
+Full record: `docs/2026-08-03-ios-companion-port.md`. App-side only — **no
+device/image change**; app stays **1.11.0+28**. Base `main` @ `c0ae9fb`.
+
+### Current state
+- ⚠️ **The work is UNCOMMITTED on `main`** (deliberately — commit only when Petr
+  says): 12 modified files under `companion/app/` + new
+  `ios/Runner/BonjourDiscovery.swift`, `ios/Podfile`, `ios/Podfile.lock`,
+  `macos/Podfile` (the Podfiles **belong in git** — `open_filex` has no SPM
+  support, forcing CocoaPods).
+- **Verified on the iPhone 17 simulator (iOS 26.5; Flutter 3.44 / Xcode 26.6):**
+  ConnectGate discovery + fallback UI (with the new iOS setup note), HomeScreen
+  via `--dart-define=NEXUSQ_MOCK=true` (sphere + LED ring, volume, output,
+  brightness, light themes all render). `flutter build ios --release
+  --no-codesign` passes (18.8 MB Runner.app). Signing team `ASFPR2T2DQ` /
+  bundle id `org.nexusq.nexusqCompanion` were already configured.
+
+### What was done
+1. **iOS discovery = native Bonjour** — `package:multicast_dns` cannot run on
+   iOS 14+ (raw port-5353 sockets need the restricted
+   `com.apple.developer.networking.multicast` entitlement, Apple request-only).
+   `BonjourDiscovery.swift`: NWBrowser browse+resolve of `_nexusq._tcp`, exposed
+   as the `nexusq/bonjour` MethodChannel (`discover {timeoutMs} -> {name, host,
+   port} | nil`); resolution opens a throwaway NWConnection and reads the remote
+   IPv4+port once `.ready` (doubles as a reachability check). Registered in
+   `AppDelegate.didInitializeImplicitFlutterEngine`; the file was added to
+   `Runner.xcodeproj` **by hand** (classic pbxproj). `discovery.dart` branches:
+   iOS → channel, everywhere else → multicast_dns unchanged.
+2. **Platform gating** — `BtSetupClient.supported` (Android-only: setup rides BT
+   Classic RFCOMM; iOS has no public API, SPP is MFi-gated) → ConnectGate shows
+   an explanatory note on iOS instead of "Set up new device" (**setup stays on
+   Android; a WiFi'd Q works fully from iOS**). `AppUpdate.selfUpdateSupported`
+   (Android-only apk hand-off) → on iOS `_checkUpdate` no-ops, the merged "App
+   update" card degrades to the device-daemon track alone. NFC/HCE was already
+   Android-gated.
+
+### Gotchas the next session must know
+- **Release mode is NOT supported on iOS simulators** — debug on the sim;
+  release is for the physical device.
+- `test/connect_gate_setup_entry_test.dart` fails on this Mac with a real-mDNS
+  `SocketException: No route to host` — **PRE-EXISTING, environment-dependent**
+  (fails on clean HEAD `c0ae9fb` too); the test does real multicast I/O.
+
+### WHERE TO CONTINUE (2026-08-03 → next)
+1. **Commit the working tree when Petr approves** (it is deliberately left
+   uncommitted).
+2. **Deploy to the physical iPhone ("Běla")** — needs the phone on cable with
+   Developer Mode enabled.
+3. Phase-2 idea (recorded, not started): **BLE GATT-based first-time setup**
+   (device-side BlueZ GATT server) would lift the iOS setup limitation —
+   CoreBluetooth exposes GATT publicly, unlike RFCOMM.
+4. The standing open lists below still stand.
+
+---
+
+## Session 2026-08-02: **Full-system OTA (Phase 1) · glibc-rt package split · app Update-UX (merged "App update" + "System") · reflashed v1.11.9**
 
 Full record: `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`. Same-day
 continuation of the daemon-OTA milestone below. Commits `dade0a2` (glibc-rt split),

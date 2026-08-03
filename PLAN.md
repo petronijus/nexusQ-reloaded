@@ -3,6 +3,19 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only, uncommitted dev).**
+> Verified on the **iPhone 17 simulator, iOS 26.5** (Flutter 3.44 / Xcode 26.6;
+> `flutter build ios --release --no-codesign` → 18.8 MB Runner.app; app stays
+> **1.11.0+28**, no device/image change). Discovery on iOS is **native Bonjour**
+> (`BonjourDiscovery.swift`, NWBrowser → `nexusq/bonjour` channel) because
+> `package:multicast_dns` needs the restricted Apple multicast entitlement;
+> **first-time BT setup + self-update stay Android-only** (no public iOS RFCOMM
+> API — the connect gate says so; apk hand-off) — a WiFi'd Q is fully controllable
+> from iOS. CocoaPods forced by `open_filex` (Podfiles now tracked). Pending:
+> deploy to the physical iPhone (cable + Developer Mode). **Phase-2 candidate: BLE
+> GATT setup transport (device-side BlueZ)** to lift the iOS setup limitation.
+> Full record: `docs/2026-08-03-ios-companion-port.md`.
+>
 > **2026-08-02 — ✅ FULL-SYSTEM OTA (Phase 1) + glibc-rt SPLIT + app Update-UX.** On top
 > of the daemon-OTA milestone below, the Q now upgrades its **whole system** over the air
 > — the "apt upgrade" of the appliance. `nexusq-control` (**r21→r25**)

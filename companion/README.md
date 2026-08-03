@@ -82,7 +82,15 @@ upgraded systemd 261.1→261.2). ⚠️ the device/system install restarts the c
 (or reboots), so the app link **drops — that is expected**; the app confirms success by
 reconnecting + re-checking the version, never by reading the disconnect as a failure.
 See `../docs/2026-08-02-full-system-ota-and-glibc-rt-split.md` +
-`../docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+`../docs/2026-08-02-device-ota-and-wifi-nogw-heal.md`.)_
+_(**iOS (2026-08-03):** the app now **runs on iOS** — verified on the iPhone 17
+simulator (iOS 26.5). Discovery there is **native Bonjour** (NWBrowser via the
+`nexusq/bonjour` channel — iOS forbids the raw-socket mDNS `package:multicast_dns`
+uses without a restricted entitlement); **first-time BT setup stays Android-only**
+(iOS has no public RFCOMM API — the connect gate says so instead of offering the
+wizard; once the Q is on WiFi, iOS works fully), and self-update is Android-only
+(iOS binaries come from Xcode/TestFlight). See
+`../docs/2026-08-03-ios-companion-port.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

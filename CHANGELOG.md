@@ -6,6 +6,36 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the companion app runs on iOS (2026-08-03; app-side only, no device/image change)
+- **The Flutter companion now runs on iOS** — verified on the **iPhone 17 simulator,
+  iOS 26.5** (Flutter 3.44 / Xcode 26.6); `flutter build ios --release --no-codesign`
+  passes (18.8 MB Runner.app). Deploying to the physical iPhone is still pending
+  (needs the phone on cable with Developer Mode).
+- **mDNS discovery via native Bonjour** — `package:multicast_dns` cannot run on
+  iOS 14+ (raw port-5353 sockets need the restricted
+  `com.apple.developer.networking.multicast` entitlement, Apple-granted on request
+  only). New `ios/Runner/BonjourDiscovery.swift` (NWBrowser browse + resolve of
+  `_nexusq._tcp`, exposed as the `nexusq/bonjour` MethodChannel:
+  `discover {timeoutMs} -> {name, host, port} | nil`; resolution = a throwaway
+  NWConnection whose remote IPv4+port is read once `.ready`, doubling as a
+  reachability check). `discovery.dart` branches: iOS → channel, everywhere else →
+  multicast_dns unchanged.
+- **Platform gating:** `BtSetupClient.supported` (Android-only — first-time setup
+  rides BT Classic RFCOMM, which iOS has no public API for; SPP is MFi-gated) —
+  ConnectGate shows an explanatory note on iOS instead of "Set up new device"
+  (**setup stays on Android; once the Q is on WiFi, iOS works fully**);
+  `AppUpdate.selfUpdateSupported` (Android-only apk hand-off — on iOS the merged
+  "App update" card degrades to the device-daemon track alone). NFC/HCE was
+  already Android-gated.
+- **Build plumbing:** `ios/Podfile` + `Podfile.lock` + `macos/Podfile` now exist
+  and are tracked (`open_filex` has no Swift-Package-Manager support → CocoaPods).
+  Known: release mode is not supported on iOS **simulators** (debug there);
+  `test/connect_gate_setup_entry_test.dart` fails on some LANs with a real-mDNS
+  `SocketException: No route to host` — **pre-existing, environment-dependent**
+  (fails on clean HEAD too). Phase-2 idea recorded: **BLE GATT-based setup**
+  (device-side BlueZ) would lift the iOS setup limitation. See
+  `docs/2026-08-03-ios-companion-port.md`.
+
 ### Added — Full-system OTA (Phase 1): the "apt upgrade" of the whole appliance (`nexusq-control` r21→r25, app 1.10.0→1.11.0)
 - **The Q upgrades its whole system over the air, not just its daemons.** New
   `checkSystemUpdate` / `installSystemUpdate` (**PROTOCOL §12b**), distinct from the
