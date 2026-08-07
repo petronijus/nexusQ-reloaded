@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=62
+pkgrel=63
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -129,13 +129,23 @@ build() {
 package() {
 	devicepkg_package $startdir $pkgname
 
+	# Appliance boots to multi-user, NOT graphical: the HDMI desktop is OFF by
+	# default and comes up ONLY on demand (the app's setDesktop -> `systemctl
+	# start tinydm`). The `ui = lxqt` build leaves /usr/lib/systemd/system/
+	# default.target -> graphical.target, which auto-started the desktop the
+	# moment an HDMI display was plugged in. Override it in /etc (wins over
+	# /usr/lib; unowned, so no conflict). The volume ring still works with the
+	# desktop off because nexusqd applies it directly (see labwc-rc.xml).
+	ln -sf /usr/lib/systemd/system/multi-user.target \
+		"$pkgdir"/etc/systemd/system/default.target
+
 	# LXQt-Wayland is the UI (installed via the build's `ui = lxqt`); these
 	# device files make it actually paint on this GPU-less, headless single-core
 	# OMAP4 board:
 	#  - force the wlroots Pixman SW renderer (else labwc aborts: no GPU)
 	install -Dm644 "$srcdir"/nexusq-wayland.sh \
 		"$pkgdir"/etc/profile.d/nexusq-wayland.sh
-	#  - pin the LXQt compositor to labwc so the full session starts on boot 1
+	#  - pin the LXQt compositor to labwc for the on-demand session
 	install -Dm644 "$srcdir"/lxqt-session.conf \
 		"$pkgdir"/etc/xdg/lxqt/session.conf
 
@@ -173,11 +183,13 @@ package() {
 		"$pkgdir"/etc/pam.d/base-session
 	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
 		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
-	# Front-panel volume ring -> real (PulseAudio) volume. Three pieces:
-	# udev seat/keyboard tag (without it labwc never receives the device),
-	# labwc keybinds in the skel rc.xml, and the nq-vol pactl helper (capped
-	# at 100%). The tray volume applet then follows via the bridge's
-	# panel.conf re-link on every output switch (nexusq-control r7+).
+	# Front-panel volume ring -> real (PulseAudio) volume. nexusqd reads the AVR
+	# evdev node directly and applies the volume via the nq-vol pactl helper
+	# (capped at 100%) — so the ring works with the desktop OFF (nexusqd r12+).
+	# The udev seat/keyboard tag + the (now keybind-less) labwc rc.xml remain for
+	# the on-demand desktop session; the audio keybinds were REMOVED so they don't
+	# double nexusqd's apply when the desktop is up. The tray volume applet follows
+	# PulseAudio via the bridge's panel.conf re-link on every output switch.
 	install -Dm644 "$srcdir"/92-steelhead-avr-keyboard.rules \
 		"$pkgdir"/etc/udev/rules.d/92-steelhead-avr-keyboard.rules
 	install -Dm644 "$srcdir"/labwc-rc.xml \
