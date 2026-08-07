@@ -305,7 +305,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             [])
         .firstWhere((p) => p['name'] == 'nexusq-control',
             orElse: () => {'installed': '?'});
-    return 'App v$kAppVersion · device nexusq-control ${ctrl['installed']}';
+    // On iOS the app binary is App Store/TestFlight-managed and never fetched
+    // for comparison here, so qualify it rather than implying a completed check.
+    final app = AppUpdate.selfUpdateSupported
+        ? 'App v$kAppVersion'
+        : 'App v$kAppVersion (App Store)';
+    return '$app · device nexusq-control ${ctrl['installed']}';
   }
 
   @override
@@ -502,8 +507,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _companionBusy
                             ? 'Updating…'
                             : (_companionUpdateAvailable
-                                ? 'App update available'
-                                : 'App is up to date'),
+                                // On iOS the phone-app track is never checked
+                                // (App Store-managed), so the card speaks only
+                                // for the device software it actually verified.
+                                ? (AppUpdate.selfUpdateSupported
+                                    ? 'App update available'
+                                    : 'Device update available')
+                                : (AppUpdate.selfUpdateSupported
+                                    ? 'App is up to date'
+                                    : 'Device software is up to date')),
                         style: const TextStyle(color: NexusQColors.white)),
                     subtitle: Text(_companionStatusLine(),
                         style: const TextStyle(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'nfc/device_tap.dart';
 import 'nfc/hce_listener.dart';
 import 'protocol/client.dart';
@@ -19,6 +20,16 @@ const _mock = bool.fromEnvironment('NEXUSQ_MOCK');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Dark theme on a dark canvas: force LIGHT (white) status-bar icons so the
+  // clock/battery stay readable. AppBar screens compute this from the bar's
+  // brightness, but the full-screen no-AppBar screens (ConnectGate — the first
+  // thing shown — and the setup wizard) would otherwise fall to the iOS default
+  // dark icons on the dark background. This global default covers them too.
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // Android
+    statusBarBrightness: Brightness.dark, // iOS
+  ));
   await StockAssets.init();
   NexusQClient? initial;
   if (_host.isNotEmpty) {

@@ -84,6 +84,31 @@ The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios
   on some networks with `SocketException: No route to host` — pre-existing and
   environment-dependent, not an iOS regression (fails on a clean checkout too).
 
+### Parity pass 2026-08-07 (v1.11.1)
+
+A full iOS↔Android parity audit (two adversarially-verified agent sweeps + a
+manual read) confirmed the shared Flutter UI is identical by construction — one
+`MaterialApp`, one theme, no Cupertino/`Platform.is*` render branches — and that
+**device-daemon OTA and full-system OTA work identically on iOS** (they go over
+the control socket). Three items were reconciled:
+
+- **Status bar:** the dark theme set no `SystemUiOverlayStyle`, so the
+  no-AppBar screens (ConnectGate, setup) would draw dark status-bar icons on the
+  dark canvas on iOS. Now forced light globally (`main()`) and in `appBarTheme`.
+- **"App update" copy on iOS:** the merged card claimed "App is up to date"
+  though the app track is never checked on iOS (App Store-managed). It now scopes
+  its title/subtitle to the device track when `!AppUpdate.selfUpdateSupported`.
+- **Font:** dropped the hard-coded `fontFamily: 'Roboto'` — it rendered Roboto on
+  Android but silently fell back to San Francisco on iOS (Roboto isn't bundled).
+  Now each platform uses its native face (deliberate: native > pixel-identical).
+
+- **macOS is NOT wired for discovery** (aspirational target — only iOS is
+  verified): there is no `macos/Runner/BonjourDiscovery.swift` and no
+  `com.apple.developer.networking.multicast` entitlement, so under the app
+  sandbox `multicast_dns` (raw 5353) is blocked and auto-discovery returns
+  nothing. Use the manual host field / `NEXUSQ_HOST` on macOS, or add a native
+  Bonjour bridge mirroring iOS. iPhone is unaffected.
+
 ## Devices screen (step 2, added 2026-07-15 — device side released in v1.10.0)
 
 **The Q has no screen and no input device, so this screen IS the Q's Bluetooth

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// Design system distilled from the original Nexus Q app
 /// (see docs/2026-06-30-companion-design-language.md): Holo-dark canvas,
@@ -52,7 +53,10 @@ ThemeData buildNexusQTheme() {
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: NexusQColors.canvas,
-    fontFamily: 'Roboto',
+    // No explicit fontFamily: let each platform use its native face (Roboto on
+    // Android, San Francisco on iOS/macOS via Flutter's default Typography).
+    // Hard-coding 'Roboto' rendered Roboto on Android but silently fell back to
+    // SF on iOS (Roboto isn't bundled) — same result, but misleading in code.
     sliderTheme: const SliderThemeData(
       activeTrackColor: NexusQColors.accent,
       inactiveTrackColor: NexusQColors.divider,
@@ -65,6 +69,13 @@ ThemeData buildNexusQTheme() {
       foregroundColor: NexusQColors.accent,
       elevation: 0,
       centerTitle: true,
+      // Light status-bar icons on the dark canvas (matches the global default
+      // set in main()); explicit so an AppBar never recomputes it back to dark.
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
       titleTextStyle: TextStyle(
         color: NexusQColors.accent,
         fontSize: NexusQSpace.titleSize,
