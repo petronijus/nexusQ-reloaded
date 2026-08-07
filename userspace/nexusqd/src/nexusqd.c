@@ -29,6 +29,8 @@
 #define THEMES_DIR "/etc/nexusqd/themes"
 #define VOL_STEP 2          /* master-volume % per rotary detent (the ring emits many events/turn) */
 #define MUTE_BLINK_S 0.5    /* mute-LED blink half-period for "update available" (CTL_MBLINK) */
+#define VOL_APPLY_S  0.05   /* min seconds between nq-vol applies — coalesces a detent's
+                             * event burst into one step and caps a fast turn's rate */
 
 /* AVR keepalive: the AVR firmware stops lighting the ring if the host stops
  * sending frame commits for too long. That happens once the idle screensaver
@@ -119,6 +121,23 @@ static void apply_mute_led(int muted) {
     int r, g, b; reaction_mute_led(muted, &r, &g, &b); avr_set_mute(r, g, b);
 }
 
+/* Apply a front-panel volume/mute action to PulseAudio via nq-vol, run in the
+ * appliance user's session (uid 10000). Fire-and-forget: SIGCHLD is SIG_IGN, so
+ * the child is auto-reaped and we never block the render loop. This makes the
+ * touch ring work HEADLESS — nexusqd is always running, whereas the labwc keybind
+ * that used to run nq-vol needs the desktop compositor (labwc), which only starts
+ * with an HDMI display. arg is "up" | "down" | "mute". */
+static void nqvol_apply(const char *arg) {
+    pid_t p = fork();
+    if (p != 0) return;                     /* parent (or fork failed): carry on */
+    int nul = open("/dev/null", O_RDWR);    /* detach stdio so pactl can't stall us */
+    if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); if (nul > 2) close(nul); }
+    execlp("runuser", "runuser", "-u", "user", "--",
+           "env", "XDG_RUNTIME_DIR=/run/user/10000", "/usr/bin/nq-vol", arg,
+           (char *)NULL);
+    _exit(127);
+}
+
 int main(void) {
     double start = now_s();
     struct reaction rx = {0};
@@ -131,6 +150,10 @@ int main(void) {
      * clears it so the physical mute state always wins. */
     int mute_blink = 0, mute_blink_on = 0, mute_blink_rgb[3] = { 0, 0, 0 };
     double mute_blink_next = 0.0;
+    /* front-panel volume ring -> PulseAudio (via nq-vol). vol_dir holds the latest
+     * turn direction; the main loop applies it at most once per VOL_APPLY_S, which
+     * coalesces a detent's event burst and rate-limits a fast continuous turn. */
+    int vol_dir = 0; double vol_apply_next = 0.0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
                                  * (companion `brightness N` over the control socket) */
 
@@ -242,12 +265,14 @@ int main(void) {
                 if (ev[i].code == KEY_MUTE) {
                     muted = !muted; apply_mute_led(muted);
                     if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; }   /* unmuted -> resume the update blink */
+                    nqvol_apply("mute");                    /* toggle the real PA mute */
                 } else if (ev[i].code == KEY_VOLUMEUP || ev[i].code == KEY_VOLUMEDOWN) {
                     volume += (ev[i].code == KEY_VOLUMEUP) ? VOL_STEP : -VOL_STEP;
                     if (volume > 100) volume = 100;
                     if (volume < 0) volume = 0;
-                    reaction_on_volume(&rx, volume, now);
+                    reaction_on_volume(&rx, volume, now);   /* LED overlay */
                     avr_set_mute(0, 0, 0);                  /* mute LED off during the volume overlay */
+                    vol_dir = (ev[i].code == KEY_VOLUMEUP) ? 1 : -1;  /* apply (debounced) below */
                 }
             }
         }
@@ -329,6 +354,16 @@ int main(void) {
             if (mute_blink_on) avr_set_mute(mute_blink_rgb[0], mute_blink_rgb[1], mute_blink_rgb[2]);
             else               avr_set_mute(0, 0, 0);
             mute_blink_next = now + MUTE_BLINK_S;
+        }
+
+        /* front-panel volume ring -> PulseAudio, debounced: apply the pending turn
+         * direction at most once per VOL_APPLY_S. One nq-vol step per apply coalesces
+         * a detent's event burst; a held fast turn steps at ~1/VOL_APPLY_S. Makes the
+         * ring work with the desktop OFF (nexusqd is always up; labwc is not). */
+        if (vol_dir != 0 && now >= vol_apply_next) {
+            nqvol_apply(vol_dir > 0 ? "up" : "down");
+            vol_dir = 0;
+            vol_apply_next = now + VOL_APPLY_S;
         }
 
         /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND.
