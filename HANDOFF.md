@@ -31,14 +31,39 @@ unchanged `nexusq-control` **r25** / `btagent` **r4** / `setupd` **r4**.
   grows to **minutes**.
 - **Ruled OUT:** clock mismatch (+100 ppm, normal), the ALSA capture buffer (~3 ms,
   `buffer_size` never fills), `tsched=0` (tested live — latency still grew).
-- **Related:** the loopback busy-polls a **stalled** capture (source paused, `hw_ptr`
-  frozen, state RUNNING) → steady nice-CPU + ~5 °C even when idle (78→73 °C when the
-  service is stopped). Overall thermals fine.
-- **Likely fix (unimplemented, needs HOURS to validate):** drop PA's latency smoother
-  for **closed-loop rate tracking** (`alsaloop --sync=samplerate`) between the two
-  independently-clocked cards, keeping PA mixing. Path: `pmos/device-google-steelhead/
-  nexusq-uac2-in` (+ `.service`). Source device: `~/Documents/Dev/xiaomi-tvbox-twilight`
-  (adb `192.168.20.169:5555`; USB→host via `gpioset -t 0 -c 0 16=0`).
+- **Related — steady CPU + heat in SILENCE (deeper root cause):** the loopback
+  sink-input is **never corked** (`Corked: no`), so `module-suspend-on-idle` (loaded)
+  can **never** suspend the TAS5713 sink → DAC/clock/DMA/speex resampler powered **24/7**
+  (`module-alsa-source` also timer-polls the async capture). Die **78→73 °C** when
+  `nexusq-uac2-in` is stopped; during streaming + the nexusqd LED-visualizer
+  `arecord -D pulse` capture the CPU pins at **1.2 GHz / 91–94 °C** — **not yet
+  throttling** (`scaling_max` still 1200, trip higher). The `arecord` is the
+  **legitimate** LED music visualizer, not a leak.
+- **Likely fix (unimplemented, needs HOURS to validate):** the SAME bridge redesign —
+  **closed-loop rate tracking** (`alsaloop --sync=samplerate`) **or**
+  **cork-on-silence** so the sink can suspend, keeping PA mixing. Path:
+  `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). Source device:
+  `~/Documents/Dev/xiaomi-tvbox-twilight` (adb `192.168.20.169:5555`; USB→host via
+  `gpioset -t 0 -c 0 16=0`).
+
+### ⚠️ NEW FINDING — System OTA reports "system update failed" (mkinitfs/boot-deploy trigger, NOT fixed)
+Full record: `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
+- **Symptom:** the app's **System** update (`installSystemUpdate`) shows **"system
+  update failed"**; `apk fix -s` shows `(1/1) Reinstalling postmarketos-mkinitfs … 1
+  error` — a **persistent pending trigger** that re-fails on **every** apk transaction.
+- **Cause** (`/var/log/apk.log`): `boot-deploy` errors `No kernel found in /boot` and
+  exits 1. `/boot` is an **empty plain dir** on this device (not a mount) because the Q
+  boots **ramdisk-less from the flashed boot partition** — `linux-google-steelhead`
+  ships `boot/vmlinuz` but it's stripped from the rootfs.
+- **Nuance:** **packages still install** (device r63 + firmware r63 + nexusqd r12 all
+  committed, verified in `apk info`; device boots fine) — the trigger runs at the end
+  and doesn't roll back. It's **cosmetic-but-alarming + blocks a clean apk state**. The
+  live reference device **currently carries the pending failing trigger.**
+- **Phase-2 (kernel/boot OTA) territory. Candidate fixes (NOT done):** (A) stop
+  stripping `/boot/vmlinuz` → trigger no-ops (+ kernel-OTA groundwork); (B) neutralize
+  the trigger via `device-google-steelhead`; (C) full Phase 2 = userspace boot-partition
+  (p9) writer + recovery fallback. Any fix must verify boot-deploy does NOT touch the
+  real boot partition (default output = the plain `/boot`).
 
 ---
 

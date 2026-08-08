@@ -50,6 +50,29 @@ polling → steady **nice-CPU** and ~**+5 °C** even with no audio (die **78 °C
 (73–78 °C die; critical ~98–99 °C), so this is a waste, not a hazard. `tsched=0`
 would blunt this busy-poll (but, per above, not the delay).
 
+#### Deeper root cause (measured 2026-08-08) — the loopback never lets the sink suspend
+`module-suspend-on-idle` **IS loaded**, but the `module-loopback` **sink-input is
+never corked** (`Corked: no`): the loopback feeds the TAS5713 sink **continuously**
+(silence when the source is idle/stalled), so suspend-on-idle can **NEVER** suspend
+the sink. That keeps the **TAS5713 DAC + the audio clock + the DMA + the
+speex-float resampler powered and running 24/7** — that is what burns the steady CPU
+and the +5 °C in silence. On top of it, `module-alsa-source` **timer-polls** the
+async UAC2 gadget capture (`Flags: LATENCY` / `tsched`).
+
+Numbers, so the next session doesn't re-derive them:
+- Stopping `nexusq-uac2-in` drops nice-CPU to **~0** and die temp **78 → 73 °C**.
+- During **active** streaming + the nexusqd LED music visualizer's `arecord -D pulse`
+  capture, the CPU sits pinned at **1.2 GHz** and **~91–94 °C** — **not yet
+  thermally throttling** (`scaling_max_freq` still 1200; the trip is higher; overall
+  thermals still within range, critical ~98–99 °C).
+- The `arecord` is **legitimate** (nexusqd's LED music visualizer reading the sink),
+  **not a leak** — don't flag it as a runaway.
+
+**Fix ties to the SAME bridge redesign** as the delay above: `alsaloop
+--sync=samplerate`, **or** making the loopback **cork-on-silence** so the sink can
+actually suspend when nothing is playing. Record both under the one USB-audio
+redesign follow-up.
+
 ### Likely fix — NOT yet implemented (needs hours-long validation)
 Redesign the bridge away from PulseAudio's broken latency smoother. Candidate:
 `alsaloop --sync=samplerate` — **closed-loop sample-rate tracking** between the two
@@ -97,3 +120,10 @@ work-volume repo for `publish-ota-repo.sh` — **no full rootfs / boot.img**. Pu
 addition; the full-pipeline path is unchanged.
 
 > `024d928` is **committed and pushed to `main`** (2026-08-08, 024d928).
+
+### Companion finding — System OTA reports "system update failed"
+The same session found the **System** update track (`installSystemUpdate`) reporting
+**"system update failed"** — a `postmarketos-mkinitfs` / `boot-deploy` pending
+trigger that fails because `/boot` is empty on this ramdisk-less device (the packages
+still install; it's cosmetic + blocks a clean apk state). Full record:
+`docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.

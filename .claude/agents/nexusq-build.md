@@ -143,6 +143,21 @@ such file or directory` and the committed r63 never built. Fixed in `024d928`
 `$pkgdir` subdir before the first `ln`/`install -T` into it** — a warm/incremental repo
 can hide the failure until a clean build.
 
+⚠️ **KNOWN OPEN (2026-08-08) — the rootfs' empty `/boot` makes a System OTA report
+"system update failed".** On-device, an `apk upgrade`/`installSystemUpdate` leaves a
+**persistent pending `postmarketos-mkinitfs` trigger** that re-fails every apk run:
+`boot-deploy` errors `No kernel found in /boot`. `/boot` is an **empty plain dir** on
+this device because the Q boots **ramdisk-less from the flashed boot partition** —
+`linux-google-steelhead` ships `boot/vmlinuz` (+ `System.map`/`config`/`dtbs`) but it's
+stripped from the rootfs. The packages **do** install (the trigger runs last, no
+rollback); it's cosmetic + blocks a clean apk state. **Candidate build-side fixes (NOT
+implemented — need on-device validation that boot-deploy does NOT write the real boot
+partition; its default output dir is the plain `/boot`, so harmless):** (A) **stop
+stripping `/boot/vmlinuz`** from the rootfs so the trigger no-ops (also groundwork for
+kernel OTA); (B) neutralize the mkinitfs trigger via `device-google-steelhead`; (C) full
+**Phase 2** — a userspace boot-partition (p9) writer + recovery fallback. See
+`docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
+
 ### The fakeroot/qemu hang (most important thing to understand)
 
 The single nastiest failure this pipeline ever had: the build froze **forever** at

@@ -120,6 +120,13 @@ Findings are tagged by `kind`; interpret them like this:
   right after a System update is expected. See
   `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md` +
   `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
+  ⚠️ **KNOWN OPEN (2026-08-08): a System OTA reports "system update failed" even though
+  the packages installed.** `apk fix -s` shows a **persistent pending
+  `postmarketos-mkinitfs` trigger** (`1 error`, re-fails every apk run): `boot-deploy`
+  can't find a kernel in `/boot` (empty plain dir on this ramdisk-less device — kernel
+  is in the flashed boot partition). Verify with `apk info` (packages committed); don't
+  read it as a broken update. NOT fixed, Phase-2 territory. See
+  `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.
   ⚠️ **`ls_active`/`ls_restarts` are UNTRUSTWORTHY in captures from device

@@ -12,12 +12,22 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (committed, **pushed**): r63 APKBUILD `install -dm755 $pkgdir/etc/systemd/system`
 > before the `default.target` symlink (clean build was failing) + a
 > **`OTA_PACKAGES_ONLY=1`** two-package build gate in `docker-build.sh`. **⚠️ NEW
-> OPEN ISSUE:** **USB-Audio-in (the UAC2 DAC) drifts ~3 min late over a long session**
-> — `module-alsa-source` on the async capture reports a bogus uptime-growing latency
+> OPEN ISSUES (2 new, both diagnosed on-device 2026-08-08, NOT fixed):**
+> **(1) USB-Audio-in (the UAC2 DAC) drifts ~3 min late over a long session** —
+> `module-alsa-source` on the async capture reports a bogus uptime-growing latency
 > that poisons `module-loopback`'s resampler (pegs ±1 % rail, minutes of backlog);
-> ruled out clock mismatch/capture-buffer/`tsched=0`; likely fix = closed-loop
-> `alsaloop --sync=samplerate`, needs hours-long validation. Full record:
+> ruled out clock mismatch/capture-buffer/`tsched=0`. **Plus:** it also burns steady
+> CPU + heat in **silence** — the loopback sink-input is **never corked**, so
+> `module-suspend-on-idle` can't suspend the TAS5713 sink (DAC/clock/DMA/resampler stay
+> on 24/7). Likely fix = closed-loop `alsaloop --sync=samplerate` **or** cork-on-silence,
+> needs hours-long validation. Record:
 > `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+> **(2) System OTA reports "system update failed"** — the `postmarketos-mkinitfs` /
+> `boot-deploy` trigger fails (`No kernel found in /boot`) because `/boot` is an empty
+> plain dir on this ramdisk-less device; a **persistent pending trigger** that re-fails
+> on every apk run. Packages still install (r63/r12 committed), so it's cosmetic +
+> blocks a clean apk state = **Phase-2 (kernel/boot OTA)** territory. Record:
+> `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 >
 > **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only, uncommitted dev).**
 > Verified on the **iPhone 17 simulator, iOS 26.5** (Flutter 3.44 / Xcode 26.6;
@@ -600,6 +610,35 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
   socket removed → the app saw "bluetooth agent unreachable" every 3 s. **Fixed (btagent
   r4): `_tick` no longer opens the socket; `start_control()` is idempotent; fd flat at
   8.** Found on the first try by the app's new debug log.
+
+### Follow-up: USB-Audio bridge redesign (2026-08-08, on-device; NOT started)
+Two on-device findings, **one fix** — replace the PulseAudio `module-alsa-source` →
+`module-loopback` bridge on the async UAC2 capture:
+- **Playback drifts ~3 min late over a long session** — the loopback's latency-driven
+  resampler is fed a bogus uptime-growing source latency (5134 s seen), pegs the ±1 %
+  rail, backlog grows to minutes. Ruled out clock mismatch (+100 ppm normal), the
+  capture buffer (~3 ms), and `tsched=0`.
+- **Steady CPU + heat in SILENCE** — the loopback sink-input is **never corked**
+  (`Corked: no`), so `module-suspend-on-idle` (loaded) can never suspend the TAS5713
+  sink → DAC/clock/DMA/speex resampler powered 24/7 (die 78→73 °C when the unit is
+  stopped; during streaming + the nexusqd LED-visualizer `arecord` the CPU pins at
+  1.2 GHz / 91–94 °C, not yet throttling).
+- **Candidate fix (needs HOURS to validate):** `alsaloop --sync=samplerate`
+  (closed-loop rate tracking) **or** cork-on-silence, keeping PA mixing. Path:
+  `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). Record:
+  `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+
+### Follow-up: System OTA "system update failed" — mkinitfs/boot-deploy trigger (2026-08-08; NOT fixed) — Phase-2 territory
+The app's **System** update reports **"system update failed"** and `apk fix -s` shows
+a **persistent pending `postmarketos-mkinitfs` trigger** (re-fails on every apk run):
+`boot-deploy` finds `No kernel found in /boot` because `/boot` is an empty plain dir on
+this ramdisk-less device (kernel lives in the flashed boot partition). **Packages still
+install** (r63/r12 committed) — cosmetic + blocks a clean apk state. Candidate fixes:
+**(A)** stop stripping `/boot/vmlinuz` so the trigger no-ops (also kernel-OTA
+groundwork); **(B)** neutralize the trigger via `device-google-steelhead`; **(C)** full
+**Phase 2** boot-partition (p9) writer + recovery fallback. Ties into the existing
+"kernel stays a fastboot flash = Phase 2" open item. Record:
+`docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### Carried forward, not root-caused
 - **v1.9.0 onboarding pairing flake** — 1 run × 2 failed attempts; 3+ runs first-try

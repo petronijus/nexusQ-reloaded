@@ -114,6 +114,14 @@ blind to nexusqd's writes — see the bug note below).
 > install** — a transient, expected state, not a stuck frame. The install restarts the
 > daemons (incl. `nexusq-control`), so a **brief `nexusqd`/bridge restart right after
 > an OTA is expected**, not a `nexusqd_restart` fault.
+>
+> ⚠️ **Known open (2026-08-08): a System OTA reports "system update failed" but the
+> packages installed.** `apk fix -s` shows a **persistent pending
+> `postmarketos-mkinitfs` trigger** (`1 error`, re-fails every apk run): `boot-deploy`
+> finds `No kernel found in /boot` (empty plain dir — the Q boots ramdisk-less from the
+> flashed boot partition). Verify with `apk info` (packages committed); don't read it as
+> a broken update. NOT fixed, Phase-2 territory. See
+> `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 **Crashes / kernel** — new error lines in `dmesg`
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and
@@ -146,7 +154,12 @@ card is present and `nexusq-uac2-in` loopbacks it into the sink (TAS5713 RUNNING
 late — `module-alsa-source` on the async `hw:UAC2Gadget` reports a bogus uptime-growing
 latency that pegs `module-loopback`'s resampler to the ±1 % rail (48480 Hz). NOT a
 clock mismatch (+100 ppm, normal), NOT the capture buffer (~3 ms), and `tsched=0`
-doesn't fix it; healthy in a short window / after a service restart. See
+doesn't fix it; healthy in a short window / after a service restart. It **also burns
+steady CPU + heat in silence** — the loopback sink-input is **never corked**
+(`Corked: no`), so `module-suspend-on-idle` (loaded) can never suspend the TAS5713 sink
+(DAC/clock/DMA/resampler on 24/7; die 78→73 °C when `nexusq-uac2-in` is stopped).
+⚠️ **A 1.2 GHz / 91–94 °C pin during active streaming is NOT a fault** — the nexusqd LED
+music visualizer's `arecord -D pulse` capture is legitimate (not throttling). See
 `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 The Q has **no optical/HDMI/line input** — every port is an OUTPUT.
 

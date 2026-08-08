@@ -45,16 +45,49 @@ All notable changes to Nexus Q Reloaded. Format follows
   ≈ 3 ms, `buffer_size` 16384 never fills); **`tsched=0`** (tested live — source
   latency still grew 25 s→33 s, so it does NOT fix the delay, though it WOULD blunt
   the related idle busy-poll).
-- **Related:** the broken loopback **busy-polls a STALLED capture** (Xiaomi paused,
-  `hw_ptr` frozen, PCM state RUNNING) → steady nice-CPU + ~**5 °C** even when nothing
-  plays (78 °C → 73 °C die when the service is stopped). Overall thermals fine (73–78 °C
-  die; critical ~98–99 °C).
-- **Likely fix (NOT implemented, needs hours-long validation):** replace PA's broken
-  latency smoother with **closed-loop sample-rate tracking** — e.g.
-  `alsaloop --sync=samplerate` between the two independently-clocked cards — while
+- **Related — steady CPU + heat in SILENCE (deeper root cause, measured 2026-08-08):**
+  `module-suspend-on-idle` **is loaded**, but the `module-loopback` **sink-input is
+  never corked** (`Corked: no`) — the loopback feeds the TAS5713 sink continuously
+  (silence when the source is idle/stalled), so suspend-on-idle can **never suspend**
+  the sink → the **TAS5713 DAC + audio clock + DMA + speex-float resampler stay powered
+  24/7**. (`module-alsa-source` also timer-polls the async capture, `Flags: LATENCY`.)
+  Evidence: stopping `nexusq-uac2-in` drops nice-CPU to ~0 and die **78 → 73 °C**;
+  during active streaming + the nexusqd LED-visualizer `arecord -D pulse` capture the
+  CPU pins at **1.2 GHz / ~91–94 °C** — **not yet throttling** (`scaling_max` still
+  1200; trip higher; overall thermals within range). The `arecord` is the **legitimate**
+  LED music visualizer, not a leak.
+- **Likely fix (NOT implemented, needs hours-long validation):** the SAME bridge
+  redesign — replace PA's broken latency smoother with **closed-loop sample-rate
+  tracking** (`alsaloop --sync=samplerate` between the two independently-clocked
+  cards), **or** make the loopback **cork-on-silence** so the sink can suspend — while
   still routing through PulseAudio so USB audio keeps mixing with Spotify/AirPlay/Roon.
   Path: `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). See
   `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+
+### Known issues — System OTA reports "system update failed" (mkinitfs/boot-deploy trigger) (2026-08-08, measured on-device; NOT fixed)
+- **Symptom:** the app's **System** update (`installSystemUpdate`, PROTOCOL §12b) shows
+  **"system update failed"**, and `apk fix -s` reports `(1/1) Reinstalling
+  postmarketos-mkinitfs … 1 error` — a **persistent pending trigger** that re-fails on
+  **every** future apk transaction.
+- **Root cause** (`/var/log/apk.log`): `ERROR: No kernel found in /boot (checked:
+  vmlinuz*, linux.efi)` → `boot-deploy failed → exit status 1` → the
+  `postmarketos-mkinitfs-2.11.1-r0.trigger` exits 1. The trigger runs
+  `/usr/bin/boot-deploy`, which requires a kernel in `/boot`; on this device **`/boot`
+  is an EMPTY plain dir** (not a mount — `findmnt /boot` empty). `linux-google-steelhead`
+  **does** ship `boot/vmlinuz`, but it is stripped from the rootfs because the Q boots
+  **ramdisk-less directly from the flashed boot partition** (see `scripts/make-bootimg.py`).
+- **Nuance — packages DO install despite the "failure":** the trigger runs at the end
+  and does not roll back; `device-google-steelhead` r63 + firmware r63 + `nexusqd` r12
+  all committed (verified in `apk info`), and the device boots fine (kernel is in the
+  flashed boot partition). The failure is **cosmetic-but-alarming** + **blocks a clean
+  apk state**. The live reference device currently carries the pending failing trigger.
+- **This is Phase-2 (kernel/boot OTA) territory. Candidate fixes (NOT implemented):**
+  **(A)** stop stripping `/boot/vmlinuz` so boot-deploy finds a kernel and the trigger
+  succeeds as a harmless no-op (also groundwork for kernel OTA); **(B)** neutralize the
+  mkinitfs trigger on this device via `device-google-steelhead`; **(C)** full Phase 2 —
+  a userspace boot-partition (p9) writer + recovery fallback. Any fix must verify
+  boot-deploy does NOT touch the real boot partition (default output dir is the plain
+  `/boot`, so harmless). See `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### Added — the companion app runs on iOS (2026-08-03; app-side only, no device/image change)
 - **The Flutter companion now runs on iOS** — verified on the **iPhone 17 simulator,

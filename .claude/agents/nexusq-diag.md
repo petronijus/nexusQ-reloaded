@@ -223,10 +223,15 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
     (`delay`/`avail` ~144 frames ≈ 3 ms, `buffer_size` 16384 never fills), and
     **`tsched=0` does NOT fix it** (tested live — source latency still grew). Healthy in
     a short window / right after `systemctl --user restart nexusq-uac2-in` (~134 ms,
-    resampler ~48002 Hz); the fault only shows over **hours**. Related: the loopback
-    busy-polls a **stalled** capture (source paused, `hw_ptr` frozen, state RUNNING) →
-    steady nice-CPU + ~5 °C even idle (78→73 °C when the unit is stopped). Likely fix
-    (unimplemented) = closed-loop `alsaloop --sync=samplerate`. See
+    resampler ~48002 Hz); the fault only shows over **hours**. Related — **steady CPU +
+    heat in SILENCE:** `module-suspend-on-idle` **is loaded** but the loopback
+    sink-input is **never corked** (`Corked: no`), so it feeds the TAS5713 sink
+    continuously and suspend-on-idle can **never** suspend it → DAC/clock/DMA/speex
+    resampler powered 24/7 (die 78→73 °C when `nexusq-uac2-in` is stopped). ⚠️ **A
+    1.2 GHz / 91–94 °C pin during active streaming is NOT a fault** — the nexusqd LED
+    music visualizer's `arecord -D pulse` capture is **legitimate** (not throttling —
+    `scaling_max` still 1200, trip higher). Likely fix (unimplemented) = closed-loop
+    `alsaloop --sync=samplerate` **or** cork-on-silence. See
     `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 - 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (**v1.9.0** = device r47 /
   setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2 — NOT on flashed
@@ -466,6 +471,14 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   update is **expected**, not a hang/crash. See
   `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md` +
   `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
+  ⚠️ **KNOWN OPEN (2026-08-08): a System OTA reports "system update failed" but the
+  packages actually installed.** `apk fix -s` shows `(1/1) Reinstalling
+  postmarketos-mkinitfs … 1 error` — a **persistent pending trigger** (re-fails every
+  apk run). Cause: `boot-deploy` errors `No kernel found in /boot` because `/boot` is an
+  **empty plain dir** on this ramdisk-less device (kernel is in the flashed boot
+  partition). **Do NOT read this as a broken update or a failed unit** — verify with
+  `apk info` (the packages committed) and note the pending trigger. NOT fixed; Phase-2
+  territory. See `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 - **failed_unit** (warn/crit) — a systemd unit is failed. On a **pre-fix** image the
   usual culprit is **python**: `python3` SIGSEGVs on ARMv7 (`onboard`,
   `blueman-applet`, `sleep-inhibitor.service`, `gdb`) — a **flash** corruption (the old
