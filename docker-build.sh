@@ -662,6 +662,68 @@ pmbootstrap checksum nexusq-glibc-rt 2>&1 || true
 echo "Generating checksums for firmware package..."
 pmbootstrap checksum firmware-google-steelhead 2>&1 || true
 
+# --- OTA_PACKAGES_ONLY: targeted two-package OTA build -------------------------
+# For an OTA that ships ONLY config/daemon apks (not a fresh rootfs/boot.img),
+# rebuilding the whole rootfs is wasteful. Set OTA_PACKAGES_ONLY=1 to build just
+# nexusqd + device-google-steelhead (both --force so a bumped pkgrel is actually
+# re-packed into the work-volume repo), sign them with the volume's existing
+# abuild key (config_abuild, re-owned to uid 12345 in Phase 7a above), export the
+# freshly-built apks to /tmp/output, and exit. All the load-bearing setup (Phase
+# 5 aports staging, 6b abuild-as-root patch, 7 config, 7a REPODEST ownership, 7b
+# checksums) has already run verbatim above, so the apks land in
+# $WORK/packages/<channel>/armv7 exactly as a full build would produce them --
+# ready for scripts/publish-ota-repo.sh. The two apks' runtime depends
+# (nexusq-glibc-rt, control/btagent/setupd, firmware, python3) are NOT rebuilt:
+# they are unchanged and already cached in the warm volume; abuild only needs
+# them at rootfs-install time, not to build these two packages.
+if [ "${OTA_PACKAGES_ONLY:-0}" = "1" ]; then
+    echo ""
+    echo "=== OTA_PACKAGES_ONLY=1: building ONLY nexusqd + device-google-steelhead ==="
+    sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
+    _ota_fail=0
+    for _ota_pkg in nexusqd device-google-steelhead; do
+        echo ""
+        echo "--- OTA build: $_ota_pkg ---"
+        set +e
+        # Regenerate per-file checksums against the just-staged sources (the
+        # aports ship sha512sums="SKIP" placeholders), then force a rebuild so a
+        # bumped pkgrel is not skipped by a stale same-name apk in the warm repo.
+        pmbootstrap checksum "$_ota_pkg" 2>&1 || true
+        pmbootstrap --no-cross build "$_ota_pkg" --arch armv7 --force 2>&1
+        _ota_rc=$?
+        set -e
+        echo "=== $_ota_pkg build exit code: $_ota_rc ==="
+        if [ $_ota_rc -ne 0 ]; then
+            echo "  ERROR: $_ota_pkg build FAILED (exit $_ota_rc). Key log lines:"
+            grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+            _ota_fail=1
+            continue
+        fi
+        # pkgrel-EXACT export (mirrors the Phase 7c logic): the persistent
+        # work-volume repo accumulates stale apks, so match the precise
+        # pkgver-r<pkgrel> from the staged APKBUILD, not a bare name glob.
+        _ota_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/$_ota_pkg/APKBUILD" | head -1)
+        _ota_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/$_ota_pkg/APKBUILD" | head -1)
+        _ota_apk=$(find "$WORK/packages" -name "${_ota_pkg}-${_ota_pv}-r${_ota_pr}.apk" -print -quit 2>/dev/null)
+        if [ -n "$_ota_apk" ]; then
+            cp "$_ota_apk" /tmp/output/ && echo "  Exported: $(basename "$_ota_apk")  ($(du -h "$_ota_apk" | cut -f1))"
+            echo "  In-volume repo path: $_ota_apk"
+        else
+            echo "  ERROR: $_ota_pkg built but ${_ota_pkg}-${_ota_pv}-r${_ota_pr}.apk not found under $WORK/packages"
+            _ota_fail=1
+        fi
+    done
+    echo ""
+    echo "=== OTA_PACKAGES_ONLY summary ==="
+    ls -1 "$WORK"/packages/*/armv7/nexusqd-*.apk "$WORK"/packages/*/armv7/device-google-steelhead-*.apk 2>/dev/null | sort -V
+    if [ $_ota_fail -ne 0 ]; then
+        echo "=== OTA BUILD FAILED ==="
+        exit 1
+    fi
+    echo "=== OTA BUILD COMPLETE (both apks in the work-volume repo, signed) ==="
+    exit 0
+fi
+
 # NOTE: there is intentionally no fakeroot workaround here anymore. A previous
 # revision installed `fakeroot-tcp` into the armv7 buildroot believing the build
 # hung on fakeroot's *SysV-IPC* daemon under qemu. That diagnosis was wrong: the

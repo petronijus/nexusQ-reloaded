@@ -136,6 +136,10 @@ package() {
 	# moment an HDMI display was plugged in. Override it in /etc (wins over
 	# /usr/lib; unowned, so no conflict). The volume ring still works with the
 	# desktop off because nexusqd applies it directly (see labwc-rc.xml).
+	# This is the FIRST thing to touch $pkgdir/etc/systemd/system, so create it
+	# here (later blocks reuse it): devicepkg_package does not, and ln -s cannot
+	# make the parent dir -> "No such file or directory" (broke the first r63).
+	install -dm755 "$pkgdir"/etc/systemd/system
 	ln -sf /usr/lib/systemd/system/multi-user.target \
 		"$pkgdir"/etc/systemd/system/default.target
 
