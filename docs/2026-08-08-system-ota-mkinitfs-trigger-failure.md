@@ -1,9 +1,10 @@
 # 2026-08-08 — System OTA reports "system update failed" (postmarketos-mkinitfs / boot-deploy trigger)
 
-Diagnosed on-device 2026-08-08. Companion note to
-`docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md` (same session).
-This is **Phase-2 (kernel/boot OTA)** territory — recorded as a follow-up, **NOT
-fixed**.
+Diagnosed AND **FIXED** on-device 2026-08-08 (Option A). Companion note to
+`docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md` (same session). The
+live device no longer reports the failure (`apk fix -s` clean); the durable build
+fix is in `docker-build.sh` (verified on the next full build). See **Resolution**
+below.
 
 ---
 
@@ -48,27 +49,42 @@ The failure is therefore:
 - **(b) a blocker to a clean apk state** — the pending trigger re-fails on every
   subsequent apk run until it is resolved.
 
-The **live reference device currently carries this pending failing trigger.**
+## Resolution — Option A (implemented + live-verified 2026-08-08)
+Chosen fix: **put the kernel payload in `/boot`** so boot-deploy's `get_kernel`
+succeeds. Rejected (B) as hacky and (C) as a much larger project (still the real
+long-term goal for actual kernel OTA).
 
-## Candidate fixes (NOT yet implemented — need a build + careful validation)
-Any fix must first verify that **boot-deploy does NOT touch the real boot
-partition**. With the current minimal `/etc/deviceinfo`, boot-deploy's default
-output dir is `/boot` — i.e. it would write harmless files into a plain dir, not the
-flashed p9. Options:
+**Safety first — confirmed boot-deploy NEVER touches the real boot partition.** Read
+`/usr/bin/boot-deploy` main(): the only partition-write is `flash_updated_boot_parts`
+(line 64), which is `[ "${deviceinfo_flash_kernel_on_update}" = "true" ] || return 0`.
+`deviceinfo_flash_kernel_on_update` is **unset** in this device's deviceinfo (which
+DOES have `deviceinfo_generate_bootimg="true"` + `flash_method="fastboot"`), so
+boot-deploy only ever *generates* a boot.img and copies files into `output_dir=/boot`
+— it never `dd`/fastboots a partition on an `apk`-driven update. Zero brick risk; the
+generated `/boot/boot.img` (~16 MB, larger than the 8 MB p9) is **inert** — the Q
+boots ramdisk-less from the flashed p9 via `make-bootimg.py`, never from `/boot`.
 
-- **(A)** Stop stripping `/boot/vmlinuz` (+ friends) from the rootfs, so boot-deploy
-  finds a kernel and the trigger **succeeds as a harmless no-op** (deploys into the
-  plain `/boot` dir, never the boot partition). Also lays groundwork for real kernel
-  OTA.
-- **(B)** Neutralize / override the mkinitfs trigger on this device via the device
-  package (`device-google-steelhead`), so the trigger is a no-op on this appliance.
-- **(C)** Full **Phase 2** — a userspace **boot-partition (p9) writer** + a recovery
-  fallback so boot-deploy actually deploys a new kernel/initramfs and the kernel can
-  update over OTA (the currently-unsolved "System" track).
+**Live device (no reflash):** extracted the `boot/` payload (vmlinuz + dtbs +
+System.map + config) from the exact installed kernel apk
+`linux-google-steelhead-6.12.12-r46` (from the `nexusq-workdir` build volume), scp'd
+it into `/boot`, then ran `mkinitfs` → boot-deploy completed (exit 0: appended the
+omap4-steelhead DTB, generated boot.img, installed to /boot, **no flash**). `apk fix`
+re-ran the pending trigger → **`OK: … 982 packages`**, and `apk fix -s` is now clean
+(0 errors). `systemctl is-system-running` = `running`. The app's System update will
+no longer report failure.
 
-Whichever is chosen must ship in `device-google-steelhead` (or the build) and be
-validated end-to-end (System update from the app succeeds; `apk fix -s` clean; the
-device still boots from the flashed partition).
+**Durable (build):** `docker-build.sh` Phase-10 post-processing now copies
+`$ROOTFS/boot/{vmlinuz,dtbs,System.map,config}` into the exported rootfs `/boot`
+before unmount (right after the fstab-strip / root-unlock, mounted at `$RP_MNT`). The
+build exports only the rootfs partition, leaving pmbootstrap's separate `/boot`
+partition (where the kernel apk installs) behind — this restores the payload so every
+future image ships a non-empty `/boot` and the trigger succeeds from first boot.
+Pending verification on the next full build.
+
+## Still-open long-term (Phase 2, unchanged)
+Option A makes the trigger *succeed*; it does **not** make the kernel itself
+OTA-updatable. Real kernel OTA still needs the **(C)** userspace boot-partition (p9)
+writer + recovery fallback — tracked separately as Phase 2 (see PLAN.md).
 
 ## Cross-refs
 - `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md` — Phase 1 System OTA (the

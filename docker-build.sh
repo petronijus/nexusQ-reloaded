@@ -1227,9 +1227,34 @@ for l in lines:
     out.append(l)
 open(sys.argv[1], "w").write("\n".join(out) + "\n")
 PYEOF
+        # Populate the shipped rootfs /boot with the kernel payload (vmlinuz +
+        # dtbs). We export ONLY the rootfs partition from pmbootstrap's two-part
+        # disk; the kernel apk installs its /boot to the disk's SEPARATE /boot
+        # partition, which we never flash -> the shipped rootfs /boot is EMPTY.
+        # On-device that makes the `postmarketos-mkinitfs` trigger fail on EVERY
+        # apk transaction: it runs boot-deploy, whose get_kernel aborts with
+        # "No kernel found in /boot" (exit 1) -> the app reports "system update
+        # failed". Packages still install and NOTHING is flashed (boot-deploy's
+        # flash_updated_boot_parts is gated on deviceinfo_flash_kernel_on_update,
+        # which is unset), but the pending trigger re-fails forever. Copy the
+        # kernel's /boot payload from the build chroot ($ROOTFS/boot, which has
+        # it) so the trigger succeeds. The boot.img boot-deploy then generates in
+        # /boot is INERT -- the Q boots ramdisk-less from the flashed p9 (see
+        # make-bootimg.py), never from /boot. See
+        # docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md.
+        if [ -f "$ROOTFS/boot/vmlinuz" ]; then
+            sudo cp -a "$ROOTFS/boot/vmlinuz" "$RP_MNT/boot/"
+            [ -d "$ROOTFS/boot/dtbs" ] && sudo cp -a "$ROOTFS/boot/dtbs" "$RP_MNT/boot/"
+            for _bf in System.map config; do
+                [ -f "$ROOTFS/boot/$_bf" ] && sudo cp -a "$ROOTFS/boot/$_bf" "$RP_MNT/boot/"
+            done
+            echo "  Populated rootfs /boot with the kernel payload (vmlinuz + dtbs) so the mkinitfs trigger succeeds on-device"
+        else
+            echo "  WARNING: $ROOTFS/boot/vmlinuz not found -- shipped /boot stays EMPTY, the mkinitfs trigger WILL fail on-device"
+        fi
         sync
         sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
-        echo "  Rootfs post-processed: /boot fstab entry dropped, root unlocked"
+        echo "  Rootfs post-processed: /boot fstab entry dropped, root unlocked, /boot kernel payload restored"
 
         echo ""
         echo "=== Build artifacts ==="

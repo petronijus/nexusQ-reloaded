@@ -64,7 +64,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   Path: `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). See
   `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 
-### Known issues — System OTA reports "system update failed" (mkinitfs/boot-deploy trigger) (2026-08-08, measured on-device; NOT fixed)
+### Fixed — System OTA "system update failed" (mkinitfs/boot-deploy trigger) (2026-08-08, Option A)
 - **Symptom:** the app's **System** update (`installSystemUpdate`, PROTOCOL §12b) shows
   **"system update failed"**, and `apk fix -s` reports `(1/1) Reinstalling
   postmarketos-mkinitfs … 1 error` — a **persistent pending trigger** that re-fails on
@@ -81,13 +81,17 @@ All notable changes to Nexus Q Reloaded. Format follows
   all committed (verified in `apk info`), and the device boots fine (kernel is in the
   flashed boot partition). The failure is **cosmetic-but-alarming** + **blocks a clean
   apk state**. The live reference device currently carries the pending failing trigger.
-- **This is Phase-2 (kernel/boot OTA) territory. Candidate fixes (NOT implemented):**
-  **(A)** stop stripping `/boot/vmlinuz` so boot-deploy finds a kernel and the trigger
-  succeeds as a harmless no-op (also groundwork for kernel OTA); **(B)** neutralize the
-  mkinitfs trigger on this device via `device-google-steelhead`; **(C)** full Phase 2 —
-  a userspace boot-partition (p9) writer + recovery fallback. Any fix must verify
-  boot-deploy does NOT touch the real boot partition (default output dir is the plain
-  `/boot`, so harmless). See `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
+- **Fix — Option A (put a kernel in `/boot`).** First confirmed boot-deploy never
+  writes a partition: `flash_updated_boot_parts` is gated on
+  `deviceinfo_flash_kernel_on_update` (unset here), so it only generates a boot.img and
+  copies files into `output_dir=/boot` — the generated `/boot/boot.img` is inert (the Q
+  boots ramdisk-less from the flashed p9). **Live device:** restored `/boot`
+  (vmlinuz + dtbs + System.map + config from the installed `linux-google-steelhead-6.12.12-r46`
+  apk), ran `mkinitfs` → boot-deploy exit 0 (no flash), `apk fix` → `OK: … 982 packages`,
+  `apk fix -s` clean. **Build:** `docker-build.sh` Phase-10 post-processing now copies
+  `$ROOTFS/boot/{vmlinuz,dtbs,System.map,config}` into the exported rootfs `/boot`
+  (pending next-build verification). Kernel OTA itself is still Phase 2. See
+  `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### Added — the companion app runs on iOS (2026-08-03; app-side only, no device/image change)
 - **The Flutter companion now runs on iOS** — verified on the **iPhone 17 simulator,

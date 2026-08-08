@@ -22,12 +22,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > on 24/7). Likely fix = closed-loop `alsaloop --sync=samplerate` **or** cork-on-silence,
 > needs hours-long validation. Record:
 > `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
-> **(2) System OTA reports "system update failed"** — the `postmarketos-mkinitfs` /
-> `boot-deploy` trigger fails (`No kernel found in /boot`) because `/boot` is an empty
-> plain dir on this ramdisk-less device; a **persistent pending trigger** that re-fails
-> on every apk run. Packages still install (r63/r12 committed), so it's cosmetic +
-> blocks a clean apk state = **Phase-2 (kernel/boot OTA)** territory. Record:
-> `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
+> **(2) ✅ FIXED — System OTA "system update failed"** (Option A) — the
+> `postmarketos-mkinitfs` / `boot-deploy` trigger failed (`No kernel found in /boot`)
+> because `/boot` was an empty plain dir on this ramdisk-less device. Fixed by putting
+> the kernel payload (vmlinuz + dtbs) in `/boot`: live device restored + `apk fix -s`
+> clean, and `docker-build.sh` now copies `$ROOTFS/boot` into the exported rootfs
+> (pending next-build verify). boot-deploy never flashes a partition
+> (`deviceinfo_flash_kernel_on_update` unset). Kernel OTA itself is still Phase 2.
+> Record: `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 >
 > **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only, uncommitted dev).**
 > Verified on the **iPhone 17 simulator, iOS 26.5** (Flutter 3.44 / Xcode 26.6;
@@ -628,16 +630,19 @@ Two on-device findings, **one fix** — replace the PulseAudio `module-alsa-sour
   `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). Record:
   `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 
-### Follow-up: System OTA "system update failed" — mkinitfs/boot-deploy trigger (2026-08-08; NOT fixed) — Phase-2 territory
-The app's **System** update reports **"system update failed"** and `apk fix -s` shows
-a **persistent pending `postmarketos-mkinitfs` trigger** (re-fails on every apk run):
-`boot-deploy` finds `No kernel found in /boot` because `/boot` is an empty plain dir on
-this ramdisk-less device (kernel lives in the flashed boot partition). **Packages still
-install** (r63/r12 committed) — cosmetic + blocks a clean apk state. Candidate fixes:
-**(A)** stop stripping `/boot/vmlinuz` so the trigger no-ops (also kernel-OTA
-groundwork); **(B)** neutralize the trigger via `device-google-steelhead`; **(C)** full
-**Phase 2** boot-partition (p9) writer + recovery fallback. Ties into the existing
-"kernel stays a fastboot flash = Phase 2" open item. Record:
+### ✅ FIXED: System OTA "system update failed" — mkinitfs/boot-deploy trigger (2026-08-08, Option A)
+The app's **System** update reported **"system update failed"** and `apk fix -s` showed
+a **persistent pending `postmarketos-mkinitfs` trigger**: `boot-deploy` found
+`No kernel found in /boot` because `/boot` was an empty plain dir on this ramdisk-less
+device (kernel lives in the flashed boot partition). **Packages still installed**
+(r63/r12 committed) — cosmetic + blocked a clean apk state. **Fixed via Option A** (put
+the kernel payload in `/boot`) after confirming boot-deploy never writes a partition
+(`flash_updated_boot_parts` gated on the unset `deviceinfo_flash_kernel_on_update`;
+the boot.img it generates in `/boot` is inert): **live device** restored from the
+`linux-google-steelhead-6.12.12-r46` apk → `apk fix -s` clean; **build** —
+`docker-build.sh` Phase-10 now copies `$ROOTFS/boot/{vmlinuz,dtbs,System.map,config}`
+into the exported rootfs (pending next-build verify). Real kernel OTA is still **Phase
+2** (boot-partition p9 writer + recovery). Record:
 `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### Carried forward, not root-caused
