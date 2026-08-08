@@ -4,7 +4,45 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-03 (latest): **Companion app runs on iOS — native Bonjour discovery + platform gating (UNCOMMITTED in `companion/app/`)**
+## Session 2026-08-08 (latest): **OTA published (nexusqd r12 + device r63) · NEW FINDING — USB-Audio-in drifts multi-minute late over a long session**
+
+Full record: `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+
+### OTA publish (live)
+`scripts/publish-ota-repo.sh` → `gh-pages` (`petronijus.github.io/nexusQ-reloaded/nexusq`):
+**`nexusqd` r12** (front-panel volume **ring applied headless** via `nq-vol` — Petr
+confirmed the ring changes volume) + **`device-google-steelhead` r63** (+ firmware
+r63): **desktop OFF by default** (`default.target` → `multi-user.target`; was
+`graphical.target`) + dropped **duplicated labwc audio keybinds**. Index also serves
+unchanged `nexusq-control` **r25** / `btagent` **r4** / `setupd` **r4**.
+- **Build fix `024d928` (committed + pushed on `main`):** the committed
+  r63 APKBUILD did `ln -sf … default.target` before anything created
+  `$pkgdir/etc/systemd/system` → clean pipeline build **failed** (`ln: … No such file
+  or directory`); r63 never actually built through docker-build. Fix = `install
+  -dm755` the dir first. Same commit adds **`OTA_PACKAGES_ONLY=1`** to
+  `docker-build.sh` (targeted `nexusqd` + `device-google-steelhead` `--force` build,
+  exports just the two signed apks for `publish-ota-repo.sh`, no full rootfs/boot.img).
+
+### ⚠️ NEW FINDING — USB Audio input runs ~3 min LATE after a long session (measured, NOT fixed)
+- **Cause:** `module-alsa-source` on the **async** `hw:UAC2Gadget` (`pcm0c`) reports a
+  **bogus, uptime-growing latency** (~64 s at 64 s uptime; **5134 s** after a long
+  run) instead of the real ~ms buffer → poisons `module-loopback`'s latency-driven
+  resampler → resampler pegs the **±1 % rail (48480 Hz)** and the `memblockq` backlog
+  grows to **minutes**.
+- **Ruled OUT:** clock mismatch (+100 ppm, normal), the ALSA capture buffer (~3 ms,
+  `buffer_size` never fills), `tsched=0` (tested live — latency still grew).
+- **Related:** the loopback busy-polls a **stalled** capture (source paused, `hw_ptr`
+  frozen, state RUNNING) → steady nice-CPU + ~5 °C even when idle (78→73 °C when the
+  service is stopped). Overall thermals fine.
+- **Likely fix (unimplemented, needs HOURS to validate):** drop PA's latency smoother
+  for **closed-loop rate tracking** (`alsaloop --sync=samplerate`) between the two
+  independently-clocked cards, keeping PA mixing. Path: `pmos/device-google-steelhead/
+  nexusq-uac2-in` (+ `.service`). Source device: `~/Documents/Dev/xiaomi-tvbox-twilight`
+  (adb `192.168.20.169:5555`; USB→host via `gpioset -t 0 -c 0 16=0`).
+
+---
+
+## Session 2026-08-03: **Companion app runs on iOS — native Bonjour discovery + platform gating (UNCOMMITTED in `companion/app/`)**
 
 Full record: `docs/2026-08-03-ios-companion-port.md`. App-side only — **no
 device/image change**; app stays **1.11.0+28**. Base `main` @ `c0ae9fb`.

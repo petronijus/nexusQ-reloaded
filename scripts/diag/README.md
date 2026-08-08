@@ -142,6 +142,12 @@ Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON; Roon
 kernel r46 `CONFIG_USB_CONFIGFS_F_UAC2`) are **default-OFF**, so an inactive one is
 **normal, not a `failed_unit`**. When USB Audio is ON: the `UAC2Gadget` ALSA capture
 card is present and `nexusq-uac2-in` loopbacks it into the sink (TAS5713 RUNNING).
+⚠️ **Known open bug (2026-08-08):** over a **long** session USB Audio drifts ~3 min
+late — `module-alsa-source` on the async `hw:UAC2Gadget` reports a bogus uptime-growing
+latency that pegs `module-loopback`'s resampler to the ±1 % rail (48480 Hz). NOT a
+clock mismatch (+100 ppm, normal), NOT the capture buffer (~3 ms), and `tsched=0`
+doesn't fix it; healthy in a short window / after a service restart. See
+`docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 The Q has **no optical/HDMI/line input** — every port is an OUTPUT.
 
 ## Finding kinds (from `nq-health-report`)

@@ -213,6 +213,21 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   and its PA loopback modules **unloaded (0)**. The Q has **no optical/HDMI/line input**
   (all ports are OUTPUTS) — USB is the only no-solder digital audio in. See
   `docs/2026-08-02-usb-audio-input.md`.
+  - ⚠️ **KNOWN OPEN BUG (2026-08-08): USB-Audio-in drifts ~3 min LATE over a LONG
+    session** — `module-alsa-source` on the **async** `hw:UAC2Gadget` (`pcm0c`) reports
+    a **bogus, uptime-growing latency** (≈ uptime: ~64 s at 64 s, **5134 s** after a
+    long run) instead of the real ~ms buffer → poisons `module-loopback`'s
+    latency-driven resampler → resampler pegs the **±1 % rail (48480 Hz)** + `memblockq`
+    backlog grows to **minutes**. **Do NOT re-derive:** it is NOT a clock mismatch
+    (effective capture ≈ **48004.79 fps / +100 ppm — normal**), NOT the capture buffer
+    (`delay`/`avail` ~144 frames ≈ 3 ms, `buffer_size` 16384 never fills), and
+    **`tsched=0` does NOT fix it** (tested live — source latency still grew). Healthy in
+    a short window / right after `systemctl --user restart nexusq-uac2-in` (~134 ms,
+    resampler ~48002 Hz); the fault only shows over **hours**. Related: the loopback
+    busy-polls a **stalled** capture (source paused, `hw_ptr` frozen, state RUNNING) →
+    steady nice-CPU + ~5 °C even idle (78→73 °C when the unit is stopped). Likely fix
+    (unimplemented) = closed-loop `alsaloop --sync=samplerate`. See
+    `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 - 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (**v1.9.0** = device r47 /
   setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2 — NOT on flashed
   ≤ v1.8.2):** a BT RFCOMM

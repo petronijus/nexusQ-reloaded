@@ -6,6 +6,56 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — OTA published 2026-08-08 (`nexusqd` 0.1.0-r12 · `device-google-steelhead` 1.0-r63)
+- **`scripts/publish-ota-repo.sh` pushed to `gh-pages`** — live at
+  `https://petronijus.github.io/nexusQ-reloaded/nexusq`:
+  - **`nexusqd` r12** — the **front-panel volume ring is applied headless** via
+    `nq-vol` (turning the physical dome ring changes volume with no desktop/app in
+    the loop). **Confirmed on-device by Petr — the ring changes volume.**
+  - **`device-google-steelhead` r63** (+ `firmware-google-steelhead` r63) —
+    **desktop OFF by default**: `default.target` → `multi-user.target` symlink (was
+    `graphical.target`, which auto-started the HDMI desktop) + the **duplicated
+    labwc audio keybinds dropped**.
+  - Unchanged in the OTA index: `nexusq-control` **r25**, `nexusq-btagent` **r4**,
+    `nexusq-setupd` **r4**.
+- **Build fix (main `024d928`, committed + pushed):** the committed
+  r63 APKBUILD (`9a9bb16`) ran `ln -sf … default.target` before anything created
+  `$pkgdir/etc/systemd/system` (later blocks `install -dm755` it, but run after) →
+  a clean pipeline build **failed** (`ln: … default.target: No such file or
+  directory`); the committed r63 never built through docker-build. Fix =
+  `install -dm755` the dir first.
+- **`docker-build.sh` gains `OTA_PACKAGES_ONLY=1`** — a targeted **two-package**
+  build (`nexusqd` + `device-google-steelhead`, both `--force`) that reuses all the
+  load-bearing setup verbatim then exports **just the two signed apks** for
+  `publish-ota-repo.sh`, skipping the full rootfs/boot.img. Pure addition; the
+  full-pipeline path is unchanged.
+- See `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+
+### Known issues — USB Audio input drifts multi-minute late over a long session (2026-08-08, measured on-device; NOT fixed)
+- **Symptom:** audio fed into the Q over USB (Xiaomi Mi TV Box → UAC2 gadget capture,
+  `nexusq-uac2-in`) plays correctly but after a **long session** comes out **~3 min
+  late**. Healthy in a short window; the lag crawls up over hours.
+- **Root cause:** `module-alsa-source` on the **async** `hw:UAC2Gadget` (`pcm0c`)
+  reports a **bogus, monotonically-growing latency** ≈ uptime (~64 s at 64 s uptime;
+  **5134 s** after a long run) instead of the real ~ms buffer. This poisons
+  `module-loopback`'s latency-driven rate controller → the resampler pegs at the
+  **±1 % rail (48480 Hz)** and the `memblockq` backlog grows to **minutes**.
+- **Ruled OUT:** clock mismatch (measured effective capture **48004.79 fps / +100 ppm
+  over a clean 30 s — normal**); the ALSA capture buffer (`delay`/`avail` ~144 frames
+  ≈ 3 ms, `buffer_size` 16384 never fills); **`tsched=0`** (tested live — source
+  latency still grew 25 s→33 s, so it does NOT fix the delay, though it WOULD blunt
+  the related idle busy-poll).
+- **Related:** the broken loopback **busy-polls a STALLED capture** (Xiaomi paused,
+  `hw_ptr` frozen, PCM state RUNNING) → steady nice-CPU + ~**5 °C** even when nothing
+  plays (78 °C → 73 °C die when the service is stopped). Overall thermals fine (73–78 °C
+  die; critical ~98–99 °C).
+- **Likely fix (NOT implemented, needs hours-long validation):** replace PA's broken
+  latency smoother with **closed-loop sample-rate tracking** — e.g.
+  `alsaloop --sync=samplerate` between the two independently-clocked cards — while
+  still routing through PulseAudio so USB audio keeps mixing with Spotify/AirPlay/Roon.
+  Path: `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). See
+  `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+
 ### Added — the companion app runs on iOS (2026-08-03; app-side only, no device/image change)
 - **The Flutter companion now runs on iOS** — verified on the **iPhone 17 simulator,
   iOS 26.5** (Flutter 3.44 / Xcode 26.6); `flutter build ios --release --no-codesign`

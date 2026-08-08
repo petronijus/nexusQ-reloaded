@@ -120,6 +120,29 @@ context), Phase 3 `MISSING: CONFIG_LEDS_LP5523` (the LED is the AVR driver, not
 LP5523). Everything else — including any `command not found` in Phase 7 or any
 `Entering fakeroot...` that does not immediately move on — is a real problem.
 
+### `OTA_PACKAGES_ONLY=1` — targeted two-package OTA build (no rootfs, since `024d928`)
+
+For an OTA that ships **only** daemon/config apks (not a fresh rootfs/boot.img),
+`docker-build.sh` honours **`OTA_PACKAGES_ONLY=1`** (pass `-e OTA_PACKAGES_ONLY=1` to
+`docker run`): it runs all the load-bearing setup verbatim (aports staging, 6b
+abuild-as-root, config, REPODEST ownership, checksums), then builds **only** `nexusqd`
++ `device-google-steelhead` (both `--force`, so a bumped pkgrel isn't skipped by a
+stale same-name apk in the warm repo), exports the two **signed, pkgrel-exact** apks
+to `/tmp/output` for `scripts/publish-ota-repo.sh`, and **exits 0** — no full rootfs,
+no boot.img. Their runtime `depends` (glibc-rt, control/btagent/setupd, firmware,
+python3) are NOT rebuilt (unchanged, already cached). Use this for a fast daemon/config
+OTA; use the full pipeline when the rootfs/kernel changed.
+
+⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
+`device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
+`ln -sf … "$pkgdir"/etc/systemd/system/default.target` as the **first** thing to touch
+that dir, but nothing had `install -dm755`'d it yet (later `package()` blocks do, but
+they run after) → a clean pipeline build **failed** with `ln: … default.target: No
+such file or directory` and the committed r63 never built. Fixed in `024d928`
+(`install -dm755` the dir before the symlink). Lesson: in `package()`, **create a
+`$pkgdir` subdir before the first `ln`/`install -T` into it** — a warm/incremental repo
+can hide the failure until a clean build.
+
 ### The fakeroot/qemu hang (most important thing to understand)
 
 The single nastiest failure this pipeline ever had: the build froze **forever** at

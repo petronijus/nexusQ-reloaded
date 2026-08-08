@@ -3,6 +3,22 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **2026-08-08 — ✅ OTA PUBLISHED (nexusqd r12 + device r63); ⚠️ USB-Audio-in delay finding.**
+> `publish-ota-repo.sh` pushed to `gh-pages`: **`nexusqd` r12** (front-panel volume
+> **ring applied headless** via `nq-vol` — Petr confirmed the ring changes volume) +
+> **`device-google-steelhead` r63** (+ firmware r63): **desktop OFF by default**
+> (`default.target` → `multi-user.target`) + dropped duplicated labwc audio keybinds;
+> `nexusq-control` r25 / `btagent` r4 / `setupd` r4 unchanged. Build fix **`024d928`**
+> (committed, **pushed**): r63 APKBUILD `install -dm755 $pkgdir/etc/systemd/system`
+> before the `default.target` symlink (clean build was failing) + a
+> **`OTA_PACKAGES_ONLY=1`** two-package build gate in `docker-build.sh`. **⚠️ NEW
+> OPEN ISSUE:** **USB-Audio-in (the UAC2 DAC) drifts ~3 min late over a long session**
+> — `module-alsa-source` on the async capture reports a bogus uptime-growing latency
+> that poisons `module-loopback`'s resampler (pegs ±1 % rail, minutes of backlog);
+> ruled out clock mismatch/capture-buffer/`tsched=0`; likely fix = closed-loop
+> `alsaloop --sync=samplerate`, needs hours-long validation. Full record:
+> `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+>
 > **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only, uncommitted dev).**
 > Verified on the **iPhone 17 simulator, iOS 26.5** (Flutter 3.44 / Xcode 26.6;
 > `flutter build ios --release --no-codesign` → 18.8 MB Runner.app; app stays
