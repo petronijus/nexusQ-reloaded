@@ -53,6 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _checkingSystem = false;
   bool _installingSystem = false;
   String? _systemError;
+  String? _systemProgress; // live phase message shown while installing
 
   bool get _systemUpdateAvailable => _systemCheck?['updateAvailable'] == true;
 
@@ -206,7 +207,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _checkingSystem = false;
-      _systemCheck = r;
+      // busy=true means the device is mid-install (control r26 serializes apk):
+      // don't overwrite the last known result, just say so.
+      if (r != null && r['busy'] == true) {
+        _systemError = 'An update is already in progress — try again shortly.';
+      } else {
+        _systemCheck = r;
+      }
     });
   }
 
@@ -215,13 +222,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _installingSystem = true;
       _systemError = null;
+      _systemProgress = 'Downloading & installing packages on the Q…';
     });
-    // Like the daemon install, a full-system upgrade restarts the daemons — and
-    // may REBOOT the Q (base libc/init churn) — so the call's disconnect is
-    // expected, not a failure. Confirm by re-checking after the device settles
-    // (longer window: a reboot takes ~30-60 s).
+    // A full-system upgrade restarts the daemons — and may REBOOT the Q (base
+    // libc/init churn) — so the call's disconnect is EXPECTED, not a failure.
+    // apk exposes no percentage, so we narrate the phases we DO know instead:
+    // installing → applying/restarting → reconnecting → verifying.
     await _call('installSystemUpdate', null, true);
     if (!mounted) return;
+    setState(() =>
+        _systemProgress = 'Applying updates — the Q may restart to finish…');
     await Future.delayed(const Duration(seconds: 12));
     await _verifySystemInstall();
   }
@@ -229,15 +239,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _verifySystemInstall() async {
     for (var attempt = 0; attempt < 8; attempt++) {
       if (!mounted) return;
+      setState(() => _systemProgress = attempt == 0
+          ? 'Reconnecting to the Q…'
+          : 'Reconnecting to the Q… (${attempt + 1}/8)');
       final r = await _call('checkSystemUpdate', null, true);
       if (!mounted) return;
-      if (r != null) {
+      // Wait past a transient disconnect (reboot) OR a busy reply (control still
+      // finishing its install lock) before judging.
+      if (r != null && r['busy'] != true) {
         final stillPending = r['updateAvailable'] == true;
         setState(() {
           _installingSystem = false;
+          _systemProgress = null;
           _systemCheck = r;
-          _systemError =
-              stillPending ? 'System update failed. Try again.' : null;
+          // A leftover upgradable package is NOT a failure (the install ran and
+          // the device came back) — only nudge the user to run it again.
+          _systemError = stillPending
+              ? 'Installed — a few packages still pending; tap Update system '
+                  'again to finish them.'
+              : null;
         });
         return;
       }
@@ -246,7 +266,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       setState(() {
         _installingSystem = false;
-        _systemError = 'Update sent — reopen Settings to confirm.';
+        _systemProgress = null;
+        _systemError = 'Update sent — reopen Settings to confirm it applied.';
       });
     }
   }
@@ -660,8 +681,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          ClipRRect(
+                        children: [
+                          const ClipRRect(
                             borderRadius: BorderRadius.all(Radius.circular(4)),
                             child: LinearProgressIndicator(
                               minHeight: 8,
@@ -669,11 +690,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               backgroundColor: NexusQColors.divider,
                             ),
                           ),
-                          SizedBox(height: 6),
+                          const SizedBox(height: 8),
+                          // Live phase message (installing → applying/restarting
+                          // → reconnecting → verifying); apk has no % so we narrate
+                          // the stages we know.
                           Text(
-                            'Upgrading all packages on the device. The Q may '
-                            'restart services or reboot to finish; the app '
-                            'reconnects when it is back.',
+                            _systemProgress ??
+                                'Upgrading all packages on the device.',
+                            style: const TextStyle(
+                                color: NexusQColors.white, fontSize: 12),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'The Q may restart services or reboot to finish; the '
+                            'app reconnects when it is back.',
                             style:
                                 TextStyle(color: NexusQColors.dim, fontSize: 11),
                           ),
