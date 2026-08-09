@@ -18,15 +18,37 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > upgradable package = "a few still pending", not a blanket "failed"). Live +
 > OTA-published + on Petr's phone.
 >
-> **NEXT TASK (2026-08-09, after r65 is baked + verified) — USB Audio vs the other
-> services.** The r65 rewrite makes USB audio EXCLUSIVE (it suspends PA's tas5713
-> sink, so Spotify/AirPlay/Roon are paused while it's on). Open design question:
-> how do we combine/switch USB audio with the PA services — a manual switch (app
-> UI / the existing per-service toggles), ideally an AUTOMATIC switch (e.g. USB
-> audio takes over when the Xiaomi is actively streaming and yields when it stops),
-> and/or is there still any viable MIXING path (alsaloop→PA failed on the pulse
-> plugin's delay query; a snd-aloop hop or a second aloop card into PA is the
-> candidate to investigate). Deferred until the r65 fix is confirmed in real use.
+> **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr:**
+>
+> **(1) USB Audio back into PulseAudio — "the proper way" (supersedes the r65
+> direct-ALSA path).** r65 made USB audio EXCLUSIVE (alsaloop → hw:NexusQSpeaker,
+> PA sink suspended): efficient + no delay, but it lost MIXING with
+> Spotify/AirPlay/Roon, lost the unified PA volume (nq-vol was re-plumbed to the
+> hardware amixer), and killed the LED music visualizer (it taps the PA monitor).
+> Root cause of the ORIGINAL PA breakage was `module-alsa-source` reading the UAC2
+> gadget's ASYNC HOST clock directly → the smoother diverged (runaway delay) and
+> the loopback never corked (idle burn). **Fix = put a stable-clock snd-aloop
+> between the gadget and PA — exactly the pattern Roon already uses successfully**
+> (`RAAT → snd-aloop → PA roon_in → mix`): `UAC2 gadget → alsaloop --sync=simple →
+> snd-aloop → PA (usb_in) → mix → TAS5713`. alsaloop rate-matches the async gadget
+> to the aloop's stable clock (bounded buffers → no runaway); PA then reads a
+> stable-clocked source (smoother happy, corks on idle → no burn). Result: low CPU
+> + no delay AND back to mixing + unified volume (revert the nq-vol amixer branch)
+> + working visualizer. Needs: build the aloop+alsaloop chain, wire PA usb_in like
+> roon_in, revert nq-vol/USB-volume-memory to the PA path, and long-session
+> re-validation (delay, idle, mixing). Superior architecture; deferred only for
+> effort/validation time.
+>
+> **(2) MQTT health telemetry → Home Assistant + the app.** The Q already samples
+> health (`nq-healthd`: die temp, cur freq + per-OPP residency "podíl frekvencí",
+> load, governor, WiFi RSSI, uptime, active services, volume). Add a small
+> publisher (`nexusq-mqtt`, or extend nq-healthd) that publishes those every
+> ~30–60 s to `nexusq/health/*` with **Home Assistant MQTT discovery**
+> (`homeassistant/sensor/nexusq_*/config` → HA auto-creates the sensors). Broker =
+> Petr's HA Mosquitto (creds from 1Password). The companion app subscribes to
+> `nexusq/health/#` (Flutter MQTT client) for a live health panel — decoupled, it
+> reads the broker rather than needing a direct control-socket link. So: Q → MQTT →
+> HA (sensors/dashboard/automations) AND the app reads the same feed.
 
 > **2026-08-08 — ✅ OTA PUBLISHED (nexusqd r12 + device r63); ⚠️ USB-Audio-in delay finding.**
 > `publish-ota-repo.sh` pushed to `gh-pages`: **`nexusqd` r12** (front-panel volume
