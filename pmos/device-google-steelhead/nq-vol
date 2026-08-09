@@ -14,13 +14,23 @@
 #    instead: Master for level, the Speaker switch for mute.
 SPKR="${NQ_SPEAKER_CARD:-NexusQSpeaker}"
 STEP="${NQ_VOL_STEP:-4%}"
+# Per-source volume memory: USB audio keeps its OWN last level here so a toggle or
+# reboot restores it (nexusq-uac2-in reads this on start) instead of snapping back
+# to the safe default. The PA services (Spotify / AirPlay / Roon) mix into one
+# sink and keep THEIR shared level via PulseAudio's own device-restore.
+VOL_STATE="${NQ_UAC2_VOL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/nexusq/usbaudio-master}"
 
 if pgrep -x alsaloop >/dev/null 2>&1; then
 	case "$1" in
 		up)   amixer -c "$SPKR" -M sset Master "${STEP}+" >/dev/null 2>&1 ;;
 		down) amixer -c "$SPKR" -M sset Master "${STEP}-" >/dev/null 2>&1 ;;
-		mute) amixer -c "$SPKR" sset Speaker toggle       >/dev/null 2>&1 ;;
+		mute) amixer -c "$SPKR" sset Speaker toggle       >/dev/null 2>&1
+		      exit 0 ;;  # mute is the Speaker switch, not a Master level to save
 	esac
+	# Remember the new Master level so USB audio comes back here next time.
+	v=$(amixer -c "$SPKR" -M sget Master 2>/dev/null | grep -o '[0-9]*%' | head -1)
+	[ -n "$v" ] && { mkdir -p "${VOL_STATE%/*}" 2>/dev/null
+	                 printf '%s\n' "$v" > "$VOL_STATE" 2>/dev/null; }
 	exit 0
 fi
 

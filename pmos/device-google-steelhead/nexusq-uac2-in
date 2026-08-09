@@ -36,9 +36,17 @@ TLAT="${NQ_UAC2_TLATENCY:-100000}"                 # alsaloop target loop latenc
 # Starting amp volume when USB audio turns on. The normal volume path (ring ->
 # nexusqd -> nq-vol) drives PulseAudio, but here PA is bypassed, so nq-vol detects
 # USB audio is on and drives this TAS5713 hardware Master instead (amixer). We set
-# a LOW, never-loud starting level so turning USB audio on can't blast the amp
-# (25 W, steep curve); the ring takes it up from there. Tunable via NQ_UAC2_VOL.
-STARTVOL="${NQ_UAC2_VOL:-10%}"
+# USB audio remembers its OWN last level: nq-vol writes it to VOL_STATE on every
+# ring change, and we restore it here so a toggle/reboot comes back where the user
+# left it (per-source memory — the PA services keep their shared level in PA). The
+# NQ_UAC2_VOL env still overrides; the FIRST-EVER start (no saved file) uses a low,
+# never-loud default so turning USB audio on can't blast the 25 W amp.
+VOL_STATE="${NQ_UAC2_VOL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/nexusq/usbaudio-master}"
+STARTVOL="${NQ_UAC2_VOL:-}"
+if [ -z "$STARTVOL" ]; then
+	STARTVOL="$(cat "$VOL_STATE" 2>/dev/null)"
+	[ -n "$STARTVOL" ] || STARTVOL="10%"
+fi
 
 pa() { pactl "$@" 2>/dev/null || true; }
 
