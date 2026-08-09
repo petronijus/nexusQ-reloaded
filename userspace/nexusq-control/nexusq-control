@@ -606,21 +606,34 @@ def service_log(sid, lines=200):
 NEXUSQ_OTA_REPO = "https://petronijus.github.io/nexusQ-reloaded/nexusq"
 OTA_PACKAGES = ["nexusq-control", "nexusqd", "nexusq-btagent", "nexusq-setupd"]
 _APK_REPOS = "/etc/apk/repositories"
-# Serialize EVERY apk-touching operation (both installs AND checks). `apk` takes
-# an exclusive DB lock, so two apk processes at once fail with "Unable to lock
-# database: Resource temporarily unavailable". Two ways that happened: a flaky
-# link resending installNexusUpdate (a 2nd `apk upgrade` over the first), and the
-# app polling checkNexus/SystemUpdate (an `apk update`/`version`) DURING an
-# install — the latter surfaced as a spurious "system update failed" even though
-# every package installed. Every check/install dispatch now takes this lock
-# non-blocking: an install refuses a concurrent install, and a check that can't
-# get it (an install is running) returns busy=True instead of racing apk.
+# Two locks, two jobs:
+#  * _apk_lock serializes the actual `apk` SUBPROCESS (see _apk). `apk` holds an
+#    exclusive DB lock, so two apk processes at once fail with "Unable to lock
+#    database" — two concurrent CHECKS, or a check racing an install, hit that.
+#    Every apk call queues behind it (sub-second for checks).
+#  * _nexus_install_lock marks "an INSTALL is in progress". Installs take it
+#    (non-blocking → refuse a concurrent install). Checks only *test* it: if an
+#    install holds it they return busy=True immediately (don't block on the
+#    install's long `apk upgrade`); otherwise they run normally and their apk
+#    calls just serialize via _apk_lock. This is the fix for r26's regression,
+#    where checks TOOK _nexus_install_lock and so a routine check-during-check
+#    (the app runs checkNexusUpdate on open) wrongly reported "update in progress".
 _nexus_install_lock = threading.Lock()
+_apk_lock = threading.Lock()
 
 
 def _apk(*args, timeout=90):
-    return subprocess.run(["apk", *args], capture_output=True, text=True,
-                          timeout=timeout)
+    # One apk process at a time (exclusive DB lock). Bounded wait: if an install's
+    # long `apk upgrade` holds it, a racing check gives up after its own timeout
+    # rather than hanging (checks are short-circuited earlier anyway via
+    # _nexus_install_lock, so this only catches the rare start-mid-check race).
+    if not _apk_lock.acquire(timeout=timeout):
+        raise Err("busy", "apk is busy with another operation")
+    try:
+        return subprocess.run(["apk", *args], capture_output=True, text=True,
+                              timeout=timeout)
+    finally:
+        _apk_lock.release()
 
 
 def _ensure_ota_repo():
@@ -1073,18 +1086,14 @@ class Bridge:
         # done (then back to the theme). The ring is left on the user's theme while an
         # update merely waits, so "available" is signalled only on the mute LED.
         if method == "checkNexusUpdate":
-            # Serialize apk against a running install (see _nexus_install_lock):
-            # `apk` takes an exclusive DB lock, so a check that runs while an
-            # install holds it hits "Unable to lock database: Resource temporarily
-            # unavailable" and the app shows a spurious "update failed". If an
-            # install is in progress, report busy instead of racing apk.
-            if not _nexus_install_lock.acquire(blocking=False):
+            # busy=True ONLY while an INSTALL is running (don't block on its long
+            # `apk upgrade`); a plain check-vs-check just serializes via _apk_lock
+            # inside _apk, so a routine poll never wrongly reads "update in
+            # progress". `apk` itself can't race (DB lock) — _apk_lock guards it.
+            if _nexus_install_lock.locked():
                 return {"packages": [], "updateAvailable": False, "busy": True,
                         "repo": NEXUSQ_OTA_REPO}, []
-            try:
-                r = check_nexus_update()
-            finally:
-                _nexus_install_lock.release()
+            r = check_nexus_update()
             if r.get("updateAvailable"):
                 nexusqd_send("mblink 255 140 0")     # amber blink on the mute LED
             else:
@@ -1119,16 +1128,12 @@ class Bridge:
         # the app's System section. The install narrates on the RING (progress bar
         # -> green) and may reboot if base libc/init churned.
         if method == "checkSystemUpdate":
-            # Same apk-DB-lock serialization as checkNexusUpdate: a System poll
-            # that runs `apk` while installSystemUpdate holds the lock would fail
-            # with "Unable to lock database" and read as "system update failed".
-            if not _nexus_install_lock.acquire(blocking=False):
+            # busy only while an INSTALL runs (see checkNexusUpdate); apk itself is
+            # serialized by _apk_lock, so a check never races the DB lock.
+            if _nexus_install_lock.locked():
                 return {"packages": [], "updateAvailable": False, "busy": True,
                         "kernel": _uname_r(), "repo": NEXUSQ_OTA_REPO}, []
-            try:
-                return check_system_update(), []
-            finally:
-                _nexus_install_lock.release()
+            return check_system_update(), []
         if method == "installSystemUpdate":
             if not _nexus_install_lock.acquire(blocking=False):
                 raise Err("busy", "an update is already installing")
