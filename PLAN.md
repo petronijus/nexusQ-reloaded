@@ -3,6 +3,21 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **✅ DONE (2026-08-09/10) — System OTA spurious "system update failed" + weak app
+> reporting.** The "failed" was a concurrent `apk` CHECK (the app polling
+> checkNexus/SystemUpdate) racing the install's `apk upgrade` → `Unable to lock
+> database`. **Fixed:** `nexusq-control` r27 — a dedicated `_apk_lock` serializes
+> the `apk` subprocess (kills the DB-lock race for check-vs-check AND
+> check-vs-install), and `_nexus_install_lock` now only marks "install in
+> progress" (checks TEST it → busy only during a real install). r26 first made
+> checks TAKE the install lock, which regressed to "update already in progress" on
+> a routine check-during-check (app runs checkNexusUpdate on open) — r27 split the
+> two locks. **App reporting** (v1.11.2+30): live phase messages while installing
+> (downloading→applying/restarting→reconnecting n/8), a `busy` reply shows "update
+> in progress" not an error, and the post-install verdict is honest (a leftover
+> upgradable package = "a few still pending", not a blanket "failed"). Live +
+> OTA-published + on Petr's phone.
+>
 > **NEXT TASK (2026-08-09, after r65 is baked + verified) — USB Audio vs the other
 > services.** The r65 rewrite makes USB audio EXCLUSIVE (it suspends PA's tas5713
 > sink, so Spotify/AirPlay/Roon are paused while it's on). Open design question:
