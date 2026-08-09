@@ -144,22 +144,24 @@ unreachable). A `"st":"nogw"` line now carries `"fails"` and, once it reaches
 held `fails=0` in that branch and never healed it). Repeated `nogw` heals in the log =
 a DHCP/AP problem worth chasing.
 
-**Audio inputs** — four inputs mix into the default PulseAudio sink (TAS5713):
-Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON; Roon
-(`roon.service`) + **USB Audio** (`nexusq-uac2-in.service`, the Q as a UAC2 USB DAC —
-kernel r46 `CONFIG_USB_CONFIGFS_F_UAC2`) are **default-OFF**, so an inactive one is
-**normal, not a `failed_unit`**. When USB Audio is ON: the `UAC2Gadget` ALSA capture
-card is present and `nexusq-uac2-in` loopbacks it into the sink (TAS5713 RUNNING).
-⚠️ **Known open bug (2026-08-08):** over a **long** session USB Audio drifts ~3 min
-late — `module-alsa-source` on the async `hw:UAC2Gadget` reports a bogus uptime-growing
-latency that pegs `module-loopback`'s resampler to the ±1 % rail (48480 Hz). NOT a
-clock mismatch (+100 ppm, normal), NOT the capture buffer (~3 ms), and `tsched=0`
-doesn't fix it; healthy in a short window / after a service restart. It **also burns
-steady CPU + heat in silence** — the loopback sink-input is **never corked**
-(`Corked: no`), so `module-suspend-on-idle` (loaded) can never suspend the TAS5713 sink
-(DAC/clock/DMA/resampler on 24/7; die 78→73 °C when `nexusq-uac2-in` is stopped).
-⚠️ **A 1.2 GHz / 91–94 °C pin during active streaming is NOT a fault** — the nexusqd LED
-music visualizer's `arecord -D pulse` capture is legitimate (not throttling). See
+**Audio inputs** — Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON
+and mix into the default PulseAudio sink (TAS5713); Roon (`roon.service`) + **USB Audio**
+(`nexusq-uac2-in.service`, the Q as a UAC2 USB DAC — kernel r46
+`CONFIG_USB_CONFIGFS_F_UAC2`) are **default-OFF**, so an inactive one is **normal, not a
+`failed_unit`**.
+⚠️ **USB Audio is EXCLUSIVE and bypasses PulseAudio (rewritten 2026-08-09, device r65).**
+When USB Audio is ON, the healthy tells are DIFFERENT from the other inputs: the
+`UAC2Gadget` ALSA capture card is present, an **`alsaloop` process is running**
+(`hw:UAC2Gadget` → `hw:NexusQSpeaker`, `--sync=simple`), and **PulseAudio's tas5713
+sink is SUSPENDED** — that suspended sink is **NORMAL while USB audio is on, NOT a
+fault** (alsaloop owns the TAS5713 card directly; PA is handed back on stop). Volume is
+driven via the TAS5713 **hardware** mixer (`amixer` Master/Speaker via `nq-vol`), not
+PA. `alsaloop` sits at **~0 %** CPU; die temp is **76–79 °C** with USB audio playing.
+✅ **The old PA-bridge bugs are FIXED here** — the multi-minute playback drift (bogus
+`module-alsa-source` latency poisoning `module-loopback`) and the idle CPU/heat burn
+(never-corked loopback sink-input) are gone with the direct-alsaloop rewrite; do NOT
+re-flag them. **Note:** the nexusqd LED music visualizer taps the PA source, so it does
+**not** react to USB-audio playback (a known minor limitation, not a fault). See
 `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 The Q has **no optical/HDMI/line input** — every port is an OUTPUT.
 

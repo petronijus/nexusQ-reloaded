@@ -31,38 +31,42 @@ All notable changes to Nexus Q Reloaded. Format follows
   full-pipeline path is unchanged.
 - See `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 
-### Known issues — USB Audio input drifts multi-minute late over a long session (2026-08-08, measured on-device; NOT fixed)
-- **Symptom:** audio fed into the Q over USB (Xiaomi Mi TV Box → UAC2 gadget capture,
-  `nexusq-uac2-in`) plays correctly but after a **long session** comes out **~3 min
-  late**. Healthy in a short window; the lag crawls up over hours.
-- **Root cause:** `module-alsa-source` on the **async** `hw:UAC2Gadget` (`pcm0c`)
-  reports a **bogus, monotonically-growing latency** ≈ uptime (~64 s at 64 s uptime;
-  **5134 s** after a long run) instead of the real ~ms buffer. This poisons
-  `module-loopback`'s latency-driven rate controller → the resampler pegs at the
-  **±1 % rail (48480 Hz)** and the `memblockq` backlog grows to **minutes**.
-- **Ruled OUT:** clock mismatch (measured effective capture **48004.79 fps / +100 ppm
-  over a clean 30 s — normal**); the ALSA capture buffer (`delay`/`avail` ~144 frames
-  ≈ 3 ms, `buffer_size` 16384 never fills); **`tsched=0`** (tested live — source
-  latency still grew 25 s→33 s, so it does NOT fix the delay, though it WOULD blunt
-  the related idle busy-poll).
-- **Related — steady CPU + heat in SILENCE (deeper root cause, measured 2026-08-08):**
-  `module-suspend-on-idle` **is loaded**, but the `module-loopback` **sink-input is
-  never corked** (`Corked: no`) — the loopback feeds the TAS5713 sink continuously
-  (silence when the source is idle/stalled), so suspend-on-idle can **never suspend**
-  the sink → the **TAS5713 DAC + audio clock + DMA + speex-float resampler stay powered
-  24/7**. (`module-alsa-source` also timer-polls the async capture, `Flags: LATENCY`.)
-  Evidence: stopping `nexusq-uac2-in` drops nice-CPU to ~0 and die **78 → 73 °C**;
-  during active streaming + the nexusqd LED-visualizer `arecord -D pulse` capture the
-  CPU pins at **1.2 GHz / ~91–94 °C** — **not yet throttling** (`scaling_max` still
-  1200; trip higher; overall thermals within range). The `arecord` is the **legitimate**
-  LED music visualizer, not a leak.
-- **Likely fix (NOT implemented, needs hours-long validation):** the SAME bridge
-  redesign — replace PA's broken latency smoother with **closed-loop sample-rate
-  tracking** (`alsaloop --sync=samplerate` between the two independently-clocked
-  cards), **or** make the loopback **cork-on-silence** so the sink can suspend — while
-  still routing through PulseAudio so USB audio keeps mixing with Spotify/AirPlay/Roon.
-  Path: `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). See
+### Fixed — USB Audio input multi-minute delay + idle CPU/heat, via a direct alsaloop bridge (2026-08-09, `device-google-steelhead` r65; committed `2dccd3a`, push + OTA pending Petr's OK)
+- **What was broken (both were the SAME PulseAudio bridge):** audio fed into the Q
+  over USB (Xiaomi Mi TV Box → UAC2 gadget capture, `nexusq-uac2-in`) (a) came out
+  **~3 min late** after a **long session**, and (b) burned **~15–20 % CPU + ~5 °C** even
+  in silence. `module-alsa-source` on the **async** `hw:UAC2Gadget` reported a bogus,
+  uptime-growing latency (5134 s seen) that poisoned `module-loopback`'s latency-driven
+  resampler (pegged the ±1 % rail, `memblockq` backlog grew to minutes); and the
+  loopback sink-input never corked, so `module-suspend-on-idle` could never sleep the
+  TAS5713 sink → DAC/clock/DMA/resampler ran 24/7. Full pre-fix analysis:
   `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+- **Fix:** rewrite the bridge to a **direct ALSA loopback — no PulseAudio in the audio
+  path**: `alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker -r 48000 -c 2 -f S16_LE
+  --sync=simple`, rate-matched from the **real hardware pointers** (no PA smoother to
+  diverge) with structurally **bounded** ALSA buffers, so the delay **cannot** run away.
+  Runs only while the toggle is on. **Measured live end-to-end:** audio plays, lip-sync
+  correct (Petr-confirmed "sedí to na mluvení"), alsaloop **~0.5 % → ~0 %** of one core
+  (was 15–20 %), die temp **93 °C → 76–79 °C**.
+- **`--sync=simple`, not `--sync=samplerate`:** the device's `alsa-utils` is built
+  **without libsamplerate**, so `--sync=samplerate` fails with `Loopback start failure`;
+  `--sync=simple` uses the gadget's **Capture Pitch** control (closed-loop pitch
+  rate-match) and works.
+- **Volume re-plumbed (PA is bypassed):** `nexusq-uac2-in` suspends PA's tas5713 sink
+  (USB audio is now **EXCLUSIVE** — Spotify/AirPlay/Roon are paused while it's on),
+  enables the TAS5713 **Speaker** switch, sets a low safe starting **Master**
+  (`NQ_UAC2_VOL`, default `10%`, so turning it on can't blast the 25 W amp); on stop it
+  kills alsaloop and hands the amp back to PA. `nq-vol` now detects `alsaloop` running
+  and drives the TAS5713 **hardware** mixer (`amixer` Master / Speaker) instead of the
+  suspended PA sink, so the front-panel ring controls USB-audio volume.
+- **APKBUILD:** `pkgrel` 63 → **65**, `depends += alsa-utils` (for `alsaloop`).
+- **Trade-off (accepted):** USB audio is **exclusive** — no simultaneous mixing with
+  Spotify/Roon/AirPlay. **Known minor:** the nexusqd LED music visualizer taps the PA
+  source, so the ring won't pulse to USB-audio playback.
+- **Source device:** the Xiaomi TV Box (adb `192.168.20.169:5555`) confirmed routing
+  media to `AUDIO_DEVICE_OUT_USB_DEVICE` (the Q); host-mode is via
+  `gpioset -t 0 -c 0 16=0` and reverts on box reboot unless the `magisk-usb-host-audio`
+  module is deployed (in `~/Documents/Dev/xiaomi-tvbox-twilight`).
 
 ### Fixed — System OTA "system update failed" (mkinitfs/boot-deploy trigger) (2026-08-08, Option A)
 - **Symptom:** the app's **System** update (`installSystemUpdate`, PROTOCOL §12b) shows

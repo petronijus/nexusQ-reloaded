@@ -4,6 +4,12 @@ Base: v1.11.0 (tagged 2026-07-31); post-1.11.0 dev. Two things recorded here:
 a new **on-device finding** (USB-Audio-in latency runaway) and the **2026-08-08 OTA
 publish** (nexusqd r12 + device-google-steelhead r63).
 
+> **✅ RESOLVED 2026-08-09 — see §3 below.** The finding in §1 (both the multi-minute
+> delay AND the idle CPU/heat) was fixed by rewriting the bridge from PulseAudio to a
+> **direct `alsaloop --sync=simple` bridge** (`device-google-steelhead` r65, commit
+> `2dccd3a`; push + OTA pending Petr's OK). The §1 analysis below is retained as the
+> pre-fix record.
+
 ---
 
 ## 1. FINDING — USB Audio input drifts ~3 minutes late over a long session
@@ -127,3 +133,58 @@ The same session found the **System** update track (`installSystemUpdate`) repor
 trigger that fails because `/boot` is empty on this ramdisk-less device (the packages
 still install; it's cosmetic + blocks a clean apk state). Full record:
 `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
+
+---
+
+## 3. ✅ RESOLVED 2026-08-09 — direct alsaloop bridge (the fix for §1)
+
+`device-google-steelhead` **r65**, commit **`2dccd3a`** on `main` — **committed, NOT
+yet pushed; push + OTA pending Petr's OK.** Both §1 faults (the multi-minute delay AND
+the idle CPU/heat) were the SAME PulseAudio bridge, so **one** change fixed both.
+
+### The fix — rip PulseAudio out of the USB-audio path
+`nexusq-uac2-in` was rewritten from `module-alsa-source` + `module-loopback` to a
+**direct ALSA bridge**:
+
+```
+alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker -r 48000 -c 2 -f S16_LE --sync=simple -t 100000
+```
+
+It bridges the UAC2 gadget capture straight to the TAS5713 amp, rate-matched from the
+**real hardware pointers** (no PulseAudio smoother to diverge) with structurally
+**bounded** ALSA buffers — so the playback delay **cannot** run away — and it only runs
+while the toggle is on (no 24/7 amp/DAC/DMA burn in silence).
+
+### `--sync=simple`, NOT `--sync=samplerate` (the original candidate FAILS on-device)
+The §1 candidate was `alsaloop --sync=samplerate` (libsamplerate closed-loop tracking).
+On the device that **fails** — the Q's `alsa-utils` is built **without libsamplerate**,
+so `--sync=samplerate` aborts with **`Loopback start failure`**. `--sync=simple` instead
+drives the gadget's **`Capture Pitch`** control (a coarse closed-loop pitch rate-match)
+and works. **Record this so the next session doesn't retry `samplerate`.**
+
+### Measured live (end-to-end, on-device)
+- Audio plays; **lip-sync correct** — Petr-confirmed ("sedí to na mluvení").
+- `alsaloop` CPU **~0.5 % → ~0 %** of one core (was **15–20 %** for the PA bridge).
+- Die temp **93 °C → 76–79 °C**.
+
+### Volume re-plumbed — PA is bypassed, so USB audio is EXCLUSIVE
+- `nexusq-uac2-in` **suspends PA's tas5713 sink** so `alsaloop` can open the amp card
+  exclusively → Spotify/AirPlay/Roon are **paused** while USB audio is on (accepted
+  trade-off: no simultaneous mixing). On stop (SIGTERM trap) it kills `alsaloop` and
+  **un-suspends** the PA sink, handing the amp back.
+- It enables the TAS5713 **Speaker** switch and sets a low safe starting **Master**
+  (`NQ_UAC2_VOL`, default `10%`) so turning USB audio on can't blast the 25 W amp.
+- `nq-vol` **detects `alsaloop` running** (`pgrep -x alsaloop`) and drives the TAS5713
+  **hardware** mixer (`amixer` Master / Speaker) instead of the suspended PA sink, so
+  the **front-panel ring still controls USB-audio volume**.
+
+### Packaging + known minor
+- APKBUILD `pkgrel` **63 → 65**, `depends += alsa-utils` (for `alsaloop`).
+- **Known minor:** the nexusqd LED music visualizer taps the PA source, so the ring
+  does **not** pulse to USB-audio playback while the bridge bypasses PA.
+
+### Source device (for the repro)
+The Xiaomi Mi TV Box (adb `192.168.20.169:5555`) is confirmed routing media to
+`AUDIO_DEVICE_OUT_USB_DEVICE` (the Q). Host-mode via `gpioset -t 0 -c 0 16=0`; it
+reverts on box reboot unless the prepared **`magisk-usb-host-audio`** module is deployed
+(in `~/Documents/Dev/xiaomi-tvbox-twilight`).

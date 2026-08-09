@@ -3,6 +3,16 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **NEXT TASK (2026-08-09, after r65 is baked + verified) — USB Audio vs the other
+> services.** The r65 rewrite makes USB audio EXCLUSIVE (it suspends PA's tas5713
+> sink, so Spotify/AirPlay/Roon are paused while it's on). Open design question:
+> how do we combine/switch USB audio with the PA services — a manual switch (app
+> UI / the existing per-service toggles), ideally an AUTOMATIC switch (e.g. USB
+> audio takes over when the Xiaomi is actively streaming and yields when it stops),
+> and/or is there still any viable MIXING path (alsaloop→PA failed on the pulse
+> plugin's delay query; a snd-aloop hop or a second aloop card into PA is the
+> candidate to investigate). Deferred until the r65 fix is confirmed in real use.
+
 > **2026-08-08 — ✅ OTA PUBLISHED (nexusqd r12 + device r63); ⚠️ USB-Audio-in delay finding.**
 > `publish-ota-repo.sh` pushed to `gh-pages`: **`nexusqd` r12** (front-panel volume
 > **ring applied headless** via `nq-vol` — Petr confirmed the ring changes volume) +
@@ -12,15 +22,19 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (committed, **pushed**): r63 APKBUILD `install -dm755 $pkgdir/etc/systemd/system`
 > before the `default.target` symlink (clean build was failing) + a
 > **`OTA_PACKAGES_ONLY=1`** two-package build gate in `docker-build.sh`. **⚠️ NEW
-> OPEN ISSUES (2 new, both diagnosed on-device 2026-08-08, NOT fixed):**
-> **(1) USB-Audio-in (the UAC2 DAC) drifts ~3 min late over a long session** —
-> `module-alsa-source` on the async capture reports a bogus uptime-growing latency
-> that poisons `module-loopback`'s resampler (pegs ±1 % rail, minutes of backlog);
-> ruled out clock mismatch/capture-buffer/`tsched=0`. **Plus:** it also burns steady
-> CPU + heat in **silence** — the loopback sink-input is **never corked**, so
-> `module-suspend-on-idle` can't suspend the TAS5713 sink (DAC/clock/DMA/resampler stay
-> on 24/7). Likely fix = closed-loop `alsaloop --sync=samplerate` **or** cork-on-silence,
-> needs hours-long validation. Record:
+> ISSUES (2 diagnosed on-device 2026-08-08, both now RESOLVED):**
+> **(1) ✅ FIXED (2026-08-09, device r65, committed `2dccd3a` — push + OTA pending):
+> USB-Audio-in delay + idle CPU/heat.** Was: ~3 min playback drift over a long session
+> (`module-alsa-source` reported a bogus uptime-growing latency that poisoned
+> `module-loopback`'s resampler, pegging the ±1 % rail) AND steady CPU + heat in
+> **silence** (never-corked loopback sink-input → `module-suspend-on-idle` couldn't
+> sleep the amp; DAC/clock/DMA/resampler ran 24/7). **Fix:** rewrote the bridge as a
+> **direct `alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker --sync=simple` — no PulseAudio
+> in the audio path** — rate-matched from the real hardware pointers with bounded ALSA
+> buffers so the delay can't run away. Live: lip-sync correct (Petr-confirmed), ~0 % CPU,
+> die 93 °C → 76–79 °C. `--sync=simple` (the device's `alsa-utils` lacks libsamplerate).
+> Trade-off: USB audio is now **EXCLUSIVE** (PA sink suspended; `nq-vol` drives the
+> TAS5713 hw mixer). Record:
 > `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 > **(2) ✅ FIXED — System OTA "system update failed"** (Option A) — the
 > `postmarketos-mkinitfs` / `boot-deploy` trigger failed (`No kernel found in /boot`)
@@ -613,22 +627,34 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
   r4): `_tick` no longer opens the socket; `start_control()` is idempotent; fd flat at
   8.** Found on the first try by the app's new debug log.
 
-### Follow-up: USB-Audio bridge redesign (2026-08-08, on-device; NOT started)
-Two on-device findings, **one fix** — replace the PulseAudio `module-alsa-source` →
-`module-loopback` bridge on the async UAC2 capture:
-- **Playback drifts ~3 min late over a long session** — the loopback's latency-driven
-  resampler is fed a bogus uptime-growing source latency (5134 s seen), pegs the ±1 %
-  rail, backlog grows to minutes. Ruled out clock mismatch (+100 ppm normal), the
-  capture buffer (~3 ms), and `tsched=0`.
-- **Steady CPU + heat in SILENCE** — the loopback sink-input is **never corked**
-  (`Corked: no`), so `module-suspend-on-idle` (loaded) can never suspend the TAS5713
-  sink → DAC/clock/DMA/speex resampler powered 24/7 (die 78→73 °C when the unit is
-  stopped; during streaming + the nexusqd LED-visualizer `arecord` the CPU pins at
-  1.2 GHz / 91–94 °C, not yet throttling).
-- **Candidate fix (needs HOURS to validate):** `alsaloop --sync=samplerate`
-  (closed-loop rate tracking) **or** cork-on-silence, keeping PA mixing. Path:
-  `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`). Record:
-  `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+### ✅ DONE: USB-Audio bridge redesign — direct alsaloop (2026-08-09, device r65, committed `2dccd3a`; push + OTA pending)
+Two on-device findings, **one fix** — the PulseAudio `module-alsa-source` →
+`module-loopback` bridge on the async UAC2 capture was replaced wholesale:
+- **Was: playback drifts ~3 min late over a long session** — the loopback's
+  latency-driven resampler was fed a bogus uptime-growing source latency (5134 s seen),
+  pegged the ±1 % rail, backlog grew to minutes. Ruled out clock mismatch (+100 ppm
+  normal), the capture buffer (~3 ms), and `tsched=0`.
+- **Was: steady CPU + heat in SILENCE** — the loopback sink-input was **never corked**
+  (`Corked: no`), so `module-suspend-on-idle` (loaded) could never suspend the TAS5713
+  sink → DAC/clock/DMA/speex resampler powered 24/7 (die 78→73 °C when the unit was
+  stopped; during streaming the CPU pinned at 1.2 GHz / 91–94 °C).
+- **Shipped fix:** a **direct ALSA bridge, no PulseAudio in the audio path** —
+  `alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker -r 48000 -c 2 -f S16_LE --sync=simple`,
+  rate-matched from the **real hardware pointers** (no PA smoother to diverge) with
+  structurally **bounded** ALSA buffers so the delay **cannot** run away. Measured live:
+  audio plays, lip-sync correct (Petr-confirmed), alsaloop ~0.5 % → ~0 % of one core
+  (was 15–20 %), die 93 °C → 76–79 °C. **`--sync=simple`, not `--sync=samplerate`** —
+  the device's `alsa-utils` is built without libsamplerate, so `--sync=samplerate` fails
+  with `Loopback start failure`; `--sync=simple` uses the gadget's **Capture Pitch**
+  control and works.
+- **Volume re-plumbed (PA bypassed):** `nexusq-uac2-in` suspends PA's tas5713 sink (USB
+  audio is now **EXCLUSIVE** — Spotify/AirPlay/Roon paused while on), enables the
+  Speaker switch, sets a safe low Master (`NQ_UAC2_VOL`, 10 %), hands the amp back to PA
+  on stop; `nq-vol` detects `alsaloop` and drives the TAS5713 **hardware** mixer so the
+  ring still controls USB-audio volume. APKBUILD `pkgrel` 63→65, `depends += alsa-utils`.
+  **Known minor:** the nexusqd LED visualizer taps the PA source → won't pulse to USB
+  audio. Path: `pmos/device-google-steelhead/nexusq-uac2-in` (+ `.service`), `nq-vol`.
+  Record: `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 
 ### ✅ FIXED: System OTA "system update failed" — mkinitfs/boot-deploy trigger (2026-08-08, Option A)
 The app's **System** update reported **"system update failed"** and `apk fix -s` showed

@@ -6,6 +6,17 @@ dev build **v1.11.3** (untagged). HEAD `0565977`
 Packages: `linux` **r46** (`#47`), `device-google-steelhead` **r60**,
 `nexusq-control` **r16**, companion app **1.7.0+16**.
 
+> **⚠️ SUPERSEDED (audio path only) — as of 2026-08-09 / `device-google-steelhead`
+> r65 (commit `2dccd3a`), the PulseAudio `module-alsa-source` + `module-loopback`
+> bridge described below was replaced by a DIRECT `alsaloop -C hw:UAC2Gadget
+> -P hw:NexusQSpeaker --sync=simple` bridge (no PulseAudio in the audio path).** This
+> fixed the multi-minute playback delay AND the idle CPU/heat burn that the PA design
+> developed (recorded in `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`).
+> Consequence: **USB audio is now EXCLUSIVE** — it suspends PA's tas5713 sink (no
+> simultaneous mixing with Spotify/AirPlay/Roon), and `nq-vol` drives the TAS5713
+> hardware mixer while it's on. Everything else in this note (kernel `uac2.0` gadget,
+> the app toggle, the "no audio input" analysis) still stands.
+
 ## The problem: the Q has no audio INPUT
 
 Petr wanted to feed external audio into the Q's amp. It has none of the obvious

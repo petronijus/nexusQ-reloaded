@@ -194,44 +194,47 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` and
   `docs/2026-07-04-ethernet-resolved-and-led-guard.md` (NFC section).
 - 🆕 **Streaming inputs + per-service app toggles (v1.11.0 step 3; USB audio
-  post-v1.11.0 dev).** The Q has **four** audio inputs, all mixing into the default
-  PulseAudio sink (TAS5713): **Spotify** (librespot) + **AirPlay** (shairport-sync)
-  are **vendor-default-ON**; **Roon** (`roon.service`, glibc/bwrap) + **USB Audio**
-  (`nexusq-uac2-in.service`) are **default-OFF**. `nexusq-control` **r16** exposes each
-  as an app switch (`SERVICES`: spotify/airplay/roon/usbaudio). ⚠️ **An INACTIVE
-  default-OFF unit (roon, usbaudio) is NORMAL, not a `failed_unit`.** ⚠️ **`set_service`
-  OFF uses `disable --now` for the default-OFF units and `mask --now` only for the
-  vendor-default-ON ones** (a new `vendor_on` flag) — because `mask --now` `/dev/null`s
-  a unit before stopping it, dropping `KillMode`/`ExecStop`, so a module-owning service
-  like `nexusq-uac2-in` (holds PA loopback modules that outlive its process) would
-  **leak its loopback** on OFF. **USB Audio input** (the Q as a USB DAC): kernel r46
+  post-v1.11.0 dev).** The Q has **four** audio inputs: **Spotify** (librespot) +
+  **AirPlay** (shairport-sync) + **Roon** (`roon.service`, glibc/bwrap) mix into the
+  default PulseAudio sink (TAS5713); **USB Audio** (`nexusq-uac2-in.service`) does NOT —
+  it is **EXCLUSIVE and bypasses PulseAudio** (see below). Spotify + AirPlay are
+  **vendor-default-ON**; Roon + USB Audio are **default-OFF**. `nexusq-control` **r16**
+  exposes each as an app switch (`SERVICES`: spotify/airplay/roon/usbaudio). ⚠️ **An
+  INACTIVE default-OFF unit (roon, usbaudio) is NORMAL, not a `failed_unit`.** ⚠️
+  **`set_service` OFF uses `disable --now` for the default-OFF units and `mask --now`
+  only for the vendor-default-ON ones** (a new `vendor_on` flag) — because `mask --now`
+  `/dev/null`s a unit before stopping it, dropping `KillMode`/`ExecStop`, so a service
+  with a SIGTERM-trap cleanup like `nexusq-uac2-in` (its trap kills `alsaloop` and
+  un-suspends the PA sink) would **skip its cleanup** on OFF (leaving alsaloop running /
+  the PA sink suspended). **USB Audio input** (the Q as a USB DAC): kernel r46
   `CONFIG_USB_CONFIGFS_F_UAC2` + a `uac2.0` function on the composite gadget
   (`c_chmask=3`, `p_chmask=0` = a USB speaker, not a mic) surface the host audio as the
-  `UAC2Gadget` ALSA capture card; `nexusq-uac2-in` loopbacks it into the default sink.
-  **Healthy tell when ON:** the `UAC2Gadget` capture card present + `nexusq-uac2-in`
-  active + the TAS5713 sink **RUNNING** while the host plays; **OFF:** the unit inactive
-  and its PA loopback modules **unloaded (0)**. The Q has **no optical/HDMI/line input**
-  (all ports are OUTPUTS) — USB is the only no-solder digital audio in. See
-  `docs/2026-08-02-usb-audio-input.md`.
-  - ⚠️ **KNOWN OPEN BUG (2026-08-08): USB-Audio-in drifts ~3 min LATE over a LONG
-    session** — `module-alsa-source` on the **async** `hw:UAC2Gadget` (`pcm0c`) reports
-    a **bogus, uptime-growing latency** (≈ uptime: ~64 s at 64 s, **5134 s** after a
-    long run) instead of the real ~ms buffer → poisons `module-loopback`'s
-    latency-driven resampler → resampler pegs the **±1 % rail (48480 Hz)** + `memblockq`
-    backlog grows to **minutes**. **Do NOT re-derive:** it is NOT a clock mismatch
-    (effective capture ≈ **48004.79 fps / +100 ppm — normal**), NOT the capture buffer
-    (`delay`/`avail` ~144 frames ≈ 3 ms, `buffer_size` 16384 never fills), and
-    **`tsched=0` does NOT fix it** (tested live — source latency still grew). Healthy in
-    a short window / right after `systemctl --user restart nexusq-uac2-in` (~134 ms,
-    resampler ~48002 Hz); the fault only shows over **hours**. Related — **steady CPU +
-    heat in SILENCE:** `module-suspend-on-idle` **is loaded** but the loopback
-    sink-input is **never corked** (`Corked: no`), so it feeds the TAS5713 sink
-    continuously and suspend-on-idle can **never** suspend it → DAC/clock/DMA/speex
-    resampler powered 24/7 (die 78→73 °C when `nexusq-uac2-in` is stopped). ⚠️ **A
-    1.2 GHz / 91–94 °C pin during active streaming is NOT a fault** — the nexusqd LED
-    music visualizer's `arecord -D pulse` capture is **legitimate** (not throttling —
-    `scaling_max` still 1200, trip higher). Likely fix (unimplemented) = closed-loop
-    `alsaloop --sync=samplerate` **or** cork-on-silence. See
+  `UAC2Gadget` ALSA capture card.
+  - ⚠️ **REWRITTEN 2026-08-09 (device r65): direct `alsaloop` bridge, NO PulseAudio in
+    the audio path** (was a PA `module-alsa-source` + `module-loopback` bridge).
+    `nexusq-uac2-in` now runs `alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker --sync=simple`
+    straight to the TAS5713 amp, and **suspends PA's tas5713 sink** for the duration
+    (USB audio is EXCLUSIVE — Spotify/AirPlay/Roon are paused while it's on). Volume is
+    the TAS5713 **hardware** mixer (`amixer` Master/Speaker via `nq-vol`, which detects
+    `alsaloop` running), not PA. **Healthy tell when ON:** `UAC2Gadget` capture card
+    present + `nexusq-uac2-in` active + an **`alsaloop` process running** + PA's tas5713
+    sink **SUSPENDED** (that suspended sink is **NORMAL, not a fault**) + the amp audible.
+    `alsaloop` sits at **~0 %** CPU; die **76–79 °C**. **OFF:** unit inactive, no
+    `alsaloop`, PA sink un-suspended and RUNNING again. `--sync=simple` (NOT
+    `--sync=samplerate` — the device's `alsa-utils` lacks libsamplerate, so `samplerate`
+    fails `Loopback start failure`). **Known minor:** the nexusqd LED visualizer taps the
+    PA source → does NOT react to USB-audio playback (a limitation, not a fault). The Q
+    has **no optical/HDMI/line input** (all ports are OUTPUTS) — USB is the only
+    no-solder digital audio in. See `docs/2026-08-02-usb-audio-input.md`.
+  - ✅ **FIXED 2026-08-09 — do NOT re-flag the old PA-bridge bugs.** The pre-rewrite PA
+    bridge had TWO faults, both cured by the direct-alsaloop rewrite above: (a) USB-Audio
+    drifted **~3 min LATE over a long session** (`module-alsa-source` reported a bogus
+    uptime-growing latency, ~5134 s, poisoning `module-loopback`'s resampler → pegged the
+    ±1 % rail, backlog grew to minutes), and (b) it **burned steady CPU + heat in
+    silence** (the loopback sink-input was never corked, so `module-suspend-on-idle`
+    could never suspend the amp; DAC/clock/DMA/resampler ran 24/7, ~15–20 % CPU + ~5 °C).
+    Both are GONE — the direct bridge rate-matches from real hardware pointers with
+    bounded ALSA buffers and only runs while on. See
     `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 - 🆕 **Setup mode / `nexusq-setupd` + `nexusq-btagent` (**v1.9.0** = device r47 /
   setupd r4 / btagent r1 / nexusqd r10 / kernel r43 / firmware r2 — NOT on flashed
