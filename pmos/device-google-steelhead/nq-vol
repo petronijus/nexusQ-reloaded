@@ -1,10 +1,29 @@
 #!/bin/sh
-# Volume-key helper for the labwc keybinds: the front-panel rotary ring
-# (steelhead-avr-keys, XF86Audio*) drives the PulseAudio DEFAULT sink — i.e.
-# whatever output (speaker / SPDIF / HDMI) is currently selected. Kept as a
-# script (not inline in rc.xml) because the cap logic needs quoting that XML
-# attributes can't hold. `up` is capped at 100% — a raw `pactl +3%` happily
-# runs past 100% into digital over-amplification (observed 477%).
+# Volume helper for the front-panel rotary ring. nexusqd runs this (as the `user`
+# session, uid 10000) for each ring detent / mute: arg is "up" | "down" | "mute".
+#
+# TWO output paths:
+#  * Normally the ring drives the PulseAudio DEFAULT sink — i.e. whatever output
+#    (speaker / SPDIF / HDMI) is currently selected, mixing all the PA inputs
+#    (Spotify / AirPlay / Roon). `up` is capped at 100% — a raw `pactl +3%` runs
+#    past 100% into digital over-amplification (observed 477%).
+#  * When "USB Audio" is on, alsaloop bridges the gadget capture STRAIGHT to the
+#    TAS5713 amp and PulseAudio's sink is SUSPENDED (see nexusq-uac2-in), so a
+#    `pactl` volume change would hit a suspended, unused sink and do nothing
+#    audible. Detect that (alsaloop running) and drive the TAS5713 HARDWARE mixer
+#    instead: Master for level, the Speaker switch for mute.
+SPKR="${NQ_SPEAKER_CARD:-NexusQSpeaker}"
+STEP="${NQ_VOL_STEP:-4%}"
+
+if pgrep -x alsaloop >/dev/null 2>&1; then
+	case "$1" in
+		up)   amixer -c "$SPKR" -M sset Master "${STEP}+" >/dev/null 2>&1 ;;
+		down) amixer -c "$SPKR" -M sset Master "${STEP}-" >/dev/null 2>&1 ;;
+		mute) amixer -c "$SPKR" sset Speaker toggle       >/dev/null 2>&1 ;;
+	esac
+	exit 0
+fi
+
 case "$1" in
 	up)
 		pactl set-sink-volume @DEFAULT_SINK@ +3%

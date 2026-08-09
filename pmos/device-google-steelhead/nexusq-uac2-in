@@ -1,42 +1,56 @@
 #!/bin/sh
-# nexusq-uac2-in — the "USB Audio" input service body. Wires the UAC2 gadget's
-# capture stream into PulseAudio so the Q is a USB DAC/speaker:
+# nexusq-uac2-in — the "USB Audio" input service body. Bridges the UAC2 gadget
+# capture STRAIGHT to the TAS5713 amp with alsaloop — NO PulseAudio in the audio
+# path — for minimum CPU on the weak OMAP4:
 #
-#   host plays over USB -> UAC2Gadget capture (pcm0c) -> module-alsa-source
-#   "usb_in" -> module-loopback -> default sink -> TAS5713 amp
+#   host plays over USB -> UAC2Gadget capture (pcm0c) -> alsaloop (--sync=simple,
+#   closed-loop pitch rate-match) -> hw:NexusQSpeaker (TAS5713 amp)
 #
-# Runs in the uid-10000 `user` PA session (see nexusq-uac2-in.service), exactly
-# like the Roon loopback, and is toggled from the companion app as the "usbaudio"
-# service. OFF by default so the always-on alsa-source + loopback cost nothing
-# until the user wants USB audio.
+# This replaced the old PulseAudio module-alsa-source + module-loopback bridge
+# (2026-08-08). That PA design had two measured faults: (a) the playback delay ran
+# away to MINUTES over a long session — module-alsa-source reported a bogus,
+# ever-growing latency (~uptime, not the real ~ms buffer) that poisoned
+# module-loopback's rate controller until its resampler pegged at the +1% rail and
+# the backlog grew unbounded; and (b) the loopback sink-input never corked, so
+# module-suspend-on-idle could never sleep the amp — the DAC/clock/DMA/resampler
+# ran 24/7, burning CPU + ~5 °C even in silence. alsaloop rate-matches from the
+# REAL hardware pointers (no PA smoother to diverge) and only runs while the toggle
+# is on; measured ~0.2% of one core vs ~15-20% for the old bridge.
 #
-# IMPORTANT — this is a LONG-RUNNING process, not a oneshot: the PA modules
-# persist in PulseAudio independently of any process, so they MUST be unloaded on
-# a SIGTERM (which is what `systemctl stop` and the app's `mask --now` send).
-# A oneshot + ExecStop would leak, because `mask --now` replaces the unit with
-# /dev/null before the stop, losing ExecStop. So: load, then wait, and unload in
-# a signal trap.
+# TRADE-OFF — EXCLUSIVE amp: alsaloop owns the TAS5713 card directly, so while USB
+# audio is on we SUSPEND PulseAudio's tas5713 sink to release the card (Spotify /
+# AirPlay / Roon have no output for the duration) and un-suspend it on stop. The
+# front-panel volume ring still works throughout: nq-vol sets the TAS5713 hardware
+# Master mixer directly, independent of PulseAudio.
 #
-# The gadget's UAC2 function / the UAC2Gadget capture card itself is owned by
-# nexusq-usb-gadget.service and is always present; this only wires it into PA.
+# LONG-RUNNING (not oneshot): on SIGTERM (systemctl stop / the app's disable --now)
+# the trap kills alsaloop and hands the amp back to PulseAudio. Toggled from the
+# companion app as the "usbaudio" service; OFF by default. The UAC2 gadget capture
+# card is owned by nexusq-usb-gadget.service and is always present.
 set -u
 
-CARD="${NQ_UAC2_CARD:-UAC2Gadget}"
-SRC="${NQ_UAC2_SOURCE:-usb_in}"
-LAT="${NQ_UAC2_LATENCY:-80}"   # loopback cushion (ms); USB audio is low-latency
+CARD="${NQ_UAC2_CARD:-UAC2Gadget}"                 # gadget capture card
+SPKR="${NQ_UAC2_SPEAKER_CARD:-NexusQSpeaker}"      # TAS5713 playback card
+PA_SINK="${NQ_UAC2_PA_SINK:-alsa_output.platform-sound-tas5713.stereo-fallback}"
+TLAT="${NQ_UAC2_TLATENCY:-100000}"                 # alsaloop target loop latency (us)
+# Starting amp volume when USB audio turns on. The normal volume path (ring ->
+# nexusqd -> nq-vol) drives PulseAudio, but here PA is bypassed, so nq-vol detects
+# USB audio is on and drives this TAS5713 hardware Master instead (amixer). We set
+# a LOW, never-loud starting level so turning USB audio on can't blast the amp
+# (25 W, steep curve); the ring takes it up from there. Tunable via NQ_UAC2_VOL.
+STARTVOL="${NQ_UAC2_VOL:-10%}"
 
-# All PA modules this service owns carry "$SRC" (usb_in) in their argument line
-# (module-alsa-source source_name=usb_in, module-loopback source=usb_in), so we
-# find/unload exactly ours without touching Roon's roon_in loopback.
-unload_ours() {
-	pactl list short modules 2>/dev/null | awk -v s="$SRC" '$0 ~ s {print $1}' \
-		| while read -r m; do pactl unload-module "$m" 2>/dev/null || true; done
+pa() { pactl "$@" 2>/dev/null || true; }
+
+ALPID=""
+# Un-suspend the PA sink (give the amp back) and stop alsaloop, then exit. Runs on
+# SIGTERM/SIGINT — including the app's `disable --now` and systemd's KillMode=mixed.
+stop_all() {
+	[ -n "$ALPID" ] && kill "$ALPID" 2>/dev/null
+	pa suspend-sink "$PA_SINK" 0
+	exit 0
 }
-
-# Unload on stop / mask (SIGTERM) or SIGINT, then exit cleanly.
-trap 'unload_ours; exit 0' TERM INT
-
-unload_ours   # clear any leak from a prior hard (SIGKILL) stop
+trap stop_all TERM INT
 
 # The gadget capture card appears a few seconds into boot; wait briefly for it.
 i=0
@@ -49,14 +63,26 @@ if ! grep -q "$CARD" /proc/asound/cards 2>/dev/null; then
 	exit 1
 fi
 
-pactl load-module module-alsa-source "device=hw:$CARD" "source_name=$SRC" \
-	source_properties=device.description=USB-Audio-In >/dev/null || exit 1
-pactl load-module module-loopback "source=$SRC" "latency_msec=$LAT" \
-	"sink=@DEFAULT_SINK@" >/dev/null || { unload_ours; exit 1; }
+# Release the TAS5713 card from PulseAudio so alsaloop can open it exclusively.
+pa suspend-sink "$PA_SINK" 1
+sleep 1
 
-# Stay alive so systemd sees the service "active" while the loopback is wired.
-# `wait` is interruptible, so a SIGTERM fires the trap promptly.
+# PulseAudio normally drives the amp's Speaker switch (its mixer path) and volume;
+# bypassing it, we own both. Set a safe starting Master and enable the Speaker
+# output so USB audio is audible; the ring adjusts Master via nq-vol from here. On
+# stop, PA reclaims the sink and its mixer path resets Master/Speaker, so no
+# restore is needed.
+amixer -c "$SPKR" -M sset Master "$STARTVOL" >/dev/null 2>&1 || true
+amixer -c "$SPKR" sset Speaker unmute >/dev/null 2>&1 || true
+
+# Bridge capture -> amp. Re-open if alsaloop drops (host stop/start, xrun) while we
+# are still meant to be running; a real stop runs the trap above instead. `wait` is
+# interruptible, so SIGTERM fires the trap promptly even mid-wait.
 while : ; do
-	sleep 86400 &
-	wait "$!"
+	alsaloop -C "hw:$CARD" -P "hw:$SPKR" -r 48000 -c 2 -f S16_LE \
+		--sync=simple -t "$TLAT" &
+	ALPID=$!
+	wait "$ALPID"
+	ALPID=""
+	sleep 2
 done

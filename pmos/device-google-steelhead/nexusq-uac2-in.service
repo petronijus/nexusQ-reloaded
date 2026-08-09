@@ -1,34 +1,36 @@
-# USB Audio input — a systemd USER unit (uid-10000 `user` session, sharing that
-# session's PulseAudio, exactly like librespot / shairport-sync / roon).
+# USB Audio input — a systemd USER unit (uid-10000 `user` session). It needs the
+# `user` PulseAudio only to hand the TAS5713 amp back and forth (pactl
+# suspend-sink); the audio itself goes gadget-capture -> alsaloop -> amp, bypassing
+# PulseAudio (see nexusq-uac2-in for why: efficiency + no latency-runaway).
 #
 # DELIBERATELY NOT AUTO-ENABLED (no default.target.wants symlink, no preset
-# entry), so it is OFF by default and the always-on alsa-source + loopback cost
-# nothing until turned on. Same resource policy as Roon: the companion app's
-# per-service toggle enables only what the user wants
-# (`systemctl --user enable --now nexusq-uac2-in`). Turning it off:
+# entry), so it is OFF by default and costs nothing until turned on. Same resource
+# policy as Roon: the companion app's per-service toggle enables only what the user
+# wants (`systemctl --user enable --now nexusq-uac2-in`). Turning it off:
 # `systemctl --user disable --now nexusq-uac2-in`.
 #
-# It is one PulseAudio INPUT (the Q as a USB DAC/speaker); OUTPUT (TAS5713 /
-# SPDIF / HDMI) + volume live in PulseAudio and mix with the other inputs.
-# The UAC2 gadget capture card itself is owned by nexusq-usb-gadget.service.
+# While ON it takes the amp EXCLUSIVELY (PA's tas5713 sink is suspended, so
+# Spotify / AirPlay / Roon are paused for the duration); OFF hands the amp back to
+# PulseAudio. The UAC2 gadget capture card itself is owned by
+# nexusq-usb-gadget.service.
 [Unit]
-Description=USB Audio input (UAC2 gadget capture -> PulseAudio -> TAS5713)
+Description=USB Audio input (UAC2 gadget capture -> alsaloop -> TAS5713 amp, exclusive)
 After=pulseaudio.service
 Wants=pulseaudio.service
 ConditionUser=10000
 
 [Service]
-# Long-running (NOT oneshot): the PA modules persist independently of any
-# process, so they must be unloaded on SIGTERM. nexusq-uac2-in loads them, waits,
-# and unloads in a signal trap — robust against the app's `mask --now` (which
-# masks the unit to /dev/null before stopping, so a oneshot's ExecStop would be
-# lost and the loopback would leak).
+# Long-running (NOT oneshot): while running it holds the amp (PA sink suspended)
+# and runs alsaloop, so on SIGTERM it MUST kill alsaloop and un-suspend the PA sink
+# in a signal trap — robust against the app's `mask --now` (which masks the unit to
+# /dev/null before stopping, so a oneshot's ExecStop would be lost and the amp
+# would stay stuck away from PulseAudio).
 ExecStart=/usr/bin/nexusq-uac2-in
 Restart=on-failure
 RestartSec=5
-# SIGTERM ONLY the main shell on stop (not the whole cgroup): its trap unloads
-# the PA modules by spawning pactl children, and control-group kill would SIGTERM
-# those pactl helpers mid-unload and leak the loopback. mixed = SIGTERM main,
+# SIGTERM ONLY the main shell on stop (not the whole cgroup): its trap un-suspends
+# the PA sink by spawning a pactl child, and a control-group kill would SIGTERM
+# that pactl helper mid-reclaim and leave the amp suspended. mixed = SIGTERM main,
 # then SIGKILL the cgroup after the timeout as a backstop.
 KillMode=mixed
 TimeoutStopSec=15
