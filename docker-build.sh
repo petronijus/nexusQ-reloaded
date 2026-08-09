@@ -678,10 +678,13 @@ pmbootstrap checksum firmware-google-steelhead 2>&1 || true
 # them at rootfs-install time, not to build these two packages.
 if [ "${OTA_PACKAGES_ONLY:-0}" = "1" ]; then
     echo ""
-    echo "=== OTA_PACKAGES_ONLY=1: building ONLY nexusqd + device-google-steelhead ==="
+    # OTA_PACKAGES lets a caller target a different set of aports (each must live
+    # at $SRC/pmos/<name>/APKBUILD). Default = the two-package rootfs-less OTA.
+    _ota_list="${OTA_PACKAGES:-nexusqd device-google-steelhead}"
+    echo "=== OTA_PACKAGES_ONLY=1: building ONLY: $_ota_list ==="
     sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
     _ota_fail=0
-    for _ota_pkg in nexusqd device-google-steelhead; do
+    for _ota_pkg in $_ota_list; do
         echo ""
         echo "--- OTA build: $_ota_pkg ---"
         set +e
@@ -715,12 +718,14 @@ if [ "${OTA_PACKAGES_ONLY:-0}" = "1" ]; then
     done
     echo ""
     echo "=== OTA_PACKAGES_ONLY summary ==="
-    ls -1 "$WORK"/packages/*/armv7/nexusqd-*.apk "$WORK"/packages/*/armv7/device-google-steelhead-*.apk 2>/dev/null | sort -V
+    for _ota_pkg in $_ota_list; do
+        ls -1 "$WORK"/packages/*/armv7/"${_ota_pkg}"-*.apk 2>/dev/null | sort -V
+    done
     if [ $_ota_fail -ne 0 ]; then
         echo "=== OTA BUILD FAILED ==="
         exit 1
     fi
-    echo "=== OTA BUILD COMPLETE (both apks in the work-volume repo, signed) ==="
+    echo "=== OTA BUILD COMPLETE (all apks in the work-volume repo, signed) ==="
     exit 0
 fi
 
