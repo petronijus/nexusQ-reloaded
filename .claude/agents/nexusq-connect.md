@@ -38,12 +38,13 @@ was an NM config loop, fixed by the baked profiles. (On a **pre-v1.6.8/`#33`**
 image `eth0` could be absent on cold boots — that was the unmuxed pad, not a
 profile fault; power-cycle onto `#33` or use another path.) The USB gadget
 renames its iface + changes MAC every reboot; WiFi last leased
-**`192.168.20.184`** (since 2026-07-12) — the on-air **factory MAC
-`f8:8f:ca:20:48:e1`** is pinned (NM `cloned-mac-address`, since the 2026-07-03
-`#29` flash) but **the router can still reassign the lease** (it moved
-`.195`→`.184` on 2026-07-12), so **treat any WiFi IP as a hint, never a
-constant**. Older leases: `.195` (2026-07-03→07-12), `.175` on the interim
-`#27` OTP-MAC flash, wandering per-boot IPs on v1.6.5. Re-discover
+**`192.168.20.246`** (since 2026-08-10 — a fresh lease after a ~2 h internet
+outage made the wifi-watchdog bounce `wlan0`) — the on-air **factory MAC
+`f8:8f:ca:20:48:e1`** is pinned (DTS since v1.10.1) but **the router can still
+reassign the lease**, so **treat any WiFi IP as a hint, never a constant**.
+Older leases: `.164` (through 2026-08-10), `.184` (2026-07-12→08), `.195`
+(2026-07-03→07-12), `.175` on the interim `#27` OTP-MAC flash, wandering
+per-boot IPs on v1.6.5. Re-discover
 by hostname `steelhead` or the factory MAC if it ever moves. Do not modify the
 device (sole allowed exception: `nmcli c up eth-direct` — activating the baked
 static profile, see Transport A).
@@ -71,10 +72,10 @@ Run these near-instant checks; the moment one `ssh` works, that is the answer:
 2. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
    (Composite RNDIS+ACM gadget; solid fallback, but its `enx*` name changes per boot.)
 3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Last-known
-   lease (2026-07-12): `192.168.20.184` (`ssh root@192.168.20.184`) — but the
-   router CAN reassign it (it moved from `.195` on 2026-07-12), so a miss here
-   just means "look up the lease", not "WiFi is down". (`.195` = 2026-07-03→
-   07-12 lease, `.175` = the interim `#27`-era one.)
+   lease (2026-08-10): `192.168.20.246` (`ssh root@192.168.20.246`) — but the
+   router CAN reassign it, so a miss here just means "look up the lease", not
+   "WiFi is down". (Prior: `.164` → 2026-08-10, `.184` = 2026-07-12→08, `.195` =
+   2026-07-03→07-12, `.175` = the interim `#27`-era one.)
 If any of those ssh-verifies → report it and STOP. Only if ALL fail do you drop to
 the slow discovery in the per-transport sections below (host-IP setup, IPv6
 link-local, mDNS, OPNsense lease lookup).
@@ -83,9 +84,14 @@ link-local, mDNS, OPNsense lease lookup).
 - Hostname: **`steelhead`** (→ try `steelhead.local` via mDNS).
 - WiFi lives on **vlan20** (`192.168.20.x`, DHCP). The on-air MAC is stable
   (factory-pinned since the 2026-07-03 `#29` flash) but **the lease is NOT
-  guaranteed stable** — the router reassigned `.195`→`.184` on 2026-07-12.
-  Last-known: `192.168.20.184` — try it first, then lease-lookup by
-  hostname/MAC. **Never hardcode the WiFi IP.**
+  guaranteed stable** — it has moved `.195`→`.184`→`.164`→`.246` over time
+  (`.246` = a fresh lease after the 2026-08-10 internet outage).
+  Last-known: `192.168.20.246` — try it first, then lease-lookup by
+  hostname/MAC. **Never hardcode the WiFi IP.** ⚠️ 2026-08-10: the
+  `opnsense-api` helper is broken from this PC (`opnsense.home.arpa` has no DNS
+  record; gw `:8443` gave a mini_httpd-style 404, possibly a temporary router
+  swap during the outage) — until re-verified, kea lease lookups may be
+  unavailable; fall back to the other transports/mDNS.
 - **WiFi on-air MAC — depends on the flashed image** (which one is on the
   device: check `uname -r`/`#N` or just match both MACs in leases):
   - **v1.10.1+ (`#45`/kernel r44)**: the **factory `f8:8f:ca:20:48:e1`**, now

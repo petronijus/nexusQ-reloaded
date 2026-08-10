@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=66
+pkgrel=67
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -33,6 +33,7 @@ depends="
 	nexusq-control
 	nexusq-setupd
 	nexusq-btagent
+	nexusq-mqtt
 	librespot
 	shairport-sync
 	bubblewrap

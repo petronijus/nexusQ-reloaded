@@ -4,7 +4,79 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-09 (latest): **USB Audio input FIXED — direct alsaloop bridge kills the multi-minute delay AND the idle CPU/heat (device r65)**
+## Session 2026-08-10 (latest): **MQTT health telemetry SHIPPED end-to-end — Q → Mosquitto → Home Assistant (18 live entities) + app Health panel (1.12.0+31)**
+
+Full record: `docs/2026-08-10-mqtt-health-telemetry.md`. PLAN.md "PLANNED NEXT"
+task **(2) is DONE**; task **(1)** (USB audio back into PA via snd-aloop) remains.
+
+### Current state
+- **NEW aport `pmos/nexusq-mqtt` (0.1.0-r0, noarch)** + `userspace/nexusq-mqtt/`
+  (pure-Python **stdlib** MQTT 3.1.1 publisher; CONNECT+auth+LWT, QoS0+retain,
+  PINGREQ dead-link detection, reconnect+backoff; **25 host tests** incl. a fake
+  TCP broker). Publishes every 30 s: retained `nexusq/health/state` JSON,
+  `nexusq/status` online/offline LWT, retained HA discovery (**12 sensors + 6
+  binary_sensors**, factory-MAC-keyed). Data = nq-healthd tail (fresh ≤60 s) +
+  own sampling (per-OPP `time_in_state` deltas, WiFi RSSI/SSID, volume/mute from
+  the mixer that owns the output — `amixer` when alsaloop runs, else uid-10000
+  PA — service states via cgroup.procs, uptime).
+- `/etc/nexusq/mqtt.json` (0600) = per-home **SECRET, never baked**; unit has
+  `ConditionPathExists` + **no `After=`/`Wants=`** (ordering-cycle rule);
+  enablement self-contained (baked `multi-user.target.wants` symlink for OTA
+  installs + own `96-nexusq-mqtt.preset` for image builds).
+- `device-google-steelhead` **r66→r67** (`depends += nexusq-mqtt`);
+  `docker-build.sh` Phase 2/5/dos2unix + NEW **Phase 7c5**;
+  `publish-ota-repo.sh` `OTA_PACKAGES += nexusq-mqtt`.
+- **Broker:** new user `nexusq` on the TrueNAS SCALE Mosquitto (eclipse-mosquitto
+  2.0.22, `192.168.20.102:1883`, `ix-eclipse-mosquitto-mosquitto-1`;
+  password_file backed up, SIGHUP reload). Password: 1Password **"MQTT nexusq
+  (Nexus Q telemetry)"** (Personal). ⚠️ broker has **NO acl_file** — any
+  authenticated user can read/write everything (incl. zigbee2mqtt).
+- **DEPLOYED LIVE** (device on the NEW WiFi lease **192.168.20.246** after
+  today's ~2 h internet outage; was `.164`): both apks installed clean —
+  **mkinitfs trigger OK, the 2026-08-08 Option-A `/boot` fix holds** — service
+  running, **18 entities live in HA with real values** (79.9 °C, 1200 MHz
+  conservative, OPP shares, −28 dBm, volume 45 %, uptime match). librespot +
+  shairport-sync are **masked** = Petr turned Spotify/AirPlay off in the app
+  (~20 h ago) — intentional, telemetry correctly reports them off.
+- **App 1.11.2+30 → 1.12.0+31** (apk published as gh release `app-v1.12.0`;
+  manifest bump staged, push pending): Settings → **"Device
+  health"** → `HealthScreen` (status/problem flags/vitals/OPP bars/service
+  chips/WiFi card; retained topics populate instantly); manual **"Connect to
+  MQTT"** dialog (Petr's decision: hand-entered, editable creds; **NO
+  auto-provisioning verb, NO protocol change**) with creds in
+  `flutter_secure_storage`; subscriber `lib/mqtt/{mqtt_settings,health_mqtt}.dart`
+  on `mqtt_client ^10.6` (autoReconnect).
+
+### WHERE TO CONTINUE (all pending Petr's go)
+1. **git commit** — the whole implementation is **uncommitted on `main`**
+   (modified: `docker-build.sh`, device APKBUILD r67, `publish-ota-repo.sh`,
+   app pubspec/settings; new: `pmos/nexusq-mqtt/`, `userspace/nexusq-mqtt/`,
+   `lib/mqtt/`, `lib/screens/health_screen.dart`).
+2. **OTA publish** — `nexusq-mqtt-0.1.0-r0.apk` + `device-google-steelhead-1.0-r67.apk`
+   are built + signed in `output/`, **not yet on gh-pages**.
+3. **App release** — the gh release **`app-v1.12.0` + apk asset already EXIST**
+   (published 2026-08-10T20:12:53Z); the `companion/app-release.json` bump to
+   1.12.0/31 is **staged uncommitted** — phones read the manifest from
+   raw.githubusercontent `main`, so the OTA offer goes live with the
+   commit+push of step 1.
+4. Later: broker `acl_file` hardening; make
+   `test/connect_gate_setup_entry_test.dart` hermetic (it does **real mDNS** and
+   fails whenever a live Q is on the LAN — it found the real bridge at
+   `192.168.20.246:45015`; needs a discovery seam/mock); PLAN task (1).
+
+### Findings
+- **Internet-only outage still takes the Q off the LAN (~2 h, by design):** the
+  wifi-watchdog pings the **gateway**; gateway unpingable → bounce `wlan0` →
+  (kea down) no lease. Self-recovered after the outage on lease `.246`. Noted
+  for refinement: LAN-fine/WAN-dead shouldn't cost LAN reachability.
+- **`opnsense-api` helper broken from this PC right now** — `opnsense.home.arpa`
+  has no DNS record and gw `:8443` gave a mini_httpd-style 404 (possibly a
+  temporary router swap during the outage) → kea lease lookups via the helper
+  currently impossible. Re-verify once the network is normal.
+
+---
+
+## Session 2026-08-09: **USB Audio input FIXED — direct alsaloop bridge kills the multi-minute delay AND the idle CPU/heat (device r65)**
 
 Committed on `main` as **`2dccd3a`** (`device-google-steelhead` **r65**) — **NOT yet
 pushed; awaiting Petr's OK → push + OTA still pending**. Full pre-fix analysis:
@@ -84,7 +156,7 @@ unchanged `nexusq-control` **r25** / `btagent` **r4** / `setupd` **r4**.
   `nq-vol`. Source device: `~/Documents/Dev/xiaomi-tvbox-twilight` (adb
   `192.168.20.169:5555`; USB→host via `gpioset -t 0 -c 0 16=0`).
 
-### ⚠️ NEW FINDING — System OTA reports "system update failed" (mkinitfs/boot-deploy trigger, NOT fixed)
+### ⚠️ NEW FINDING — System OTA reports "system update failed" (mkinitfs/boot-deploy trigger — ✅ FIXED later 2026-08-08, Option A: kernel payload restored to `/boot`; re-verified live 2026-08-10 by the clean nexusq-mqtt `apk add`)
 Full record: `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 - **Symptom:** the app's **System** update (`installSystemUpdate`) shows **"system
   update failed"**; `apk fix -s` shows `(1/1) Reinstalling postmarketos-mkinitfs … 1

@@ -37,7 +37,10 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 1.2.0 — Devices screen: BT pairing (phone + mouse/keyboard) and the desktop toggle.
 # 1.3.0 — debug mode: always-on connection log, viewer behind a Developer toggle.
 # 1.3.1 — Devices: background poll errors are logged, not flashed as a red bar.
-version: 1.11.2+30
+# 1.12.0 — Health panel: MQTT telemetry subscriber (Connect-to-MQTT dialog,
+#          creds in the platform secure store; reads nexusq/health/# published
+#          by the on-device nexusq-mqtt daemon).
+version: 1.12.0+31
 
 environment:
   sdk: ^3.12.0
@@ -69,6 +72,14 @@ dependencies:
   # hand it to the OS package installer (open_filex). See lib/update/app_update.dart.
   path_provider: ^2.1.4
   open_filex: ^4.5.0
+
+  # Health panel: subscribes to the nexusq/health/# telemetry the on-device
+  # nexusq-mqtt daemon publishes (see lib/mqtt/). Broker credentials are typed
+  # in by hand and kept in the platform secure store (Android Keystore / iOS
+  # Keychain) — the broker password guards more than the Q, it must not sit in
+  # plaintext SharedPreferences.
+  mqtt_client: ^10.6.0
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""nexusq-mqtt — MQTT health telemetry publisher for the Nexus Q (steelhead).
+
+Publishes the device's health picture to the home MQTT broker every
+~30 s so Home Assistant (via MQTT discovery) and the companion app (subscribing
+to the same feed) get a live panel without either needing a direct link to the
+device:
+
+    Q ──publish──▶ broker (Mosquitto)
+                     ├──▶ Home Assistant  (auto-created sensors, dashboards,
+                     │                     automations — MQTT discovery)
+                     └──▶ companion app   (subscribes nexusq/health/#)
+
+Design notes (why it looks the way it does):
+  * Pure Python 3 stdlib, like every other nexusq daemon (nexusq-control,
+    -setupd, -btagent): no paho dependency to ship/verify on the armv7 image.
+    The MQTT 3.1.1 subset we need as a non-subscribing publisher is tiny —
+    CONNECT (+auth +Last Will), PUBLISH QoS 0, PINGREQ/PINGRESP, DISCONNECT.
+    QoS 0 everywhere is deliberate: `retain` is independent of QoS, and on a
+    LAN a lost publish means a dead TCP connection, which the reconnect loop
+    answers by republishing everything anyway.
+  * The data comes from two places: the LAST line of nq-healthd's health.jsonl
+    (the 5 s sampler already owns cpufreq/thermal/vdd/nexusqd/LED signals —
+    don't sample them twice) plus what healthd does NOT record: per-OPP
+    residency (time_in_state delta over the publish window), WiFi RSSI (iw),
+    volume/mute (PA — or the TAS5713 hardware mixer while USB-audio's alsaloop
+    owns the output, same detection as nq-vol), streaming-service states
+    (instant cgroup read, the nexusq-control pattern — systemctl --machine
+    costs ~2 s per call), and uptime.
+  * Availability is a retained Last Will: `<prefix>/status` = online/offline.
+    A graceful stop (SIGTERM) publishes `offline` explicitly — the Will only
+    fires on ungraceful death.
+  * Home Assistant discovery configs are retained and (re)published on every
+    connect; HA then owns entity lifecycle. One shared JSON state topic +
+    per-entity value_template keeps the wire format identical for HA and the
+    app: `<prefix>/health/state`.
+  * NOT configured == NOT running: the systemd unit has
+    ConditionPathExists=/etc/nexusq/mqtt.json. Broker credentials are per-home
+    secrets and are NEVER baked into the (public) image.
+
+Config (/etc/nexusq/mqtt.json, mode 0600):
+    {
+      "host": "192.168.20.102",        # required — broker
+      "port": 1883,                    # optional
+      "username": "nexusq",            # required
+      "password": "...",               # required
+      "interval_s": 30,                # optional, clamped 10..600
+      "prefix": "nexusq",              # optional — state/availability topics
+      "discovery_prefix": "homeassistant"  # optional — HA discovery root
+    }
+
+Env overrides (host-test seams, mirroring nq-healthd's NQ_* style):
+    NQMQTT_CONF NQMQTT_IDENTITY NQMQTT_HEALTH NQMQTT_TIS NQMQTT_WLAN
+    NQMQTT_MAC_PATH NQMQTT_CGROUP NQMQTT_UPTIME
+"""
+
+import json
+import os
+import re
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+CONF_PATH = os.environ.get("NQMQTT_CONF", "/etc/nexusq/mqtt.json")
+IDENTITY_PATH = os.environ.get("NQMQTT_IDENTITY", "/etc/nexusq/device.json")
+HEALTH_PATH = os.environ.get("NQMQTT_HEALTH", "/var/log/nq-health/health.jsonl")
+TIS_PATH = os.environ.get(
+    "NQMQTT_TIS", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
+WLAN_IFACE = os.environ.get("NQMQTT_WLAN", "wlan0")
+MAC_PATH = os.environ.get("NQMQTT_MAC_PATH", "/sys/class/net/wlan0/address")
+UPTIME_PATH = os.environ.get("NQMQTT_UPTIME", "/proc/uptime")
+# user-unit liveness: a user unit is ACTIVE iff its cgroup has processes
+# (see nexusq-control _service_on for why systemctl --machine is unusable).
+USER_CGROUP = os.environ.get(
+    "NQMQTT_CGROUP",
+    "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice")
+
+# user-session PulseAudio, reachable from this root daemon via the user cookie
+# (the nexusq-control pattern).
+PULSE_SERVER = os.environ.get(
+    "NEXUSQ_PULSE_SERVER", "unix:/run/user/10000/pulse/native")
+PULSE_COOKIE = os.environ.get(
+    "NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/cookie")
+SPEAKER_CARD = os.environ.get("NQ_SPEAKER_CARD", "NexusQSpeaker")
+
+# The same toggleable streaming inputs nexusq-control exposes to the app.
+SERVICES = {
+    "spotify": "librespot.service",
+    "airplay": "shairport-sync.service",
+    "roon": "roon.service",
+    "usbaudio": "nexusq-uac2-in.service",
+}
+
+# healthd samples every 5 s; a last line older than this means the sampler is
+# down/stuck and its fields must not be presented as current.
+HEALTH_FRESH_S = 60
+
+
+def log(*args):
+    print("nexusq-mqtt:", *args, flush=True)
+
+
+# --------------------------------------------------------------------------
+# config + identity
+# --------------------------------------------------------------------------
+
+class ConfigError(Exception):
+    pass
+
+
+def load_conf(path=None):
+    """Parse + validate the broker config. Raises ConfigError on any problem —
+    the caller exits non-zero so systemd's Restart=on-failure surfaces a bad
+    file in `systemctl status` instead of silently looping."""
+    path = path or CONF_PATH
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+    except OSError as e:
+        raise ConfigError(f"cannot read {path}: {e}")
+    except ValueError as e:
+        raise ConfigError(f"{path} is not valid JSON: {e}")
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: top level must be an object")
+    conf = {
+        "host": raw.get("host"),
+        "port": raw.get("port", 1883),
+        "username": raw.get("username"),
+        "password": raw.get("password"),
+        "interval_s": raw.get("interval_s", 30),
+        "prefix": raw.get("prefix", "nexusq"),
+        "discovery_prefix": raw.get("discovery_prefix", "homeassistant"),
+    }
+    for key in ("host", "username", "password"):
+        if not conf[key] or not isinstance(conf[key], str):
+            raise ConfigError(f"{path}: '{key}' is required (non-empty string)")
+    if not isinstance(conf["port"], int) or not 0 < conf["port"] < 65536:
+        raise ConfigError(f"{path}: 'port' must be 1..65535")
+    try:
+        conf["interval_s"] = min(600, max(10, int(conf["interval_s"])))
+    except (TypeError, ValueError):
+        raise ConfigError(f"{path}: 'interval_s' must be a number")
+    return conf
+
+
+def device_identity():
+    """(node_id, display_name). node_id embeds the factory WiFi MAC (pinned by
+    kernel patch 0043, so it is stable across boots AND reflashes) — it keys the
+    HA device registry entry and every unique_id."""
+    mac = "000000000000"
+    try:
+        with open(MAC_PATH) as f:
+            mac = f.read().strip().replace(":", "").lower() or mac
+    except OSError:
+        pass
+    name = "Nexus Q"
+    try:
+        with open(IDENTITY_PATH) as f:
+            ident = json.load(f)
+        if isinstance(ident, dict) and ident.get("name"):
+            name = str(ident["name"])
+    except (OSError, ValueError):
+        pass
+    return f"nexusq_{mac}", name
+
+
+# --------------------------------------------------------------------------
+# collectors
+# --------------------------------------------------------------------------
+
+def _run(cmd, timeout=4, env=None):
+    """Run a helper tool; '' on any failure — a missing tool or a hiccup must
+    never take the publisher down."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, env=env)
+        return r.stdout if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def read_health():
+    """Latest nq-healthd sample as (dict, age_seconds) — ({}, None) when the
+    log is missing/empty/unparseable. Reads only the file tail: the log grows
+    to 4 MiB before rotation and this runs every publish."""
+    try:
+        with open(HEALTH_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", "replace")
+        age = max(0.0, time.time() - os.stat(HEALTH_PATH).st_mtime)
+    except OSError:
+        return {}, None
+    for line in reversed(tail.strip().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            sample = json.loads(line)
+            if isinstance(sample, dict):
+                return sample, age
+        except ValueError:
+            continue  # torn first line of the tail window / partial write
+    return {}, None
+
+
+def read_time_in_state():
+    """{freq_khz: ticks} from cpufreq stats, {} on failure."""
+    out = {}
+    try:
+        with open(TIS_PATH) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    out[int(parts[0])] = int(parts[1])
+    except OSError:
+        pass
+    return out
+
+
+def opp_residency(prev, cur):
+    """Per-OPP share (%) of the time between two time_in_state snapshots.
+    With no usable prev (first publish, counter reset) fall back to the
+    since-boot distribution — still honest, just a longer window."""
+    deltas = {f: cur[f] - prev.get(f, 0) for f in cur}
+    if not deltas or min(deltas.values()) < 0 or sum(deltas.values()) <= 0:
+        deltas = dict(cur)
+    total = sum(deltas.values())
+    if total <= 0:
+        return {}
+    return {f: round(100.0 * t / total, 1) for f, t in deltas.items()}
+
+
+def read_wifi():
+    """(rssi_dbm, ssid) via `iw dev <iface> link` — (None, None) when not
+    associated. Same source the wifi-watchdog trusts."""
+    out = _run(["iw", "dev", WLAN_IFACE, "link"])
+    m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
+    rssi = int(m.group(1)) if m else None
+    m = re.search(r"SSID:\s*(.+)", out)
+    ssid = m.group(1).strip() if m else None
+    return rssi, ssid
+
+
+def read_volume():
+    """(volume_pct, muted) from whichever mixer currently owns the output:
+    the TAS5713 hardware mixer while USB-audio's alsaloop bridges the gadget
+    straight to the amp (PA sink suspended — same pgrep detection as nq-vol),
+    the user-session PulseAudio default sink otherwise. (None, None) when
+    neither answers."""
+    try:
+        alsaloop = subprocess.run(["pgrep", "-x", "alsaloop"],
+                                  capture_output=True, timeout=4).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        alsaloop = False
+    if alsaloop:
+        out = _run(["amixer", "-c", SPEAKER_CARD, "-M", "sget", "Master"])
+        m = re.search(r"\[(\d+)%\]", out)
+        vol = int(m.group(1)) if m else None
+        out = _run(["amixer", "-c", SPEAKER_CARD, "sget", "Speaker"])
+        # the Speaker switch is the mute: [off] == muted
+        muted = ("[off]" in out) if ("[on]" in out or "[off]" in out) else None
+        return vol, muted
+    env = {**os.environ, "PULSE_SERVER": PULSE_SERVER,
+           "PULSE_COOKIE": PULSE_COOKIE}
+    out = _run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"], env=env)
+    m = re.search(r"(\d+)%", out)
+    vol = int(m.group(1)) if m else None
+    out = _run(["pactl", "get-sink-mute", "@DEFAULT_SINK@"], env=env)
+    muted = None
+    if "Mute:" in out:
+        muted = "yes" in out
+    return vol, muted
+
+
+def read_services():
+    """{id: bool} for the four streaming inputs — instant cgroup.procs read."""
+    states = {}
+    for sid, unit in SERVICES.items():
+        try:
+            with open(f"{USER_CGROUP}/{unit}/cgroup.procs") as f:
+                states[sid] = any(line.strip() for line in f)
+        except OSError:
+            states[sid] = False
+    return states
+
+
+def read_uptime():
+    try:
+        with open(UPTIME_PATH) as f:
+            return int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def collect(prev_tis):
+    """One publishable state snapshot. Fields whose source is unavailable are
+    OMITTED (not null) so HA value_templates can `| default('unknown')` and the
+    app can distinguish 'absent' from a real value. Returns (state, cur_tis)."""
+    state = {}
+
+    health, age = read_health()
+    fresh = age is not None and age <= HEALTH_FRESH_S
+    state["healthd_fresh"] = fresh
+    if age is not None:
+        state["healthd_age_s"] = int(age)
+    if health and fresh:
+        if isinstance(health.get("temp_mC"), (int, float)):
+            state["temp_c"] = round(health["temp_mC"] / 1000.0, 1)
+        if isinstance(health.get("freq"), (int, float)) and health["freq"] > 0:
+            state["freq_mhz"] = int(health["freq"] // 1000)
+        if health.get("gov") not in (None, "", "?"):
+            state["governor"] = str(health["gov"])
+        try:
+            state["load1"] = float(health.get("load1"))
+        except (TypeError, ValueError):
+            pass
+        if isinstance(health.get("mem_avail_kB"), (int, float)):
+            state["mem_avail_mb"] = int(health["mem_avail_kB"] // 1024)
+        if isinstance(health.get("nq_alive"), (int, bool)):
+            state["nexusqd_alive"] = bool(health["nq_alive"])
+        if isinstance(health.get("led_stall"), (int, float)):
+            state["led_stall"] = int(health["led_stall"])
+        if isinstance(health.get("dmesg_err"), (int, float)):
+            state["dmesg_err"] = int(health["dmesg_err"])
+        if isinstance(health.get("pstore"), (int, float)):
+            state["pstore"] = int(health["pstore"])
+
+    cur_tis = read_time_in_state()
+    if cur_tis:
+        for freq, pct in opp_residency(prev_tis, cur_tis).items():
+            state[f"opp{freq // 1000}_pct"] = pct
+
+    rssi, ssid = read_wifi()
+    if rssi is not None:
+        state["wifi_rssi_dbm"] = rssi
+    if ssid is not None:
+        state["wifi_ssid"] = ssid
+
+    vol, muted = read_volume()
+    if vol is not None:
+        state["volume_pct"] = vol
+    if muted is not None:
+        state["muted"] = muted
+
+    state["services"] = read_services()
+
+    uptime = read_uptime()
+    if uptime is not None:
+        state["uptime_s"] = uptime
+
+    return state, cur_tis
+
+
+# --------------------------------------------------------------------------
+# minimal MQTT 3.1.1 client (publisher-only, QoS 0)
+# --------------------------------------------------------------------------
+
+class MqttError(Exception):
+    pass
+
+
+def _mqtt_str(s):
+    b = s.encode("utf-8")
+    if len(b) > 65535:
+        raise MqttError("MQTT string too long")
+    return struct.pack("!H", len(b)) + b
+
+
+def _remaining_len(n):
+    """MQTT variable-length remaining-length encoding (7 bits per byte,
+    continuation in bit 7)."""
+    if n > 268435455:
+        raise MqttError("packet too large")
+    out = bytearray()
+    while True:
+        byte = n % 128
+        n //= 128
+        out.append(byte | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+CONNACK_RC = {
+    1: "unacceptable protocol version",
+    2: "identifier rejected",
+    3: "server unavailable",
+    4: "bad user name or password",
+    5: "not authorized",
+}
+
+
+class MqttClient:
+    """Connect, publish QoS 0, keep alive, notice a dead broker. Nothing else —
+    this daemon never subscribes."""
+
+    KEEPALIVE_S = 90
+    PINGRESP_GRACE_S = 15
+
+    def __init__(self, host, port, client_id, username, password,
+                 will_topic, will_payload):
+        self.host = host
+        self.port = port
+        self.client_id = client_id
+        self.username = username
+        self.password = password
+        self.will_topic = will_topic
+        self.will_payload = will_payload
+        self.sock = None
+        self._last_send = 0.0
+        self._ping_sent = None   # monotonic time of an unanswered PINGREQ
+        self._rxbuf = b""
+
+    def connect(self, timeout=10):
+        self.sock = socket.create_connection((self.host, self.port), timeout)
+        self.sock.settimeout(timeout)
+        flags = 0x02 | 0x04 | 0x20 | 0x80 | 0x40  # clean session, will(+retain,
+        # QoS 0), username, password
+        var = (_mqtt_str("MQTT") + bytes([4, flags])
+               + struct.pack("!H", self.KEEPALIVE_S))
+        payload = (_mqtt_str(self.client_id)
+                   + _mqtt_str(self.will_topic)
+                   + _mqtt_str(self.will_payload)
+                   + _mqtt_str(self.username)
+                   + _mqtt_str(self.password))
+        body = var + payload
+        self._send(bytes([0x10]) + _remaining_len(len(body)) + body)
+        ptype, body = self._read_packet()
+        if ptype != 0x20 or len(body) != 2:
+            raise MqttError(f"expected CONNACK, got type 0x{ptype:02x}")
+        rc = body[1]
+        if rc != 0:
+            raise MqttError(
+                f"broker refused connection: {CONNACK_RC.get(rc, rc)}")
+        self.sock.setblocking(False)
+        self._ping_sent = None
+
+    def publish(self, topic, payload, retain=False):
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        body = _mqtt_str(topic) + payload
+        self._send(bytes([0x30 | (0x01 if retain else 0)])
+                   + _remaining_len(len(body)) + body)
+
+    def disconnect(self):
+        """Graceful DISCONNECT — tells the broker NOT to publish the Will."""
+        try:
+            self._send(b"\xe0\x00")
+        except MqttError:
+            pass
+        self.close()
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+    def maintain(self):
+        """Call frequently between publishes: drains broker->client packets
+        (PINGRESP; a broker close is detected here), sends PINGREQ when the
+        keepalive window is half spent, and raises MqttError when a PINGREQ
+        goes unanswered — the only way to notice a silently-dead link."""
+        self._drain()
+        now = time.monotonic()
+        if self._ping_sent is not None:
+            if now - self._ping_sent > self.PINGRESP_GRACE_S:
+                raise MqttError("PINGRESP timeout — broker link dead")
+        elif now - self._last_send > self.KEEPALIVE_S / 2:
+            self._send(b"\xc0\x00")  # PINGREQ
+            self._ping_sent = now
+
+    # -- wire helpers -----------------------------------------------------
+
+    def _send(self, data):
+        if self.sock is None:
+            raise MqttError("not connected")
+        try:
+            self.sock.sendall(data)
+        except OSError as e:
+            raise MqttError(f"send failed: {e}")
+        self._last_send = time.monotonic()
+
+    def _read_packet(self):
+        """Blocking read of one packet (used only for CONNACK, while the
+        socket still has a timeout). Returns (type_byte, body)."""
+        header = self._read_exact(1)[0]
+        length = 0
+        for shift in range(0, 28, 7):
+            byte = self._read_exact(1)[0]
+            length |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                break
+        else:
+            raise MqttError("malformed remaining length")
+        return header & 0xF0, self._read_exact(length)
+
+    def _read_exact(self, n):
+        buf = b""
+        while len(buf) < n:
+            try:
+                chunk = self.sock.recv(n - len(buf))
+            except OSError as e:
+                raise MqttError(f"recv failed: {e}")
+            if not chunk:
+                raise MqttError("broker closed connection")
+            buf += chunk
+        return buf
+
+    def _drain(self):
+        """Non-blocking: consume whatever the broker sent. We only ever expect
+        PINGRESP (0xd0); anything else is ignored after being length-skipped."""
+        if self.sock is None:
+            raise MqttError("not connected")
+        while True:
+            try:
+                readable, _, _ = select.select([self.sock], [], [], 0)
+            except (OSError, ValueError):
+                raise MqttError("socket lost")
+            if not readable:
+                break
+            try:
+                data = self.sock.recv(4096)
+            except BlockingIOError:
+                break
+            except OSError as e:
+                raise MqttError(f"recv failed: {e}")
+            if not data:
+                raise MqttError("broker closed connection")
+            self._rxbuf += data
+        # parse complete packets out of the buffer
+        while self._rxbuf:
+            parsed = self._parse_buffered()
+            if parsed is None:
+                break
+            ptype, _body = parsed
+            if ptype == 0xD0:  # PINGRESP
+                self._ping_sent = None
+
+    def _parse_buffered(self):
+        """One packet from _rxbuf, or None if incomplete."""
+        buf = self._rxbuf
+        if len(buf) < 2:
+            return None
+        length = 0
+        i = 1
+        for shift in range(0, 28, 7):
+            if i >= len(buf):
+                return None
+            byte = buf[i]
+            i += 1
+            length |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                break
+        else:
+            raise MqttError("malformed remaining length")
+        if len(buf) < i + length:
+            return None
+        packet_type = buf[0] & 0xF0
+        body = buf[i:i + length]
+        self._rxbuf = buf[i + length:]
+        return packet_type, body
+
+
+# --------------------------------------------------------------------------
+# Home Assistant MQTT discovery
+# --------------------------------------------------------------------------
+
+# (key, component, name, extra config). value_template defaults to
+# `{{ value_json.<key... mapping below> }}` composed per entry. Optional fields
+# are OMITTED from the state JSON when unavailable, so templates guard with
+# `| default('unknown')` (Jinja's default() fires on undefined, not on null —
+# which is exactly why collect() omits instead of null-ing).
+def discovery_configs(node_id, display_name, prefix):
+    device = {
+        "identifiers": [node_id],
+        "name": display_name,
+        "manufacturer": "Google",
+        "model": "Nexus Q (steelhead)",
+        "sw_version": os.uname().release,
+    }
+    base = {
+        "state_topic": f"{prefix}/health/state",
+        "availability_topic": f"{prefix}/status",
+        "device": device,
+    }
+    sensors = [
+        ("temp", "Die temperature",
+         {"device_class": "temperature", "unit_of_measurement": "°C",
+          "state_class": "measurement",
+          "value_template": "{{ value_json.temp_c | default('unknown') }}"}),
+        ("cpu_freq", "CPU frequency",
+         {"device_class": "frequency", "unit_of_measurement": "MHz",
+          "state_class": "measurement",
+          "value_template": "{{ value_json.freq_mhz | default('unknown') }}"}),
+        ("governor", "CPU governor",
+         {"entity_category": "diagnostic",
+          "value_template": "{{ value_json.governor | default('unknown') }}"}),
+        ("load1", "Load (1 min)",
+         {"state_class": "measurement", "icon": "mdi:chip",
+          "value_template": "{{ value_json.load1 | default('unknown') }}"}),
+        ("mem_avail", "Memory available",
+         {"device_class": "data_size", "unit_of_measurement": "MB",
+          "state_class": "measurement", "entity_category": "diagnostic",
+          "value_template":
+              "{{ value_json.mem_avail_mb | default('unknown') }}"}),
+        ("uptime", "Uptime",
+         {"device_class": "duration", "unit_of_measurement": "s",
+          "entity_category": "diagnostic", "state_class": "total_increasing",
+          "value_template": "{{ value_json.uptime_s | default('unknown') }}"}),
+        ("wifi_rssi", "WiFi RSSI",
+         {"device_class": "signal_strength", "unit_of_measurement": "dBm",
+          "state_class": "measurement", "entity_category": "diagnostic",
+          "value_template":
+              "{{ value_json.wifi_rssi_dbm | default('unknown') }}"}),
+        ("volume", "Volume",
+         {"unit_of_measurement": "%", "icon": "mdi:volume-high",
+          "value_template":
+              "{{ value_json.volume_pct | default('unknown') }}"}),
+    ]
+    # per-OPP residency — "podíl frekvencí" (share of time at each OPP over the
+    # publish window). The four OPPs are the fixed steelhead table.
+    for mhz in (350, 700, 920, 1200):
+        sensors.append((
+            f"opp{mhz}", f"Time at {mhz} MHz",
+            {"unit_of_measurement": "%", "state_class": "measurement",
+             "entity_category": "diagnostic", "icon": "mdi:sine-wave",
+             "value_template":
+                 f"{{{{ value_json.opp{mhz}_pct | default('unknown') }}}}"}))
+    binary = [
+        ("spotify", "Spotify Connect", "running", "services.spotify"),
+        ("airplay", "AirPlay", "running", "services.airplay"),
+        ("roon", "Roon", "running", "services.roon"),
+        ("usbaudio", "USB Audio", "running", "services.usbaudio"),
+    ]
+    configs = []
+    for key, name, extra in sensors:
+        cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}", **extra}
+        configs.append((f"sensor/{node_id}/{key}/config", cfg))
+    for key, name, devclass, path in binary:
+        cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
+               "device_class": devclass,
+               "value_template":
+                   f"{{{{ 'ON' if (value_json.{path} | default(false)) "
+                   f"else 'OFF' }}}}"}
+        configs.append((f"binary_sensor/{node_id}/{key}/config", cfg))
+    # problem-style binaries: ON == something is wrong
+    for key, name, expr in (
+        ("nexusqd", "LED daemon",
+         "value_json.nexusqd_alive | default(true)"),
+        ("healthd", "Health sampler",
+         "value_json.healthd_fresh | default(false)"),
+    ):
+        cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
+               "device_class": "problem", "entity_category": "diagnostic",
+               "value_template":
+                   f"{{{{ 'OFF' if ({expr}) else 'ON' }}}}"}
+        configs.append((f"binary_sensor/{node_id}/{key}/config", cfg))
+    return configs
+
+
+# --------------------------------------------------------------------------
+# main loop
+# --------------------------------------------------------------------------
+
+_shutdown = False
+
+
+def _on_sigterm(signum, frame):
+    global _shutdown
+    _shutdown = True
+
+
+def run():
+    try:
+        conf = load_conf()
+    except ConfigError as e:
+        log("FATAL:", e)
+        return 1
+    node_id, display_name = device_identity()
+    prefix = conf["prefix"]
+    status_topic = f"{prefix}/status"
+    state_topic = f"{prefix}/health/state"
+    log(f"starting: broker {conf['host']}:{conf['port']}, node {node_id}, "
+        f"interval {conf['interval_s']}s")
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+    signal.signal(signal.SIGINT, _on_sigterm)
+
+    prev_tis = {}
+    backoff = 5
+    client = None
+    while not _shutdown:
+        try:
+            client = MqttClient(
+                conf["host"], conf["port"], client_id=node_id,
+                username=conf["username"], password=conf["password"],
+                will_topic=status_topic, will_payload="offline")
+            client.connect()
+            log("connected")
+            backoff = 5
+            client.publish(status_topic, "online", retain=True)
+            for suffix, cfg in discovery_configs(
+                    node_id, display_name, prefix):
+                client.publish(f"{conf['discovery_prefix']}/{suffix}",
+                               json.dumps(cfg), retain=True)
+            while not _shutdown:
+                state, prev_tis = collect(prev_tis)
+                client.publish(state_topic, json.dumps(state), retain=True)
+                deadline = time.monotonic() + conf["interval_s"]
+                while not _shutdown and time.monotonic() < deadline:
+                    client.maintain()
+                    time.sleep(1)
+        except (MqttError, OSError) as e:
+            log("connection lost:", e)
+            if client is not None:
+                client.close()
+                client = None
+            # interruptible backoff sleep
+            for _ in range(backoff):
+                if _shutdown:
+                    break
+                time.sleep(1)
+            backoff = min(backoff * 2, 60)
+
+    # graceful exit: explicit retained offline + DISCONNECT (the Will only
+    # covers ungraceful death).
+    if client is not None:
+        try:
+            client.publish(status_topic, "offline", retain=True)
+            client.disconnect()
+        except MqttError:
+            client.close()
+    log("stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run())

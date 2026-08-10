@@ -85,6 +85,13 @@ verdict), `snapshot.txt` (full device dump), `health.jsonl`, `events.jsonl`. If 
 running image predates `nq-healthd`, nq-collect bootstraps the tools into `/tmp`
 and gathers a short live burst. Paths are documented in `scripts/diag/README.md`.
 
+Since 2026-08-10 `health.jsonl` also feeds the on-device **`nexusq-mqtt`** daemon
+(retained health JSON + HA discovery to the home Mosquitto, 30 s cadence, freshness
+gate ≤60 s) — so a healthd field rename/semantic change also breaks the MQTT/Home
+Assistant view, and `systemctl status nexusq-mqtt` + the HA `nexusq` device are an
+extra remote health read when ssh is down (`nexusq/status` retained topic =
+online/offline LWT).
+
 ## 3. Hardware-inventory sweep (answer the concrete questions)
 
 The runtime tooling focuses on nexusqd/power/thermal/cpufreq; ALSO sweep the

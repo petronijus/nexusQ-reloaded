@@ -90,7 +90,19 @@ uses without a restricted entitlement); **first-time BT setup stays Android-only
 (iOS has no public RFCOMM API — the connect gate says so instead of offering the
 wizard; once the Q is on WiFi, iOS works fully), and self-update is Android-only
 (iOS binaries come from Xcode/TestFlight). See
-`../docs/2026-08-03-ios-companion-port.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+`../docs/2026-08-03-ios-companion-port.md`.)_
+_(**Health panel (2026-08-10, app 1.12.0+31 — apk released as `app-v1.12.0`; the
+`app-release.json` bump is staged uncommitted, so the OTA offer goes live on
+push):** Settings →
+**"Device health"** → a live health view (status, problem flags, vitals, per-OPP
+residency bars, service chips, WiFi card) fed by **MQTT**, not the control socket —
+the on-device `nexusq-mqtt` daemon publishes retained JSON + Home Assistant
+discovery to the home Mosquitto, and the app subscribes to `nexusq/health/#`
+(`lib/mqtt/`, `mqtt_client ^10.6`; retained topics make the panel populate
+instantly). Broker creds are **hand-entered** in a "Connect to MQTT" dialog and
+kept in `flutter_secure_storage` (Android Keystore / iOS Keychain) — deliberately
+**no auto-provisioning verb and NO change to [`PROTOCOL.md`](PROTOCOL.md)**. See
+`../docs/2026-08-10-mqtt-health-telemetry.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

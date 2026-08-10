@@ -37,10 +37,13 @@ eth0's hw MAC is random per boot — no MAC EEPROM),
 **USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
 changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
 serial console as a fallback), and **WiFi** (last-known lease
-**`192.168.20.184`** as of 2026-07-12 — the factory-MAC pin does NOT freeze the
-lease, the router reassigned `.195`→`.184`; try the last-known IP but **never
+**`192.168.20.246`** as of 2026-08-10 — the factory-MAC pin does NOT freeze the
+lease; it has moved `.195`→`.184`→`.164`→`.246` (`.246` = a fresh lease after the
+2026-08-10 internet outage); try the last-known IP but **never
 hardcode it** — else look the lease up in OPNsense
-via the `opnsense-api` helper, matching hostname `steelhead` or the MAC per the
+via the `opnsense-api` helper (⚠️ broken from this PC as of 2026-08-10 — no
+`opnsense.home.arpa` DNS + 404 on gw `:8443`; re-verify before relying on it),
+matching hostname `steelhead` or the MAC per the
 flashed image: the **factory `f8:8f:ca:20:48:e1` on v1.10.1+** (`#45`/kernel r44
 — DTS-pinned `local-mac-address`, patch 0043, `ethtool -P wlan0` PERMANENT, and
 the lease hostname is populated again), the chip's **OTP `14:7d:c5:3a:35:b5` on

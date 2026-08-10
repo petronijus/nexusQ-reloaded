@@ -25,7 +25,8 @@ for apkbuild in \
     "$SRC/pmos/nexusqd/APKBUILD" \
     "$SRC/pmos/nexusq-control/APKBUILD" \
     "$SRC/pmos/nexusq-setupd/APKBUILD" \
-    "$SRC/pmos/nexusq-btagent/APKBUILD"; do
+    "$SRC/pmos/nexusq-btagent/APKBUILD" \
+    "$SRC/pmos/nexusq-mqtt/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -256,6 +257,15 @@ cp "$SRC/userspace/nexusq-btagent/nexusq-btagent.service" "$NEXUSQBTA_DIR/"
 cp "$SRC/userspace/nexusq-btagent/README.md"              "$NEXUSQBTA_DIR/"
 echo "  Installed: nexusq-btagent (aport + agent -> main/nexusq-btagent)"
 
+# nexusq-mqtt: the MQTT health telemetry publisher (pure staging, like the rest).
+NEXUSQMQTT_DIR="$PMAPORTS/main/nexusq-mqtt"
+mkdir -p "$NEXUSQMQTT_DIR"
+cp "$SRC/pmos/nexusq-mqtt/APKBUILD"                       "$NEXUSQMQTT_DIR/"
+cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt"               "$NEXUSQMQTT_DIR/"
+cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt.service"       "$NEXUSQMQTT_DIR/"
+cp "$SRC/userspace/nexusq-mqtt/96-nexusq-mqtt.preset"     "$NEXUSQMQTT_DIR/"
+echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
+
 # python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
 # deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
 # That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
@@ -275,7 +285,7 @@ cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
 echo "  Installed: python3 override (gated -> main/python3)"
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -865,6 +875,32 @@ if [ $NEXUSQSETUP_RC -eq 0 ]; then
     fi
 else
     echo "  WARNING: nexusq-setupd build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7c5: Build nexusq-mqtt package (noarch) ==="
+set +e
+# Pure-Python (stdlib-only) MQTT health telemetry publisher; noarch. Same
+# SKIP-checksums-then-regenerate dance as the other daemon aports.
+pmbootstrap checksum nexusq-mqtt 2>&1 || true
+pmbootstrap --no-cross build nexusq-mqtt --arch armv7 --force 2>&1
+NEXUSQMQTT_RC=$?
+set -e
+echo "=== nexusq-mqtt build exit code: $NEXUSQMQTT_RC ==="
+if [ $NEXUSQMQTT_RC -eq 0 ]; then
+    # pkgrel-EXACT (see the nexusqd note above): avoid exporting a stale
+    # nexusq-mqtt-...-rN.apk from the persistent work-volume repo.
+    _nqm_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusq-mqtt/APKBUILD" | head -1)
+    _nqm_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusq-mqtt/APKBUILD" | head -1)
+    NEXUSQMQTT_APK=$(find "$WORK/packages" -name "nexusq-mqtt-${_nqm_pv}-r${_nqm_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$NEXUSQMQTT_APK" ]; then
+        cp "$NEXUSQMQTT_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQMQTT_APK")"
+    else
+        echo "  WARNING: nexusq-mqtt apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  WARNING: nexusq-mqtt build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
 fi
 

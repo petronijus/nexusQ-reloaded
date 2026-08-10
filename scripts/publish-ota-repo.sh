@@ -27,7 +27,7 @@ KEY=pmos@local-6a42e957
 # packages come from the Alpine/pmOS mirrors; the ~180 MB nexusq-glibc-rt base and
 # the kernel are deliberately NOT here — flash-only). A size guard below refuses
 # to publish anything ≥99 MB so a mistaken big apk can never break the push.
-OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd \
+OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
               device-google-steelhead device-google-steelhead-nonfree-firmware)
 
 STAGE="$(mktemp -d)"

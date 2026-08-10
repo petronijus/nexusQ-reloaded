@@ -1,0 +1,12 @@
+# nexusq-mqtt enablement (systemd preset).
+#
+# Shipped by the nexusq-mqtt aport itself (not 95-nexusq.preset in
+# device-google-steelhead) so the package stays self-contained for OTA installs
+# on live devices — no device-pkg bump needed to adopt it. Same rationale as
+# 95-nexusq.preset: the image build runs `systemctl preset-all` and 99-default's
+# `disable *` would strip a vendor unit's enable symlink; this priority-96 entry
+# (after 95-nexusq, before 99-default) keeps it enabled declaratively.
+#
+# Note the unit also carries ConditionPathExists=/etc/nexusq/mqtt.json —
+# enabled-but-unprovisioned boots skip it cleanly (condition-failed, not failed).
+enable nexusq-mqtt.service

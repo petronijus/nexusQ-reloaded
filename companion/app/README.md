@@ -83,6 +83,10 @@ The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios
 - ⚠️ `test/connect_gate_setup_entry_test.dart` does **real mDNS I/O** and fails
   on some networks with `SocketException: No route to host` — pre-existing and
   environment-dependent, not an iOS regression (fails on a clean checkout too).
+  **Confirmed NOT hermetic 2026-08-10:** with a **live Q on the LAN** the
+  discovery finds the real bridge (it connected to `192.168.20.246:45015`) so
+  "Set up new device" is never offered and the test **fails whenever the device
+  is online** (passes when it's not). Needs a discovery seam/mock.
 
 ### Parity pass 2026-08-07 (v1.11.1)
 
@@ -146,6 +150,22 @@ the connection itself was healthy).
 
 The **Devices background poll no longer flashes the red error bar**: the 3 s poll now
 **logs** a failure instead; only user-initiated actions surface a visible error.
+
+## Health panel (added 2026-08-10 — app 1.12.0+31; apk released as `app-v1.12.0`, OTA-manifest push pending)
+
+Settings → **"Device health"** → `lib/screens/health_screen.dart`: a live view of
+status, problem flags, vitals (die temp / CPU freq / governor / load / memory),
+per-OPP residency bars, service chips (Spotify / AirPlay / Roon / USB Audio), and
+a WiFi card. **Fed by MQTT, not the control socket** — the on-device
+`nexusq-mqtt` daemon (`../../userspace/nexusq-mqtt/`) publishes retained health
+JSON + Home Assistant discovery to the home Mosquitto, and the app subscribes to
+`nexusq/health/#` via `lib/mqtt/{mqtt_settings,health_mqtt}.dart`
+(`mqtt_client ^10.6`, autoReconnect; retained topics populate the panel
+instantly). Broker creds are **hand-entered** in a "Connect to MQTT" dialog
+(Petr's decision — editable, **no auto-provisioning verb, NO protocol change**)
+and stored in `flutter_secure_storage` (Android Keystore / iOS Keychain) — the
+broker password guards more than the Q, it must not sit in plaintext
+SharedPreferences. Record: `../../docs/2026-08-10-mqtt-health-telemetry.md`.
 
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 
@@ -246,6 +266,9 @@ works).
   exposing optimistic intents.
 - `screens/home_screen.dart` — v1 remote: ring + now-playing, transport, volume, theme picker,
   brightness.
+- `mqtt/` — `mqtt_settings.dart` (broker creds in the platform secure store) +
+  `health_mqtt.dart` (the `nexusq/health/#` subscriber feeding
+  `screens/health_screen.dart` — see "Health panel" above).
 
 ## v1 scope
 

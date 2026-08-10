@@ -6,6 +6,59 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — MQTT health telemetry → Home Assistant + app Health panel (2026-08-10; uncommitted — commit + device-OTA publish + app OTA-manifest push pending Petr's go; app apk itself already released as `app-v1.12.0`)
+- **NEW aport `pmos/nexusq-mqtt` (0.1.0-r0, noarch)** + `userspace/nexusq-mqtt/`
+  (daemon, `.service`, `96-nexusq-mqtt.preset`, README, **25 host tests** passing
+  incl. a fake TCP MQTT broker): a **pure-Python3 stdlib MQTT 3.1.1 publisher**
+  (CONNECT+auth+LWT, PUBLISH QoS0+retain, PINGREQ with PINGRESP-timeout dead-link
+  detection, reconnect+backoff). Every 30 s: retained JSON at
+  `nexusq/health/state`, availability `nexusq/status` (retained LWT
+  online/offline; SIGTERM publishes offline explicitly), retained **HA MQTT
+  discovery** (`homeassistant/(binary_)sensor/nexusq_<factoryMAC>/*/config` — **12
+  sensors + 6 binary_sensors**, shared state topic + value_templates; unavailable
+  fields are **omitted**, never null).
+- **Data:** nq-healthd's `health.jsonl` tail (fresh ≤60 s:
+  temp/freq/gov/load/mem/nq_alive/led_stall/dmesg_err/pstore) + the daemon's own
+  sampling: **per-OPP residency deltas** from `time_in_state` ("podíl
+  frekvencí"), WiFi RSSI/SSID via `iw`, volume/mute from the mixer that owns the
+  output (`amixer` while `alsaloop` runs — same pgrep detection as `nq-vol` —
+  else uid-10000 PA), 4 streaming-service states via instant `cgroup.procs`
+  reads, uptime.
+- **Config `/etc/nexusq/mqtt.json` (0600) is a per-home SECRET — never baked into
+  the public image**; unit has `ConditionPathExists` + deliberately **NO
+  `After=`/`Wants=`** (boot-ordering-cycle rule). Enablement is self-contained:
+  baked `multi-user.target.wants` symlink (live OTA installs) + own priority-96
+  preset (image `preset-all`).
+- **Integration:** `device-google-steelhead` r66→**r67** (`depends +=
+  nexusq-mqtt`); `docker-build.sh` Phase 2/5/dos2unix + NEW **Phase 7c5**
+  build/export; `publish-ota-repo.sh` `OTA_PACKAGES += nexusq-mqtt`. Built via
+  `OTA_PACKAGES_ONLY=1` → `nexusq-mqtt-0.1.0-r0.apk` +
+  `device-google-steelhead-1.0-r67.apk` (signed, verified; **NOT yet published**).
+- **Broker:** NEW MQTT user `nexusq` on the TrueNAS Mosquitto
+  (eclipse-mosquitto 2.0.22, `192.168.20.102:1883`; password in 1Password
+  "MQTT nexusq (Nexus Q telemetry)"). ⚠️ broker has **no `acl_file`** — every
+  authenticated user can read/write everything (incl. zigbee2mqtt).
+- **DEPLOYED LIVE 2026-08-10** (device at the new lease `192.168.20.246`): apk
+  add clean (**mkinitfs trigger OK — the 2026-08-08 Option-A `/boot` fix
+  holds**), **18 entities live in Home Assistant** with real values (die
+  79.9 °C, 1200 MHz conservative, OPP shares, −28 dBm RSSI, volume 45 %); binary
+  sensors cross-checked against device truth.
+- **Companion app 1.11.2+30 → 1.12.0+31** (apk published as gh release
+  **`app-v1.12.0`**; the `app-release.json` bump is staged **uncommitted** — the
+  OTA offer goes live on push): Settings → **"Device health"** → `HealthScreen` (status/problem
+  flags/vitals/OPP bars/service chips/WiFi card; retained topics populate it
+  instantly); manual **"Connect to MQTT"** dialog (hand-entered creds — Petr's
+  decision, NO auto-provisioning verb, **NO protocol change**), creds in
+  `flutter_secure_storage`; subscriber `lib/mqtt/` on `mqtt_client ^10.6`.
+- **Known issues found:** `test/connect_gate_setup_entry_test.dart` is **not
+  hermetic** (real mDNS discovery — fails whenever a live Q is on the LAN; needs
+  a discovery seam/mock) · an **internet-only outage still drops the Q off the
+  LAN** (wifi-watchdog pings the GATEWAY; ~2 h today, self-recovered on lease
+  `.246` — working as designed, noted for refinement) · `opnsense-api` helper
+  currently broken from this PC (no `opnsense.home.arpa` DNS + 404 on gw :8443 —
+  re-verify after the outage).
+- Full record: `docs/2026-08-10-mqtt-health-telemetry.md`.
+
 ### Added — OTA published 2026-08-08 (`nexusqd` 0.1.0-r12 · `device-google-steelhead` 1.0-r63)
 - **`scripts/publish-ota-repo.sh` pushed to `gh-pages`** — live at
   `https://petronijus.github.io/nexusQ-reloaded/nexusq`:

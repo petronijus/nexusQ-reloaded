@@ -1,0 +1,21 @@
+# userspace/nexusq-mqtt/nexusq-mqtt.service
+# MQTT health telemetry publisher: nq-healthd samples + live extras →
+# <prefix>/health/state + Home Assistant MQTT discovery. See the daemon header.
+[Unit]
+Description=Nexus Q MQTT health telemetry publisher
+# NOT configured == NOT running: broker credentials are per-home secrets,
+# never baked into the (public) image. Provision /etc/nexusq/mqtt.json (0600)
+# and `systemctl restart nexusq-mqtt` (Condition* is only checked at start).
+ConditionPathExists=/etc/nexusq/mqtt.json
+# IMPORTANT: no After=/Wants= ordering on other nexusq services or
+# network-online — an After= on an enabled peer forms the boot ordering cycle
+# that made systemd DELETE the start job (see nexusq-control.service), and the
+# daemon's reconnect loop already rides out a not-yet-up network or broker.
+
+[Service]
+ExecStart=/usr/bin/nexusq-mqtt
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

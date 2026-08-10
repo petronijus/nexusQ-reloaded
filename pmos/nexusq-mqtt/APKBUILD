@@ -1,0 +1,37 @@
+# Nexus Q MQTT health telemetry publisher — pure-Python (stdlib only) daemon
+# that pushes nq-healthd's picture + live extras (per-OPP residency, WiFi RSSI,
+# volume, streaming-service states) to the home MQTT broker with Home Assistant
+# MQTT discovery. See userspace/nexusq-mqtt/README.md.
+pkgname=nexusq-mqtt
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q MQTT health telemetry publisher (HA discovery + app feed)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# python3: the daemon. iw: WiFi RSSI. alsa-utils: amixer (TAS5713 mixer while
+# USB audio owns the output). pulseaudio-utils: pactl (default-sink volume).
+depends="python3 iw alsa-utils pulseaudio-utils"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-mqtt/.
+source="
+	nexusq-mqtt nexusq-mqtt.service 96-nexusq-mqtt.preset
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nexusq-mqtt "$pkgdir"/usr/bin/nexusq-mqtt
+	install -Dm644 nexusq-mqtt.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-mqtt.service
+
+	# Enable autostart declaratively (mirrors the nexusq-control aport): the
+	# baked wants symlink covers a live OTA install, the preset survives the
+	# image build's `systemctl preset-all` (99-default `disable *`).
+	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-mqtt.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-mqtt.service
+	install -Dm644 96-nexusq-mqtt.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/96-nexusq-mqtt.preset
+}
+
+sha512sums="SKIP"

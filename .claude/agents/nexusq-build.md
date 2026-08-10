@@ -120,18 +120,21 @@ context), Phase 3 `MISSING: CONFIG_LEDS_LP5523` (the LED is the AVR driver, not
 LP5523). Everything else — including any `command not found` in Phase 7 or any
 `Entering fakeroot...` that does not immediately move on — is a real problem.
 
-### `OTA_PACKAGES_ONLY=1` — targeted two-package OTA build (no rootfs, since `024d928`)
+### `OTA_PACKAGES_ONLY=1` — targeted OTA build (no rootfs, since `024d928`; arbitrary aport set via `OTA_PACKAGES` since `1262af0`)
 
 For an OTA that ships **only** daemon/config apks (not a fresh rootfs/boot.img),
 `docker-build.sh` honours **`OTA_PACKAGES_ONLY=1`** (pass `-e OTA_PACKAGES_ONLY=1` to
 `docker run`): it runs all the load-bearing setup verbatim (aports staging, 6b
-abuild-as-root, config, REPODEST ownership, checksums), then builds **only** `nexusqd`
-+ `device-google-steelhead` (both `--force`, so a bumped pkgrel isn't skipped by a
-stale same-name apk in the warm repo), exports the two **signed, pkgrel-exact** apks
-to `/tmp/output` for `scripts/publish-ota-repo.sh`, and **exits 0** — no full rootfs,
-no boot.img. Their runtime `depends` (glibc-rt, control/btagent/setupd, firmware,
-python3) are NOT rebuilt (unchanged, already cached). Use this for a fast daemon/config
-OTA; use the full pipeline when the rootfs/kernel changed.
+abuild-as-root, config, REPODEST ownership, checksums), then builds **only** the
+targeted aports (default `nexusqd device-google-steelhead`; override with
+**`OTA_PACKAGES="pkg1 pkg2 …"`** — each must live at `pmos/<name>/APKBUILD`. Used
+2026-08-10 to build `nexusq-mqtt` 0.1.0-r0 + `device-google-steelhead` r67). All
+`--force`, so a bumped pkgrel isn't skipped by a stale same-name apk in the warm
+repo; exports the **signed, pkgrel-exact** apks to `/tmp/output` for
+`scripts/publish-ota-repo.sh`, and **exits 0** — no full rootfs, no boot.img. Their
+runtime `depends` (glibc-rt, control/btagent/setupd/mqtt, firmware, python3) are NOT
+rebuilt (unchanged, already cached). Use this for a fast daemon/config OTA; use the
+full pipeline when the rootfs/kernel changed.
 
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
@@ -143,19 +146,19 @@ such file or directory` and the committed r63 never built. Fixed in `024d928`
 `$pkgdir` subdir before the first `ln`/`install -T` into it** — a warm/incremental repo
 can hide the failure until a clean build.
 
-⚠️ **KNOWN OPEN (2026-08-08) — the rootfs' empty `/boot` makes a System OTA report
-"system update failed".** On-device, an `apk upgrade`/`installSystemUpdate` leaves a
-**persistent pending `postmarketos-mkinitfs` trigger** that re-fails every apk run:
-`boot-deploy` errors `No kernel found in /boot`. `/boot` is an **empty plain dir** on
-this device because the Q boots **ramdisk-less from the flashed boot partition** —
-`linux-google-steelhead` ships `boot/vmlinuz` (+ `System.map`/`config`/`dtbs`) but it's
-stripped from the rootfs. The packages **do** install (the trigger runs last, no
-rollback); it's cosmetic + blocks a clean apk state. **Candidate build-side fixes (NOT
-implemented — need on-device validation that boot-deploy does NOT write the real boot
-partition; its default output dir is the plain `/boot`, so harmless):** (A) **stop
-stripping `/boot/vmlinuz`** from the rootfs so the trigger no-ops (also groundwork for
-kernel OTA); (B) neutralize the mkinitfs trigger via `device-google-steelhead`; (C) full
-**Phase 2** — a userspace boot-partition (p9) writer + recovery fallback. See
+✅ **FIXED (2026-08-08, Option A; was "KNOWN OPEN") — the rootfs' empty `/boot` made a
+System OTA report "system update failed".** On-device, any apk transaction re-failed a
+**persistent pending `postmarketos-mkinitfs` trigger**: `boot-deploy` errors `No kernel
+found in /boot` — `/boot` was an **empty plain dir** on this ramdisk-less device
+(`linux-google-steelhead` ships `boot/vmlinuz` but it was stripped from the rootfs;
+packages still installed, the trigger just failed last). **Fix = Option A: keep the
+kernel payload (vmlinuz + dtbs) in `/boot`** so the trigger no-ops — boot-deploy never
+flashes a partition (`deviceinfo_flash_kernel_on_update` unset; its default output is
+the plain `/boot`, harmless). The live device was cleaned AND `docker-build.sh` now
+ships a populated `/boot` in the exported rootfs. **Re-verified live 2026-08-10:** the
+`nexusq-mqtt` + device r67 `apk add` ran the mkinitfs trigger cleanly. Do NOT
+re-introduce the `/boot` strip. Real kernel/boot OTA (userspace p9 writer + recovery
+fallback) is still **Phase 2**. See
 `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### The fakeroot/qemu hang (most important thing to understand)
@@ -367,8 +370,17 @@ Check and REPORT each (PASS/FAIL + evidence):
   checksummed + built BEFORE `nexusq-setupd` (Phase 7c4)**, which now `depends=` on
   it. The reverse order fails **every clean build** with `nexusq-btagent is missing in
   checksums`. `docker-build.sh` also `--force`s the
-  nexusqd/nexusq-control/nexusq-btagent/nexusq-setupd builds (warm-volume stale-apk
-  trap).
+  nexusqd/nexusq-control/nexusq-btagent/nexusq-setupd/nexusq-mqtt builds
+  (warm-volume stale-apk trap).
+  🆕 **`nexusq-mqtt` (2026-08-10, 0.1.0-r0, noarch — Phase 7c5):** the MQTT health
+  telemetry publisher (`userspace/nexusq-mqtt/`, staged in Phase 5 like the other
+  daemons, in the dos2unix list, `device-google-steelhead` r67 `depends=` it, in
+  `publish-ota-repo.sh`'s `OTA_PACKAGES`). Stdlib-only python; **no ordering
+  constraint** on the other daemon phases. Gate on the built rootfs:
+  `usr/bin/nexusq-mqtt` present, `nexusq-mqtt.service` + its
+  `multi-user.target.wants` symlink + `96-nexusq-mqtt.preset` installed, and
+  **NO `/etc/nexusq/mqtt.json` in the image** (broker creds are a per-home secret,
+  provisioned over ssh only — the unit's `ConditionPathExists` skips cleanly).
   ⚠️ **BT pairing was root-caused 2026-07-15 as TWO userspace bugs** (blueman's
   DisplayYesNo agent hijacking SSP + the app bonding on demand) — **NOT** a BCM4330
   limit; that claim is RETRACTED. See

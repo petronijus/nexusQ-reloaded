@@ -11,7 +11,7 @@ capture.*
 
 | Tool | Side | What it does |
 |------|------|--------------|
-| `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package) |
+| `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package). Since 2026-08-10 `health.jsonl` has an on-device consumer: **`nexusq-mqtt`** tails the latest sample (used only when fresh ≤60 s) and republishes it — plus its own extras — to MQTT / Home Assistant (see `userspace/nexusq-mqtt/README.md`); a change to healthd's field names/semantics now also touches the MQTT state JSON + HA discovery templates |
 | `pmos/device-google-steelhead/nq-diag-snapshot` | device | comprehensive read-only "log everything" one-shot dump |
 | `scripts/diag/nqctl` | host | reach the device over the best link (ethernet `10.42.0.2` first, then USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
 | `scripts/diag/nq-collect` | host | **the engine**: connect → snapshot → pull/burst samples → save locally → analyze |

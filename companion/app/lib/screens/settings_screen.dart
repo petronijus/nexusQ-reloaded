@@ -7,6 +7,7 @@ import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
 import 'debug_log_screen.dart';
+import 'health_screen.dart';
 import 'service_log_screen.dart';
 
 /// "Settings": the box's configuration that isn't Bluetooth pairing —
@@ -504,6 +505,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Music keeps playing either way.',
                   style: TextStyle(color: NexusQColors.dim, fontSize: 12),
                 ),
+              ),
+            ),
+
+            // --- Health: the MQTT telemetry panel ----------------------------
+            const SizedBox(height: 20),
+            _sectionTitle('Health'),
+            Card(
+              color: NexusQColors.surface,
+              child: ListTile(
+                leading: const Icon(Icons.monitor_heart_outlined,
+                    color: NexusQColors.dim),
+                title: const Text('Device health',
+                    style: TextStyle(color: NexusQColors.white)),
+                subtitle: const Text(
+                  'Live telemetry over your home MQTT broker — temperature, '
+                  'CPU, WiFi, services. Works even when the direct link to '
+                  'the Q is down.',
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+                ),
+                trailing:
+                    const Icon(Icons.chevron_right, color: NexusQColors.dim),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const HealthScreen())),
               ),
             ),
 

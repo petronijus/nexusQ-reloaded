@@ -42,7 +42,9 @@ scripts/diag/nq-collect
 
 The capture dir contains: `report.txt` (human), `report.json` (machine findings),
 `snapshot.txt` (full device dump), `health.jsonl` (samples), `events.jsonl`
-(device-side anomaly events), `paths.txt`.
+(device-side anomaly events), `paths.txt`. (Since 2026-08-10 the on-device
+`nexusq-mqtt` daemon also republishes the freshest `health.jsonl` sample to
+MQTT/Home Assistant — a field change in healthd now propagates there too.)
 
 Options: `nq-collect [OUTDIR] [--burst N] [--interval S]`. To watch a suspected
 intermittent fault live for longer, raise the burst, e.g. `--burst 60 --interval 2`

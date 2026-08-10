@@ -3,6 +3,35 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> **✅ DONE (2026-08-10) — MQTT health telemetry → Home Assistant + app (PLANNED-NEXT
+> task 2, end-to-end; uncommitted — commit + device-OTA publish + app
+> OTA-manifest push pending Petr's go; the app apk itself is released as
+> `app-v1.12.0`).** NEW aport **`nexusq-mqtt`** (0.1.0-r0, noarch; `userspace/nexusq-mqtt/`,
+> 25 host tests): pure-Python **stdlib** MQTT 3.1.1 publisher (CONNECT+auth+LWT,
+> QoS0+retain, PINGREQ dead-link detection, reconnect+backoff) publishing every
+> 30 s — retained `nexusq/health/state` JSON, `nexusq/status` online/offline LWT,
+> and retained **HA MQTT discovery** (12 sensors + 6 binary_sensors). Data =
+> nq-healthd tail (fresh ≤60 s) + own sampling (per-OPP `time_in_state` deltas
+> "podíl frekvencí", WiFi RSSI/SSID, volume/mute from whichever mixer owns the
+> output, 4 service states, uptime). `/etc/nexusq/mqtt.json` (0600) is a per-home
+> SECRET, never baked; unit = `ConditionPathExists`, NO `After=` (ordering-cycle
+> rule); enablement self-contained (baked wants-symlink + own 96-preset). Device
+> r66→**r67** (`depends += nexusq-mqtt`); docker-build Phase **7c5**;
+> `publish-ota-repo.sh` += nexusq-mqtt (apks **built + signed, NOT published**).
+> Broker: new user `nexusq` on the TrueNAS Mosquitto (192.168.20.102:1883; pw in
+> 1Password "MQTT nexusq (Nexus Q telemetry)"; ⚠️ broker has NO acl_file).
+> **DEPLOYED LIVE: 18 entities in Home Assistant with real values** (79.9 °C,
+> 1200 MHz conservative, −28 dBm, volume 45 %); mkinitfs trigger passed — the
+> Option-A `/boot` fix holds. **App 1.11.2+30 → 1.12.0+31** (apk published as gh
+> release `app-v1.12.0`; the `app-release.json` bump is staged uncommitted — the
+> OTA offer goes live on push): Settings → "Device health" `HealthScreen` + manual
+> "Connect to MQTT" dialog (hand-entered creds in the platform secure store; NO
+> protocol change). Known: `connect_gate_setup_entry_test` is NOT hermetic (real
+> mDNS — fails with a live Q on the LAN); an internet-only outage still bounces
+> the Q off the LAN (watchdog pings the gateway; self-healed on new lease
+> `.246`). Record: `docs/2026-08-10-mqtt-health-telemetry.md`. **Task (1) — USB
+> audio back into PA via snd-aloop — REMAINS (see PLANNED NEXT below).**
+>
 > **✅ DONE (2026-08-09/10) — System OTA spurious "system update failed" + weak app
 > reporting.** The "failed" was a concurrent `apk` CHECK (the app polling
 > checkNexus/SystemUpdate) racing the install's `apk upgrade` → `Unable to lock
@@ -18,7 +47,8 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > upgradable package = "a few still pending", not a blanket "failed"). Live +
 > OTA-published + on Petr's phone.
 >
-> **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr:**
+> **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr — task (2) ✅ DONE
+> 2026-08-10 (see the top note); task (1) remains:**
 >
 > **(1) USB Audio back into PulseAudio — "the proper way" (supersedes the r65
 > direct-ALSA path).** r65 made USB audio EXCLUSIVE (alsaloop → hw:NexusQSpeaker,
@@ -39,7 +69,10 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > re-validation (delay, idle, mixing). Superior architecture; deferred only for
 > effort/validation time.
 >
-> **(2) MQTT health telemetry → Home Assistant + the app.** The Q already samples
+> **(2) ✅ DONE 2026-08-10 — MQTT health telemetry → Home Assistant + the app**
+> (shipped as planned — see the top note +
+> `docs/2026-08-10-mqtt-health-telemetry.md`; original plan text kept below).
+> The Q already samples
 > health (`nq-healthd`: die temp, cur freq + per-OPP residency "podíl frekvencí",
 > load, governor, WiFi RSSI, uptime, active services, volume). Add a small
 > publisher (`nexusq-mqtt`, or extend nq-healthd) that publishes those every
