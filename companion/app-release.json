@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.12.0",
-  "versionCode": 31,
-  "notes": "Health panel: live device telemetry over your home MQTT broker (temperature, CPU, WiFi, volume, services). Settings → Health → Connect to MQTT.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.12.0/nexusq-companion-1.12.0.apk",
+  "version": "1.13.0",
+  "versionCode": 33,
+  "notes": "Health panel: live device telemetry over your home MQTT broker — and saving the Connect-to-MQTT dialog now provisions the credentials to the Q itself (no hand-edited config). Includes the 1.12.1 grey-screen fix.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.13.0/nexusq-companion-1.13.0.apk",
   "minAndroidSdk": 21
 }

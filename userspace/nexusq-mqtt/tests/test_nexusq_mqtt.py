@@ -353,6 +353,43 @@ class TestOppResidency(unittest.TestCase):
         self.assertEqual(MOD.opp_residency({}, {}), {})
 
 
+class TestWindowResidency(unittest.TestCase):
+    """The rolling 1 h window: shares are measured against the OLDEST
+    in-window snapshot, expired history is pruned, a kernel counter reset
+    discards the whole history instead of poisoning an hour of readings."""
+
+    def test_grows_from_daemon_start_then_slides(self):
+        hist = []
+        # t=0: since-boot fallback (no history yet)
+        pct, hist = MOD.window_residency(hist, {350: 100, 700: 100}, 0.0,
+                                         window_s=3600)
+        self.assertEqual(pct[350], 50.0)
+        # t=1800: measured against t=0 (window still growing)
+        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 100}, 1800.0,
+                                         window_s=3600)
+        self.assertEqual(pct[350], 100.0)   # all growth was at 350
+        # t=5400: the t=0 snapshot expired; base is now t=1800
+        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 1000}, 5400.0,
+                                         window_s=3600)
+        self.assertEqual(pct[700], 100.0)   # within the window only 700 grew
+        self.assertEqual([t for t, _ in hist], [1800.0, 5400.0])
+
+    def test_counter_reset_discards_history(self):
+        hist = []
+        _, hist = MOD.window_residency(hist, {350: 5000}, 0.0, window_s=3600)
+        # counters went backwards -> reboot -> fresh start, since-boot fallback
+        pct, hist = MOD.window_residency(hist, {350: 30, 700: 10}, 30.0,
+                                         window_s=3600)
+        self.assertEqual(pct[350], 75.0)
+        self.assertEqual(len(hist), 1)
+
+    def test_empty_snapshot_keeps_history(self):
+        hist = [(0.0, {350: 1})]
+        pct, hist2 = MOD.window_residency(hist, {}, 30.0, window_s=3600)
+        self.assertEqual(pct, {})
+        self.assertEqual(hist2, hist)
+
+
 class TestCollect(unittest.TestCase):
     def test_omits_unavailable_and_maps_units(self):
         health = tempfile.NamedTemporaryFile(
@@ -380,7 +417,7 @@ class TestCollect(unittest.TestCase):
                 mock.patch.object(MOD, "read_volume",
                                   return_value=(None, None)), \
                 mock.patch.object(MOD, "read_uptime", return_value=1234):
-            state, cur_tis = MOD.collect({})
+            state, hist = MOD.collect([])
 
         self.assertEqual(state["temp_c"], 76.5)
         self.assertEqual(state["freq_mhz"], 350)
@@ -401,7 +438,7 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(state["services"], {
             "spotify": False, "airplay": False,
             "roon": True, "usbaudio": False})
-        self.assertEqual(cur_tis, {350000: 900, 700000: 100})
+        self.assertEqual(hist[-1][1], {350000: 900, 700000: 100})
 
     def test_stale_healthd_drops_health_fields(self):
         health = tempfile.NamedTemporaryFile(
@@ -419,7 +456,7 @@ class TestCollect(unittest.TestCase):
                 mock.patch.object(MOD, "read_volume",
                                   return_value=(None, None)), \
                 mock.patch.object(MOD, "read_uptime", return_value=None):
-            state, _ = MOD.collect({})
+            state, _ = MOD.collect([])
         self.assertFalse(state["healthd_fresh"])
         self.assertNotIn("temp_c", state)
         self.assertNotIn("freq_mhz", state)

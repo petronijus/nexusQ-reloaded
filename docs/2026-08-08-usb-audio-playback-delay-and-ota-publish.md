@@ -7,8 +7,8 @@ publish** (nexusqd r12 + device-google-steelhead r63).
 > **✅ RESOLVED 2026-08-09 — see §3 below.** The finding in §1 (both the multi-minute
 > delay AND the idle CPU/heat) was fixed by rewriting the bridge from PulseAudio to a
 > **direct `alsaloop --sync=simple` bridge** (`device-google-steelhead` r65, commit
-> `2dccd3a`; push + OTA pending Petr's OK). The §1 analysis below is retained as the
-> pre-fix record.
+> `2dccd3a` — pushed; OTA published 2026-08-09, gh-pages `d983b3f`). The §1 analysis
+> below is retained as the pre-fix record.
 
 ---
 
@@ -138,8 +138,9 @@ still install; it's cosmetic + blocks a clean apk state). Full record:
 
 ## 3. ✅ RESOLVED 2026-08-09 — direct alsaloop bridge (the fix for §1)
 
-`device-google-steelhead` **r65**, commit **`2dccd3a`** on `main` — **committed, NOT
-yet pushed; push + OTA pending Petr's OK.** Both §1 faults (the multi-minute delay AND
+`device-google-steelhead` **r65**, commit **`2dccd3a`** on `main` — was "committed,
+not yet pushed" at time of writing; **since pushed + OTA published** (gh-pages
+`d983b3f`, 2026-08-09). Both §1 faults (the multi-minute delay AND
 the idle CPU/heat) were the SAME PulseAudio bridge, so **one** change fixed both.
 
 ### The fix — rip PulseAudio out of the USB-audio path

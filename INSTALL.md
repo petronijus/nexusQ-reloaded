@@ -29,7 +29,9 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
     `nexusq-v1.11.0.sha256`.
-  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9** — are **not
+  - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9**, and
+    **v1.12.0** (built 2026-08-10: MQTT health telemetry `nexusq-mqtt`, device
+    r67; gates PASS, not yet flashed) — are **not
     tagged/released**: they add the WiFi watchdog (`roamoff=1` + the `nogw` heal),
     **USB Audio input** (the Q as a toggleable USB DAC, kernel r46 `#47`),
     **device (daemon) OTA** and **full-system OTA** + the **glibc-rt split** (§1c).

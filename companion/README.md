@@ -67,8 +67,10 @@ alone LIES** (§9.2). Record:
 _(**OTA self-update (post-v1.11.0 dev):** the Settings **Update cluster** has **two
 items**. **App update** — the phone app **and** the four device daemons, versioned
 together as the companion system: the app checks a manifest on raw.githubusercontent
-(compares Android `versionCode`, downloads + installs the apk — now **1.11.0** /
-`versionCode 28`), the daemons update via `checkNexusUpdate`/`installNexusUpdate`
+(compares Android `versionCode`, downloads + installs the apk — the manifest
+offers **1.12.0** / `versionCode 31` as of 2026-08-10; **1.13.0+33** is built +
+adb-installed, its OTA release imminent), the daemons update via
+`checkNexusUpdate`/`installNexusUpdate`
 ([`PROTOCOL.md`](PROTOCOL.md) **§12a**, `nexusq-control` **r25**); one indicator + one
 button covers whichever side is newer, install order = **device daemons first, then the
 phone app** (installing the app restarts the phone). **System** — the whole-appliance
@@ -91,18 +93,23 @@ uses without a restricted entitlement); **first-time BT setup stays Android-only
 wizard; once the Q is on WiFi, iOS works fully), and self-update is Android-only
 (iOS binaries come from Xcode/TestFlight). See
 `../docs/2026-08-03-ios-companion-port.md`.)_
-_(**Health panel (2026-08-10, app 1.12.0+31 — apk released as `app-v1.12.0`; the
-`app-release.json` bump is staged uncommitted, so the OTA offer goes live on
-push):** Settings →
+_(**Health panel (2026-08-10, app 1.12.0+31 — released as `app-v1.12.0`, OTA
+offer live; 1.12.1+32 grey-screen fix → 1.13.0+33 provisioning):** Settings →
 **"Device health"** → a live health view (status, problem flags, vitals, per-OPP
 residency bars, service chips, WiFi card) fed by **MQTT**, not the control socket —
 the on-device `nexusq-mqtt` daemon publishes retained JSON + Home Assistant
 discovery to the home Mosquitto, and the app subscribes to `nexusq/health/#`
 (`lib/mqtt/`, `mqtt_client ^10.6`; retained topics make the panel populate
-instantly). Broker creds are **hand-entered** in a "Connect to MQTT" dialog and
-kept in `flutter_secure_storage` (Android Keystore / iOS Keychain) — deliberately
-**no auto-provisioning verb and NO change to [`PROTOCOL.md`](PROTOCOL.md)**. See
-`../docs/2026-08-10-mqtt-health-telemetry.md`.)_ The original app was reverse-engineered first — the full feature catalog, the
+instantly). Broker creds are entered once in the "Connect to MQTT" dialog, kept
+in `flutter_secure_storage` (Android Keystore / iOS Keychain), and — since
+**1.13.0** — **Save also PROVISIONS the same credentials to the device** over
+the control link (`setMqttConfig`/`getMqttStatus`, [`PROTOCOL.md`](PROTOCOL.md)
+**§13**, `nexusq-control` **r28**): **the app is the device's only credential
+input**, no file is hand-edited over ssh. **1.12.1** fixed the panel's
+grey-screen crash (null cast on absent problem-flag fields in an empty state
+map; regression test `app/test/health_problems_test.dart`). See
+`../docs/2026-08-10-mqtt-health-telemetry.md` (§7 = the provisioning
+follow-up).)_ The original app was reverse-engineered first — the full feature catalog, the
 three local wire protocols (discovery / pairing / control RPC), and a keep/modernize/drop/add
 triage live in [`../docs/2026-06-30-companion-app-RE.md`](../docs/2026-06-30-companion-app-RE.md).
 

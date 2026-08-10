@@ -3,9 +3,31 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:simple_icons/simple_icons.dart';
 
+import '../debug/app_log.dart';
 import '../mqtt/health_mqtt.dart';
 import '../mqtt/mqtt_settings.dart';
+import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
+
+/// Problem flags the daemon/HA treat as "something is wrong". Top-level (not a
+/// State method) so tests can pin it against sparse payloads: the daemon OMITS
+/// fields whose source is unavailable, and the state map is entirely empty
+/// until the first retained message lands — every read here must tolerate an
+/// absent key. (`(x ?? 0) is num && (x as num) …` looked guarded but tested
+/// the FALLBACK and cast the ORIGINAL — null cast crashed the first build,
+/// v1.12.0's grey screen.)
+List<String> healthProblems(Map<String, dynamic> s) {
+  final out = <String>[];
+  if (s['nexusqd_alive'] == false) out.add('LED daemon (nexusqd) is down');
+  if (s['healthd_fresh'] == false) {
+    out.add('Health sampler (nq-healthd) is stale');
+  }
+  final stall = s['led_stall'];
+  if (stall is num && stall >= 6) out.add('LED ring frame is stalled');
+  final pstore = s['pstore'];
+  if (pstore is num && pstore > 0) out.add('Crash dump present (pstore)');
+  return out;
+}
 
 /// "Health": the live device-health panel fed by the MQTT telemetry the
 /// on-device nexusq-mqtt daemon publishes (die temp, CPU, per-OPP residency,
@@ -17,7 +39,13 @@ import '../theme/nexusq_theme.dart';
 /// health panel). Broker credentials are entered by hand via the
 /// "Connect to MQTT" dialog and kept in the platform secure store.
 class HealthScreen extends StatefulWidget {
-  const HealthScreen({super.key});
+  const HealthScreen({super.key, this.client});
+
+  /// The device control link, when the app currently has one. Saving broker
+  /// settings ALSO provisions them to the Q over it (`setMqttConfig`,
+  /// PROTOCOL §13) — the app is the device's only credential input; there is
+  /// nothing baked into the image and no hand-edited file.
+  final NexusQClient? client;
 
   @override
   State<HealthScreen> createState() => _HealthScreenState();
@@ -194,21 +222,7 @@ class _HealthScreenState extends State<HealthScreen> {
     );
   }
 
-  /// Problem flags the daemon/HA treat as "something is wrong".
-  List<String> _problems(Map<String, dynamic> s) {
-    final out = <String>[];
-    if (s['nexusqd_alive'] == false) out.add('LED daemon (nexusqd) is down');
-    if (s['healthd_fresh'] == false) {
-      out.add('Health sampler (nq-healthd) is stale');
-    }
-    if ((s['led_stall'] ?? 0) is num && (s['led_stall'] as num) >= 6) {
-      out.add('LED ring frame is stalled');
-    }
-    if ((s['pstore'] ?? 0) is num && (s['pstore'] as num) > 0) {
-      out.add('Crash dump present (pstore)');
-    }
-    return out;
-  }
+  List<String> _problems(Map<String, dynamic> s) => healthProblems(s);
 
   Widget _problemsCard(List<String> problems) {
     return Card(
@@ -513,7 +527,45 @@ class _HealthScreenState extends State<HealthScreen> {
     }
     await settings.save();
     setState(() => _settings = settings);
+    // Provision the DEVICE first (it is the reason this dialog exists), then
+    // connect the phone's own subscriber. Device unreachable is not fatal —
+    // the phone-side subscription still works and the user is told.
+    await _provisionDevice(settings);
     await _mqtt.connect(settings);
+  }
+
+  /// Hand the saved broker credentials to the Q (`setMqttConfig`, §13).
+  Future<void> _provisionDevice(MqttSettings s) async {
+    final client = widget.client;
+    if (client == null) return;
+    String msg;
+    try {
+      final st = await client.call('setMqttConfig', {
+        'host': s.host,
+        'port': s.port,
+        'username': s.username,
+        'password': s.password,
+        'prefix': s.prefix,
+      });
+      msg = st['active'] == 'active'
+          ? 'Nexus Q provisioned — telemetry running'
+          : 'Nexus Q provisioned (service: ${st['active']})';
+      AppLog.add('mqtt', 'device provisioned, service ${st['active']}');
+    } catch (e) {
+      // An old device build (control < r28) answers bad_request/unknown — say
+      // so instead of a generic failure.
+      final old = e.toString().contains('bad_request') ||
+          e.toString().contains('unknown');
+      msg = old
+          ? 'Saved on phone. The Q needs a software update before the app '
+              'can provision it (Settings → Update).'
+          : 'Saved on phone, but provisioning the Q failed: '
+              '${e.toString().replaceFirst('Exception: ', '')}';
+      AppLog.add('mqtt', 'device provisioning failed: $e', warn: true);
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
   }
 
   Widget _field(TextEditingController c, String label,

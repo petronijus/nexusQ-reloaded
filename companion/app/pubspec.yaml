@@ -40,7 +40,13 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 1.12.0 — Health panel: MQTT telemetry subscriber (Connect-to-MQTT dialog,
 #          creds in the platform secure store; reads nexusq/health/# published
 #          by the on-device nexusq-mqtt daemon).
-version: 1.12.0+31
+# 1.12.1 — fix: Health panel grey-screen crash on the first build after saving
+#          broker settings (null cast on absent led_stall/pstore in an empty
+#          state map — the guard tested the fallback, cast the original).
+# 1.13.0 — the app PROVISIONS the Q's MQTT credentials (setMqttConfig, §13):
+#          saving the Connect-to-MQTT dialog hands the same broker login to
+#          the device (control r28) — nothing hand-edited on the Q anymore.
+version: 1.13.0+33
 
 environment:
   sdk: ^3.12.0

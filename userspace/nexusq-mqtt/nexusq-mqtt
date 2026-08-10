@@ -22,7 +22,7 @@ Design notes (why it looks the way it does):
   * The data comes from two places: the LAST line of nq-healthd's health.jsonl
     (the 5 s sampler already owns cpufreq/thermal/vdd/nexusqd/LED signals —
     don't sample them twice) plus what healthd does NOT record: per-OPP
-    residency (time_in_state delta over the publish window), WiFi RSSI (iw),
+    residency (time_in_state deltas over a rolling 1 h window), WiFi RSSI (iw),
     volume/mute (PA — or the TAS5713 hardware mixer while USB-audio's alsaloop
     owns the output, same detection as nq-vol), streaming-service states
     (instant cgroup read, the nexusq-control pattern — systemctl --machine
@@ -225,7 +225,7 @@ def read_time_in_state():
 
 def opp_residency(prev, cur):
     """Per-OPP share (%) of the time between two time_in_state snapshots.
-    With no usable prev (first publish, counter reset) fall back to the
+    With no usable prev (no history yet, counter reset) fall back to the
     since-boot distribution — still honest, just a longer window."""
     deltas = {f: cur[f] - prev.get(f, 0) for f in cur}
     if not deltas or min(deltas.values()) < 0 or sum(deltas.values()) <= 0:
@@ -234,6 +234,37 @@ def opp_residency(prev, cur):
     if total <= 0:
         return {}
     return {f: round(100.0 * t / total, 1) for f, t in deltas.items()}
+
+
+# The residency is reported over a ROLLING window, not publish-to-publish.
+# A 30 s window swings wildly (one governor burst = tens of percent — Petr:
+# "lita to uplne jak se to zlibi"); an hour reads as "how the box actually
+# spends its time" while still moving. Until an hour of history exists the
+# window is honestly shorter (since daemon start).
+OPP_WINDOW_S = int(os.environ.get("NQMQTT_OPP_WINDOW_S", "3600"))
+
+
+def window_residency(history, cur, now, window_s=None):
+    """Rolling-window per-OPP share.
+
+    history: list of (monotonic_t, snapshot) oldest-first; cur: the snapshot
+    just read; now: time.monotonic(). Returns (pct_dict, new_history) — the
+    new history has expired entries pruned and `cur` appended. A counter that
+    went BACKWARDS vs the newest history entry means the kernel counters were
+    reset (reboot while our state somehow survived) — the whole history is
+    discarded rather than poisoning an hour of readings."""
+    window_s = OPP_WINDOW_S if window_s is None else window_s
+    if not cur:
+        return {}, history
+    if history:
+        _, newest = history[-1]
+        if any(cur.get(f, 0) < v for f, v in newest.items()):
+            history = []
+    history = [(t, s) for (t, s) in history if now - t <= window_s]
+    base = history[0][1] if history else {}
+    pct = opp_residency(base, cur)
+    history.append((now, cur))
+    return pct, history
 
 
 def read_wifi():
@@ -298,10 +329,12 @@ def read_uptime():
         return None
 
 
-def collect(prev_tis):
+def collect(tis_history):
     """One publishable state snapshot. Fields whose source is unavailable are
     OMITTED (not null) so HA value_templates can `| default('unknown')` and the
-    app can distinguish 'absent' from a real value. Returns (state, cur_tis)."""
+    app can distinguish 'absent' from a real value. Returns
+    (state, tis_history) — the caller threads the rolling residency history
+    through consecutive calls."""
     state = {}
 
     health, age = read_health()
@@ -332,9 +365,9 @@ def collect(prev_tis):
             state["pstore"] = int(health["pstore"])
 
     cur_tis = read_time_in_state()
-    if cur_tis:
-        for freq, pct in opp_residency(prev_tis, cur_tis).items():
-            state[f"opp{freq // 1000}_pct"] = pct
+    pct, tis_history = window_residency(tis_history, cur_tis, time.monotonic())
+    for freq, val in pct.items():
+        state[f"opp{freq // 1000}_pct"] = val
 
     rssi, ssid = read_wifi()
     if rssi is not None:
@@ -354,7 +387,7 @@ def collect(prev_tis):
     if uptime is not None:
         state["uptime_s"] = uptime
 
-    return state, cur_tis
+    return state, tis_history
 
 
 # --------------------------------------------------------------------------
@@ -694,7 +727,7 @@ def run():
     signal.signal(signal.SIGTERM, _on_sigterm)
     signal.signal(signal.SIGINT, _on_sigterm)
 
-    prev_tis = {}
+    tis_history = []   # rolling time_in_state snapshots for the 1 h residency window
     backoff = 5
     client = None
     while not _shutdown:
@@ -712,7 +745,7 @@ def run():
                 client.publish(f"{conf['discovery_prefix']}/{suffix}",
                                json.dumps(cfg), retain=True)
             while not _shutdown:
-                state, prev_tis = collect(prev_tis)
+                state, tis_history = collect(tis_history)
                 client.publish(state_topic, json.dumps(state), retain=True)
                 deadline = time.monotonic() + conf["interval_s"]
                 while not _shutdown and time.monotonic() < deadline:

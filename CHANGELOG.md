@@ -6,7 +6,55 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Added — MQTT health telemetry → Home Assistant + app Health panel (2026-08-10; uncommitted — commit + device-OTA publish + app OTA-manifest push pending Petr's go; app apk itself already released as `app-v1.12.0`)
+### Changed — MQTT credentials: the companion app is the device's ONLY provisioner (2026-08-10 follow-up; `nexusq-control` r28 + app 1.13.0+33 — source uncommitted; the r28 apk is already OTA-published as gh-pages `e428bef`, the app OTA release of 1.13.0 is imminent)
+- **Petr rejected the dedicated `nexusq` broker user** ("that's not another user
+  at all, delete it — it just connects with our petronijus"): the user was
+  removed from the Mosquitto `password_file` (broker back to its original three
+  users petronijus/ustredna/sumperak) and the 1Password item "MQTT nexusq (Nexus
+  Q telemetry)" was **deleted**. The Q connects as **`petronijus`** (household
+  login; password now in the 1P item **"MQTT broker"**); broker host referred to
+  as **`mqtt.home.arpa`** (→ 192.168.20.102).
+- **`nexusq-control` r28 — PROTOCOL §13** ("appka to musí nexusu
+  provisionovat"): **`setMqttConfig`** (validate → **atomic 0600** write of
+  `/etc/nexusq/mqtt.json`, 0600 tempfile + rename → restart `nexusq-mqtt`;
+  password **verbatim + never logged/returned**) and **`getMqttStatus`**
+  (password-less state + unit active state); event **`mqttStatusChanged`**.
+  Security note in §13: creds transit the unauthenticated LAN control link —
+  accepted trade-off, Petr's call. New host tests
+  `tests/test_mqtt_config.py` (7; control suite now **13 green**). The r28 apk
+  is published to the OTA repo (gh-pages `e428bef`).
+- **App 1.13.0+33:** Save in the "Connect to MQTT" dialog **ALSO provisions the
+  device** via `setMqttConfig` (`HealthScreen` takes the `NexusQClient`;
+  graceful message on a pre-r28 device build) — nothing hand-edited on the Q.
+- **Live end-to-end PROVEN:** Petr filled the dialog → app provisioned the Q
+  (`getMqttStatus`: host `mqtt.home.arpa`, user `petronijus`, `active`) → phone
+  panel Live with data → HA still fed.
+- **`nexusq-mqtt` r0→r1 (uncommitted, not yet OTA-published):** per-OPP
+  residency now over a **rolling 1 h window** (`NQMQTT_OPP_WINDOW_S`, default
+  3600) instead of the wildly-swinging 30 s publish window (Petr: "lítá to
+  úplně jak se to zlíbí"); counter reset discards the history; daemon tests
+  25→**28** green.
+- Record: `docs/2026-08-10-mqtt-health-telemetry.md` §7.
+
+### Fixed — app 1.12.1+32: Health-panel grey-screen crash (2026-08-10)
+- 1.12.0's Health panel crashed to a grey screen on the first build after
+  saving broker settings: a **null cast on absent `led_stall`/`pstore`** in an
+  *empty* state map — `(x ?? 0) is num && (x as num) …` tested the FALLBACK but
+  cast the ORIGINAL (the daemon deliberately omits unavailable fields, and the
+  map is empty until the first retained message). `healthProblems()` extracted
+  top-level + regression test `test/health_problems_test.dart`. Diagnosed over
+  adb (uiautomator repro + logcat stack trace); a `notAuthorized` seen en route
+  was mistyped creds on the phone, not a bug. Installed on Petr's phone via adb
+  (1.12.1 and 1.13.0 both; OTA release ships as 1.13.0).
+
+### Added — v1.12.0 full image built, all gates PASS (2026-08-10; NOT flashed)
+- Full pipeline run: bakes `nexusq-mqtt` 0.1.0-r0 + device **r67** + control
+  **r27** (r28 arrives via System OTA once published). Artifacts
+  `output/nexusq-boot-v1.12.0.img` + `output/nexusq-rootfs-v1.12.0-sparse.img`
+  (+ `.sha256`). The live device already runs the same bits via OTA; the image
+  is the flash-anytime safety copy.
+
+### Added — MQTT health telemetry → Home Assistant + app Health panel (2026-08-10; SHIPPED — commit `b49b536` pushed on `main`, device-OTA published as gh-pages `cff585f`, app released as `app-v1.12.0` + manifest live)
 - **NEW aport `pmos/nexusq-mqtt` (0.1.0-r0, noarch)** + `userspace/nexusq-mqtt/`
   (daemon, `.service`, `96-nexusq-mqtt.preset`, README, **25 host tests** passing
   incl. a fake TCP MQTT broker): a **pure-Python3 stdlib MQTT 3.1.1 publisher**
@@ -33,10 +81,13 @@ All notable changes to Nexus Q Reloaded. Format follows
   nexusq-mqtt`); `docker-build.sh` Phase 2/5/dos2unix + NEW **Phase 7c5**
   build/export; `publish-ota-repo.sh` `OTA_PACKAGES += nexusq-mqtt`. Built via
   `OTA_PACKAGES_ONLY=1` → `nexusq-mqtt-0.1.0-r0.apk` +
-  `device-google-steelhead-1.0-r67.apk` (signed, verified; **NOT yet published**).
+  `device-google-steelhead-1.0-r67.apk` (signed, verified; **published to the
+  OTA repo as gh-pages `cff585f`**).
 - **Broker:** NEW MQTT user `nexusq` on the TrueNAS Mosquitto
-  (eclipse-mosquitto 2.0.22, `192.168.20.102:1883`; password in 1Password
-  "MQTT nexusq (Nexus Q telemetry)"). ⚠️ broker has **no `acl_file`** — every
+  (eclipse-mosquitto 2.0.22, `192.168.20.102:1883`). **SUPERSEDED later the
+  same day** — Petr rejected the extra user; it and its 1P item were deleted,
+  the Q connects as the household `petronijus` (see the Changed entry above).
+  ⚠️ broker has **no `acl_file`** — every
   authenticated user can read/write everything (incl. zigbee2mqtt).
 - **DEPLOYED LIVE 2026-08-10** (device at the new lease `192.168.20.246`): apk
   add clean (**mkinitfs trigger OK — the 2026-08-08 Option-A `/boot` fix
@@ -44,11 +95,12 @@ All notable changes to Nexus Q Reloaded. Format follows
   79.9 °C, 1200 MHz conservative, OPP shares, −28 dBm RSSI, volume 45 %); binary
   sensors cross-checked against device truth.
 - **Companion app 1.11.2+30 → 1.12.0+31** (apk published as gh release
-  **`app-v1.12.0`**; the `app-release.json` bump is staged **uncommitted** — the
-  OTA offer goes live on push): Settings → **"Device health"** → `HealthScreen` (status/problem
+  **`app-v1.12.0`**; the `app-release.json` bump shipped with `b49b536` — the
+  OTA offer is live): Settings → **"Device health"** → `HealthScreen` (status/problem
   flags/vitals/OPP bars/service chips/WiFi card; retained topics populate it
-  instantly); manual **"Connect to MQTT"** dialog (hand-entered creds — Petr's
-  decision, NO auto-provisioning verb, **NO protocol change**), creds in
+  instantly); manual **"Connect to MQTT"** dialog (hand-entered creds; at this
+  point no provisioning verb — **superseded same day by 1.13.0/§13**, see the
+  Changed entry above), creds in
   `flutter_secure_storage`; subscriber `lib/mqtt/` on `mqtt_client ^10.6`.
 - **Known issues found:** `test/connect_gate_setup_entry_test.dart` is **not
   hermetic** (real mDNS discovery — fails whenever a live Q is on the LAN; needs
@@ -84,7 +136,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   full-pipeline path is unchanged.
 - See `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 
-### Fixed — USB Audio input multi-minute delay + idle CPU/heat, via a direct alsaloop bridge (2026-08-09, `device-google-steelhead` r65; committed `2dccd3a`, push + OTA pending Petr's OK)
+### Fixed — USB Audio input multi-minute delay + idle CPU/heat, via a direct alsaloop bridge (2026-08-09, `device-google-steelhead` r65; committed `2dccd3a` + pushed, OTA published — gh-pages `d983b3f` 2026-08-09)
 - **What was broken (both were the SAME PulseAudio bridge):** audio fed into the Q
   over USB (Xiaomi Mi TV Box → UAC2 gadget capture, `nexusq-uac2-in`) (a) came out
   **~3 min late** after a **long session**, and (b) burned **~15–20 % CPU + ~5 °C** even

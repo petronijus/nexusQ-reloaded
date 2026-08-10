@@ -4,10 +4,45 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-10 (latest): **MQTT health telemetry SHIPPED end-to-end — Q → Mosquitto → Home Assistant (18 live entities) + app Health panel (1.12.0+31)**
+## Session 2026-08-10 (latest): **MQTT health telemetry SHIPPED end-to-end — Q → Mosquitto → Home Assistant (18 live entities) + app Health panel; SAME-DAY FOLLOW-UP: the app now PROVISIONS the device's broker creds (control r28 §13, app 1.12.1→1.13.0)**
 
-Full record: `docs/2026-08-10-mqtt-health-telemetry.md`. PLAN.md "PLANNED NEXT"
-task **(2) is DONE**; task **(1)** (USB audio back into PA via snd-aloop) remains.
+Full record: `docs/2026-08-10-mqtt-health-telemetry.md` (**§7 = the follow-up**).
+PLAN.md "PLANNED NEXT" task **(2) is DONE**; task **(1)** (USB audio back into
+PA via snd-aloop) remains. The telemetry milestone itself is SHIPPED: commit
+**`b49b536`** pushed, device-OTA published (gh-pages **`cff585f`**), app
+`app-v1.12.0` released + manifest live.
+
+### Follow-up (later 2026-08-10, Petr's direction — implementation UNCOMMITTED in the working tree)
+- **`nexusq` broker user REJECTED + DELETED** (Petr: "it just connects with our
+  petronijus"): Mosquitto back to its three original users
+  (petronijus/ustredna/sumperak); 1P item "MQTT nexusq (Nexus Q telemetry)"
+  deleted. The Q connects as **`petronijus`** — password in the 1P item
+  **"MQTT broker"**; broker host = **`mqtt.home.arpa`** (→ 192.168.20.102).
+- **The companion app is the device's ONLY credential provisioner**
+  ("appka to musí nexusu provisionovat"): `nexusq-control` **r28** adds
+  PROTOCOL **§13** — `setMqttConfig` (validate → atomic 0600 write of
+  `/etc/nexusq/mqtt.json` → restart nexusq-mqtt; password verbatim, never
+  logged/returned) + `getMqttStatus` (password-less + unit active state) +
+  event `mqttStatusChanged`. §13 security note: creds transit the
+  unauthenticated LAN control link — accepted, Petr's call. New
+  `tests/test_mqtt_config.py` (control suite 13 tests green). The **r28 apk is
+  already OTA-published** (gh-pages **`e428bef`**) — only its source is
+  uncommitted.
+- **App 1.12.1+32**: Health-panel grey-screen crash FIXED (null cast on absent
+  `led_stall`/`pstore` in an empty state map; `healthProblems()` top-level +
+  regression test `test/health_problems_test.dart`; diagnosed over adb —
+  uiautomator repro + logcat). **App 1.13.0+33**: dialog Save **also provisions
+  the device** via `setMqttConfig` (graceful message on a pre-r28 build). Both
+  on Petr's phone via adb; 1.13.0 OTA release imminent.
+- **Live-proven end-to-end**: dialog → provision (`getMqttStatus`: host
+  `mqtt.home.arpa`, user `petronijus`, `active`) → panel Live → HA still fed.
+- **`nexusq-mqtt` r0→r1 (uncommitted, NOT yet OTA-published):** OPP residency
+  over a **rolling 1 h window** (was the swingy 30 s publish window — Petr:
+  "lítá to úplně jak se to zlíbí"); counter reset discards history; daemon
+  tests 25→28 green.
+- **v1.12.0 FULL IMAGE built, all gates PASS** — bakes mqtt r0 + device r67 +
+  control r27 (r28 arrives via System OTA). `output/nexusq-boot-v1.12.0.img` +
+  `output/nexusq-rootfs-v1.12.0-sparse.img`. **NOT flashed** — ready whenever.
 
 ### Current state
 - **NEW aport `pmos/nexusq-mqtt` (0.1.0-r0, noarch)** + `userspace/nexusq-mqtt/`
@@ -26,10 +61,12 @@ task **(2) is DONE**; task **(1)** (USB audio back into PA via snd-aloop) remain
 - `device-google-steelhead` **r66→r67** (`depends += nexusq-mqtt`);
   `docker-build.sh` Phase 2/5/dos2unix + NEW **Phase 7c5**;
   `publish-ota-repo.sh` `OTA_PACKAGES += nexusq-mqtt`.
-- **Broker:** new user `nexusq` on the TrueNAS SCALE Mosquitto (eclipse-mosquitto
-  2.0.22, `192.168.20.102:1883`, `ix-eclipse-mosquitto-mosquitto-1`;
-  password_file backed up, SIGHUP reload). Password: 1Password **"MQTT nexusq
-  (Nexus Q telemetry)"** (Personal). ⚠️ broker has **NO acl_file** — any
+- **Broker:** TrueNAS SCALE Mosquitto (eclipse-mosquitto 2.0.22,
+  `mqtt.home.arpa` → `192.168.20.102:1883`, `ix-eclipse-mosquitto-mosquitto-1`).
+  A dedicated `nexusq` user was created first, then **rejected by Petr and
+  deleted the same day** (incl. its 1P item) — the Q uses the household
+  **`petronijus`** login (password in 1P **"MQTT broker"**), provisioned by the
+  app (§13). ⚠️ broker has **NO acl_file** — any
   authenticated user can read/write everything (incl. zigbee2mqtt).
 - **DEPLOYED LIVE** (device on the NEW WiFi lease **192.168.20.246** after
   today's ~2 h internet outage; was `.164`): both apks installed clean —
@@ -39,27 +76,34 @@ task **(2) is DONE**; task **(1)** (USB audio back into PA via snd-aloop) remain
   shairport-sync are **masked** = Petr turned Spotify/AirPlay off in the app
   (~20 h ago) — intentional, telemetry correctly reports them off.
 - **App 1.11.2+30 → 1.12.0+31** (apk published as gh release `app-v1.12.0`;
-  manifest bump staged, push pending): Settings → **"Device
+  manifest bump shipped with `b49b536` — OTA offer live): Settings → **"Device
   health"** → `HealthScreen` (status/problem flags/vitals/OPP bars/service
-  chips/WiFi card; retained topics populate instantly); manual **"Connect to
-  MQTT"** dialog (Petr's decision: hand-entered, editable creds; **NO
-  auto-provisioning verb, NO protocol change**) with creds in
-  `flutter_secure_storage`; subscriber `lib/mqtt/{mqtt_settings,health_mqtt}.dart`
-  on `mqtt_client ^10.6` (autoReconnect).
+  chips/WiFi card; retained topics populate instantly); "Connect to MQTT"
+  dialog with creds in `flutter_secure_storage`; subscriber
+  `lib/mqtt/{mqtt_settings,health_mqtt}.dart` on `mqtt_client ^10.6`
+  (autoReconnect). Since the same-day follow-up (**1.13.0**) the dialog's Save
+  **also provisions the device** (§13) — see the Follow-up block above.
 
 ### WHERE TO CONTINUE (all pending Petr's go)
-1. **git commit** — the whole implementation is **uncommitted on `main`**
-   (modified: `docker-build.sh`, device APKBUILD r67, `publish-ota-repo.sh`,
-   app pubspec/settings; new: `pmos/nexusq-mqtt/`, `userspace/nexusq-mqtt/`,
-   `lib/mqtt/`, `lib/screens/health_screen.dart`).
-2. **OTA publish** — `nexusq-mqtt-0.1.0-r0.apk` + `device-google-steelhead-1.0-r67.apk`
-   are built + signed in `output/`, **not yet on gh-pages**.
-3. **App release** — the gh release **`app-v1.12.0` + apk asset already EXIST**
-   (published 2026-08-10T20:12:53Z); the `companion/app-release.json` bump to
-   1.12.0/31 is **staged uncommitted** — phones read the manifest from
-   raw.githubusercontent `main`, so the OTA offer goes live with the
-   commit+push of step 1.
-4. Later: broker `acl_file` hardening; make
+1. **App release 1.13.0 FIRST** — `gh release create app-v1.13.0` with the apk
+   asset: the `companion/app-release.json` bump to **1.13.0/33 is already
+   staged in the working tree** and points at that release URL, so the release
+   must exist **before** the commit is pushed (1.12.1/1.13.0 are on Petr's
+   phone via adb only; the live manifest still offers 1.12.0).
+2. **git commit + push** — the **follow-up** implementation is uncommitted on
+   `main` (modified: `companion/PROTOCOL.md` §13,
+   `userspace/nexusq-control/nexusq-control` r28, `pmos/nexusq-control/APKBUILD`,
+   `userspace/nexusq-mqtt/nexusq-mqtt` + tests + `pmos/nexusq-mqtt/APKBUILD` r1,
+   app `health_screen.dart` / `settings_screen.dart` / `pubspec.yaml` 1.13.0+33,
+   `companion/app-release.json`; new:
+   `userspace/nexusq-control/tests/test_mqtt_config.py`,
+   `companion/app/test/health_problems_test.dart`).
+3. **OTA publish `nexusq-mqtt` r1** — `publish-ota-repo.sh` (control **r28 is
+   already published**, gh-pages **`e428bef`**; the telemetry apks r0/r67 went
+   live earlier as `cff585f` — only the r1 rolling-window fix is missing).
+4. **v1.12.0 image** — built, gates PASS, in `output/` — flash whenever wanted
+   (the live device already runs the same bits via OTA).
+5. Later: broker `acl_file` hardening; make
    `test/connect_gate_setup_entry_test.dart` hermetic (it does **real mDNS** and
    fails whenever a live Q is on the LAN — it found the real bridge at
    `192.168.20.246:45015`; needs a discovery seam/mock); PLAN task (1).
@@ -78,8 +122,8 @@ task **(2) is DONE**; task **(1)** (USB audio back into PA via snd-aloop) remain
 
 ## Session 2026-08-09: **USB Audio input FIXED — direct alsaloop bridge kills the multi-minute delay AND the idle CPU/heat (device r65)**
 
-Committed on `main` as **`2dccd3a`** (`device-google-steelhead` **r65**) — **NOT yet
-pushed; awaiting Petr's OK → push + OTA still pending**. Full pre-fix analysis:
+Committed on `main` as **`2dccd3a`** (`device-google-steelhead` **r65**) — since
+**pushed + OTA published** (gh-pages `d983b3f` 2026-08-09). Full pre-fix analysis:
 `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md` (updated with the outcome).
 
 Both previously-open USB-audio faults (the ~3 min playback delay AND the idle CPU/heat

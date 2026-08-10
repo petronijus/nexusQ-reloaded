@@ -527,7 +527,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 trailing:
                     const Icon(Icons.chevron_right, color: NexusQColors.dim),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => const HealthScreen())),
+                    builder: (_) => HealthScreen(client: widget.client))),
               ),
             ),
 

@@ -151,7 +151,7 @@ the connection itself was healthy).
 The **Devices background poll no longer flashes the red error bar**: the 3 s poll now
 **logs** a failure instead; only user-initiated actions surface a visible error.
 
-## Health panel (added 2026-08-10 — app 1.12.0+31; apk released as `app-v1.12.0`, OTA-manifest push pending)
+## Health panel (added 2026-08-10 — app 1.12.0+31, released as `app-v1.12.0`; 1.12.1+32 crash fix → 1.13.0+33 device provisioning)
 
 Settings → **"Device health"** → `lib/screens/health_screen.dart`: a live view of
 status, problem flags, vitals (die temp / CPU freq / governor / load / memory),
@@ -161,11 +161,22 @@ a WiFi card. **Fed by MQTT, not the control socket** — the on-device
 JSON + Home Assistant discovery to the home Mosquitto, and the app subscribes to
 `nexusq/health/#` via `lib/mqtt/{mqtt_settings,health_mqtt}.dart`
 (`mqtt_client ^10.6`, autoReconnect; retained topics populate the panel
-instantly). Broker creds are **hand-entered** in a "Connect to MQTT" dialog
-(Petr's decision — editable, **no auto-provisioning verb, NO protocol change**)
-and stored in `flutter_secure_storage` (Android Keystore / iOS Keychain) — the
-broker password guards more than the Q, it must not sit in plaintext
-SharedPreferences. Record: `../../docs/2026-08-10-mqtt-health-telemetry.md`.
+instantly). Broker creds are entered in the "Connect to MQTT" dialog and stored
+in `flutter_secure_storage` (Android Keystore / iOS Keychain) — the broker
+password guards more than the Q, it must not sit in plaintext SharedPreferences.
+
+**Since 1.13.0 the dialog's Save ALSO PROVISIONS the device** (Petr's direction
+— "appka to musí nexusu provisionovat"): `HealthScreen` takes the
+`NexusQClient` and calls `setMqttConfig` (`../PROTOCOL.md` **§13**,
+`nexusq-control` **r28**) so the Q gets the same broker login (atomic 0600
+`/etc/nexusq/mqtt.json` on the device, password never logged or returned; a
+graceful message when the device build predates r28). **The app is the device's
+only credential input** — nothing is baked into the image or hand-edited over
+ssh. **1.12.1** fixed the panel's grey-screen crash: a null cast on absent
+`led_stall`/`pstore` in an *empty* state map (the daemon omits unavailable
+fields) — `healthProblems()` is now top-level with the regression test
+`test/health_problems_test.dart`. Record:
+`../../docs/2026-08-10-mqtt-health-telemetry.md` (§7 = the follow-up).
 
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 

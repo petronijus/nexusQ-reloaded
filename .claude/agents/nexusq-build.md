@@ -380,7 +380,9 @@ Check and REPORT each (PASS/FAIL + evidence):
   `usr/bin/nexusq-mqtt` present, `nexusq-mqtt.service` + its
   `multi-user.target.wants` symlink + `96-nexusq-mqtt.preset` installed, and
   **NO `/etc/nexusq/mqtt.json` in the image** (broker creds are a per-home secret,
-  provisioned over ssh only — the unit's `ConditionPathExists` skips cleanly).
+  provisioned by the companion app via `setMqttConfig` — PROTOCOL §13,
+  `nexusq-control` r28, since 2026-08-10; ssh is the manual fallback — the
+  unit's `ConditionPathExists` skips cleanly when unprovisioned).
   ⚠️ **BT pairing was root-caused 2026-07-15 as TWO userspace bugs** (blueman's
   DisplayYesNo agent hijacking SSP + the app bonding on demand) — **NOT** a BCM4330
   limit; that claim is RETRACTED. See

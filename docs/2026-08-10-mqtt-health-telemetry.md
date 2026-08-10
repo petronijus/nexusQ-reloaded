@@ -5,9 +5,14 @@ Base: v1.11.0 (tagged 2026-07-31); post-1.11.0 dev. PLAN.md "PLANNED NEXT" task 
 Assistant auto-creates the sensors (18 entities live with real values), and the
 companion app (**1.12.0+31**, apk published as gh release `app-v1.12.0`) grew a
 Health panel subscribing to the same feed.
-**Everything is uncommitted on `main`** (the commit — which also carries the
-staged `app-release.json` bump that makes the app OTA offer live — and the
-device-OTA publish pend Petr's go; see HANDOFF.md "WHERE TO CONTINUE").
+~~Everything is uncommitted on `main`~~ — **shipped later the same evening**:
+commit **`b49b536`** on `main` (pushed; carries the `app-release.json` bump →
+the 1.12.0 app OTA offer is live), device-OTA repo published as gh-pages
+**`cff585f`** (`nexusq-mqtt` 0.1.0-r0 + `device-google-steelhead` 1.0-r67).
+⚠️ **The provisioning architecture then CHANGED the same day on Petr's
+direction — see §7** (the app is now the device's only credential provisioner;
+the dedicated `nexusq` broker user was deleted). §§2 and 4 below are kept as
+the honest history of the first iteration.
 
 ```
 Q (nexusq-mqtt) ──publish──▶ Mosquitto (TrueNAS, 192.168.20.102:1883)
@@ -66,7 +71,7 @@ list + a NEW **Phase 7c5** build/export block; `scripts/publish-ota-repo.sh`
 `output/nexusq-mqtt-0.1.0-r0.apk` + `device-google-steelhead-1.0-r67.apk`
 (signed, verified; **NOT yet published to the OTA repo** — pending Petr's go).
 
-## 2. Broker side — new MQTT user `nexusq` on the TrueNAS Mosquitto
+## 2. Broker side — new MQTT user `nexusq` on the TrueNAS Mosquitto (SUPERSEDED same day — see §7.1)
 
 - TrueNAS SCALE Mosquitto app (eclipse-mosquitto **2.0.22**,
   `192.168.20.102:1883`, container `ix-eclipse-mosquitto-mosquitto-1`).
@@ -100,9 +105,11 @@ app ~20 h ago — intentional, left alone) and telemetry correctly reports them 
   (`lib/screens/health_screen.dart`): status, problem flags, vitals, OPP residency
   bars, service chips, WiFi card. Retained topics make it **populate instantly**
   on connect.
-- Manual **"Connect to MQTT" dialog** — **Petr's decision: hand-entered broker
-  creds, editable; NO auto-provisioning verb, NO protocol change** (the app reads
-  the broker, not the control socket — PROTOCOL.md untouched). Creds live in
+- Manual **"Connect to MQTT" dialog** — hand-entered broker creds, editable; at
+  this point NO auto-provisioning verb, NO protocol change (the app read the
+  broker only, the device was provisioned over ssh). **Superseded the same day:
+  Petr then directed the opposite — the app MUST provision the device (§7.2,
+  PROTOCOL §13, app 1.13.0).** Creds live in
   `flutter_secure_storage` (Android Keystore / iOS Keychain) — the broker password
   guards more than the Q, it must not sit in plaintext SharedPreferences.
 - Subscriber in `lib/mqtt/{mqtt_settings,health_mqtt}.dart` using
@@ -134,13 +141,108 @@ app ~20 h ago — intentional, left alone) and telemetry correctly reports them 
 4. librespot + shairport-sync **masked** on the device = intentional user state
    (app toggles), not a fault — see §3.
 
-## 6. Where to continue
+## 6. Where to continue (all three DONE later 2026-08-10)
 
-- `git commit` the working tree (Petr's go) — implementation is all uncommitted.
-- OTA publish: `publish-ota-repo.sh` with the built `nexusq-mqtt-0.1.0-r0` +
-  `device-google-steelhead-1.0-r67` apks (Petr's go).
-- App release: the `app-v1.12.0` gh release + apk **exist**; the staged
-  `companion/app-release.json` bump ships with the commit+push (Petr's go) —
-  that push is what makes phones see the update.
-- Later: broker `acl_file`; the non-hermetic connect-gate test; MQTT telemetry
-  was PLAN task (2) — task (1) (USB audio back into PA via snd-aloop) remains.
+- ✅ `git commit` — landed as **`b49b536`** on `main`, pushed.
+- ✅ OTA publish — gh-pages **`cff585f`** (`nexusq-mqtt-0.1.0-r0` +
+  `device-google-steelhead-1.0-r67`).
+- ✅ App release — `app-v1.12.0` gh release + the pushed `app-release.json`
+  bump → the phone OTA offer is live.
+- Still later: broker `acl_file`; the non-hermetic connect-gate test; PLAN
+  task (1) (USB audio back into PA via snd-aloop) remains.
+
+---
+
+## 7. Same-day follow-up (later 2026-08-10) — provisioning architecture changed: the APP provisions the device
+
+### 7.1 Petr rejected the dedicated `nexusq` broker user — DELETED
+
+Petr: *"that's not another user at all, delete it — it just connects with our
+petronijus"*. So:
+
+- The `nexusq` user was **removed from the Mosquitto `password_file`** — the
+  broker is back to its original three users (`petronijus`, `ustredna`,
+  `sumperak`) — and the 1Password item **"MQTT nexusq (Nexus Q telemetry)" was
+  DELETED**.
+- The Q connects as **`petronijus`** (the household broker login). Its password
+  now lives in the 1Password item **"MQTT broker"** (saved by Petr).
+- The broker host is referred to as **`mqtt.home.arpa`** (→ 192.168.20.102).
+- The no-ACL caveat from §2 stands unchanged (and matters slightly more now —
+  the device holds the full household login; accepted, Petr's call).
+
+### 7.2 The app is the ONLY provisioner — `nexusq-control` r28, PROTOCOL §13
+
+Petr: *"appka to musí nexusu provisionovat"*, *"nemůžeš to dát do nexusu
+natvrdo"*. Implemented as **PROTOCOL.md §13** (written in `companion/PROTOCOL.md`
+— normative there, not duplicated here) on **`nexusq-control` r28**:
+
+- **`setMqttConfig`** — validate → **atomic 0600 write** of
+  `/etc/nexusq/mqtt.json` (0600 tempfile + rename, never world-readable even
+  transiently) → `systemctl restart nexusq-mqtt` (Condition* is evaluated at
+  unit start, so the restart is what arms the first provision). Password taken
+  **verbatim** (no strip) and **never logged, never returned** by any verb.
+- **`getMqttStatus`** — password-less provisioning state + the
+  `nexusq-mqtt.service` active state; event **`mqttStatusChanged`** pushed to
+  every subscribed client on a successful provision.
+- **Security note recorded in §13:** the creds transit the unauthenticated
+  plaintext LAN control link (TCP 45015) — same trust level as every other
+  verb; accepted trade-off, Petr's call.
+- New host tests `userspace/nexusq-control/tests/test_mqtt_config.py` (7 tests;
+  the control suite is now **13 tests, all green**).
+- The **r28 apk is already OTA-published** (gh-pages **`e428bef`**, 2026-08-10)
+  — the live device pulls it via the app's update flow; the r28 **source** is
+  what's still uncommitted (§7.6).
+
+### 7.3 App 1.12.1+32 (grey-screen fix) → 1.13.0+33 (provisioning)
+
+- **1.12.1** fixed the **Health-panel grey-screen crash** in 1.12.0: a null cast
+  on absent `led_stall`/`pstore` in an *empty* state map — `(x ?? 0) is num &&
+  (x as num) …` looked guarded but tested the FALLBACK and cast the ORIGINAL.
+  The daemon deliberately omits unavailable fields (§1), so every read must
+  tolerate an absent key. `healthProblems()` extracted top-level + regression
+  test `test/health_problems_test.dart`.
+  - Debug trail: diagnosed **over adb** — uiautomator-driven repro on Petr's
+    phone + the `logcat` stack trace pinned the cast. A `notAuthorized` broker
+    refusal seen along the way was simply **mistyped creds on the phone**, not
+    a bug.
+- **1.13.0**: Save in the "Connect to MQTT" dialog **ALSO provisions the
+  device** via `setMqttConfig` (`HealthScreen` now takes the `NexusQClient`;
+  a graceful message when the device build predates r28). Nothing hand-edited
+  on the Q anymore.
+- Both installed on Petr's phone **via adb** (testing); the OTA release of
+  1.13.0 is the imminent next step — the `app-release.json` bump to 1.13.0/33
+  is **already staged in the working tree**, so the `app-v1.13.0` gh release
+  (with the apk asset) must exist before the commit is pushed.
+
+### 7.4 Live end-to-end PROVEN
+
+Petr filled the dialog with the `petronijus` creds → the app provisioned the Q
+(`getMqttStatus`: host `mqtt.home.arpa`, username `petronijus`, `active`) → the
+phone Health panel went Live with data → HA still fed.
+
+### 7.4b `nexusq-mqtt` r0 → r1 (uncommitted, not yet OTA-published): rolling 1 h OPP-residency window
+
+The 30 s publish-to-publish OPP shares swung wildly (one governor burst = tens
+of percent — Petr: "lítá to úplně jak se to zlíbí"). r1 reports the residency
+over a **rolling 1 h window** (`window_residency()`, `NQMQTT_OPP_WINDOW_S`
+default 3600): honestly shorter until an hour of history exists (since daemon
+start), and a kernel counter reset **discards the history** rather than
+poisoning an hour of readings. Daemon tests 25 → **28**, all green. The OTA
+index still carries r0 — publishing r1 rides with the next
+`publish-ota-repo.sh` run.
+
+### 7.5 v1.12.0 full image built (NOT flashed)
+
+The full pipeline was run and **all gates PASS** — the image bakes
+`nexusq-mqtt` r0 + device **r67** + control **r27** (r28 arrives via System
+OTA — already on gh-pages `e428bef`). Artifacts: `output/nexusq-boot-v1.12.0.img` +
+`output/nexusq-rootfs-v1.12.0-sparse.img` (+ `.sha256`). Ready to flash
+whenever; the live device already runs the same bits via OTA.
+
+### 7.6 State at the end of the day
+
+The §7 implementation (control r28, PROTOCOL §13, `nexusq-mqtt` r1, app
+1.12.1/1.13.0, tests, staged manifest bump) is **uncommitted in the working
+tree** (the r28 *apk* is already OTA-published, gh-pages `e428bef`; the
+`nexusq-mqtt` r1 apk is NOT); next steps = `app-v1.13.0` gh release → commit +
+push → OTA-publish r1 — see HANDOFF.md "WHERE TO CONTINUE".

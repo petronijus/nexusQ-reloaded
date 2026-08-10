@@ -596,6 +596,96 @@ def service_log(sid, lines=200):
     return {"id": sid, "name": s["name"], "lines": out}
 
 
+# --- MQTT telemetry provisioning (PROTOCOL §13) ------------------------------
+# The companion app is the ONLY provisioner of the broker credentials: they are
+# a per-home secret that must never be baked into the (public) image, and the
+# appliance has no other input surface. The app's "Connect to MQTT" dialog
+# saves the same credentials it uses itself and hands them to the device here;
+# nexusq-mqtt (ConditionPathExists on this file) then starts publishing.
+MQTT_CONF_PATH = os.environ.get("NEXUSQ_MQTT_CONF", "/etc/nexusq/mqtt.json")
+
+
+def _mqtt_service_active():
+    try:
+        r = subprocess.run(["systemctl", "is-active", "nexusq-mqtt.service"],
+                           capture_output=True, text=True, timeout=6)
+        return (r.stdout or "").strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def get_mqtt_status(path=None):
+    """Provisioning state WITHOUT the password — safe to hand any client."""
+    path = path or MQTT_CONF_PATH
+    st = {"configured": False, "host": "", "port": 1883, "username": "",
+          "prefix": "nexusq", "active": _mqtt_service_active()}
+    try:
+        with open(path) as f:
+            conf = json.load(f)
+        if isinstance(conf, dict):
+            st["configured"] = True
+            st["host"] = str(conf.get("host", ""))
+            st["port"] = conf.get("port", 1883)
+            st["username"] = str(conf.get("username", ""))
+            st["prefix"] = str(conf.get("prefix", "nexusq"))
+    except (OSError, ValueError):
+        pass
+    return st
+
+
+def set_mqtt_config(p, path=None):
+    """Validate + atomically write mqtt.json (0600) and restart nexusq-mqtt.
+
+    The password is accepted VERBATIM (no strip — trailing spaces could be
+    legitimate) and never logged; host/username are trimmed. The restart also
+    covers the first provision: Condition* is only evaluated at unit start, so
+    a restart after the file appears is exactly what arms the publisher."""
+    path = path or MQTT_CONF_PATH
+    host = p.get("host")
+    username = p.get("username")
+    password = p.get("password")
+    if not isinstance(host, str) or not host.strip():
+        raise Err("bad_request", "host required")
+    if not isinstance(username, str) or not username.strip():
+        raise Err("bad_request", "username required")
+    if not isinstance(password, str) or not password:
+        raise Err("bad_request", "password required")
+    port = p.get("port", 1883)
+    if not isinstance(port, int) or not 0 < port < 65536:
+        raise Err("bad_request", "port must be 1..65535")
+    conf = {"host": host.strip(), "port": port,
+            "username": username.strip(), "password": password}
+    prefix = p.get("prefix")
+    if isinstance(prefix, str) and prefix.strip():
+        conf["prefix"] = prefix.strip()
+    interval = p.get("interval_s")
+    if isinstance(interval, int) and 10 <= interval <= 600:
+        conf["interval_s"] = interval
+    # atomic + never world-readable, even transiently: 0600 tempfile in the
+    # same directory, then rename over the target.
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(conf, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Err("unavailable", f"cannot write mqtt config: {e}")
+    log(f"mqtt config provisioned: {conf['host']}:{port} user={conf['username']}")
+    try:
+        subprocess.run(["systemctl", "restart", "nexusq-mqtt.service"],
+                       capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "nexusq-mqtt did not restart")
+    return get_mqtt_status(path)
+
+
 # --- system OTA: update the Nexus Q's OWN daemons from our GitHub-Pages apk repo -
 # The device already trusts the `pmos@local` build key (it is in /etc/apk/keys
 # from the image build), so it can install our signed packages straight from the
@@ -1079,6 +1169,14 @@ class Bridge:
             if not isinstance(sid, str) or not sid:
                 raise Err("bad_request", "id required")
             return service_log(sid, p.get("lines", 200)), []
+
+        # --- MQTT telemetry provisioning (PROTOCOL §13) --------------------
+        if method == "getMqttStatus":
+            return get_mqtt_status(), []
+        if method == "setMqttConfig":
+            st = set_mqtt_config(p)
+            # Push the (password-less) status so every client reconciles.
+            return st, [("mqttStatusChanged", st)]
 
         # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
         # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;

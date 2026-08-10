@@ -36,8 +36,13 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
   `temp_c`, `freq_mhz`, `governor`, `load1`, `mem_avail_mb`, `nexusqd_alive`,
   `led_stall`, `dmesg_err`, `pstore`
 - sampled live by this daemon (things healthd does not record):
-  - `opp350_pct` `opp700_pct` `opp920_pct` `opp1200_pct` — per-OPP share of
-    the publish window ("podíl frekvencí"), from `time_in_state` deltas
+  - `opp350_pct` `opp700_pct` `opp920_pct` `opp1200_pct` — per-OPP share
+    ("podíl frekvencí") from `time_in_state` deltas over a **rolling 1 h
+    window** (`NQMQTT_OPP_WINDOW_S`, default 3600 — r1; was publish-to-publish
+    30 s in r0, which swung wildly: one governor burst = tens of percent,
+    Petr: "lítá to úplně jak se to zlíbí"). Until an hour of history exists
+    the window is honestly shorter (since daemon start); a kernel counter
+    reset discards the history rather than poisoning an hour of readings
   - `wifi_rssi_dbm`, `wifi_ssid` — `iw dev wlan0 link`
   - `volume_pct`, `muted` — the mixer that currently owns the output: TAS5713
     hardware mixer while USB-audio's alsaloop bridges the gadget straight to
@@ -57,18 +62,30 @@ Discovery creates one device ("Nexus Q" / the name from
 - binary sensors: Spotify Connect / AirPlay / Roon / USB Audio (running),
   LED daemon + Health sampler (problem class — ON means something is wrong)
 
-## Configuration (NOT baked into the image)
+## Configuration (NOT baked into the image — provisioned by the companion app)
 
 Broker credentials are per-home secrets — the (public) image ships **no**
 config and the unit has `ConditionPathExists`, so an unprovisioned device
-skips the service cleanly. Provision over ssh:
+skips the service cleanly.
+
+**The companion app is the provisioner** (since 2026-08-10, `nexusq-control`
+r28 / app 1.13.0 — Petr's direction: "appka to musí nexusu provisionovat"):
+saving the app's **"Connect to MQTT" dialog** calls `setMqttConfig`
+(`companion/PROTOCOL.md` **§13**) on the control bridge, which validates,
+**atomically writes** `/etc/nexusq/mqtt.json` (0600 tempfile + rename — never
+world-readable, even transiently; password verbatim, never logged or returned)
+and restarts this service (Condition* is only evaluated at unit start, so the
+restart is what arms the first provision). `getMqttStatus` reports the
+password-less state + the unit's active state.
+
+Manual fallback / file format reference (ssh):
 
 ```sh
 cat > /etc/nexusq/mqtt.json <<'EOF'
 {
-  "host": "192.168.20.102",
+  "host": "mqtt.home.arpa",
   "port": 1883,
-  "username": "nexusq",
+  "username": "…",
   "password": "…",
   "interval_s": 30,
   "prefix": "nexusq",
@@ -80,7 +97,9 @@ systemctl restart nexusq-mqtt   # Condition* is only evaluated at start
 ```
 
 Only `host`, `username`, `password` are required; the rest defaults as shown.
-`interval_s` is clamped to 10–600.
+`interval_s` is clamped to 10–600. (In Petr's home the Q logs in with the
+household broker user — a dedicated device user was rejected + deleted
+2026-08-10.)
 
 ## Enablement
 
@@ -103,5 +122,6 @@ python3 -m unittest discover -s userspace/nexusq-mqtt/tests -v
 Covered: MQTT wire encoding (CONNECT flags/Will/auth, retain bit,
 remaining-length boundaries, CONNACK refusal, dead-broker detection), config
 validation, health-tail parsing (torn lines, staleness), OPP residency math
-(window delta + counter-reset fallback), discovery payload contract
-(unique_ids, shared topics, device block), identity fallbacks.
+(rolling-window pruning + since-boot fallback + counter-reset discard),
+discovery payload contract (unique_ids, shared topics, device block),
+identity fallbacks. 28 tests as of r1.

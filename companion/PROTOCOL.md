@@ -788,3 +788,46 @@ success (which also stops the spin). The daemon track (§12.3) keeps the determi
 — its upgrade is small and short. Guarded by the same install lock (`Err "busy"`); the
 install can drop the app link (bridge restart / reboot) — that is **expected**, success
 is confirmed by reconnect + re-check.
+
+## 13. MQTT telemetry provisioning — v1.12.x (dev)
+
+The Q publishes health telemetry over the home MQTT broker (`nexusq-mqtt`
+daemon → `nexusq/health/state` + Home Assistant discovery). The broker
+credentials are a **per-home secret**: they are never baked into the (public)
+image, and the appliance has no input surface of its own — so **the companion
+app is the only provisioner**. The app's "Connect to MQTT" dialog saves the
+credentials for its own subscription AND hands the same values to the device
+here. The device stores them in `/etc/nexusq/mqtt.json` (0600, root-only);
+`nexusq-mqtt` has `ConditionPathExists` on that file and is restarted by the
+provision call, which is what arms it the first time.
+
+### 13.1 `getMqttStatus`
+
+→ `{}`
+← `{"configured": bool, "host": str, "port": int, "username": str,
+    "prefix": str, "active": "active"|"inactive"|"unknown"}`
+
+The **password is never returned** — by any verb, ever. `active` is the
+`nexusq-mqtt.service` unit state (a truthful "is the device publishing").
+
+### 13.2 `setMqttConfig`
+
+→ `{"host": str, "username": str, "password": str,
+    "port"?: int (1..65535, default 1883), "prefix"?: str (default "nexusq"),
+    "interval_s"?: int (10..600, dropped when out of range)}`
+← the same shape as `getMqttStatus` (password-less), after the restart.
+
+Errors: `bad_request` (missing/empty host, username or password; bad port
+type/range), `unavailable` (config not writable), `timeout` (restart hung).
+The write is atomic (0600 tempfile + rename — never world-readable, even
+transiently); host/username are trimmed, the **password is taken verbatim**
+(trailing whitespace could be legitimate). The password is never logged.
+
+Event: `mqttStatusChanged` (the password-less status) is pushed to every
+subscribed client so their MQTT panels reconcile.
+
+Security note (accepted trade-off, Petr's call 2026-08-10): the credentials
+transit the **unauthenticated plaintext LAN TCP 45015** control link — the
+same trust level as every other verb (anyone on the LAN can already control
+the device). The alternative (a dedicated low-privilege broker user for the
+device) was rejected in favour of one household broker login.

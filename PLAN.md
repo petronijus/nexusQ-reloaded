@@ -4,9 +4,9 @@ Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 > **✅ DONE (2026-08-10) — MQTT health telemetry → Home Assistant + app (PLANNED-NEXT
-> task 2, end-to-end; uncommitted — commit + device-OTA publish + app
-> OTA-manifest push pending Petr's go; the app apk itself is released as
-> `app-v1.12.0`).** NEW aport **`nexusq-mqtt`** (0.1.0-r0, noarch; `userspace/nexusq-mqtt/`,
+> task 2, end-to-end; SHIPPED — commit `b49b536` pushed, device-OTA published as
+> gh-pages `cff585f`, app released as `app-v1.12.0` + manifest live).**
+> NEW aport **`nexusq-mqtt`** (0.1.0-r0, noarch; `userspace/nexusq-mqtt/`,
 > 25 host tests): pure-Python **stdlib** MQTT 3.1.1 publisher (CONNECT+auth+LWT,
 > QoS0+retain, PINGREQ dead-link detection, reconnect+backoff) publishing every
 > 30 s — retained `nexusq/health/state` JSON, `nexusq/status` online/offline LWT,
@@ -17,20 +17,32 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > SECRET, never baked; unit = `ConditionPathExists`, NO `After=` (ordering-cycle
 > rule); enablement self-contained (baked wants-symlink + own 96-preset). Device
 > r66→**r67** (`depends += nexusq-mqtt`); docker-build Phase **7c5**;
-> `publish-ota-repo.sh` += nexusq-mqtt (apks **built + signed, NOT published**).
-> Broker: new user `nexusq` on the TrueNAS Mosquitto (192.168.20.102:1883; pw in
-> 1Password "MQTT nexusq (Nexus Q telemetry)"; ⚠️ broker has NO acl_file).
+> `publish-ota-repo.sh` += nexusq-mqtt (apks published, gh-pages `cff585f`).
+> ⚠️ broker has NO acl_file.
 > **DEPLOYED LIVE: 18 entities in Home Assistant with real values** (79.9 °C,
 > 1200 MHz conservative, −28 dBm, volume 45 %); mkinitfs trigger passed — the
-> Option-A `/boot` fix holds. **App 1.11.2+30 → 1.12.0+31** (apk published as gh
-> release `app-v1.12.0`; the `app-release.json` bump is staged uncommitted — the
-> OTA offer goes live on push): Settings → "Device health" `HealthScreen` + manual
-> "Connect to MQTT" dialog (hand-entered creds in the platform secure store; NO
-> protocol change). Known: `connect_gate_setup_entry_test` is NOT hermetic (real
+> Option-A `/boot` fix holds. **App 1.11.2+30 → 1.12.0+31** (apk released as gh
+> release `app-v1.12.0`, manifest live): Settings → "Device health" `HealthScreen`.
+> **SAME-DAY FOLLOW-UP (Petr's direction — provisioning architecture changed,
+> uncommitted):** the dedicated `nexusq` broker user was REJECTED + deleted
+> (1P item too) — the Q connects as the household **`petronijus`** login
+> (pw in 1P "MQTT broker"; broker = `mqtt.home.arpa`), and **the companion app
+> is the device's ONLY credential provisioner**: `nexusq-control` **r28**
+> (PROTOCOL **§13** `setMqttConfig`/`getMqttStatus` + `mqttStatusChanged`;
+> atomic 0600 write, password verbatim + never logged/returned; 13 control
+> tests green; r28 apk OTA-published gh-pages `e428bef`, source uncommitted)
+> + app **1.12.1+32** (Health-panel grey-screen crash fix, null
+> cast on absent led_stall/pstore) → **1.13.0+33** (dialog Save also provisions
+> the device). Live-proven end-to-end; the **v1.12.0 full image is built, all
+> gates PASS** (bakes mqtt r0 + device r67 + control r27 — r28 via System OTA;
+> **NOT flashed**). Also uncommitted: **nexusq-mqtt r1** — OPP residency over a
+> **rolling 1 h window** (30 s shares swung wildly; 28 daemon tests green; r1
+> not yet OTA-published). Known: `connect_gate_setup_entry_test` is NOT hermetic (real
 > mDNS — fails with a live Q on the LAN); an internet-only outage still bounces
 > the Q off the LAN (watchdog pings the gateway; self-healed on new lease
-> `.246`). Record: `docs/2026-08-10-mqtt-health-telemetry.md`. **Task (1) — USB
-> audio back into PA via snd-aloop — REMAINS (see PLANNED NEXT below).**
+> `.246`). Record: `docs/2026-08-10-mqtt-health-telemetry.md` (§7 = follow-up).
+> **Task (1) — USB audio back into PA via snd-aloop — REMAINS (see PLANNED NEXT
+> below).**
 >
 > **✅ DONE (2026-08-09/10) — System OTA spurious "system update failed" + weak app
 > reporting.** The "failed" was a concurrent `apk` CHECK (the app polling
@@ -93,7 +105,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > before the `default.target` symlink (clean build was failing) + a
 > **`OTA_PACKAGES_ONLY=1`** two-package build gate in `docker-build.sh`. **⚠️ NEW
 > ISSUES (2 diagnosed on-device 2026-08-08, both now RESOLVED):**
-> **(1) ✅ FIXED (2026-08-09, device r65, committed `2dccd3a` — push + OTA pending):
+> **(1) ✅ FIXED (2026-08-09, device r65, committed `2dccd3a` + pushed; OTA published gh-pages `d983b3f`):
 > USB-Audio-in delay + idle CPU/heat.** Was: ~3 min playback drift over a long session
 > (`module-alsa-source` reported a bogus uptime-growing latency that poisoned
 > `module-loopback`'s resampler, pegging the ±1 % rail) AND steady CPU + heat in
@@ -115,7 +127,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (`deviceinfo_flash_kernel_on_update` unset). Kernel OTA itself is still Phase 2.
 > Record: `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 >
-> **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only, uncommitted dev).**
+> **2026-08-03 — ✅ COMPANION APP RUNS ON iOS (app-side only; since committed as `5ba6a9e`).**
 > Verified on the **iPhone 17 simulator, iOS 26.5** (Flutter 3.44 / Xcode 26.6;
 > `flutter build ios --release --no-codesign` → 18.8 MB Runner.app; app stays
 > **1.11.0+28**, no device/image change). Discovery on iOS is **native Bonjour**
@@ -697,7 +709,7 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
   r4): `_tick` no longer opens the socket; `start_control()` is idempotent; fd flat at
   8.** Found on the first try by the app's new debug log.
 
-### ✅ DONE: USB-Audio bridge redesign — direct alsaloop (2026-08-09, device r65, committed `2dccd3a`; push + OTA pending)
+### ✅ DONE: USB-Audio bridge redesign — direct alsaloop (2026-08-09, device r65, committed `2dccd3a` + pushed; OTA published gh-pages `d983b3f`)
 Two on-device findings, **one fix** — the PulseAudio `module-alsa-source` →
 `module-loopback` bridge on the async UAC2 capture was replaced wholesale:
 - **Was: playback drifts ~3 min late over a long session** — the loopback's
