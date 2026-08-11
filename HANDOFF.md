@@ -84,20 +84,59 @@ PA via snd-aloop) remains. The telemetry milestone itself is SHIPPED: commit
   (autoReconnect). Since the same-day follow-up (**1.13.0**) the dialog's Save
   **also provisions the device** (§13) — see the Follow-up block above.
 
-### WHERE TO CONTINUE (all pending Petr's go)
-1. **App release 1.13.0 FIRST** — `gh release create app-v1.13.0` with the apk
+### WHERE TO CONTINUE (2026-08-11 → next) — device r68 needs a BUILD on the desktop
+
+`abfffb2` is pushed: `nq-healthd` r68 (cgroup-first unit state — kills the
+per-sample `systemctl` churn — plus `opp_ms`/`opp_trans` kernel-counter
+residency), `device-google-steelhead` **r67 → r68**, the standing idle goal in
+PLAN.md, and `docs/2026-08-11-overnight-telemetry-analysis.md`.
+
+⚠️ **Source + pkgrel only — NOT built, NOT OTA-published.** The analysis and the
+fix were done from **claudebox (`server-linux`)**, which has **no docker and no
+ARM binfmt**, so the build could not run there. It must run on the **desktop
+(petronijus-PC, Linux)** where the warm `nexusq-workdir` volume lives:
+
+```bash
+cd ~/Documents/Dev/nexusQ-reloaded && git pull
+docker build -t nexusq-builder .
+docker rm -f nexusq-build 2>/dev/null || true
+docker run --rm --privileged \
+    -e OTA_PACKAGES_ONLY=1 -e OTA_PACKAGES="device-google-steelhead" \
+    -v "$PWD:/src:ro" \
+    -v nexusq-output:/tmp/output \
+    -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
+    --name nexusq-build \
+    nexusq-builder /src/docker-build.sh 2>&1 | tee /tmp/nexusq-build.log
+# export the signed apk out of the volume:
+docker run --rm -v nexusq-output:/data -v "$PWD/output:/out" alpine:3.21 \
+    sh -c 'cp /data/*.apk /out/'
+```
+
+Only `device-google-steelhead` changed, so the default two-package set is
+narrowed to it. Then `scripts/publish-ota-repo.sh` — and note **`nexusq-mqtt` r1
+is still unpublished** (below), so publishing both together is the efficient move.
+
+**After the OTA lands, verify the fix on the live device** — the point of r68 is
+the idle goal, so measure it properly: leave the Q idle with no ssh session and
+read `opp_ms` out of `health.jsonl` (never `freq`). Target = as close to 100 % at
+350 MHz as possible; baseline to beat is 56.7 %.
+
+### WHERE TO CONTINUE (2026-08-10; items 1-2 DONE in `39a6a46`, 3-5 still open)
+1. ~~**App release 1.13.0 FIRST**~~ — **DONE**, released + manifest live.
+   *(original note kept for context)* — `gh release create app-v1.13.0` with the apk
    asset: the `companion/app-release.json` bump to **1.13.0/33 is already
    staged in the working tree** and points at that release URL, so the release
    must exist **before** the commit is pushed (1.12.1/1.13.0 are on Petr's
    phone via adb only; the live manifest still offers 1.12.0).
-2. **git commit + push** — the **follow-up** implementation is uncommitted on
-   `main` (modified: `companion/PROTOCOL.md` §13,
+2. ~~**git commit + push**~~ — **DONE** as `39a6a46`. *(was: the **follow-up**
+   implementation is uncommitted on
+   `main` — modified: `companion/PROTOCOL.md` §13,
    `userspace/nexusq-control/nexusq-control` r28, `pmos/nexusq-control/APKBUILD`,
    `userspace/nexusq-mqtt/nexusq-mqtt` + tests + `pmos/nexusq-mqtt/APKBUILD` r1,
    app `health_screen.dart` / `settings_screen.dart` / `pubspec.yaml` 1.13.0+33,
    `companion/app-release.json`; new:
    `userspace/nexusq-control/tests/test_mqtt_config.py`,
-   `companion/app/test/health_problems_test.dart`).
+   `companion/app/test/health_problems_test.dart`.)
 3. **OTA publish `nexusq-mqtt` r1** — `publish-ota-repo.sh` (control **r28 is
    already published**, gh-pages **`e428bef`**; the telemetry apks r0/r67 went
    live earlier as `cff585f` — only the r1 rolling-window fix is missing).
