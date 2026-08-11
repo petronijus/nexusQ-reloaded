@@ -3,6 +3,56 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🎯 STANDING GOAL — idle OPP residency
+>
+> **With every streaming service off and nothing playing — the Q just sitting
+> there asleep — the CPU should spend as close to 100 % of the time at
+> `350 MHz` as possible, and an absolute minimum at any OPP above it.**
+>
+> This is the number every idle-power change is iterated against. It is not a
+> nice-to-have: 350 MHz is the only OPP at 1025 mV, so residency above it is
+> where the idle heat and the ~65 °C floor come from.
+>
+> - **Baseline to beat: 56.7 % @ 350 MHz** (v1.8.2, 542 s idle study,
+>   2026-07-13 — up from 25.6 % on v1.8.1). Secondary metric from the same
+>   study: **~4.2 governor transitions/s** on `conservative` (was 17.5/s on
+>   `ondemand`'s sawtooth).
+> - **Measure it from `opp_ms`** in `health.jsonl` (device r68+, kernel
+>   `time_in_state` deltas) or the MQTT `opp*_pct` rolling window. **Never from
+>   healthd's `freq` field** — that is a spot read taken inside healthd's own
+>   busy tick and is observer-biased: over a 12 h capture it claimed 20.5 % at
+>   350 MHz where the kernel counter said **39.1 %**
+>   (`docs/2026-08-11-overnight-telemetry-analysis.md` §4).
+> - **Judge idle only from an on-device self-logging capture with no live ssh
+>   session** — an open session pushes the die 74–79 °C within seconds and
+>   drags the OPP up with it (2026-07-13 Finding 1).
+
+> **✅ DONE (2026-08-11) — healthd stopped distorting what it measures (device r68).**
+> Two fixes out of the 12 h overnight-telemetry analysis
+> (`docs/2026-08-11-overnight-telemetry-analysis.md`):
+> **(1) the per-sample `systemctl` churn is gone.** With librespot *masked*
+> (app's "Spotify off") its MainPID is 0 forever, so the r40 "query systemd only
+> on transitions" rule degenerated into querying **every** sample — and each
+> `systemctl -M user@` makes pid 1 build and tear down a full PAM login session:
+> **~600 sessions/h, pid 1 back to 4 % CPU**, worse than the 3.4 % the r40
+> rewrite existed to fix. Both units are now resolved **cgroup-first**
+> (`cgroup.procs`, fork-free, instant — the same pattern `nexusq-control` took in
+> `098b50f`); systemd is asked only on a real (re)start or once per
+> `NQ_UNIT_REFRESH_S` (default 300 s) so `failed`/`inactive`/masked and
+> `NRestarts` stay honest. Measured on-device (A/B from `/tmp` with a `systemctl`
+> shim counting invocations): over 9 samples **r67 = 10 calls** (9 of them the
+> per-sample librespot probe) vs **r68 = 2**; at the default refresh that is
+> **60× fewer**, and `NQ_UNIT_REFRESH_S=20` fires exactly 4× in 65 s, so a
+> stopped unit's state still cannot go stale.
+> **(2) OPP residency is now measured, not guessed:** new `opp_ms`
+> (per-OPP ms since the previous sample, from kernel `time_in_state`) and
+> `opp_trans` (governor transitions in the same window) — `{}`/`-1` on the first
+> sample and after a counter reset rather than a poisoned window. Live-verified:
+> `opp_trans` reads **~4.2/s**, matching the independent 2026-07-13 governor
+> study. Also `rotate_if_big` now uses `stat` instead of busybox `wc -c`, which
+> was reading the whole 4 MB log every 5 s.
+> **NOT yet built or OTA-published** — source + pkgrel only.
+
 > **✅ DONE (2026-08-10) — MQTT health telemetry → Home Assistant + app (PLANNED-NEXT
 > task 2, end-to-end; SHIPPED — commit `b49b536` pushed, device-OTA published as
 > gh-pages `cff585f`, app released as `app-v1.12.0` + manifest live).**
