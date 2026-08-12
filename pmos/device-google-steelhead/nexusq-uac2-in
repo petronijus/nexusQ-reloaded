@@ -94,6 +94,27 @@ MOD_SRC=$(pa load-module module-alsa-source device="hw:$ALOOP,1,$SUB" \
 	rate=48000 channels=2 format=s16le)
 MOD_LB=$(pa load-module module-loopback source="$SRC" latency_msec="$LOOPLAT")
 
+# module-loopback's sink-input can come up MUTED / attenuated: module-stream-restore
+# restores a saved volume/mute for the "Loopback from USBAudio" stream, and a stale
+# 0%/muted entry makes USB audio silent while everything else (amp, source) looks
+# fine. Force the stream to unity, unmuted — USB audio is a full-level passthrough;
+# loudness belongs to the sink (ring) + the source, not this internal hop. Retry a
+# few ticks because the sink-input appears just after the module loads.
+if [ -n "$MOD_LB" ]; then
+	j=0
+	while [ "$j" -lt 10 ]; do
+		si=$(pactl list sink-inputs 2>/dev/null | awk -v m="$MOD_LB" '
+			/^Sink Input #/{id=substr($3,2)}
+			/Owner Module:/{if ($3==m) {print id; exit}}')
+		[ -n "$si" ] && break
+		j=$((j + 1)); sleep 1
+	done
+	if [ -n "$si" ]; then
+		pa set-sink-input-mute "$si" 0
+		pa set-sink-input-volume "$si" 100%
+	fi
+fi
+
 # Supervise alsaloop: if it drops on its own (host stop/start, xrun) restart just
 # it; the PA modules stay loaded (the aloop capture underruns harmlessly in the
 # gap). A real stop runs the trap above instead. `wait` is interruptible so SIGTERM
