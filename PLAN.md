@@ -109,6 +109,23 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > upgradable package = "a few still pending", not a blanket "failed"). Live +
 > OTA-published + on Petr's phone.
 >
+> **FOLLOW-UPS (2026-08-10 late, Petr):** (a) **HA switches for the audio
+> services** (Spotify/AirPlay/Roon/USB Audio toggles on the KolacicekAPrdelcicka
+> board — a "Nexus Q" view with gauge/vitals/shares/services/history was added
+> 2026-08-10) — MQTT command topics + HA `switch` discovery in nexusq-mqtt,
+> wired to the same set_service path nexusq-control uses; **deferred until after
+> the idle performance work**. (b) **Idle load/heat investigation → RESOLVED by
+> the 2026-08-11 overnight telemetry (device r68).** The real idle-load driver was
+> **`nq-healthd` itself**, not the ssh/adb observer-effect hypothesis first noted
+> here: with librespot *masked* it ran `systemctl -M user@` **every 5 s**, opening
+> and tearing down a full PAM login session per tick (~600/h → pid 1 back to 4 %
+> CPU). Fixed r68 (cgroup-first unit state, 60× fewer `systemctl` calls); see
+> `docs/2026-08-11-overnight-telemetry-analysis.md` §5. *(Original hypothesis, kept
+> for context: pid 1 D-state in `cgroup_lock_and_drain_offline` / `brcmf_escan_timeout`
+> storms — the 12 h capture found WiFi flawless, so the escan storms are a separate
+> occasional dmesg finding, not the load cause.)* Idle-goal residency is now read
+> honestly from `opp_ms`; baseline to beat = **56.7 % @ 350 MHz** (see STANDING GOAL).
+>
 > **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr — task (2) ✅ DONE
 > 2026-08-10 (see the top note); task (1) remains:**
 >
