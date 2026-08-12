@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=68
+pkgrel=69
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -407,10 +407,10 @@ package() {
 	# on every interface; the wrapper pins it to the live wlan0 IPv4
 	# (--zeroconf-interface) so it never announces the usb0 gadget IP, and avahi is
 	# constrained to wlan0 in the post-install.
-	# NB asound.conf is still installed: the "nexusq"/snd-aloop loopback it defines
-	# feeds nexusqd's LED music-visualizer tap (arecord hw:Loopback,1). That tap
-	# will move to a PA monitor source when the companion bridge is reworked; until
-	# then librespot no longer writes the loopback, so the visualizer is dormant.
+	# asound.conf is now a retired stub: its old "nexusq"/snd-aloop tee + softvol
+	# had no consumer left (librespot moved to --device pulse; the visualizer reads
+	# arecord -D pulse off the PA monitor). The Loopback substream it used to feed
+	# is now claimed by the USB Audio hop (nexusq-uac2-in). Kept installed for docs.
 	install -Dm644 "$srcdir"/asound.conf \
 		"$pkgdir"/etc/asound.conf
 	install -Dm755 "$srcdir"/librespot-nexusq \
@@ -468,10 +468,12 @@ package() {
 		"$pkgdir"/usr/bin/roon-nexusq
 	install -Dm644 "$srcdir"/roon.service \
 		"$pkgdir"/usr/lib/systemd/user/roon.service
-	# USB Audio input: UAC2 gadget capture -> PA loopback -> TAS5713 amp. OFF by
-	# default (NO default.target.wants symlink, like Roon) — the app's "usbaudio"
-	# toggle enables it on demand. The gadget's UAC2 function itself lives in
-	# nexusq-usb-gadget.sh; this is just the always-optional PA wiring.
+	# USB Audio input: UAC2 gadget capture -> alsaloop -> snd-aloop (Loopback) ->
+	# PA module-alsa-source usb_in -> module-loopback -> default sink, so it mixes
+	# with Spotify/AirPlay/Roon (see nexusq-uac2-in for the stable-clock rationale).
+	# OFF by default (NO default.target.wants symlink, like Roon) — the app's
+	# "usbaudio" toggle enables it on demand. The gadget's UAC2 function itself
+	# lives in nexusq-usb-gadget.sh; this is just the always-optional PA wiring.
 	install -Dm755 "$srcdir"/nexusq-uac2-in \
 		"$pkgdir"/usr/bin/nexusq-uac2-in
 	install -Dm644 "$srcdir"/nexusq-uac2-in.service \
@@ -498,10 +500,10 @@ package() {
 	# over WiFi (the normal path).
 	install -Dm644 "$srcdir"/55_nexusq-control.nft \
 		"$pkgdir"/etc/nftables.d/55_nexusq-control.nft
-	# Load snd-aloop so the "nexusq" tee's loopback slave (hw:Loopback,0) exists.
-	# librespot's audio is duplicated to the speaker AND the loopback; nexusqd's
-	# tap (arecord on hw:Loopback,1, see userspace/nexusqd) reads it for the LED
-	# music visualizer.
+	# Load snd-aloop so the Loopback card (index 0) exists. It is the stable-clock
+	# hop for the USB Audio input: alsaloop writes hw:Loopback,0,0 and PA reads
+	# hw:Loopback,1,0 as source usb_in (see nexusq-uac2-in). Its options (index/id/
+	# substreams, incl. Roon's index-7 card) are in snd-aloop-options.conf.
 	install -Dm644 "$srcdir"/snd-aloop.conf \
 		"$pkgdir"/etc/modules-load.d/snd-aloop.conf
 

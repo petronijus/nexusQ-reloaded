@@ -2,38 +2,12 @@
 # Volume helper for the front-panel rotary ring. nexusqd runs this (as the `user`
 # session, uid 10000) for each ring detent / mute: arg is "up" | "down" | "mute".
 #
-# TWO output paths:
-#  * Normally the ring drives the PulseAudio DEFAULT sink — i.e. whatever output
-#    (speaker / SPDIF / HDMI) is currently selected, mixing all the PA inputs
-#    (Spotify / AirPlay / Roon). `up` is capped at 100% — a raw `pactl +3%` runs
-#    past 100% into digital over-amplification (observed 477%).
-#  * When "USB Audio" is on, alsaloop bridges the gadget capture STRAIGHT to the
-#    TAS5713 amp and PulseAudio's sink is SUSPENDED (see nexusq-uac2-in), so a
-#    `pactl` volume change would hit a suspended, unused sink and do nothing
-#    audible. Detect that (alsaloop running) and drive the TAS5713 HARDWARE mixer
-#    instead: Master for level, the Speaker switch for mute.
-SPKR="${NQ_SPEAKER_CARD:-NexusQSpeaker}"
-STEP="${NQ_VOL_STEP:-4%}"
-# Per-source volume memory: USB audio keeps its OWN last level here so a toggle or
-# reboot restores it (nexusq-uac2-in reads this on start) instead of snapping back
-# to the safe default. The PA services (Spotify / AirPlay / Roon) mix into one
-# sink and keep THEIR shared level via PulseAudio's own device-restore.
-VOL_STATE="${NQ_UAC2_VOL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/nexusq/usbaudio-master}"
-
-if pgrep -x alsaloop >/dev/null 2>&1; then
-	case "$1" in
-		up)   amixer -c "$SPKR" -M sset Master "${STEP}+" >/dev/null 2>&1 ;;
-		down) amixer -c "$SPKR" -M sset Master "${STEP}-" >/dev/null 2>&1 ;;
-		mute) amixer -c "$SPKR" sset Speaker toggle       >/dev/null 2>&1
-		      exit 0 ;;  # mute is the Speaker switch, not a Master level to save
-	esac
-	# Remember the new Master level so USB audio comes back here next time.
-	v=$(amixer -c "$SPKR" -M sget Master 2>/dev/null | grep -o '[0-9]*%' | head -1)
-	[ -n "$v" ] && { mkdir -p "${VOL_STATE%/*}" 2>/dev/null
-	                 printf '%s\n' "$v" > "$VOL_STATE" 2>/dev/null; }
-	exit 0
-fi
-
+# The ring drives the PulseAudio DEFAULT sink — i.e. whatever output (speaker /
+# SPDIF / HDMI) is currently selected — so it is one unified knob over every PA
+# input mixing there: Spotify / AirPlay / Roon AND USB Audio, which is now a PA
+# source via the snd-aloop hop (see nexusq-uac2-in) instead of the old exclusive
+# hardware-mixer path. `up` is capped at 100%: a raw `pactl +3%` runs past 100%
+# into digital over-amplification (observed 477%).
 case "$1" in
 	up)
 		pactl set-sink-volume @DEFAULT_SINK@ +3%
