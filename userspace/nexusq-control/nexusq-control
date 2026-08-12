@@ -824,6 +824,35 @@ _KERNEL_PKG = "linux-google-steelhead"
 # Base packages whose upgrade only fully takes effect after a reboot (libc/init).
 _REBOOT_HINTS = ("musl", "systemd", "kmod", "eudev", "busybox", "openrc")
 
+# Which systemd services to restart when a given OTA package changes, so a new
+# binary actually starts running without waiting for the next reboot. Most of
+# our daemons ARE their own package (service name == package name), but two were
+# silently missed before r29: nq-healthd ships *inside* device-google-steelhead
+# (package name != service name), and nexusq-mqtt was never in the restart set
+# at all — so a device-config or telemetry upgrade left the OLD process running
+# until an unrelated reboot, while the app cheerfully reported "up to date".
+# nexusq-control restarts itself last (it drops the bridge), so it is handled
+# specially in _finish_system_update, not here.
+_PKG_RESTART = {
+    "nexusqd":                  ("nexusqd",),
+    "nexusq-btagent":           ("nexusq-btagent",),
+    "nexusq-setupd":            ("nexusq-setupd",),
+    "nexusq-mqtt":              ("nexusq-mqtt",),
+    "nexusq-control":           ("nexusq-control",),
+    "device-google-steelhead":  ("nq-healthd",),
+}
+
+
+def _services_for_changed(changed):
+    """Ordered, de-duplicated list of systemd services to restart for the set of
+    packages an upgrade actually changed (see _PKG_RESTART)."""
+    services = []
+    for pkg in changed:
+        for svc in _PKG_RESTART.get(pkg, ()):
+            if svc not in services:
+                services.append(svc)
+    return services
+
 
 def _uname_r():
     try:
@@ -887,8 +916,10 @@ def install_system_update():
             raise Err("unavailable",
                       f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
         changed = _apk_changed(r)
-        daemons = [p for p in ("nexusqd", "nexusq-btagent", "nexusq-setupd",
-                               "nexusq-control") if p in changed]
+        # Services (not package names) to restart — nq-healthd lives inside
+        # device-google-steelhead and nexusq-mqtt is its own daemon, both of
+        # which the old package-name list silently skipped (r29).
+        daemons = _services_for_changed(changed)
         reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
         return {"ok": True, "changed": changed, "daemons": daemons,
                 "rebootRecommended": reboot,
@@ -1303,7 +1334,11 @@ class Bridge:
         def _do():
             time.sleep(0.4)
             restarted_nexusqd = False
-            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
+            # nexusq-control is NOT restarted here — it kills the bridge, so it
+            # goes last (below). nq-healthd (device-google-steelhead) and
+            # nexusq-mqtt are cheap, stateless daemons safe to bounce anytime.
+            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd",
+                        "nexusq-mqtt", "nq-healthd"):
                 if svc in daemons:
                     try:
                         subprocess.run(["systemctl", "restart", svc],
