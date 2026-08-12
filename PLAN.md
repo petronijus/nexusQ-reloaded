@@ -147,8 +147,11 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr — task (2) ✅ DONE
 > 2026-08-10 (see the top note); task (1) remains:**
 >
-> **(1) ⏳ IMPLEMENTED 2026-08-12 (device r69) — pending Petr's listening test.**
-> USB Audio back into PulseAudio via a stable-clock snd-aloop hop:
+> **(1) ✅ DONE 2026-08-12 (device r70, v1.12.0) — live-verified by Petr: plays,
+> lip-sync holds (~130 ms), mixing works, LED visualizer pulses.** The r69 build
+> played silence until the r70 fix: `module-loopback`'s sink-input came up
+> muted/0 % from `module-stream-restore`; the service now forces it unmuted + 100 %
+> after load. USB Audio back into PulseAudio via a stable-clock snd-aloop hop:
 > `UAC2Gadget → alsaloop --sync=simple → hw:Loopback,0,0 → PA module-alsa-source
 > usb_in → module-loopback → default sink` (mirrors Roon; the alsaloop up front
 > converts the async gadget clock to the aloop's stable one, so PA never reads the

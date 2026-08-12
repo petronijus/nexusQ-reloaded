@@ -6,6 +6,49 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-08-12 — OTA everywhere (device · app · full-system) · MQTT health telemetry → Home Assistant + app · USB Audio as a mixing PulseAudio source · iOS app · idle-power made measurable
+
+### Changed — USB Audio back into PulseAudio via a stable-clock snd-aloop hop (2026-08-12, `device-google-steelhead` r68→r70; committed + OTA-published gh-pages `4d1d8e1`; live-verified)
+- Supersedes the r65/r68 exclusive direct-ALSA bridge (`alsaloop → hw:NexusQSpeaker`
+  + `suspend-sink`), which was efficient but took the amp exclusively — no mixing
+  with Spotify/AirPlay/Roon, no unified PA volume, and the LED visualizer went dark
+  (a suspended sink has no `.monitor`).
+- New path mirrors the proven Roon pattern with an `alsaloop` inserted up front to
+  convert the async gadget clock to a stable one:
+  `UAC2Gadget (async) → alsaloop --sync=simple → hw:Loopback,0,0 (snd-aloop,
+  timer-clocked) → PA module-alsa-source usb_in → module-loopback → default sink`.
+  PA's `module-alsa-source` now reads the STABLE aloop capture (sane latency) instead
+  of the async endpoint (which misreported latency as ~uptime → the r65 runaway to
+  minutes). Reuses the existing PULSE_IGNORE'd `Loopback` aloop card (spare
+  substreams) — no new card, no index reshuffle, `CONFIG_SND_ALOOP=y` drift
+  sidestepped. `asound.conf` tee retired to a stub; `nq-vol` reverted to the pure PA
+  `@DEFAULT_SINK@` path (one unified volume, Petr's call — the r66 per-source memory
+  is gone).
+- **r70 fix (found in the live test):** the `module-loopback` sink-input came up
+  `Mute:yes`/0% because `module-stream-restore` restored a stale muted entry —
+  hidden per-stream attenuation that silenced USB audio while amp/source/routing all
+  looked fine. The service now forces that sink-input unmuted + 100% (unity
+  passthrough) after loading. **Live-verified: plays, lip-sync holds (~130 ms total),
+  mixing works, LED visualizer pulses.**
+
+### Fixed — System update now restarts nq-healthd + nexusq-mqtt (2026-08-12, `nexusq-control` r29; OTA-published gh-pages `56aa4d0`)
+- `install_system_update` restarted only daemons whose service name equals their
+  package name, so `nq-healthd` (ships inside `device-google-steelhead`) and
+  `nexusq-mqtt` fell through — an app-driven update that changed either left the OLD
+  daemon running until an unrelated reboot while the app said "up to date". Now a
+  `_PKG_RESTART` package→service map drives the restart set. 6 new unit tests (suite
+  19/19).
+
+### Fixed — nq-healthd stopped distorting what it measures (2026-08-11, `device-google-steelhead` r68)
+- From a 12 h overnight telemetry run (`docs/2026-08-11-overnight-telemetry-analysis.md`):
+  (1) with librespot masked, healthd ran `systemctl -M user@` **every 5 s** → a full
+  PAM login session per tick (~600/h, pid 1 back to 4 % CPU) — now resolved
+  **cgroup-first** (fork-free), systemd queried only on a real (re)start or once per
+  `NQ_UNIT_REFRESH_S` (60× fewer). (2) New `opp_ms` / `opp_trans` (kernel
+  `time_in_state` deltas) — OPP residency is now MEASURED, not read from the
+  observer-biased `freq` spot sample. Standing idle goal recorded in PLAN.md
+  (56.7 % @ 350 MHz to beat).
+
 ### Changed — MQTT credentials: the companion app is the device's ONLY provisioner (2026-08-10 follow-up; `nexusq-control` r28 + app 1.13.0+33 — source uncommitted; the r28 apk is already OTA-published as gh-pages `e428bef`, the app OTA release of 1.13.0 is imminent)
 - **Petr rejected the dedicated `nexusq` broker user** ("that's not another user
   at all, delete it — it just connects with our petronijus"): the user was
