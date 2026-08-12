@@ -451,6 +451,27 @@ source (most often: `deviceinfo_systemd="always"` missing, `systemd = default`
 instead of `always`, or a missing `depends=`), and rebuild. Do not hand back a
 rootfs you have not mounted and verified.
 
+## Pruning `output/` — SAFELY (⚠️ read before deleting anything)
+
+Petr's standing rule is to prune old images after a build ("vzdycky to uklizej"),
+but **NEVER with a bare `rm -f *.img`** — that once deleted irreplaceable
+device-pull backups (`stock-boot.img`, `stock-adb-boot.img`, `p9-backup-*.img`;
+2026-08-12). Those `stock-*` / `p9-backup-*` / `private-*` files have no copy in
+git or the docker volume — deleting one is irreversible destruction of a backup.
+
+Prune ONLY with an EXCLUSION `find` (never a wildcard `rm`), and dry-run it first:
+
+```sh
+find output -maxdepth 1 -name '*.img' \
+  ! -name 'boot*.img' ! -name 'stock*.img' ! -name 'p9-backup*.img' \
+  ! -name 'google-steelhead.img' ! -name 'nexusq-rootfs-v<LATEST>-sparse.img' \
+  -print   # inspect, THEN swap -print for -delete
+```
+
+Keepers: the newest rootfs sparse + its boot.img, and ALL `stock-*`/`p9-backup-*`/
+`private-*` (they are tiny). Old dated/per-version rootfs+boot are the only dead
+weight. If unsure whether a file is a backup, do NOT delete it.
+
 ## What to return
 
 A short report: build outcome, artifact paths + sizes (boot.img, sparse rootfs),

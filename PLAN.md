@@ -147,7 +147,23 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr — task (2) ✅ DONE
 > 2026-08-10 (see the top note); task (1) remains:**
 >
-> **(1) USB Audio back into PulseAudio — "the proper way" (supersedes the r65
+> **(1) ⏳ IMPLEMENTED 2026-08-12 (device r69) — pending Petr's listening test.**
+> USB Audio back into PulseAudio via a stable-clock snd-aloop hop:
+> `UAC2Gadget → alsaloop --sync=simple → hw:Loopback,0,0 → PA module-alsa-source
+> usb_in → module-loopback → default sink` (mirrors Roon; the alsaloop up front
+> converts the async gadget clock to the aloop's stable one, so PA never reads the
+> async endpoint — that was the r65 runaway). Reuses the vestigial Loopback aloop
+> card (PULSE_IGNORE'd, spare substreams → no new card / no index reshuffle / drift
+> sidestepped). No suspend-sink → mixing + unified volume + visualizer restored.
+> nq-vol reverted to the pure PA `@DEFAULT_SINK@` path (unified volume, per Petr);
+> per-source `usbaudio-master` memory dropped. asound.conf tee retired to a stub.
+> BUILT + OTA-published (gh-pages `7131f8c`) + installed on the Q; **structural
+> test PASS** (start → usb_in+loopback+alsaloop load; stop → clean teardown, sink
+> IDLE). **STILL TO VERIFY WITH PETR:** real listening — mixing, lip-sync (tune
+> `NQ_UAC2_LOOPLAT`, start 120 ms), LED visualizer, and no delay-runaway over a
+> 30+ min session; needs the Xiaomi in USB-host mode. Original design notes below.
+>
+> **(1-orig) USB Audio back into PulseAudio — "the proper way" (supersedes the r65
 > direct-ALSA path).** r65 made USB audio EXCLUSIVE (alsaloop → hw:NexusQSpeaker,
 > PA sink suspended): efficient + no delay, but it lost MIXING with
 > Spotify/AirPlay/Roon, lost the unified PA volume (nq-vol was re-plumbed to the
