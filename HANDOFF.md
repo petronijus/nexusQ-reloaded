@@ -84,42 +84,44 @@ PA via snd-aloop) remains. The telemetry milestone itself is SHIPPED: commit
   (autoReconnect). Since the same-day follow-up (**1.13.0**) the dialog's Save
   **also provisions the device** (§13) — see the Follow-up block above.
 
-### WHERE TO CONTINUE (2026-08-11 → next) — device r68 needs a BUILD on the desktop
+### ✅ DONE (2026-08-12, petronijus-PC) — device r68 built, OTA'd, LIVE; + control r29
 
-`abfffb2` is pushed: `nq-healthd` r68 (cgroup-first unit state — kills the
-per-sample `systemctl` churn — plus `opp_ms`/`opp_trans` kernel-counter
-residency), `device-google-steelhead` **r67 → r68**, the standing idle goal in
-PLAN.md, and `docs/2026-08-11-overnight-telemetry-analysis.md`.
+`abfffb2` (`nq-healthd` r68: cgroup-first unit state — kills the per-sample
+`systemctl` PAM churn — plus `opp_ms`/`opp_trans` kernel-counter residency,
+`device-google-steelhead` r67→r68) was **built on the desktop, OTA-published,
+and installed on the Q**:
 
-⚠️ **Source + pkgrel only — NOT built, NOT OTA-published.** The analysis and the
-fix were done from **claudebox (`server-linux`)**, which has **no docker and no
-ARM binfmt**, so the build could not run there. It must run on the **desktop
-(petronijus-PC, Linux)** where the warm `nexusq-workdir` volume lives:
+- **Built** (warm `nexusq-workdir` volume, `OTA_PACKAGES_ONLY=1`): device r68 +
+  nonfree-firmware r68, then `nexusq-control` r29 (below). All verified
+  byte-identical to source, signed with `pmos@local-6a42e957`.
+- **OTA-published**: gh-pages `f61d9eb` (device r68 + mqtt r1) then `56aa4d0`
+  (control r29). Live at `…github.io/nexusQ-reloaded/nexusq`.
+- **Installed on the Q** (`apk upgrade --available`): device r68, firmware r68,
+  `nexusq-mqtt` r1, `nexusq-control` r29. mkinitfs/boot-deploy passed (Option-A
+  `/boot` fix holds). Verified: `opp_ms` emits real per-OPP ms summing to the
+  window, `opp_trans` ≈ 4/s, temp 63–65 °C, all 4 daemons active.
 
-```bash
-cd ~/Documents/Dev/nexusQ-reloaded && git pull
-docker build -t nexusq-builder .
-docker rm -f nexusq-build 2>/dev/null || true
-docker run --rm --privileged \
-    -e OTA_PACKAGES_ONLY=1 -e OTA_PACKAGES="device-google-steelhead" \
-    -v "$PWD:/src:ro" \
-    -v nexusq-output:/tmp/output \
-    -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
-    --name nexusq-build \
-    nexusq-builder /src/docker-build.sh 2>&1 | tee /tmp/nexusq-build.log
-# export the signed apk out of the volume:
-docker run --rm -v nexusq-output:/data -v "$PWD/output:/out" alpine:3.21 \
-    sh -c 'cp /data/*.apk /out/'
-```
+⚠️ **CDN latency note:** GitHub Pages serves a freshly-pushed APKINDEX/apk with a
+delay — the first `apk upgrade` after a publish saw the stale index (r67/r28) and
+a plain `apk upgrade` (no `--available`) silently skipped our OTA-repo packages.
+Use `apk upgrade --available` (what `nexusq-control` does) and re-run `apk update`
+until the new candidate shows (took ~1 poll here). Also: an `apk upgrade` of
+`nexusq-control` does NOT restart the running daemon (Alpine has no auto-restart)
+— `systemctl restart nexusq-control` after a manual upgrade.
 
-Only `device-google-steelhead` changed, so the default two-package set is
-narrowed to it. Then `scripts/publish-ota-repo.sh` — and note **`nexusq-mqtt` r1
-is still unpublished** (below), so publishing both together is the efficient move.
+**`nexusq-control` r29** (`882b83d`) closes the gap that this deploy exposed:
+`install_system_update` restarted only package-name==service-name daemons, so an
+app-driven update that changed `device-google-steelhead` (→ `nq-healthd`) or
+`nexusq-mqtt` left the OLD daemon running until a reboot while the app said "up
+to date". Now a `_PKG_RESTART` map drives `_services_for_changed()`;
+`_finish_system_update` restarts `nq-healthd` + `nexusq-mqtt` too. 6 new tests,
+suite 19/19.
 
-**After the OTA lands, verify the fix on the live device** — the point of r68 is
-the idle goal, so measure it properly: leave the Q idle with no ssh session and
-read `opp_ms` out of `health.jsonl` (never `freq`). Target = as close to 100 % at
-350 MHz as possible; baseline to beat is 56.7 %.
+**STILL OPEN — the honest idle-goal measurement.** r68 makes it *measurable*; the
+number itself must be read from a hands-off capture (no ssh session — an open one
+drives the die 74–79 °C) from `opp_ms` in `health.jsonl` or the MQTT rolling
+window, never `freq`. Target = as close to 100 % at 350 MHz as possible; baseline
+to beat is **56.7 %** (v1.8.2, 2026-07-13).
 
 ### WHERE TO CONTINUE (2026-08-10; items 1-2 DONE in `39a6a46`, 3-5 still open)
 1. ~~**App release 1.13.0 FIRST**~~ — **DONE**, released + manifest live.

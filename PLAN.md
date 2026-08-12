@@ -51,7 +51,25 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > `opp_trans` reads **~4.2/s**, matching the independent 2026-07-13 governor
 > study. Also `rotate_if_big` now uses `stat` instead of busybox `wc -c`, which
 > was reading the whole 4 MB log every 5 s.
-> **NOT yet built or OTA-published** — source + pkgrel only.
+> **✅ BUILT + OTA-PUBLISHED + LIVE (2026-08-12, petronijus-PC).** device r68 +
+> nonfree-firmware r68 built (warm volume), published to gh-pages `f61d9eb`, and
+> installed on the Q (`apk upgrade --available`; mkinitfs/boot-deploy passed —
+> Option-A /boot fix holds). Verified on-device: `opp_ms` emits real per-OPP ms
+> summing to the sample window, `opp_trans` ≈ 4/s, temp 63–65 °C. `nexusq-mqtt`
+> r1 was published in the same push.
+
+> **✅ DONE (2026-08-12) — system update now restarts nq-healthd + nexusq-mqtt
+> (nexusq-control r29).** Found while landing r68: `install_system_update` ran
+> `apk upgrade --available` but then restarted only a hardcoded list of packages
+> whose service name equals their package name — so **nq-healthd** (ships inside
+> `device-google-steelhead`) and **nexusq-mqtt** fell through, and neither
+> matches `_REBOOT_HINTS`. An app-driven update that changed either left the OLD
+> daemon running until an unrelated reboot while the app said "up to date" — i.e.
+> r68's whole point (kill 4 % idle CPU + `opp_ms`) would silently not take effect
+> via the app button. Fix: a `_PKG_RESTART` package→service map +
+> `_services_for_changed()`; `_finish_system_update` restarts `nq-healthd` +
+> `nexusq-mqtt` too. 6 new unit tests, suite 19/19 green. **BUILT + OTA-published
+> (gh-pages `56aa4d0`) + installed + running on the Q (r29, PID restarted).**
 
 > **✅ DONE (2026-08-10) — MQTT health telemetry → Home Assistant + app (PLANNED-NEXT
 > task 2, end-to-end; SHIPPED — commit `b49b536` pushed, device-OTA published as
