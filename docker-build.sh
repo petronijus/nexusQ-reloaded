@@ -693,15 +693,33 @@ if [ "${OTA_PACKAGES_ONLY:-0}" = "1" ]; then
     _ota_list="${OTA_PACKAGES:-nexusqd device-google-steelhead}"
     echo "=== OTA_PACKAGES_ONLY=1: building ONLY: $_ota_list ==="
     sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
+
+    # Checksum EVERY requested package BEFORE building any of them. Interleaving
+    # (checksum A; build A; checksum B; build B) breaks whenever A depends on B:
+    # pmbootstrap resolves the dep and builds B from within A's build, while B's
+    # aport still carries the sha512sums="SKIP" placeholder ->
+    #   ">>> ERROR: <B>: <B> is missing in checksums"
+    # and the whole run dies with exit 3. That made the caller's package ORDER
+    # load-bearing, which nothing documented and nothing enforced: it bit
+    # nexusq-btagent -> nexusq-setupd, then again on 2026-08-13 with
+    # device-google-steelhead -> nexusq-mqtt. A separate first pass makes order
+    # irrelevant, which is the only version of this that stays fixed.
+    for _ota_pkg in $_ota_list; do
+        set +e
+        # The aports ship sha512sums="SKIP" placeholders; regenerate them against
+        # the just-staged sources. Failure here is not fatal on its own — the
+        # build below reports the real error with context.
+        pmbootstrap checksum "$_ota_pkg" 2>&1 || true
+        set -e
+    done
+
     _ota_fail=0
     for _ota_pkg in $_ota_list; do
         echo ""
         echo "--- OTA build: $_ota_pkg ---"
         set +e
-        # Regenerate per-file checksums against the just-staged sources (the
-        # aports ship sha512sums="SKIP" placeholders), then force a rebuild so a
-        # bumped pkgrel is not skipped by a stale same-name apk in the warm repo.
-        pmbootstrap checksum "$_ota_pkg" 2>&1 || true
+        # --force: a bumped pkgrel must not be skipped by a stale same-name apk
+        # in the warm repo.
         pmbootstrap --no-cross build "$_ota_pkg" --arch armv7 --force 2>&1
         _ota_rc=$?
         set -e
