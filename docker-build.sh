@@ -661,16 +661,34 @@ echo "  $WORK/cache_distfiles now owned by uid 12345 (chroot abuild-fetch lock)"
 
 echo ""
 echo "=== Phase 7b: Generate checksums ==="
+# EVERY aport we stage gets its checksums here, BEFORE any build phase runs —
+# not per-phase, next to each build.
+#
+# Our APKBUILDs ship sha512sums="SKIP" placeholders, so each one must be
+# regenerated against the sources Phase 6 just staged. Doing that inside each
+# build phase silently made phase ORDER part of the contract: pmbootstrap
+# resolves a package's `depends=` and builds them from inside that build, so a
+# dependency whose own phase had not run yet was still carrying the placeholder
+# and abuild hard-failed the phase that triggered it:
+#     >>> ERROR: <dep>: <dep> is missing in checksums     (exit 3)
+# That is why 7c3 had to precede 7c4 (nexusq-setupd depends= nexusq-btagent,
+# found 2026-07-15), and the same trap reappeared on 2026-08-13 in the
+# OTA_PACKAGES_ONLY path (device-google-steelhead depends= nexusq-mqtt).
+# Checksumming everything up front removes the ordering constraint entirely
+# instead of documenting it — a build phase can no longer be defeated by which
+# phase happens to run first.
+#
+# The kernel is listed first only because it is the slow one (it fetches a
+# ~148 MB tarball); nothing depends on that position.
 echo "Generating checksums for kernel package..."
 pmbootstrap checksum linux-google-steelhead 2>&1 || {
     echo "WARNING: checksum generation failed, will try building anyway"
 }
-echo "Generating checksums for device package..."
-pmbootstrap checksum device-google-steelhead 2>&1 || true
-echo "Generating checksums for glibc-rt package..."
-pmbootstrap checksum nexusq-glibc-rt 2>&1 || true
-echo "Generating checksums for firmware package..."
-pmbootstrap checksum firmware-google-steelhead 2>&1 || true
+for _ck_pkg in device-google-steelhead nexusq-glibc-rt firmware-google-steelhead \
+               nexusqd nexusq-control nexusq-btagent nexusq-setupd nexusq-mqtt; do
+    echo "Generating checksums for $_ck_pkg..."
+    pmbootstrap checksum "$_ck_pkg" 2>&1 || true
+done
 
 # --- OTA_PACKAGES_ONLY: targeted two-package OTA build -------------------------
 # For an OTA that ships ONLY config/daemon apks (not a fresh rootfs/boot.img),
@@ -770,11 +788,9 @@ echo ""
 echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 set +e
-# The nexusqd sources are staged flat into the aport above (frame.c, fx_*.c, ...)
-# and the APKBUILD ships sha512sums="SKIP" as a placeholder, so abuild aborts with
-# "<file> is missing in checksums". Regenerate the per-file checksums against the
-# just-staged sources before building (same step the kernel/device/firmware get).
-pmbootstrap checksum nexusqd 2>&1 || true
+# Checksums for every aport were regenerated in Phase 7b (the nexusqd sources are
+# staged flat into the aport — frame.c, fx_*.c, ... — under a sha512sums="SKIP"
+# placeholder that abuild would otherwise reject).
 # --no-cross (qemu-only), matching Phase 8: crossdirect (the default cross-compile
 # accelerator) is broken in this image -- it cannot exec cc1 ("cc: fatal error:
 # cannot execute 'cc1': posix_spawnp: No such file or directory") and the build
@@ -808,9 +824,7 @@ fi
 echo ""
 echo "=== Phase 7c2: Build nexusq-control package (noarch) ==="
 set +e
-# Pure-Python (stdlib) bridge; noarch, no compiler/qemu needed. SKIP checksums
-# placeholder -> regenerate against the staged scripts before building.
-pmbootstrap checksum nexusq-control 2>&1 || true
+# Pure-Python (stdlib) bridge; noarch, no compiler/qemu needed. Checksums: 7b.
 pmbootstrap --no-cross build nexusq-control --arch armv7 --force 2>&1
 NEXUSQCTL_RC=$?
 set -e
@@ -835,18 +849,15 @@ echo ""
 echo "=== Phase 7c3: Build nexusq-btagent package (noarch) ==="
 set +e
 # Pure-Python (py3-dbus/py3-gobject3) BlueZ agent; noarch, no compiler/qemu.
-# Same SKIP-checksum regeneration + --force (stale-apk-from-warm-volume trap)
-# as nexusq-setupd below.
+# --force guards the stale-apk-from-warm-volume trap; checksums: 7b.
 #
-# ORDER IS LOAD-BEARING: this MUST stay ahead of nexusq-setupd (7c4), which
-# `depends=` on nexusq-btagent. pmbootstrap resolves that dep and queues
-# nexusq-btagent for build as part of the setupd build -- but `pmbootstrap
-# checksum` is per-aport, so if setupd ran first, btagent would still carry its
-# sha512sums="SKIP" placeholder and abuild would hard-fail the whole 7c3 with
-#     >>> ERROR: nexusq-btagent: nexusq-btagent is missing in checksums
-# (exit 3), leaving no nexusq-setupd apk to export. Checksum+build every
-# dependency BEFORE its dependent. Found 2026-07-15 on the first rc4 build.
-pmbootstrap checksum nexusq-btagent 2>&1 || true
+# Order note (historical): this phase used to be REQUIRED to precede 7c4,
+# because nexusq-setupd `depends=` nexusq-btagent and pmbootstrap builds that
+# dep from inside the setupd build -- while btagent still carried its
+# sha512sums="SKIP" placeholder, which abuild rejects (found 2026-07-15). Since
+# Phase 7b checksums every aport up front, that constraint is GONE: the phases
+# may run in any order. The dependency-first sequence is kept only because it
+# reads naturally.
 pmbootstrap --no-cross build nexusq-btagent --arch armv7 --force 2>&1
 NEXUSQBTA_RC=$?
 set -e
@@ -870,12 +881,9 @@ echo ""
 echo "=== Phase 7c4: Build nexusq-setupd package (noarch) ==="
 set +e
 # Pure-Python (py3-dbus/py3-gobject3) BT provisioning daemon; noarch, no
-# compiler/qemu needed. SKIP checksums placeholder -> regenerate against the
-# staged scripts before building (without this, the implicit Phase 8/install
-# auto-build fails with "nexusq-setupd is missing in checksums").
-# Runs AFTER 7c3 on purpose: nexusq-setupd depends= nexusq-btagent (see the
-# ORDER IS LOAD-BEARING note above).
-pmbootstrap checksum nexusq-setupd 2>&1 || true
+# compiler/qemu needed. Checksums: 7b -- which is also what makes it safe for
+# this to sit after 7c3 by convention rather than by necessity (it `depends=`
+# nexusq-btagent; see the order note there).
 pmbootstrap --no-cross build nexusq-setupd --arch armv7 --force 2>&1
 NEXUSQSETUP_RC=$?
 set -e
@@ -899,9 +907,10 @@ fi
 echo ""
 echo "=== Phase 7c5: Build nexusq-mqtt package (noarch) ==="
 set +e
-# Pure-Python (stdlib-only) MQTT health telemetry publisher; noarch. Same
-# SKIP-checksums-then-regenerate dance as the other daemon aports.
-pmbootstrap checksum nexusq-mqtt 2>&1 || true
+# Pure-Python (stdlib-only) MQTT health telemetry publisher; noarch.
+# Checksums: 7b. device-google-steelhead `depends=` this package, so before 7b
+# covered everything, building the device package first would drag this one in
+# unchecksummed and fail the run (2026-08-13, the OTA path).
 pmbootstrap --no-cross build nexusq-mqtt --arch armv7 --force 2>&1
 NEXUSQMQTT_RC=$?
 set -e
