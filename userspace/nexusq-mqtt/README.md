@@ -34,7 +34,30 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
 
 - from **nq-healthd**'s latest `health.jsonl` sample (only when fresh, ≤60 s):
   `temp_c`, `freq_mhz`, `governor`, `load1`, `mem_avail_mb`, `nexusqd_alive`,
-  `led_stall`, `dmesg_err`, `pstore`
+  `led_stall`, **`led_stalled`**, `dmesg_err`, `pstore`
+- **`led_stalled` (bool) is the LED VERDICT — consumers must read this, never
+  `led_stall`** (added **r2**, 2026-08-13):
+
+  ```
+  led_stalled = led_stall >= LED_STALL_MIN(6)
+                AND (nq_resp falsy OR nq_progress falsy)
+  ```
+
+  `led_stall` counts consecutive samples whose frame **CONTENT** is identical —
+  which the screensaver does **by design** (locks at `SS_LOCK_S`=300 s, blanks at
+  `SS_BLANK_S`=600 s) while the 1 Hz AVR keepalive re-commits the same bytes. So
+  the raw counter climbs without bound on a healthy idle device (7142 over an
+  11.81 h episode in the 2026-08-11 capture), and thresholding it in a UI made
+  **every idle Q permanently report "LED ring frame is stalled"** ~10 min after
+  the music stopped. r2 therefore makes the judgement **on-device**, using the
+  same distress co-signal `nq-healthd` itself uses to choose crit `led_frozen`
+  over info `led_static` — daemon and telemetry agree **by construction**.
+  `led_stall` stays in the payload as a **diagnostic number only**.
+  Contract for consumers: **an absent `led_stalled` means healthy**, not unknown
+  and never an alarm (an older device simply doesn't send it; a genuinely dead
+  daemon still surfaces via `nexusqd_alive`). See
+  `docs/2026-08-13-led-stall-verdict-and-progress-window.md` and
+  `docs/2026-08-11-overnight-telemetry-analysis.md` §6.
 - sampled live by this daemon (things healthd does not record):
   - `opp350_pct` `opp700_pct` `opp920_pct` `opp1200_pct` — per-OPP share
     ("podíl frekvencí") from `time_in_state` deltas over a **rolling 1 h
@@ -47,7 +70,16 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
   - `volume_pct`, `muted` — the mixer that currently owns the output: TAS5713
     hardware mixer while USB-audio's alsaloop bridges the gadget straight to
     the amp (same `pgrep -x alsaloop` detection as `nq-vol`), the uid-10000
-    PulseAudio default sink otherwise
+    PulseAudio default sink otherwise.
+    ⚠️ **Open follow-up (quantified on-device 2026-08-13, NOT yet done):** this
+    is the **last idle `pactl` forker on the box**. Each 30 s publish forks
+    `pactl get-sink-volume` + `pactl get-sink-mute` (plus the `pgrep`) —
+    ≈ **0.09 % of a core**, matching the ~47 s of `pactl` CPU seen over a 14 h
+    idle night. After nexusqd r13 replaced its own 1.5 s gate poll with a
+    persistent `pactl subscribe`, this is what remains. **Proposal:** take
+    volume/mute from **`nexusq-control`**, which already runs a persistent
+    `pactl subscribe` bridge and therefore knows the current value without
+    forking. See `docs/2026-08-13-idle-opp-residency-measurement.md`.
   - `services` — `{spotify, airplay, roon, usbaudio}` booleans (instant
     cgroup.procs read, the nexusq-control pattern)
   - `uptime_s`, `healthd_fresh`, `healthd_age_s`
@@ -60,7 +92,20 @@ Discovery creates one device ("Nexus Q" / the name from
 - sensors: die temperature, CPU frequency, governor, load, memory available,
   uptime, WiFi RSSI, volume, 4× per-OPP residency
 - binary sensors: Spotify Connect / AirPlay / Roon / USB Audio (running),
-  LED daemon + Health sampler (problem class — ON means something is wrong)
+  LED daemon + Health sampler + **LED ring** (problem class — ON means something
+  is wrong)
+
+The problem-class binaries are **inverted** — `off` = healthy. The **LED ring**
+entity (key `led`, `device_class: problem`, `entity_category: diagnostic`, added
+**r2**) renders as
+
+```jinja
+{{ 'OFF' if (not (value_json.led_stalled | default(false))) else 'ON' }}
+```
+
+so a device too old to publish `led_stalled` reads **healthy** rather than
+inventing an alarm out of a missing signal. Live since 2026-08-13:
+`binary_sensor.nexus_q_led_ring = off` with `led_stall=17, led_stalled=False`.
 
 ## Configuration (NOT baked into the image — provisioned by the companion app)
 

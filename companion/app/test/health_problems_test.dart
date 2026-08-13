@@ -27,17 +27,40 @@ void main() {
         contains('LED daemon (nexusqd) is down'));
     expect(healthProblems({'healthd_fresh': false}),
         contains('Health sampler (nq-healthd) is stale'));
-    expect(healthProblems({'led_stall': 6}),
-        contains('LED ring frame is stalled'));
+    expect(healthProblems({'led_stalled': true}),
+        contains('LED ring is stalled'));
     expect(healthProblems({'pstore': 2}),
         contains('Crash dump present (pstore)'));
   });
 
   test('sub-threshold and wrong-typed values are ignored', () {
-    expect(
-        healthProblems({'led_stall': 5, 'pstore': 0, 'nexusqd_alive': true}),
-        isEmpty);
+    expect(healthProblems({'pstore': 0, 'nexusqd_alive': true}), isEmpty);
     // hostile/garbage payload must never throw
     expect(healthProblems({'led_stall': 'x', 'pstore': null}), isEmpty);
+  });
+
+  /// The regression this rule exists for: a locked/blanked screensaver drives
+  /// `led_stall` arbitrarily high on a HEALTHY device (the 1 Hz AVR keepalive
+  /// re-commits identical bytes), so the raw counter must never raise an alarm
+  /// on its own — only the device's qualified `led_stalled` verdict may.
+  test('a high led_stall counter alone is NOT a problem (idle screensaver)', () {
+    expect(
+        healthProblems({
+          'nexusqd_alive': true,
+          'healthd_fresh': true,
+          'led_stall': 9751,
+          'led_stalled': false,
+          'pstore': 0,
+        }),
+        isEmpty);
+    // and with the verdict field absent entirely (device too old to send it)
+    expect(healthProblems({'led_stall': 9751, 'nexusqd_alive': true}), isEmpty);
+  });
+
+  test('led_stalled only fires on a real boolean true', () {
+    expect(healthProblems({'led_stalled': false}), isEmpty);
+    expect(healthProblems({'led_stalled': null}), isEmpty);
+    expect(healthProblems({'led_stalled': 'yes'}), isEmpty);
+    expect(healthProblems({'led_stalled': 1}), isEmpty);
   });
 }

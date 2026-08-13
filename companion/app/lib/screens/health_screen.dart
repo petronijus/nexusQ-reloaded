@@ -22,8 +22,18 @@ List<String> healthProblems(Map<String, dynamic> s) {
   if (s['healthd_fresh'] == false) {
     out.add('Health sampler (nq-healthd) is stale');
   }
-  final stall = s['led_stall'];
-  if (stall is num && stall >= 6) out.add('LED ring frame is stalled');
+  // `led_stalled` is the DEVICE's verdict, not a raw counter. The old rule here
+  // (`led_stall >= 6`) flagged every idle Q forever: that counter measures the
+  // ring's frame CONTENT staying identical, and the screensaver locks a static
+  // frame after 300 s and blanks it at 600 s by design, while the 1 Hz AVR
+  // keepalive re-commits the same bytes — so ~10 min after the music stopped,
+  // a perfectly healthy device permanently reported "LED ring frame is
+  // stalled". nexusq-mqtt now qualifies the counter with the same distress
+  // co-signal nq-healthd uses (control socket unresponsive, or nexusqd's CPU
+  // time not advancing) and publishes the result. A device too old to send the
+  // field raises nothing: silence beats a known-false alarm, and a genuinely
+  // dead daemon still surfaces via `nexusqd_alive` above.
+  if (s['led_stalled'] == true) out.add('LED ring is stalled');
   final pstore = s['pstore'];
   if (pstore is num && pstore > 0) out.add('Crash dump present (pstore)');
   return out;

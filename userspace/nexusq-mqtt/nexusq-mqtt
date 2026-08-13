@@ -99,6 +99,12 @@ SERVICES = {
 # down/stuck and its fields must not be presented as current.
 HEALTH_FRESH_S = 60
 
+# Consecutive identical-frame samples before a static ring is even CONSIDERED
+# stalled. Matches nq-healthd's own LED_STALL event threshold (6 samples ~ 30 s)
+# so the daemon and the telemetry never disagree; on its own it is not a fault —
+# see led_stalled where the distress co-signal is applied.
+LED_STALL_MIN = 6
+
 
 def log(*args):
     print("nexusq-mqtt:", *args, flush=True)
@@ -359,6 +365,26 @@ def collect(tis_history):
             state["nexusqd_alive"] = bool(health["nq_alive"])
         if isinstance(health.get("led_stall"), (int, float)):
             state["led_stall"] = int(health["led_stall"])
+        # `led_stall` alone does NOT mean a fault, and thresholding it in the UI
+        # produced a permanent false alarm on every idle Q: the counter measures
+        # frame CONTENT staying identical, and the screensaver deliberately locks
+        # a static frame after SS_LOCK_S (300 s) and blanks it at SS_BLANK_S
+        # (600 s), while the 1 Hz AVR keepalive re-commits those same bytes. So
+        # ~10 min after the music stops, a perfectly healthy device reported "LED
+        # ring frame is stalled" forever (found 2026-08-11, fixed here).
+        # Publish the JUDGEMENT, not the raw counter: a static frame is only a
+        # fault when nexusqd is simultaneously distressed — unresponsive on its
+        # control socket, or its CPU time has stopped advancing. That is exactly
+        # the co-signal nq-healthd itself uses to pick `led_frozen` (crit) over
+        # `led_static` (info), so the two agree by construction. The consumers
+        # (app Health panel, HA binary_sensor) read this boolean; `led_stall`
+        # stays in the payload as a diagnostic number.
+        stall_n = health.get("led_stall")
+        resp = health.get("nq_resp")
+        prog = health.get("nq_progress")
+        if isinstance(stall_n, (int, float)) and isinstance(resp, (int, bool)):
+            distressed = (not resp) or (prog is not None and not prog)
+            state["led_stalled"] = bool(stall_n >= LED_STALL_MIN and distressed)
         if isinstance(health.get("dmesg_err"), (int, float)):
             state["dmesg_err"] = int(health["dmesg_err"])
         if isinstance(health.get("pstore"), (int, float)):
@@ -690,6 +716,10 @@ def discovery_configs(node_id, display_name, prefix):
          "value_json.nexusqd_alive | default(true)"),
         ("healthd", "Health sampler",
          "value_json.healthd_fresh | default(false)"),
+        # healthy == NOT stalled; absent field (older device) reads as healthy
+        # rather than inventing an alarm out of a missing signal.
+        ("led", "LED ring",
+         "not (value_json.led_stalled | default(false))"),
     ):
         cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
                "device_class": "problem", "entity_category": "diagnostic",
