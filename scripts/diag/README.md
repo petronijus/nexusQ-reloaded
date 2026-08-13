@@ -11,7 +11,7 @@ capture.*
 
 | Tool | Side | What it does |
 |------|------|--------------|
-| `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package). Since 2026-08-10 `health.jsonl` has an on-device consumer: **`nexusq-mqtt`** tails the latest sample (used only when fresh ≤60 s) and republishes it — plus its own extras — to MQTT / Home Assistant (see `userspace/nexusq-mqtt/README.md`); a change to healthd's field names/semantics now also touches the MQTT state JSON + HA discovery templates |
+| `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package). Since 2026-08-10 `health.jsonl` has an on-device consumer: **`nexusq-mqtt`** tails the latest sample (used only when fresh ≤60 s) and republishes it — plus its own extras — to MQTT / Home Assistant (see `userspace/nexusq-mqtt/README.md`); a change to healthd's field names/semantics now also touches the MQTT state JSON + HA discovery templates. Since **mqtt r2** (2026-08-13) that coupling is explicit: the payload carries a **`led_stalled` verdict** derived from healthd's own `led_stall` + `nq_resp`/`nq_progress` distress co-signal — so changing what `nq_progress` means (as device **r72** did) changes what the app and HA alarm on |
 | `pmos/device-google-steelhead/nq-diag-snapshot` | device | comprehensive read-only "log everything" one-shot dump |
 | `scripts/diag/nqctl` | host | reach the device over the best link (ethernet `10.42.0.2` first, then USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
 | `scripts/diag/nq-collect` | host | **the engine**: connect → snapshot → pull/burst samples → save locally → analyze |
@@ -53,10 +53,15 @@ fallback is just a cross-check.)_ Expected governor: **`conservative` since
 v1.8.2 / kernel r43** (2026-07-13 — measurement-backed: ondemand's jump-to-max on
 ~1000 microburst wakeups/s kept 74 % of idle at ≥700 MHz; was `ondemand`
 v1.6.6–v1.8.1, `conservative` v1.5.0–v1.6.5). Idle expectation **changed with
-v1.8.2**: a healthy idle now **settles at 350 MHz** (56.7 % residency, ~4.25
-trans/s) — the old "hovers ~920 MHz" behaviour was the ondemand sawtooth (+
-healthd's own polling load) and on a ≥v1.8.2 image it is a **regression signal**,
-not the norm. ⚠️ Idle **temperature** must be judged from an on-device
+v1.8.2**: a healthy idle now **settles at 350 MHz** (56.7 % residency 2026-07-13;
+**60.5 %** on the first clean 14 h hands-off MQTT-window measurement 2026-08-13/
+r70 — judge from `opp_ms`/MQTT `opp*_pct`, never healthd's `freq`; expect higher
+on **r71 + nexusqd r13**, the 2026-08-13 idle diet: healthd 6.3 → 2.3 % of a
+core, nexusqd 4.4 → **0.165 %** and 22 → **2.9 wakeups/s**, system idle fork rate
+14 → 2.6/s — ~12 pp of one core of constant background gone; ~4.25 trans/s) —
+the old "hovers ~920 MHz"
+behaviour was the ondemand sawtooth (+ healthd's own polling load) and on a
+≥v1.8.2 image it is a **regression signal**, not the norm. ⚠️ Idle **temperature** must be judged from an on-device
 self-logging capture with no live ssh session — any interactive session heats
 the die to 74–79 °C within seconds (cooling constant ~10 s; true unobserved idle
 floor ~65–66 °C — measured 2026-07-13).
@@ -78,11 +83,18 @@ fault (125 °C critical was never approached). This supersedes the older "peaks
 **LED ring / nexusqd / AVR** — the ring is 32 `steelhead:rgb:ring-*` LEDs (+ a
 `mute` LED) driven by the userspace daemon **nexusqd** (control socket
 `/run/nexusqd.sock`, queried via `nexusled status`) through an on-board **AVR**
-MCU on i2c (IRQ line `steelhead-avr`). nexusqd has **no systemd watchdog**, so a
-*hang* (vs a crash) is invisible to systemd — we detect it via socket
+MCU on i2c (IRQ line `steelhead-avr`). *(Corrected 2026-08-13 — this section
+used to say "nexusqd has **no systemd watchdog**": it has had one since v1.6.x /
+`543b492`. `nexusqd.service` is `Type=notify` with `WatchdogSec=15s` and the
+daemon pings `WATCHDOG=1` once a second from the render loop, so a **wedged**
+daemon is SIGABRT'd + restarted by systemd. The healthd heuristics below remain
+the finer-grained signal — they catch a ring/AVR fault that leaves the render
+loop, and therefore the ping, alive.)* We detect a hang via socket
 unresponsiveness + a frozen LED frame + no daemon CPU progress. The frame
 fingerprint reads the AVR driver's **`frame` bin_attr** (readable since kernel
-patch 0029 / healthd r20 — md5 + byte sum of the committed frame), falling back
+patch 0029 / healthd r20 — md5 + byte sum of the committed frame; since **r71**
+(2026-08-13) one `od|awk` pass yields byte sum + a rolling hash, no md5 — the
+fingerprint only ever feeds an equality test, semantics unchanged), falling back
 to the classdev `brightness` sample spread on pre-0029 kernels (where it is
 blind to nexusqd's writes — see the bug note below).
 
@@ -104,6 +116,64 @@ blind to nexusqd's writes — see the bug note below).
 >   even when unchanged. If a dark-after-long-idle ring recurs on a **≥ v1.6.5** image,
 >   suspect the keepalive stopped (check `nexusqd` is up and the render loop is ticking)
 >   rather than a design blank. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`.
+
+> 🆕 **nexusqd r13 (2026-08-13) — the idle daemon is now nearly free, and the
+> ring renders at 1 Hz when idle.** Two changes a sweep must expect:
+> - **The PA sink-input gate is event-driven.** A **persistent `pactl subscribe`
+>   child** (exactly one, owned by nexusqd) replaces the old `pactl list short
+>   sink-inputs` every 1.5 s. Timed re-counts are now a safety net (30 s while
+>   tapping / 60 s while idle once the subscriber is proven ≥2 s alive; 1.5 s
+>   while it is down/unproven, respawn every 10 s). **Healthy tells:** exactly
+>   **one** long-lived `pactl subscribe` under `nexusqd.service`, and **no**
+>   recurring short-lived `pactl` under it. A *stream* of short `pactl` forks
+>   from nexusqd on r13+ means the subscriber keeps dying — check PulseAudio.
+>   A subscription is not a stream: it holds no sink out of suspend.
+> - **The render loop stretches to 1 Hz when idle.** After 40 bit-identical
+>   renders **and** an intent-idle test (no volume overlay, no music fade, no
+>   breathe/spin, screensaver locked or blanked) the frame deadline goes 50 ms →
+>   **1.0 s** (0.25 s cap while the tap is open, 0.5 s while the update blink
+>   runs). Measured idle cost: **0.165 % of a core, 2.9 wakeups/s** (was 4.4 % /
+>   22 wake per s on r12). It snaps back instantly on a key, on any mutating
+>   control command (`nexusled status` deliberately does **not** — healthd probes
+>   it every 5 s), and on a stream starting.
+> - ⚠️ **A/B rule: never compare nexusqd CPU/wakeups across screensaver states.**
+>   A fresh `systemctl restart nexusqd` restarts the screensaver, so the ring
+>   breathes at 20 fps for `SS_LOCK_S` — a measurement taken then reads ~1.6 % /
+>   54 wakeups per s and is meaningless. Wait out `SS_LOCK_S`/`SS_BLANK_S`
+>   (~9 min) and confirm `led_sum` is static/0 first.
+> - ✅ **`nq_progress` is a WINDOW, not a per-sample delta — FIXED in device r72
+>   (2026-08-13).** *(Was flagged the same day as an "unverified risk"; it was
+>   NOT theoretical — it fired **twice** on the live device between `nexusqd` r13
+>   and r72 landing:
+>   `{"t_mono":214110,"sev":"crit","kind":"led_frozen","msg":"LED frame unchanged
+>   for 6 samples with distressed nexusqd (resp=1 progress=0) …"}`, and again at
+>   `t_mono` 214497.)*
+>   The old definition — "did nexusqd's `/proc/pid/stat` tick count change since
+>   the last 5 s sample" — was valid only while nexusqd burned 4.4 % of a core
+>   (≈22 USER_HZ ticks/sample). r13 dropped it to 0.165 % ≈ **0.8 ticks/sample**,
+>   so a zero delta became the ORDINARY reading for a healthy daemon, and since
+>   `LED_STALL >= 6` is *guaranteed* on a locked/blanked ring, healthd's
+>   co-signal `nq_resp=0 || nq_progress=0` produced **CRIT `led_frozen` on a
+>   healthy idle device**.
+>   **Since r72:** `nq_progress` is 0 only when nexusqd's CPU time has not
+>   advanced for `PROGRESS_STALE_S` (env **`NQ_PROGRESS_STALE_S`**, default
+>   **60 s**) — ~10× the ~6 s idle tick interval, and the window resets while the
+>   unit is not running. The same idle state now logs **info `led_static` …
+>   (resp=1)**.
+>   **Reading a capture:** on **r72+** a `nq_progress=0` is meaningful again —
+>   believe a `led_frozen` CRIT. On an image with **nexusqd r13 + healthd ≤ r71**
+>   (the narrow window above) treat `led_frozen` with `nq_resp=1` as **info** and
+>   judge the ring by `nq_resp`/`nexusled status`. Record:
+>   `docs/2026-08-13-led-stall-verdict-and-progress-window.md`.
+> - ✅ **Healthy-idle expectation (r72 + `nexusq-mqtt` r2):** a blanked ring shows
+>   a **large and growing `led_stall`** (hundreds to thousands — the screensaver
+>   locks/blanks by design and the 1 Hz keepalive re-commits identical bytes)
+>   together with **`led_stalled = false`** in the MQTT payload and
+>   `binary_sensor.nexus_q_led_ring = off` in HA. **That combination is HEALTHY —
+>   do not report it.** `led_stall` is a diagnostic number only; the fault verdict
+>   is `led_stalled` (= `led_stall >= 6` AND nexusqd distressed), computed
+>   on-device from the same co-signal healthd uses. Live reference sample:
+>   `led_stall=17, led_stalled=False`.
 
 > **The mute LED blinking amber is NOT a fault — it means "OTA update available".**
 > Since `nexusqd` **r11** / `nexusq-control` **r20** (device OTA, PROTOCOL §12) the
@@ -177,7 +247,10 @@ print the per-sample timeline around it. Since 2026-07-04 a stalled LED frame
 splits by distress: crit **`led_frozen`** only when `nq_resp=0`/`nq_progress=0`
 co-fires; a static frame with a healthy daemon is info **`led_static`**
 (screensaver static-by-design), and the summary carries both
-`led_frozen_events` and `led_static_events`.
+`led_frozen_events` and `led_static_events`. *(Since device **r72**, 2026-08-13,
+the `nq_progress` half of that co-signal is a **60 s window**
+(`NQ_PROGRESS_STALE_S`), not a per-sample tick delta — see the r13/r72 note
+above; on r13-with-healthd-≤r71 it was firing false CRITs on idle devices.)*
 
 > **Known nq-healthd bugs (found by the 2026-07-03 acceptance run; FIXED
 > on-device since the `#29` flash 2026-07-03 — kernel patch 0029 +
@@ -189,8 +262,10 @@ co-fires; a static frame with a healthy daemon is info **`led_static`**
 >   structurally 0 and the frozen heuristic always trips. On those images ignore
 >   `led_frozen`; judge the ring by `nq_resp`/`nexusled status`. **Fix (r20):**
 >   patch 0029 makes `frame` readable (0644) — the system previously had NO
->   readable ring-state source — and healthd fingerprints it (md5 + byte sum),
->   keeping the brightness loop only as a pre-0029 fallback.
+>   readable ring-state source — and healthd fingerprints it (md5 + byte sum;
+>   since r71 a one-pass od|awk byte-sum + rolling hash — no md5, equality-only
+>   use, semantics unchanged), keeping the brightness loop only as a pre-0029
+>   fallback.
 >   ✅ **Static-by-design guard SHIPPED 2026-07-04 (healthd r21 +
 >   `nq-health-report`; baked + flashed since v1.6.7, 2026-07-05).** The
 >   screensaver intentionally locks
@@ -229,7 +304,20 @@ co-fires; a static frame with a healthy daemon is info **`led_static`**
 >   execs per 5 s sample held pid 1 at ~3.4 % idle. **r40 is process-first**:
 >   cached MainPID + `/proc` liveness per sample; ONE `systemctl show` (3 props)
 >   only on transitions (a restart always changes MainPID, so `NRestarts` bumps
->   are still caught). pid 1 idle: 3.4 % → 0.10 % measured.
+>   are still caught). pid 1 idle: 3.4 % → 0.10 % measured. **r68 (2026-08-12)**:
+>   with librespot *masked* the r40 transition rule degenerated into a
+>   `systemctl -M user@` per tick (~600 PAM sessions/h, pid 1 back to 4 %) —
+>   unit state is now resolved **cgroup-first**, systemd asked only on a real
+>   (re)start or once per `NQ_UNIT_REFRESH_S`; also new `opp_ms`/`opp_trans`
+>   kernel-counter residency fields. **r71 (2026-08-13, the fork diet)**: the
+>   2026-08-13 attribution still measured healthd at ~6.3 % of a core (~5.7 %
+>   its ~35-40 forked children per 5 s tick) — now every probe that can be an
+>   ash builtin is one (`rdv` reads, fork-free stat/show parsing, one-pass LED
+>   fingerprint, dmesg every `NQ_DMESG_EVERY` ticks default 30 s, glob pstore
+>   count, fifo `read -t` tick instead of `sleep`). Measured: 4212 → 1682 ms
+>   CPU/60 s (−60 %), production 2.3 % of a core, system idle fork rate
+>   14 → 3.2/s. **JSONL schema unchanged** — captures parse identically.
+>   See `docs/2026-08-13-idle-opp-residency-measurement.md`.
 > - **`dmesg_err`/`kern_new_err` counts info-level brcmfmac `clm_blob` lines**
 >   (matcher too broad) — cosmetic false positives, refinement candidate
 >   (noted 2026-07-13; not a device fault).
@@ -255,7 +343,12 @@ inline fallback).
 
 ## Known follow-ups surfaced by this work
 
-- **nexusqd has no watchdog** — a hang is unrecoverable. Real fix: sd_notify +
-  `WatchdogSec=` in `pmos/nexusqd/` (so systemd restarts a wedged daemon).
+- ~~**nexusqd has no watchdog** — a hang is unrecoverable. Real fix: sd_notify +
+  `WatchdogSec=` in `pmos/nexusqd/` (so systemd restarts a wedged daemon).~~
+  ✅ **DONE (v1.6.x, commit `543b492`)** — `nexusqd.service` is `Type=notify`
+  with **`WatchdogSec=15s`**, and the daemon pings `WATCHDOG=1` from the render
+  loop (rate-limited to 1/s, sent even when the frame is unchanged / the ring is
+  idle — including under r13's stretched 1 Hz idle cadence). systemd SIGABRTs and
+  restarts a wedged daemon. *(Stale entry corrected 2026-08-13.)*
 - **RTC is wrong** (year 2000 until NTP) — timestamps use monotonic uptime;
   worth fixing RTC/NTP independently.

@@ -13,10 +13,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > nice-to-have: 350 MHz is the only OPP at 1025 mV, so residency above it is
 > where the idle heat and the ~65 °C floor come from.
 >
-> - **Baseline to beat: 56.7 % @ 350 MHz** (v1.8.2, 542 s idle study,
->   2026-07-13 — up from 25.6 % on v1.8.1). Secondary metric from the same
->   study: **~4.2 governor transitions/s** on `conservative` (was 17.5/s on
->   `ondemand`'s sawtooth).
+> - **Baseline to beat: 60.5 % @ 350 MHz** (v1.12.0/r70, 14 h clean overnight
+>   MQTT-window measurement, 2026-08-13 — up from 56.7 % on v1.8.2, which was
+>   up from 25.6 % on v1.8.1; see
+>   `docs/2026-08-13-idle-opp-residency-measurement.md`). Residual at pure
+>   idle: 24.8 % @ 700, 9.5 % @ 920, **5.1 % @ 1200 MHz/1380 mV** — flat over
+>   14 h, i.e. a constant background load, not noise. Secondary metric from the
+>   2026-07-13 study: **~4.2 governor transitions/s** on `conservative` (was
+>   17.5/s on `ondemand`'s sawtooth).
 > - **Measure it from `opp_ms`** in `health.jsonl` (device r68+, kernel
 >   `time_in_state` deltas) or the MQTT `opp*_pct` rolling window. **Never from
 >   healthd's `freq` field** — that is a spot read taken inside healthd's own
@@ -26,6 +30,66 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > - **Judge idle only from an on-device self-logging capture with no live ssh
 >   session** — an open session pushes the die 74–79 °C within seconds and
 >   drags the OPP up with it (2026-07-13 Finding 1).
+
+> **✅ DONE (2026-08-13) — nq-healthd fork diet (device r71) — SHIPPED via OTA,
+> live-verified.** Driven by the first clean idle measurement above and its
+> same-day attribution (`docs/2026-08-13-idle-opp-residency-measurement.md`):
+> total idle busy = 18.2 % of one core, fork rate **13.96/s** (702 759 forks
+> overnight), 63 % of busy CPU in short-lived forked children — **nq-healthd
+> ~6.3 %** of a core (~5.7 % its forks) was the single biggest consumer,
+> ahead of nexusqd ~4.4 % (22 wakeups/s), the leftover nq-idle-study sampler
+> ~3.8 % (stopped 2026-08-13), pid 1 ~1.4 % (r68 fix holding), btagent 0.8 %,
+> brcmf kworker 0.5 %, pulseaudio+pactl-forker 0.4 %. **r71** rewrites every
+> healthd probe fork-free or amortized (builtin `read` for sysfs/procfs,
+> fork-free stat/show parsing, one-pass LED fingerprint without md5sum, dmesg
+> every 30 s, cgroup-scan librespot liveness, fifo `read -t` tick instead of
+> `sleep`; JSONL schema unchanged). On-device A/B: 4212 → **1682 ms CPU/60 s
+> (−60 %)**, −517 system forks/min; production after OTA: **2.3 %** of a core
+> (was 6.3–7.0 %), system fork rate **3.2/s** (was ~14/s). With the idle-study
+> stopped, ~8 pp of one core of constant idle background removed — tonight's
+> overnight window is the free A/B (re-measure from HA/MQTT tomorrow morning,
+> NO overnight ssh). **Next levers, in order:** ~~nexusqd wakeup audit (22/s for
+> a 1 Hz keepalive)~~ **✅ done the same day → nexusqd r13, see the next note**,
+> ~~the idle `pactl` forker (volume polling → subscription)~~ **mostly done —
+> it was nexusqd's own gate poll (r13); residue = nexusq-mqtt, below**,
+> governor tunables last (the 5.1 % @ 1200 MHz may collapse on its own).
+
+> **✅ DONE (2026-08-13) — nexusqd event-driven PA gate + adaptive idle render
+> cadence (`nexusqd` r13) — SHIPPED via OTA, live-verified.** The second half of
+> the same day's attribution: with healthd fixed, **nexusqd was the top idle
+> consumer at ~4.4 % of a core and 22 wakeups/s** on a fully idle box. Two
+> causes, both closed. (a) The PA sink-input gate polled `pactl list short
+> sink-inputs` every `PA_POLL_S`=1.5 s whenever the tap was off — ~0.67 forks/s
+> around the clock, and every short-lived client also woke every OTHER PA
+> subscriber (e.g. `nexusq-control`'s bridge) with connect events. Now a
+> persistent `pactl subscribe` child (`pa_subscribe_open()`, watched in the main
+> `poll()`) drives the re-count on `'new'`/`'remove'` sink-input events; the
+> timed re-count is demoted to a safety net (30 s tapping / 60 s idle when the
+> subscriber is **proven** ≥ `PA_SUB_PROVEN_S`=2 s, 1.5 s while it is
+> down/unproven, respawn every 10 s). (b) The render loop ran a full 20 fps tick
+> forever, even with the ring locked/blanked and the frame bit-identical — now
+> the deadline stretches to `IDLE_FRAME_S`=1.0 s (matching the 1 Hz AVR
+> keepalive) after 40 bit-identical renders **AND** an *intent-idle* test (no
+> overlay, no fade, no breathe/spin, screensaver locked or blanked); caps 0.25 s
+> with the tap open (a PAUSED stream still holds a sink-input) and 0.5 s while
+> the update blink is live; keys / mutating control commands (`CTL_STATUS`
+> excluded) / tap off→on force an immediate render.
+> **Measured, blanked idle, 120 s, no ssh: 0.165 % of a core (was 4.4 %,
+> −96 %), 2.9 wakeups/s (was 22/s, −87 %)**, system fork rate 2.6/s, die
+> 59.2 °C; plus a 5-test acceptance suite off the AVR `frame` attr (overlay from
+> deep idle in ~8 ms, breath still animating, silent sink-input opens the tap in
+> ~200 ms, exactly 1 persistent child). ⚠️ **Never A/B across screensaver
+> states** — the first measurement (1.6 % / 54 wake per s) was discarded because
+> a fresh `systemctl restart nexusqd` restarts the screensaver and the ring was
+> legitimately breathing at 20 fps; wait out `SS_LOCK_S`/`SS_BLANK_S` (548 s).
+> **Cumulative for 2026-08-13:** healthd 6.3 → 2.3 %, idle-study stopped
+> (~3.8 %), nexusqd 4.4 → 0.165 % ≈ **12 pp of one core** removed since the
+> morning's 60.5 % baseline. **Next levers:** (1) re-measure the overnight
+> opp350 window tomorrow morning from HA/MQTT, no overnight ssh; (2) the last
+> quantified idle forker — `nexusq-mqtt`'s 30 s volume/mute poll (2 forks per
+> 30 s ≈ 0.09 % of a core ≈ the 47 s of overnight `pactl` CPU) → take volume
+> from `nexusq-control`'s existing persistent `pactl subscribe` bridge instead
+> of forking; (3) governor tunables LAST.
 
 > **✅ DONE (2026-08-11) — healthd stopped distorting what it measures (device r68).**
 > Two fixes out of the 12 h overnight-telemetry analysis
@@ -142,7 +206,8 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > for context: pid 1 D-state in `cgroup_lock_and_drain_offline` / `brcmf_escan_timeout`
 > storms — the 12 h capture found WiFi flawless, so the escan storms are a separate
 > occasional dmesg finding, not the load cause.)* Idle-goal residency is now read
-> honestly from `opp_ms`; baseline to beat = **56.7 % @ 350 MHz** (see STANDING GOAL).
+> honestly from `opp_ms`; baseline to beat was **56.7 % @ 350 MHz** at the time
+> (superseded 2026-08-13 → **60.5 %**; see STANDING GOAL).
 >
 > **PLANNED NEXT (2026-08-10) — two tasks, decided with Petr — task (2) ✅ DONE
 > 2026-08-10 (see the top note); task (1) remains:**

@@ -188,6 +188,26 @@ locked/blanked (or while `led_sum == 0`), or raise the threshold well past
 `SS_BLANK_S`. As written it carries no information about the idle device it is
 most often describing.
 
+> ✅ **FIXED 2026-08-13** (this analysis stands as written; the outcome is
+> recorded here so the finding is not re-derived). The chosen shape is neither of
+> the two above: the **device publishes a verdict**, not a counter.
+> `nexusq-mqtt` **r2** adds a boolean **`led_stalled`** =
+> `led_stall >= 6` **AND** (`nq_resp` falsy **OR** `nq_progress` falsy) — the
+> same distress co-signal `nq-healthd` uses to choose crit `led_frozen` over info
+> `led_static`, so daemon and telemetry agree by construction. `led_stall` stays
+> in the payload as a diagnostic number. New HA `binary_sensor` **"LED ring"**
+> (problem/diagnostic); an absent field reads as **healthy**. The companion app's
+> `healthProblems()` now reads `led_stalled == true` (change is **code-only** —
+> not built, not released). Live: `led_stall=17, led_stalled=False`,
+> `binary_sensor.nexus_q_led_ring = off`. See
+> `docs/2026-08-13-led-stall-verdict-and-progress-window.md`.
+>
+> ⚠️ Related, found while fixing this: the co-signal itself had gone blind —
+> `nq_progress` (per-sample tick delta) became meaningless once `nexusqd` r13
+> dropped idle CPU to 0.165 % of a core, and it fired **CRIT `led_frozen` on a
+> healthy idle device twice**. Fixed by `device-google-steelhead` **r72** (window
+> instead of per-sample; `NQ_PROGRESS_STALE_S`, default 60 s).
+
 ## 7. LED-ring AVR soak — still not answered, and this telemetry *cannot* answer it
 
 The open follow-up from `docs/2026-07-01-led-ring-avr-starvation-keepalive.md`
@@ -233,7 +253,7 @@ the gateway was reachable. No watchdog heal, no interface bounce, no lease chang
 | # | Item | Severity | Status |
 |---|---|---|---|
 | 1 | `nq-healthd`: replace the `systemctl -M user@` librespot probe with a cgroup read (per `098b50f`), or hard-rate-limit it — §5 | **high** — 4 % CPU 24/7 on an idle device | ✅ **fixed, r68** |
-| 2 | App: qualify the `led_stall ≥ 6` rule by screensaver/blank state — §6 | **medium** — permanent false alarm | ⛔ open |
+| 2 | App: qualify the `led_stall ≥ 6` rule by screensaver/blank state — §6 | **medium** — permanent false alarm | ✅ **fixed 2026-08-13** — `nexusq-mqtt` **r2** + app (code-only) |
 | 3 | Never quote `health.jsonl`'s `freq` for power claims; make residency measurable instead — §4 | **medium** | ✅ **fixed, r68** (`opp_ms`, `opp_trans`) |
 | 4 | `rotate_if_big`: `stat` instead of busybox `wc -c` — §4 | low — hygiene | ✅ **fixed, r68** |
 | 5 | Keep the Q idle past ~19:30 today to finish the AVR soak — §7 | — | ⏳ running |

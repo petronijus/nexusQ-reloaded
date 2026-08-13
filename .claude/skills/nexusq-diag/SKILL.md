@@ -60,8 +60,31 @@ Findings are tagged by `kind`; interpret them like this:
   (`nexusled status`) does not answer. This is the classic "ring rotation froze
   and never came back": a *hang*, not a crash, so `Restart=on-failure` never
   fires. Confirm with **led_frozen** (frame unchanged ≥6 samples) and
-  **nexusqd_no_progress** (no CPU time). Real fix lives in `pmos/nexusqd/`
-  (add an sd_notify watchdog / `WatchdogSec=`) — note it, don't hack around it.
+  **nexusqd_no_progress** (no CPU time). *(Correction 2026-08-13: this used to
+  say the sd_notify watchdog was a missing follow-up — it SHIPPED in v1.6.x
+  (`543b492`). `nexusqd.service` is `Type=notify`, `WatchdogSec=15s`, and the
+  daemon pings `WATCHDOG=1` once a second from the render loop, so systemd does
+  SIGABRT + restart a wedged daemon; the healthd signals stay useful for faults
+  that leave the render loop — and the ping — alive.)*
+  ✅ **`nq_progress` is a 60 s WINDOW since device r72 (2026-08-13) — FIXED.**
+  *(Was flagged here as an unverified risk; it was real — with `nexusqd` r13 +
+  healthd ≤ r71 it fired **CRIT `led_frozen` on a healthy idle device twice**:
+  `{"t_mono":214110,"sev":"crit","kind":"led_frozen","msg":"LED frame unchanged
+  for 6 samples with distressed nexusqd (resp=1 progress=0) …"}`, again at
+  214497.)* healthd compared `/proc/pid/stat` ticks across a single 5 s sample,
+  and an idle r13 nexusqd accrues only **~0.8 USER_HZ ticks per sample** — so
+  zero-delta became ordinary, while `LED_STALL >= 6` is guaranteed on a
+  locked/blanked ring. **r72:** `nq_progress` is 0 only after the tick count has
+  stood still for `NQ_PROGRESS_STALE_S` (default **60 s** ≈ 10× the ~6 s idle
+  tick interval); the window resets while the unit is stopped. **On r72+ believe
+  a `led_frozen` CRIT again**; downgrade it only on the narrow
+  r13-with-healthd-≤r71 combination. See
+  `docs/2026-08-13-led-stall-verdict-and-progress-window.md`.
+  ✅ **Healthy-idle tell (r72 + `nexusq-mqtt` r2):** blanked ring ⇒ **large,
+  growing `led_stall`** (hundreds–thousands) **with `led_stalled = false`** and
+  `binary_sensor.nexus_q_led_ring = off` in HA. **HEALTHY — do not report it.**
+  `led_stall` is diagnostic only; `led_stalled` (= `led_stall >= 6` AND nexusqd
+  distressed, computed on-device) is the verdict the app and HA alarm on.
   ⚠️ **A dark ring is NOT a hang if the socket still answers** (`nq_resp=1`) — either
   (a) idle-off (the ring blanks on the idle timeout; false CRIT seen 2026-06-28), or
   (b) **AVR starvation** (FIXED v1.6.5) — a dark ring after a **long** idle (~20 h) was the
@@ -173,9 +196,15 @@ Findings are tagged by `kind`; interpret them like this:
   governor or cpufreq path is stalling. See `CPU` + `CLOCKS` (`dpll_mpu`).
   Expected governor since **v1.8.2** (kernel r43, 2026-07-13): **`conservative`**
   (was `ondemand` v1.6.6–v1.8.1) — and a healthy ≥v1.8.2 idle **settles at
-  350 MHz** (~56.7 % residency, ~4.25 trans/s); a sustained ~920 MHz idle hover
+  350 MHz** (~56.7 % residency 2026-07-13; **60.5 %** on the first clean 14 h
+  hands-off measurement 2026-08-13/r70 — judge from `opp_ms`/MQTT `opp*_pct`,
+  never `freq`; expect higher on **r71 + nexusqd r13**, the 2026-08-13 idle diet
+  — healthd 6.3 → 2.3 % of a core, nexusqd 4.4 → **0.165 %** and 22 → **2.9
+  wakeups/s**, idle fork rate 14 → 2.6/s, ~12 pp of one core removed;
+  ~4.25 trans/s); a sustained ~920 MHz idle hover
   is a regression (the old ondemand microburst sawtooth). See
-  `docs/2026-07-13-idle-power-governor-and-pid1-churn.md`.
+  `docs/2026-07-13-idle-power-governor-and-pid1-churn.md` +
+  `docs/2026-08-13-idle-opp-residency-measurement.md`.
 - **kernel_errors** — new oops/WARN/i2c-timeout/voltage lines; read the
   `KERNEL_LOG_FULL` tail in `snapshot.txt`. ℹ️ **As of v1.6.10 the boot log is
   GENUINELY CLEAN:** on a clean-flash `#36` / device r28 boot, `dmesg -l err,warn`
@@ -225,13 +254,24 @@ Findings are tagged by `kind`; interpret them like this:
   `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
 - **LED tap GATED on playback (v1.7.1, nexusqd r8)** — the `arecord -D pulse` tap
   used to run continuously (uncorked PA source-output held the `tas5713` sink
-  IDLE/clocked at silence → ~7 % idle CPU, top idle-heat source). nexusqd now polls
-  `pactl list short sink-inputs` and runs arecord **only while a stream plays** (gate
-  = sink-input count, not level). **Idle-healthy tell:** no `arecord`, `tas5713` sink
-  **SUSPENDED** (not IDLE) in `pactl list short sinks`, nexusqd **~0-1 %** CPU (was
-  ~7 %); playback → arecord present + sink RUNNING; after → re-gated → SUSPENDED.
-  arecord running at idle / sink IDLE / nexusqd ~7 % = regression. Dep `+pulseaudio-utils`.
-  See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`.
+  IDLE/clocked at silence → ~7 % idle CPU, top idle-heat source). nexusqd runs
+  arecord **only while a stream plays** (gate = sink-input count, not level).
+  **Idle-healthy tell:** no `arecord`, `tas5713` sink **SUSPENDED** (not IDLE) in
+  `pactl list short sinks`, nexusqd **~0-1 %** CPU (was ~7 %); playback → arecord
+  present + sink RUNNING; after → re-gated → SUSPENDED. arecord running at idle /
+  sink IDLE / nexusqd ~7 % = regression. Dep `+pulseaudio-utils`.
+  🆕 **The gate is EVENT-DRIVEN since nexusqd r13 (2026-08-13)** — it used to poll
+  `pactl list short sink-inputs` every 1.5 s while the tap was off (~0.67 forks/s,
+  and each short-lived client also woke every *other* PA subscriber on the box).
+  Now one **persistent `pactl subscribe`** child feeds `'new'`/`'remove'`
+  sink-input events into the poll loop; timed re-counts are a safety net (30 s
+  tapping / 60 s idle once the subscriber is proven ≥2 s alive, 1.5 s while it is
+  down, respawn every 10 s). **Healthy tell:** exactly **one** long-lived
+  `pactl subscribe` under `nexusqd.service` and **no** recurring short-lived
+  `pactl` from it; a stream of short `pactl` forks on r13+ = the subscriber keeps
+  dying (check PA). Gate latency measured live: a silent sink-input opens the tap
+  in **~200 ms**. See `docs/2026-07-08-audio-volume-scale-and-bootlog-cleanup.md`
+  + `docs/2026-08-13-idle-opp-residency-measurement.md`.
 - **Volume gain RESOLVED (v1.7.2 kernel 0038 + v1.7.3 device r35, verified live)** — PA
   used to stack **both** TAS5713 controls: `analog-output-speaker.conf` marked
   `[Element Master]` **and** `[Element Speaker]` as `volume = merge`, so PA filled
@@ -392,7 +432,9 @@ moment the ring froze?).
 
 Give the user the verdict and the specific findings with their evidence (quote
 the timeline / snapshot section), and—if a finding implies a code fix—name the
-file to change (e.g. `pmos/nexusqd/` for the missing watchdog) rather than
+file to change (that is how the `nq_progress` false-CRIT vector opened by
+nexusqd r13 got named and then fixed in
+`pmos/device-google-steelhead/nq-healthd`, device r72, 2026-08-13) rather than
 applying a workaround. Captures persist under `nq-captures/` for later diffs, so
 you can compare a "good" run against a "bad" one.
 

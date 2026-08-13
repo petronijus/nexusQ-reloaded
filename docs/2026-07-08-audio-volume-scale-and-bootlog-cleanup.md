@@ -32,6 +32,17 @@ flows, so idle pactl overhead ≈ 0. `audio_open()` now returns the arecord pid;
 
 Idle CPU **~7 % → ~1 %**. Satisfies the AI-handover "idle temperature / performance" task.
 
+> **Superseded in part on 2026-08-13 (nexusqd r13) — the "idle pactl overhead ≈ 0"
+> claim above was wrong.** The 1.5 s tap-off cadence forked a `pactl` ~**0.67×/s
+> around the clock**, and each short-lived PA client additionally woke every
+> *other* PA subscriber on the box (`nexusq-control`'s bridge) with client-connect
+> events. Measured in the 2026-08-13 idle attribution as part of nexusqd's
+> ~4.4 % of a core / 22 wakeups per s. r13 makes the gate **event-driven** (a
+> persistent `pactl subscribe`; the timed re-count demoted to a 30/60 s safety
+> net) and adds an adaptive idle render cadence → **0.165 % of a core,
+> 2.9 wakeups/s**. The gate SEMANTICS above are unchanged (sink-input count, not
+> level). See `docs/2026-08-13-idle-opp-residency-measurement.md`.
+
 ## 2. TAS5713 Master volume scale — no PA software boost (BUILDING, v1.7.2, NOT flashed)
 
 Kernel patch `0038-ASoC-tas571x-tas5713-steelhead-volume-scale-no-sw-boost.patch`

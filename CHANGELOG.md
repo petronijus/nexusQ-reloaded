@@ -6,6 +6,256 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Measured — post-r71/r13 idle attribution: `nq-healthd` is the new #1 consumer (2026-08-13, 240 s window, ring blanked)
+- Total idle busy **8.73 % of one core** (was **18.2 %** in the overnight window
+  before the day's fixes), forks **2.59/s** (was 13.96/s).
+- Per-cgroup: **nq-healthd 2.43 % (new #1)** · init.scope 1.69 % ·
+  nexusq-btagent 0.90 % · sshd 0.86 % · nexusq-mqtt 0.47 % · wifi-watchdog
+  0.36 % · avahi 0.30 % · dbus-broker 0.18 % · **nexusqd 0.14 % (confirms r13)**.
+- Wakeups/s: **brcmf kworker 33.9** · kworker/0:1-events 13.1 · rcu_sched 11.5 ·
+  irq/116-i2c 10.0 · dbus-broker 7.4 · brcmf_wdog 6.5 · avahi 5.8 · systemd 4.7 ·
+  btagent 3.3 · nexusqd 3.0 · healthd 2.6.
+- ⚠️ **MEASUREMENT CAVEAT — record it with the numbers:** an ssh poll loop (8
+  logins inside the window) inflated `sshd` **and** `init.scope` (every login makes
+  pid 1 build and tear down a PAM session), so the **pid1 / sshd / user.slice
+  figures are NOT trustworthy**; the other daemons' figures are. Real idle busy
+  ≈ **7.7 %**. Two earlier attempts were **discarded outright**: one wrote its
+  snapshots to the void (empty diffs), and its ~400 `awk` forks heated the die
+  **60 → 67 °C**. Rules for next time: wait for `led_sum == 0`, run **detached**
+  and fetch **once** (no polling), **one** `awk` fork per snapshot.
+- **Next targets, in order:** (1) re-measure the overnight opp350 window from HA
+  history, **no ssh overnight**; (2) **nq-healthd C rewrite** — the residual
+  2.43 % is its ~6 forks/tick (`date`, `timeout`+`nexusled`, `od`+`awk`,
+  amortized `dmesg`); the correct fix is a C daemon in the nexusqd mould
+  (in-process socket connect for the liveness probe instead of forking
+  `nexusled`, `/dev/kmsg` instead of `dmesg`, in-process hashing instead of
+  `od|awk`) — **deliberately NOT started 2026-08-13**: three rewrites of the
+  observability layer in one day is unacceptable churn; (3) **WiFi wakeups** —
+  `brcmf` ~40/s dominates every other wakeup source combined; investigate
+  mDNS/avahi chatter + MQTT keepalive; (4) `nexusq-mqtt`'s 30 s `pactl` volume
+  poll (2 forks/30 s ≈ 0.09 %) → take volume from `nexusq-control`'s persistent
+  subscribe bridge; (5) governor tunables **last**; (6) commit r71 + r13 + r72 +
+  mqtt r2 + the app change + `docker-build.sh`.
+- Device-side leftovers still present after the study:
+  `/var/log/nq-idle-study/attrib.log` (**36 MB**) and
+  `/usr/local/bin/nq-idle-attrib.sh` (service **stopped** 2026-08-13; a local copy
+  of the log was pulled for the analysis).
+
+### Fixed — build: OTA package ORDER is no longer load-bearing (2026-08-13, `docker-build.sh`)
+- The `OTA_PACKAGES_ONLY=1` loop interleaved `pmbootstrap checksum <pkg>; build
+  <pkg>` **per package, in the caller's order**. When a listed package `depends=`
+  another listed package, pmbootstrap resolves the dep and builds it **from inside
+  the first build** — while that dep's aport still carries the
+  `sha512sums="SKIP"` placeholder → `>>> ERROR: <dep>: <dep> is missing in
+  checksums`, and the whole run exits **3**.
+- Bit `nexusq-btagent`→`nexusq-setupd` before (documented only as a "list
+  dependencies first" workaround in `.claude/agents/nexusq-build.md`), and again
+  on 2026-08-13 with `device-google-steelhead`→`nexusq-mqtt` (r72 `depends=` the
+  mqtt aport).
+- **Fix:** a checksum pass over the **entire** `$_ota_list` first, then a separate
+  build pass. Order-independent — the workaround is no longer required, and the
+  failure mode catalogue in `.claude/agents/nexusq-build.md` is updated to say so.
+
+### Fixed — the LED "stalled" alarm now reports a VERDICT, not a raw counter (2026-08-13, `nexusq-mqtt` r1→r2 built + OTA-published + installed, live-verified; companion app change is **code-only**)
+- Closes the last open action item of
+  `docs/2026-08-11-overnight-telemetry-analysis.md` (§6 / §10 item 2, previously
+  ⛔ open): **every idle Q permanently reported "LED ring frame is stalled"** in
+  the app's Health panel ~10 min after the music stopped. The app thresholded
+  `led_stall >= 6`, but that counter measures the ring's frame **CONTENT** staying
+  identical — which the screensaver does **by design** (locks at `SS_LOCK_S`=300 s,
+  blanks at `SS_BLANK_S`=600 s) while the 1 Hz AVR keepalive re-commits the very
+  same bytes.
+- **`nexusq-mqtt` r2** publishes a new boolean **`led_stalled`** =
+  `led_stall >= LED_STALL_MIN(6)` **AND** (`nq_resp` falsy **OR** `nq_progress`
+  falsy) — i.e. the judgement is made **on-device**, from the same distress
+  co-signal `nq-healthd` itself uses to choose crit `led_frozen` over info
+  `led_static`, so daemon and telemetry agree **by construction**. `led_stall`
+  stays in the payload as a diagnostic number.
+- New HA discovery entity: `binary_sensor` key `led`, name **"LED ring"**,
+  `device_class: problem`, `entity_category: diagnostic`, template
+  `{{ 'OFF' if (not (value_json.led_stalled | default(false))) else 'ON' }}` — an
+  **absent** field reads as healthy rather than inventing an alarm out of a
+  missing signal. Live: `binary_sensor.nexus_q_led_ring = off` in HA with the
+  payload showing `led_stall=17, led_stalled=False`. Daemon test suite **28/28**.
+- **Companion app (code only — NOT built, NOT released):**
+  `companion/app/lib/screens/health_screen.dart` `healthProblems()` swaps
+  `led_stall >= 6` for `s['led_stalled'] == true`, message **"LED ring is
+  stalled"**. A device too old to send the field raises **nothing** (silence beats
+  a known-false alarm; a genuinely dead daemon still surfaces via
+  `nexusqd_alive`). `companion/app/test/health_problems_test.dart`: the old
+  assertion replaced + **two new regression tests** — a payload with
+  `led_stall: 9751` **and** `led_stalled: false` must be EMPTY, and `led_stalled`
+  fires only on a real boolean `true` (not `1`, not `"yes"`, not `null`). 6/6 pass
+  under `flutter test`. ⚠️ **No pubspec bump, no APK build, no GitHub release, no
+  `app-release.json` bump — the app release needs Petr's approval** (it
+  self-installs on his phone).
+
+### Fixed — `nq_progress` measured over a WINDOW, not per sample — a false CRIT created by r13's own success (2026-08-13, `device-google-steelhead` r71→r72; built + OTA-published to gh-pages + installed on the Q, live-verified)
+- **A second-order defect created by `nexusqd` r13.** `nq_progress` was "did
+  nexusqd's `/proc/pid/stat` tick count change since the last 5 s sample". Valid
+  while nexusqd burned 4.4 % of a core (≈22 USER_HZ ticks per sample) — but r13
+  dropped it to **0.165 % ≈ 0.8 ticks per sample**, so a **zero delta became the
+  ORDINARY reading for a perfectly healthy daemon**. Combined with `LED_STALL`
+  reaching 6 being *guaranteed* on a locked/blanked ring (the keepalive re-commits
+  identical bytes), healthd's co-signal
+  `[ "$nq_resp" = 0 ] || [ "$nq_progress" = 0 ]` fired **CRIT `led_frozen` on a
+  healthy idle device**.
+- **Not theoretical — it fired twice on the live device** in the window between
+  r13 and r72 landing. Evidence from `/var/log/nq-health/events.jsonl`:
+  ```json
+  {"t_mono":214110,"sev":"crit","kind":"led_frozen","msg":"LED frame unchanged for 6 samples with distressed nexusqd (resp=1 progress=0) - ring/AVR/nexusqd hang"}
+  ```
+  (and again at `t_mono` 214497). After r72 the same situation correctly logs
+  **info `led_static` … (resp=1)**.
+- **Fix:** new `NQ_LAST_TICK_MOVE` state + `PROGRESS_STALE_S` (env
+  `NQ_PROGRESS_STALE_S`, default **60 s**). `nq_progress` is 0 only when nexusqd's
+  CPU time has **not advanced for that long**; at r13's idle rate nexusqd accrues a
+  tick roughly every 6 s, so 60 s of silence is ~10× beyond normal and genuinely
+  means wedged. The window resets when the unit is not running. File:
+  `pmos/device-google-steelhead/nq-healthd`.
+- Doc note: this closes the "UNVERIFIED RISK / flagged, not yet seen in a capture"
+  warnings the earlier 2026-08-13 sweep left in `scripts/diag/README.md`,
+  `.claude/agents/nexusq-diag.md` and `.claude/skills/nexusq-diag/SKILL.md` — it
+  **was** seen, and it is fixed.
+
+### Changed — nexusqd: event-driven PA gate + adaptive idle render cadence (2026-08-13, `nexusqd` r12→r13; built + OTA-published to gh-pages + installed on the Q, live-verified)
+- **Why:** the same 2026-08-13 idle attribution
+  (`docs/2026-08-13-idle-opp-residency-measurement.md`) put **nexusqd at ~4.4 % of
+  a core and 22 wakeups/s** on a fully idle box — the #2 consumer, and the top one
+  once r71 shipped. Two causes: (a) the PA sink-input gate polled `pactl list short
+  sink-inputs` every `PA_POLL_S`=1.5 s whenever the tap was off, forking ~0.67
+  procs/s around the clock (and each short-lived client also woke every OTHER PA
+  subscriber on the box, e.g. `nexusq-control`'s bridge, with connect events);
+  (b) the render loop ran a full 20 fps tick forever, even with the ring
+  locked/blanked and the frame bit-identical.
+- **Event-driven gate:** new `pa_subscribe_open()` (`audio.c`/`audio.h`) spawns a
+  persistent `pactl subscribe` child; its non-blocking stdout is watched in the
+  main `poll()`. Lines matching `on sink-input` + `'new'`/`'remove'` set
+  `pa_check` → re-count. The timed re-count becomes a slow safety net
+  (`PA_SAFETY_ON_S`=30 s tapping, `PA_SAFETY_OFF_S`=60 s idle) and falls back to
+  `PA_POLL_S`=1.5 s while the subscriber is down/unproven. Dead subscriber
+  (EOF/HUP) → close + respawn every `PA_SUB_RESPAWN_S`=10 s. `'change'` events are
+  deliberately ignored (they don't alter the count). r12's "while music flows we
+  never poll" still holds for the TIMED path; an EVENT may re-count mid-playback —
+  an accepted deviation, bounded by real PA activity rather than by a clock.
+- **Adaptive idle cadence:** after `IDLE_AFTER_TICKS`=40 bit-identical renders
+  **and** an *intent-idle* test, the render deadline stretches to
+  `IDLE_FRAME_S`=1.0 s — matching the 1 Hz AVR keepalive. Caps:
+  `IDLE_TAP_FRAME_S`=0.25 s while the tap is open (a possibly-PAUSED stream still
+  holds a sink-input), `MUTE_BLINK_S`=0.5 s while the update-available blink is
+  live. Keys, any mutating control command (`CTL_STATUS` excluded — healthd probes
+  it every 5 s), and a tap off→on transition reset `static_ticks` and force an
+  immediate render.
+- **Fixed during adversarial review (all found + fixed BEFORE shipping):**
+  - **CRITICAL — 1 s black ring on a volume press from idle.** `frame_int` was
+    computed *before* `poll()` but consumed *after* event handling
+    (`next_frame += frame_int`), so from idle cadence a single volume detent
+    rendered the overlay's fade-in first frame at `eased=0` — with
+    `RX_COLOR_R=0x00` that is **pure black** — and scheduled the next render 1.0 s
+    later, by which time `RX_TIMEOUT_S` had expired. Net: the ring went black for
+    ~1 s instead of showing the volume flash. Fix: the whole cadence choice moved
+    to the **END** of the render tick (it picks the NEXT deadline, so it must see
+    post-render state); `tick_base` preserves the non-drifting accumulate + resync.
+  - **MAJOR — stretching mid-animation.** Keying the stretch on bytes alone
+    engaged during the breathing screensaver: near its cosine trough the breath
+    quantizes to an identical frame for >40 ticks at low global brightness (breath
+    would visibly freeze, then step). Fix: an **INTENT** test — stretch only when
+    there is no overlay, `child_alpha == 0`, no breathe/spin override, and the
+    screensaver is locked (`elapsed_no_audio > SS_LOCK_S`) or blanked. Bytes AND
+    intent must both agree.
+  - **MAJOR — gate blind for the whole respawn gap.** `pa_poll` kept its 30/60 s
+    safety deadline after the subscriber died, so the documented 1.5 s degraded
+    polling never ran; a stream started right after a PA restart left the
+    visualizer dark ~10 s. Fix: clamp `pa_poll` to `now + PA_POLL_S` in the
+    EOF/HUP path.
+  - **MAJOR — a doomed subscriber armed the long horizon.** `fork`+`exec` succeed
+    even when PulseAudio is down (the child only EOFs afterwards). Fix:
+    `PA_SUB_PROVEN_S`=2.0 — a subscriber earns the long safety horizon only after
+    surviving that long.
+  - **MINOR — leaked pipe fd defeated the arecord SIGPIPE backstop.** The pipe
+    read ends lacked `FD_CLOEXEC`, so the long-lived subscribe child inherited
+    `arecord`'s read end; `audio_close()`'s documented SIGPIPE backstop then had a
+    second holder and `arecord` could survive a raced SIGTERM, capturing forever
+    and pinning the sink out of suspend. Fix: `FD_CLOEXEC` in both spawn helpers.
+  - **MINOR — a leaked locale would silently kill every match.** pactl's event
+    wrapper `Event '%s' on %s #%u` is gettext-translated. Fix: `setenv LC_ALL=C`
+    in the forked children.
+  - The volume **overlay is excluded from the stretch** — it was hitting 40 static
+    ticks during its 1 s hold, delaying expiry + the mute-LED hand-back.
+- **Verified on device (r13 live), acceptance suite of 5 tests** driven
+  programmatically off the AVR `frame` attr (the same bytes healthd fingerprints):
+  volume overlay from deep idle visible in **~8 ms** (the pre-fix bug would have
+  left it black); screensaver still breathes (`led_sum` 8192→1248 over 6 s — i.e.
+  cadence NOT stretched while animating); a **silent** sink-input
+  (`paplay /dev/zero`, nothing audible) brings the tap up in **~200 ms** via the
+  subscribe path and it closes again when the stream ends; exactly **1** persistent
+  child (`pactl subscribe`), 7 open fds, `NRestarts` unchanged.
+- **Blanked-idle measurement** (waited 548 s for the ring to blank, then a 120 s
+  window with NO ssh session): nexusqd **198 ms/120 s = 0.165 % of a core (was
+  4.4 %, −96 %)**, **2.9 wakeups/s (was 22/s, −87 %)**, system-wide fork rate
+  2.6/s, die 59.2 °C.
+- ⚠️ **Method note — never A/B across screensaver states.** The first attempt
+  measured 1.6 % / 54 wakeups per s and was **DISCARDED as invalid**: a fresh
+  `systemctl restart nexusqd` restarts the screensaver, so the ring was
+  legitimately breathing at 20 fps (`led_sum` ≠ 0). The r12 comparison numbers come
+  from the locked+blanked state — any A/B must wait out `SS_LOCK_S`/`SS_BLANK_S`
+  first.
+- **Cumulative idle picture for 2026-08-13:** healthd 6.3 → 2.3 % (r71),
+  `nq-idle-study` stopped (~3.8 %), nexusqd 4.4 → 0.165 % (r13) — roughly **12 pp
+  of one core** of constant idle background removed since the morning's 60.5 % @
+  350 MHz baseline.
+- **Known issues / next:** the only remaining idle `pactl` forker is quantified —
+  **`nexusq-mqtt`'s 30 s volume/mute poll** (2 forks per 30 s ≈ 0.09 % of a core,
+  ≈ the 47 s of `pactl` CPU seen overnight). Proposed follow-up (NOT done): have
+  `nexusq-mqtt` take volume from `nexusq-control` (which already runs a persistent
+  `pactl subscribe` bridge) instead of forking `pactl`.
+
+### Changed — nq-healthd fork diet (2026-08-13, `device-google-steelhead` r70→r71; built + OTA-published to gh-pages + installed on the Q, live-verified)
+- **Why:** the first clean idle-OPP measurement (14 h overnight MQTT window,
+  2026-08-13) landed at **60.5 % @ 350 MHz** and the same-day attribution from the
+  device's own logs (the 2026-08-11 `nq-idle-attrib.sh` sampler log, 36 MB, + live
+  60 s per-cgroup `cpu.stat` deltas) put **nq-healthd at ~6.3 % of a core** —
+  ~0.6 % the shell itself, **~5.7 % its forked children** — the single biggest
+  idle consumer. System-wide fork rate at idle: **13.96/s** (702 759 forks
+  overnight); 63 % of all busy CPU was short-lived forked children. Record:
+  `docs/2026-08-13-idle-opp-residency-measurement.md`.
+- **r71:** every sysfs/procfs read is now an ash-builtin `read` (`rdv` helper,
+  no `$(cat)`); `/proc/pid/stat` parsed fork-free (`read_stat`, replaces 2×
+  awk); LED frame fingerprint = **one** `od|awk` pass (byte sum + rolling hash;
+  no more `md5sum` — `led_fp` only ever feeds an equality test); dmesg ring
+  scan amortized to every `NQ_DMESG_EVERY` ticks (default 6 = 30 s); rotation
+  `stat()` every 12 ticks; pstore counted by glob (no `ls|wc`);
+  loadavg/meminfo/uptime via builtins; `systemctl show` output parsed by the
+  fork-free `sv()` (no sed/subshell); librespot liveness = cgroup membership
+  scan (`cg_scan`) with restart detection via "cached pid no longer a member
+  while the cgroup is non-empty" (no more `grep` on cmdline); inter-sample
+  sleep replaced by a fork-free `read -t` on a private fifo fd 9 (probed at
+  startup, falls back to `sleep`; the start event carries `tickfd=0/1`).
+  **JSONL schema UNCHANGED** (keys verified identical). Fixed during review:
+  `set --` in the AVR-scan/pstore-glob clobbered `sample()`'s `$1`, so `--once`
+  is captured up front (`_oncearg`).
+- **Verified on-device A/B** (60 s each, systemd-run transient units, throwaway
+  `NQ_LOGDIR`): r70 = **4212 ms** CPU, r71 = **1682 ms** (**−60 %**), system
+  forks **−517/min** (−43/tick). Production unit after the OTA: **1403 ms/60 s
+  = 2.3 %** (was 6.3–7.0 %), system-wide fork rate **3.2/s** (was ~14/s incl.
+  the now-stopped idle-study sampler).
+- Also **stopped the leftover `nq-idle-study` transient unit** (~3.8 % of a
+  core; the 2026-08-11 sampler — script + logs remain on the device). Together
+  ~8 pp of one core of constant idle background removed; tonight's overnight
+  window is the free A/B — expect opp350 well above 60.5 %.
+- **Known issues / next (idle attribution, in impact order):** re-measure the
+  overnight opp350 window tomorrow morning from HA/MQTT (no ssh overnight) ·
+  ~~**nexusqd wakes 22×/s** for a 1 Hz keepalive (event-loop poll timeout
+  audit)~~ ✅ **done the same day — nexusqd r13, see the entry above** (22 → 2.9
+  wakeups/s) · ~~something forks `pactl` repeatedly at idle (volume polling —
+  switch to a subscription)~~ **mostly done same day** — nexusqd's 1.5 s poll is
+  gone (r13); the residue is `nexusq-mqtt`'s 30 s volume/mute poll (~0.09 % of a
+  core), follow-up proposed · `conservative` governor tunables only after those,
+  to see if the residual 5.1 % @ 1200 MHz collapses on its own.
+  *(Superseded later the same day — see "Measured — post-r71/r13 idle
+  attribution" at the top of [Unreleased]: healthd is **again** #1 at 2.43 %, and
+  `brcmf` WiFi wakeups moved ahead of the `pactl` residue.)*
+
 ## [1.12.0] — 2026-08-12 — OTA everywhere (device · app · full-system) · MQTT health telemetry → Home Assistant + app · USB Audio as a mixing PulseAudio source · iOS app · idle-power made measurable
 
 ### Changed — USB Audio back into PulseAudio via a stable-clock snd-aloop hop (2026-08-12, `device-google-steelhead` r68→r70; committed + OTA-published gh-pages `4d1d8e1`; live-verified)

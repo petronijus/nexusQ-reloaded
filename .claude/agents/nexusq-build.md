@@ -136,6 +136,21 @@ runtime `depends` (glibc-rt, control/btagent/setupd/mqtt, firmware, python3) are
 rebuilt (unchanged, already cached). Use this for a fast daemon/config OTA; use the
 full pipeline when the rootfs/kernel changed.
 
+✅ **FIXED 2026-08-13 (was: "list dependencies FIRST in `OTA_PACKAGES`") — the
+package ORDER is no longer load-bearing.** The loop used to interleave
+`pmbootstrap checksum <pkg>; build <pkg>` **per package, in the caller's order**.
+When a listed package `depends=` another **listed** package, pmbootstrap resolves
+the dep and builds it **from inside the first build** — while that dep's aport
+still carries the `sha512sums="SKIP"` placeholder → `>>> ERROR: <dep>: <dep> is
+missing in checksums`, and the whole run exits **3**. It bit
+`nexusq-btagent`→`nexusq-setupd`, and again on 2026-08-13 with
+`device-google-steelhead`→`nexusq-mqtt` (r72 `depends=` the mqtt aport).
+`docker-build.sh` now runs a **checksum pass over the ENTIRE `$_ota_list` first**,
+then a separate build pass — so **you no longer need to order `OTA_PACKAGES` by
+dependency**. (If you ever see `is missing in checksums` from an OTA run again,
+that first pass has regressed — fix the pass, do not re-introduce the ordering
+workaround.)
+
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
 `ln -sf … "$pkgdir"/etc/systemd/system/default.target` as the **first** thing to touch
@@ -366,10 +381,14 @@ Check and REPORT each (PASS/FAIL + evidence):
   BCM4330B1 build 0749** (md5 `7e5bb859e33142e94052c76fba23b9e6`, 51813 B) — NOT the
   wrong `Proxima … NoExtLNA` build-0482 blob (md5 `16db686…`) that shipped through
   v1.8.2.
-  ⚠️ **BUILD PHASE ORDER IS LOAD-BEARING: `nexusq-btagent` (Phase 7c3) MUST be
-  checksummed + built BEFORE `nexusq-setupd` (Phase 7c4)**, which now `depends=` on
-  it. The reverse order fails **every clean build** with `nexusq-btagent is missing in
-  checksums`. `docker-build.sh` also `--force`s the
+  ⚠️ **BUILD PHASE ORDER IS LOAD-BEARING *in the FULL pipeline*: `nexusq-btagent`
+  (Phase 7c3) MUST be checksummed + built BEFORE `nexusq-setupd` (Phase 7c4)**,
+  which now `depends=` on it. The reverse order fails **every clean build** with
+  `nexusq-btagent is missing in checksums`. *(Scope note 2026-08-13: the Phase 7c\*
+  blocks still interleave `checksum <pkg>; build <pkg>` per phase, so this
+  constraint is REAL here. It no longer applies to the `OTA_PACKAGES_ONLY=1` path —
+  that one now checksums the whole list first; see the §OTA section.)*
+  `docker-build.sh` also `--force`s the
   nexusqd/nexusq-control/nexusq-btagent/nexusq-setupd/nexusq-mqtt builds
   (warm-volume stale-apk trap).
   🆕 **`nexusq-mqtt` (2026-08-10, 0.1.0-r0, noarch — Phase 7c5):** the MQTT health
