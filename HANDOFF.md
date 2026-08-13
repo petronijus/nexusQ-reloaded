@@ -185,13 +185,58 @@ for `led_sum == 0`, run **detached** and fetch **ONCE** (no polling), **one**
    `nexusq-control`, which already runs a persistent `pactl subscribe` bridge.
 5. **Governor tunables LAST** — only after 1–4, see whether the residual
    5.1 % @ 1200 MHz collapses on its own before touching `conservative` knobs.
-6. Commit **r71 + r13 + r72 + mqtt r2 + the app change + `docker-build.sh`** +
-   doc updates (working tree; the three apks are already published — source and
-   repo state should converge). **The app release itself needs Petr's approval.**
+6. ✅ ~~Commit r71 + r13 + r72 + mqtt r2 + app + `docker-build.sh` + docs~~ —
+   done 2026-08-13, pushed (`2989e43`…`1cc1299`); `app-v1.13.1` released with
+   the manifest live, so the repo, the OTA repo and the device agree again.
+
+7. 🔴 **AGREED WITH PETR 2026-08-13, DO IT NEXT SESSION: a COMPLETE COLD BUILD,
+   to prove the whole tree still builds from nothing.** Everything shipped this
+   year has been built on the **warm** `nexusq-workdir` volume, which reuses
+   cached aports and can therefore hide an APKBUILD error entirely (the r63
+   class of bug). Today's four OTA packages — nexusqd **r13**,
+   device-google-steelhead **r71/r72**, nexusq-mqtt **r2** — have **never been
+   clean-built**, and neither were r68 / mqtt r1 before them.
+
+   Run the FULL pipeline (not `OTA_PACKAGES_ONLY`) on a **throwaway volume**, so
+   the production one is never at risk:
+
+   ```sh
+   docker build -t nexusq-builder .
+   docker run --rm --privileged \
+       -v "$PWD:/src:ro" \
+       -v nexusq-output-cold:/tmp/output \
+       -v nexusq-workdir-cold:/home/pmos/.local/var/pmbootstrap \
+       --name nexusq-build-cold \
+       nexusq-builder /src/docker-build.sh 2>&1 | tee /tmp/nexusq-cold.log
+   ```
+
+   **Budget 2–4 h and expect the machine to be loud** — it compiles the kernel
+   (~30 min) and then **python3 for armv7 under qemu** (~30–60 min on its own,
+   ~10 parallel `cc1`, load average ~20 on the i9). Partial evidence already
+   exists: an accidental cold run on 2026-08-13 got the kernel done in ~30 min
+   and reached python3 (2 of 9 packages) with **zero checksum errors** before it
+   was stopped — so Phase 7b's new up-front checksum pass survives a cold tree.
+
+   ⚠️ **Known blocker to expect:** the 2026-08-13 build logged
+   `partition.py partitions_mount: PATTERN NOT FOUND (pmbootstrap changed?)`
+   in Phase 6b. Every other patch applied (including the load-bearing
+   `backend.py` abuild-as-root one), and OTA builds never reach that code — but
+   the **full** pipeline does, at the Phase 10 rootfs mount. Re-target that
+   pattern before or during the run, or the build will die at rootfs assembly
+   after having done all the expensive work.
+
+   Afterwards: verify the rootfs by MOUNTING it (systemd init, nexusqd, sshd —
+   the v1.5.0 lesson), check the boot.img is ramdisk-less and under the 8 MB
+   partition ceiling, then **delete the `-cold` volumes and prune the images**
+   (the always-prune rule). Do NOT publish anything from a cold build without
+   comparing it against what is already live.
+
    *(Done 2026-08-13: ~~nexusqd wakeup audit~~ → r13; ~~find the idle `pactl`
    forker~~ → it was nexusqd's own 1.5 s gate poll, now event-driven, plus the
    nexusq-mqtt residue in item 4; ~~led_stall false alarm~~ → mqtt r2 + app;
-   ~~nq_progress false CRIT~~ → device r72.)*
+   ~~nq_progress false CRIT~~ → device r72; ~~OTA build order load-bearing~~ →
+   `docker-build.sh` Phase 7b; ~~connect_gate test depended on the LAN~~ →
+   discovery injection seam.)*
 
 ---
 

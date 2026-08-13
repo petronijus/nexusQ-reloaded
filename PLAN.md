@@ -3,6 +3,17 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🔴 NEXT SESSION — a complete COLD build (agreed with Petr, 2026-08-13)
+>
+> Everything we ship is built on the **warm** `nexusq-workdir` volume, which
+> reuses cached aports and can hide an APKBUILD error outright. **No package we
+> currently run has ever been clean-built** — nexusqd r13, device r71/r72 and
+> nexusq-mqtt r2 included. Run the FULL pipeline on throwaway `-cold` volumes,
+> budget **2–4 h**, and expect the Phase 6b `partitions_mount` pattern to need
+> re-targeting before Phase 10 can assemble the rootfs. Exact command, evidence
+> from the partial cold run, and the post-build verification list are in
+> **HANDOFF.md → WHERE TO CONTINUE (2026-08-13), item 7**.
+
 > ## 🎯 STANDING GOAL — idle OPP residency
 >
 > **With every streaming service off and nothing playing — the Q just sitting
