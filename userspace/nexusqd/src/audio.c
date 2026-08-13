@@ -38,6 +38,11 @@ int audio_open(pid_t *pid) {
     }
     close(pf[1]);
     fcntl(pf[0], F_SETFL, O_NONBLOCK);
+    /* CLOEXEC: a later child (the long-lived `pactl subscribe`) must not inherit
+     * this read end. audio_close() relies on closing it to SIGPIPE arecord as its
+     * backstop; a second holder keeps the pipe open and arecord would survive a
+     * raced SIGTERM, capturing forever and pinning the sink out of suspend. */
+    fcntl(pf[0], F_SETFD, FD_CLOEXEC);
     if (pid) *pid = p;
     return pf[0];
 }
@@ -67,6 +72,7 @@ int pa_sink_inputs_active(void) {
         close(pf[0]); close(pf[1]);
         int dn = open("/dev/null", O_WRONLY);
         if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+        setenv("LC_ALL", "C", 1);   /* keep pactl's output untranslated (see below) */
         execlp("pactl", "pactl", "list", "short", "sink-inputs", (char *)NULL);
         _exit(127);
     }
@@ -87,4 +93,38 @@ int pa_sink_inputs_active(void) {
         i = j + 1;
     }
     return count;
+}
+
+int pa_subscribe_open(pid_t *pid) {
+    /* Same spawn shape as audio_open(): stdout -> non-blocking pipe, stderr ->
+     * /dev/null, child auto-reaped via the daemon's SIGCHLD=SIG_IGN. `pactl
+     * subscribe` prints one line per PA event and otherwise sleeps in the PA
+     * socket — a subscription is not a stream, so it does NOT hold any sink out
+     * of suspend. If PulseAudio is down the child exits at once; the caller sees
+     * EOF/HUP and falls back to timed polling until a respawn sticks. */
+    if (pid) *pid = -1;
+    int pf[2];
+    if (pipe(pf) != 0) return -1;
+    pid_t p = fork();
+    if (p < 0) { close(pf[0]); close(pf[1]); return -1; }
+    if (p == 0) {
+        dup2(pf[1], STDOUT_FILENO);
+        close(pf[0]); close(pf[1]);
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+        /* The caller matches pactl's English event wrapper ("Event 'new' on
+         * sink-input #N"). The facility and type tokens are untranslated
+         * literals, but the surrounding format string IS in pactl's gettext
+         * catalog — a locale leaking into the daemon's environment would drop
+         * the word "on" and silently kill every match, degrading the gate to
+         * its safety net with no error anywhere. Pin C for the child. */
+        setenv("LC_ALL", "C", 1);
+        execlp("pactl", "pactl", "subscribe", (char *)NULL);
+        _exit(127);
+    }
+    close(pf[1]);
+    fcntl(pf[0], F_SETFL, O_NONBLOCK);
+    fcntl(pf[0], F_SETFD, FD_CLOEXEC);   /* see audio_open() */
+    if (pid) *pid = p;
+    return pf[0];
 }

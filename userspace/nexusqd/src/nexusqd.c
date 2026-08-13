@@ -58,6 +58,41 @@
 #define PA_POLL_S    1.5   /* min seconds between sink-input re-counts (at a transition) */
 #define TAP_QUIET_S  4.0   /* raw-silent this long while tapping -> re-check if the stream ended */
 
+/* r13: the gate is EVENT-DRIVEN. A persistent `pactl subscribe` child (see
+ * pa_subscribe_open) feeds PA events into the poll loop, and a sink-input
+ * membership event ("'new'/'remove' on sink-input") triggers the re-count —
+ * the timed PA_POLL_S polling above becomes the FALLBACK for when the
+ * subscriber is down (PA restarting / not up yet at boot). While the
+ * subscriber is healthy the timed re-count degrades to a slow safety net
+ * bounding the staleness of a missed event. Why it matters: the 1.5 s poll
+ * forked a pactl ~0.67x/s around the clock (2026-08-13 idle attribution), and
+ * every one of those short-lived clients also woke every OTHER PA subscriber
+ * on the box (nexusq-control's bridge) with client-connect events. */
+#define PA_SUB_RESPAWN_S 10.0  /* retry a dead `pactl subscribe` this often */
+#define PA_SAFETY_ON_S   30.0  /* safety re-count while tapping + raw-silent (subscriber PROVEN) */
+#define PA_SAFETY_OFF_S  60.0  /* safety re-count while the tap is off (subscriber PROVEN) */
+/* A just-forked subscriber is NOT yet evidence that PA is reachable: fork+exec
+ * succeed even when PulseAudio is down (the child only EOFs afterwards). Trusting
+ * a live fd alone let a doomed child arm the 30/60 s safety deadline, and the
+ * 1.5 s degraded polling then never ran — the gate went blind for the whole
+ * respawn gap. A subscriber earns the long horizon only after surviving this
+ * long; until then the timed fallback stays at PA_POLL_S. */
+#define PA_SUB_PROVEN_S  2.0
+
+/* r13 idle render cadence. The ring's content is fingerprinted per tick anyway
+ * (the AVR memcmp gate); once it has been bit-identical for IDLE_AFTER_TICKS
+ * consecutive renders and nothing animated is active, the render deadline
+ * stretches to IDLE_FRAME_S — matching the 1 Hz AVR keepalive, so a locked/
+ * blanked screensaver costs one render+write per second instead of 20 wakeups/s
+ * (measured 22 wake/s, ~4.4 % of a core, 2026-08-13 attribution). Any key
+ * event, mutating control command, tap start, or frame change snaps it back.
+ * While the tap runs but is silent (a PAUSED stream keeps its sink-input), the
+ * cap is 0.25 s so un-pause shows on the ring without a visible hiccup; while
+ * the update-available blink is live the cap is MUTE_BLINK_S to keep its 2 Hz. */
+#define IDLE_FRAME_S     1.0
+#define IDLE_TAP_FRAME_S 0.25
+#define IDLE_AFTER_TICKS 40
+
 /* Compositor layers, by priority (matches the original arbitration):
  *   10  reaction   — volume overlay (Plan 2b), active only during the overlay
  *    8  manual     — CLI/socket override (set/theme/off), off until used (our feature)
@@ -193,10 +228,19 @@ int main(void) {
     int prev_overlay = 0;
     uint8_t lastpk[RING*3] = {0}, pk[RING*3];
     double next_frame = now_s();   /* monotonic render deadline (decouples fps from audio) */
+    double frame_int = 0.050;      /* current render interval; re-chosen at the END of each
+                                    * tick from the state that tick produced (see there) */
     double afd_retry = 0.0;        /* next time to re-spawn arecord after it died */
     int    tap_should_run = 0;     /* a real PA playback stream (sink-input) exists -> tap on */
-    double pa_poll = 0.0;          /* next PA sink-input re-count (gated; 0 = check now) */
+    double pa_poll = 0.0;          /* next timed/safety sink-input re-count deadline */
     double quiet_since = -1.0;     /* when the raw capture went silent while tapping (-1 = not) */
+    int    sfd = -1;               /* `pactl subscribe` stdout (event feed), -1 = down */
+    pid_t  spid = -1;
+    double sfd_retry = 0.0;        /* next subscribe respawn attempt */
+    double sfd_since = 0.0;        /* when the current subscriber was spawned (PA_SUB_PROVEN_S) */
+    int    pa_check = 1;           /* re-count sink-inputs NOW (start with one to sync) */
+    char   sline[256]; int slen = 0;   /* line assembly for the subscribe feed */
+    int    static_ticks = 0;       /* consecutive renders with a bit-identical frame */
 
     /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
      * ready, then ping WATCHDOG=1 from the render loop below. A *hang* in that
@@ -207,20 +251,44 @@ int main(void) {
     double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
     double last_avr_push = 0.0;    /* last AVR frame commit — drives the keepalive re-push */
     for (;;) {
-        /* PA sink-input gate (idle-CPU fix — see PA_POLL_S at the top). Re-count PA
-         * playback streams only at a possible transition: while the tap is OFF (a
-         * stream may have started) or while it is ON but has been raw-silent for
-         * TAP_QUIET_S (the stream may have ended). While music flows we never poll. */
+        /* PA sink-input gate (idle-CPU fix — see PA_POLL_S / PA_SUB_* at the top).
+         * Event-driven: `pactl subscribe` membership events set pa_check; the timed
+         * re-count runs only as a slow safety net (subscriber proven) or at
+         * PA_POLL_S (subscriber down/unproven — PA restarting / early boot). The
+         * TIMED path still fires only at a possible transition: while the tap is
+         * OFF (a stream may have started) or while it is ON but raw-silent (the
+         * stream may have ended) — so r12's "while music flows we never poll"
+         * still holds for it. An EVENT re-counts whenever it arrives, including
+         * mid-playback: a membership change is exactly what the count tracks, and
+         * it is bounded by real PA activity rather than by a clock. */
         {
             double nowg = now_s();
-            int poll_due = 0;
-            if (!tap_should_run)
-                poll_due = nowg >= pa_poll;                       /* watch for a stream starting */
-            else if (quiet_since >= 0.0 && nowg - quiet_since >= TAP_QUIET_S)
-                poll_due = nowg >= pa_poll;                       /* raw-silent a while: ended? */
+            if (sfd < 0 && nowg >= sfd_retry) {
+                sfd = pa_subscribe_open(&spid);
+                sfd_retry = nowg + PA_SUB_RESPAWN_S;
+                sfd_since = nowg;
+                if (sfd >= 0) { pa_check = 1; slen = 0; }   /* (re)spawned: resync the count */
+            }
+            int sub_proven = (sfd >= 0) && (nowg - sfd_since >= PA_SUB_PROVEN_S);
+            int poll_due = pa_check;
+            if (!poll_due) {
+                if (!tap_should_run)
+                    poll_due = nowg >= pa_poll;                   /* watch for a stream starting */
+                else if (quiet_since >= 0.0 && nowg - quiet_since >= TAP_QUIET_S)
+                    poll_due = nowg >= pa_poll;                   /* raw-silent a while: ended? */
+            }
             if (poll_due) {
+                int was = tap_should_run;
                 tap_should_run = pa_sink_inputs_active() > 0;
-                pa_poll = nowg + PA_POLL_S;
+                pa_check = 0;
+                pa_poll = nowg + (sub_proven
+                                  ? (tap_should_run ? PA_SAFETY_ON_S : PA_SAFETY_OFF_S)
+                                  : PA_POLL_S);
+                if (tap_should_run && !was) {
+                    /* a stream appeared: leave idle cadence NOW so the
+                     * visualizer fade-in starts on the next iteration */
+                    static_ticks = 0; next_frame = 0.0;
+                }
             }
             if (tap_should_run) {
                 /* (re)spawn arecord if it should be tapping but isn't yet
@@ -237,20 +305,23 @@ int main(void) {
             }
         }
 
-        struct pollfd pfds[3]; int np = 0;
-        int ki = -1, ai = -1;
+        struct pollfd pfds[4]; int np = 0;
+        int ki = -1, ai = -1, pi = -1;
         if (kfd >= 0) { ki = np; pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
         if (afd >= 0) { ai = np; pfds[np].fd = afd; pfds[np].events = POLLIN; np++; }
+        if (sfd >= 0) { pi = np; pfds[np].fd = sfd; pfds[np].events = POLLIN; np++; }
         pfds[np].fd = srv; pfds[np].events = POLLIN; int srvi = np; np++;
-        /* Frame cadence: 16 ms during the volume fade, 30 ms (~33 fps) while a
-         * music scene plays, else 50 ms (20 fps). The render is driven by the
-         * `next_frame` monotonic deadline below, NOT by audio-pipe readability:
-         * a continuously-fed ALSA loopback keeps `afd` readable, so polling on it
-         * would return instantly and free-run the render loop (the old ~37% CPU
-         * bug). poll() now only sleeps until the next frame is due; audio/input
-         * that arrives sooner just wakes us to drain, then we loop and re-sleep. */
-        double frame_int = reaction_overlay_active(&rx, now_s()) ? 0.016
-                         : ((child_alpha > 0.0f || (comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
+        /* Frame cadence is chosen AFTER the event drains, just above the render
+         * gate — never here. It is consumed only by the deadline advance
+         * (`next_frame += frame_int`), and a handler that runs between this
+         * point and there (a key, a control command, a PA event) changes which
+         * cadence is correct. Computing it pre-poll made the post-event render
+         * schedule its successor at the PRE-event interval: from idle cadence
+         * that was a full 1 s, so a single volume detent rendered the overlay's
+         * black first frame (eased=0, RX_COLOR_R=0) and the next render landed
+         * after RX_TIMEOUT_S had already expired — a 1 s black ring instead of
+         * the volume flash. poll()'s timeout derives from `next_frame` alone,
+         * so it needs nothing from here. */
         int to = (int)((next_frame - now_s()) * 1000.0);
         if (to < 0) to = 0;
         poll(pfds, np, to);
@@ -258,6 +329,9 @@ int main(void) {
         if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
             uint8_t b[INPUT_EVENT_SIZE*64]; int r = (int)read(kfd, b, sizeof(b));
             struct keyev ev[64]; int n = r > 0 ? keys_decode(b, r, ev, 64) : 0;
+            /* physical interaction: leave idle cadence and render immediately
+             * (the volume overlay must appear at its full 16 ms cadence) */
+            if (n > 0) { static_ticks = 0; next_frame = 0.0; }
             for (int i = 0; i < n; i++) {
                 if (!ev[i].down) continue;
                 double now = now_s();
@@ -334,9 +408,50 @@ int main(void) {
                         if (fp) { char js[1024]; int m=(int)fread(js,1,sizeof(js)-1,fp); js[m]=0; fclose(fp);
                                   struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; } }
                     }
+                    /* any mutating command leaves idle cadence and renders on this
+                     * very iteration (volume overlay wants its 16 ms immediately).
+                     * CTL_STATUS is the exception: healthd's `nexusled status`
+                     * probe fires every 5 s and must not keep cadence fast. */
+                    if (cmd.kind != CTL_STATUS) { static_ticks = 0; next_frame = 0.0; }
                     if (write(c, "ok\n", 3) < 0) { /* client gone */ }
                 } else { if (write(c, "err\n", 4) < 0) { /* client gone */ } }
                 close(c);
+            }
+        }
+
+        /* PA subscribe feed: assemble lines, flag a sink-input membership event
+         * for the gate at the top of the loop. 'change' events (volume moves,
+         * prop updates — constant during playback) do not alter the COUNT, so
+         * they are deliberately ignored. EOF/HUP = subscriber (or PA) died:
+         * close and let the gate respawn it after PA_SUB_RESPAWN_S, with timed
+         * polling covering the gap. */
+        if (pi >= 0 && (pfds[pi].revents & (POLLIN | POLLHUP | POLLERR))) {
+            char sb[512]; ssize_t sr; int sdead = 0;
+            while ((sr = read(sfd, sb, sizeof sb)) > 0) {
+                for (ssize_t si = 0; si < sr; si++) {
+                    if (sb[si] == '\n') {
+                        sline[slen] = 0; slen = 0;
+                        if (strstr(sline, "on sink-input") &&
+                            (strstr(sline, "'new'") || strstr(sline, "'remove'")))
+                            pa_check = 1;
+                    } else if (slen < (int)sizeof(sline) - 1) {
+                        sline[slen++] = (char)sb[si];
+                    }
+                }
+            }
+            if (sr == 0) sdead = 1;   /* EOF: pactl exited */
+            if (sdead || (pfds[pi].revents & (POLLHUP | POLLERR))) {
+                /* child already gone or pipe broken — auto-reaped (SIGCHLD=IGN),
+                 * so just drop the fd; never kill spid (pid may be reused) */
+                close(sfd); sfd = -1; spid = -1; pi = -1; slen = 0;
+                double nowd = now_s();
+                sfd_retry = nowd + PA_SUB_RESPAWN_S;
+                /* Re-arm the timed fallback: without this the deadline armed
+                 * while the subscriber was alive (up to 60 s out) survives its
+                 * death, so neither events nor polling would re-count for the
+                 * whole respawn gap — a stream started right after a PA restart
+                 * would leave the visualizer dark for ~10 s. */
+                if (pa_poll > nowd + PA_POLL_S) pa_poll = nowd + PA_POLL_S;
             }
         }
 
@@ -408,8 +523,9 @@ int main(void) {
          * monotonic deadline is due. dt is measured render-to-render, not
          * wake-to-wake, so the fades advance at real time. */
         if (now < next_frame) continue;
-        next_frame += frame_int;
-        if (next_frame < now) next_frame = now + frame_int;   /* fell behind -> resync */
+        double tick_base = next_frame;   /* the deadline is advanced at the END of
+                                          * this tick, once the cadence the just-
+                                          * rendered state implies is known */
         double dt = now - prev_now; prev_now = now;
 
         audiocap_on_new_frame(&ac);
@@ -467,7 +583,10 @@ int main(void) {
         /* Push to the AVR on any change, and additionally re-push the unchanged
          * frame every AVR_KEEPALIVE_S so the AVR never starves once the ring goes
          * idle/static (screensaver lock/blank) — see AVR_KEEPALIVE_S above. */
-        if (memcmp(pk, lastpk, sizeof(pk)) != 0 || now - last_avr_push >= AVR_KEEPALIVE_S) {
+        int frame_changed = memcmp(pk, lastpk, sizeof(pk)) != 0;
+        if (frame_changed) static_ticks = 0;
+        else if (static_ticks < IDLE_AFTER_TICKS) static_ticks++;   /* saturate; no overflow */
+        if (frame_changed || now - last_avr_push >= AVR_KEEPALIVE_S) {
             avr_write_frame(pk, 0); memcpy(lastpk, pk, sizeof(pk)); last_avr_push = now;
         }
 
@@ -475,5 +594,41 @@ int main(void) {
          * alive (this runs even when the frame is unchanged / the ring is idle).
          * Rate-limited to once a second; WatchdogSec in the unit is far larger. */
         if (now - last_wd >= 1.0) { sdnotify_send("WATCHDOG=1"); last_wd = now; }
+
+        /* --- next deadline: cadence chosen from the state this tick produced ---
+         * Base: 16 ms during the volume fade, 30 ms (~33 fps) while a music scene
+         * plays, else 50 ms (20 fps). The render is driven by this monotonic
+         * deadline, NOT by audio-pipe readability: a continuously-fed ALSA
+         * loopback keeps `afd` readable, so polling on it would return instantly
+         * and free-run the loop (the old ~37 % CPU bug). poll() only sleeps until
+         * the next frame is due; audio/input arriving sooner just wakes us to
+         * drain, then we loop and re-sleep. */
+        int ovl = reaction_overlay_active(&rx, now);
+        frame_int = ovl ? 0.016
+                  : ((child_alpha > 0.0f || (comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
+        /* r13 idle stretch (see IDLE_FRAME_S at the top). Two conditions must BOTH
+         * hold, because neither alone is sound:
+         *   - INTENT: nothing on the ring is meant to be animating — no volume
+         *     overlay, no music scene/fade, no breathe/spin override, and the
+         *     screensaver itself is locked (constant ledAlpha past SS_LOCK_S) or
+         *     blanked. Bytes alone are NOT enough: near its cosine trough the
+         *     breathing screensaver quantizes to an identical frame for seconds
+         *     at low global brightness, so a bytes-only test would back off
+         *     mid-animation and the breath would visibly freeze, then step.
+         *   - BYTES: the frame has actually been identical for IDLE_AFTER_TICKS
+         *     renders, so we never stretch across a still-settling transition.
+         * Caps: the update-available blink keeps its 2 Hz; an open tap (a PAUSED
+         * stream still holds a sink-input) keeps 4 Hz so un-pause shows promptly. */
+        int animating = ovl || child_alpha > 0.0f
+                     || (comp.layers[manual_idx].active && (manual.breathe || manual.spin))
+                     || !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0);
+        if (!animating && static_ticks >= IDLE_AFTER_TICKS && frame_int < IDLE_FRAME_S) {
+            double cap = IDLE_FRAME_S;
+            if (afd >= 0 && cap > IDLE_TAP_FRAME_S) cap = IDLE_TAP_FRAME_S;
+            if (mute_blink && !muted && cap > MUTE_BLINK_S) cap = MUTE_BLINK_S;
+            if (frame_int < cap) frame_int = cap;
+        }
+        next_frame = tick_base + frame_int;
+        if (next_frame < now) next_frame = now + frame_int;   /* fell behind -> resync */
     }
 }

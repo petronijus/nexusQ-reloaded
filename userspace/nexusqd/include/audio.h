@@ -50,4 +50,14 @@ void  audio_close(int *fd, pid_t *pid);
  * 0 if pactl fails / PulseAudio is down (safe: no streams -> keep the tap off). */
 int   pa_sink_inputs_active(void);
 
+/* Event feed for the sink-input gate (r13 idle-CPU fix): spawn a persistent
+ * `pactl subscribe` child and return a non-blocking read fd on its stdout (or
+ * -1), storing the child pid in *pid. The main loop watches the fd and re-counts
+ * sink-inputs only when a membership event ("'new'/'remove' on sink-input")
+ * arrives, replacing the 1.5 s pactl polling that forked ~0.67 procs/s around
+ * the clock — and, worse, made every OTHER PA subscriber (nexusq-control's own
+ * `pactl subscribe` bridge) wake for our poller's client-connect events.
+ * Tear down with audio_close() (it is child-agnostic: SIGTERM + close). */
+int   pa_subscribe_open(pid_t *pid);
+
 #endif
