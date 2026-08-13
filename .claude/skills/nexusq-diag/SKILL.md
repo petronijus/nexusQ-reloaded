@@ -201,7 +201,11 @@ Findings are tagged by `kind`; interpret them like this:
   never `freq`; expect higher on **r71 + nexusqd r13**, the 2026-08-13 idle diet
   — healthd 6.3 → 2.3 % of a core, nexusqd 4.4 → **0.165 %** and 22 → **2.9
   wakeups/s**, idle fork rate 14 → 2.6/s, ~12 pp of one core removed;
-  ~4.25 trans/s); a sustained ~920 MHz idle hover
+  ~4.25 trans/s. **Post-diet 2026-08-13** (240 s, ring blanked): idle busy
+  **8.73 %** of a core — **real ≈ 7.7 %**, an ssh poll loop inflated
+  `sshd`/`init.scope` (untrustworthy) — forks **2.59/s**; **`nq-healthd`
+  2.43 % = new #1**, nexusqd 0.14 %, **`brcmf` ~34–40 wakeups/s dominates all
+  other wakeup sources combined**); a sustained ~920 MHz idle hover
   is a regression (the old ondemand microburst sawtooth). See
   `docs/2026-07-13-idle-power-governor-and-pid1-churn.md` +
   `docs/2026-08-13-idle-opp-residency-measurement.md`.

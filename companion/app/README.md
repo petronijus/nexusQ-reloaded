@@ -178,6 +178,25 @@ fields) — `healthProblems()` is now top-level with the regression test
 `test/health_problems_test.dart`. Record:
 `../../docs/2026-08-10-mqtt-health-telemetry.md` (§7 = the follow-up).
 
+⏳ **UNRELEASED change in the working tree (2026-08-13) — the LED problem rule
+reads the device's verdict.** `healthProblems()` no longer thresholds the raw
+counter (`led_stall >= 6` → "LED ring frame is stalled"); it now checks
+**`s['led_stalled'] == true`** → *"LED ring is stalled"*. The old rule fired on
+**every idle Q permanently**: `led_stall` counts samples whose LED frame
+*content* is identical, which the screensaver does by design (locks at 300 s,
+blanks at 600 s) while the 1 Hz AVR keepalive re-commits the same bytes. The
+qualification now happens **on-device** (`nexusq-mqtt` **r2**, using the same
+distress co-signal `nq-healthd` uses), and a device too old to publish
+`led_stalled` raises **nothing** — silence beats a known-false alarm, and a dead
+daemon still surfaces via `nexusqd_alive`. `test/health_problems_test.dart` gained
+two regression tests (a payload with `led_stall: 9751` **and**
+`led_stalled: false` must be EMPTY; `led_stalled` fires only on a real boolean
+`true`, not `1`/`"yes"`/`null`); **6/6 pass** under `flutter test`.
+⚠️ **Not in any APK yet** — no `pubspec.yaml` version bump, no build, no
+`app-vX.Y.Z` GitHub release, no `../app-release.json` bump. The app self-installs
+OTA on Petr's phone, so **the release needs his approval**. Record:
+`../../docs/2026-08-13-led-stall-verdict-and-progress-window.md`.
+
 ## Setup wizard (onboarding step 1, added 2026-07-13 — device side released in v1.9.0)
 
 `lib/setup/` ships an 8-screen wizard (welcome / cables / find / confirm-color /

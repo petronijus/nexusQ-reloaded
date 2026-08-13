@@ -31,6 +31,84 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   session** — an open session pushes the die 74–79 °C within seconds and
 >   drags the OPP up with it (2026-07-13 Finding 1).
 
+> **✅ DONE (2026-08-13) — the observability layer stopped lying: `nq_progress`
+> window (device **r72**) + LED verdict in telemetry (`nexusq-mqtt` **r2**) —
+> both SHIPPED via OTA, live-verified. Companion-app half is CODE ONLY.**
+> Full record: `docs/2026-08-13-led-stall-verdict-and-progress-window.md`.
+> **(a) r72 — a second-order defect created by r13's own success.**
+> `nq_progress` was "did nexusqd's `/proc/pid/stat` tick count change since the
+> last 5 s sample" — valid only while nexusqd burned 4.4 % of a core (≈22
+> USER_HZ ticks/sample). r13 dropped it to 0.165 % ≈ **0.8 ticks/sample**, so a
+> zero delta became the ORDINARY reading for a healthy daemon; combined with
+> `LED_STALL` reaching 6 being *guaranteed* on a locked/blanked ring (the 1 Hz
+> keepalive re-commits identical bytes), healthd's co-signal
+> `nq_resp=0 || nq_progress=0` fired **CRIT `led_frozen` on a healthy idle
+> device — twice, on the live Q** (`events.jsonl` `t_mono` 214110 and 214497,
+> both `resp=1 progress=0`). Fix: `NQ_LAST_TICK_MOVE` + `PROGRESS_STALE_S` (env
+> `NQ_PROGRESS_STALE_S`, default 60 s ≈ 10× the ~6 s idle tick interval); the
+> window resets when the unit is not running. Post-r72 the same state logs
+> **info `led_static` … (resp=1)**. **Lesson: an efficiency win can invalidate a
+> monitoring threshold — re-check every "did this process burn CPU recently"
+> signal whenever the process gets cheaper.**
+> **(b) mqtt r2 — publish the VERDICT, not the counter.** Closes the last open
+> action item of `docs/2026-08-11-overnight-telemetry-analysis.md` (§6/§10-2,
+> was ⛔ open): every idle Q permanently reported "LED ring frame is stalled"
+> ~10 min after the music stopped, because the app thresholded `led_stall >= 6`
+> — a counter measuring frame CONTENT staying identical, which the screensaver
+> does **by design** (`SS_LOCK_S`=300 s, `SS_BLANK_S`=600 s). New payload
+> boolean **`led_stalled`** = `led_stall >= 6` **AND** (`nq_resp` falsy **OR**
+> `nq_progress` falsy) — the same distress co-signal healthd uses to pick crit
+> `led_frozen` over info `led_static`, so daemon and telemetry agree by
+> construction; `led_stall` stays as a diagnostic number. New HA entity
+> `binary_sensor` `led` / "LED ring" (problem, diagnostic); an **absent** field
+> reads healthy. Live: `binary_sensor.nexus_q_led_ring = off`, payload
+> `led_stall=17, led_stalled=False`; 28 pytest tests pass.
+> **(c) companion app — NOT RELEASED.** `healthProblems()` reads
+> `s['led_stalled'] == true`; two new regression tests pin the idle case
+> (`led_stall: 9751` + `led_stalled: false` ⇒ empty) and strict-boolean
+> handling; 6/6 pass. **No pubspec bump / no APK / no GitHub release / no
+> `app-release.json` bump — Petr must approve the app release** (it self-installs
+> on his phone).
+> **(d) build infra — `docker-build.sh` OTA package order is no longer
+> load-bearing.** The `OTA_PACKAGES_ONLY` loop interleaved `checksum; build` per
+> package, so a listed package depending on another listed package hit
+> `>>> ERROR: <dep>: <dep> is missing in checksums` (exit 3) — bit
+> `nexusq-btagent`→`nexusq-setupd`, then `device-google-steelhead`→`nexusq-mqtt`
+> today. Now: one checksum pass over the whole list, then a build pass. (The
+> FULL pipeline's Phase 7c3-before-7c4 constraint still stands.)
+
+> **📊 Attribution after the diet (2026-08-13, 240 s, ring blanked) — the next
+> targets.** Total busy **8.73 % of one core** (was 18.2 % overnight), forks
+> **2.59/s**. Per-cgroup: **nq-healthd 2.43 % (new #1)**, init.scope 1.69 %,
+> nexusq-btagent 0.90 %, sshd 0.86 %, nexusq-mqtt 0.47 %, wifi-watchdog 0.36 %,
+> avahi 0.30 %, dbus-broker 0.18 %, **nexusqd 0.14 % (confirms r13)**.
+> Wakeups/s: **brcmf kworker 33.9**, kworker/0:1-events 13.1, rcu_sched 11.5,
+> irq/116-i2c 10.0, dbus-broker 7.4, brcmf_wdog 6.5, avahi 5.8, systemd 4.7,
+> btagent 3.3, nexusqd 3.0, healthd 2.6.
+> ⚠️ **CAVEAT:** an ssh poll loop (8 logins in the window) inflated **sshd AND
+> init.scope** (each login = a pid-1 PAM session), so **pid1/sshd/user.slice are
+> NOT trustworthy**; the other daemons' figures are. **Real idle busy ≈ 7.7 %.**
+> Two earlier attempts were discarded — one wrote its snapshots to the void
+> (empty diffs) and its ~400 `awk` forks heated the die **60 → 67 °C**. **Rules
+> for next time:** wait for `led_sum == 0`, run **detached** + fetch **ONCE** (no
+> polling), **one** `awk` fork per snapshot.
+> **NEXT, in order:** (1) re-measure the overnight opp350 window from HA history,
+> **no ssh overnight**; (2) **`nq-healthd` C rewrite** — at 2.43 % it is #1 again
+> and what remains is its ~6 forks/tick (`date`, `timeout`+`nexusled`, `od`+`awk`,
+> amortized `dmesg`); the right fix is a C daemon in the nexusqd mould
+> (in-process socket `connect()` for the liveness probe instead of forking
+> `nexusled`, `/dev/kmsg` instead of `dmesg`, in-process hashing instead of
+> `od|awk`) — **deliberately NOT started 2026-08-13**, three rewrites of the
+> observability layer in one day is unacceptable churn; (3) **WiFi wakeups** —
+> `brcmf` ~40/s dominates all other wakeup sources combined; investigate
+> mDNS/avahi chatter + the MQTT keepalive; (4) `nexusq-mqtt`'s 30 s `pactl`
+> volume poll (≈0.09 %) → take volume from `nexusq-control`'s persistent
+> subscribe bridge; (5) governor tunables **LAST**; (6) commit r71 + r13 + r72 +
+> mqtt r2 + the app change + `docker-build.sh`.
+> **Device-side leftovers:** `/var/log/nq-idle-study/attrib.log` (36 MB) and
+> `/usr/local/bin/nq-idle-attrib.sh` remain on the device (service stopped
+> 2026-08-13; a local copy of the log was pulled for the analysis).
+
 > **✅ DONE (2026-08-13) — nq-healthd fork diet (device r71) — SHIPPED via OTA,
 > live-verified.** Driven by the first clean idle measurement above and its
 > same-day attribution (`docs/2026-08-13-idle-opp-residency-measurement.md`):
@@ -90,6 +168,9 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > 30 s ≈ 0.09 % of a core ≈ the 47 s of overnight `pactl` CPU) → take volume
 > from `nexusq-control`'s existing persistent `pactl subscribe` bridge instead
 > of forking; (3) governor tunables LAST.
+> *(Superseded later the same day by the post-diet attribution above: healthd is
+> #1 again at 2.43 %, `brcmf` WiFi wakeups are #3, and the `pactl` residue drops
+> to #4. r13 also opened the `nq_progress` false-CRIT, fixed by device r72.)*
 
 > **✅ DONE (2026-08-11) — healthd stopped distorting what it measures (device r68).**
 > Two fixes out of the 12 h overnight-telemetry analysis

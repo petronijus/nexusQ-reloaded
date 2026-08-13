@@ -43,7 +43,13 @@ Daemon in `userspace/nexusq-mqtt/` (`nexusq-mqtt` + `.service` +
   "absent" from a value.
 - **Data:** the tail of nq-healthd's `health.jsonl` (used only when fresh ≤60 s:
   `temp_c`, `freq_mhz`, `governor`, `load1`, `mem_avail_mb`, `nexusqd_alive`,
-  `led_stall`, `dmesg_err`, `pstore`) + the daemon's own sampling of what healthd
+  `led_stall`, `dmesg_err`, `pstore`
+  — *(payload extended 2026-08-13 by `nexusq-mqtt` **r2**: a `led_stalled`
+  boolean verdict joins the raw `led_stall` counter, plus a 19th HA entity
+  `binary_sensor` "LED ring"; consumers must read `led_stalled`, never threshold
+  `led_stall`. See `docs/2026-08-13-led-stall-verdict-and-progress-window.md` and
+  `userspace/nexusq-mqtt/README.md` for the current contract.)*)
+  + the daemon's own sampling of what healthd
   doesn't record: **per-OPP residency deltas** from `time_in_state` ("podíl
   frekvencí", `opp350/700/920/1200_pct` of the publish window), WiFi RSSI/SSID via
   `iw`, **volume/mute from the mixer that currently owns the output** (TAS5713

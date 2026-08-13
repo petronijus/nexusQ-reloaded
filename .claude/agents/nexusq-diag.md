@@ -300,7 +300,12 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   still on **r71 + nexusqd r13**, the 2026-08-13 idle diet: healthd 6.3 → 2.3 %
   of a core, **nexusqd 4.4 → 0.165 % and 22 → 2.9 wakeups/s**, idle fork rate
   14 → 2.6/s — ~12 pp of one core of constant background removed in one day;
-  ~4.25 trans/s on `conservative`); a
+  ~4.25 trans/s on `conservative`. **Post-diet attribution 2026-08-13** (240 s,
+  ring blanked): total idle busy **8.73 %** of one core — **real ≈ 7.7 %**, an
+  ssh poll loop inflated `sshd`/`init.scope` so those two are NOT trustworthy —
+  forks **2.59/s**; **`nq-healthd` 2.43 % is the new #1**, nexusqd 0.14 %, and
+  **`brcmf` WiFi kworker at ~34–40 wakeups/s dominates all other wakeup sources
+  combined**); a
   sustained ~920 MHz idle hover on a ≥v1.8.2 image is a **regression** (that
   was the ondemand microburst sawtooth + healthd's own systemctl churn, both
   fixed in v1.8.2; healthd's PAM churn re-fixed r68, fork churn fixed r71,

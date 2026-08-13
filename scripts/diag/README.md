@@ -58,7 +58,12 @@ v1.8.2**: a healthy idle now **settles at 350 MHz** (56.7 % residency 2026-07-13
 r70 — judge from `opp_ms`/MQTT `opp*_pct`, never healthd's `freq`; expect higher
 on **r71 + nexusqd r13**, the 2026-08-13 idle diet: healthd 6.3 → 2.3 % of a
 core, nexusqd 4.4 → **0.165 %** and 22 → **2.9 wakeups/s**, system idle fork rate
-14 → 2.6/s — ~12 pp of one core of constant background gone; ~4.25 trans/s) —
+14 → 2.6/s — ~12 pp of one core of constant background gone; ~4.25 trans/s.
+**Post-diet attribution, 2026-08-13, 240 s blanked-ring window:** total idle busy
+**8.73 %** of one core (real ≈ **7.7 %** — an ssh poll loop inflated
+`sshd`/`init.scope`, those two figures are NOT trustworthy), forks **2.59/s**;
+**`nq-healthd` 2.43 % is the new #1**, nexusqd 0.14 %, and **`brcmf` WiFi
+kworker at ~34–40 wakeups/s dominates every other wakeup source combined**) —
 the old "hovers ~920 MHz"
 behaviour was the ondemand sawtooth (+ healthd's own polling load) and on a
 ≥v1.8.2 image it is a **regression signal**, not the norm. ⚠️ Idle **temperature** must be judged from an on-device
