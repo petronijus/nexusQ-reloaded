@@ -19,8 +19,18 @@ enum _Phase { discovering, ready, needInput }
 /// timeout, offers a manual host entry / demo-mock fallback. Renders [HomeScreen]
 /// once a controller is live.
 class ConnectGate extends StatefulWidget {
-  const ConnectGate({super.key, this.initialClient});
+  const ConnectGate({super.key, this.initialClient, this.discover});
   final NexusQClient? initialClient;
+
+  /// Injection seam for the mDNS browse, defaulting to the real one.
+  ///
+  /// Widget tests of the "nothing found" fallback cannot rely on the ambient
+  /// network: on a developer machine sitting on the same LAN as a powered-on
+  /// Q, `discoverNexusQ()` genuinely SUCCEEDS, the gate goes straight to
+  /// [HomeScreen], and the fallback under test never renders — so the test
+  /// passed or failed depending on whether the appliance happened to be
+  /// switched on. Passing a stub here makes that outcome deterministic.
+  final Future<Discovered?> Function()? discover;
 
   @override
   State<ConnectGate> createState() => _ConnectGateState();
@@ -69,7 +79,7 @@ class _ConnectGateState extends State<ConnectGate> {
     // Back to waiting for a Q — a tap is expected again.
     TapCapture.set(true);
     setState(() => _phase = _Phase.discovering);
-    final found = await discoverNexusQ();
+    final found = await (widget.discover ?? discoverNexusQ)();
     if (!mounted) return;
     if (found != null) {
       _use(TcpClient(host: found.host, port: found.port));
