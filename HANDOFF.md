@@ -274,7 +274,22 @@ for `led_sum == 0`, run **detached** and fetch **ONCE** (no polling), **one**
    done 2026-08-13, pushed (`2989e43`…`1cc1299`); `app-v1.13.1` released with
    the manifest live, so the repo, the OTA repo and the device agree again.
 
-7. 🔴 **AGREED WITH PETR 2026-08-13, DO IT NEXT SESSION: a COMPLETE COLD BUILD,
+7. 🟡 **COLD BUILD — STARTED 2026-08-17, and it has already paid for itself.**
+   First attempt died in Phase 8b and, in dying, exposed that pmbootstrap 3.11.0
+   **renamed the config option `systemd` → `service_manager` and silently ignores
+   the old key**: the run had selected no init system, fallen back to the UI
+   default (openrc), and was on course to build **an OpenRC rootfs with no
+   nexusqd and no sshd — the v1.5.0 failure verbatim**. It had stayed invisible
+   because the WARM volume carried a correct config from before the rename.
+   Fixed (`service_manager = systemd` + a gate that asserts pmbootstrap accepts
+   the key, from argparse's choice list); attempt 2 running on wiped `-cold`
+   volumes. Logs: `nq-captures/2026-08-16-coldbuild-attempt1-openrc.log` and
+   `nq-captures/2026-08-17-coldbuild.log`. Post-build gates are now a script:
+   **`scripts/verify-rootfs.sh <rootfs.img> [boot.img]`** (init=systemd, no
+   OpenRC packages, nexusqd/sshd present, the r73 idle set, Roon default-OFF,
+   libpython gate, boot.img ≤8 MB and ramdisk-less).
+
+   Original brief, still accurate: **a COMPLETE COLD BUILD,
    to prove the whole tree still builds from nothing.** Everything shipped this
    year has been built on the **warm** `nexusq-workdir` volume, which reuses
    cached aports and can therefore hide an APKBUILD error entirely (the r63

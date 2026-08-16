@@ -97,6 +97,32 @@ All notable changes to Nexus Q Reloaded. Format follows
 - A `powersave` arm proved **nothing at idle needs more than 350 MHz** (busy
   7.06 %, everything kept working), so the remaining headroom is real.
 
+### Fixed — the cold build caught an OpenRC rootfs in the making: `systemd` → `service_manager` (2026-08-17)
+- The verification build did exactly what it was commissioned for. pmbootstrap
+  **3.11.0 renamed the config option `systemd` (≤3.10.x) to `service_manager`**
+  (`default|openrc|systemd`), and **the old key is not rejected — it is silently
+  ignored**. Our config therefore selected nothing, pmbootstrap fell back to the
+  UI default (`postmarketos-ui-lxqt defaults to openrc`), and the run was on
+  course to produce **an OpenRC rootfs with no `nexusqd` and no `sshd`**.
+- **This is the v1.5.0 failure verbatim** — an image that builds green,
+  checksums green and boots into nothing reachable. It stayed hidden because the
+  **warm `nexusq-workdir` volume had been carrying a correct config since before
+  the rename**, so every OTA build kept working while the option had quietly
+  stopped meaning anything. Exactly the class of hidden warm-volume dependency
+  the cold build exists to expose.
+- Fix: the config writes `service_manager = systemd`, **and a gate right after
+  the config write asserts pmbootstrap actually accepts that key** — read from
+  argparse's choice list via `pmbootstrap config --help`, which needs no work
+  dir — plus a best-effort read-back that fails on a wrong value and tolerates an
+  empty one. Both directions verified in a container. *A config option we merely
+  write is a hope; one we read back is a fact.*
+- Self-inflicted, caught and fixed in the same run: the comment added with that
+  fix used **backticks inside a heredoc whose delimiter is unquoted** (the config
+  interpolates `$PMAPORTS`/`$WORK`), so they ran as command substitution
+  (`service_manager: command not found`). Harmless — the config line itself has
+  no backticks and read back correctly — but the heredoc will execute anything a
+  future comment quotes that way, so the warning now sits next to it.
+
 ### Fixed — build: the toolchain was unpinned, and upstream broke it (`Dockerfile`)
 - `Dockerfile` installed pmbootstrap from **git master** and `docker-build.sh`
   clones pmaports **`--depth=1` from HEAD**, so what a build used depended on the
