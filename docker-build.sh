@@ -614,8 +614,10 @@ locale = en_US.UTF-8
 qemu_redir_stdio = False
 ssh_keys = False
 sudo_timer = False
-# pmbootstrap RENAMED this key: it was `systemd = always` up to 3.10.x and is
-# `service_manager = systemd` (default|openrc|systemd) from 3.11.0. The old key
+# pmbootstrap RENAMED this key: it was 'systemd = always' up to 3.10.x and is
+# 'service_manager = systemd' (default|openrc|systemd) from 3.11.0. NB: this
+# heredoc's delimiter is UNQUOTED (values below interpolate $PMAPORTS etc.), so
+# backticks here would run as command substitution -- they did, once. The old key
 # is not rejected, it is SILENTLY IGNORED — so the 2026-08-16 cold build fell
 # back to the ui default (postmarketos-ui-lxqt -> openrc) and was on course to
 # produce an OpenRC rootfs with no nexusqd and no sshd. That is exactly the
