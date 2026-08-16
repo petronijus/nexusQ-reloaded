@@ -99,6 +99,12 @@ AGENT_CAPABILITY = "NoInputNoOutput"
 
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 SETUPD_UNIT = "nexusq-setupd.service"
+# systemd creates a unit's cgroup when its start job begins and removes it when
+# the unit goes away, so the directory's mere existence answers
+# "active OR activating OR deactivating" — exactly the tri-state this daemon
+# wants — with one stat() instead of forking systemctl. See setupd_active().
+SETUPD_CGROUP = os.environ.get(
+    "NEXUSQ_SETUPD_CGROUP", f"/sys/fs/cgroup/system.slice/{SETUPD_UNIT}")
 
 # Our own control socket. `nexusq-control` (the LAN bridge the app talks to) is
 # stdlib-only by standing rule and so cannot speak D-Bus; BlueZ knowledge lives
@@ -148,7 +154,7 @@ def led_send(line, sock_path=NEXUSQD_SOCK):
         return False
 
 
-def setupd_active(run=None):
+def setupd_active(cgroup=None):
     """True while nexusq-setupd owns the ring.
 
     "activating" counts as active. `systemctl is-active --quiet` exits non-zero
@@ -156,23 +162,31 @@ def setupd_active(run=None):
     during which it has ALREADY flipped the adapter to discoverable. That gap let
     us grab a ring setupd was about to drive (seen live 2026-07-15).
 
-    Fails to FALSE — i.e. "the ring is ours" — when systemctl cannot be consulted
-    (it has timed out live under load). This direction is deliberate: the ring is
-    a SAFETY indicator, and the invariant that must never break is "dark ==
-    nobody can pair". Assuming setupd owns the ring would make us skip it, which
-    on a pairable adapter is exactly the lie this daemon exists to prevent.
-    Assuming it is ours costs almost nothing: DISCOVERABLE_CMD is byte-identical
-    to setupd's idle spin, so the worst case is re-sending the blue it is already
-    showing, and at most a wiped theme in a rare error path. A silent dark ring
-    on a bondable appliance is the worse failure.
+    Answered from the unit's CGROUP DIRECTORY rather than by forking systemctl.
+    systemd creates that directory when the start job begins and removes it when
+    the unit is gone, so its existence covers active/activating/deactivating —
+    the same tri-state the systemctl form was reaching for, and strictly wider
+    than `is-active --quiet`. The cost is one stat() instead of a fork+exec that
+    also wakes pid 1: this runs on the 10 s reconcile tick, and the 2026-08-16
+    idle study measured it at 12 `systemctl` executions per minute, whose pid-1
+    service slices (up to 59 ms) were the single largest source of cpufreq ramps
+    on an otherwise idle device
+    (`docs/2026-08-16-idle-700mhz-deep-analysis.md`).
+
+    Fails to FALSE — i.e. "the ring is ours" — if the cgroup cannot be consulted
+    at all. This direction is deliberate: the ring is a SAFETY indicator, and the
+    invariant that must never break is "dark == nobody can pair". Assuming setupd
+    owns the ring would make us skip it, which on a pairable adapter is exactly
+    the lie this daemon exists to prevent. Assuming it is ours costs almost
+    nothing: DISCOVERABLE_CMD is byte-identical to setupd's idle spin, so the
+    worst case is re-sending the blue it is already showing, and at most a wiped
+    theme in a rare error path. A silent dark ring on a bondable appliance is the
+    worse failure.
     """
-    run = run or subprocess.run
     try:
-        r = run(["systemctl", "is-active", SETUPD_UNIT],
-                timeout=5, capture_output=True, text=True)
-        return (r.stdout or "").strip() in ("active", "activating", "reloading")
-    except (OSError, subprocess.SubprocessError) as e:
-        log("systemctl is-active failed; taking the ring so it cannot lie:", e)
+        return os.path.isdir(cgroup or SETUPD_CGROUP)
+    except OSError as e:      # defensive: isdir swallows most errors already
+        log("setupd cgroup unreadable; taking the ring so it cannot lie:", e)
         return False
 
 

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=72
+pkgrel=73
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -101,6 +101,8 @@ source="
 	nq-healthd.service
 	nexusq-wifi-watchdog
 	nexusq-wifi-watchdog.service
+	nexusq-cpufreq-tune
+	nexusq-cpufreq-tune.service
 	librespot.service
 	librespot-nexusq
 	shairport-sync.service
@@ -376,6 +378,18 @@ package() {
 	ln -sf ../nexusq-wifi-watchdog.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-wifi-watchdog.service
 
+	# cpufreq idle tuning: ignore_nice_load=1 + down_threshold=40 on the
+	# conservative governor. Measured 2026-08-16 to move idle 350 MHz residency
+	# 72.4 % -> 86.2 % with no change to how fast REAL load ramps the clock
+	# (docs/2026-08-16-idle-700mhz-deep-analysis.md). Pairs with the Nice=19 the
+	# housekeeping units now carry.
+	install -Dm755 "$srcdir"/nexusq-cpufreq-tune \
+		"$pkgdir"/usr/bin/nexusq-cpufreq-tune
+	install -Dm644 "$srcdir"/nexusq-cpufreq-tune.service \
+		"$pkgdir"/etc/systemd/system/nexusq-cpufreq-tune.service
+	ln -sf ../nexusq-cpufreq-tune.service \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-cpufreq-tune.service
+
 	# Keep root's user manager resident (logind linger). Without it every ssh
 	# login builds and tears down the whole user@0 session — ~7.5 s CPU per
 	# login/logout cycle plus the cgroup/bpf destroy churn in pid 1 (measured
@@ -561,6 +575,8 @@ SKIP  labwc-rc.xml
 SKIP  nq-vol
 SKIP  nexusq-nfc-send
 SKIP  nexusq-nfc.service
+SKIP  nexusq-cpufreq-tune
+SKIP  nexusq-cpufreq-tune.service
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf

@@ -1,0 +1,77 @@
+#!/bin/sh
+# nexusq-cpufreq-tune — idle-power tuning for the `conservative` cpufreq governor.
+#
+# WHY (measured 2026-08-16, docs/2026-08-16-idle-700mhz-deep-analysis.md):
+# an idle Nexus Q is only ~3.8 % busy, but that CPU arrives in bursts — pid 1
+# and nq-healthd each produce dozens of runs >= 16 ms per minute — and
+# `conservative` ramps the clock on any run filling 80 % of its 20 ms sampling
+# window. Every step above 350 MHz raises VDD_MPU (1025 -> 1200/1313/1380 mV),
+# which is where the idle heat comes from.
+#
+# Two knobs, both measured, neither of which slows the ramp for REAL load:
+#
+#   ignore_nice_load=1  Nice time is credited as idle, so the housekeeping
+#                       daemons (all shipped with Nice=19: nq-healthd,
+#                       nexusq-mqtt, nexusq-btagent, nexusq-wifi-watchdog,
+#                       nexusq-nfc) stop driving the frequency entirely. The
+#                       audio path — librespot/PulseAudio, never nice'd, PA at
+#                       RT priority — is untouched and still ramps instantly.
+#                       nexusq-control is deliberately NOT nice'd either: it
+#                       serves the app's volume RPC.
+#
+#   down_threshold=40   `conservative` HOLDS the frequency between
+#                       down_threshold and up_threshold, so at 20 % a mere 4 ms
+#                       of work per 20 ms window pinned the CPU at 700 MHz —
+#                       measured mean stay 318 ms per visit. At 40 it decays.
+#
+# Measured together, 12 min arms, idle: 350 MHz residency 72.4 % -> 86.2 %,
+# 920 MHz 5.70 -> 0.61 %, 1200 MHz 0.89 -> 0.05 %, ~22 % less relative dynamic
+# power. `sampling_rate` and `up_threshold` are deliberately LEFT ALONE: raising
+# them to 100 ms/95 measured 98.7 % but stretches a genuine ramp from ~60 ms to
+# ~300 ms, which needs a listening test before it can ship.
+#
+# Idempotent, and a missing knob is never fatal — a governor change (or a kernel
+# without CONFIG_CPU_FREQ_GOV_CONSERVATIVE) must not fail the boot.
+set -u
+
+GOVDIR=/sys/devices/system/cpu/cpufreq/conservative
+POLICY=/sys/devices/system/cpu/cpufreq/policy0
+WAIT_S="${NQ_CPUFREQ_WAIT_S:-30}"
+
+log() { echo "nexusq-cpufreq-tune: $*"; }
+
+# The governor's tunable directory only exists once `conservative` is the active
+# governor, which happens as the cpufreq driver registers — possibly after this
+# unit starts. Wait, bounded, instead of racing it.
+i=0
+while [ ! -d "$GOVDIR" ] && [ "$i" -lt "$WAIT_S" ]; do
+    sleep 1
+    i=$((i + 1))
+done
+
+if [ ! -d "$GOVDIR" ]; then
+    log "no conservative governor after ${WAIT_S}s (active: $(cat $POLICY/scaling_governor 2>/dev/null || echo unknown)) - nothing to tune"
+    exit 0
+fi
+
+set_knob() {
+    _k=$1 _v=$2
+    [ -w "$GOVDIR/$_k" ] || { log "$_k not writable, skipped"; return 0; }
+    _old=$(cat "$GOVDIR/$_k" 2>/dev/null)
+    [ "$_old" = "$_v" ] && { log "$_k already $_v"; return 0; }
+    if echo "$_v" > "$GOVDIR/$_k" 2>/dev/null; then
+        log "$_k $_old -> $(cat "$GOVDIR/$_k" 2>/dev/null)"
+    else
+        log "$_k could not be set to $_v (was $_old)"
+    fi
+}
+
+set_knob ignore_nice_load 1
+set_knob down_threshold 40
+
+log "governor=$(cat $POLICY/scaling_governor 2>/dev/null)" \
+    "sampling_rate=$(cat $GOVDIR/sampling_rate 2>/dev/null)" \
+    "up=$(cat $GOVDIR/up_threshold 2>/dev/null)" \
+    "down=$(cat $GOVDIR/down_threshold 2>/dev/null)" \
+    "ignore_nice=$(cat $GOVDIR/ignore_nice_load 2>/dev/null)"
+exit 0

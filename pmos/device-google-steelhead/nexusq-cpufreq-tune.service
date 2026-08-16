@@ -1,0 +1,23 @@
+[Unit]
+Description=Nexus Q cpufreq idle tuning (conservative: ignore_nice_load, down_threshold)
+Documentation=file:///usr/bin/nexusq-cpufreq-tune
+Documentation=file:///usr/share/doc/nexusq/2026-08-16-idle-700mhz-deep-analysis.md
+# The governor's tunables appear when the cpufreq driver registers; the script
+# waits for them itself, so no ordering against a device unit is needed here.
+# Deliberately NO After= on one of our own services: an After=<our unit> formed
+# a boot ordering cycle once (nexusq-control -> nexusqd -> multi-user.target)
+# which systemd resolved by DELETING the start job.
+DefaultDependencies=no
+After=sysinit.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nexusq-cpufreq-tune
+RemainAfterExit=yes
+# Tuning knobs are not worth failing a boot over; the script already exits 0
+# when the governor is absent.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

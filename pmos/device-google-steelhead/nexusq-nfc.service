@@ -21,7 +21,12 @@ ExecStart=/usr/bin/nexusq-nfc-send
 Restart=always
 RestartSec=5
 # Continuous NFC polling is low priority next to audio on this OMAP4.
-Nice=10
+# 19 since 2026-08-16: with `ignore_nice_load=1` on the conservative
+# governor (nexusq-cpufreq-tune drop-in) nice time is credited as idle, so
+# this background daemon no longer drives the CPU frequency; the audio path
+# is never nice'd and still ramps instantly.
+# docs/2026-08-16-idle-700mhz-deep-analysis.md
+Nice=19
 IOSchedulingClass=idle
 
 [Install]

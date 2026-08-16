@@ -7,7 +7,9 @@ ownership rules and the fail-open behaviour of the setupd check.
 import importlib.machinery
 import importlib.util
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -91,46 +93,62 @@ class TestLedPlan(unittest.TestCase):
 
 
 class TestSetupdActive(unittest.TestCase):
+    """setupd ownership is read from the unit's cgroup directory (2026-08-16).
+
+    It used to fork `systemctl is-active` on every 10 s reconcile tick — measured
+    at 12 executions/min, and pid 1's service slices (up to 59 ms) were the
+    largest single source of cpufreq ramps on an idle device. systemd creates the
+    cgroup when the start job begins and removes it when the unit is gone, so the
+    directory covers active/activating/deactivating in one stat().
+    """
+
     def setUp(self):
         self.mod = load_daemon()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cg = os.path.join(self.tmp, "nexusq-setupd.service")
 
-    @staticmethod
-    def _systemctl_says(state, rc=0):
-        return lambda *a, **k: subprocess.CompletedProcess(a, rc, stdout=state + "\n")
+    def _running(self):
+        os.makedirs(self.cg, exist_ok=True)
 
     def test_active(self):
-        self.assertTrue(self.mod.setupd_active(run=self._systemctl_says("active")))
+        self._running()
+        self.assertTrue(self.mod.setupd_active(cgroup=self.cg))
 
     def test_inactive(self):
-        self.assertFalse(self.mod.setupd_active(
-            run=self._systemctl_says("inactive", rc=3)))
+        # unit stopped -> systemd removed the cgroup
+        self.assertFalse(self.mod.setupd_active(cgroup=self.cg))
 
     def test_activating_counts_as_active(self):
         # REGRESSION (live 2026-07-15): setupd makes the adapter discoverable
-        # while still "activating" (systemctl exits NON-ZERO for that state), so
-        # treating only "active" as active let us steal the ring from it.
-        self.assertTrue(self.mod.setupd_active(
-            run=self._systemctl_says("activating", rc=3)))
+        # while still "activating", so treating only fully-started as active let
+        # us steal the ring from it. The cgroup exists from the moment the start
+        # job begins — BEFORE the main process is forked — which is why this
+        # checks the directory and not cgroup.procs (an empty cgroup is still an
+        # activating unit).
+        self._running()                      # dir present, no procs file at all
+        self.assertTrue(self.mod.setupd_active(cgroup=self.cg))
 
     def test_failed_is_not_active(self):
-        self.assertFalse(self.mod.setupd_active(
-            run=self._systemctl_says("failed", rc=3)))
+        # a failed unit has no processes left and systemd drops its cgroup
+        self.assertFalse(self.mod.setupd_active(cgroup=self.cg))
 
-    def test_unreadable_systemctl_means_the_ring_is_ours(self):
+    def test_a_file_where_the_cgroup_should_be_is_not_active(self):
+        # defensive: only a DIRECTORY means "unit exists"
+        with open(self.cg, "w") as fh:
+            fh.write("")
+        self.assertFalse(self.mod.setupd_active(cgroup=self.cg))
+
+    def test_unreadable_cgroup_means_the_ring_is_ours(self):
         # The ring is a SAFETY indicator: "dark == nobody can pair" must never
         # be a lie. If we cannot tell whether setupd is running, claim the ring
         # (worst case: we re-send the same blue setupd already shows). Skipping
         # it on a pairable adapter would be the lie this daemon prevents.
-        def boom(*a, **k):
-            raise OSError("no systemctl")
-        self.assertFalse(self.mod.setupd_active(run=boom))
+        self.assertFalse(self.mod.setupd_active(cgroup="/proc/self/mem/nope"))
 
-    def test_systemctl_timeout_means_the_ring_is_ours(self):
-        # Observed live 2026-07-15: "systemctl is-active failed ... timed out
-        # after 5 seconds" under load.
-        def slow(*a, **k):
-            raise subprocess.TimeoutExpired("systemctl", 5)
-        self.assertFalse(self.mod.setupd_active(run=slow))
+    def test_default_cgroup_path_is_the_system_slice(self):
+        self.assertEqual(self.mod.SETUPD_CGROUP,
+                         "/sys/fs/cgroup/system.slice/nexusq-setupd.service")
 
 
 class TestLedSend(unittest.TestCase):

@@ -28,6 +28,7 @@ enable nexusq-control.service
 enable nexusqd.service
 enable nq-healthd.service
 enable nexusq-wifi-watchdog.service
+enable nexusq-cpufreq-tune.service
 enable nexusq-usb-gadget.service
 enable nexusq-nfc.service
 enable nexusq-setupd.service

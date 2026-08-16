@@ -11,7 +11,15 @@ ExecStart=/usr/bin/nq-healthd
 Restart=always
 RestartSec=5
 # Stay out of the way on this single-/dual-core OMAP4.
-Nice=10
+#
+# 19, not 10, since 2026-08-16: paired with `ignore_nice_load=1` on the
+# conservative governor (see the nexusq-cpufreq-tune drop-in), nice time is
+# credited as idle, so this daemon's 5 s tick — 18 runs of >=16 ms per minute,
+# longest 40 ms — stops driving the CPU frequency altogether, while the audio
+# path (never nice'd) still ramps instantly. Measured worth, together with
+# down_threshold=40: 72.4 % -> 86.2 % of idle time at 350 MHz.
+# `docs/2026-08-16-idle-700mhz-deep-analysis.md`
+Nice=19
 IOSchedulingClass=idle
 # Logs live under /var/log/nq-health (rotated by the daemon itself).
 
