@@ -108,9 +108,16 @@ All notable changes to Nexus Q Reloaded. Format follows
   **`partition.py partitions_mount` now applies again**, which had reported
   "PATTERN NOT FOUND" on 2026-08-13 and was recorded in HANDOFF as the blocker to
   expect during the cold build. That blocker is gone.
-- ⚠️ **Still open: pmaports itself is unpinned** (`--depth=1` clone of HEAD), so
-  upstream can break the build again at any time. A `PMAPORTS_REF` pin is the
-  remaining half of making the build reproducible.
+- **pmaports is pinned too** (`PMAPORTS_REF`, default `11e89df`): fetched by SHA
+  (shallow) with a blobless-clone fallback for servers that refuse by-SHA
+  fetches. Plus an **early toolchain check** — it reads pmaports'
+  `pmbootstrap_min_version` and fails in Phase 5 with the exact one-line fix,
+  instead of letting the run die in Phase 7b after all the staging work. ⚠️ The
+  first version of that check read the WRONG key
+  (`required_pmbootstrap_version`), matched nothing and skipped **silently** — a
+  guard worse than no guard; it now accepts either key and says so out loud when
+  it finds neither. All four branches exercised, both pins verified by real
+  container builds.
 
 ### Measured — post-r71/r13 idle attribution: `nq-healthd` is the new #1 consumer (2026-08-13, 240 s window, ring blanked)
 - Total idle busy **8.73 % of one core** (was **18.2 %** in the overnight window

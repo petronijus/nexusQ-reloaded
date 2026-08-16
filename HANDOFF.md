@@ -74,9 +74,12 @@ reboot, all services off.
   `required_pmbootstrap_version` to 3.11.0 and every build died in Phase 7b.
   pmbootstrap is now **pinned to 3.11.0**. All four monkey patches still apply —
   **including `partition.py partitions_mount`, the exact blocker item 7 below
-  told the next session to expect.** Still open: **pmaports itself is unpinned**
-  (`--depth=1` of HEAD), so upstream can break the build again; a `PMAPORTS_REF`
-  pin is the remaining half.
+  told the next session to expect.** ✅ **pmaports is now pinned too**
+  (`PMAPORTS_REF`, default `11e89df`), fetched by SHA with a blobless-clone
+  fallback, plus an **early toolchain check** that compares pmaports'
+  `pmbootstrap_min_version` against the installed pmbootstrap and fails in
+  Phase 5 with the exact fix instead of dying in Phase 7b. `PMAPORTS_REF=main`
+  deliberately tracks upstream again.
 
 ## Session 2026-08-13: **First clean idle-OPP measurement (60.5 % @ 350 MHz) → same-day attribution → FOUR fixes shipped via OTA: nq-healthd fork diet (device r71), nexusqd event-driven PA gate + adaptive idle cadence (nexusqd r13), nq_progress window (device r72), LED verdict in telemetry (nexusq-mqtt r2) — all live-verified**
 
