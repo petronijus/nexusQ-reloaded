@@ -24,23 +24,59 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > nice-to-have: 350 MHz is the only OPP at 1025 mV, so residency above it is
 > where the idle heat and the ~65 °C floor come from.
 >
-> - **Baseline to beat: 60.5 % @ 350 MHz** (v1.12.0/r70, 14 h clean overnight
->   MQTT-window measurement, 2026-08-13 — up from 56.7 % on v1.8.2, which was
->   up from 25.6 % on v1.8.1; see
->   `docs/2026-08-13-idle-opp-residency-measurement.md`). Residual at pure
->   idle: 24.8 % @ 700, 9.5 % @ 920, **5.1 % @ 1200 MHz/1380 mV** — flat over
->   14 h, i.e. a constant background load, not noise. Secondary metric from the
->   2026-07-13 study: **~4.2 governor transitions/s** on `conservative` (was
->   17.5/s on `ondemand`'s sawtooth).
+> - **Baseline to beat: 70.7 % @ 350 MHz** (nexusqd r13 / device r72 /
+>   nexusq-mqtt r2, **79 h** clean MQTT-window measurement, 2026-08-16 — up from
+>   60.5 % on r70, which was up from 56.7 % on v1.8.2 and 25.6 % on v1.8.1; see
+>   `docs/2026-08-16-idle-opp-remeasure.md`). Residual at pure idle:
+>   **22.6 % @ 700**, 6.0 % @ 920, **0.7 % @ 1200 MHz/1380 mV** — flat over the
+>   whole 79 h (p05 69.6 %), die 58.4 °C mean. The 08-13 fixes converted the
+>   predicted ~12 pp of core-time into ~10 pp of 350 MHz residency and all but
+>   erased the hottest OPP (5.1 → 0.7 %), so **the remaining lever is 700 MHz,
+>   not 1200**. Secondary metric from the 2026-07-13 study: **~4.2 governor
+>   transitions/s** on `conservative` (was 17.5/s on `ondemand`'s sawtooth).
 > - **Measure it from `opp_ms`** in `health.jsonl` (device r68+, kernel
->   `time_in_state` deltas) or the MQTT `opp*_pct` rolling window. **Never from
->   healthd's `freq` field** — that is a spot read taken inside healthd's own
->   busy tick and is observer-biased: over a 12 h capture it claimed 20.5 % at
->   350 MHz where the kernel counter said **39.1 %**
+>   `time_in_state` deltas) or the MQTT `opp*_pct` rolling window — the latter is
+>   what **`scripts/diag/ha-opp-window.py --days N --since '<clean start>'`**
+>   reads out of HA history (passive, never touches the device; it also chunks
+>   the query, because **HA silently truncates a long multi-entity history
+>   response** — a 3.5 d call returned only the first 24 h, well-formed and
+>   wrong). **Never use healthd's `freq` field** — that is a spot read taken
+>   inside healthd's own busy tick and is observer-biased: over a 12 h capture it
+>   claimed 20.5 % at 350 MHz where the kernel counter said **39.1 %**
 >   (`docs/2026-08-11-overnight-telemetry-analysis.md` §4).
+> - **Root-caused 2026-08-16 — `docs/2026-08-16-idle-700mhz-deep-analysis.md`.**
+>   The idle machine is only **3.8 % busy**, but the CPU arrives as ~one burst
+>   per second and `conservative` (20 ms window, `up_threshold` 80) ramps on any
+>   run **≥16 ms**. The bursts are **pid 1 (27 runs ≥16 ms/min, longest 59 ms,
+>   driven by `systemctl` polling at 0.33/s)** and **nq-healthd (18/min)** — the
+>   long-lived daemons never cross the threshold. Measured A/B: production
+>   72.4 % → **86.2 %** with `ignore_nice_load=1` + housekeeping `Nice=19` +
+>   `down_threshold=40` (ramp responsiveness unchanged) → **98.7 %** if
+>   `sampling_rate=100 ms` + `up_threshold=95` is added (needs a listening test
+>   first). A `powersave` arm proves **nothing at idle needs more than 350 MHz**.
+> - **✅ SHIPPED 2026-08-16 (device r73 / btagent r5 / mqtt r3):**
+>   `ignore_nice_load=1` + `down_threshold=40` (new `nexusq-cpufreq-tune` oneshot)
+>   + `Nice=19` on healthd/mqtt/btagent/wifi-watchdog/nfc (**not** on
+>   nexusq-control, it serves the app's volume RPC) + btagent's `systemctl
+>   is-active` replaced by a cgroup-directory test. Measured **72.4 % → 86.2 %** from the governor knobs alone, and
+>   **90.99 % verified on the device** once btagent's `systemctl` polling went too
+>   (pid 1 fell 1.49–2.15 % → 0.186 % of a core), with **ramp responsiveness for real audio unchanged** (`sampling_rate` 20 ms
+>   and `up_threshold` 80 are deliberately untouched).
+> - 🔬 **KNOWN POTENTIAL TEST — the aggressive governor variant, NOT shipped.**
+>   `sampling_rate=100 ms` + `up_threshold=95` on top of the above measured
+>   **98.74 % @ 350 MHz** (920/1200 at zero, 0.04 transitions/s, ≈36 % less
+>   dynamic power). It stretches a genuine ramp from ~60 ms to ~300 ms, so it
+>   needs **Petr's listening test** — Spotify/AirPlay/USB-audio start plus a
+>   volume sweep, `dmesg` watched for XRUNs. Runtime-only trial (reverts on
+>   reboot): `echo 100000 > /sys/devices/system/cpu/cpufreq/conservative/sampling_rate`
+>   and `echo 95 > .../up_threshold`. If it passes, fold both into
+>   `nexusq-cpufreq-tune`.
 > - **Judge idle only from an on-device self-logging capture with no live ssh
 >   session** — an open session pushes the die 74–79 °C within seconds and
->   drags the OPP up with it (2026-07-13 Finding 1).
+>   drags the OPP up with it (2026-07-13 Finding 1). Re-confirmed 2026-08-16:
+>   across 3.5 days, **every** contaminated sample (die > 65 °C, peak 82.6;
+>   opp350 < 60 %; opp1200 > 3 %, peak 16 %) fell inside the previous session's
+>   own ssh window, and nothing outside it came close.
 
 > **✅ DONE (2026-08-13) — the observability layer stopped lying: `nq_progress`
 > window (device **r72**) + LED verdict in telemetry (`nexusq-mqtt` **r2**) —

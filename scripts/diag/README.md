@@ -16,6 +16,11 @@ capture.*
 | `scripts/diag/nqctl` | host | reach the device over the best link (ethernet `10.42.0.2` first, then USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
 | `scripts/diag/nq-collect` | host | **the engine**: connect → snapshot → pull/burst samples → save locally → analyze |
 | `scripts/diag/nq-health-report` | host | analyze a capture → findings (human + JSON) |
+| `scripts/diag/ha-opp-window.py` | host | **the STANDING GOAL measurement**: idle OPP residency read out of Home Assistant history (the `nexusq-mqtt` rolling 1 h window). **Passive — it never touches the device**, which is the whole point: an ssh session invalidates the number it is measuring |
+| `scripts/diag/nq-opp-study.sh` | device | detached idle-OPP study: 60 s ftrace event capture + governor A/B arms, measured from `time_in_state`/`trans_table` deltas. Aborts and restores every knob if playback starts |
+| `scripts/diag/nq-opp-study2.sh` | device | same harness with arms given on the command line (`label:gov:sampling_rate:up:down:ignore_nice:nice_mode`), incl. renicing the housekeeping units for an `ignore_nice_load` A/B |
+| `scripts/diag/analyze-opp-snaps.py` | host | study snapshots → per-arm OPP residency, transition matrix, **mean residency per visit**, per-cgroup CPU, IRQ/softirq rates, cpuidle, temperature |
+| `scripts/diag/analyze-opp-trace.py` | host | ftrace dump → per-task CPU reconstruction from `sched_switch`, **burst-length histogram against the governor's ramp threshold**, and attribution of every up-transition to what ran before it |
 | `.claude/skills/nexusq-diag/` | — | agent skill wrapping `nq-collect` + interpretation guidance |
 
 Captures land in `nq-captures/<timestamp>/` (git-ignored; `nq-captures/latest`
@@ -33,7 +38,21 @@ scripts/diag/nqctl run 'nq-diag-snapshot --brief'
 scripts/diag/nqctl logs --follow          # tail the live health log
 scripts/diag/nqctl net-usb up             # USB-gadget fallback (ethernet 10.42.0.2 is the default)
 scripts/diag/nq-health-report nq-captures/latest   # re-analyze a capture
+
+# idle OPP residency (the STANDING GOAL number) — never over ssh:
+scripts/diag/ha-opp-window.py --days 3.5 --since '2026-08-13 12:00'
 ```
+
+⚠️ **Two traps in the OPP measurement**, both already paid for:
+
+1. **Do not measure idle with a session open.** An ssh login pushes the die to
+   74–79 °C and drags the OPP up; on 2026-08-16 *every* contaminated sample in a
+   3.5 d window fell inside the previous session's own ssh hours (die up to
+   82.6 °C, opp1200 up to 16 %). Hence a host-side, HA-only tool.
+2. **HA's history endpoint silently truncates a long multi-entity response.** A
+   single 3.5 d call for 12 entities returned only the first 24 h — well-formed
+   JSON, no error. `ha-opp-window.py` fetches in 6 h chunks and merges; if you
+   ever query HA history by hand, chunk it and check the last timestamp.
 
 `nq-collect` works against **today's image too**: if the device doesn't yet ship
 `nq-healthd`/`nq-diag-snapshot`, it pushes them to `/tmp` and gathers a short

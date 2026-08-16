@@ -4,7 +4,81 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-13 (latest): **First clean idle-OPP measurement (60.5 % @ 350 MHz) → same-day attribution → FOUR fixes shipped via OTA: nq-healthd fork diet (device r71), nexusqd event-driven PA gate + adaptive idle cadence (nexusqd r13), nq_progress window (device r72), LED verdict in telemetry (nexusq-mqtt r2) — all live-verified**
+## Session 2026-08-16 (latest): **the 08-13 fixes verified in the field — idle OPP residency 60.5 % → `70.69 % @ 350 MHz` over 79 h, 1200 MHz/1380 mV all but gone (5.1 → 0.71 %)**
+
+Full record: `docs/2026-08-16-idle-opp-remeasure.md`. Nothing was changed on the
+device — this is a **passive read** of HA history / the MQTT retained state
+(new tool `scripts/diag/ha-opp-window.py`), settling the A/B that item 1 of the
+08-13 continue-list asked for. Live device state unchanged: `nexusqd` **r13** ·
+`device-google-steelhead` **r72** · `nexusq-mqtt` **r2**, uptime 5.84 d, no
+reboot, all services off.
+
+- **Result:** 350 MHz **70.69 %** (p05 69.6, flat over the whole 79 h) · 700
+  **22.56 %** · 920 **6.04 %** · 1200 **0.71 %** · die **58.4 °C** mean
+  (min 54.6). The 08-13 work (healthd r71 fork diet, nexusqd r13, idle-study
+  sampler stopped) predicted ~12 pp of core-time back and delivered ~10 pp of
+  350 MHz residency — the "structural" residual was mostly our own
+  observability layer.
+- **`led_stalled` verdict holds in the field:** `led_stall` reached **55 842**
+  on a locked/blanked ring over 5.8 d with `led_stalled=false` and
+  `binary_sensor.nexus_q_led_ring=off` — zero false CRITs since r72/mqtt r2.
+- ⚠️ **New method trap: HA's history endpoint silently truncates a long
+  multi-entity response.** One 3.5 d / 12-entity call returned only the first
+  24 h — well-formed JSON, no error, stopping right after the interesting
+  transition. `ha-opp-window.py` fetches in 6 h chunks and merges.
+- **Re-plan:** with 1200 MHz at 0.71 % the remaining idle cost is **700 MHz at
+  22.6 %**; the nq-healthd C rewrite and the `brcmf` wakeups are the live leads.
+- **Same day, root-caused — `docs/2026-08-16-idle-700mhz-deep-analysis.md`.**
+  Two detached studies (60 s ftrace + 10 × 12 min governor A/B arms). The idle
+  device is **3.8 % busy**, but the CPU comes in bursts and `conservative` ramps
+  on any run **≥16 ms** (80 % of its 20 ms window); 62 such runs and 48
+  up-transitions in the same 60 s. Culprits are **pid 1** (27 long runs/min,
+  longest **59 ms**, fed by `systemctl` polling at 0.33/s from healthd, mqtt and
+  the wifi watchdog) and **nq-healthd** (18/min, its ~6 forks per tick) — the
+  long-lived daemons (python, avahi, **nexusqd at 0.069 %**) never cross the
+  threshold. ⚠️ **The "1 Hz AVR keepalive causes the ramps" hypothesis was
+  disproved by the trace** — it came from a cumulative counter that still held
+  the pre-r13 workload.
+  **Measured A/B (12 min arms):** production **72.4 %** → **86.2 %** with
+  `ignore_nice_load=1` + housekeeping `Nice=19` + `down_threshold=40`, with ramp
+  responsiveness for real audio **unchanged** → **98.74 %** if
+  `sampling_rate=100 ms` + `up_threshold=95` is added (**needs Petr's listening
+  test first** — it delays a genuine ramp from ~60 ms to ~300 ms). A `powersave`
+  arm proves nothing at idle needs more than 350 MHz (busy 7.06 %, all fine).
+  **Nothing has been changed on the device**: both studies restore every knob
+  through an EXIT trap (verified), and the round-2 renice bug that left the
+  daemons at nice 19 was caught, restored to each unit's configured `Nice=`, and
+  fixed in the script.
+  New tools, all committed under `scripts/diag/`: `nq-opp-study.sh`,
+  `nq-opp-study2.sh`, `analyze-opp-snaps.py`, `analyze-opp-trace.py`.
+- **SHIPPED the same evening — `device-google-steelhead` r73, `nexusq-btagent`
+  r5, `nexusq-mqtt` r3** (built, installed on the Q, verified live):
+  `ignore_nice_load=1` + `down_threshold=40` via a new **`nexusq-cpufreq-tune`**
+  oneshot (waits for the governor's tunable dir, idempotent, never fails a boot),
+  `Nice=19` on healthd/mqtt/btagent/wifi-watchdog/nfc (**not** nexusq-control —
+  it serves the app's volume RPC), and btagent's `systemctl is-active` replaced
+  by a cgroup-directory test. `sampling_rate`/`up_threshold` deliberately
+  UNCHANGED so real audio still ramps as fast as before.
+  **Verified live after install: 90.99 % @ 350 MHz** (12 min arm; 700 8.83 %,
+  920 0.17 %, 1200 0.02 %) — better than the 86.2 % the A/B predicted, because
+  **pid 1 dropped from ~2 % of a core to 0.186 %** once btagent stopped forking
+  `systemctl`. ≈27.5 % less relative dynamic power; 16 % above a locked-350 floor.
+- 🔬 **KNOWN POTENTIAL TEST (agreed with Petr 2026-08-16, deferred):** the
+  aggressive variant `sampling_rate=100 ms` + `up_threshold=95` measured
+  **98.74 % @ 350 MHz** but stretches a genuine ramp ~60 ms → ~300 ms. Needs a
+  **listening test** (Spotify/AirPlay/USB-audio start + volume sweep, `dmesg`
+  watched for XRUNs). Runtime-only trial, reverts on reboot; fold into
+  `nexusq-cpufreq-tune` only if it passes.
+- ⚠️ **The build toolchain was unpinned and upstream broke it.** `Dockerfile`
+  installed pmbootstrap from git master; upstream pmaports bumped
+  `required_pmbootstrap_version` to 3.11.0 and every build died in Phase 7b.
+  pmbootstrap is now **pinned to 3.11.0**. All four monkey patches still apply —
+  **including `partition.py partitions_mount`, the exact blocker item 7 below
+  told the next session to expect.** Still open: **pmaports itself is unpinned**
+  (`--depth=1` of HEAD), so upstream can break the build again; a `PMAPORTS_REF`
+  pin is the remaining half.
+
+## Session 2026-08-13: **First clean idle-OPP measurement (60.5 % @ 350 MHz) → same-day attribution → FOUR fixes shipped via OTA: nq-healthd fork diet (device r71), nexusqd event-driven PA gate + adaptive idle cadence (nexusqd r13), nq_progress window (device r72), LED verdict in telemetry (nexusq-mqtt r2) — all live-verified**
 
 Full record: `docs/2026-08-13-idle-opp-residency-measurement.md` (measurement +
 attribution + the r71/r13 ship-verify sections + the post-diet attribution) and
@@ -165,11 +239,19 @@ for `led_sum == 0`, run **detached** and fetch **ONCE** (no polling), **one**
 2026-08-13); a local copy of the log was pulled for the analysis.
 
 ### WHERE TO CONTINUE (2026-08-13)
-1. **Tomorrow morning: re-measure the overnight opp350 window from HA/MQTT** —
-   same method as `docs/2026-08-13-idle-opp-residency-measurement.md`
-   §Provenance (HA history on `sensor.nexus_q_time_at_*_mhz`). **NO ssh
-   overnight** — tonight is the free A/B for r71 + r13 + the idle-study stop
-   (~12 pp of a core removed); expect opp350 well above 60.5 %.
+1. ✅ **DONE 2026-08-16 — re-measured: `70.69 % @ 350 MHz` over 79 h of
+   undisturbed idle** (nobody touched the Q after 08-13, so the A/B window grew
+   from one night to 3.3 days). **+10.2 pp over the 60.5 % baseline**, and the
+   hot OPP collapsed: **1200 MHz 5.1 % → 0.71 %** (−86 %), 920 9.5 → 6.0, 700
+   24.8 → 22.6; die 58.4 °C mean (min 54.6), the coolest sustained idle so far.
+   No reboot in the window (uptime 2.34 → 5.84 d), all services off, and every
+   contaminated sample in the 3.5 d pull sits inside the 08-13 07:41–11:35 ssh
+   session. Full record + method trap: `docs/2026-08-16-idle-opp-remeasure.md`;
+   the measurement is now the committed tool
+   **`scripts/diag/ha-opp-window.py --days 3.5 --since '2026-08-13 12:00'`**.
+   **Consequence for the plan: the next lever is 700 MHz (22.6 %), not 1200** —
+   items 2–4 below (healthd C rewrite, brcmf wakeups, the mqtt `pactl` poll) are
+   what is left, and item 5's governor tunables have little to win.
 2. **`nq-healthd` is now the #1 idle consumer at 2.43 %** — the remaining cost is
    its **~6 forks/tick** (`date`, `timeout`+`nexusled`, `od`+`awk`, amortized
    `dmesg`). The correct fix is a **C rewrite in the nexusqd mould**: in-process
@@ -217,13 +299,20 @@ for `led_sum == 0`, run **detached** and fetch **ONCE** (no polling), **one**
    and reached python3 (2 of 9 packages) with **zero checksum errors** before it
    was stopped — so Phase 7b's new up-front checksum pass survives a cold tree.
 
-   ⚠️ **Known blocker to expect:** the 2026-08-13 build logged
-   `partition.py partitions_mount: PATTERN NOT FOUND (pmbootstrap changed?)`
-   in Phase 6b. Every other patch applied (including the load-bearing
-   `backend.py` abuild-as-root one), and OTA builds never reach that code — but
-   the **full** pipeline does, at the Phase 10 rootfs mount. Re-target that
-   pattern before or during the run, or the build will die at rootfs assembly
-   after having done all the expensive work.
+   ✅ ~~**Known blocker to expect:** the 2026-08-13 build logged
+   `partition.py partitions_mount: PATTERN NOT FOUND (pmbootstrap changed?)`~~ —
+   **RESOLVED 2026-08-16.** It was a pmbootstrap-version mismatch, not a moved
+   pattern: the image carried 3.10.1 against a newer pmaports. With pmbootstrap
+   pinned to **3.11.0** in the Dockerfile, Phase 6b logs
+   `Patched partition.py: mknod-from-sysfs fallback in partitions_mount`
+   together with the other three. Rebuild the image (`docker build -t
+   nexusq-builder .`) before the cold run so it picks the pin up.
+   ⚠️ **New thing to watch instead:** pmaports is still cloned `--depth=1` from
+   HEAD, so an upstream bump of `required_pmbootstrap_version` breaks every
+   build again. If Phase 7b says "Please update your pmbootstrap version", that
+   is what happened — bump `ARG PMBOOTSTRAP_REF`, rebuild the image, and re-check
+   that all four patches still apply (they only WARN when they miss, and
+   `backend.py` is load-bearing: without it abuild hangs in fakeroot under qemu).
 
    Afterwards: verify the rootfs by MOUNTING it (systemd init, nexusqd, sshd —
    the v1.5.0 lesson), check the boot.img is ramdisk-less and under the 8 MB

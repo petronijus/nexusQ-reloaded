@@ -6,6 +6,112 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Measured — idle OPP residency after the 08-13 fixes: **70.7 % @ 350 MHz** (2026-08-16, 79 h passive window)
+- The A/B the 08-13 session asked for, settled from 79 h of undisturbed idle:
+  **350 MHz 70.69 %** (was 60.5 %, **+10.2 pp**) · 700 MHz 22.56 % · 920 MHz
+  6.04 % · **1200 MHz 0.71 % (was 5.1 %, −86 %)** · die **58.4 °C** mean
+  (min 54.6) — the coolest sustained idle recorded. Flat across the whole window
+  (p05 69.6 %), no reboot (uptime 2.34 → 5.84 d), all services off.
+- Every contaminated sample in a 3.5 d pull sat inside the previous session's own
+  ssh hours (die up to **82.6 °C**, opp1200 up to 16 %) — the "never judge idle
+  with a session open" rule, re-confirmed by accident.
+- ⚠️ **New method trap: Home Assistant's history endpoint SILENTLY TRUNCATES a
+  long multi-entity response.** One 3.5 d / 12-entity call returned only the
+  first 24 h — well-formed JSON, no error, stopping right after the interesting
+  transition. New tool `scripts/diag/ha-opp-window.py` chunks the query (6 h) and
+  merges. Full record: `docs/2026-08-16-idle-opp-remeasure.md`.
+
+### Root-caused — an idle Q ramps on BURST SHAPE, not on load (2026-08-16, 60 s ftrace + 10 × 12 min A/B arms)
+- The idle machine is **3.8 % busy** (both cores), but that CPU arrives as ~one
+  long burst per second, and `conservative` (20 ms window, `up_threshold` 80)
+  ramps on **any run ≥16 ms**: 62 such runs and 48 up-transitions in the same
+  60 s — very nearly one ramp per long run.
+- **Culprits are short-lived processes and pid 1, not the daemons.**
+  **systemd (pid 1) 1.94 % of a core, 190 slices, longest 59.1 ms, 27 runs
+  ≥16 ms/min** · **nq-healthd 1.41 %, longest 40.1 ms, 18 runs/min**. The
+  long-lived daemons never cross the threshold at all: python3 daemon 0.52 % / 0
+  long runs, avahi 0.23 % / 0, **nexusqd 0.069 % / 0**.
+- pid 1 is fed by **`/usr/bin/systemctl` at 0.33 execs/s**, traced to
+  **`nexusq-btagent`** (12/min, `systemctl is-active nexusq-setupd` on its 10 s
+  reconcile tick) — plus, embarrassingly, this study's own first-round playback
+  guard.
+- ⚠️ **Disproved hypothesis, recorded on purpose:** the cumulative `trans_table`
+  showed arrivals at 700 MHz at 1.008/s, matching nexusqd's 1 Hz AVR keepalive so
+  exactly that it looked certain. **The trace refutes it** — nexusqd's longest
+  run is 0.9 ms and it appears in no ramp window. The 1 Hz figure was an average
+  over 5.85 d that still contained the pre-r13/r71 workload.
+- `schedutil` could not be evaluated: it is **not compiled in**. Added to
+  `steelhead_defconfig` (with `CPU_IDLE_GOV_TEO`) for the next kernel build.
+  Full record: `docs/2026-08-16-idle-700mhz-deep-analysis.md`.
+
+### Fixed — idle OPP: `ignore_nice_load` + housekeeping `Nice=19` + `down_threshold=40` (device **r73**, nexusq-btagent **r5**, nexusq-mqtt **r3**)
+- **Measured A/B (12 min arms, identical conditions): 72.4 % → 86.2 % at
+  350 MHz**, 920 MHz 5.70 → 0.61 %, 1200 MHz 0.89 → 0.05 %, ≈22 % less relative
+  dynamic power. The two levers are independent and additive (+5.1 pp and
+  +5.8 pp alone): nice+ignore hides the housekeeping BURSTS, `down_threshold=40`
+  shortens the TAIL (mean stay at 700 MHz 318 → 206 ms).
+- **Ramp responsiveness for real load is deliberately UNCHANGED** —
+  `sampling_rate` stays 20 ms and `up_threshold` stays 80. Only *nice* time is
+  hidden, and the audio path (librespot/PulseAudio, PA at RT) is never nice'd.
+- New `nexusq-cpufreq-tune` oneshot (script + unit + preset entry) applies
+  `ignore_nice_load=1` and `down_threshold=40`; it waits for the governor's
+  tunable directory instead of racing it, is idempotent, and never fails a boot.
+- `Nice=19` on `nq-healthd`, `nexusq-mqtt`, `nexusq-btagent`,
+  `nexusq-wifi-watchdog`, `nexusq-nfc`. **NOT** on `nexusq-control` — it serves
+  the app's volume RPC, and the trace shows it never produces a ≥16 ms run
+  anyway, so nothing is lost.
+- **`nexusq-btagent` r5: `systemctl is-active` → cgroup directory test.** systemd
+  creates a unit's cgroup when its start job begins and removes it when the unit
+  is gone, so the directory covers active/activating/deactivating — the same
+  tri-state the systemctl form reached for, in one `stat()` with no fork and no
+  pid-1 wakeup. The 2026-07-15 "activating counts as active" regression stays
+  covered (26 pytest tests pass, the class was rewritten around the new
+  contract).
+- Indicative worth of dropping `systemctl` polling on its own: round 1's baseline
+  measured 64.7 % with a systemctl-based guard, round 2's 72.4 % with the cgroup
+  test and nothing else changed — the latter landing within 1.7 pp of the passive
+  79 h number. Not a controlled A/B (an hour apart), but it agrees with the trace.
+
+### Verified on the device — the shipped set measures **90.99 % @ 350 MHz** (2026-08-16, 12 min, post-install)
+- Beats the 86.2 % the governor A/B predicted, because that arm still carried
+  btagent's `systemctl` polling. With r5 installed, **`init.scope` (pid 1) fell
+  from 1.49–2.15 % of a core to 0.186 %** — a ~10× drop, exactly the mechanism
+  the trace pointed at — and nexusq-btagent itself 1.00 → 0.55 %.
+- **350 MHz 90.99 % · 700 MHz 8.83 % · 920 MHz 0.17 % · 1200 MHz 0.02 %**
+  (from 72.4 / 21.0 / 5.70 / 0.89) — **+18.6 pp**, ≈**27.5 % less relative
+  dynamic power**, and only 16 % above the floor of a CPU locked at 350 MHz.
+- Mean stay at 700 MHz **318 → 170 ms**; idle busy 4.72 → 4.08 % of one core,
+  forks 2.59 → 2.39/s. Die 60.3 °C (12 min is too short for a thermal claim).
+
+### Known potential test — the aggressive governor variant (NOT shipped)
+- Adding `sampling_rate=100 ms` + `up_threshold=95` on top of the above measured
+  **98.74 % @ 350 MHz** with 920/1200 at exactly **zero** and only 28 transitions
+  in 12 minutes (0.04/s vs 1.43/s), ≈36 % less relative dynamic power — 2 % above
+  the theoretical floor of a CPU locked at 350 MHz.
+- **Deliberately not shipped**: it stretches a genuine ramp from ~60 ms to
+  ~300 ms, which is exactly where a first-second audio glitch would live. Needs a
+  real listening test (Spotify / AirPlay / USB audio start + a volume sweep, with
+  `dmesg` watched for XRUNs) driven by Petr. Apply for a test with:
+  `echo 100000 > /sys/devices/system/cpu/cpufreq/conservative/sampling_rate` and
+  `echo 95 > .../up_threshold` (runtime-only, reverts on reboot).
+- A `powersave` arm proved **nothing at idle needs more than 350 MHz** (busy
+  7.06 %, everything kept working), so the remaining headroom is real.
+
+### Fixed — build: the toolchain was unpinned, and upstream broke it (`Dockerfile`)
+- `Dockerfile` installed pmbootstrap from **git master** and `docker-build.sh`
+  clones pmaports **`--depth=1` from HEAD**, so what a build used depended on the
+  day it ran. On 2026-08-16 an image carrying **3.10.1** met a pmaports tree that
+  had bumped `required_pmbootstrap_version` to **3.11.0**, and every build — OTA
+  and full — died in Phase 7b with "Please update your pmbootstrap version".
+- pmbootstrap is now **pinned to 3.11.0** (`ARG PMBOOTSTRAP_REF`, verified at
+  image build time). All four monkey patches still apply under it — and
+  **`partition.py partitions_mount` now applies again**, which had reported
+  "PATTERN NOT FOUND" on 2026-08-13 and was recorded in HANDOFF as the blocker to
+  expect during the cold build. That blocker is gone.
+- ⚠️ **Still open: pmaports itself is unpinned** (`--depth=1` clone of HEAD), so
+  upstream can break the build again at any time. A `PMAPORTS_REF` pin is the
+  remaining half of making the build reproducible.
+
 ### Measured — post-r71/r13 idle attribution: `nq-healthd` is the new #1 consumer (2026-08-13, 240 s window, ring blanked)
 - Total idle busy **8.73 % of one core** (was **18.2 %** in the overnight window
   before the day's fixes), forks **2.59/s** (was 13.96/s).
