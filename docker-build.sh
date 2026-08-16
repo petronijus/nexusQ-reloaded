@@ -614,8 +614,15 @@ locale = en_US.UTF-8
 qemu_redir_stdio = False
 ssh_keys = False
 sudo_timer = False
-systemd = always
-# Switching the 'systemd' option flips the apk channel (edge -> systemd-edge). A warm
+# pmbootstrap RENAMED this key: it was `systemd = always` up to 3.10.x and is
+# `service_manager = systemd` (default|openrc|systemd) from 3.11.0. The old key
+# is not rejected, it is SILENTLY IGNORED — so the 2026-08-16 cold build fell
+# back to the ui default (postmarketos-ui-lxqt -> openrc) and was on course to
+# produce an OpenRC rootfs with no nexusqd and no sshd. That is exactly the
+# v1.5.0 disaster, which shipped because a build "succeeded". The guard right
+# after this config write is what makes the rename non-silent; do not remove it.
+service_manager = systemd
+# Switching the service manager flips the apk channel (edge -> systemd-edge). A warm
 # nexusq-workdir volume left over from an older 'edge' (OpenRC) build then holds
 # misconfigured chroots, and pmbootstrap aborts ("Chroot is for the 'edge'
 # channel, but you are on 'systemd-edge'"). Let it auto-delete those stale
@@ -643,6 +650,39 @@ pmbootstrap config device 2>&1 || {
     echo "  Attempting pmbootstrap status..."
     pmbootstrap status 2>&1 || true
 }
+
+# --- the init-system gate (v1.5.0, and again 2026-08-16) ---------------------
+# ASSERT the service manager actually took, do not assume the config was read.
+# v1.5.0 shipped an OpenRC rootfs (no nexusqd, no sshd) that built and checksummed
+# cleanly; on 2026-08-16 pmbootstrap 3.11.0 renamed `systemd` -> `service_manager`
+# and SILENTLY ignored the old key, putting a cold build back on that same road.
+# A config option we merely write is a hope; one we read back is a fact.
+# Step 1 — does this pmbootstrap even KNOW the key we just wrote? argparse lists
+# every valid config name in `config --help`, and it needs no work dir, so this
+# works at any point in the run. This is the check that catches a rename: today
+# `service_manager` is listed and the old `systemd` is not.
+if ! pmbootstrap config --help 2>&1 | grep -q '\bservice_manager\b'; then
+    echo ""
+    echo "=== INIT SYSTEM OPTION RENAMED ==="
+    echo "  This pmbootstrap does not accept 'service_manager'. The config we"
+    echo "  write would be SILENTLY IGNORED and the build would fall back to the"
+    echo "  ui default (openrc) -> an OpenRC rootfs with no nexusqd and no sshd,"
+    echo "  which is exactly how v1.5.0 shipped broken."
+    echo "  Valid names in this version:"
+    pmbootstrap config --help 2>&1 | sed -n 's/.*choose from \(.*\))/    \1/p'
+    exit 1
+fi
+# Step 2 — best effort read-back. Needs an initialised work dir, so an empty
+# answer is not treated as failure; a WRONG answer is.
+_svc="$(pmbootstrap config service_manager 2>/dev/null | tail -1 | tr -d '[:space:]')"
+if [ -n "$_svc" ] && [ "$_svc" != "systemd" ]; then
+    echo ""
+    echo "=== INIT SYSTEM MISCONFIGURED ==="
+    echo "  wanted service_manager=systemd, pmbootstrap reports: '$_svc'"
+    echo "  Refusing to continue — this builds an OpenRC rootfs."
+    exit 1
+fi
+echo "  init system: service_manager=systemd (key accepted${_svc:+, read back as $_svc})"
 
 echo ""
 echo "=== Phase 7a: Fix abuild REPODEST ownership on the work volume ==="
