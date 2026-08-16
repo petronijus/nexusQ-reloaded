@@ -95,8 +95,66 @@ echo "pmbootstrap version: $(pmbootstrap --version)"
 
 echo "Cloning pmaports (this takes a while)..."
 PMAPORTS="/home/pmos/pmaports"
+PMAPORTS_URL="https://gitlab.postmarketos.org/postmarketOS/pmaports.git"
+# PINNED, deliberately — see the Dockerfile's PMBOOTSTRAP_REF for the other half.
+# This used to be an unpinned `--depth=1` clone of HEAD, which made every build
+# depend on whatever upstream had merged that morning. On 2026-08-16 upstream
+# bumped pmaports' `required_pmbootstrap_version` to 3.11.0 and EVERY build --
+# OTA and full -- died in Phase 7b, mid-run, after all the staging work.
+# Set PMAPORTS_REF=main (or any ref) to deliberately track upstream again; bump
+# this pin together with PMBOOTSTRAP_REF, and re-verify that the four pmbootstrap
+# monkey patches in Phase 6b still apply (they only WARN when they miss, and
+# backend.py is load-bearing: without it abuild hangs in fakeroot under qemu).
+PMAPORTS_REF="${PMAPORTS_REF:-11e89dfbb2f8ecc9bcc074ca4d62a609ffa50bf6}"
 if [ ! -d "$PMAPORTS" ]; then
-    git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS" 2>&1 | tail -3
+    # A --depth=1 clone cannot check out an arbitrary commit, so fetch exactly
+    # the pinned object. If the server refuses a by-SHA fetch (uploadpack
+    # .allowReachableSHA1InWant disabled), fall back to a blobless full-history
+    # clone, which can always resolve it.
+    echo "  pmaports pin: $PMAPORTS_REF"
+    if git init -q "$PMAPORTS" \
+       && git -C "$PMAPORTS" remote add origin "$PMAPORTS_URL" \
+       && git -C "$PMAPORTS" fetch -q --depth=1 origin "$PMAPORTS_REF" 2>/dev/null \
+       && git -C "$PMAPORTS" checkout -q FETCH_HEAD; then
+        echo "  pmaports: fetched pinned commit directly (shallow)"
+    else
+        echo "  pmaports: by-SHA fetch unavailable, falling back to a blobless clone"
+        rm -rf "$PMAPORTS"
+        git clone -q --filter=blob:none "$PMAPORTS_URL" "$PMAPORTS" 2>&1 | tail -3
+        git -C "$PMAPORTS" checkout -q "$PMAPORTS_REF"
+    fi
+    echo "  pmaports at $(git -C "$PMAPORTS" rev-parse --short HEAD)"
+fi
+
+# Fail EARLY and legibly on a toolchain mismatch. Without this the run dies in
+# Phase 7b -- after cloning, staging every aport and fixing ownership -- with
+# pmbootstrap's own "Please update your pmbootstrap version" and no hint that
+# the fix is a one-line pin bump. Comparison is `sort -V`, not string equality:
+# any pmbootstrap at or above what pmaports demands is fine.
+_pmb_have="$(pmbootstrap --version 2>/dev/null | tr -d '[:space:]')"
+# The key is `pmbootstrap_min_version` (pmaports.cfg, [pmaports] section).
+# `required_pmbootstrap_version` is accepted too in case upstream renames it
+# back -- and if NEITHER is found the check says so out loud, because a guard
+# that skips silently is worse than no guard: the first version of this read the
+# wrong key, matched nothing, and sailed straight past a real mismatch.
+_pmb_need="$(sed -n -e 's/^pmbootstrap_min_version[[:space:]]*=[[:space:]]*//p' \
+                    -e 's/^required_pmbootstrap_version[[:space:]]*=[[:space:]]*//p' \
+             "$PMAPORTS/pmaports.cfg" 2>/dev/null | head -1 | tr -d '[:space:]')"
+if [ -z "$_pmb_need" ] || [ -z "$_pmb_have" ]; then
+    echo "  ⚠ toolchain check SKIPPED (pmaports requirement='$_pmb_need'," \
+         "pmbootstrap version='$_pmb_have') -- did pmaports.cfg change its keys?"
+elif [ "$(printf '%s\n%s\n' "$_pmb_need" "$_pmb_have" | sort -V | head -1)" != "$_pmb_need" ]; then
+    echo ""
+    echo "=== TOOLCHAIN MISMATCH ==="
+    echo "  pmaports $(git -C "$PMAPORTS" rev-parse --short HEAD) requires pmbootstrap >= $_pmb_need"
+    echo "  this image has $_pmb_have"
+    echo "  Fix: bump ARG PMBOOTSTRAP_REF in the Dockerfile to >= $_pmb_need,"
+    echo "       rebuild the image (docker build -t nexusq-builder .), and re-check"
+    echo "       that Phase 6b still reports all FOUR patches as applied."
+    echo "  (Or pin PMAPORTS_REF to an older pmaports commit.)"
+    exit 1
+else
+    echo "  toolchain OK: pmbootstrap $_pmb_have >= pmaports' required $_pmb_need"
 fi
 
 # pmaports renamed its default branch master -> main, but pmbootstrap (>=3.9.0)
