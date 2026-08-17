@@ -578,6 +578,33 @@ sudo python3 -c "import py_compile; py_compile.compile('$BACKEND_PY', doraise=Tr
 sudo python3 -c "import py_compile; py_compile.compile('$BLOCKDEV_PY', doraise=True)" && echo "    blockdevice.py: OK"
 
 echo ""
+echo "=== Phase 6c: Pre-create /dev/loop* nodes (docker static /dev) ==="
+# A docker container's /dev is a STATIC tmpfs snapshot taken at container start
+# (no devtmpfs, no udev), so ANY device node the kernel creates afterwards never
+# shows up inside the container. `losetup -f` asks the kernel for the next free
+# loop index via ioctl(LOOP_CTL_GET_FREE) and then opens /dev/loop<idx>. On a
+# host whose low loop indices are all consumed -- this build machine's snapd
+# keeps ~47 squashfs mounts alive -- the kernel hands back an index that was
+# only materialised as a node on the HOST, after our container started:
+#     losetup: .../google-steelhead.img: failed to set up loop device: No such file or directory
+#     losetup: device node /dev/loop47 (7:47) is lost. You may use mknod(1) to recover it.
+# pmbootstrap calls losetup with check=False, so the only symptom is Phase 9
+# dying at "(3/4) PREPARE INSTALL BLOCKDEVICE" with
+#     ERROR: Failed to find loop device for /home/pmos/rootfs/google-steelhead.img
+# (hit 2026-08-17 on the cold verification build). Exactly the same class as the
+# partitions_mount() mknod-from-sysfs patch above -- fix it the same way, but
+# up-front: materialise the whole loop-major node range ourselves. Loop nodes are
+# inert until configured, so pre-creating unused ones costs nothing, and it makes
+# the build independent of how many loop devices the host happens to be using.
+_loop_made=0
+for _i in $(seq 0 255); do
+    [ -e "/dev/loop$_i" ] && continue
+    sudo mknod -m 660 "/dev/loop$_i" b 7 "$_i" 2>/dev/null && _loop_made=$((_loop_made + 1))
+done
+echo "  Created $_loop_made missing node(s); /dev now has $(ls -d /dev/loop[0-9]* 2>/dev/null | wc -l) loop nodes"
+echo "  Next free loop device: $(sudo losetup -f 2>&1)"
+
+echo ""
 echo "=== Phase 7: Initialize pmbootstrap config ==="
 WORK="/home/pmos/.local/var/pmbootstrap"
 mkdir -p "$XDG_CONFIG_HOME" "$WORK"
