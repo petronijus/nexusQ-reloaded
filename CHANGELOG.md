@@ -97,6 +97,74 @@ All notable changes to Nexus Q Reloaded. Format follows
 - A `powersave` arm proved **nothing at idle needs more than 350 MHz** (busy
   7.06 %, everything kept working), so the remaining headroom is real.
 
+### Verified — the COLD BUILD passed: 27/27 rootfs gates, built from nothing (2026-08-17)
+- The verification agreed with Petr on 2026-08-13 is **done**. Full pipeline, empty
+  `-cold` volumes, nothing reused from the warm one. `scripts/verify-rootfs.sh`:
+  **27 passed, 0 failed** — headline `PASS /sbin/init is systemd`, no OpenRC
+  packages, no `/etc/runlevels`; nexusqd + sshd present and enabled; the whole
+  r73 idle set (`nexusq-cpufreq-tune`, `Nice=19` on five units, `nexusq-control`
+  deliberately NOT nice'd, btagent on the cgroup test); Roon default-OFF and
+  RoonBridge not baked; **boot.img 5.3 MiB, ramdisk-less**.
+- Hand-checked on the mounted rootfs beyond the script: fstab carries no `/boot`
+  line, zero files owned by uid 12345 (the abuild-as-root fix holds), the BCM4330
+  blob matches by md5, `/boot` is populated, and **the DTB inside boot.img is
+  byte-identical to the rootfs DTB** and carries the factory WiFi MAC.
+- Artifacts: `output/nexusq-rootfs-cold-2026-08-17.img` (2.7 GiB) +
+  `output/boot-cold-2026-08-17.img`. Logs `nq-captures/2026-08-17-coldbuild-run*.log`.
+  Not flashed, not published. Kernel is **r47** (schedutil + TEO) vs r46 live, so
+  the new governor option only becomes testable after a flash.
+- Package versions match the device exactly (nexusqd r13, control r29, btagent r5,
+  setupd r4, mqtt r3, glibc-rt r0) — the tree really does rebuild what is running.
+
+### Fixed — build: `/dev/loop*` nodes must be pre-created (2026-08-17)
+- Phase 9 died at **"(3/4) PREPARE INSTALL BLOCKDEVICE"**: `losetup` reported
+  `device node /dev/loop47 (7:47) is lost`. A container's `/dev` is a **static
+  tmpfs snapshot** taken at container start — no devtmpfs, no udev — so any node
+  the kernel materialises later never appears inside it. `losetup -f` asks the
+  kernel for the next free index, and this host's snapd keeps ~47 squashfs loops
+  alive, so it handed back an index whose node only ever existed on the host.
+  pmbootstrap calls losetup with `check=False`, so the only symptom is the abort.
+- New **Phase 6c** materialises `/dev/loop0..255` up front (inert until
+  configured). Same class as the existing `partitions_mount()` mknod patch.
+  **Only the full pipeline touches losetup** — every `OTA_PACKAGES_ONLY=1` run
+  skips it, which is why this was invisible until a cold build.
+
+### Removed — the python3 override, which had quietly stopped being installed (2026-08-17)
+- The override existed because Alpine's stock python3 SIGSEGVed on armv7. That
+  root cause was **settled 2026-06-28 and was never the build**: `raw2simg.py`
+  marked all-zero blocks as fastboot `DONT_CARE`, the device does not pre-erase
+  userdata, and stale garbage showed through libpython's should-be-zero regions
+  **after flashing**. The built apk was always clean; `raw2simg.py` now writes
+  every block RAW.
+- The cold build then exposed that the override had gone **inert**: Alpine edge
+  moved to **python3 3.14.7** and apk compares `pkgver` before `pkgrel`, so our
+  `3.14.5-r5` stopped winning. Phase 7d still built it, still gate-passed it
+  ("CLEAN, attempt 1"), still exported it and still printed *"supersedes Alpine's
+  -r2"* — while **the rootfs installed 3.14.7-r0 regardless** (proved by libpython
+  md5: rootfs `d7952ba7…` vs our apk `3ad0ce88…`). A warm build could never have
+  shown this: it reuses a cached APKINDEX that still listed the old version.
+- **A safety net that silently stops being installed is worse than none.** Gone:
+  the Phase 6 staging, Phase 7d's build+gate+retry loop, the `PYTHON3_VALIDATE_RUNS`
+  harness, and `pmos/python3` itself (a `git revert` restores all of it).
+- The **Phase 10 ship gate stays and is now stronger**: it prints *which* python3
+  the rootfs actually contains (read from apk's own db — the question nobody was
+  asking), and **a missing python3 is now a hard FAILURE**, because
+  `nexusq-control`, `nexusq-mqtt`, `nexusq-btagent` and `nexusq-nfc` are all
+  stdlib-python daemons. ⚠️ Paragraph-mode `awk` needs `FS="\n"`: matching
+  `/^P:python3$/` with `RS=""` anchors to the record, not the line, and silently
+  never matches — the first version of the check did exactly that, and both the
+  bug and the fix were verified against the cold rootfs.
+
+### Shipped — device r74 published, and the live box realigned (2026-08-17)
+- `device-google-steelhead` **r74** (the `deviceinfo_boot_filesystem="ext2"` fix)
+  built on the warm volume and published to gh-pages (`91cd44a`), then installed
+  on the Q via `apk upgrade`. This also closes the skew where the **firmware
+  subpackage was two revisions behind** (r72) the main package.
+- Live device after the upgrade: device **r74** + firmware **r74**, nexusqd r13,
+  control r29, btagent r5, setupd r4, mqtt r3 — all seven services active, and
+  the idle tuning intact (`down_threshold=40`, `ignore_nice_load=1`, `Nice=19`
+  on the housekeeping units, `nexusq-control` at 0).
+
 ### Fixed — the cold build caught an OpenRC rootfs in the making: `systemd` → `service_manager` (2026-08-17)
 - The verification build did exactly what it was commissioned for. pmbootstrap
   **3.11.0 renamed the config option `systemd` (≤3.10.x) to `service_manager`**

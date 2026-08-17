@@ -274,7 +274,28 @@ for `led_sum == 0`, run **detached** and fetch **ONCE** (no polling), **one**
    done 2026-08-13, pushed (`2989e43`…`1cc1299`); `app-v1.13.1` released with
    the manifest live, so the repo, the OTA repo and the device agree again.
 
-7. 🟡 **COLD BUILD — STARTED 2026-08-17, and it has already paid for itself.**
+7. ✅ **COLD BUILD — DONE 2026-08-17, and it paid for itself four times over.**
+   Full pipeline on empty `-cold` volumes, **`scripts/verify-rootfs.sh` 27 passed /
+   0 failed**, `/sbin/init` = systemd, boot.img 5.3 MiB ramdisk-less, DTB in
+   boot.img byte-identical to the rootfs one and carrying the factory WiFi MAC,
+   package versions matching the live device exactly. Artifacts
+   `output/nexusq-rootfs-cold-2026-08-17.img` + `output/boot-cold-2026-08-17.img`
+   — **not flashed, not published**. Kernel r47 (schedutil + TEO) is in that image
+   but the device still runs r46, so a schedutil A/B needs a flash first.
+   **Four things it exposed that the warm volume had been hiding:**
+   (a) pmbootstrap 3.11 renamed `systemd` → `service_manager` and ignores the old
+   key silently → was heading for an OpenRC rootfs; (b) 3.11's
+   `deviceinfo_schema_default_boot_filesystem()` is broken (`@Cache` wrapper is
+   not a descriptor) → fixed by setting `deviceinfo_boot_filesystem="ext2"`
+   explicitly, device pkgrel 74; (c) a container's static `/dev` has no
+   `/dev/loop47` → new Phase 6c pre-creates the loop nodes; (d) **our python3
+   override had gone inert** (Alpine moved to 3.14.7; apk compares pkgver before
+   pkgrel) and the rootfs was silently shipping Alpine's binary while the gate
+   said PASS — the override is now **retired**, and the Phase 10 ship gate reports
+   python3's PROVENANCE and fails hard when it is missing.
+   Historical brief below.
+
+7-orig. **AGREED WITH PETR 2026-08-13: a COMPLETE COLD BUILD,
    First attempt died in Phase 8b and, in dying, exposed that pmbootstrap 3.11.0
    **renamed the config option `systemd` → `service_manager` and silently ignores
    the old key**: the run had selected no init system, fallen back to the UI
