@@ -324,23 +324,21 @@ cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt.service"       "$NEXUSQMQTT_DIR/"
 cp "$SRC/userspace/nexusq-mqtt/96-nexusq-mqtt.preset"     "$NEXUSQMQTT_DIR/"
 echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
 
-# python3 local override: Alpine's stock python3-3.14.5-r2 SIGSEGVs on armv7 --
-# deterministically, on the very first bytecode, even `python3 -S -c ''` (rc 139).
-# That crashes every python consumer on the device (sleep-inhibitor, onboard, blueman).
-# Stage our rebuilt aport (pkgrel r5) into main/python3 so the higher pkgrel supersedes
-# Alpine's -r2 in the rootfs. Built + gated below in Phase 7d. See pmos/python3/APKBUILD.
-# ROOT CAUSE (settled 2026-06-28): NOT a build/compiler/CPython bug -- the on-device
-# SIGSEGV was a FLASH bug. raw2simg.py's DONT_CARE chunks (skip zero blocks) on a
-# non-erased eMMC let stale prior-flash garbage show through libpython's should-be-zero
-# .PyRuntime/.data.rel.ro -> wild type-index deref -> SIGSEGV. The BUILT apk is clean;
-# fixed in raw2simg.py (writes every block RAW). A gold-linker build workaround was
-# tried + found unnecessary (default-linker builds are clean). Phase 7d still gates
-# every build + rebuilds on residual corruption (safety net). See
-# docs/2026-06-28-session-findings.md + the sparse-dontcare-stale-emmc note.
-PYTHON3_DIR="$PMAPORTS/main/python3"
-mkdir -p "$PYTHON3_DIR"
-cp "$SRC/pmos/python3/"* "$PYTHON3_DIR/"
-echo "  Installed: python3 override (gated -> main/python3)"
+# python3: NO local override any more (retired 2026-08-17).
+# We used to stage pmos/python3 over pmaports main/python3 (a rebuild at a higher
+# pkgrel, LTO+PGO dropped) because Alpine's stock python3 SIGSEGVed on armv7. That
+# root cause was settled on 2026-06-28 and it was NOT the build: raw2simg.py marked
+# all-zero blocks as fastboot DONT_CARE, the device does not pre-erase userdata, and
+# stale garbage showed through libpython's should-be-zero regions AFTER flashing. The
+# built apk was always clean. raw2simg.py now writes every block RAW.
+#
+# The override then quietly went inert: Alpine edge moved to python3 3.14.7 and apk
+# compares pkgver BEFORE pkgrel, so our 3.14.5-r5 stopped winning. The 2026-08-17 cold
+# build still built it, still gate-passed it, still exported it -- and the rootfs
+# installed Alpine's 3.14.7-r0 regardless (proved by libpython md5). A safety net that
+# silently stops being installed is worse than none, so it is gone; what remains is the
+# Phase 10 SHIP GATE, which checks the libpython actually present in the rootfs
+# whatever its provenance. To resurrect the override: git revert this commit.
 
 echo "  Converting line endings (CRLF -> LF)..."
 find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$PYTHON3_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" \) -exec dos2unix -q {} +
@@ -1059,130 +1057,6 @@ else
 fi
 
 echo ""
-# Resolve the EXACT apk filename from the staged aport's pkgver/pkgrel. A bare
-# python3-3.14.5-r*.apk glob is UNSAFE: $WORK/packages is the persistent work-volume
-# repo and accumulates stale apks from earlier runs (r3, r4, r5, ...), so
-# `find ... -print -quit` can return an OLD pkgrel instead of the one we just built --
-# this exact stale-artifact bug silently gated the wrong apk. Match the precise
-# r<pkgrel> so the gate always checks what this build actually produced.
-_py3_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/python3/APKBUILD" | head -1)
-_py3_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/python3/APKBUILD" | head -1)
-PY3_APK_NAME="python3-${_py3_pv}-r${_py3_pr}.apk"
-echo "  python3 target apk (pkgrel-exact): $PY3_APK_NAME"
-
-# --- Optional build-integrity validation harness (opt-in via PYTHON3_VALIDATE_RUNS) -
-# Set PYTHON3_VALIDATE_RUNS=N to force N independent python3 rebuilds and gate each,
-# checking the build reliably produces an integrity-clean libpython. (This is how the
-# qemu-build-corruption theory was tested -- it did NOT reproduce: 6/6 default-linker
-# builds were clean, which is why the gold workaround was dropped.) Runs ONLY python3
-# (no kernel/rootfs -- those are Phase 8+) and exits. Production leaves this unset.
-# See scripts/verify-libpython-clean.py.
-if [ -n "${PYTHON3_VALIDATE_RUNS:-}" ]; then
-    echo "=== Phase 7d-validate: $PYTHON3_VALIDATE_RUNS forced rebuilds + gate ==="
-    GATE="$SRC/scripts/verify-libpython-clean.py"
-    _vclean=0; _vcorrupt=0
-    for _v in $(seq 1 "$PYTHON3_VALIDATE_RUNS"); do
-        pmbootstrap checksum python3 >/dev/null 2>&1 || true
-        set +e
-        pmbootstrap --no-cross build python3 --arch armv7 --force >"/tmp/validate-$_v.log" 2>&1
-        _vrc=$?
-        set -e
-        if [ $_vrc -ne 0 ]; then
-            echo "  run $_v/$PYTHON3_VALIDATE_RUNS: BUILD FAILED (rc=$_vrc) -- tail /tmp/validate-$_v.log:"
-            tail -15 "/tmp/validate-$_v.log" 2>/dev/null | sed 's/^/      /'
-            _vcorrupt=$((_vcorrupt + 1)); continue
-        fi
-        _vapk=$(find "$WORK/packages" -path "*/armv7/$PY3_APK_NAME" -print -quit 2>/dev/null)
-        tar -xzOf "$_vapk" usr/lib/libpython3.14.so.1.0 > "/tmp/validate-$_v.so" 2>/dev/null
-        if python3 "$GATE" "/tmp/validate-$_v.so" > "/tmp/validate-$_v.gate" 2>&1; then
-            _vverdict="CLEAN  "; _vclean=$((_vclean + 1))
-        else
-            _vverdict="CORRUPT"; _vcorrupt=$((_vcorrupt + 1))
-        fi
-        _vmd5=$(md5sum "/tmp/validate-$_v.so" | awk '{print $1}')
-        _vlr=$(grep -oE 'longest_run=[ ]*[0-9]+' "/tmp/validate-$_v.gate" | grep -oE '[0-9]+' | sort -n | tail -1)
-        echo "  run $_v/$PYTHON3_VALIDATE_RUNS: $_vverdict  md5=$_vmd5  max_longest_run=${_vlr:-?}"
-    done
-    echo "=== VALIDATION SUMMARY: $_vclean CLEAN / $_vcorrupt CORRUPT of $PYTHON3_VALIDATE_RUNS ==="
-    if [ $_vcorrupt -eq 0 ]; then
-        echo "  PASS: the build produced an integrity-clean libpython on EVERY run."
-    else
-        echo "  FAIL: a build produced a corrupt libpython -- investigate."
-    fi
-    exit 0
-fi
-
-echo "=== Phase 7d: Build python3 override (armv7/musl, gated) ==="
-# Alpine's python3-3.14.5-r2 SIGSEGVs on armv7 ON THE DEVICE (rc 139), taking down every
-# python consumer. ROOT CAUSE (settled 2026-06-28): NOT a build/compiler/CPython bug --
-# it was a FLASH bug (raw2simg DONT_CARE on a non-erased eMMC; see raw2simg.py + the
-# Phase 6 note). The BUILT apk is clean. We still gate every built libpython here with
-# scripts/verify-libpython-clean.py and rebuild on any residual zero-region corruption
-# -- a cheap safety net against any qemu-build flakiness, so a corrupt apk can never
-# reach the rootfs -- and Phase 10 re-gates the installed rootfs. A gold-linker build
-# workaround was tried and dropped as unnecessary (default-linker builds are clean).
-# The higher pkgrel (r5 > Alpine r2) makes the Phase 9 rootfs install pull OUR python3
-# (+ all subpackages) instead of Alpine's. A green build is still not on its own proof
-# of runtime health -- validate `python3 -S -c ''` ON THE DEVICE.
-# docs/2026-06-28-session-findings.md + the sparse-dontcare-stale-emmc note.
-GATE="$SRC/scripts/verify-libpython-clean.py"
-PYTHON3_MAX_TRIES=4
-PYTHON3_RC=1
-PYTHON3_APK=""
-for _try in $(seq 1 "$PYTHON3_MAX_TRIES"); do
-    echo "--- python3 build attempt $_try/$PYTHON3_MAX_TRIES ---"
-    set +e
-    # regenerate checksums (absorb any dos2unix drift in companion files) then build.
-    pmbootstrap checksum python3 2>&1 || true
-    # --no-cross (qemu-only): crossdirect cannot exec cc1 in this image (see Phase 7c).
-    # --force: every (re)build must actually re-compile + re-LINK, both to apply the
-    # current aport and -- on a retry -- to re-roll any build-time flakiness.
-    pmbootstrap --no-cross build python3 --arch armv7 --force 2>&1
-    _brc=$?
-    set -e
-    if [ $_brc -ne 0 ]; then
-        echo "  ERROR: python3 build FAILED (exit $_brc). A rebuild will not fix a compile"
-        echo "         error, so not retrying. Key log:"
-        grep -niE "ERROR|error:|FAILED|segmentation|configure: error" "$WORK/log.txt" 2>/dev/null | tail -30
-        PYTHON3_RC=$_brc
-        break
-    fi
-    # pkgrel-EXACT (see PY3_APK_NAME above): the work-volume repo accumulates stale
-    # python3 apks from prior runs, so a bare r*.apk glob could gate/export the wrong
-    # one. Match only the apk this build produced.
-    # Match ONLY the target (armv7) apk: pmbootstrap also builds a native x86_64
-    # python3 of the SAME name for the buildroot, and a bare -name glob picks
-    # whichever the fs returns first — often x86_64, whose 64-bit libpython fails
-    # the "32-bit LE ELF" gate as a false CORRUPT (looped the whole build). The
-    # target apk lives under .../packages/edge/armv7/.
-    _apk=$(find "$WORK/packages" -path "*/armv7/$PY3_APK_NAME" -print -quit 2>/dev/null)
-    if [ -z "$_apk" ]; then
-        echo "  ERROR: build returned 0 but no $PY3_APK_NAME under $WORK/packages."
-        PYTHON3_RC=1
-        break
-    fi
-    # INTEGRITY GATE: extract the libpython from the freshly-built apk (busybox tar
-    # reads apk's concatenated gzip members fine) and check it for zero-region
-    # corruption before we let it anywhere near the rootfs.
-    tar -xzOf "$_apk" usr/lib/libpython3.14.so.1.0 > /tmp/libpython-check.so 2>/dev/null
-    if python3 "$GATE" /tmp/libpython-check.so; then
-        echo "  CLEAN: $(basename "$_apk") passed the integrity gate on attempt $_try."
-        PYTHON3_APK="$_apk"
-        PYTHON3_RC=0
-        break
-    fi
-    echo "  CORRUPT: $(basename "$_apk") FAILED the integrity gate (zero-region"
-    echo "           corruption) -- discarding and rebuilding (--force re-links)."
-done
-echo "=== python3 build result: rc=$PYTHON3_RC ==="
-if [ $PYTHON3_RC -eq 0 ] && [ -n "$PYTHON3_APK" ]; then
-    cp "$PYTHON3_APK" /tmp/output/ 2>/dev/null && echo "  Exported: $(basename "$PYTHON3_APK")"
-    echo "  $(basename "$PYTHON3_APK" .apk) is gate-verified clean -> supersedes Alpine's -r2"
-else
-    echo "  ERROR: no clean python3 apk after $PYTHON3_MAX_TRIES attempt(s) -- the rootfs"
-    echo "         would ship a broken python. Do NOT flash. ABORTING the build."
-    exit 1
-fi
 
 echo ""
 echo "=== Phase 8: Build all packages ==="
@@ -1396,6 +1270,24 @@ print(f\"{p['start']} {p['size']} {ss}\")
         # crashing python earlier. If it is qemu-corrupted, refuse to emit a flashable
         # image. See scripts/verify-libpython-clean.py + the qemu-user-corrupts note.
         SHIP_LIBPY="$RP_MNT/usr/lib/libpython3.14.so.1.0"
+        # PROVENANCE FIRST, then integrity. The 2026-08-17 cold build shipped a
+        # python nobody had chosen: our override went inert when Alpine moved to
+        # 3.14.7 (apk compares pkgver before pkgrel) and the gate still said PASS,
+        # because it checks the FILE and never asked where it came from. Say out
+        # loud which python3 is actually in the rootfs, every build.
+        # RS="" reads apk's db one PACKAGE per record; FS="\n" then makes each
+        # field a line, so "P:" and "V:" can be compared exactly. (Matching
+        # /^P:python3$/ in paragraph mode does NOT work -- ^ and $ anchor to the
+        # whole record, not to a line, so it silently never matches.)
+        _ship_py="$(sudo awk -v RS="" -v FS="\n" '
+            { pkg = ""; ver = ""
+              for (i = 1; i <= NF; i++) {
+                  if ($i == "P:python3")            pkg = 1
+                  else if (substr($i, 1, 2) == "V:") ver = substr($i, 3)
+              }
+              if (pkg && ver) { print ver; exit } }' \
+            "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
+        echo "  SHIP GATE: rootfs python3 = ${_ship_py:-<not installed>}"
         if [ -f "$SHIP_LIBPY" ]; then
             if python3 "$SRC/scripts/verify-libpython-clean.py" "$SHIP_LIBPY"; then
                 echo "  SHIP GATE: installed libpython is clean."
@@ -1406,7 +1298,15 @@ print(f\"{p['start']} {p['size']} {ss}\")
                 exit 1
             fi
         else
-            echo "  WARNING: no $SHIP_LIBPY in the rootfs to gate (python3 not installed?)."
+            # Not a warning: nexusq-control, nexusq-mqtt, nexusq-btagent and
+            # nexusq-nfc are all stdlib-python daemons. An image without python3
+            # is an image whose companion bridge, telemetry, pairing agent and NFC
+            # reader are all dead -- do not let that reach a flash.
+            echo "  SHIP GATE FAILED: no $SHIP_LIBPY in the rootfs -- python3 is"
+            echo "  missing, which kills control/mqtt/btagent/nfc. Refusing to emit"
+            echo "  a flashable image."
+            sync; sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
+            exit 1
         fi
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
         sudo python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
