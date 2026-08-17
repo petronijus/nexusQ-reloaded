@@ -276,6 +276,68 @@ re-flash. `raw2simg.py` now writes every block as RAW (sparse ≈ raw size); the
 `fastboot -S 100M flash userdata` command is unchanged. A de-sparse round-trip md5 of
 the output must equal the raw image. See `docs/2026-06-28-session-findings.md` §7.
 
+## ⚠️ THE TOOLCHAIN IS PINNED — and it is pinned for a reason (2026-08-17)
+
+Both halves used to float, so what a build did depended on the day it ran:
+
+| what | where | pinned to |
+|---|---|---|
+| pmbootstrap | `Dockerfile`, `ARG PMBOOTSTRAP_REF` | **3.11.0** |
+| pmaports | `docker-build.sh`, `PMAPORTS_REF` | **11e89dfbb2f8ecc9bcc074ca4d62a609ffa50bf6** |
+
+On 2026-08-16 upstream pmaports raised `pmbootstrap_min_version` to 3.11.0 and
+**every build died in Phase 7b** against an image carrying 3.10.1. Bump the two
+**together and deliberately**, never as a side effect, and after any bump
+re-check that Phase 6b still reports **all four** patches as applied — they only
+WARN when they miss, and `backend.py` is load-bearing (without it abuild hangs in
+fakeroot under qemu).
+
+Three gates now run early and fail loudly. **If you "fix" a build by deleting
+one of them, you have broken the build, not fixed it.**
+
+1. **Toolchain** — pmaports' `pmbootstrap_min_version` vs the installed
+   pmbootstrap, compared with `sort -V`. Prints `toolchain OK: …`.
+2. **Init system** — asserts pmbootstrap still ACCEPTS the config key we write,
+   read from argparse's choice list (`pmbootstrap config --help`). Prints
+   `init system: service_manager=systemd …`.
+3. **Rootfs** (post-build, separate) — `scripts/verify-rootfs.sh`.
+
+### The two pmbootstrap 3.11.x traps this pinning exposed
+
+**(a) `systemd` → `service_manager`, silently.** The config option was renamed
+(`default|openrc|systemd`) and **the old key is not rejected, just ignored**. A
+cold build therefore selected no init system, fell back to the UI default
+(`postmarketos-ui-lxqt defaults to openrc`) and was on course to produce **an
+OpenRC rootfs with no `nexusqd` and no `sshd`** — the v1.5.0 disaster verbatim.
+It stayed invisible for months because the WARM volume carried a correct config
+from before the rename. Gate 2 exists so this can never be silent again.
+
+**(b) `deviceinfo_boot_filesystem` must be set explicitly.** pmbootstrap 3.11.0
+and 3.11.1 cannot compute their own default: `deviceinfo_schema_default_boot_filesystem()`
+calls `deviceinfo_schema().get("flash", "boot_filesystem")`, and that `@Cache`
+wrapper is **not a descriptor** — `self` never reaches the function and the cache
+key lookup is off by one, so the call dies with
+`ValueError: Invalid cache key argument variable_name`. Only devices that leave
+the variable unset reach that code, which is why upstream has not hit it. It
+killed a cold build at **"(3/4) PREPARE INSTALL BLOCKDEVICE"** after 40 minutes.
+`deviceinfo` now sets `deviceinfo_boot_filesystem="ext2"` — verbatim the
+`default_value` from pmaports' own `deviceinfo_schema.toml`, so behaviour is
+unchanged. **Do not "simplify" it away.**
+
+If a future pmbootstrap breaks something else, the conservative alternative is
+to pin pmaports BACK to a commit whose `pmbootstrap_min_version` the older
+pmbootstrap satisfies, and pin `PMBOOTSTRAP_REF` with it — that reproduces the
+toolchain every shipped image was built with, and is a legitimate answer.
+
+## ⚠️ Run the container DETACHED (`docker run -d`)
+
+`nohup docker run …` keeps an attached client: when the launching shell or the
+agent process goes away, **the container dies with it** — that killed a cold
+build mid-kernel on 2026-08-17. Use `-d`, give it `--name`, and follow it with
+`docker logs -f <name>`; mirror that to a file under `nq-captures/` (NOT `/tmp`,
+which is tmpfs and is wiped by a reboot — a host crash cost us a whole build log
+the same night).
+
 ## Known failure modes → fixes (work this list)
 
 | Symptom in log | Cause | Fix |
@@ -308,6 +370,16 @@ edit, then **re-run the build** (cold if you wiped the volume). Do not paper ove
 a failure — fix the source so the next build is clean.
 
 ## MANDATORY verification gate (before you report success)
+
+**Run `scripts/verify-rootfs.sh <rootfs.img> [boot.img]`** (added 2026-08-17).
+The gates below used to live here as prose only, which is exactly why they were
+skippable; the script mounts the image read-only and exit-codes the lot: init is
+systemd (not busybox) + no OpenRC packages + no `/etc/runlevels`, nexusqd/sshd
+present and enabled, the r73 idle set (`nexusq-cpufreq-tune` + `Nice=19` on the
+housekeeping units + `nexusq-control` NOT nice'd + btagent carrying
+`SETUPD_CGROUP`), Roon default-OFF and RoonBridge not baked, the libpython
+integrity gate, and boot.img ≤ 8 MB and ramdisk-less. Report its PASS/FAIL table
+verbatim. The prose below stays as the explanation of WHY each gate exists.
 
 A green exit code is NOT success. The headline bug this catalog exists for —
 v1.5.0 silently shipped an **OpenRC** rootfs with no `nexusqd` and no `sshd` —

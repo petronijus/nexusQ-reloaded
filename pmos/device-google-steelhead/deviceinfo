@@ -30,6 +30,18 @@ deviceinfo_screen_width="1920"
 deviceinfo_screen_height="1080"
 
 # Bootloader (offsets validated against samsung-maguro / OMAP4460)
+# Set EXPLICITLY, and to the schema's own documented default. pmbootstrap
+# 3.11.x cannot compute this default: deviceinfo_schema_default_boot_filesystem()
+# calls `deviceinfo_schema().get("flash", "boot_filesystem")`, whose @Cache
+# wrapper is not a descriptor — `self` never reaches the function and the cache
+# key lookup is off by one, so the call dies with
+# "Invalid cache key argument variable_name". Only devices that leave this unset
+# reach that code, which is why upstream has not hit it. Killed the 2026-08-17
+# cold build at "(3/4) PREPARE INSTALL BLOCKDEVICE" after 40 minutes of work.
+# "ext2" is verbatim what deviceinfo_schema.toml declares as default_value for
+# flash.boot_filesystem (pmaports 11e89df), so behaviour is unchanged.
+deviceinfo_boot_filesystem="ext2"
+
 deviceinfo_flash_method="fastboot"
 deviceinfo_generate_bootimg="true"
 deviceinfo_flash_offset_base="0x80000000"
