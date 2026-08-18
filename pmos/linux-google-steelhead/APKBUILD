@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=47
+pkgrel=48
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -82,6 +82,19 @@ builddir="$srcdir/linux-$pkgver"
 prepare() {
 	default_prepare
 	cp "$srcdir/$_config" .config
+
+	# Give EVERY build its own kernel release string, so its modules land in
+	# their own /lib/modules/<release>. Without this both kernels call
+	# themselves 6.12.12, share /lib/modules/6.12.12, and installing a new
+	# kernel's modules OVERWRITES the running kernel's -- which poisons the
+	# rollback path that kernel OTA (phase 2) depends on: fall back to the old
+	# kernel and its modules are gone, so no cfg80211, so no WiFi, so no way in.
+	# (CONFIG_MODVERSIONS=y and CONFIG_CFG80211=m, so this is not theoretical.)
+	# Keyed on pkgrel, not a fixed suffix, so the NEXT update does not collide
+	# either. LOCALVERSION_AUTO is off in the defconfig so the string stays
+	# deterministic (it would otherwise append git state).
+	# docs/2026-08-18-kernel-ota-phase2.md
+	sed -i "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-r$pkgrel\"/" .config
 }
 
 build() {
