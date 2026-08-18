@@ -97,6 +97,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 - A `powersave` arm proved **nothing at idle needs more than 350 MHz** (busy
   7.06 %, everything kept working), so the remaining headroom is real.
 
+### Measured — `schedutil` rejected: better residency, identical power (2026-08-19)
+- The standing "maybe schedutil is the real fix" hypothesis, open since the
+  2026-08-16 burst analysis and untestable until kernel **r48** compiled it in.
+  Four 12-minute arms, idle, detached.
+- **On the STANDING GOAL's own metric schedutil wins**: **94.75 % @ 350 MHz** vs
+  conservative's **91.22 %**. Shipping on that number alone would have changed
+  nothing for the better.
+- It spends **30× longer at 1200 MHz** (0.05 → 1.63 %), which at 1380 mV costs
+  6.2× a 350 MHz tick — the two cancel to **1.158 vs 1.157 relative power**.
+  Mean stay at 1200 MHz **2.6 ms** vs conservative's 97 ms: schedutil jumps
+  straight to the frequency utilisation implies, conservative climbs one OPP per
+  sampling tick and serves the burst at 700 MHz.
+- `rate_limit_us` does not rescue it: 5 ms/20 ms cut transitions from 15.4/s to
+  2.5/s but make power **2–3 % worse**.
+- **Keeping `conservative`** with the shipped tuning, which additionally does
+  ~20× fewer transitions — not free where each OPP change is a voltage ramp with
+  a 300 µs transition latency. `docs/2026-08-19-schedutil-ab.md`.
+
 ### Added — kernel OTA (Phase 2): a kernel can now be applied without a cable (2026-08-18)
 - **Phase 2 was never started** — it was scoped out in 2026-08 in favour of
   `fastboot-over-ssh`, which looked like it made kernel flashing software-only.

@@ -71,6 +71,19 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   reboot): `echo 100000 > /sys/devices/system/cpu/cpufreq/conservative/sampling_rate`
 >   and `echo 95 > .../up_threshold`. If it passes, fold both into
 >   `nexusq-cpufreq-tune`.
+> - **`schedutil` was MEASURED and REJECTED (2026-08-19)** — do not re-open this
+>   without new information. Four 12-min arms on kernel r48 (which finally
+>   compiled it in): schedutil reaches **94.75 % @ 350 MHz vs conservative's
+>   91.22 %** — i.e. it WINS on the metric this goal is written in — but spends
+>   **30× longer at 1200 MHz** (0.05 → 1.63 %), and at 1380 mV that OPP costs
+>   6.2× what 350 MHz does, so relative power comes out **1.158 vs 1.157: a
+>   wash**. Mean stay at 1200 MHz is 2.6 ms (conservative: 97 ms) — it jumps
+>   straight to what utilisation suggests instead of climbing one OPP per tick.
+>   `rate_limit_us` does not rescue it (5 ms/20 ms cut transitions 15.4 → 2.5/s
+>   but make power 2–3 % WORSE). conservative also does ~20× fewer transitions,
+>   which is not free when every OPP change is a voltage ramp.
+>   **Lesson: 350 MHz residency alone can mislead — always price the mix.**
+>   `docs/2026-08-19-schedutil-ab.md`.
 > - **Judge idle only from an on-device self-logging capture with no live ssh
 >   session** — an open session pushes the die 74–79 °C within seconds and
 >   drags the OPP up with it (2026-07-13 Finding 1). Re-confirmed 2026-08-16:

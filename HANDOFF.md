@@ -4,7 +4,42 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-18 (latest): **kernel OTA (Phase 2) works — a kernel can now be applied without a cable, proven end to end**
+## Session 2026-08-18/19 (latest): **kernel OTA phase 2 shipped and proven · schedutil measured and rejected · a no-RTC DNS deadlock fixed**
+
+Records: `docs/2026-08-18-kernel-ota-phase2.md`, `docs/2026-08-19-schedutil-ab.md`.
+
+### WHERE TO CONTINUE — agreed with Petr, next session
+1. 🔴 **`nq-healthd` C rewrite.** After everything above, this is the last idle
+   lever the burst analysis identified: ~6 forks per tick, 18 runs ≥16 ms per
+   minute, and each of those is what ramps the governor. The shape: a C daemon in
+   the nexusqd mould — in-process socket connect for the liveness probe instead of
+   forking `nexusled`, `/dev/kmsg` instead of `dmesg`, in-process hashing instead
+   of `od|awk`. **Do NOT chase the governor further** — schedutil is settled
+   (below) and the tunables are already at their measured best.
+2. The kernel-OTA app-side action (CLI-only today, which suits an
+   attended-only operation).
+3. `nexusq-mqtt`'s 30 s `pactl` poll → take volume from nexusq-control's
+   persistent subscribe bridge.
+
+### State of the device right now
+Kernel **6.12.12-r48** (applied over the air, no cable), device **r76**, control
+**r30**, kernel-ota **r2**, mqtt r3, btagent r5, nexusqd r13 — all published.
+`conservative` with `down_threshold=40`, `ignore_nice_load=1`, `Nice=19` on the
+housekeeping units. Idle sits ~91 % @ 350 MHz. Slot A == slot B == the running
+kernel; a slot-A backup lives in `/var/lib/nexusq-kernel-ota/`. Device-side study
+leftovers cleaned up.
+
+### Three things worth carrying in your head
+- **schedutil is closed**: it beats conservative on 350 MHz residency (94.75 vs
+  91.22 %) and is identical in power, because it spends 30× longer at 1200 MHz.
+  Residency alone misleads — price the mix.
+- **The board has no RTC**, so every boot starts at 2000-01-01 and DNSSEC fails
+  until timesyncd fixes the clock **~173 s in** (now from IP literals, device
+  r76). Anything needing DNS earlier must tolerate that window.
+- **Stock u-boot has no fallback**: an unbootable trial kernel stops the device
+  and needs the mute-sensor fastboot path. Kernel updates stay attended.
+
+## Session 2026-08-18: **kernel OTA (Phase 2) works — a kernel can now be applied without a cable, proven end to end**
 
 Full record: `docs/2026-08-18-kernel-ota-phase2.md`.
 
