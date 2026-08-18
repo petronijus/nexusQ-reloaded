@@ -85,7 +85,7 @@ Consequences that must survive into the design:
    always-on domain and a brief mains interruption does not drain it. Unresolved,
    and it should stay written down as unresolved.
 
-## ⛔ Blocker before the first real run: module trees collide
+## ✅ Blocker found and closed before the first real run: module trees collided
 
 `CONFIG_MODVERSIONS=y` and the WiFi stack is modular (`CONFIG_CFG80211=m`), while
 both kernels call themselves `6.12.12` — so both install into
@@ -93,14 +93,44 @@ both kernels call themselves `6.12.12` — so both install into
 running kernel's**, which poisons the very fallback the design exists to protect:
 roll back to slot A and its modules are gone, i.e. no WiFi, i.e. no way in.
 
-The fix is a distinct version string for the new kernel (`CONFIG_LOCALVERSION`,
-e.g. `-nq2`) so its modules live in their own directory and both trees coexist.
-**Phase 2 must not be exercised end-to-end until that lands.**
+Fixed in kernel **r48**: `prepare()` injects `CONFIG_LOCALVERSION="-r$pkgrel"`
+(and the defconfig turns `LOCALVERSION_AUTO` off so the string is deterministic),
+so every build gets its own release and its own module directory. Keyed on
+pkgrel rather than a fixed suffix, so the update after this one does not collide
+either. Verified on the built apk: `kernel.release` = `6.12.12-r48`, modules in
+`/lib/modules/6.12.12-r48`.
 
 Related: the kernel apk is deliberately absent from the OTA repo
 (`scripts/publish-ota-repo.sh`, "the kernel stays flash-only"). Phase 2 needs it
 published, because that apk is what delivers the matching modules and the `/boot`
 payload.
+
+## The second half of the module trap: `apk upgrade` deletes the old tree
+
+`CONFIG_LOCALVERSION=-r<pkgrel>` (kernel r48) makes the two module trees
+*coexist* — `/lib/modules/6.12.12` and `/lib/modules/6.12.12-r48`. Verified on
+the built apk. **That alone is not enough.**
+
+If the kernel apk is simply published and `apk upgrade` installs it, apk removes
+the OLD package's files as part of the upgrade — including
+`/lib/modules/6.12.12`, the running kernel's modules. The rollback path is
+poisoned again, just one step later: slot A still boots, but the kernel it boots
+no longer has modules.
+
+So the OTA flow must **not** upgrade the package until the new kernel has proven
+itself:
+
+1. `stage` extracts the new kernel's `/boot` payload and
+   `/lib/modules/<new release>` **out of the apk, by hand**, leaving the
+   installed package (and its module tree) untouched
+2. build/write the boot image into the trial slot, trial-boot it
+3. **only on promote** run the real `apk add --upgrade linux-google-steelhead`,
+   so the package database catches up once the new kernel is the running one
+4. on rollback nothing needs restoring — the old package was never removed
+
+This is why `nq-kernel-ota` grows a `stage-apk` mode rather than leaning on
+`apk upgrade`; the apk in the OTA repo is a *payload source*, not something the
+device installs on sight.
 
 ## Status
 
@@ -108,7 +138,9 @@ payload.
 - ✅ `nq-kernel-ota` written; `status` verified on the live device (reads both
   slots and the SAR reason)
 - ✅ trial-slot selection proven to work — including its failure mode
-- ⛔ `LOCALVERSION` split, kernel-in-OTA-repo, the promotion systemd unit, and the
-  app-side action are not done
-- ⛔ no end-to-end run has been performed, and must not be until the module
-  collision is fixed
+- ✅ `LOCALVERSION` split done (kernel r48, verified on the apk)
+- ⛔ `stage-apk` (extract payload without upgrading the package), kernel in the
+  OTA repo, the promotion systemd unit, and the app-side action are not done
+- ⛔ no end-to-end run has been performed. It must not be attempted until
+  `stage-apk` exists, or `apk upgrade` will delete the running kernel's modules
+  and take the rollback path with it.
