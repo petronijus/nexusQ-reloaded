@@ -69,6 +69,109 @@ else:
 PY
 }
 
+# --- pack an Android boot image, exactly like the host build does ------------
+# The device's u-boot boots a header-v0 image whose "kernel" is zImage with the
+# DTB appended (deviceinfo_append_dtb=true) and whose ramdisk is EMPTY -- the
+# kernel has CONFIG_CMDLINE_FORCE, boots root=/dev/mmcblk0p13 directly, and
+# u-boot ignores the ramdisk section on a partition boot. Same layout as
+# make-bootimg.py on the host; `verify-self` proves it by rebuilding the RUNNING
+# kernel's image and comparing it against slot A.
+pack_bootimg() {
+    python3 - "$1" "$2" "$3" "$4" <<'PACKEOF'
+import hashlib, struct, sys
+kern_p, dtb_p, out_p, cmdline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+kernel = open(kern_p, "rb").read() + (open(dtb_p, "rb").read() if dtb_p != "-" else b"")
+base, ps = 0x80000000, 2048
+pad = lambda d: d + b"\x00" * ((ps - len(d) % ps) % ps)
+hdr = struct.pack("<8s10I16s512s", b"ANDROID!",
+                  len(kernel), base + 0x00008000,
+                  0,           base + 0x01000000,
+                  0,           base + 0x00f00000,
+                  base + 0x00000100, ps, 0, 0,
+                  b"", cmdline.encode().ljust(512, b"\x00"))
+sha = hashlib.sha1()
+for blob in (kernel, struct.pack("<I", len(kernel)),
+             b"", struct.pack("<I", 0), b"", struct.pack("<I", 0)):
+    sha.update(blob)
+img = pad(hdr + sha.digest().ljust(32, b"\x00")) + pad(kernel)
+if len(img) > 8 * 1024 * 1024:
+    sys.exit("image is %d B -- the boot partition holds 8 MiB" % len(img))
+open(out_p, "wb").write(img)
+print("packed %s: %d B (kernel+dtb %d B)" % (out_p, len(img), len(kernel)))
+PACKEOF
+}
+
+# CONFIG_CMDLINE belongs to the kernel being packed, so read it from that
+# kernel's own config rather than assuming the running one's.
+cmdline_from_config() {
+    sed -n 's/^CONFIG_CMDLINE="\(.*\)"$/\1/p' "$1" | head -1
+}
+
+cmd_bootimg() {
+    _k=${1:?usage: nq-kernel-ota bootimg <vmlinuz> <dtb|-> <out.img> [config]}
+    _d=${2:?}; _o=${3:?}; _c=${4:-/boot/config}
+    _cl=$(cmdline_from_config "$_c")
+    [ -n "$_cl" ] || log "warning: no CONFIG_CMDLINE in $_c -- packing an empty cmdline"
+    pack_bootimg "$_k" "$_d" "$_o" "$_cl"
+}
+
+# Prove the packer is right, using the only ground truth available: rebuild the
+# image for the kernel that is CURRENTLY RUNNING and compare it with slot A.
+cmd_verify_self() {
+    _tmp=$(mktemp -d)
+    _dtb=/boot/omap4-steelhead.dtb
+    [ -f "$_dtb" ] || _dtb=/boot/dtbs/omap4-steelhead.dtb
+    cmd_bootimg /boot/vmlinuz "$_dtb" "$_tmp/rebuilt.img" /boot/config >/dev/null || die "pack failed"
+    _sz=$(stat -c %s "$_tmp/rebuilt.img")
+    _a=$(md5sum < "$_tmp/rebuilt.img" | cut -d' ' -f1)
+    _b=$(dd if="$BOOT_SLOT" bs=1 count="$_sz" 2>/dev/null | md5sum | cut -d' ' -f1)
+    rm -rf "$_tmp"
+    log "rebuilt   $_sz B  md5 $_a"
+    log "slot A    (first $_sz B) md5 $_b"
+    if [ "$_a" = "$_b" ]; then
+        log "MATCH -- the on-device packer reproduces the booting image exactly"
+    else
+        die "MISMATCH -- do not stage anything until this is understood"
+    fi
+}
+
+# --- stage straight out of a kernel apk -------------------------------------
+# Deliberately does NOT `apk add` the package. Upgrading it would delete the OLD
+# package's files, including the RUNNING kernel's /lib/modules -- which is the
+# rollback path this whole design exists to protect. The apk is a payload
+# source; the package database catches up in `promote`, once the new kernel is
+# the one running. docs/2026-08-18-kernel-ota-phase2.md
+cmd_stage_apk() {
+    _apk=${1:?usage: nq-kernel-ota stage-apk <linux-google-steelhead-*.apk>}
+    [ -f "$_apk" ] || die "no such apk: $_apk"
+    _tmp=$(mktemp -d)
+
+    log "unpacking $_apk"
+    tar -xzf "$_apk" -C "$_tmp" 2>/dev/null || { rm -rf "$_tmp"; die "cannot unpack apk"; }
+    _rel=$(cat "$_tmp"/usr/share/kernel/*/kernel.release 2>/dev/null)
+    [ -n "$_rel" ] || { rm -rf "$_tmp"; die "apk has no kernel.release -- is this a kernel package?"; }
+    log "kernel release in apk: $_rel"
+    [ "$_rel" = "$(uname -r)" ] && { rm -rf "$_tmp"; die "that apk IS the running kernel ($_rel)"; }
+    [ -d "$_tmp/lib/modules/$_rel" ] || { rm -rf "$_tmp"; die "apk has no /lib/modules/$_rel"; }
+
+    # Installing into a NEW directory cannot disturb the running kernel's tree.
+    [ -d "/lib/modules/$_rel" ] && { log "refreshing existing /lib/modules/$_rel"; rm -rf "/lib/modules/$_rel"; }
+    cp -a "$_tmp/lib/modules/$_rel" /lib/modules/ || { rm -rf "$_tmp"; die "installing modules failed"; }
+    depmod "$_rel" 2>/dev/null || log "warning: depmod failed for $_rel"
+    log "modules installed: /lib/modules/$_rel (running kernel's $(uname -r) untouched)"
+
+    _dtb="$_tmp/boot/omap4-steelhead.dtb"
+    [ -f "$_dtb" ] || _dtb="$_tmp/boot/dtbs/omap4-steelhead.dtb"
+    [ -f "$_tmp/boot/vmlinuz" ] || { rm -rf "$_tmp"; die "apk has no /boot/vmlinuz"; }
+    [ -f "$_dtb" ] || { rm -rf "$_tmp"; die "apk has no omap4-steelhead.dtb"; }
+
+    cmd_bootimg "$_tmp/boot/vmlinuz" "$_dtb" "$_tmp/boot.img" "$_tmp/boot/config" \
+        || { rm -rf "$_tmp"; die "pack failed"; }
+    cmd_stage "$_tmp/boot.img"
+    rm -rf "$_tmp"
+    log "staged kernel $_rel. Nothing has booted it yet -- run 'try' with the device in reach."
+}
+
 usage() {
     cat <<EOF
 usage: nq-kernel-ota <command>
@@ -175,7 +278,10 @@ cmd_restore() {
 }
 
 case "${1:-}" in
-    stage)   shift; cmd_stage "$@" ;;
+    stage)       shift; cmd_stage "$@" ;;
+    stage-apk)   shift; cmd_stage_apk "$@" ;;
+    bootimg)     shift; cmd_bootimg "$@" ;;
+    verify-self) cmd_verify_self ;;
     try)     cmd_try ;;
     promote) cmd_promote ;;
     status)  cmd_status ;;
