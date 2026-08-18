@@ -132,15 +132,69 @@ This is why `nq-kernel-ota` grows a `stage-apk` mode rather than leaning on
 `apk upgrade`; the apk in the OTA repo is a *payload source*, not something the
 device installs on sight.
 
+## ✅ Proven end to end on the live device (2026-08-18)
+
+First kernel ever applied to this Q without a cable — `6.12.12` → `6.12.12-r48`:
+
+| step | what happened |
+|---|---|
+| `stage-apk` | modules installed to `/lib/modules/6.12.12-r48`, the running kernel's `/lib/modules/6.12.12` left intact — **both trees present**; boot image packed, written to the trial slot, read-back verified |
+| `try` | armed the SAR reason, rebooted |
+| **trial boot** | SSH back in **36 s** running `6.12.12-r48 #49` **from the trial slot**; system `running`, WiFi up on the same address, and `schedutil` finally in `scaling_available_governors` |
+| `autopromote` | recognised the staged release, health gate passed at 0 s (services + a real ping through the default route), copied trial → boot, disarmed |
+| plain reboot | came up on the promoted kernel from slot A in **30 s**, no flag involved |
+
+Slot A was never written with an image that had not already booted.
+
+### Defects this run exposed (all fixed)
+
+- `sar()` called `m.flush()` on a MAP_SHARED mapping of `/dev/mem`, where
+  `msync()` returns EINVAL — printing a Python traceback on **every** arm and
+  disarm. The store had already landed, so it worked, but a traceback on the code
+  path that rewrites boot state is precisely what buries the next real failure.
+- The device APKBUILD's `depends=` is a **shell string**: the explanatory `#`
+  lines added inside it became literal dependencies
+  (`ERROR: device-google-steelhead: dependency not found: #`). Comments belong
+  above the string, and there is now a note there saying so.
+- The aport depended on `iputils`/`iproute2` for a `ping -c1` and an `ip route`
+  the device already has (`ping` is busybox's). That pulled in
+  `iputils-tracepath`, and the install failed the moment a mirror hiccupped —
+  on a device whose whole point is updating itself over the network. Now
+  `depends="python3"`.
+
+## Packaging
+
+`pmos/nexusq-kernel-ota/` (aport) + `userspace/nexusq-kernel-ota/`
+(tool, unit, preset). Installed and verified on the device: `/usr/bin/nq-kernel-ota`,
+`nexusq-kernel-ota-promote.service` **enabled** via `97-nexusq-kernel-ota.preset`,
+state in `/var/lib/nexusq-kernel-ota/`. `device-google-steelhead` r75 depends on
+it, and `scripts/publish-ota-repo.sh` ships it.
+
+## How to update a kernel now
+
+```sh
+# on the device, with someone near it
+nq-kernel-ota stage-apk /path/to/linux-google-steelhead-<ver>.apk
+nq-kernel-ota status          # slot A must still be the old image
+nq-kernel-ota try             # asks for YES, then reboots into the trial slot
+# after it comes back:
+nq-kernel-ota status          # or let nexusq-kernel-ota-promote.service do it
+```
+
+`restore` puts slot A back from the pre-stage backup. If the trial kernel never
+comes up, slot A is untouched — but getting there needs hands on the device
+(mute sensor at power-on → fastboot).
+
 ## Status
 
 - ✅ layout mapped; p8/p9 backed up to `reverse-eng/factory/partitions/`
 - ✅ `nq-kernel-ota` written; `status` verified on the live device (reads both
   slots and the SAR reason)
 - ✅ trial-slot selection proven to work — including its failure mode
-- ✅ `LOCALVERSION` split done (kernel r48, verified on the apk)
-- ⛔ `stage-apk` (extract payload without upgrading the package), kernel in the
-  OTA repo, the promotion systemd unit, and the app-side action are not done
-- ⛔ no end-to-end run has been performed. It must not be attempted until
-  `stage-apk` exists, or `apk upgrade` will delete the running kernel's modules
-  and take the rollback path with it.
+- ✅ `LOCALVERSION` split (kernel r48), `stage-apk`, the promotion unit, the
+  aport + preset, and OTA-repo inclusion are all done and installed
+- ✅ **end-to-end run completed on hardware** — see above
+- ⛔ the kernel apk itself is still not published to the OTA repo (the device
+  currently needs the apk copied to it by hand), and there is no app-side action
+- ⛔ the SAR-RAM-vs-power-cycle question from the failed-trial test remains
+  unresolved, and the failure path still needs physical access

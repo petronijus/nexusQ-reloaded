@@ -97,6 +97,51 @@ All notable changes to Nexus Q Reloaded. Format follows
 - A `powersave` arm proved **nothing at idle needs more than 350 MHz** (busy
   7.06 %, everything kept working), so the remaining headroom is real.
 
+### Added — kernel OTA (Phase 2): a kernel can now be applied without a cable (2026-08-18)
+- **Phase 2 was never started** — it was scoped out in 2026-08 in favour of
+  `fastboot-over-ssh`, which looked like it made kernel flashing software-only.
+  It did not: the Q lives on WiFi with nothing in its micro-USB, so sending it to
+  the bootloader works perfectly and leaves it **unreachable**. That happened
+  today and cost a mute-sensor rescue with a cable.
+- **New `nexusq-kernel-ota` aport** (`nq-kernel-ota` + a promotion unit) applies a
+  kernel from the running system using the one lever a 2012 Android u-boot gives
+  us — a second bootable slot selected by the SAR-RAM reboot reason that kernel
+  patch 0044 writes:
+  - `stage`/`stage-apk` → write to the **trial slot (p8)**, read back, compare
+  - `try` → arm the reason and reboot into it (interactive `YES` required)
+  - `autopromote` → on the next boot: disarm first, confirm the staged release is
+    what is running, then promote **only** after the device proves it is usable
+    (services up **and** a real ping through the default route) — because a
+    kernel that boots without cfg80211 boots fine and locks us out
+  - `restore` → put slot A back from the pre-stage backup
+  **Slot A is never written with an image that has not booted.**
+- **Proven end to end on hardware, `6.12.12` → `6.12.12-r48`:** trial boot came
+  back on SSH in **36 s** running from the trial slot, promotion passed its health
+  gate, and a plain reboot then came up on the promoted kernel from slot A in
+  **30 s**. `schedutil` is now in `scaling_available_governors`, which unblocks
+  the governor A/B that was previously gated on a flash.
+- **The packer is verified against ground truth, not trusted:** `verify-self`
+  rebuilds the image for the *running* kernel and compares it with slot A —
+  5 545 984 B / md5 `03c7be62…` on both sides. A one-byte packing difference
+  would otherwise have surfaced only as a failed boot.
+- **Two module traps, both closed before they could bite.** (a) Both kernels
+  called themselves `6.12.12` and shared `/lib/modules/6.12.12`; kernel **r48**
+  now injects `CONFIG_LOCALVERSION="-r$pkgrel"` so every build gets its own tree
+  (and `LOCALVERSION_AUTO` is off so the string is deterministic). (b) Even then,
+  letting `apk upgrade` install the kernel would delete the *old* package's files
+  — including the running kernel's modules — so `stage-apk` extracts the payload
+  by hand and the real `apk` upgrade happens only on promote.
+- ⚠️ **What the bootloader will NOT do, measured:** with a deliberately invalid
+  image in the trial slot, stock u-boot does **not** fall back to p9 — it stops,
+  and a power-cycle at that moment did not recover it either. Rescue was the
+  documented mute-sensor fastboot path plus `fastboot -s AW1S12241020 flash
+  recovery` from a backup. So a kernel update must never be silent or automatic,
+  and `try` says so before it does anything.
+- Also from this work: the eMMC map is now documented (p8 recovery / p9 boot /
+  p1 u-boot env / p5 device_info / p10 `/factory`), and p8+p9 are backed up to
+  `reverse-eng/factory/partitions/`. Full record:
+  `docs/2026-08-18-kernel-ota-phase2.md`.
+
 ### Verified — the COLD BUILD passed: 27/27 rootfs gates, built from nothing (2026-08-17)
 - The verification agreed with Petr on 2026-08-13 is **done**. Full pipeline, empty
   `-cold` volumes, nothing reused from the warm one. `scripts/verify-rootfs.sh`:

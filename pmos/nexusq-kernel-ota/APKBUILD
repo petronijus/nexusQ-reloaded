@@ -1,0 +1,44 @@
+# Nexus Q kernel OTA (phase 2) — applies a kernel from the running system, with
+# no host, no cable and no fastboot, using a trial slot and a health-gated
+# promotion. Full design + the bootloader's measured limits:
+# docs/2026-08-18-kernel-ota-phase2.md
+pkgname=nexusq-kernel-ota
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q kernel OTA — trial-slot writer with health-gated promotion"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# python3 is the only real dependency: it packs the Android boot image and pokes
+# the SAR reboot reason through /dev/mem.
+#
+# NOT iputils/iproute2. The health gate needs `ping` and `ip route`, and both are
+# already there — ping via busybox (verified: /usr/bin/ping -> busybox), ip from
+# the base install. Depending on iputils drags in iputils-tracepath and friends
+# for a `ping -c1` we already have, and an OTA install then fails the moment a
+# mirror hiccups, which is exactly how this was found.
+depends="python3"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from
+# userspace/nexusq-kernel-ota/.
+source="
+	nq-kernel-ota nexusq-kernel-ota-promote.service 97-nexusq-kernel-ota.preset
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nq-kernel-ota "$pkgdir"/usr/bin/nq-kernel-ota
+	install -Dm644 nexusq-kernel-ota-promote.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-kernel-ota-promote.service
+
+	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-kernel-ota-promote.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-kernel-ota-promote.service
+	install -Dm644 97-nexusq-kernel-ota.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/97-nexusq-kernel-ota.preset
+
+	# State (pending marker + the slot-A backup) lives outside the package.
+	install -d "$pkgdir"/var/lib/nexusq-kernel-ota
+}
+
+sha512sums="SKIP"

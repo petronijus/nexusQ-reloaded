@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=74
+pkgrel=75
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -15,6 +15,11 @@ arch="armv7"
 # package ships no musl ELF of its own (scripts only), so auto-tracing
 # adds nothing.
 options="!check !archcheck !fhs !tracedeps"
+# NB: this is a shell string — a "#" inside it is NOT a comment, it becomes a
+# literal dependency ("dependency not found: #"). Explanations go up here.
+# nexusq-kernel-ota: applies a kernel from the running system via a trial
+# slot, so a kernel update no longer needs a USB cable
+# (docs/2026-08-18-kernel-ota-phase2.md).
 depends="
 	linux-google-steelhead
 	mesa-dri-gallium
@@ -34,6 +39,7 @@ depends="
 	nexusq-setupd
 	nexusq-btagent
 	nexusq-mqtt
+	nexusq-kernel-ota
 	librespot
 	shairport-sync
 	bubblewrap
@@ -50,8 +56,7 @@ depends="
 	ethtool
 	iproute2-minimal
 	tzdata
-	alsa-utils
-"
+	alsa-utils"
 makedepends="devicepkg-dev"
 install="$pkgname.post-install"
 # apk trigger: patch pulseaudio's tas5713 mixer path AFTER pulseaudio is unpacked

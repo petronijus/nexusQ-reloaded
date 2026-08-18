@@ -4,7 +4,27 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-16 (latest): **the 08-13 fixes verified in the field — idle OPP residency 60.5 % → `70.69 % @ 350 MHz` over 79 h, 1200 MHz/1380 mV all but gone (5.1 → 0.71 %)**
+## Session 2026-08-18 (latest): **kernel OTA (Phase 2) works — a kernel can now be applied without a cable, proven end to end**
+
+Full record: `docs/2026-08-18-kernel-ota-phase2.md`.
+
+- **Why it mattered now:** `fastboot-over-ssh` had made kernel flashing *look*
+  software-only. It is not — the Q is on WiFi with nothing in its micro-USB, so
+  sending it to the bootloader leaves it unreachable. That happened today.
+- **New `nexusq-kernel-ota`** (aport + promotion unit, installed and enabled on
+  the device): `stage-apk` → trial slot **p8** → `try` → `autopromote` (health
+  gated) → slot **p9**. Slot A is never written with an image that has not booted.
+- **Proven on hardware:** `6.12.12` → `6.12.12-r48`, trial boot back on SSH in
+  36 s, promoted after the health gate, plain reboot into the promoted kernel in
+  30 s. **`schedutil` is now available**, which unblocks the governor A/B.
+- ⚠️ **Stock u-boot has no fallback**: an invalid trial image stops the device and
+  a power-cycle did not recover it — rescue is the mute-sensor fastboot path. A
+  kernel update must stay a deliberate, attended action.
+- **Still open:** the kernel apk is not yet published to the OTA repo (it has to
+  be copied to the device by hand), no app-side action, and the
+  SAR-RAM-vs-power-cycle question from the failed-trial test is unresolved.
+
+## Session 2026-08-16: **the 08-13 fixes verified in the field — idle OPP residency 60.5 % → `70.69 % @ 350 MHz` over 79 h, 1200 MHz/1380 mV all but gone (5.1 → 0.71 %)**
 
 Full record: `docs/2026-08-16-idle-opp-remeasure.md`. Nothing was changed on the
 device — this is a **passive read** of HA history / the MQTT retained state

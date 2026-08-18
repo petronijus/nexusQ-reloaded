@@ -28,6 +28,7 @@ KEY=pmos@local-6a42e957
 # the kernel are deliberately NOT here — flash-only). A size guard below refuses
 # to publish anything ≥99 MB so a mistaken big apk can never break the push.
 OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
+              nexusq-kernel-ota \
               device-google-steelhead device-google-steelhead-nonfree-firmware)
 
 STAGE="$(mktemp -d)"

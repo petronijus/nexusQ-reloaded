@@ -1,0 +1,13 @@
+# nexusq-kernel-ota promotion enablement (systemd preset).
+#
+# Shipped by the aport itself (same rationale as 96-nexusq-mqtt.preset): the
+# image build runs `systemctl preset-all` and 99-default's `disable *` would
+# strip a vendor unit's enable symlink, so declare it here at priority 97
+# (after 95-nexusq/96-mqtt, before 99-default).
+#
+# The unit costs a normal boot nothing — with no trial kernel in flight
+# `nq-kernel-ota autopromote` exits 0 immediately. It only does work on the one
+# boot that follows a `try`, which is exactly when nobody can be relied on to be
+# watching: the whole point is that the trial gets promoted or abandoned by
+# itself, and the reboot reason gets disarmed either way.
+enable nexusq-kernel-ota-promote.service

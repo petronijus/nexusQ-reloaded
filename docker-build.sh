@@ -324,6 +324,14 @@ cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt.service"       "$NEXUSQMQTT_DIR/"
 cp "$SRC/userspace/nexusq-mqtt/96-nexusq-mqtt.preset"     "$NEXUSQMQTT_DIR/"
 echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
 
+NEXUSQKOTA_DIR="$PMAPORTS/main/nexusq-kernel-ota"
+mkdir -p "$NEXUSQKOTA_DIR"
+cp "$SRC/pmos/nexusq-kernel-ota/APKBUILD"                             "$NEXUSQKOTA_DIR/"
+cp "$SRC/userspace/nexusq-kernel-ota/nq-kernel-ota"                   "$NEXUSQKOTA_DIR/"
+cp "$SRC/userspace/nexusq-kernel-ota/nexusq-kernel-ota-promote.service" "$NEXUSQKOTA_DIR/"
+cp "$SRC/userspace/nexusq-kernel-ota/97-nexusq-kernel-ota.preset"     "$NEXUSQKOTA_DIR/"
+echo "  Installed: nexusq-kernel-ota (aport + tool -> main/nexusq-kernel-ota)"
+
 # python3: NO local override any more (retired 2026-08-17).
 # We used to stage pmos/python3 over pmaports main/python3 (a rebuild at a higher
 # pkgrel, LTO+PGO dropped) because Alpine's stock python3 SIGSEGVed on armv7. That
@@ -341,7 +349,7 @@ echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
 # whatever its provenance. To resurrect the override: git revert this commit.
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$NEXUSQKOTA_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
