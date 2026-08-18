@@ -911,7 +911,16 @@ def install_system_update():
     _ensure_ota_repo()
     try:
         _apk("update", timeout=60)
-        r = _apk("upgrade", "--available", timeout=600)
+        # --ignore the kernel EXPLICITLY. This used to be a plain
+        # `upgrade --available`, and the "kernel is never touched" promise in the
+        # docstring was enforced only by the kernel not existing in any repo the
+        # device reads. From 2026-08-18 it DOES exist there (kernel OTA phase 2
+        # publishes it as a payload source), so without this flag a "System
+        # update" tap would install it — which deletes the RUNNING kernel's
+        # /lib/modules and writes nothing to the boot partition, i.e. the next
+        # boot comes up on the old kernel with no modules: no cfg80211, no WiFi,
+        # no way back in. The kernel is applied by nq-kernel-ota, never by apk.
+        r = _apk("upgrade", "--available", "--ignore", _KERNEL_PKG, timeout=600)
         if r.returncode != 0:
             raise Err("unavailable",
                       f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")

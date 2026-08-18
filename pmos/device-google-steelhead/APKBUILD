@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=75
+pkgrel=76
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -108,6 +108,7 @@ source="
 	nexusq-wifi-watchdog.service
 	nexusq-cpufreq-tune
 	nexusq-cpufreq-tune.service
+	10-nexusq-ntp-by-ip.conf
 	librespot.service
 	librespot-nexusq
 	shairport-sync.service
@@ -388,6 +389,12 @@ package() {
 	# 72.4 % -> 86.2 % with no change to how fast REAL load ramps the clock
 	# (docs/2026-08-16-idle-700mhz-deep-analysis.md). Pairs with the Nice=19 the
 	# housekeeping units now carry.
+	# Clock bootstrap without DNS — see the file's header for the deadlock it
+	# breaks (no RTC -> year 2000 -> DNSSEC "signature-expired" -> no DNS -> no
+	# NTP hostname resolution -> no clock).
+	install -Dm644 "$srcdir"/10-nexusq-ntp-by-ip.conf \
+		"$pkgdir"/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip.conf
+
 	install -Dm755 "$srcdir"/nexusq-cpufreq-tune \
 		"$pkgdir"/usr/bin/nexusq-cpufreq-tune
 	install -Dm644 "$srcdir"/nexusq-cpufreq-tune.service \
@@ -582,6 +589,7 @@ SKIP  nexusq-nfc-send
 SKIP  nexusq-nfc.service
 SKIP  nexusq-cpufreq-tune
 SKIP  nexusq-cpufreq-tune.service
+SKIP  10-nexusq-ntp-by-ip.conf
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf

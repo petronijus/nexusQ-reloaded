@@ -230,6 +230,28 @@ cmd_autopromote() {
     exit 1
 }
 
+# --- fetch the kernel apk from the OTA repo and stage it ---------------------
+# `apk fetch` downloads WITHOUT installing, which is exactly the relationship we
+# want with the kernel package: the repo hosts it as a payload source, apk never
+# applies it. (nexusq-control's system upgrade passes
+# --ignore linux-google-steelhead for the same reason.)
+KERNEL_PKG=linux-google-steelhead
+
+cmd_stage_latest() {
+    _dir=$(mktemp -d)
+    log "refreshing the package index"
+    apk update >/dev/null 2>&1 || log "warning: apk update failed — using the cached index"
+    log "fetching $KERNEL_PKG"
+    if ! apk fetch --output "$_dir" "$KERNEL_PKG" >/dev/null 2>&1; then
+        rm -rf "$_dir"; die "could not fetch $KERNEL_PKG — is the OTA repo reachable?"
+    fi
+    _apk=$(ls "$_dir"/$KERNEL_PKG-*.apk 2>/dev/null | head -1)
+    [ -n "$_apk" ] || { rm -rf "$_dir"; die "fetch produced no apk"; }
+    log "fetched $(basename "$_apk")"
+    cmd_stage_apk "$_apk"
+    rm -rf "$_dir"
+}
+
 usage() {
     cat <<EOF
 usage: nq-kernel-ota <command>
@@ -337,7 +359,8 @@ cmd_restore() {
 
 case "${1:-}" in
     stage)       shift; cmd_stage "$@" ;;
-    stage-apk)   shift; cmd_stage_apk "$@" ;;
+    stage-apk)    shift; cmd_stage_apk "$@" ;;
+    stage-latest) cmd_stage_latest ;;
     bootimg)     shift; cmd_bootimg "$@" ;;
     verify-self) cmd_verify_self ;;
     try)     cmd_try ;;

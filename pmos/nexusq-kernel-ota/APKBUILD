@@ -4,7 +4,7 @@
 # docs/2026-08-18-kernel-ota-phase2.md
 pkgname=nexusq-kernel-ota
 pkgver=0.1.0
-pkgrel=0
+pkgrel=1
 pkgdesc="Nexus Q kernel OTA — trial-slot writer with health-gated promotion"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"

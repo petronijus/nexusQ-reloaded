@@ -185,6 +185,47 @@ nq-kernel-ota status          # or let nexusq-kernel-ota-promote.service do it
 comes up, slot A is untouched — but getting there needs hands on the device
 (mute sensor at power-on → fastboot).
 
+## The device could not reach the OTA repo at all — no RTC, so no DNS
+
+Publishing the kernel exposed a fault that had nothing to do with kernels:
+`apk update` reported "6 stale" and `wget` said **`bad address
+'petronijus.github.io'`**, which looks like a network failure and is not one.
+
+    resolvectl query petronijus.github.io
+    ... resolve call failed: DNSSEC validation failed: signature-expired
+
+The clock read **2000-01-01**. This board has no usable RTC (`hwclock -r` times
+out), so every boot starts 26 years in the past; systemd-resolved validates
+DNSSEC, and against that clock every signature is "expired". Meanwhile
+systemd-timesyncd shipped only `FallbackNTPServers=*.pool.ntp.org` — **hostnames**.
+So: no time → no DNS → cannot resolve an NTP server → no time. A closed loop the
+device cannot leave on its own, and the reason it had worked until now is simply
+that it had been *up* for 6.9 days with a clock synced before the reboots.
+
+Fixed in **device r76** with `/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip.conf`:
+NTP servers as **IP literals** (LAN gateway first, then Cloudflare/Google
+anycast), so timesyncd reaches one before DNS is involved at all. Verified on the
+device: it synced from `162.159.200.1` and `System clock synchronized: yes`,
+after which DNS resolved immediately and the OTA upgrade went through.
+
+**This matters beyond kernels**: every OTA the device performs depends on it, and
+the failure mode is misleading — it presents as a dead network.
+
+## The kernel exclusion was a comment, not code
+
+`install_system_update()` in nexusq-control documented "EXCEPT the kernel", but
+the implementation was a plain `apk upgrade --available`. The kernel was excluded
+only by not existing in any repo the device reads — and publishing it as a
+payload source removed exactly that protection. A "System update" tap would then
+have installed the kernel package: deleting the RUNNING kernel's `/lib/modules`
+and writing nothing to the boot partition, so the next boot comes up on the old
+kernel with no modules — no cfg80211, no WiFi, no way back in.
+
+**nexusq-control r30** now passes `--ignore linux-google-steelhead` (apk-tools
+3.0.7: "Upgrade all other packages than the ones listed"), verified on the device.
+The check path already filtered it; now both halves agree, and the kernel is
+applied only by `nq-kernel-ota`.
+
 ## Status
 
 - ✅ layout mapped; p8/p9 backed up to `reverse-eng/factory/partitions/`
@@ -194,7 +235,11 @@ comes up, slot A is untouched — but getting there needs hands on the device
 - ✅ `LOCALVERSION` split (kernel r48), `stage-apk`, the promotion unit, the
   aport + preset, and OTA-repo inclusion are all done and installed
 - ✅ **end-to-end run completed on hardware** — see above
-- ⛔ the kernel apk itself is still not published to the OTA repo (the device
-  currently needs the apk copied to it by hand), and there is no app-side action
+- ✅ the kernel apk **is** published to the OTA repo as a payload source, and
+  `nq-kernel-ota stage-latest` fetches it over the network (`apk fetch`, never
+  `apk add`) — verified end to end on the device, including its refusal to stage
+  the kernel that is already running
+- ⛔ no app-side action yet (the update is CLI-only, which given the
+  attended-only requirement is arguably the right default for now)
 - ⛔ the SAR-RAM-vs-power-cycle question from the failed-trial test remains
   unresolved, and the failure path still needs physical access

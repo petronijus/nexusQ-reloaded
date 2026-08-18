@@ -27,8 +27,13 @@ KEY=pmos@local-6a42e957
 # packages come from the Alpine/pmOS mirrors; the ~180 MB nexusq-glibc-rt base and
 # the kernel are deliberately NOT here — flash-only). A size guard below refuses
 # to publish anything ≥99 MB so a mistaken big apk can never break the push.
+# linux-google-steelhead is here as a PAYLOAD SOURCE for nq-kernel-ota, not as
+# something the device installs: `apk` never applies a kernel (nexusq-control
+# upgrades with --ignore linux-google-steelhead, and the device track lists its
+# packages explicitly). nq-kernel-ota fetches this apk, unpacks it, and writes a
+# boot image to the trial slot. docs/2026-08-18-kernel-ota-phase2.md
 OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
-              nexusq-kernel-ota \
+              nexusq-kernel-ota linux-google-steelhead \
               device-google-steelhead device-google-steelhead-nonfree-firmware)
 
 STAGE="$(mktemp -d)"
