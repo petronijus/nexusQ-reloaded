@@ -1,0 +1,185 @@
+#!/bin/sh
+# nq-kernel-ota — write a kernel (boot.img) to the Nexus Q's eMMC from the
+# running system, without a host, a cable, or fastboot.
+#
+# THE POINT: until now applying a kernel meant `fastboot flash boot`, which needs
+# USB. The Q normally lives on WiFi with nothing plugged in, so "kernel updates
+# are software-only" was never actually true — proved the hard way on 2026-08-18.
+#
+# THE SHAPE (the industry trial-boot/rollback pattern, adapted to a bootloader we
+# cannot change — see docs/2026-08-18-kernel-ota-phase2.md):
+#
+#     p9  "boot"      slot A — the kernel that is known to work. NEVER written
+#                     with an image that has not booted.
+#     p8  "recovery"  slot B — the TRIAL slot. u-boot boots it when the reboot
+#                     reason in SAR RAM says "recovery".
+#
+#     stage    write the new image to slot B, read it back, compare
+#     try      set the reason and reboot -> u-boot runs the new kernel from B
+#     promote  (on the next successful boot) copy B to A and clear the marker
+#
+# So a kernel that does not boot can never cost us the kernel that does.
+#
+# ⚠️ WHAT THIS CANNOT DO. Stock u-boot (2011.09-rc1) has no bootcount/altbootcmd
+# and does NOT fall back when the trial image is unbootable — it just stops
+# (measured 2026-08-18). Recovery from a failed trial boot is therefore PHYSICAL:
+# cover the mute sensor at power-on for fastboot, or power off long enough to
+# drain the always-on domain. That is why `try` refuses to run unattended and
+# says so out loud.
+set -u
+
+BOOT_SLOT=/dev/mmcblk0p9          # A — proven kernel
+TRIAL_SLOT=/dev/mmcblk0p8         # B — trial (stock recovery lives here)
+STATE_DIR=/var/lib/nexusq-kernel-ota
+PENDING="$STATE_DIR/pending"      # marker: a trial boot is in flight
+BACKUP="$STATE_DIR/slot-a-backup.img"
+SAR_ADDR=0x4A326A0C               # reboot-reason string, read by stock u-boot
+
+die() { echo "nq-kernel-ota: $*" >&2; exit 1; }
+log() { echo "nq-kernel-ota: $*"; }
+
+part_bytes() {
+    _n=$(basename "$1")
+    echo $(( $(cat "/sys/block/mmcblk0/$_n/size") * 512 ))
+}
+
+# --- the reboot reason, straight out of the SAR scratchpad -------------------
+# Readable/writable because the kernel ships CONFIG_DEVMEM=y and does NOT set
+# CONFIG_STRICT_DEVMEM. Kernel patch 0044 writes this on reboot; u-boot reads it.
+sar() {
+    python3 - "$1" "${2:-}" <<'PY'
+import mmap, os, sys
+ADDR = 0x4A326A0C
+PAGE = 0x1000
+base, off = ADDR & ~(PAGE - 1), ADDR & (PAGE - 1)
+mode, value = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else ""
+flags = os.O_RDWR if mode == "write" else os.O_RDONLY
+prot = (mmap.PROT_READ | mmap.PROT_WRITE) if mode == "write" else mmap.PROT_READ
+fd = os.open("/dev/mem", flags | os.O_SYNC)
+m = mmap.mmap(fd, PAGE, mmap.MAP_SHARED, prot, offset=base)
+if mode == "read":
+    print(m[off:off + 32].split(b"\x00")[0].decode(errors="replace"))
+else:
+    # stock clears 0x20 bytes then writes the reason; match it exactly
+    m[off:off + 32] = b"\x00" * 32
+    if value:
+        b = value.encode()[:31]
+        m[off:off + len(b)] = b
+    m.flush()
+PY
+}
+
+usage() {
+    cat <<EOF
+usage: nq-kernel-ota <command>
+
+  stage <boot.img>   write the image to the TRIAL slot and verify it read-back
+  try                arm the trial boot and reboot into it  (INTERACTIVE ONLY)
+  promote            copy the trial slot into the boot slot and clear the marker
+  status             what is where, and whether a trial is pending
+  reason [value]     read (or set) the u-boot reboot reason in SAR RAM
+  restore            put the boot slot back from the pre-update backup
+EOF
+}
+
+cmd_status() {
+    log "slot A (boot)  $BOOT_SLOT  $(part_bytes $BOOT_SLOT) B  md5 $(dd if=$BOOT_SLOT bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)"
+    log "slot B (trial) $TRIAL_SLOT  $(part_bytes $TRIAL_SLOT) B  md5 $(dd if=$TRIAL_SLOT bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)"
+    log "reboot reason  '$(sar read)'"
+    if [ -f "$PENDING" ]; then
+        log "PENDING trial boot: $(cat "$PENDING")"
+    else
+        log "no trial boot pending"
+    fi
+    [ -f "$BACKUP" ] && log "slot-A backup: $BACKUP ($(stat -c %s "$BACKUP") B)"
+    return 0
+}
+
+cmd_stage() {
+    _img=${1:?usage: nq-kernel-ota stage <boot.img>}
+    [ -f "$_img" ] || die "no such image: $_img"
+    _sz=$(stat -c %s "$_img")
+    _cap=$(part_bytes "$TRIAL_SLOT")
+    [ "$_sz" -le "$_cap" ] || die "image is $_sz B, trial slot holds $_cap B"
+    # An Android boot header is the minimum sanity check: a truncated download
+    # must never reach a partition.
+    [ "$(dd if="$_img" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] \
+        || die "not an Android boot image (bad magic) — refusing to write"
+
+    mkdir -p "$STATE_DIR"
+    log "backing up slot A -> $BACKUP"
+    dd if="$BOOT_SLOT" of="$BACKUP" bs=1M count=8 2>/dev/null || die "slot A backup failed"
+
+    log "writing $_sz B to the trial slot"
+    dd if="$_img" of="$TRIAL_SLOT" bs=1M conv=fsync 2>/dev/null || die "write failed"
+    sync
+
+    # Read back and compare. The 2026-06 flash corruption (sparse DONT_CARE over a
+    # non-erased eMMC) is exactly the class of bug a read-back catches.
+    _want=$(md5sum < "$_img" | cut -d' ' -f1)
+    _got=$(dd if="$TRIAL_SLOT" bs=1 count="$_sz" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$_want" = "$_got" ] || die "READ-BACK MISMATCH ($_want != $_got) — slot B is not what we wrote"
+    log "read-back verified: $_got"
+
+    printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" > "$PENDING"
+    log "staged. Next: 'nq-kernel-ota try' — and read what it prints first."
+}
+
+cmd_try() {
+    [ -f "$PENDING" ] || die "nothing staged"
+    cat <<EOF
+
+  ⚠️  A TRIAL BOOT CANNOT BE UNDONE REMOTELY.
+
+  Stock u-boot has no bootcount and does not fall back: if the staged kernel
+  does not boot, this device STOPS at the bootloader and needs hands on it —
+  cover the mute sensor at power-on to reach fastboot (USB), or leave it
+  unplugged long enough for the always-on domain to drain.
+
+  Do this only with the device in reach. Slot A is untouched either way.
+
+EOF
+    if [ "${NQ_KOTA_YES:-}" != "1" ]; then
+        printf "  type YES to boot the trial kernel: "
+        read _ans
+        [ "$_ans" = "YES" ] || die "aborted"
+    fi
+    log "arming the trial boot"
+    sar write recovery
+    log "reason is now '$(sar read)' — rebooting"
+    sync
+    systemctl reboot --reboot-argument=recovery
+}
+
+cmd_promote() {
+    [ -f "$PENDING" ] || die "nothing pending — promote is for a kernel that just proved it boots"
+    log "promoting trial slot -> boot slot"
+    dd if="$TRIAL_SLOT" of="$BOOT_SLOT" bs=1M conv=fsync 2>/dev/null || die "promote failed"
+    sync
+    _a=$(dd if="$BOOT_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
+    _b=$(dd if="$TRIAL_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$_a" = "$_b" ] || die "post-promote mismatch ($_a != $_b)"
+    sar write ""              # never leave a recovery request armed
+    rm -f "$PENDING"
+    log "promoted and disarmed. Slot A md5 $_a"
+}
+
+cmd_restore() {
+    [ -f "$BACKUP" ] || die "no backup at $BACKUP"
+    log "restoring slot A from $BACKUP"
+    dd if="$BACKUP" of="$BOOT_SLOT" bs=1M conv=fsync 2>/dev/null || die "restore failed"
+    sync
+    sar write ""
+    rm -f "$PENDING"
+    log "restored and disarmed."
+}
+
+case "${1:-}" in
+    stage)   shift; cmd_stage "$@" ;;
+    try)     cmd_try ;;
+    promote) cmd_promote ;;
+    status)  cmd_status ;;
+    restore) cmd_restore ;;
+    reason)  if [ $# -ge 2 ]; then sar write "$2"; log "reason set to '$(sar read)'"; else sar read; fi ;;
+    *)       usage; exit 1 ;;
+esac
