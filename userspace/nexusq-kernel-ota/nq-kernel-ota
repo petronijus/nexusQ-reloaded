@@ -65,7 +65,11 @@ else:
     if value:
         b = value.encode()[:31]
         m[off:off + len(b)] = b
-    m.flush()
+    # No flush(): this is a MAP_SHARED mapping of /dev/mem, so the store has
+    # already reached the SAR register — and msync() on it fails with EINVAL,
+    # which printed a traceback on every arm/disarm and would have buried a real
+    # failure the next time one happened.
+    m.close()
 PY
 }
 
