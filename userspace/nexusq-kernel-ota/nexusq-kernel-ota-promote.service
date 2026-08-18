@@ -2,11 +2,28 @@
 Description=Nexus Q kernel OTA — promote a trial kernel once it has proven itself
 Documentation=file:///usr/bin/nq-kernel-ota
 Documentation=file:///usr/share/doc/nexusq/2026-08-18-kernel-ota-phase2.md
-# Must run after the things it judges health by are up; it does its own waiting
-# and exits 0 immediately when no trial is pending, so it costs a normal boot
-# nothing. No After= on one of our own services — that formed a boot ordering
-# cycle once and systemd resolved it by deleting the start job.
-After=multi-user.target network-online.target
+
+# NO After= line, deliberately.
+#
+# This unit is WantedBy=multi-user.target, and it used to also carry
+# `After=multi-user.target network-online.target`. Both were wrong:
+#
+#  * ordering a unit after the very target that pulls it in is the shape that
+#    already bit this repo once (an After= on our own service made systemd
+#    resolve the ordering by DELETING the start job, so nexusq-control was
+#    "enabled" and never started).
+#  * `network-online.target` is INACTIVE on this device, so ordering against it
+#    guarantees nothing at all — it silently does nothing rather than waiting.
+#
+# None of that is needed: `nq-kernel-ota autopromote` does its own waiting. It
+# exits 0 immediately when no trial kernel is pending, and when one IS pending it
+# polls for up to 180 s until our services are up AND a ping through the default
+# route answers. The unit only has to RUN; it decides for itself when the device
+# is ready to be judged.
+#
+# ⚠️ As of 2026-08-18 this unit had never executed even once (the package landed
+# after multi-user.target on the boot it was installed), so its boot behaviour is
+# unproven — verify it on the next reboot rather than assuming.
 
 [Service]
 Type=oneshot

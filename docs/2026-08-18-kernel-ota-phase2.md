@@ -226,6 +226,38 @@ kernel with no modules — no cfg80211, no WiFi, no way back in.
 The check path already filtered it; now both halves agree, and the kernel is
 applied only by `nq-kernel-ota`.
 
+## Post-swap diagnostic and two things it caught
+
+A full sweep on r48 came back **PASS with no regressions** — every DTS-dependent
+fix survived the rebuild (factory WiFi MAC / patch 0043, ethernet pad mux / #17,
+DPLL_ABE / 0042, BT baud / 0040), modules resolve against
+`/lib/modules/6.12.12-r48` with zero vermagic or symbol complaints, VDD_MPU
+tracks the OPP exactly at all three points (`vdd_mismatch` 0 of 5439 samples),
+1.2 GHz is reached, no throttling, and the boot log is *quieter* than the kernel
+it replaced. Capture: `nq-captures/20260818-230118/`.
+
+Two findings worth carrying forward:
+
+**`CPU_IDLE_GOV_TEO=y` builds TEO but does not select it — a no-op as shipped.**
+The cpuidle governor is chosen by rating and `menu` (20) outranks `teo` (19);
+there is no `CONFIG_CPU_IDLE_GOV_DEFAULT_*` in this tree, so it would take
+`cpuidle.governor=teo` on the kernel cmdline. **Deliberately not doing that**:
+this board exposes exactly one idle state (`C1, MPUSS ON`), so the governor has
+nothing to choose between and TEO cannot pay for itself. It only becomes
+interesting if deep C2/C3 ever land, which is blocked without a serial console.
+Recorded as a dead end rather than a to-do.
+
+**The promotion unit had never executed once**, so its boot behaviour was
+unproven — the package happened to install after `multi-user.target` on the boot
+that introduced it. Reviewing it then turned up two real defects, both fixed in
+**nexusq-kernel-ota r2**: it was `WantedBy=multi-user.target` *and*
+`After=multi-user.target` (the same self-ordering shape that once made systemd
+resolve a dependency by deleting nexusq-control's start job), and it ordered
+itself `After=network-online.target`, a target that is **inactive** on this
+device and therefore guarantees nothing. Both `After=` lines are gone: the unit
+only has to run, because `autopromote` does its own waiting. **Its boot behaviour
+still needs verifying on the next reboot.**
+
 ## Status
 
 - ✅ layout mapped; p8/p9 backed up to `reverse-eng/factory/partitions/`

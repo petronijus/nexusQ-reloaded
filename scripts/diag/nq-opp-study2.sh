@@ -15,7 +15,7 @@
 #     CPU at 700 MHz. Raising it should collapse the decay tail.
 #
 # Arms are given on the command line so the round-1 results can pick them:
-#   nq-opp-study2.sh 'label:gov:sampling_rate:up:down:ignore_nice:nice_mode' ...
+#   nq-opp-study2.sh 'label:gov:sampling_rate:up:down:ignore_nice:nice_mode[:rate_limit_us]' ...
 # where '-' leaves a knob alone and nice_mode is 'none' or 'hk19' (renice the
 # housekeeping units to 19 for the duration of the arm).
 #
@@ -151,15 +151,21 @@ if _u=$(playing); then
 fi
 
 for spec in "$@"; do
-    IFS=: read -r label gov sr up down ign nicemode <<EOF
+    IFS=: read -r label gov sr up down ign nicemode ratelimit <<EOF
 $spec
 EOF
+    ratelimit=${ratelimit:--}
     echo "--- arm $label gov=$gov sr=$sr up=$up down=$down ign=$ign nice=$nicemode $(cat /proc/uptime)"
     [ "$gov"  != - ] && echo "$gov"  > $P/scaling_governor
     [ "$sr"   != - ] && echo "$sr"   > $G/sampling_rate
     [ "$up"   != - ] && echo "$up"   > $G/up_threshold
     [ "$down" != - ] && echo "$down" > $G/down_threshold
     [ "$ign"  != - ] && echo "$ign"  > $G/ignore_nice_load
+    # schedutil's only knob: how often it may re-evaluate. Its default comes from
+    # cpuinfo_transition_latency (300 us here), which is aggressive for a CPU
+    # whose OPP changes cost a voltage ramp -- worth A/B'ing against a slower one.
+    [ "$ratelimit" != - ] && [ -w /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us ] \
+        && echo "$ratelimit" > /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us
     # ALWAYS unwind the previous arm's renices first. Two consecutive hk19 arms
     # used to append to RENICED without unwinding, so the restore replayed
     # "pid:10" and then "pid:19" for the same pid and the LAST write won — the
