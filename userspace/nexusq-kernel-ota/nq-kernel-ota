@@ -167,9 +167,63 @@ cmd_stage_apk() {
 
     cmd_bootimg "$_tmp/boot/vmlinuz" "$_dtb" "$_tmp/boot.img" "$_tmp/boot/config" \
         || { rm -rf "$_tmp"; die "pack failed"; }
-    cmd_stage "$_tmp/boot.img"
+    # autopromote compares this against `uname -r` after the trial boot, so it can
+    # tell "the new kernel is running" from "we fell back to slot A".
+    NQ_KOTA_RELEASE="$_rel" cmd_stage "$_tmp/boot.img"
     rm -rf "$_tmp"
     log "staged kernel $_rel. Nothing has booted it yet -- run 'try' with the device in reach."
+}
+
+# --- what runs on the next boot, from the systemd unit -----------------------
+# "It booted" is NOT the same as "it works". A kernel that comes up without
+# cfg80211 boots perfectly and leaves the device unreachable — promoting that
+# into slot A would lock us out of the only working kernel we have. So promotion
+# waits for the box to be genuinely usable: our services up AND the network
+# actually carrying traffic.
+#
+# The reason is disarmed FIRST, unconditionally: whatever else happens, the next
+# reboot must go to slot A rather than back into the trial slot.
+HEALTH_WAIT_S="${NQ_KOTA_HEALTH_WAIT_S:-180}"
+
+health_ok() {
+    [ "$(systemctl is-active nexusq-control)" = active ] || return 1
+    [ "$(systemctl is-active nq-healthd)" = active ] || return 1
+    # The failure that actually matters: no network means no way back in.
+    _gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+    [ -n "$_gw" ] || return 1
+    ping -c1 -W2 "$_gw" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+cmd_autopromote() {
+    [ -f "$PENDING" ] || exit 0            # nothing in flight — normal boot
+    _want=$(awk '{print $4}' "$PENDING" 2>/dev/null)
+
+    log "trial boot marker found; disarming the reboot reason first"
+    sar write ""
+
+    _now=$(uname -r)
+    if [ -n "$_want" ] && [ "$_want" != "$_now" ]; then
+        log "running $_now but the trial staged $_want — the trial slot did NOT boot."
+        log "slot A is intact and still in charge. Leaving the marker for inspection;"
+        log "clear it with 'nq-kernel-ota restore' or stage again."
+        exit 0
+    fi
+
+    log "running the staged kernel ($_now); waiting up to ${HEALTH_WAIT_S}s for the device to prove it is usable"
+    _t=0
+    while [ "$_t" -lt "$HEALTH_WAIT_S" ]; do
+        if health_ok; then
+            log "healthy after ${_t}s — promoting"
+            cmd_promote
+            exit 0
+        fi
+        sleep 10; _t=$((_t + 10))
+    done
+
+    log "NOT healthy after ${HEALTH_WAIT_S}s — refusing to promote."
+    log "slot A still holds the previous kernel; reboot to go back to it."
+    exit 1
 }
 
 usage() {
@@ -224,7 +278,7 @@ cmd_stage() {
     [ "$_want" = "$_got" ] || die "READ-BACK MISMATCH ($_want != $_got) — slot B is not what we wrote"
     log "read-back verified: $_got"
 
-    printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" > "$PENDING"
+    printf '%s %s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" "${NQ_KOTA_RELEASE:-}" > "$PENDING"
     log "staged. Next: 'nq-kernel-ota try' — and read what it prints first."
 }
 
@@ -283,7 +337,8 @@ case "${1:-}" in
     bootimg)     shift; cmd_bootimg "$@" ;;
     verify-self) cmd_verify_self ;;
     try)     cmd_try ;;
-    promote) cmd_promote ;;
+    promote)     cmd_promote ;;
+    autopromote) cmd_autopromote ;;
     status)  cmd_status ;;
     restore) cmd_restore ;;
     reason)  if [ $# -ge 2 ]; then sar write "$2"; log "reason set to '$(sar read)'"; else sar read; fi ;;

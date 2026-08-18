@@ -1,0 +1,20 @@
+[Unit]
+Description=Nexus Q kernel OTA — promote a trial kernel once it has proven itself
+Documentation=file:///usr/bin/nq-kernel-ota
+Documentation=file:///usr/share/doc/nexusq/2026-08-18-kernel-ota-phase2.md
+# Must run after the things it judges health by are up; it does its own waiting
+# and exits 0 immediately when no trial is pending, so it costs a normal boot
+# nothing. No After= on one of our own services — that formed a boot ordering
+# cycle once and systemd resolved it by deleting the start job.
+After=multi-user.target network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nq-kernel-ota autopromote
+RemainAfterExit=yes
+# Refusing to promote is a legitimate outcome, not a boot failure.
+SuccessExitStatus=0 1
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
