@@ -211,6 +211,14 @@ after which DNS resolved immediately and the OTA upgrade went through.
 **This matters beyond kernels**: every OTA the device performs depends on it, and
 the failure mode is misleading — it presents as a dead network.
 
+**Verified across a reboot (2026-08-19):** the device still comes up at
+2000-01-01 (there is no RTC to fix), and timesyncd reaches `162.159.200.1` by IP
+and corrects the clock **173 s into the boot**. So there is a ~3 minute window
+after every boot in which DNS does not resolve — which is exactly why
+`nexusq-mqtt` logs `[Errno -3] Try again` at start and connects on its retry.
+Anything that needs DNS early must tolerate that window; nothing should be
+"fixed" by weakening DNSSEC.
+
 ## The kernel exclusion was a comment, not code
 
 `install_system_update()` in nexusq-control documented "EXCEPT the kernel", but
@@ -271,6 +279,9 @@ still needs verifying on the next reboot.**
   `nq-kernel-ota stage-latest` fetches it over the network (`apk fetch`, never
   `apk add`) — verified end to end on the device, including its refusal to stage
   the kernel that is already running
+- ✅ the promotion unit **has now run at boot** (`active / success / exit 0`,
+  Starting+Finished in the journal) after its `After=` lines were removed — the
+  last unproven part of the mechanism
 - ⛔ no app-side action yet (the update is CLI-only, which given the
   attended-only requirement is arguably the right default for now)
 - ⛔ the SAR-RAM-vs-power-cycle question from the failed-trial test remains
