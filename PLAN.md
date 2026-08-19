@@ -24,16 +24,15 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > nice-to-have: 350 MHz is the only OPP at 1025 mV, so residency above it is
 > where the idle heat and the ~65 °C floor come from.
 >
-> - **Baseline to beat: 70.7 % @ 350 MHz** (nexusqd r13 / device r72 /
->   nexusq-mqtt r2, **79 h** clean MQTT-window measurement, 2026-08-16 — up from
->   60.5 % on r70, which was up from 56.7 % on v1.8.2 and 25.6 % on v1.8.1; see
->   `docs/2026-08-16-idle-opp-remeasure.md`). Residual at pure idle:
->   **22.6 % @ 700**, 6.0 % @ 920, **0.7 % @ 1200 MHz/1380 mV** — flat over the
->   whole 79 h (p05 69.6 %), die 58.4 °C mean. The 08-13 fixes converted the
->   predicted ~12 pp of core-time into ~10 pp of 350 MHz residency and all but
->   erased the hottest OPP (5.1 → 0.7 %), so **the remaining lever is 700 MHz,
->   not 1200**. Secondary metric from the 2026-07-13 study: **~4.2 governor
->   transitions/s** on `conservative` (was 17.5/s on `ondemand`'s sawtooth).
+> - **Baseline to beat: 90.8 % @ 350 MHz** (device r76 / nexusqd r13 / kernel
+>   r48, **overnight passive HA window 2026-08-19**, 8 h idle — up from 70.7 %
+>   on 08-16, 60.5 % on 08-13, 56.7 % on v1.8.2 and 25.6 % on v1.8.1). Residual:
+>   **9.0 % @ 700**, 0.15 % @ 920, **0.04 % @ 1200 MHz**. Flat (p05 90.2 %,
+>   min 89.8, max 91.7) and die **52.7 °C mean** (min 51.1) — though ambient is
+>   not controlled, so do not attribute all of that to us. Relative dynamic
+>   power is now **+16 % over a locked-350 floor**, from +101 % on 08-13.
+>   `docs/2026-08-16-idle-700mhz-deep-analysis.md` (mechanism),
+>   `docs/2026-08-19-schedutil-ab.md` (governor choice settled).
 > - **Measure it from `opp_ms`** in `health.jsonl` (device r68+, kernel
 >   `time_in_state` deltas) or the MQTT `opp*_pct` rolling window — the latter is
 >   what **`scripts/diag/ha-opp-window.py --days N --since '<clean start>'`**
