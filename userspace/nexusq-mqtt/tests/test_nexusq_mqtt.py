@@ -529,5 +529,73 @@ class TestIdentity(unittest.TestCase):
         self.assertEqual(name, "Nexus Q")
 
 
+class TestVolumeFromControl(unittest.TestCase):
+    """Volume now comes from nexusq-control's persistent `pactl subscribe`
+    instead of forking pactl/amixer every publish. The fallback must survive a
+    bridge that is down, because publishing telemetry must never depend on the
+    companion bridge being healthy."""
+
+    def _serve(self, reply, *, close_early=False):
+        """One-shot loopback server standing in for nexusq-control."""
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def run():
+            try:
+                c, _ = srv.accept()
+                c.recv(4096)
+                if not close_early:
+                    c.sendall(reply)
+                c.close()
+            except OSError:
+                pass
+            finally:
+                srv.close()
+
+        threading.Thread(target=run, daemon=True).start()
+        return port
+
+    def _with_port(self, port):
+        MOD.CONTROL_HOST, MOD.CONTROL_PORT = "127.0.0.1", port
+
+    def test_reads_volume_and_mute(self):
+        port = self._serve(json.dumps(
+            {"id": 1, "result": {"volume": 42, "muted": True}}).encode() + b"\n")
+        self._with_port(port)
+        self.assertEqual(MOD.volume_from_control(), (42, True))
+
+    def test_accepts_a_bare_state_object(self):
+        port = self._serve(json.dumps({"volume": 7, "muted": False}).encode() + b"\n")
+        self._with_port(port)
+        self.assertEqual(MOD.volume_from_control(), (7, False))
+
+    def test_bridge_down_returns_none(self):
+        # nothing listening: must fall through to the mixer probes, not raise
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.close()
+        self._with_port(port)
+        self.assertIsNone(MOD.volume_from_control())
+
+    def test_garbage_reply_returns_none(self):
+        port = self._serve(b"not json at all\n")
+        self._with_port(port)
+        self.assertIsNone(MOD.volume_from_control())
+
+    def test_missing_fields_return_none(self):
+        port = self._serve(json.dumps({"result": {"volume": None}}).encode() + b"\n")
+        self._with_port(port)
+        self.assertIsNone(MOD.volume_from_control())
+
+    def test_connection_closed_without_reply(self):
+        port = self._serve(b"", close_early=True)
+        self._with_port(port)
+        self.assertIsNone(MOD.volume_from_control())
+
+
 if __name__ == "__main__":
     unittest.main()

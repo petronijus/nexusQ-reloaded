@@ -284,12 +284,56 @@ def read_wifi():
     return rssi, ssid
 
 
+# nexusq-control already holds a PERSISTENT `pactl subscribe` and tracks volume
+# and mute for the companion app, so asking it costs one local TCP round trip
+# and no processes. Publishing used to fork up to three times every interval
+# (pgrep + two pactl/amixer), which on an idle appliance is most of what this
+# daemon does — the 2026-08-16 burst analysis measured short-lived forks as the
+# thing that ramps the CPU, and pid 1 pays for every one of them.
+CONTROL_HOST = os.environ.get("NQMQTT_CONTROL_HOST", "127.0.0.1")
+CONTROL_PORT = int(os.environ.get("NQMQTT_CONTROL_PORT", "45015"))
+
+
+def volume_from_control():
+    """(volume_pct, muted) straight from the control bridge, or None if it is
+    not answering — in which case read_volume() falls back to the mixer probes.
+
+    Verified against `pactl get-sink-volume` before this became the primary
+    source: both reported the same value, so the number Home Assistant plots did
+    not move when the source changed."""
+    try:
+        with socket.create_connection((CONTROL_HOST, CONTROL_PORT), 2) as s:
+            s.settimeout(3)
+            s.sendall(json.dumps({"id": 1, "method": "getState"}).encode() + b"\n")
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(4096)
+                if not chunk:
+                    return None
+                buf += chunk
+                if len(buf) > 65536:
+                    return None
+        res = json.loads(buf.split(b"\n", 1)[0].decode())
+        res = res.get("result", res)
+        vol, muted = res.get("volume"), res.get("muted")
+        if isinstance(vol, int) and isinstance(muted, bool):
+            return vol, muted
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def read_volume():
     """(volume_pct, muted) from whichever mixer currently owns the output:
     the TAS5713 hardware mixer while USB-audio's alsaloop bridges the gadget
     straight to the amp (PA sink suspended — same pgrep detection as nq-vol),
     the user-session PulseAudio default sink otherwise. (None, None) when
     neither answers."""
+    # Fork-free path first; the mixer probes below stay as the fallback for a
+    # bridge that is down or mid-restart.
+    v = volume_from_control()
+    if v is not None:
+        return v
     try:
         alsaloop = subprocess.run(["pgrep", "-x", "alsaloop"],
                                   capture_output=True, timeout=4).returncode == 0

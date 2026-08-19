@@ -4,7 +4,7 @@
 # MQTT discovery. See userspace/nexusq-mqtt/README.md.
 pkgname=nexusq-mqtt
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Nexus Q MQTT health telemetry publisher (HA discovery + app feed)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
