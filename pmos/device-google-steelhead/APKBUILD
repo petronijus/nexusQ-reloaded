@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=76
+pkgrel=77
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -101,7 +101,7 @@ source="
 	nexusq-usb-acm-console.service
 	nexusq-usb-gadget.sh
 	nexusq-usb-gadget.service
-	nq-healthd
+	nq-healthd.c
 	nq-diag-snapshot
 	nq-healthd.service
 	nexusq-wifi-watchdog
@@ -134,6 +134,13 @@ source="
 
 build() {
 	devicepkg_build $startdir $pkgname
+
+	# nq-healthd is C since device r77 (was a 664-line shell daemon). It runs
+	# forever on the device it measures, so its own cost is measurement error:
+	# even after the r71 fork diet the shell version cost 3.08 % of a core --
+	# about three quarters of ALL idle CPU on the box. Every probe that used to
+	# fork is a syscall now; see userspace/nq-healthd/nq-healthd.c.
+	${CC:-cc} -std=c11 -O2 -Wall -Wextra -o "$srcdir"/nq-healthd "$srcdir"/nq-healthd.c
 }
 
 package() {
@@ -601,7 +608,7 @@ SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  nexusq-usb-gadget.sh
 SKIP  nexusq-usb-gadget.service
-SKIP  nq-healthd
+SKIP  nq-healthd.c
 SKIP  nq-diag-snapshot
 SKIP  nq-healthd.service
 SKIP  nexusq-wifi-watchdog
