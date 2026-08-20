@@ -299,16 +299,33 @@ link is how it is administered and how it would be rescued. The gate now accepts
 either a working gateway **or** a `usb0` that is `LOWER_UP` (a host has actually
 enumerated it, not merely that we brought the interface up) with an address.
 
-## Open, and Petr's call
+## The Q cannot see its 5 GHz AP — and it is not distance
 
-**The Q has no network but the USB cable.** `wlan0` is disconnected and the saved
-profile is `Svatovitske-Internety-5g`, which does **not appear in a scan** from
-where the device now sits — while `Svatovitske-Internety`, `Svatovitske-IoT` and
-`Svatovitske-Internety_EXT` all do, on 2.4 GHz only. 5 GHz scanning itself works
-(other 5 GHz networks show up). eth0 has no carrier. So the 5 GHz AP does not
-reach the Q's new position. Joining the 2.4 GHz SSID would fix connectivity but
-2.4 GHz is the band that stalls Bluetooth bulk transfers on this chip, and that
-is a trade to make deliberately, not silently.
+First read of this was wrong and worth recording as such. `wlan0` was
+disconnected and `nmcli connection up Svatovitske-Internety-5g` answered
+**"No network with SSID ... found"**, while 2.4 GHz `Svatovitske-Internety` sat at
+79 %. That looks exactly like the 5 GHz AP being out of reach.
+
+Scanning from the desktop settles it: `Svatovitske-Internety-5g` is there at 67 %,
+on **channel 100 — 5500 MHz**. The Q's own scan, repeated and given time, finds
+5 GHz networks only up to **5320 MHz** (channels 36–64). Nothing above. It is a
+band problem.
+
+    iw reg get     global -> country 00 (world): 5490-5730 is DFS, PASSIVE-SCAN
+                   phy#0  -> country 99: 5460-5860 allowed in hardware
+    nvram          brcmfmac4330-sdio.google,steelhead.txt: ccode=US
+
+`iw reg set CZ` moves the global domain (5470–5725 becomes available) but `phy#0`
+stays at 99 and the scan does not change: brcmfmac keeps the firmware's own
+domain, and on this chip UNII-2C/DFS is simply not reported.
+
+Recommended to Petr: **pin the router's 5 GHz radio to channel 36–48**, outside
+DFS. It worked before at −48 dBm, so the AP almost certainly auto-selected 100
+after a restart. Rewriting `ccode` in the nvram is the second choice — it is an
+image change, and DFS client scanning on a BCM4330 is not something to depend on.
+
+Until then the Q has no route off the USB link: no NTP (hence a clock reading
+2000, and tar warning about every timestamp it extracts) and no apk or OTA.
 
 ## Still to do
 
