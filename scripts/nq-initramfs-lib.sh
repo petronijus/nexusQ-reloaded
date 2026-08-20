@@ -62,7 +62,19 @@ nq_pack_bootimg() {
     "${NQ_SSH[@]}" "$dev" 'cat /boot/vmlinuz' > "$tmp/vmlinuz"
     "${NQ_SSH[@]}" "$dev" 'cat /boot/omap4-steelhead.dtb 2>/dev/null || cat /boot/dtbs/omap4-steelhead.dtb' > "$tmp/dtb"
     cat "$tmp/vmlinuz" "$tmp/dtb" > "$tmp/zImage-dtb"
-    python3 "$_NQ_LIB_DIR/../make-bootimg.py" "$tmp/zImage-dtb" "$out" "$cpio" "rescue"
+
+    # The kernel's OWN CONFIG_CMDLINE, not a placeholder. CONFIG_CMDLINE_FORCE
+    # means the kernel ignores whatever is in this header, so a wrong value here
+    # boots perfectly -- and then `nq-kernel-ota verify-self`, which repacks from
+    # /boot and compares against the boot slot, reports MISMATCH and looks like a
+    # corrupted slot. This field cost exactly that once: images built here
+    # carried the literal string "rescue".
+    local cmdline
+    cmdline=$("${NQ_SSH[@]}" "$dev" \
+        "sed -n 's/^CONFIG_CMDLINE=\"\(.*\)\"\$/\1/p' /boot/config | head -1")
+    [ -n "$cmdline" ] || { echo "no CONFIG_CMDLINE in the device's /boot/config" >&2; return 1; }
+
+    python3 "$_NQ_LIB_DIR/../make-bootimg.py" "$tmp/zImage-dtb" "$out" "$cpio" "$cmdline"
     rm -rf "$tmp"
 
     local sz cap=8388608

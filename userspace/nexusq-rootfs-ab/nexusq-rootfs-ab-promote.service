@@ -1,12 +1,18 @@
 [Unit]
 Description=Nexus Q rootfs A/B — commit a trial rootfs once it has proven itself
+Documentation=file:///usr/bin/nq-rootfs-ab
 # No After= on any of our own services. A boot-ordering cycle here deletes the
 # start job silently, and this unit is the only thing that makes a rootfs trial
 # permanent — it failing to run looks exactly like the trial having failed.
-DefaultDependencies=no
-After=basic.target
-Conflicts=shutdown.target
-Before=shutdown.target
+#
+# After= the TARGET is a different matter and is required: this is Type=oneshot
+# and WantedBy=multi-user.target, and a oneshot in a target's wants HOLDS THAT
+# TARGET until it finishes. Its health gate can wait up to 180s, and everything
+# ordered after multi-user.target — nq-healthd among them — would sit behind it
+# for that whole time. Ordering after the target means the target does not wait
+# for us. (The same shape cost the kernel OTA its automatic promotion entirely;
+# see nexusq-kernel-ota-promote.service.)
+After=multi-user.target
 
 [Service]
 Type=oneshot
@@ -14,6 +20,7 @@ ExecStart=/usr/bin/nq-rootfs-ab autopromote
 RemainAfterExit=yes
 # A refusal to promote is a normal, expected outcome, not a unit failure.
 SuccessExitStatus=0 1
+Nice=10
 
 [Install]
 WantedBy=multi-user.target

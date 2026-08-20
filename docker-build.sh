@@ -26,7 +26,9 @@ for apkbuild in \
     "$SRC/pmos/nexusq-control/APKBUILD" \
     "$SRC/pmos/nexusq-setupd/APKBUILD" \
     "$SRC/pmos/nexusq-btagent/APKBUILD" \
-    "$SRC/pmos/nexusq-mqtt/APKBUILD"; do
+    "$SRC/pmos/nexusq-mqtt/APKBUILD" \
+    "$SRC/pmos/nexusq-kernel-ota/APKBUILD" \
+    "$SRC/pmos/nexusq-rootfs-ab/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -358,7 +360,7 @@ echo "  Installed: nexusq-rootfs-ab (aport + tools -> main/nexusq-rootfs-ab)"
 # whatever its provenance. To resurrect the override: git revert this commit.
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$NEXUSQKOTA_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$NEXUSQKOTA_DIR" "$NEXUSQAB_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" -o -name "nq-slot" -o -name "nq-rootfs-ab" -o -name "nq-kernel-ota" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -826,8 +828,20 @@ echo "Generating checksums for kernel package..."
 pmbootstrap checksum linux-google-steelhead 2>&1 || {
     echo "WARNING: checksum generation failed, will try building anyway"
 }
-for _ck_pkg in device-google-steelhead nexusq-glibc-rt firmware-google-steelhead \
-               nexusqd nexusq-control nexusq-btagent nexusq-setupd nexusq-mqtt; do
+# The list is DERIVED from the aports Phase 6 stages ($SRC/pmos/*/APKBUILD),
+# never hand-maintained. A hard-coded list silently goes stale the moment a new
+# aport is added: nexusq-kernel-ota and nexusq-rootfs-ab were both staged, both
+# `depends=` of device-google-steelhead, and neither was in the list -- so the
+# first full build after they landed would have resolved them as a dependency of
+# the device package, found the sha512sums="SKIP" placeholder, and died with
+# ">>> ERROR: nexusq-rootfs-ab: nq-slot is missing in checksums" (exit 3).
+# Deriving it means adding an aport directory is the only thing anyone has to
+# remember.
+for _ck_apkbuild in "$SRC"/pmos/*/APKBUILD; do
+    [ -f "$_ck_apkbuild" ] || continue
+    _ck_pkg=$(basename "$(dirname "$_ck_apkbuild")")
+    # Already done above (it is the slow one, so it goes first).
+    [ "$_ck_pkg" = "linux-google-steelhead" ] && continue
     echo "Generating checksums for $_ck_pkg..."
     pmbootstrap checksum "$_ck_pkg" 2>&1 || true
 done

@@ -335,3 +335,74 @@ freshly flashed image therefore boots without slot selection. That degrades
 safely (the kernel mounts p13, which is slot A) but it means a reflash silently
 turns the feature off until the image is rebuilt from the device. Folding the
 initramfs into the build's own boot.img is the next piece.
+
+---
+
+# After the build: two defects the new image would have shipped with
+
+The cold build passed 28/28 gates (5m19s warm; `boot-ab-2026-08-20.img`
+6 508 544 B with a 935 KiB ramdisk at `0x84000000`). Two things it could not
+catch turned up immediately afterwards.
+
+## A kernel OTA would have silently deleted the A/B initramfs
+
+`nq-kernel-ota`'s on-device packer always emitted a ramdisk-**less** image. So
+the first `stage-apk` after flashing would have written a new kernel into slot A
+with no initramfs, the kernel would have fallen back to its forced
+`root=/dev/mmcblk0p13`, everything would have booted, everything would have
+looked healthy — and slot switching would have been gone.
+
+The packer now takes a ramdisk, and everything that builds a boot image on the
+device passes `current_ramdisk`, which extracts whatever the **boot slot** is
+carrying. The initramfs therefore survives a kernel update by construction rather
+than by anyone remembering. `stage-apk` refuses outright if the packed image
+lost a ramdisk the boot slot has. On a legacy ramdisk-less device it is a no-op
+and the image comes out byte-identical to before.
+
+`verify-self` repacks with the ramdisk slot A already holds, not a freshly built
+one: the question it answers is "does the packer reproduce the booting image",
+and rebuilding the initramfs would be testing something else and would break the
+moment the rootfs shipped a newer `nq-slot`.
+
+## verify-self said MISMATCH, and it was right
+
+Chasing that turned up sloppiness of mine: `nq_pack_bootimg` passed the literal
+string `"rescue"` as the kernel command line for **every** image built from a
+device, because I derived it from the rescue builder. `CONFIG_CMDLINE_FORCE`
+means the kernel ignores that field, so it booted perfectly all day — and made
+`verify-self` report a corrupted slot. It now reads the kernel's own
+`CONFIG_CMDLINE` from the device's `/boot/config`.
+
+## Automatic kernel-OTA promotion had never worked at boot
+
+Fixing the cmdline was not enough: the promotion still failed with `NOT healthy
+after 180s`, while running `autopromote` by hand succeeded instantly. The
+timestamps say why:
+
+    nq-healthd          ActiveEnterTimestamp  01:03:14
+    promote unit        stop_time             01:03:14
+
+`nq-healthd` is ordered `After=multi-user.target`. The promote unit is
+`Type=oneshot` and `WantedBy=multi-user.target` — **and a oneshot in a target's
+wants holds that target until it finishes**. So the health gate polled for
+nq-healthd, nq-healthd waited for multi-user.target, and multi-user.target waited
+for the gate. The 180 s timeout broke the ring, which is why it never looked like
+a hang: it looked like a device that was never healthy.
+
+This is why the feature was believed to work. Every success it ever had came from
+running `autopromote` manually over ssh, after boot, when the ring was long since
+broken.
+
+The unit had carried `After=multi-user.target` once and it was removed, together
+with a genuinely useless `network-online.target` (that target is inactive on this
+device, so ordering against it silently does nothing). The reasoning for removing
+the target ordering was a misapplied lesson: an `After=` on one of *our own
+services* really did once make systemd resolve a cycle by deleting a start job.
+`After=` a *target* is not that, and forms no cycle.
+
+Restored on both promote units. Measured after: `nq-healthd` active at 01:00:12,
+`healthy after 0s — promoting`, `verify-self` → **MATCH**.
+
+Final device state: slot A committed and running, both boot slots holding the
+corrected A/B image (md5 `a50011b67670ee63f0d10c11dba47e02`), nothing pending,
+`systemctl is-system-running` = running, both promote units active.

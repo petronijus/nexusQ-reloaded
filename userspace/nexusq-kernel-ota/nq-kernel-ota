@@ -75,38 +75,76 @@ PY
 }
 
 # --- pack an Android boot image, exactly like the host build does ------------
-# The device's u-boot boots a header-v0 image whose "kernel" is zImage with the
-# DTB appended (deviceinfo_append_dtb=true) and whose ramdisk is EMPTY -- the
-# kernel has CONFIG_CMDLINE_FORCE and boots root=/dev/mmcblk0p13 directly.
-# (The ramdisk address below is the Android-stock one. It is only correct
-# BECAUSE the size is 0 -- 0x81000000 sits inside our kernel's own reserved
-# memory, so a real ramdisk placed there gets dropped by the kernel. See the
-# docstring in make-bootimg.py. This packer never emits one.) Same layout as
-# make-bootimg.py on the host; `verify-self` proves it by rebuilding the RUNNING
-# kernel's image and comparing it against slot A.
+# Header v0, "kernel" = zImage with the DTB appended (deviceinfo_append_dtb=true),
+# same layout as make-bootimg.py on the host.
+#
+# THE RAMDISK IS NOT OPTIONAL ANY MORE, and getting this wrong is silent.
+# The boot image carries the A/B initramfs that picks the rootfs slot (p13 or
+# p14) -- see docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md. A kernel
+# OTA that packed a ramdisk-LESS image would promote it into slot A and the
+# kernel would simply fall back to its forced root=/dev/mmcblk0p13. Everything
+# would boot, everything would look healthy, and slot switching would be gone.
+# So callers pass the ramdisk through, and `stage-apk` takes it from the image
+# that is currently in the boot slot.
+#
+# The load address matters too: 0x81000000, the Android-stock offset, sits inside
+# this kernel's own reserved memory and the kernel drops the initrd rather than
+# failing to boot. Ramdisk-less images keep the stock value so they stay
+# byte-identical to what was flashed before this existed.
 pack_bootimg() {
-    python3 - "$1" "$2" "$3" "$4" <<'PACKEOF'
+    python3 - "$1" "$2" "$3" "$4" "${5:--}" <<'PACKEOF'
 import hashlib, struct, sys
-kern_p, dtb_p, out_p, cmdline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+kern_p, dtb_p, out_p, cmdline, rd_p = sys.argv[1:6]
 kernel = open(kern_p, "rb").read() + (open(dtb_p, "rb").read() if dtb_p != "-" else b"")
+ramdisk = open(rd_p, "rb").read() if rd_p != "-" else b""
 base, ps = 0x80000000, 2048
+rd_off = 0x04000000 if ramdisk else 0x01000000
 pad = lambda d: d + b"\x00" * ((ps - len(d) % ps) % ps)
 hdr = struct.pack("<8s10I16s512s", b"ANDROID!",
-                  len(kernel), base + 0x00008000,
-                  0,           base + 0x01000000,
-                  0,           base + 0x00f00000,
+                  len(kernel),  base + 0x00008000,
+                  len(ramdisk), base + rd_off,
+                  0,            base + 0x00f00000,
                   base + 0x00000100, ps, 0, 0,
                   b"", cmdline.encode().ljust(512, b"\x00"))
 sha = hashlib.sha1()
 for blob in (kernel, struct.pack("<I", len(kernel)),
-             b"", struct.pack("<I", 0), b"", struct.pack("<I", 0)):
+             ramdisk, struct.pack("<I", len(ramdisk)), b"", struct.pack("<I", 0)):
     sha.update(blob)
 img = pad(hdr + sha.digest().ljust(32, b"\x00")) + pad(kernel)
+if ramdisk:
+    img += pad(ramdisk)
 if len(img) > 8 * 1024 * 1024:
     sys.exit("image is %d B -- the boot partition holds 8 MiB" % len(img))
 open(out_p, "wb").write(img)
-print("packed %s: %d B (kernel+dtb %d B)" % (out_p, len(img), len(kernel)))
+print("packed %s: %d B (kernel+dtb %d B, ramdisk %d B)"
+      % (out_p, len(img), len(kernel), len(ramdisk)))
 PACKEOF
+}
+
+# Pull the ramdisk section out of an Android boot image (or straight off a boot
+# partition). This is how a kernel OTA keeps the A/B initramfs: whatever is
+# booting today is carried over verbatim onto the new kernel, so an OTA can
+# never quietly drop it. Prints the size; writes nothing and exits 1 if there is
+# no ramdisk, which is the legacy ramdisk-less case and not an error.
+extract_ramdisk() {
+    python3 - "$1" "$2" <<'RDEOF'
+import struct, sys
+src, out = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    hdr = f.read(4096)
+    if hdr[:8] != b"ANDROID!":
+        sys.exit("not an Android boot image")
+    ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", hdr, 8)
+    if rs == 0:
+        sys.exit(1)
+    pages = lambda n: (n + ps - 1) // ps
+    f.seek(ps * (1 + pages(ks)))
+    data = f.read(rs)
+if len(data) != rs:
+    sys.exit("truncated ramdisk: got %d of %d B" % (len(data), rs))
+open(out, "wb").write(data)
+print("%d" % rs)
+RDEOF
 }
 
 # CONFIG_CMDLINE belongs to the kernel being packed, so read it from that
@@ -116,11 +154,24 @@ cmdline_from_config() {
 }
 
 cmd_bootimg() {
-    _k=${1:?usage: nq-kernel-ota bootimg <vmlinuz> <dtb|-> <out.img> [config]}
-    _d=${2:?}; _o=${3:?}; _c=${4:-/boot/config}
+    _k=${1:?usage: nq-kernel-ota bootimg <vmlinuz> <dtb|-> <out.img> [config] [ramdisk]}
+    _d=${2:?}; _o=${3:?}; _c=${4:-/boot/config}; _rd=${5:--}
     _cl=$(cmdline_from_config "$_c")
     [ -n "$_cl" ] || log "warning: no CONFIG_CMDLINE in $_c -- packing an empty cmdline"
-    pack_bootimg "$_k" "$_d" "$_o" "$_cl"
+    pack_bootimg "$_k" "$_d" "$_o" "$_cl" "$_rd"
+}
+
+# The ramdisk the CURRENTLY BOOTING image carries, or "-" if it has none.
+# Everything that builds a new boot image on the device goes through this, so the
+# A/B initramfs survives a kernel update by construction rather than by anyone
+# remembering to preserve it.
+current_ramdisk() {
+    _dst=$1
+    if extract_ramdisk "$BOOT_SLOT" "$_dst" >/dev/null 2>&1; then
+        echo "$_dst"
+    else
+        echo "-"
+    fi
 }
 
 # Prove the packer is right, using the only ground truth available: rebuild the
@@ -129,7 +180,13 @@ cmd_verify_self() {
     _tmp=$(mktemp -d)
     _dtb=/boot/omap4-steelhead.dtb
     [ -f "$_dtb" ] || _dtb=/boot/dtbs/omap4-steelhead.dtb
-    cmd_bootimg /boot/vmlinuz "$_dtb" "$_tmp/rebuilt.img" /boot/config >/dev/null || die "pack failed"
+    # Repack with the ramdisk slot A already carries, not a freshly built one.
+    # The question this answers is "does the packer reproduce the booting image",
+    # and rebuilding the initramfs here would be testing a different thing and
+    # would fail the moment the rootfs shipped a newer nq-slot.
+    _rd=$(current_ramdisk "$_tmp/ramdisk.img")
+    [ "$_rd" = "-" ] || log "slot A carries a $(stat -c %s "$_rd") B ramdisk (the A/B initramfs)"
+    cmd_bootimg /boot/vmlinuz "$_dtb" "$_tmp/rebuilt.img" /boot/config "$_rd" >/dev/null || die "pack failed"
     _sz=$(stat -c %s "$_tmp/rebuilt.img")
     _a=$(md5sum < "$_tmp/rebuilt.img" | cut -d' ' -f1)
     _b=$(dd if="$BOOT_SLOT" bs=1 count="$_sz" 2>/dev/null | md5sum | cut -d' ' -f1)
@@ -173,8 +230,27 @@ cmd_stage_apk() {
     [ -f "$_tmp/boot/vmlinuz" ] || { rm -rf "$_tmp"; die "apk has no /boot/vmlinuz"; }
     [ -f "$_dtb" ] || { rm -rf "$_tmp"; die "apk has no omap4-steelhead.dtb"; }
 
-    cmd_bootimg "$_tmp/boot/vmlinuz" "$_dtb" "$_tmp/boot.img" "$_tmp/boot/config" \
+    # Carry the booting image's ramdisk onto the new kernel. On a device with the
+    # A/B rootfs that ramdisk is the initramfs that chooses the slot; packing
+    # without it would produce an image that boots fine, looks healthy, and has
+    # silently lost slot switching. On a legacy ramdisk-less device this is a
+    # no-op and the image comes out byte-identical to before.
+    _rd=$(current_ramdisk "$_tmp/ramdisk.img")
+    if [ "$_rd" = "-" ]; then
+        log "boot slot has no ramdisk -- packing ramdisk-less, as before"
+    else
+        log "carrying over the boot slot's initramfs ($(stat -c %s "$_rd") B)"
+    fi
+
+    cmd_bootimg "$_tmp/boot/vmlinuz" "$_dtb" "$_tmp/boot.img" "$_tmp/boot/config" "$_rd" \
         || { rm -rf "$_tmp"; die "pack failed"; }
+
+    # Refuse to stage an image that lost a ramdisk the boot slot has. This is the
+    # one failure that would not announce itself.
+    if [ "$_rd" != "-" ] && ! extract_ramdisk "$_tmp/boot.img" "$_tmp/check.img" >/dev/null 2>&1; then
+        rm -rf "$_tmp"
+        die "packed image has no ramdisk but the boot slot does -- refusing to stage"
+    fi
     # autopromote compares this against `uname -r` after the trial boot, so it can
     # tell "the new kernel is running" from "we fell back to slot A".
     NQ_KOTA_RELEASE="$_rel" cmd_stage "$_tmp/boot.img"

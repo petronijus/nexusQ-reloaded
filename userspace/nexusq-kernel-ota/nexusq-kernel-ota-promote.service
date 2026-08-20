@@ -3,27 +3,37 @@ Description=Nexus Q kernel OTA — promote a trial kernel once it has proven its
 Documentation=file:///usr/bin/nq-kernel-ota
 Documentation=file:///usr/share/doc/nexusq/2026-08-18-kernel-ota-phase2.md
 
-# NO After= line, deliberately.
+# After=multi-user.target — and the reasoning here has been wrong twice, so it is
+# written out in full.
 #
-# This unit is WantedBy=multi-user.target, and it used to also carry
-# `After=multi-user.target network-online.target`. Both were wrong:
+# The unit is WantedBy=multi-user.target. It originally also carried
+# `After=multi-user.target network-online.target`, and both halves were removed
+# for reasons that were half right:
 #
-#  * ordering a unit after the very target that pulls it in is the shape that
-#    already bit this repo once (an After= on our own service made systemd
-#    resolve the ordering by DELETING the start job, so nexusq-control was
-#    "enabled" and never started).
 #  * `network-online.target` is INACTIVE on this device, so ordering against it
-#    guarantees nothing at all — it silently does nothing rather than waiting.
+#    guarantees nothing — it silently does nothing rather than waiting. Correct
+#    to drop, and it stays dropped.
+#  * ordering after the target that pulls the unit in was called the shape that
+#    once made systemd resolve an ordering cycle by DELETING a start job. That
+#    was an After= on one of OUR OWN SERVICES, which really can form a cycle.
+#    After= a TARGET is not the same thing and forms no cycle.
 #
-# None of that is needed: `nq-kernel-ota autopromote` does its own waiting. It
-# exits 0 immediately when no trial kernel is pending, and when one IS pending it
-# polls for up to 180 s until our services are up AND a ping through the default
-# route answers. The unit only has to RUN; it decides for itself when the device
-# is ready to be judged.
+# Dropping it cost the feature. This unit is Type=oneshot, and a oneshot in a
+# target's wants HOLDS THAT TARGET until it finishes. nq-healthd is ordered
+# After=multi-user.target. So the three of them waited on each other: the health
+# gate polls for nq-healthd, nq-healthd waits for multi-user.target, and
+# multi-user.target waits for this unit. The 180 s timeout broke the ring, so it
+# never looked like a hang — it looked like a device that was never healthy, and
+# automatic promotion silently never worked at boot. It only ever succeeded when
+# `autopromote` was run by hand, which is exactly how it came to be believed
+# working. Measured 2026-08-20: nq-healthd's ActiveEnterTimestamp was 01:03:14,
+# the same second this unit gave up at 01:03:14.
 #
-# ⚠️ As of 2026-08-18 this unit had never executed even once (the package landed
-# after multi-user.target on the boot it was installed), so its boot behaviour is
-# unproven — verify it on the next reboot rather than assuming.
+# Ordering after the target means the target does not wait for us, nq-healthd
+# starts normally, and the gate can actually pass. `autopromote` still does its
+# own waiting: it exits 0 immediately when nothing is pending, and polls for up
+# to 180 s otherwise.
+After=multi-user.target
 
 [Service]
 Type=oneshot
