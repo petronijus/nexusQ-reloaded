@@ -1,0 +1,204 @@
+#!/bin/sh
+# nq-rootfs-ab -- populate and switch between the two rootfs slots.
+#
+# p13 ("userdata") and p14 ("userdata_b") each hold a complete rootfs. Which one
+# boots is decided by the initramfs in the boot image from the marker nq-slot
+# keeps on p7; this tool is the other half -- it puts a rootfs INTO the inactive
+# slot and drives the trial.
+#
+# The point of the whole arrangement: a rootfs update stops being a reflash. The
+# inactive slot is written while the device is up and serving, the switch is a
+# 512-byte write, and a slot that does not boot costs one reboot because the
+# initramfs consumes the trial marker before that rootfs gets control.
+set -eu
+
+SLOT_A=/dev/mmcblk0p13
+SLOT_B=/dev/mmcblk0p14
+MNT=/mnt/nq-slot-target
+
+die() { echo "nq-rootfs-ab: $*" >&2; exit 1; }
+log() { echo "nq-rootfs-ab: $*"; }
+
+running_slot() {
+    _dev=$(awk '$2 == "/" {print $1}' /proc/mounts | head -1)
+    case "$_dev" in
+        "$SLOT_A") echo a ;;
+        "$SLOT_B") echo b ;;
+        # /dev/root means the kernel mounted root itself, i.e. this is a boot
+        # image WITHOUT the A/B initramfs. Slot A is the only thing the forced
+        # cmdline can mount, so that is where we are.
+        /dev/root)  echo a ;;
+        *) die "cannot tell which slot is running (/ is $_dev)" ;;
+    esac
+}
+
+slot_dev() { [ "$1" = a ] && echo "$SLOT_A" || echo "$SLOT_B"; }
+other()    { [ "$1" = a ] && echo b || echo a; }
+
+cmd_status() {
+    _run=$(running_slot)
+    log "running slot : $_run  ($(slot_dev "$_run"))"
+    nq-slot show 2>/dev/null | sed 's/^/nq-rootfs-ab: /'
+    for s in a b; do
+        _d=$(slot_dev "$s")
+        _lbl=$(blkid -s LABEL -o value "$_d" 2>/dev/null || echo "-")
+        _uuid=$(blkid -s UUID -o value "$_d" 2>/dev/null || echo "-")
+        log "slot $s: $_d  label=$_lbl  uuid=$_uuid"
+    done
+}
+
+# Copy the RUNNING rootfs into the other slot.
+#
+# --one-file-system is what keeps /proc, /sys, /dev, /run and the target mount
+# itself out of the copy without a hand-maintained exclude list that would rot
+# the first time a new mount appeared. --xattrs and --acls matter more than they
+# look: Alpine carries file capabilities in xattrs, and a copy that drops them
+# produces a rootfs that boots and then misbehaves in ways that look like
+# anything except a bad copy.
+cmd_populate() {
+    _run=$(running_slot)
+    _tgt=$(other "$_run")
+    _dev=$(slot_dev "$_tgt")
+    log "running slot $_run -> populating slot $_tgt ($_dev)"
+
+    [ -b "$_dev" ] || die "$_dev is not a block device"
+    awk -v d="$_dev" '$1 == d { found = 1 } END { exit !found }' /proc/mounts \
+        && die "$_dev is mounted at $(awk -v d="$_dev" '$1 == d {print $2; exit}' /proc/mounts) -- refusing"
+
+    mkdir -p "$MNT"
+    mount "$_dev" "$MNT" || die "cannot mount $_dev"
+    # shellcheck disable=SC2064
+    trap "umount '$MNT' 2>/dev/null || true" EXIT
+
+    if [ -n "$(ls -A "$MNT" 2>/dev/null | grep -v '^lost+found$' || true)" ]; then
+        [ "${NQ_AB_OVERWRITE:-}" = 1 ] \
+            || die "slot $_tgt is not empty; set NQ_AB_OVERWRITE=1 to replace it"
+        log "slot $_tgt is not empty -- clearing it as instructed"
+        find "$MNT" -mindepth 1 -maxdepth 1 ! -name 'lost+found' -exec rm -rf {} + 
+    fi
+
+    log "copying (this reads the live rootfs; it is not a snapshot)"
+    # --warning=no-timestamp: this board has no working RTC and, with no route
+    # off the USB link, no NTP either -- so the clock reads 2000 and tar warns
+    # about every single 2026 timestamp it extracts. Thousands of lines of it
+    # bury the errors that would actually matter.
+    # The journal is the one thing guaranteed to be inconsistent in a live copy:
+    # journald is writing to it while tar reads it, and the copy always comes up
+    # "corrupted or uncleanly shut down, renaming and replacing". Dropping the
+    # contents (keeping the directory) skips a guaranteed-useless 100+ MB and one
+    # alarming boot message that means nothing.
+    tar -C / --one-file-system --numeric-owner --xattrs --acls --sparse \
+        --exclude='./var/log/journal/*' --exclude='./var/cache/apk/*' -cf - . \
+        | tar -C "$MNT" --numeric-owner --xattrs --acls \
+              --warning=no-timestamp -xf - \
+        || die "copy failed"
+    sync
+
+    # The copied /etc/fstab still names the SOURCE filesystem for /. Left alone,
+    # systemd would be told that / is a device it is not running from. The root
+    # entry is redundant here anyway -- the initramfs mounts /, not fstab -- so
+    # point it at this slot's own UUID and let it agree with reality.
+    _uuid=$(blkid -s UUID -o value "$_dev" 2>/dev/null || true)
+    if [ -n "$_uuid" ] && [ -f "$MNT/etc/fstab" ]; then
+        awk -v u="UUID=$_uuid" '
+            $2 == "/" && $0 !~ /^[[:space:]]*#/ { $1 = u; print; next }
+            { print }
+        ' "$MNT/etc/fstab" > "$MNT/etc/fstab.new" \
+            && mv "$MNT/etc/fstab.new" "$MNT/etc/fstab"
+        log "fstab / entry in slot $_tgt now points at UUID=$_uuid"
+    fi
+
+    sync
+    umount "$MNT"
+    trap - EXIT
+    log "slot $_tgt populated. Next: nq-rootfs-ab try $_tgt"
+}
+
+cmd_try() {
+    _tgt=${1:?usage: nq-rootfs-ab try <a|b>}
+    _run=$(running_slot)
+    [ "$_tgt" != "$_run" ] || die "slot $_tgt is already running"
+    _dev=$(slot_dev "$_tgt")
+    mkdir -p "$MNT"
+    mount -o ro "$_dev" "$MNT" 2>/dev/null || die "slot $_tgt will not mount -- not populated?"
+    if [ ! -x "$MNT/sbin/init" ] && [ ! -L "$MNT/sbin/init" ]; then
+        umount "$MNT"; die "slot $_tgt has no /sbin/init -- refusing to boot it"
+    fi
+    umount "$MNT"
+
+    cat <<MSG
+
+  Slot $_tgt boots ONCE on the next reboot. If it does not come up, reboot again
+  (or pull the power) and the device returns to slot $_run on its own -- the
+  initramfs clears the trial marker before slot $_tgt gets control.
+
+  This only works if the boot image in slot A carries the A/B initramfs. If it
+  does not, the kernel mounts p13 regardless and this does nothing.
+
+MSG
+    nq-slot try "$_tgt"
+}
+
+# Reachability, not merely "systemd came up". A rootfs that boots into something
+# nobody can log into is the failure this gate exists to catch, and stock u-boot
+# has no bootcount to fall back on. Deliberately the same shape as the kernel
+# OTA's gate in nq-kernel-ota -- they are allowed to diverge, because a rootfs
+# trial can check things a kernel trial cannot.
+HEALTH_WAIT_S=${NQ_AB_HEALTH_WAIT_S:-180}
+
+health_ok() {
+    [ "$(systemctl is-active nexusq-control 2>/dev/null)" = active ] || return 1
+    [ "$(systemctl is-active sshd 2>/dev/null)" = active ] || return 1
+    _gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+    if [ -n "$_gw" ] && ping -c1 -W2 "$_gw" >/dev/null 2>&1; then return 0; fi
+    # The USB gadget is a real way in on this device -- often the only one.
+    if ip link show usb0 2>/dev/null | grep -q LOWER_UP \
+       && ip -4 addr show usb0 2>/dev/null | grep -q "inet "; then return 0; fi
+    return 1
+}
+
+# Runs at every boot. Does nothing unless the slot that actually booted is NOT
+# the committed one -- which can only mean a trial is in progress, because the
+# initramfs already consumed the marker on the way up. So this is the single
+# point where a rootfs update becomes permanent, and it only happens after the
+# new rootfs has demonstrably produced a reachable system.
+cmd_autopromote() {
+    _run=$(running_slot)
+    _committed=$(nq-slot show 2>/dev/null | awk '/committed slot/ {print $4}')
+    [ -n "$_committed" ] || { log "cannot read the slot marker — doing nothing"; exit 0; }
+
+    if [ "$_run" = "$_committed" ]; then
+        exit 0                          # ordinary boot, nothing in flight
+    fi
+
+    log "booted slot $_run but slot $_committed is committed — this is a trial"
+    _t=0
+    while [ "$_t" -lt "$HEALTH_WAIT_S" ]; do
+        if health_ok; then
+            log "healthy after ${_t}s — committing slot $_run"
+            nq-slot promote "$_run"
+            exit 0
+        fi
+        sleep 10
+        _t=$((_t + 10))
+    done
+
+    log "NOT healthy after ${HEALTH_WAIT_S}s — leaving slot $_committed committed."
+    log "Reboot to go back to it; nothing has been changed."
+    exit 1
+}
+
+cmd_promote() {
+    _run=$(running_slot)
+    nq-slot promote "$_run"
+    log "slot $_run is now committed; it boots from here on"
+}
+
+case "${1:-status}" in
+    status)      cmd_status ;;
+    autopromote) cmd_autopromote ;;
+    populate) cmd_populate ;;
+    try)      shift; cmd_try "$@" ;;
+    promote)  cmd_promote ;;
+    *) echo "usage: nq-rootfs-ab [status|populate|try <a|b>|promote]" >&2; exit 1 ;;
+esac

@@ -28,6 +28,7 @@
 # says so out loud.
 set -u
 
+KERNEL_PKG=linux-google-steelhead
 BOOT_SLOT=/dev/mmcblk0p9          # A — proven kernel
 TRIAL_SLOT=/dev/mmcblk0p8         # B — trial (stock recovery lives here)
 STATE_DIR=/var/lib/nexusq-kernel-ota
@@ -76,8 +77,11 @@ PY
 # --- pack an Android boot image, exactly like the host build does ------------
 # The device's u-boot boots a header-v0 image whose "kernel" is zImage with the
 # DTB appended (deviceinfo_append_dtb=true) and whose ramdisk is EMPTY -- the
-# kernel has CONFIG_CMDLINE_FORCE, boots root=/dev/mmcblk0p13 directly, and
-# u-boot ignores the ramdisk section on a partition boot. Same layout as
+# kernel has CONFIG_CMDLINE_FORCE and boots root=/dev/mmcblk0p13 directly.
+# (The ramdisk address below is the Android-stock one. It is only correct
+# BECAUSE the size is 0 -- 0x81000000 sits inside our kernel's own reserved
+# memory, so a real ramdisk placed there gets dropped by the kernel. See the
+# docstring in make-bootimg.py. This packer never emits one.) Same layout as
 # make-bootimg.py on the host; `verify-self` proves it by rebuilding the RUNNING
 # kernel's image and comparing it against slot A.
 pack_bootimg() {
@@ -189,14 +193,35 @@ cmd_stage_apk() {
 # reboot must go to slot A rather than back into the trial slot.
 HEALTH_WAIT_S="${NQ_KOTA_HEALTH_WAIT_S:-180}"
 
+# "Healthy" here means one thing: this kernel produced a system somebody can
+# still reach. A trial kernel that boots into an unreachable device is the
+# failure this gate exists to catch, because stock u-boot has no bootcount and
+# will not fall back on its own.
+#
+# Reachability is NOT the same as having a default route. This device spends much
+# of its life on the USB gadget link with no route off it at all -- that is how
+# it is administered, and how it would be rescued. Requiring a gateway there
+# means the gate can never pass, so a kernel that is running perfectly well never
+# gets promoted. Either path counts.
 health_ok() {
     [ "$(systemctl is-active nexusq-control)" = active ] || return 1
     [ "$(systemctl is-active nq-healthd)" = active ] || return 1
-    # The failure that actually matters: no network means no way back in.
+
+    # Routed network: a gateway that answers.
     _gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-    [ -n "$_gw" ] || return 1
-    ping -c1 -W2 "$_gw" >/dev/null 2>&1 || return 1
-    return 0
+    if [ -n "$_gw" ] && ping -c1 -W2 "$_gw" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # USB gadget: LOWER_UP means a host has actually enumerated and configured
+    # the link -- not merely that we brought the interface up -- and an address
+    # on it means somebody can talk to us.
+    if ip link show usb0 2>/dev/null | grep -q LOWER_UP \
+       && ip -4 addr show usb0 2>/dev/null | grep -q "inet "; then
+        return 0
+    fi
+
+    return 1
 }
 
 cmd_autopromote() {
@@ -235,7 +260,6 @@ cmd_autopromote() {
 # want with the kernel package: the repo hosts it as a payload source, apk never
 # applies it. (nexusq-control's system upgrade passes
 # --ignore linux-google-steelhead for the same reason.)
-KERNEL_PKG=linux-google-steelhead
 
 cmd_stage_latest() {
     _dir=$(mktemp -d)
@@ -262,6 +286,9 @@ usage: nq-kernel-ota <command>
   status             what is where, and whether a trial is pending
   reason [value]     read (or set) the u-boot reboot reason in SAR RAM
   restore            put the boot slot back from the pre-update backup
+
+  rescue <img>       boot a maintenance image (rootfs left UNMOUNTED) out of the
+                     trial slot; `reboot` from it returns to the normal system
 EOF
 }
 
@@ -278,8 +305,12 @@ cmd_status() {
     return 0
 }
 
-cmd_stage() {
-    _img=${1:?usage: nq-kernel-ota stage <boot.img>}
+# Write an image into the trial slot, with every check that must never be
+# skipped: size, magic, a backup of slot A and a read-back compare. Shared by
+# `stage` (an OTA kernel, which then arms a pending trial) and `rescue` (a
+# maintenance image, which must NOT). Sets $_want to the image md5.
+write_trial() {
+    _img=$1
     [ -f "$_img" ] || die "no such image: $_img"
     _sz=$(stat -c %s "$_img")
     _cap=$(part_bytes "$TRIAL_SLOT")
@@ -304,8 +335,53 @@ cmd_stage() {
     [ "$_want" = "$_got" ] || die "READ-BACK MISMATCH ($_want != $_got) — slot B is not what we wrote"
     log "read-back verified: $_got"
 
+}
+
+cmd_stage() {
+    write_trial "${1:?usage: nq-kernel-ota stage <boot.img>}"
     printf '%s %s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" "${NQ_KOTA_RELEASE:-}" > "$PENDING"
     log "staged. Next: 'nq-kernel-ota try' — and read what it prints first."
+}
+
+# --- boot a maintenance image out of the trial slot -------------------------
+# Same slot and same bootloader trick as an OTA trial, but deliberately WITHOUT
+# a pending marker, because a rescue image is not a candidate for slot A.
+#
+# It would be actively dangerous to reuse `stage` here. autopromote decides
+# whether a trial booted by comparing `uname -r` against the release recorded in
+# the pending file, and a rescue image is built from the RUNNING kernel — same
+# release. So the next normal boot would conclude the trial had succeeded and
+# copy the rescue image over slot A, leaving a device that boots into a
+# rescue shell for good. (That check is sound for real OTA kernels: every
+# release bumps pkgrel, which CONFIG_LOCALVERSION puts into `uname -r`.)
+#
+# Getting back out is just `reboot`: the rescue init clears the reboot reason
+# as its first action, so the bootloader falls back to slot A on its own.
+cmd_rescue() {
+    _rimg=${1:?usage: nq-kernel-ota rescue <rescue-boot.img>}
+    [ -f "$PENDING" ] && die "an OTA trial is pending — resolve it first (status / restore)"
+    write_trial "$_rimg"
+    cat <<EOF
+
+  The rescue image is in the trial slot. Booting it leaves the rootfs on p13
+  UNMOUNTED, so it can be repaired, resized or replaced. Nothing has been
+  written to p13 and nothing will be unless you do it from that shell.
+
+  It comes up as a telnet server on 172.16.42.1 over the USB gadget. There is
+  no serial console on this board, so if that gadget fails to enumerate you are
+  blind and the way out is a power cycle.
+
+EOF
+    if [ "${NQ_KOTA_YES:-}" != "1" ]; then
+        printf "  type YES to boot the rescue image: "
+        read _ans
+        [ "$_ans" = "YES" ] || die "aborted"
+    fi
+    log "arming the rescue boot"
+    sar write recovery
+    log "reason is now '$(sar read)' — rebooting into the rescue image"
+    sync
+    systemctl reboot --reboot-argument=recovery
 }
 
 cmd_try() {
@@ -345,6 +421,35 @@ cmd_promote() {
     sar write ""              # never leave a recovery request armed
     rm -f "$PENDING"
     log "promoted and disarmed. Slot A md5 $_a"
+
+    # Reconcile the package database LAST, now that the new kernel is the one
+    # running. Until this point the old package had to stay installed so its
+    # /lib/modules survived a rollback; from here it is safe to let apk replace
+    # it, which also refreshes /boot (vmlinuz, dtbs, config, kernel.release).
+    #
+    # This step was documented from the start and NOT implemented — the code had
+    # only a comment. The gap was silent and real: after the first promotion the
+    # device booted 6.12.12-r48 from slot A while `apk info` still said r46 and
+    # /boot still held r46's vmlinuz, so anything rebuilding an image from /boot
+    # (verify-self, the rescue builder) quietly used the WRONG kernel.
+    if ! command -v apk >/dev/null 2>&1; then
+        :
+    elif apk info -v 2>/dev/null | grep -q "^$KERNEL_PKG-$(uname -r)\$"; then
+        # Already in agreement. Worth checking before reaching for the network:
+        # this device often has no route off the USB link, and a pointless
+        # `apk add` there fails on DNS and prints a warning that reads like a
+        # real problem.
+        log "package database already agrees ($KERNEL_PKG-$(uname -r))"
+    else
+        log "reconciling the package database with the running kernel"
+        if apk add --upgrade "$KERNEL_PKG" >/dev/null 2>&1; then
+            log "apk now agrees: $(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1)"
+        else
+            log "WARNING: could not upgrade $KERNEL_PKG — /boot still describes the"
+            log "         PREVIOUS kernel. Run 'apk add --upgrade $KERNEL_PKG' by hand;"
+            log "         the running kernel is fine either way."
+        fi
+    fi
 }
 
 cmd_restore() {
@@ -368,6 +473,20 @@ case "${1:-}" in
     autopromote) cmd_autopromote ;;
     status)  cmd_status ;;
     restore) cmd_restore ;;
-    reason)  if [ $# -ge 2 ]; then sar write "$2"; log "reason set to '$(sar read)'"; else sar read; fi ;;
+    rescue)  shift; cmd_rescue "$@" ;;
+    reason)  if [ $# -ge 2 ]; then
+                 sar write "$2"
+                 log "reason set to '$(sar read)'"
+                 # Writing the word is not enough to act on it, and the failure is
+                 # silent. Kernel patch 0044 rewrites the reason from the machine
+                 # .restart hook on EVERY restart, so a plain `reboot` clobbers
+                 # whatever was set here with the default "normal" on the way
+                 # down. Measured: setting "recovery" this way and rebooting
+                 # normally boots slot A, not the trial slot.
+                 log "NB: this is clobbered by a plain reboot. To act on it use"
+                 log "    systemctl reboot --reboot-argument=$2"
+             else
+                 sar read
+             fi ;;
     *)       usage; exit 1 ;;
 esac

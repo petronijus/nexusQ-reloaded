@@ -1,0 +1,68 @@
+#!/bin/sh
+# Nexus Q rescue environment -- RAM only. p13 is not mounted and stays that way
+# until you mount it yourself. This is what makes offline work on the rootfs
+# possible at all: it lives on p13, so nothing that has to unmount, resize or
+# replace it can be done from the running system.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+mount -t proc     none /proc  2>/dev/null || true
+mount -t sysfs    none /sys   2>/dev/null || true
+mount -t devtmpfs none /dev   2>/dev/null || true
+
+say() { echo "[rescue] $*"; echo "[rescue] $*" > /dev/kmsg 2>/dev/null || true; }
+say "starting -- rootfs is NOT mounted"
+
+. /lib/nq-gadget.sh
+
+# GETTING BACK OUT
+# This image is reached by writing "recovery" into the SAR-RAM reboot reason at
+# 0x4A326A0C, and it needs no help to undo that: kernel patch 0044 writes the
+# reason from the machine .restart hook on EVERY restart, and u-boot consumes the
+# word when it reads it (measured -- after a boot it reads back empty, not the
+# "normal" the kernel wrote). A plain `reboot -f` returns to the normal system.
+#
+# Second belt, in case a reset ever bypasses that path: copy the proven kernel in
+# slot A over the trial slot this image is running from. It costs 8 MB of eMMC
+# writes and makes the rescue image single-shot -- after this, no reboot can land
+# back here whatever the reason word says. p13 is not touched; the trial slot is
+# scratch space by design.
+if dd if=/dev/mmcblk0p9 of=/dev/mmcblk0p8 bs=1M count=8 conv=fsync 2>/dev/null; then
+    sync
+    say "trial slot restored from slot A -- this image cannot be booted again"
+else
+    say "WARNING: could not restore the trial slot. 'reboot -f' should still"
+    say "         return to the normal system; if it does not, pull the power."
+fi
+
+nq_gadget_up "Nexus Q RESCUE" || say "no way in -- power-cycle to return"
+
+cat > /bin/stay <<'STAY'
+#!/bin/sh
+touch /tmp/keep
+echo "dead-man timer cancelled -- this environment will now stay up."
+STAY
+chmod +x /bin/stay
+
+say "ready. /dev/mmcblk0p13 is the rootfs and is NOT mounted."
+say "p13 has NOT been touched. Write to it only when you mean to."
+
+# DEAD-MAN TIMER
+# The one failure this environment cannot report is the one that matters: if the
+# USB gadget does not enumerate there is no serial console to fall back on, and
+# the device would sit here needing hands on it. So assume nobody arrives, and
+# undo ourselves unless somebody actually takes control. `reboot -f` goes
+# straight to the reboot syscall -- there is no init to signal here.
+say "dead-man timer: rebooting into the normal system in 600s unless you run 'stay'"
+_i=0
+while [ "$_i" -lt 60 ]; do
+    [ -f /tmp/keep ] && break
+    sleep 10
+    _i=$((_i + 1))
+done
+if [ ! -f /tmp/keep ]; then
+    say "nobody took control -- rebooting into the normal system"
+    sync
+    reboot -f
+fi
+say "timer cancelled -- staying up"
+while :; do sleep 3600; done

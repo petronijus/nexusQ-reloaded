@@ -1,0 +1,19 @@
+[Unit]
+Description=Nexus Q rootfs A/B — commit a trial rootfs once it has proven itself
+# No After= on any of our own services. A boot-ordering cycle here deletes the
+# start job silently, and this unit is the only thing that makes a rootfs trial
+# permanent — it failing to run looks exactly like the trial having failed.
+DefaultDependencies=no
+After=basic.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nq-rootfs-ab autopromote
+RemainAfterExit=yes
+# A refusal to promote is a normal, expected outcome, not a unit failure.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

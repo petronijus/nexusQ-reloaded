@@ -1,0 +1,128 @@
+#!/bin/sh
+# nq-slot -- which rootfs the next boot should use.
+#
+# The Nexus Q's kernel is built with CONFIG_CMDLINE_FORCE and a hardcoded
+# root=/dev/mmcblk0p13, so a second rootfs cannot be selected on the kernel
+# command line no matter what is on the disk. The slot is therefore chosen by an
+# initramfs, and this is the record it reads.
+#
+# WHERE IT LIVES
+# p7, named "misc", 512 KiB, verified byte-for-byte zero before first use -- it
+# is the Android "bootloader control block" partition and nothing in this port
+# has ever touched it. The record sits at offset 256 KiB (sector 512), well
+# clear of the 2 KiB BCB header at the start, so a stock bootloader reading a
+# command out of that header still sees exactly what it saw before.
+#
+# THE RECORD  (512 bytes, NUL-padded)
+#   NQSLOT1
+#   slot=a          the committed slot -- what boots from now on
+#   try=none        a ONE-SHOT trial, consumed by the initramfs on the way up
+#
+# `try` is what makes a rootfs update survivable. The initramfs clears it
+# BEFORE handing control to that rootfs, so a slot that does not boot costs one
+# reboot and nothing else: the next boot falls back to `slot` on its own, with
+# no bootcount in the bootloader and no help from userspace.
+set -eu
+
+MISC=${NQ_SLOT_DEV:-/dev/mmcblk0p7}
+OFF_SECTORS=512                  # 256 KiB in
+MAGIC=NQSLOT1
+
+slot_dev() {
+    case "$1" in
+        a) echo /dev/mmcblk0p13 ;;
+        b) echo /dev/mmcblk0p14 ;;
+        *) echo "nq-slot: not a slot: $1" >&2; return 1 ;;
+    esac
+}
+
+read_rec() {
+    dd if="$MISC" bs=512 skip="$OFF_SECTORS" count=1 2>/dev/null | tr -d '\000'
+}
+
+# Anything we do not recognise reads as a pristine record pointing at slot A.
+# An unreadable or corrupt marker must never be able to send the device to a
+# slot that was never populated -- A is the one that is known to work.
+get() {
+    _rec=$(read_rec)
+    case "$_rec" in
+        "$MAGIC"*) ;;
+        *) echo "slot=a try=none"; return 0 ;;
+    esac
+    _slot=$(echo "$_rec" | sed -n 's/^slot=\([ab]\)$/\1/p' | head -1)
+    _try=$(echo  "$_rec" | sed -n 's/^try=\([abn][a-z]*\)$/\1/p' | head -1)
+    [ "$_slot" = a ] || [ "$_slot" = b ] || _slot=a
+    [ "$_try" = a ] || [ "$_try" = b ] || _try=none
+    echo "slot=$_slot try=$_try"
+}
+
+# The record is padded to a full 512 bytes by `conv=sync`, which NUL-pads each
+# input block up to bs -- and there is exactly one, short, block. Doing it this
+# way rather than appending from /dev/zero keeps this script working with no
+# /dev at all, which is what lets it be tested in a chroot instead of only by
+# booting it. `notrunc` matters just as much: without it dd would truncate a
+# block device it has no business shortening.
+put() {
+    _slot=$1; _try=$2
+    _tmp=$(mktemp 2>/dev/null || echo /tmp/.nqslot.$$)
+    {
+        printf '%s\n' "$MAGIC"
+        printf 'slot=%s\n' "$_slot"
+        printf 'try=%s\n'  "$_try"
+    } > "$_tmp"
+    _len=$(wc -c < "$_tmp")
+    [ "$_len" -le 512 ] || { echo "nq-slot: record too long" >&2; rm -f "$_tmp"; return 1; }
+    dd if="$_tmp" of="$MISC" bs=512 seek="$OFF_SECTORS" count=1 conv=notrunc,sync 2>/dev/null \
+        || { rm -f "$_tmp"; echo "nq-slot: write failed" >&2; return 1; }
+    sync
+    rm -f "$_tmp"
+}
+
+case "${1:-show}" in
+show)
+    eval "$(get)"
+    echo "committed slot : $slot  ($(slot_dev "$slot"))"
+    echo "one-shot try   : $try$([ "$try" != none ] && echo "  ($(slot_dev "$try"))" || true)"
+    echo "next boot uses : $([ "$try" != none ] && slot_dev "$try" || slot_dev "$slot")"
+    ;;
+target)                                  # what the next boot should mount
+    eval "$(get)"
+    [ "$try" != none ] && slot_dev "$try" || slot_dev "$slot"
+    ;;
+consume)                                 # initramfs: take the try and clear it
+    eval "$(get)"
+    if [ "$try" != none ]; then
+        put "$slot" none
+        slot_dev "$try"
+    else
+        slot_dev "$slot"
+    fi
+    ;;
+set)
+    eval "$(get)"
+    slot_dev "${2:?usage: nq-slot set <a|b>}" >/dev/null
+    put "$2" none
+    echo "nq-slot: committed to slot $2, no trial pending"
+    ;;
+try)
+    eval "$(get)"
+    slot_dev "${2:?usage: nq-slot try <a|b>}" >/dev/null
+    [ "$2" != "$slot" ] || { echo "nq-slot: slot $2 is already committed" >&2; exit 1; }
+    put "$slot" "$2"
+    echo "nq-slot: next boot tries slot $2 ONCE; any later boot returns to $slot"
+    ;;
+promote)                                 # the trial booted and proved itself
+    eval "$(get)"
+    _running=${2:-}
+    [ -n "$_running" ] || { echo "usage: nq-slot promote <a|b>" >&2; exit 1; }
+    put "$_running" none
+    echo "nq-slot: slot $_running is now the committed slot"
+    ;;
+dev)
+    slot_dev "${2:?usage: nq-slot dev <a|b>}"
+    ;;
+*)
+    echo "usage: nq-slot [show|target|consume|set <a|b>|try <a|b>|promote <a|b>|dev <a|b>]" >&2
+    exit 1
+    ;;
+esac

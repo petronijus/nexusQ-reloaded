@@ -332,6 +332,15 @@ cp "$SRC/userspace/nexusq-kernel-ota/nexusq-kernel-ota-promote.service" "$NEXUSQ
 cp "$SRC/userspace/nexusq-kernel-ota/97-nexusq-kernel-ota.preset"     "$NEXUSQKOTA_DIR/"
 echo "  Installed: nexusq-kernel-ota (aport + tool -> main/nexusq-kernel-ota)"
 
+NEXUSQAB_DIR="$PMAPORTS/main/nexusq-rootfs-ab"
+mkdir -p "$NEXUSQAB_DIR"
+cp "$SRC/pmos/nexusq-rootfs-ab/APKBUILD"                                "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nq-slot"                            "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nq-rootfs-ab"                       "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-rootfs-ab-promote.service"   "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/95-nexusq-rootfs-ab.preset"         "$NEXUSQAB_DIR/"
+echo "  Installed: nexusq-rootfs-ab (aport + tools -> main/nexusq-rootfs-ab)"
+
 # python3: NO local override any more (retired 2026-08-17).
 # We used to stage pmos/python3 over pmaports main/python3 (a rebuild at a higher
 # pkgrel, LTO+PGO dropped) because Alpine's stock python3 SIGSEGVed on armv7. That

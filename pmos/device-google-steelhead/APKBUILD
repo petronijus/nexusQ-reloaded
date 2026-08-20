@@ -20,6 +20,10 @@ options="!check !archcheck !fhs !tracedeps"
 # nexusq-kernel-ota: applies a kernel from the running system via a trial
 # slot, so a kernel update no longer needs a USB cable
 # (docs/2026-08-18-kernel-ota-phase2.md).
+# nexusq-rootfs-ab: the same idea for the rootfs itself — p13/p14 are two full
+# slots, the switch is a 512-byte write to p7 "misc", and the choice is made by
+# an initramfs in the boot image; a boot image without it just mounts p13, which
+# is slot A (docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md).
 depends="
 	linux-google-steelhead
 	mesa-dri-gallium
@@ -40,6 +44,7 @@ depends="
 	nexusq-btagent
 	nexusq-mqtt
 	nexusq-kernel-ota
+	nexusq-rootfs-ab
 	librespot
 	shairport-sync
 	bubblewrap

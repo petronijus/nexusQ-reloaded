@@ -1,0 +1,88 @@
+#!/bin/sh
+# Nexus Q A/B rootfs selector.
+#
+# The kernel is built with CONFIG_CMDLINE_FORCE and root=/dev/mmcblk0p13, so the
+# rootfs cannot be chosen on the command line. This initramfs chooses it instead:
+# it reads the slot marker from p7 "misc", mounts p13 or p14, and hands over with
+# switch_root. The kernel's own root= is never used while this runs.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+mount -t proc     none /proc  2>/dev/null || true
+mount -t sysfs    none /sys   2>/dev/null || true
+mount -t devtmpfs none /dev   2>/dev/null || true
+
+say() { echo "[nq-ab] $*"; echo "[nq-ab] $*" > /dev/kmsg 2>/dev/null || true; }
+
+. /lib/nq-gadget.sh
+
+# `rootwait` in the forced cmdline is not doing anything for us here -- that is
+# the kernel's own wait, and we mount before the kernel would. Do our own.
+_i=0
+while [ ! -b /dev/mmcblk0p13 ] && [ "$_i" -lt 20 ]; do sleep 1; _i=$((_i + 1)); done
+
+# `consume` returns the device to boot AND clears a one-shot trial in the same
+# step, before that rootfs gets any chance to run. That ordering is the whole
+# safety property: a slot that hangs, panics or never reaches userspace costs one
+# reboot, because the marker already points back at the committed slot.
+ROOT=$(nq-slot consume 2>/dev/null || echo /dev/mmcblk0p13)
+say "slot marker selects $ROOT"
+
+other_slot() {
+    case "$1" in
+        /dev/mmcblk0p13) echo /dev/mmcblk0p14 ;;
+        *)               echo /dev/mmcblk0p13 ;;
+    esac
+}
+
+# A mount that succeeds on an EMPTY filesystem is worse than one that fails: it
+# hands PID 1 to a root with no init and panics with nothing useful on screen,
+# on a board with no serial console. So check for the thing that has to be there.
+try_mount() {
+    [ -b "$1" ] || { say "$1 is not a block device"; return 1; }
+    mkdir -p /newroot
+    if ! mount -t ext4 -o rw "$1" /newroot 2>/dev/null; then
+        say "$1 will not mount as ext4"
+        return 1
+    fi
+    if [ ! -x /newroot/sbin/init ] && [ ! -L /newroot/sbin/init ]; then
+        say "$1 mounted but has no /sbin/init -- not a rootfs"
+        umount /newroot 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
+if try_mount "$ROOT"; then
+    say "mounted $ROOT"
+else
+    ALT=$(other_slot "$ROOT")
+    say "falling back to $ALT"
+    if try_mount "$ALT"; then
+        say "mounted $ALT"
+        ROOT=$ALT
+    else
+        say "NEITHER slot is bootable -- staying here so you can look at it"
+        nq_gadget_up "Nexus Q NO ROOTFS" || say "no way in; power-cycle"
+        say "p13 and p14 are both unmounted. /init must never exit, so it will not."
+        while :; do sleep 3600; done
+    fi
+fi
+
+# Say it BEFORE moving /dev: after the move there is no /dev/kmsg under this
+# root any more, so a message logged after it goes nowhere.
+say "switch_root -> $ROOT"
+
+# Hand the kernel filesystems over rather than unmounting them: systemd expects
+# to find them, and re-mounting devtmpfs after switch_root would drop the device
+# nodes udev has not recreated yet.
+for m in dev proc sys; do
+    [ -d "/newroot/$m" ] || mkdir -p "/newroot/$m"
+    mount --move "/$m" "/newroot/$m" 2>/dev/null || true
+done
+
+exec switch_root /newroot /sbin/init
+
+# Only reached if switch_root failed. Exiting here panics the kernel, so do not.
+say "switch_root FAILED"
+nq_gadget_up "Nexus Q SWITCHROOT FAILED" || true
+while :; do sleep 3600; done

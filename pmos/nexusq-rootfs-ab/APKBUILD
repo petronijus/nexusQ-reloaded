@@ -1,0 +1,45 @@
+# Nexus Q rootfs A/B — two complete rootfs slots on eMMC (p13 "userdata" and p14
+# "userdata_b", 6.57 GiB each), so a rootfs update stops being a reflash: the
+# inactive slot is written while the device is up, the switch is a 512-byte write
+# to p7 "misc", and a slot that does not boot costs one reboot.
+#
+# The half that chooses the slot lives in the boot image, not here: the kernel is
+# built with CONFIG_CMDLINE_FORCE and root=/dev/mmcblk0p13, so an initramfs is the
+# only place the choice can be made (scripts/build-ab-bootimg.sh). A boot image
+# WITHOUT that initramfs degrades safely -- the kernel simply mounts p13, which is
+# slot A -- so a device flashed with an older image keeps working, it just cannot
+# switch slots. Design and measurements:
+# docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md
+pkgname=nexusq-rootfs-ab
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Nexus Q rootfs A/B — slot marker, slot population and health-gated commit"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="noarch"
+license="GPL-2.0-only"
+# Nothing beyond the base install. The copy uses GNU tar (--one-file-system,
+# --xattrs, --sparse), which is already in the image; ping comes from busybox and
+# ip from the base, the same reasoning as nexusq-kernel-ota's depends= note.
+depends="tar"
+options="!check"
+# Staged flat next to this APKBUILD by docker-build.sh from
+# userspace/nexusq-rootfs-ab/.
+source="
+	nq-slot nq-rootfs-ab nexusq-rootfs-ab-promote.service 95-nexusq-rootfs-ab.preset
+"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 nq-slot      "$pkgdir"/usr/bin/nq-slot
+	install -Dm755 nq-rootfs-ab "$pkgdir"/usr/bin/nq-rootfs-ab
+
+	install -Dm644 nexusq-rootfs-ab-promote.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-rootfs-ab-promote.service
+	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-rootfs-ab-promote.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-rootfs-ab-promote.service
+	install -Dm644 95-nexusq-rootfs-ab.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/95-nexusq-rootfs-ab.preset
+}
+
+sha512sums="SKIP"
