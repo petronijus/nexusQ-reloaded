@@ -22,15 +22,16 @@ OUT="${NQ_OUT:-output/ab}"
 mkdir -p "$OUT"
 
 STAGE=$(mktemp -d); trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/lib" "$STAGE/bin"
-cp scripts/initramfs/nq-gadget.sh   "$STAGE/lib/"
-cp userspace/nexusq-rootfs-ab/nq-slot "$STAGE/bin/"
-chmod +x "$STAGE/bin/nq-slot"
+mkdir -p "$STAGE/lib"
+cp scripts/initramfs/nq-gadget.sh "$STAGE/lib/"
 
-# No extra device binaries: everything this image does -- read a 512-byte record,
-# mount ext4, switch_root -- is a busybox applet. Keeping it to busybox is what
-# leaves room for the kernel in an 8 MiB slot.
-nq_build_cpio "$DEV" scripts/initramfs/init-ab "$STAGE" "$OUT/ab-initramfs.cpio.gz"
+# nq-slot is taken from the device's own installed copy rather than staged from
+# the working tree, so the image can never disagree with the tool the running
+# system uses to write the marker it reads. Everything else this image does --
+# mount ext4, switch_root -- is a busybox applet, which is what leaves room for
+# the kernel in an 8 MiB slot.
+nq_build_cpio "$DEV" scripts/initramfs/init-ab "$STAGE" "$OUT/ab-initramfs.cpio.gz" \
+    /usr/bin/nq-slot
 
 nq_pack_bootimg "$DEV" "$OUT/ab-initramfs.cpio.gz" "$OUT/ab-boot.img"
 

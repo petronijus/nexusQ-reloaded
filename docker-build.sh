@@ -1238,8 +1238,30 @@ ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack('<8I', d[8:40])
 open(sys.argv[2], 'wb').write(d[ps:ps + ks])   # kernel = zImage+DTB, starts at page 1
 print(f"  pmOS boot.img: kernel={ks} B, ramdisk={rs} B (initramfs dropped for ramdisk-less boot)")
 PYEOF
-        python3 "$SRC/make-bootimg.py" /tmp/zImage-dtb /tmp/output/boot.img - "$BOOT_CMDLINE" \
-            && echo "  Exported: boot.img (ramdisk-less, fits 8 MB boot partition)"
+        # The boot image carries the A/B initramfs: CONFIG_CMDLINE_FORCE pins
+        # root=/dev/mmcblk0p13 into the kernel, so the rootfs slot can only be
+        # chosen by an initramfs, and a boot image without one silently mounts
+        # slot A for ever. Built from the rootfs that was JUST built -- the same
+        # collector scripts/build-ab-bootimg.sh points at a running device, so
+        # there is one implementation of it rather than two that drift.
+        #
+        # Note the ramdisk address make-bootimg.py uses: 0x81000000 (the
+        # Android-stock offset) lands inside this kernel's own memory and the
+        # kernel silently drops the initrd, which reads as a perfectly normal
+        # boot. See docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md.
+        AB_EXTRA=$(mktemp -d)
+        mkdir -p "$AB_EXTRA/lib"
+        cp "$SRC/scripts/initramfs/nq-gadget.sh" "$AB_EXTRA/lib/"
+        sudo python3 "$SRC/scripts/make-ab-initramfs.py" \
+            "$ROOTFS" "$SRC/scripts/initramfs/init-ab" "$AB_EXTRA" \
+            /tmp/ab-initramfs.cpio.gz /usr/bin/nq-slot \
+            || { echo "ERROR: could not build the A/B initramfs"; exit 1; }
+        sudo chown pmos:pmos /tmp/ab-initramfs.cpio.gz
+        rm -rf "$AB_EXTRA"
+
+        python3 "$SRC/make-bootimg.py" /tmp/zImage-dtb /tmp/output/boot.img \
+                /tmp/ab-initramfs.cpio.gz "$BOOT_CMDLINE" \
+            && echo "  Exported: boot.img (A/B initramfs, fits 8 MB boot partition)"
 
         echo "  Extracting rootfs partition from disk image..."
         ROOTFS_INFO=$(sfdisk -J "$DISK_IMG" 2>/dev/null | python3 -c "

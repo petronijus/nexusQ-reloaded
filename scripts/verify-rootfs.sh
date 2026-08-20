@@ -149,12 +149,33 @@ if [ -n "$BOOTIMG" ] && [ -f "$BOOTIMG" ]; then
     else
         bad "boot.img <= 8 MB" "$((sz/1024)) KiB — will fail fastboot with error=-27"
     fi
-    # ramdisk size lives at offset 0x10 in the Android boot header
+    # ramdisk size at 0x10, ramdisk load address at 0x14, in the Android header.
+    #
+    # This gate used to demand ramdisk_size=0, because pmbootstrap's own 7.6 MB
+    # initramfs made a 12.6 MB image that could not fit the 8 MB boot partition.
+    # It now demands the OPPOSITE: the boot image carries the A/B initramfs that
+    # picks the rootfs slot, and without it the kernel falls back to its forced
+    # root=p13 and slot switching silently stops working -- a failure that looks
+    # exactly like a normal, healthy boot.
     rd=$(od -An -tu4 -j16 -N4 "$BOOTIMG" | tr -d ' ')
-    if [ "${rd:-1}" = "0" ]; then
-        ok "boot.img is ramdisk-less" "ramdisk_size=0"
+    if [ "${rd:-0}" -gt 0 ]; then
+        ok "boot.img carries the A/B initramfs" "ramdisk_size=$((rd/1024)) KiB"
     else
-        bad "boot.img is ramdisk-less" "ramdisk_size=$rd — initramfs bundled"
+        bad "boot.img carries the A/B initramfs" \
+            "ramdisk_size=0 — a flash of this image cannot switch rootfs slots"
+    fi
+
+    # And it has to be loaded somewhere the kernel will accept. 0x81000000 is the
+    # Android-stock address and it sits inside our kernel's own memory, so the
+    # kernel drops the initrd and boots as if it were never there.
+    ra=$(od -An -tu4 -j20 -N4 "$BOOTIMG" | tr -d ' ')
+    if [ "${rd:-0}" -gt 0 ]; then
+        if [ "$ra" -ge $((0x83000000)) ]; then
+            ok "ramdisk load address is clear of the kernel" "$(printf '0x%08x' "$ra")"
+        else
+            bad "ramdisk load address is clear of the kernel" \
+                "$(printf '0x%08x' "$ra") — kernel will disable the initrd"
+        fi
     fi
 else
     say "  (no boot.img given — pass it as the 2nd argument to check size/ramdisk)"
