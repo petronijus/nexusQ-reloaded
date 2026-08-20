@@ -406,3 +406,63 @@ Restored on both promote units. Measured after: `nq-healthd` active at 01:00:12,
 Final device state: slot A committed and running, both boot slots holding the
 corrected A/B image (md5 `a50011b67670ee63f0d10c11dba47e02`), nothing pending,
 `systemctl is-system-running` = running, both promote units active.
+
+---
+
+# r79: the shipped artifact, booted
+
+The rebuild after those three fixes needed no intervention: 28/28 gates,
+`nexusq-kernel-ota 0.1.0-r3`, `nexusq-rootfs-ab 0.1.0-r1`,
+`device-google-steelhead 1.0-r79`. Artifacts `output/boot-ab-r79.img`
+(6 508 544 B) and `output/nexusq-rootfs-ab-r79{,-sparse}.img`, sparse verified
+byte-exact by a `simg2img` round trip.
+
+The build's boot.img came out **byte-identical to the previous run's**
+(md5 `28e728ee68cae27e3d0091be99577ecc`) — nothing kernel- or initramfs-side had
+changed, only userspace apks, so that is the A/B initramfs repacking
+reproducibly.
+
+## It was actually booted, not just verified on disk
+
+The kernel inside `boot-ab-r79.img` is byte-identical to the one running on the
+device (`md5 6f560cbf0412a08ff91a45b2b28a4eb8`, 5 546 520 B), so its modules
+match what is already installed — which means the real shipped artifact could be
+trial-booted through the kernel-OTA trial slot **without flashing a rootfs**:
+
+    [nq-ab] slot marker selects /dev/mmcblk0p13
+    [nq-ab] mounted /dev/mmcblk0p13
+    [nq-ab] switch_root -> /dev/mmcblk0p13
+    healthy after 0s — promoting
+    promoted and disarmed
+
+and then, against the build's own image:
+
+    slot A carries a 958080 B ramdisk (the A/B initramfs)
+    MATCH -- the on-device packer reproduces the booting image exactly
+
+So the image on disk is not merely gate-passing: its initramfs runs, it selects
+the slot from the marker, it hands over to systemd, and the promote unit commits
+it — with the ordering fix holding in the same boot.
+
+## A temperature scare that was not one
+
+79.4 °C right after that boot, against 58–67 °C earlier in the session. Uptime
+was 158 s: it was boot work, with 45.5 % of the first two and a half minutes at
+1200 MHz. A clean 180 s window, sampled detached and fetched once (the method
+from the idle-attribution work — an ssh poll loop fakes its own load):
+
+    350000 kHz  88.9 %      60.3 C -> 55.7 C
+    700000 kHz  10.7 %
+    920000 kHz   0.3 %
+    1200000 kHz  0.1 %
+
+Idle behaviour is intact and the temperature falls on its own.
+
+## Where this leaves the device
+
+Running slot A, committed, both boot slots holding the r79 image, nothing
+pending, all services active. Note the device's rootfs is still the one it has
+been running all along — the r79 **rootfs** has not been flashed, so its package
+database still says `nexusq-kernel-ota-0.1.0-r2` even though the fixed tools were
+installed by hand. Flashing `output/nexusq-rootfs-ab-r79-sparse.img` is what
+reconciles that, and it needs fastboot.
