@@ -6,6 +6,31 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — hardware EQ on the TAS5713 (GitHub issue #2) — CODE + BUILDS ONLY, not yet deployed (2026-08-23, kernel **r49** + `nexusq-control` **r31** + app **1.14.0+35**)
+- Issue #2 (terierbread360) asked for a bass control. Implemented **in the
+  amp's own DSP**, not in software: kernel patch **0045** exposes the
+  TAS5713's per-channel biquad bank (7+7 filters, regs 0x29–0x36 — the
+  driver's TAS5707 plumbing reused; coefficient I/O bypasses regmap, so no
+  regmap changes) as `CH1/CH2 - Biquad 0..6` ALSA controls. Post-mix ⇒ one EQ
+  for Spotify/AirPlay/Roon/USB alike, zero CPU, zero latency.
+- `nexusq-control` r31: PROTOCOL **§14** `getEq`/`setEq` + `eqChanged` —
+  `bass_db`/`treble_db` ±12 dB → RBJ low-shelf @100 Hz (BQ0) / high-shelf
+  @8 kHz (BQ1) on both channels, computed for the chain's pinned 48 kHz,
+  packed 3.23 (TI negated-a convention, pinned word-for-word against the
+  known-good kungpfui/tas5713-biquad packing); an **unstable filter is
+  refused before any register write** (speaker safety). Persisted in
+  `/etc/nexusq/eq.json`, re-applied at daemon start (DAP powers up flat).
+  12 new tests (shelf response measured from the transfer function; 31/31
+  suite green).
+- App 1.14.0+35: **Settings → Sound → Equalizer** card (bass/treble sliders
+  + Flat), sends on gesture end, reconciles via `eqChanged`, greys out with
+  an update hint on a pre-r49 kernel (`supported` feature-detect). 3 new
+  widget tests (23/23 green). **Not released** — needs Petr's approval.
+- ⚠️ NOT on the device yet: the overnight USB-idle measurement blocks any
+  device contact tonight. Deploy plan (kernel via nq-kernel-ota incl.
+  /lib/modules, control via apk OTA, low-volume verification) in PLAN.md
+  "Hardware EQ".
+
 ### Changed — GitHub Pages landing page redesigned + self-updating package table (2026-08-23, `gh-pages` + `scripts/publish-ota-repo.sh`)
 - The OTA repo's landing page (https://petronijus.github.io/nexusQ-reloaded/)
   was a single unstyled paragraph; replaced with a self-contained dark page —

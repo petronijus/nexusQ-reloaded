@@ -3,6 +3,54 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🎯 IN PROGRESS (2026-08-23) — Hardware EQ (GitHub issue #2)
+>
+> **Request:** issue #2 (terierbread360) asks for an EQ in the app — mainly a
+> bass control (their Q drives a JBL Partybox donor speaker). Petr's call:
+> best possible quality ⇒ **hardware EQ in the TAS5713**, no software DSP.
+>
+> **Why hardware:** the TAS5713 has **22 programmable biquads** (the main
+> per-channel EQ bank = 7+7 biquads at I2C regs `0x29–0x2F`/`0x30–0x36`,
+> coefficients in 3.23 fixed point) plus a programmable 2-band DRC. Filtering
+> happens in the amp die, **post-mix**: one EQ applies to every source
+> (Spotify/AirPlay/Roon/USB) at once, zero CPU, zero added latency, and the
+> chain before the amp stays bit-exact. A PA-based EQ would reopen exactly the
+> CPU/latency box the alsaloop work closed. Sample rate is a non-issue: the
+> whole sink chain is **pinned to 48 kHz** (`50-nexusq-48k.conf`,
+> default+alternate rate, avoid-resampling=false) — coefficients are computed
+> for fs=48000, with the sink rate asserted at apply time.
+>
+> **Plan (bottom-up):**
+> 1. **Kernel — patch 0045**: mainline `tas571x` already has the full biquad
+>    control plumbing — TAS5707 exposes `CH1/CH2 - Biquad 0–6` ALSA integer
+>    array controls at the **same addresses the 5713 uses**. Our `tas5713_chip`
+>    (patch 0001) points at `tas5711_controls` (volume-only); give it its own
+>    controls array = volume/mute + the 14 `BIQUAD_COEFS`, and make sure the
+>    regmap config treats the biquad regs like tas5707's does. Bump kernel
+>    pkgrel. `CONFIG_SND_SOC_TAS571X=m` ⇒ the change ships in the kernel apk's
+>    `/lib/modules` — **`nq-kernel-ota` installs modules too** (nq-kernel-ota
+>    lines 220–226), so delivery is the normal health-gated kernel OTA; a dev
+>    shortcut is a direct `.ko` swap (same KERNELRELEASE) + reboot.
+> 2. **Device — `nexusq-control` §14 `getEq`/`setEq`**: two user knobs first,
+>    `bass_db` / `treble_db` (±12 dB, low-shelf ~100 Hz / high-shelf ~8 kHz,
+>    RBJ cookbook → 3.23 two's complement), written identically to both
+>    channels via `amixer -c NexusQSpeaker cset 'CHx - Biquad 0/1'`; unused
+>    biquads stay pass-through. Persist to `/etc/nexusq/eq.json`, re-apply at
+>    control start (after the codec probes) and on every set; `getEq` returns
+>    the dB values + whether the kernel exposes the controls (feature-detect →
+>    the app can grey the UI on an old kernel). Unit tests in the control suite.
+> 3. **App**: EQ card (bass/treble sliders + Flat reset) driven by §14, hidden
+>    when the device reports no EQ support. Own version track, **release only
+>    after Petr's approval** (self-installs on his phone).
+> 4. **Later (phase 2, not now):** DRC as speaker protection / loudness,
+>    presets, per-source EQ memory if ever wanted.
+>
+> **Sequencing constraint:** the night USB-idle sampler runs on the Q tonight
+> (2026-08-23) — **no ssh/flash/reboot until the morning fetch**. Tonight =
+> code + builds only; tomorrow = deploy (kernel OTA + control apk OTA), then a
+> **low-volume** listening check (≤1–2 %, no risky speaker tests) before
+> handing the sliders to Petr.
+
 > ## 🔴 NEXT SESSION — a complete COLD build (agreed with Petr, 2026-08-13)
 >
 > Everything we ship is built on the **warm** `nexusq-workdir` volume, which
