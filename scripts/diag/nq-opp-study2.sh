@@ -34,10 +34,23 @@ G=/sys/devices/system/cpu/cpufreq/conservative
 HK_UNITS="nq-healthd.service nexusq-mqtt.service nexusq-control.service
           nexusq-wifi-watchdog.service nexusq-btagent.service nexusq-nfc.service"
 UNITS="librespot.service shairport-sync.service roon.service nexusq-uac2-in.service"
+# Deliberately profiling one of those paths (e.g. "what does USB audio cost when
+# nothing plays?") is a legitimate study — it just must not be mistaken for an
+# idle baseline. ALLOW_UNITS drops units from the guard AND is echoed into the
+# run log, so a capture always says which audio path was live while it ran.
+ALLOW_UNITS=${ALLOW_UNITS:-}
+for _a in $ALLOW_UNITS; do
+    _keep=""
+    for _u in $UNITS; do
+        [ "$_u" = "$_a" ] || _keep="$_keep $_u"
+    done
+    UNITS=$_keep
+done
 
 mkdir -p "$OUT"
 exec >>"$OUT/run.log" 2>&1
 echo "=== nq-opp-study2 start $(cat /proc/uptime)  arms: $*"
+[ -n "$ALLOW_UNITS" ] && echo "=== ALLOW_UNITS (deliberately live during this run): $ALLOW_UNITS"
 
 ORIG_GOV=$(cat $P/scaling_governor)
 ORIG_SR=$(cat $G/sampling_rate 2>/dev/null)
@@ -80,9 +93,18 @@ fi
 # all by itself, which is the very thing being measured. A running unit has a
 # cgroup directory and a stopped one does not, so test that instead: no fork, no
 # pid-1 wakeup. (nq-healthd already uses this trick for librespot liveness.)
+# ⚠️ 2026-08-24: this guard was checking system.slice ONLY, but every unit in
+# $UNITS (librespot, shairport-sync, roon, nexusq-uac2-in) is a *user* unit
+# under user@10000.service — that path never exists for them, so `playing()`
+# always returned false and the "playback started, study invalid" abort could
+# NEVER fire. A run with music playing would have been reported as idle. Check
+# the user manager's tree too (glob, still fork-free).
 playing() {
     for _u in $UNITS; do
-        [ -d "/sys/fs/cgroup/system.slice/$_u" ] && { echo "$_u"; return 0; }
+        for _d in "/sys/fs/cgroup/system.slice/$_u" \
+                  /sys/fs/cgroup/user.slice/*/user@*.service/*/"$_u"; do
+            [ -d "$_d" ] && { echo "$_u"; return 0; }
+        done
     done
     return 1
 }

@@ -12,6 +12,22 @@ import sys
 
 USER_HZ = 100.0
 
+# VDD_MPU per OPP (docs/cpufreq work, patches 0013-0018). Dynamic power goes as
+# C*V^2*f, so residency alone can MISLEAD: the 2026-08-19 schedutil A/B won on
+# "% at 350 MHz" and still came out a power wash, because it spent 30x longer at
+# 1200 MHz where a second costs 6.2x what it costs at 350. Every arm therefore
+# also gets a relative dynamic-power index, normalised to a hypothetical
+# locked-350 MHz floor. Cross-check: the published 2026-08-19 idle baseline
+# (90.8/9.0/0.15/0.04 %) evaluates to 1.164 here, i.e. PLAN.md's "+16 % over a
+# locked-350 floor" — so this reproduces the number the goal is written in.
+OPP_MV = {350: 1.025, 700: 1.200, 920: 1.313, 1200: 1.380}
+
+
+def rel_power(res):
+    """res = {MHz: fraction} -> dynamic power relative to all-time-at-350."""
+    unit = OPP_MV[350] ** 2 * 350
+    return sum(res.get(f, 0.0) * OPP_MV[f] ** 2 * f for f in OPP_MV) / unit
+
 
 def parse(path):
     """snapshot file -> {section: [lines]} plus scalars."""
@@ -138,10 +154,15 @@ def report(label, pre_path, post_path, top=14):
     ta, tb = time_in_state(a), time_in_state(b)
     tot = sum(tb[f] - ta[f] for f in tb)
     print("OPP residency:")
+    res = {}
     for f in sorted(tb):
         d = tb[f] - ta[f]
         pct = 100.0 * d / tot if tot else 0
+        res[f // 1000] = (d / tot) if tot else 0.0
         print(f"   {f // 1000:>5} MHz {pct:6.2f} %   ({d / 100:8.1f} s)  {'#' * int(pct / 2)}")
+    rp = rel_power(res)
+    print(f"   >> relative dynamic power {rp:5.2f} x a locked-350 floor "
+          f"(idle baseline 2026-08-19 = 1.16 x)")
 
     # --- transitions
     ca, cb = trans_table(a), trans_table(b)
@@ -187,6 +208,23 @@ def report(label, pre_path, post_path, top=14):
     for d, k in rows[:top]:
         name = k.replace("/sys/fs/cgroup/", "")
         print(f"   {name:<52} {100.0 * d / dt:6.3f} %  ({d:7.2f} s)")
+
+    # --- what the cgroup view CANNOT see.
+    # Interrupt handlers, softirqs and kernel threads are charged to no cgroup,
+    # so a per-cgroup table alone silently hides them. On the 2026-08-24 USB-audio
+    # run that gap was 26 % of all CPU burned — the gadget's 1 kHz IRQ — and it
+    # was invisible until /proc/interrupts was read separately. Always print it.
+    da_all = [x - y for x, y in zip(pb["cpu"], pa["cpu"])]
+    busy_all = (sum(da_all) - da_all[3] - da_all[4]) / USER_HZ
+    top_level = sum((gb[k] - ga[k]) / 1e6 for k in gb
+                    if k in ga and k.rstrip("/").count("/") == 4
+                    and k.rstrip("/").endswith((".slice", ".scope")))
+    gap = busy_all - top_level
+    if busy_all > 0:
+        print(f"   {'-> in cgroups (system+user+init)':<52} {100.0 * top_level / dt:6.3f} %  "
+              f"({top_level:7.2f} s) = {100.0 * top_level / busy_all:.0f} % of all busy CPU")
+        print(f"   {'-> NOT in any cgroup (IRQ/softirq/kthreads)':<52} {100.0 * gap / dt:6.3f} %  "
+              f"({gap:7.2f} s) = {100.0 * gap / busy_all:.0f} % of all busy CPU")
 
     # --- wakeup sources
     ia, ib = irqs(a), irqs(b)
