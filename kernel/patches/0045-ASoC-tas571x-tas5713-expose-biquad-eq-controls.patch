@@ -1,0 +1,59 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] ASoC: tas571x: TAS5713 (steelhead) — expose the hardware biquad EQ controls
+
+The TAS5713's DAP has the same per-channel speaker-EQ bank as the TAS5707:
+7 biquads per channel at the same I2C subaddresses (0x29-0x2f ch1, 0x30-0x36
+ch2), each holding five 3.23 fixed-point coefficients (b0,b1,b2,a1,a2; bits
+[31:26] of each 32-bit word ignored, unity b0 = 0x00800000). The driver
+already has everything needed -- the TAS5707 register defines and the
+multiword coefficient accessors -- but tas5713_controls (added for the
+steelhead volume-scale fix) exposes only volume/mute, so the EQ bank is
+unreachable from userspace.
+
+Add the 14 BIQUAD_COEFS integer-array controls to tas5713_controls, exactly
+as the TAS5707 exposes them. Coefficient I/O bypasses regmap (multiword I2C
+transfers), so no regmap changes are needed; the PDN GPIO is never toggled
+after probe and the DAP keeps register state with MCLK gated, so programmed
+coefficients survive sink suspend and are lost only on power loss --
+userspace re-applies them at boot (on the Nexus Q: nexusq-control's EQ
+support, which drives a bass/treble shelving EQ requested in GitHub
+issue #2).
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ sound/soc/codecs/tas571x.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+--- a/sound/soc/codecs/tas571x.c	2026-08-23 19:41:44.540496699 +0200
++++ b/sound/soc/codecs/tas571x.c	2026-08-23 19:42:09.892997140 +0200
+@@ -811,6 +811,30 @@
+ 		   TAS571X_SOFT_MUTE_REG,
+ 		   TAS571X_SOFT_MUTE_CH1_SHIFT, TAS571X_SOFT_MUTE_CH2_SHIFT,
+ 		   1, 1),
++
++	/* The TAS5713's DAP carries the same per-channel EQ bank as the
++	 * TAS5707 -- 7 biquads per channel at the same subaddresses
++	 * (0x29-0x2f / 0x30-0x36; five coefficients b0,b1,b2,a1,a2 in 3.23
++	 * format, bits [31:26] ignored) -- so it can reuse the TAS5707
++	 * register defines and the multiword coefficient accessors, which
++	 * bypass regmap. The PDN GPIO is not toggled after probe and the DAP
++	 * keeps register state with MCLK gated, so coefficients survive sink
++	 * suspend; they are lost on power-off, so whoever programs them must
++	 * re-apply at boot (on the Nexus Q: nexusq-control). */
++	BIQUAD_COEFS("CH1 - Biquad 0", TAS5707_CH1_BQ0_REG),
++	BIQUAD_COEFS("CH1 - Biquad 1", TAS5707_CH1_BQ1_REG),
++	BIQUAD_COEFS("CH1 - Biquad 2", TAS5707_CH1_BQ2_REG),
++	BIQUAD_COEFS("CH1 - Biquad 3", TAS5707_CH1_BQ3_REG),
++	BIQUAD_COEFS("CH1 - Biquad 4", TAS5707_CH1_BQ4_REG),
++	BIQUAD_COEFS("CH1 - Biquad 5", TAS5707_CH1_BQ5_REG),
++	BIQUAD_COEFS("CH1 - Biquad 6", TAS5707_CH1_BQ6_REG),
++	BIQUAD_COEFS("CH2 - Biquad 0", TAS5707_CH2_BQ0_REG),
++	BIQUAD_COEFS("CH2 - Biquad 1", TAS5707_CH2_BQ1_REG),
++	BIQUAD_COEFS("CH2 - Biquad 2", TAS5707_CH2_BQ2_REG),
++	BIQUAD_COEFS("CH2 - Biquad 3", TAS5707_CH2_BQ3_REG),
++	BIQUAD_COEFS("CH2 - Biquad 4", TAS5707_CH2_BQ4_REG),
++	BIQUAD_COEFS("CH2 - Biquad 5", TAS5707_CH2_BQ5_REG),
++	BIQUAD_COEFS("CH2 - Biquad 6", TAS5707_CH2_BQ6_REG),
+ };
+ 
+ static const struct tas571x_chip tas5713_chip = {
