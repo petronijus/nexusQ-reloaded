@@ -504,13 +504,18 @@ static int systemd_show(const char *unit, int user_scope,
 }
 
 /* ---------- log rotation ------------------------------------------------- */
-static void rotate_if_big(void)
+static void rotate_if_big(FILE **outp)
 {
     struct stat st;
     if (stat(logpath, &st) == 0 && st.st_size > maxbytes) {
         char old[600];
         snprintf(old, sizeof old, "%s.1", logpath);
-        rename(logpath, old);
+        if (rename(logpath, old) == 0 && *outp) {
+            /* the open stream still points at the renamed inode — drop it so
+             * the next sample reopens a fresh logpath (readers stat logpath) */
+            fclose(*outp);
+            *outp = NULL;
+        }
     }
 }
 
@@ -759,7 +764,7 @@ int main(int argc, char **argv)
         FILE *dst = stdout;
         if (!once) {
             if (tickn % 12 == 0)
-                rotate_if_big();
+                rotate_if_big(&out);
             if (!out)
                 out = fopen(logpath, "ae");
             dst = out ? out : stdout;
