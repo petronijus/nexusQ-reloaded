@@ -33,7 +33,7 @@ KEY=pmos@local-6a42e957
 # packages explicitly). nq-kernel-ota fetches this apk, unpacks it, and writes a
 # boot image to the trial slot. docs/2026-08-18-kernel-ota-phase2.md
 OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
-              nexusq-kernel-ota linux-google-steelhead \
+              nexusq-kernel-ota nexusq-rootfs-ab linux-google-steelhead \
               device-google-steelhead device-google-steelhead-nonfree-firmware)
 
 STAGE="$(mktemp -d)"
