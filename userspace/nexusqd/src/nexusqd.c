@@ -618,13 +618,24 @@ int main(void) {
          *   - BYTES: the frame has actually been identical for IDLE_AFTER_TICKS
          *     renders, so we never stretch across a still-settling transition.
          * Caps: the update-available blink keeps its 2 Hz; an open tap (a PAUSED
-         * stream still holds a sink-input) keeps 4 Hz so un-pause shows promptly. */
+         * stream still holds a sink-input) keeps 4 Hz so un-pause shows promptly —
+         * but only while that tap could still produce something. A tap that has
+         * been RAW-SILENT for TAP_QUIET_S gets the full 1 Hz stretch: the USB-DAC
+         * bridge holds a sink-input open forever and streams digital silence
+         * whenever the host box is on, so the 4 Hz cap otherwise applied 24/7 and
+         * the ring rendered 4 fps for a blanked screensaver (measured 2.1 % of a
+         * core over the 2026-08-24 USB-audio idle run, 13x nexusqd's r13 budget).
+         * Dropping the cap costs no responsiveness: afd is in the poll set, so the
+         * first non-silent period WAKES the loop to drain and the very next
+         * iteration renders — the cap was only ever belt-and-braces for a
+         * paused->playing transition, which arrives as audio data too. */
         int animating = ovl || child_alpha > 0.0f
                      || (comp.layers[manual_idx].active && (manual.breathe || manual.spin))
                      || !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0);
+        int tap_silent = quiet_since >= 0.0 && (now - quiet_since) >= TAP_QUIET_S;
         if (!animating && static_ticks >= IDLE_AFTER_TICKS && frame_int < IDLE_FRAME_S) {
             double cap = IDLE_FRAME_S;
-            if (afd >= 0 && cap > IDLE_TAP_FRAME_S) cap = IDLE_TAP_FRAME_S;
+            if (afd >= 0 && !tap_silent && cap > IDLE_TAP_FRAME_S) cap = IDLE_TAP_FRAME_S;
             if (mute_blink && !muted && cap > MUTE_BLINK_S) cap = MUTE_BLINK_S;
             if (frame_int < cap) frame_int = cap;
         }
