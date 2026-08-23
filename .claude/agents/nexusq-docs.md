@@ -38,20 +38,34 @@ Our docs:
 - **CHANGELOG.md** — Keep-a-Changelog format; versioning is tag-only / milestone
   (no version string in source). Add bullets under the right `### Added/Changed/Fixed`
   of the current/next milestone. This is the FIRST place a success or fix is recorded.
-- **README.md** — project overview, current feature/status table, build one-liner.
-  **MANDATORY stop — always review it, and on ANY release or capability/status
-  change you MUST update it:** bump every version reference (latest release tag,
-  artifact names like `nexusq-*-vX.Y.Z*`, the "what works"/status rows) to the
-  shipped state and reconcile the feature/status table with reality. Never leave
-  the README advertising an older version or a superseded status. If after a real
-  review nothing genuinely changed, say so explicitly in your ledger with the reason
-  — README is never silently skipped.
+- **README.md** — the SHOP WINDOW, not the record (restructured 2026-08-23 after
+  it had grown 500-word table cells; Petr's explicit direction). **MANDATORY stop
+  — always review it, and on ANY release or capability/status change you MUST
+  update it** (bump version references, artifact names, status rows — never leave
+  it advertising an older version or a superseded status). BUT the update is
+  always a CONDENSATION, never an accumulation. Hard rules:
+  * **"What works" table: ONE sentence per Notes cell** (≈160 chars max) — the
+    current state + the version/date it landed. NO root-cause narratives, NO
+    measurement histories, NO fix chronology, NO lists of docs/ references —
+    all of that goes in CHANGELOG.md (and a dated docs/ note), which the table's
+    intro already points at.
+  * **Milestones: ONE line per entry**, telegram style. A dev milestone is
+    `(dev) ── ✦ <what> <date>`; details live in CHANGELOG.
+  * When a feature ships: README gains/updates its one line; the full story is
+    a CHANGELOG entry. If you catch yourself writing a second sentence into a
+    README cell, you are writing a CHANGELOG bullet in the wrong file — move it.
+  If after a real review nothing genuinely changed, say so explicitly in your
+  ledger with the reason — README is never silently skipped.
 - **INSTALL.md** — the flash guide (fastboot steps, partition names, size limits,
   the "never touch xloader/bootloader" warning, boot quirks). Update if the image,
   boot.img constraints, or flash procedure changed.
 - **HANDOFF.md** — the living cross-session handoff. Keep the "current state /
   what works / what's broken / next steps" honest.
-- **PLAN.md** — roadmap/milestones. Tick off what shipped; adjust what's next.
+- **PLAN.md** — roadmap/milestones, FORWARD-LOOKING. Tick off what shipped; adjust
+  what's next. A completed item does not accumulate as a full ✅-DONE essay here:
+  collapse it to a short ✅ line + date + a pointer to its CHANGELOG entry / docs/
+  note (moving any detail that exists nowhere else into those first). Standing
+  goals/constraints (e.g. idle-OPP residency) stay — they are forward-looking.
 - **firmware/README.md** — what firmware ships where (WiFi brcmfmac + BT) and how
   it's staged. Update when firmware handling changes.
 - **scripts/diag/README.md** — ground-truth subsystem paths the diag tooling reads.
@@ -71,6 +85,9 @@ Do NOT touch `~/.claude/.../memory/` — that auto-synced memory is maintained
 separately, not part of this repo's docs.
 
 ## 2. Rules
+- **One canonical home per fact** — the detailed story of a change lives in
+  CHANGELOG.md (+ a dated docs/ note); README and PLAN carry one-line summaries
+  pointing there. Never duplicate a narrative into a second file — link it.
 - **Absolute dates** — write `2026-06-28`, never "today"/"yesterday". Get the date
   from the prompt or `git log -1 --format=%cd`.
 - **Evidence, not invention** — quote the real dmesg line / md5 / test output / commit
