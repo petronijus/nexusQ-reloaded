@@ -33,6 +33,7 @@ Config via env:
                                                             # by nexusq-setupd's setName
 """
 import json
+import math
 import os
 import re
 import socket
@@ -686,6 +687,181 @@ def set_mqtt_config(p, path=None):
     return get_mqtt_status(path)
 
 
+# --- hardware EQ on the TAS5713 (PROTOCOL §14) -------------------------------
+# The amp's DAP has 7 programmable biquads per channel; kernel r49+ exposes them
+# as ALSA integer-array controls ("CH1/CH2 - Biquad 0..6", five 3.23 fixed-point
+# coefficients b0,b1,b2,-a1,-a2 — TI stores the feedback terms NEGATED, verified
+# against a known-good TAS5713 implementation). Filtering happens in the amp die,
+# post-mix: one EQ covers every source (Spotify/AirPlay/Roon/USB) at zero CPU and
+# zero added latency. Two user knobs map to two biquads on BOTH channels:
+#   bass_db   -> RBJ low-shelf  @ 100 Hz  -> Biquad 0
+#   treble_db -> RBJ high-shelf @ 8 kHz   -> Biquad 1
+# Biquads 2..6 are never touched (chip default = pass-through). Coefficients are
+# computed for the chain's pinned 48 kHz (50-nexusq-48k.conf); the DAP keeps
+# register state across sink suspend (PDN untouched after probe) but loses it on
+# power-off, so the stored eq.json is re-applied at every daemon start.
+EQ_CONF_PATH = os.environ.get("NEXUSQ_EQ_CONF", "/etc/nexusq/eq.json")
+EQ_FS = 48000
+EQ_MAX_DB = 12.0
+EQ_BASS_HZ = 100.0
+EQ_TREBLE_HZ = 8000.0
+_EQ_UNITY = (0x00800000, 0, 0, 0, 0)  # b0 = 1.0 in 3.23, rest zero
+# control name -> which knob drives it (both channels get identical coefficients)
+_EQ_CONTROLS = {"bass": ("CH1 - Biquad 0", "CH2 - Biquad 0"),
+                "treble": ("CH1 - Biquad 1", "CH2 - Biquad 1")}
+
+
+def _eq_shelf_coeffs(kind, gain_db, f0, fs=EQ_FS):
+    """RBJ cookbook shelving filter (S=1), normalized by a0.
+
+    Returns (b0, b1, b2, a1, a2) as floats — the *mathematical* transfer
+    function H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2).
+    The TI-register negation of a1/a2 happens in _eq_pack()."""
+    a = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * math.pi * f0 / fs
+    cw, sw = math.cos(w0), math.sin(w0)
+    alpha = sw / 2.0 * math.sqrt(2.0)  # RBJ shelf, S=1
+    two_sqrt_a_alpha = 2.0 * math.sqrt(a) * alpha
+    if kind == "low":
+        b0 = a * ((a + 1) - (a - 1) * cw + two_sqrt_a_alpha)
+        b1 = 2 * a * ((a - 1) - (a + 1) * cw)
+        b2 = a * ((a + 1) - (a - 1) * cw - two_sqrt_a_alpha)
+        a0 = (a + 1) + (a - 1) * cw + two_sqrt_a_alpha
+        a1 = -2 * ((a - 1) + (a + 1) * cw)
+        a2 = (a + 1) + (a - 1) * cw - two_sqrt_a_alpha
+    else:  # high shelf
+        b0 = a * ((a + 1) + (a - 1) * cw + two_sqrt_a_alpha)
+        b1 = -2 * a * ((a - 1) + (a + 1) * cw)
+        b2 = a * ((a + 1) + (a - 1) * cw - two_sqrt_a_alpha)
+        a0 = (a + 1) - (a - 1) * cw + two_sqrt_a_alpha
+        a1 = 2 * ((a - 1) - (a + 1) * cw)
+        a2 = (a + 1) - (a - 1) * cw - two_sqrt_a_alpha
+    return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+
+def _eq_pack(coeffs):
+    """(b0,b1,b2,a1,a2) floats -> 5 register words: 3.23 two's complement in the
+    low 26 bits, a1/a2 NEGATED (TI DAP feedback convention). Refuses an unstable
+    filter — an unstable biquad on a 25 W amp is a speaker hazard, never write
+    one no matter how it was produced."""
+    b0, b1, b2, a1, a2 = coeffs
+    # poles inside the unit circle: |a2| < 1 and |a1| < 1 + a2
+    if not (abs(a2) < 1.0 and abs(a1) < 1.0 + a2):
+        raise Err("internal", "unstable biquad refused")
+    words = []
+    for i, c in enumerate((b0, b1, b2, -a1, -a2)):
+        w = int(round(c * (1 << 23)))
+        if not -(1 << 25) <= w < (1 << 25):  # 3.23 in 26 bits: [-4, 4)
+            raise Err("internal", "coefficient out of 3.23 range")
+        words.append(w & 0x03FFFFFF)
+    return words
+
+
+def _eq_words(kind, gain_db):
+    """Register words for one knob: exact unity at 0 dB, shelf otherwise."""
+    if abs(gain_db) < 0.05:
+        return list(_EQ_UNITY)
+    f0 = EQ_BASS_HZ if kind == "bass" else EQ_TREBLE_HZ
+    shelf = "low" if kind == "bass" else "high"
+    return _eq_pack(_eq_shelf_coeffs(shelf, gain_db, f0))
+
+
+def eq_supported():
+    """Does the running kernel expose the biquad controls? (r49+; feature-detect
+    so the app can grey the EQ card out on an older kernel)."""
+    try:
+        r = _amixer("cget", "name=CH1 - Biquad 0")
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _eq_load(path=None):
+    st = {"bass_db": 0.0, "treble_db": 0.0}
+    try:
+        with open(path or EQ_CONF_PATH) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for k in ("bass_db", "treble_db"):
+                v = data.get(k)
+                if isinstance(v, (int, float)) and abs(v) <= EQ_MAX_DB:
+                    st[k] = float(v)
+    except (OSError, ValueError):
+        pass
+    return st
+
+
+def get_eq(path=None):
+    st = _eq_load(path)
+    st["supported"] = eq_supported()
+    return st
+
+
+def _eq_apply(st):
+    """Write both knobs' coefficients to both channels. All-or-error: a failed
+    cset raises so the caller never reports an EQ the hardware doesn't run."""
+    for knob, controls in _EQ_CONTROLS.items():
+        words = _eq_words(knob, st[f"{knob}_db"])
+        val = ",".join(str(w) for w in words)
+        for name in controls:
+            r = _amixer("cset", f"name={name}", val)
+            if r.returncode != 0:
+                raise Err("unavailable",
+                          f"biquad write failed ({name}): {(r.stderr or '').strip()}")
+
+
+def set_eq(p, path=None):
+    """Validate + clamp, program the amp, then persist. Hardware first: if the
+    write fails the stored file still matches what the chip actually runs."""
+    path = path or EQ_CONF_PATH
+    st = _eq_load(path)
+    for k in ("bass_db", "treble_db"):
+        if k in p:
+            v = p[k]
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise Err("bad_request", f"{k} must be a number")
+            st[k] = max(-EQ_MAX_DB, min(EQ_MAX_DB, float(v)))
+    if not eq_supported():
+        raise Err("unavailable", "kernel does not expose the TAS5713 biquads")
+    _eq_apply(st)
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Err("unavailable", f"cannot persist eq: {e}")
+    log(f"eq applied: bass {st['bass_db']:+.1f} dB, treble {st['treble_db']:+.1f} dB")
+    return get_eq(path)
+
+
+def eq_restore_thread():
+    """Boot re-apply of the persisted EQ. The DAP powers up flat, so a stored
+    non-flat EQ must be rewritten after every boot. Retries briefly in case the
+    codec/ALSA is still probing when the bridge starts; gives up quietly on a
+    flat config (nothing to restore) or a pre-r49 kernel."""
+    st = _eq_load()
+    if abs(st["bass_db"]) < 0.05 and abs(st["treble_db"]) < 0.05:
+        return
+    for _ in range(12):  # up to ~60 s
+        if eq_supported():
+            try:
+                _eq_apply(st)
+                log(f"eq restored: bass {st['bass_db']:+.1f} dB, "
+                    f"treble {st['treble_db']:+.1f} dB")
+            except Err as e:
+                log("eq restore failed:", e)
+            return
+        time.sleep(5)
+    log("eq restore skipped: biquad controls never appeared (pre-r49 kernel?)")
+
+
 # --- system OTA: update the Nexus Q's OWN daemons from our GitHub-Pages apk repo -
 # The device already trusts the `pmos@local` build key (it is in /etc/apk/keys
 # from the image build), so it can install our signed packages straight from the
@@ -1218,6 +1394,14 @@ class Bridge:
             # Push the (password-less) status so every client reconciles.
             return st, [("mqttStatusChanged", st)]
 
+        # --- hardware EQ on the TAS5713 amp (PROTOCOL §14) -----------------
+        if method == "getEq":
+            return get_eq(), []
+        if method == "setEq":
+            st = set_eq(p)
+            # Push the applied state so every client's sliders reconcile.
+            return st, [("eqChanged", st)]
+
         # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
         # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;
         # the ring shows a determinate PROGRESS bar while installing; green flash =
@@ -1690,6 +1874,7 @@ def main():
     bridge = Bridge()
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
+    threading.Thread(target=eq_restore_thread, daemon=True).start()
     mdns = publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

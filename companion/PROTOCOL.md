@@ -831,3 +831,49 @@ transit the **unauthenticated plaintext LAN TCP 45015** control link — the
 same trust level as every other verb (anyone on the LAN can already control
 the device). The alternative (a dedicated low-privilege broker user for the
 device) was rejected in favour of one household broker login.
+
+## 14. Hardware EQ (TAS5713 biquads) — v1.13.x (dev), kernel r49+
+
+GitHub issue #2 asked for an EQ ("the bass is horrible" on a donor speaker).
+It is implemented **in the amplifier's own DSP**, not in software: the TAS5713
+has 7 programmable biquads per channel, and kernel **r49** exposes them as
+ALSA integer-array controls (`CH1/CH2 - Biquad 0..6`). Two user knobs map to
+two biquads, written identically to both channels:
+
+| knob        | filter                    | biquad |
+|-------------|---------------------------|--------|
+| `bass_db`   | RBJ low-shelf @ 100 Hz    | 0      |
+| `treble_db` | RBJ high-shelf @ 8 kHz    | 1      |
+
+Both are **−12..+12 dB** (clamped, floats allowed); `0` = that knob is exact
+unity (pass-through coefficients, not a computed 0 dB shelf). Filtering is
+post-mix in the amp die: one EQ covers Spotify/AirPlay/Roon/USB alike, zero
+CPU, zero added latency, and the digital chain before the amp stays bit-exact.
+Coefficients are computed for the chain's pinned 48 kHz, packed as 3.23
+fixed-point (TI convention: a1/a2 negated), and an **unstable filter is
+refused before any register write** (speaker safety). The device persists the
+values in `/etc/nexusq/eq.json` and re-applies them at every `nexusq-control`
+start (the DAP powers up flat).
+
+### 14.1 `getEq`
+
+→ `{}`
+← `{"supported": bool, "bass_db": float, "treble_db": float}`
+
+`supported=false` means the running kernel predates r49 (no biquad controls)
+— the app should show the EQ card disabled. The dB values are the *stored*
+ones either way.
+
+### 14.2 `setEq`
+
+→ `{"bass_db"?: number, "treble_db"?: number}`   (partial updates allowed;
+   values clamped to ±12)
+← the same shape as `getEq`, after the hardware write.
+
+Errors: `bad_request` (non-numeric value), `unavailable` (kernel without the
+controls, a failed `amixer` write, or an unwritable config file). Hardware
+first, persist second — a failed write leaves the stored file matching what
+the chip actually runs.
+
+Event: `eqChanged` (the `getEq` shape) is pushed to every subscribed client
+so all open EQ cards reconcile.
