@@ -44,7 +44,12 @@ The capture dir contains: `report.txt` (human), `report.json` (machine findings)
 `snapshot.txt` (full device dump), `health.jsonl` (samples), `events.jsonl`
 (device-side anomaly events), `paths.txt`. (Since 2026-08-10 the on-device
 `nexusq-mqtt` daemon also republishes the freshest `health.jsonl` sample to
-MQTT/Home Assistant — a field change in healthd now propagates there too.)
+MQTT/Home Assistant — a field change in healthd now propagates there too.
+⚠️ `healthd_fresh:false` with the service active is NOT proof of a dead
+sampler: on device **r77–r79** — fixed **r80**, 2026-08-23 — rotation renamed
+`health.jsonl` without closing the stream, so the daemon wrote into a growing
+`health.jsonl.1` forever and never recreated `health.jsonl`; check
+`ls -la /var/log/nq-health/` first.)
 
 Options: `nq-collect [OUTDIR] [--burst N] [--interval S]`. To watch a suspected
 intermittent fault live for longer, raise the burst, e.g. `--burst 60 --interval 2`
@@ -438,7 +443,9 @@ Give the user the verdict and the specific findings with their evidence (quote
 the timeline / snapshot section), and—if a finding implies a code fix—name the
 file to change (that is how the `nq_progress` false-CRIT vector opened by
 nexusqd r13 got named and then fixed in
-`pmos/device-google-steelhead/nq-healthd`, device r72, 2026-08-13) rather than
+`pmos/device-google-steelhead/nq-healthd`, device r72, 2026-08-13 — since
+r77/2026-08-20 the daemon is C: `nq-healthd.c`, kept in sync with
+`userspace/nq-healthd/nq-healthd.c`, edit both) rather than
 applying a workaround. Captures persist under `nq-captures/` for later diffs, so
 you can compare a "good" run against a "bad" one.
 

@@ -151,7 +151,15 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (empty diffs) and its ~400 `awk` forks heated the die **60 → 67 °C**. **Rules
 > for next time:** wait for `led_sum == 0`, run **detached** + fetch **ONCE** (no
 > polling), **one** `awk` fork per snapshot.
-> **NEXT, in order:** (1) re-measure the overnight opp350 window from HA history,
+> **NEXT, in order** *(status 2026-08-23: (1) ✅ done 2026-08-16 — 70.7 % over
+> 79 h; (2) ✅ done 2026-08-20 — healthd rewritten in C, device **r77**,
+> 3.08 → 0.55 % of a core, forks 2.45 → 0.75/s — plus a rotation leak it
+> introduced, fixed **r80** 2026-08-23, see
+> `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`; (4) ✅ done
+> 2026-08-20 — `nexusq-mqtt` **r4** takes volume from nexusq-control's
+> subscribe bridge; (5) governor tunables shipped r73 2026-08-16, schedutil
+> rejected 2026-08-19; (3) `brcmf` wakeups still open)*:
+> (1) re-measure the overnight opp350 window from HA history,
 > **no ssh overnight**; (2) **`nq-healthd` C rewrite** — at 2.43 % it is #1 again
 > and what remains is its ~6 forks/tick (`date`, `timeout`+`nexusled`, `od`+`awk`,
 > amortized `dmesg`); the right fix is a C daemon in the nexusqd mould

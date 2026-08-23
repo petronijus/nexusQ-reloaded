@@ -4,11 +4,68 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-18/19 (latest): **kernel OTA phase 2 shipped and proven · schedutil measured and rejected · a no-RTC DNS deadlock fixed**
+## Session 2026-08-23 (latest): **telemetry outage worked backwards — DFS fixed at the router · healthd rotation leak (r80) · the OTA repo had silently frozen the fleet at r77**
+
+Full record: `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`. Working
+tree holds the r80 source (`nq-healthd.c` ×2, APKBUILD) + the
+`publish-ota-repo.sh` fix — uncommitted.
+
+- **The Q was off the network** — the 2026-08-20 DFS finding, resolved as
+  recommended: Petr pinned the router's 5 GHz radio to **ch36**, the Q
+  re-associated on its own (**−52 dBm, ch36/5180 MHz**), timesyncd fixed the
+  clock (it had sat in **year 2000** — no RTC, no NTP off the USB link), MQTT
+  reconnected.
+- **NEW BUG, fixed — `nq-healthd` rotation leak (r77–r79, fixed r80):**
+  `rotate_if_big()` renamed `health.jsonl`→`.1` but never closed the open
+  `FILE *`, so the daemon wrote into the renamed inode forever (`.1` at
+  **25 MB, unbounded**) and `health.jsonl` was never recreated →
+  `nexusq-mqtt` reported **`healthd_fresh:false`**, HA lost temp/freq/governor
+  + raised "Health sampler". Fix: `rotate_if_big(FILE **outp)` fcloses+NULLs
+  after a successful rename. Package-only rebuild, OTA-published, device on
+  **r80**, live-verified `healthd_fresh:true`.
+- **SECOND BUG, fixed — the OTA hold-back:** `publish-ota-repo.sh`
+  `OTA_PACKAGES` was missing **`nexusq-rootfs-ab`**, which
+  `device-google-steelhead` depends on since the A/B work — so r78+ was
+  unsatisfiable and `apk add --upgrade` **silently kept r77 (exit 0, no
+  error)**. Diagnosed with `apk policy` + forcing `apk add pkg=ver`.
+  **Rule: a new runtime `depends=` of an OTA-shipped package goes into
+  `OTA_PACKAGES` in the same change.** Also published `nexusq-kernel-ota`
+  **0.1.0-r3** (built 2026-08-20, had sat in the workdir).
+
+### State of the device right now (2026-08-23)
+Kernel **6.12.12-r48**, device **r80** (healthd is the C daemon + rotation
+fix), kernel-ota **r3**, rootfs-ab **r1**, mqtt **r4** (volume from the
+control bridge), control r30, btagent r5, nexusqd r13 — all published. A/B
+rootfs live (p13/p14, slot marker in p7 misc, health-gated promote). WiFi on
+**ch36 at −52 dBm**, clock synced, HA telemetry whole (`healthd_fresh:true`).
+
+## Session 2026-08-20/21: **A/B rootfs + rescue initramfs proven both directions · healthd rewritten in C (3.08 → 0.55 % of a core) · r79 built and trial-booted**
+
+Full record: `docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md`
+(committed sessions `dfc5dce`…`588cdfc`; CHANGELOG entries backfilled
+2026-08-23).
+
+- **"u-boot ignores the ramdisk" was WRONG** — bad load address; `0x84000000`
+  works. → rescue initramfs, then **p13/p14 A/B rootfs** with the slot marker
+  in p7 misc + health-gated auto-promote, proven in both directions without a
+  cable.
+- The built boot.img now **carries the A/B initramfs** (byte-reproducible
+  repack); the kernel-OTA packer takes a ramdisk (`current_ramdisk`) so a
+  kernel update no longer deletes it; promote units got the `After=` ordering
+  fix (a `Type=oneshot` `WantedBy=` blocks its own target). **r79**
+  trial-booted through the kernel-OTA slot and promoted in the same boot.
+- **`nq-healthd` rewritten in C** (device **r77**): 3.08 → **0.550 %** of a
+  core, system forks 2.45 → 0.75/s; JSONL schema verified field-by-field
+  against the shell. **`nexusq-mqtt` r4**: volume/mute from nexusq-control's
+  persistent subscribe bridge — the last idle `pactl` forker gone.
+- Found here, resolved 2026-08-23: the Q's missing 5 GHz was **DFS channel
+  100**, not distance.
+
+## Session 2026-08-18/19: **kernel OTA phase 2 shipped and proven · schedutil measured and rejected · a no-RTC DNS deadlock fixed**
 
 Records: `docs/2026-08-18-kernel-ota-phase2.md`, `docs/2026-08-19-schedutil-ab.md`.
 
-### WHERE TO CONTINUE — agreed with Petr, next session
+### WHERE TO CONTINUE — agreed with Petr, next session *(items 1 + 3 ✅ done 2026-08-20 — healthd C rewrite = device r77, mqtt volume-from-bridge = mqtt r4; see the 2026-08-20/21 session above)*
 1. 🔴 **`nq-healthd` C rewrite.** After everything above, this is the last idle
    lever the burst analysis identified: ~6 forks per tick, 18 runs ≥16 ms per
    minute, and each of those is what ramps the governor. The shape: a C daemon in
@@ -55,9 +112,11 @@ Full record: `docs/2026-08-18-kernel-ota-phase2.md`.
 - ⚠️ **Stock u-boot has no fallback**: an invalid trial image stops the device and
   a power-cycle did not recover it — rescue is the mute-sensor fastboot path. A
   kernel update must stay a deliberate, attended action.
-- **Still open:** the kernel apk is not yet published to the OTA repo (it has to
-  be copied to the device by hand), no app-side action, and the
-  SAR-RAM-vs-power-cycle question from the failed-trial test is unresolved.
+- **Still open:** ~~the kernel apk is not yet published to the OTA repo~~
+  *(✅ resolved same session, `9eb607d` — the kernel is published as a payload
+  source; `nexusq-kernel-ota` itself r3-published 2026-08-23)*, no app-side
+  action, and the SAR-RAM-vs-power-cycle question from the failed-trial test is
+  unresolved.
 
 ## Session 2026-08-16: **the 08-13 fixes verified in the field — idle OPP residency 60.5 % → `70.69 % @ 350 MHz` over 79 h, 1200 MHz/1380 mV all but gone (5.1 → 0.71 %)**
 

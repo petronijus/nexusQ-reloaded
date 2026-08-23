@@ -39,8 +39,11 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 
 ### 1c. Updating without a reflash (post-v1.11.0)
 
-A full reflash (the steps below) is only needed for a **kernel** change or a
-first install. Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
+A full reflash (the steps below) is only needed for a first install *(and was
+needed for a kernel change until 2026-08-18 — since kernel-OTA Phase 2 a kernel
+can be applied over the air too, via `nexusq-kernel-ota`'s trial-slot flow:
+attended-only, because the stock u-boot has no fallback if a trial kernel fails
+to boot)*. Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
 no fastboot, no cable — from a **signed apk repo on GitHub Pages**
 (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch); the device
 already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs
@@ -62,8 +65,12 @@ our signed packages straight from it. Two Settings items in the companion app:
 ≤ the first split build, v1.11.9) can't OTA the config package — it would need the
 flash-only `nexusq-glibc-rt` and `apk` refuses the unsatisfiable dependency. Reflash
 once (the steps below, or fastboot-over-ssh) to establish the split layout; after that,
-System OTA of the config is incremental. The **kernel** and **`nexusq-glibc-rt`** itself
-are **never** OTA'd — those always need the fastboot flash below.
+System OTA of the config is incremental. **`nexusq-glibc-rt`** itself is **never**
+OTA'd — it always needs the fastboot flash below. *(The kernel was in that
+sentence too until 2026-08-18: kernel-OTA Phase 2 — the `nexusq-kernel-ota`
+trial-slot updater, kernel apk published to the repo since 2026-08-23 — now
+applies a kernel without a cable, as a deliberate attended action; fastboot
+remains the bootstrap + rescue path.)*
 
 ## 1. Enter fastboot mode
 
@@ -100,7 +107,9 @@ have no shell:
 ## 2. Flash
 
 ```bash
-# Boot image (kernel + appended DTB, ramdisk-less) -> 8 MB boot partition.
+# Boot image (kernel + appended DTB; ramdisk-less through the v1.12.0 line —
+# dev builds since 2026-08-20 carry the small A/B-slot initramfs, still well
+# under the limit) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
 # The v1.11.0 kernel is r45 (~5.3 MiB; 44 patches through 0044 + the
 # conservative-governor defconfig). The only change from v1.10.1's r44 is patch 0044

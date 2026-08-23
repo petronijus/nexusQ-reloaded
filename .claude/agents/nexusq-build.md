@@ -151,6 +151,19 @@ dependency**. (If you ever see `is missing in checksums` from an OTA run again,
 that first pass has regressed — fix the pass, do not re-introduce the ordering
 workaround.)
 
+⚠️ **PUBLISH-LIST RULE (2026-08-23): a new runtime `depends=` of an OTA-shipped
+package MUST be added to `scripts/publish-ota-repo.sh`'s `OTA_PACKAGES` array in
+the same change** (this is a *different* list from `docker-build.sh`'s
+`OTA_PACKAGES` build env var — the publish list decides what the device can
+actually fetch). The failure mode is **silent everywhere**: build OK, publish
+OK, and on the device `apk add --upgrade <pkg>` **exits 0 and keeps the old
+version** because the new pkgrel's dependency is unsatisfiable in the repo. It
+bit `device-google-steelhead` r78–r80 via the new `nexusq-rootfs-ab` dep — the
+fleet sat frozen at r77 with no error anywhere. Diagnose with **`apk policy
+<pkg>`** (is the new rel offered?) then **`apk add <pkg>=<ver>`** (forcing the
+version makes apk finally print the unsatisfiable dep).
+`docs/2026-08-23-healthd-rotation-and-ota-holdback.md`.
+
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
 `ln -sf … "$pkgdir"/etc/systemd/system/default.target` as the **first** thing to touch
@@ -425,7 +438,10 @@ Check and REPORT each (PASS/FAIL + evidence):
   (owned by `nexusq-glibc-rt` in `lib/apk/db/installed`); `docker-build.sh` builds the
   new aport as a device dependency (Phase 2 validate / Phase 6 copy / Phase 7b checksum),
   kept OUT of the `--force` list so its 180 MB isn't re-unpacked each build.
-  `nexusq-glibc-rt` (~182 MB) + the kernel are **flash-only** (never in the OTA repo);
+  `nexusq-glibc-rt` (~182 MB) stays **flash-only** *(the kernel was too until
+  2026-08-18/20 — since kernel-OTA Phase 2, `linux-google-steelhead` +
+  `nexusq-kernel-ota` + `nexusq-rootfs-ab` ARE published as payload sources for
+  the trial-slot updater)*;
   `publish-ota-repo.sh` ships the daemons + `device-google-steelhead` + its firmware
   subpackage with a **size guard ≥ 99 MB → skip**. A pre-split device can't OTA the
   config (needs the flash-only glibc dep) → **one reflash** to adopt. See

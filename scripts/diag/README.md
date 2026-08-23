@@ -11,7 +11,7 @@ capture.*
 
 | Tool | Side | What it does |
 |------|------|--------------|
-| `pmos/device-google-steelhead/nq-healthd` | device | continuous health monitor → `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package). Since 2026-08-10 `health.jsonl` has an on-device consumer: **`nexusq-mqtt`** tails the latest sample (used only when fresh ≤60 s) and republishes it — plus its own extras — to MQTT / Home Assistant (see `userspace/nexusq-mqtt/README.md`); a change to healthd's field names/semantics now also touches the MQTT state JSON + HA discovery templates. Since **mqtt r2** (2026-08-13) that coupling is explicit: the payload carries a **`led_stalled` verdict** derived from healthd's own `led_stall` + `nq_resp`/`nq_progress` distress co-signal — so changing what `nq_progress` means (as device **r72** did) changes what the app and HA alarm on |
+| `pmos/device-google-steelhead/nq-healthd.c` | device | continuous health monitor — **a C daemon since device r77 (2026-08-20)**: the shell original was deleted (git history has it) after measuring 3.08 % of a core even post-diet; the C rewrite measures 0.55 %, **JSONL schema unchanged** (verified field-by-field). Source is kept in sync with `userspace/nq-healthd/nq-healthd.c` — edit both. Writes `/var/log/nq-health/{health,events}.jsonl` (systemd `nq-healthd.service`, enabled by the device package). Since 2026-08-10 `health.jsonl` has an on-device consumer: **`nexusq-mqtt`** tails the latest sample (used only when fresh ≤60 s) and republishes it — plus its own extras — to MQTT / Home Assistant (see `userspace/nexusq-mqtt/README.md`); a change to healthd's field names/semantics now also touches the MQTT state JSON + HA discovery templates. Since **mqtt r2** (2026-08-13) that coupling is explicit: the payload carries a **`led_stalled` verdict** derived from healthd's own `led_stall` + `nq_resp`/`nq_progress` distress co-signal — so changing what `nq_progress` means (as device **r72** did) changes what the app and HA alarm on |
 | `pmos/device-google-steelhead/nq-diag-snapshot` | device | comprehensive read-only "log everything" one-shot dump |
 | `scripts/diag/nqctl` | host | reach the device over the best link (ethernet `10.42.0.2` first, then USB-net / WiFi / serial), incl. `net-usb up` (RNDIS gadget + host NAT) |
 | `scripts/diag/nq-collect` | host | **the engine**: connect → snapshot → pull/burst samples → save locally → analyze |
@@ -342,6 +342,19 @@ above; on r13-with-healthd-≤r71 it was firing false CRITs on idle devices.)*
 >   CPU/60 s (−60 %), production 2.3 % of a core, system idle fork rate
 >   14 → 3.2/s. **JSONL schema unchanged** — captures parse identically.
 >   See `docs/2026-08-13-idle-opp-residency-measurement.md`.
+>   **r77 (2026-08-20, the C rewrite)**: even post-diet the shell measured
+>   3.08 % of a core; the C daemon measures **0.55 %**, forks 2.45 → 0.75/s,
+>   schema verified field-by-field against the shell.
+> - **Log rotation stopped producing `health.jsonl` on r77–r79 (fixed r80,
+>   2026-08-23)** — the C rewrite's `rotate_if_big()` renamed the file past the
+>   4 MiB cap but kept the open `FILE *`, so the daemon appended to the renamed
+>   inode forever: `health.jsonl.1` grows **unbounded** (25 MB seen live) and
+>   `health.jsonl` is never recreated. Symptom: `nexusq-mqtt` publishes
+>   **`healthd_fresh:false`** / HA raises "Health sampler" while
+>   `nq-healthd.service` is active and sampling — check
+>   `ls -la /var/log/nq-health/` before suspecting the daemon. **Fix (r80):**
+>   `rotate_if_big(FILE **outp)` fcloses+NULLs the stream after a successful
+>   rename. `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`.
 > - **`dmesg_err`/`kern_new_err` counts info-level brcmfmac `clm_blob` lines**
 >   (matcher too broad) — cosmetic false positives, refinement candidate
 >   (noted 2026-07-13; not a device fault).

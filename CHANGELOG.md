@@ -6,6 +6,70 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — nq-healthd log rotation orphaned its own stream → "Health sampler" outage in HA (2026-08-23, `device-google-steelhead` r79→**r80**; package-only rebuild, OTA-published, live-verified)
+- Introduced by the C rewrite (r77): `rotate_if_big()` renamed `health.jsonl` →
+  `health.jsonl.1` past the 4 MiB cap but never closed the daemon's open
+  `FILE *` — the stream followed the renamed **inode**, so every later sample
+  went into `.1` (**25 MB and growing, unbounded** — rotation stats a path that
+  no longer existed) and `health.jsonl` was never recreated. `nexusq-mqtt`
+  stats `HEALTH_PATH` → **`healthd_fresh:false`**, HA lost temp/freq/governor
+  and raised the "Health sampler" problem sensor, with `nq-healthd.service`
+  running and sampling the whole time. Bug window r77–r79 (the shell daemon
+  reopened per append, so its rotation was accidentally safe).
+- Fix: `rotate_if_big(FILE **outp)` `fclose()`s + NULLs the stream after a
+  successful rename, so the next sample's reopen creates a fresh `logpath` —
+  readers stat the path, so the path must be what the daemon writes. Fixed in
+  both synced copies (`userspace/nq-healthd/` + `pmos/device-google-steelhead/`).
+  **Verified live: `healthd_fresh:true` on the broker.**
+  `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`.
+
+### Fixed — OTA repo: a missing `OTA_PACKAGES` entry silently froze the fleet at r77 (2026-08-23, `scripts/publish-ota-repo.sh`)
+- `device-google-steelhead` depends on **`nexusq-rootfs-ab`** since the A/B
+  rootfs work (2026-08-20), but `publish-ota-repo.sh` never learned the new
+  aport — the repo offered r78+ with an unsatisfiable dependency, and
+  `apk add --upgrade` treats that as "nothing to do", **exit 0, no error**:
+  the device silently kept **r77** (exactly the range carrying the rotation
+  bug above). Diagnosed via `apk policy` (r80 offered?) + forcing
+  `apk add device-google-steelhead=1.0-r80` (apk finally prints the
+  unsatisfiable dep).
+- Fix: `nexusq-rootfs-ab` added to `OTA_PACKAGES`, repo republished, device
+  upgraded r77→r80 and verified. **Rule: any new runtime `depends=` of an
+  OTA-shipped package goes into `OTA_PACKAGES` in the same change.** Also
+  published `nexusq-kernel-ota` **0.1.0-r3** (built 2026-08-20, had sat in the
+  workdir).
+
+### Fixed in the field — 5 GHz back: router pinned to channel 36 (2026-08-23, no code change)
+- The 2026-08-20 DFS finding resolved as recommended: the AP had auto-selected
+  **ch100/5500 MHz**, which the BCM4330 (`ccode=US`, world regdomain) never
+  reports; Petr pinned the router to **ch36** → the Q re-associated on its own
+  at **−52 dBm, 5180 MHz**. The device clock had sat in **year 2000** the whole
+  offline stretch (no RTC, no NTP off the USB link); timesyncd fixed it after
+  reconnect, and MQTT telemetry came back online.
+
+### Added — A/B rootfs + rescue initramfs, proven both directions (2026-08-20/21, `nexusq-rootfs-ab` r1 · `nexusq-kernel-ota` r3 · device r77–r79) *(backfilled 2026-08-23)*
+- p13/p14 A/B rootfs split with the slot marker in p7 misc and health-gated
+  auto-promote; the "u-boot ignores the ramdisk" belief was WRONG (bad load
+  address — `0x84000000` works). The built boot.img now carries the A/B
+  initramfs (repack is byte-reproducible); the kernel-OTA packer takes a
+  ramdisk (`current_ramdisk`) so a kernel update no longer deletes it; the
+  promote units gained the `After=` ordering fix (a `Type=oneshot` `WantedBy=`
+  blocks its own target). r79 trial-booted through the kernel-OTA slot and
+  promoted in the same boot. Full record:
+  `docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md`.
+
+### Changed — nq-healthd rewritten in C · nexusq-mqtt volume from the control bridge (2026-08-20, device **r77** · `nexusq-mqtt` **r4**) *(backfilled 2026-08-23)*
+- The shell healthd still cost **3.08 % of a core** after every diet — roughly
+  three quarters of all idle CPU. The C daemon measures **0.550 %**, system
+  forks 2.45 → **0.75/s**; every probe that forked is now a syscall, the JSONL
+  schema verified field-by-field against the shell (`--once` side by side, 30
+  fields identical — which caught an `avr_irq` parser bug and preserved
+  `dmesg_err`'s historical semantics). `systemctl show` stays the one rationed
+  fork.
+- `nexusq-mqtt` r4 closed the last idle `pactl` forker: volume/mute now comes
+  from `nexusq-control`'s persistent subscribe bridge over loopback (mixer
+  probes kept as fallback; 6 new bridge-failure tests, 34 pass). Forks
+  0.75 → 0.71/s.
+
 ### Measured — idle OPP residency after the 08-13 fixes: **70.7 % @ 350 MHz** (2026-08-16, 79 h passive window)
 - The A/B the 08-13 session asked for, settled from 79 h of undisturbed idle:
   **350 MHz 70.69 %** (was 60.5 %, **+10.2 pp**) · 700 MHz 22.56 % · 920 MHz

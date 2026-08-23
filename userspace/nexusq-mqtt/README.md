@@ -67,22 +67,27 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
     the window is honestly shorter (since daemon start); a kernel counter
     reset discards the history rather than poisoning an hour of readings
   - `wifi_rssi_dbm`, `wifi_ssid` — `iw dev wlan0 link`
-  - `volume_pct`, `muted` — the mixer that currently owns the output: TAS5713
-    hardware mixer while USB-audio's alsaloop bridges the gadget straight to
-    the amp (same `pgrep -x alsaloop` detection as `nq-vol`), the uid-10000
-    PulseAudio default sink otherwise.
-    ⚠️ **Open follow-up (quantified on-device 2026-08-13, NOT yet done):** this
-    is the **last idle `pactl` forker on the box**. Each 30 s publish forks
-    `pactl get-sink-volume` + `pactl get-sink-mute` (plus the `pgrep`) —
-    ≈ **0.09 % of a core**, matching the ~47 s of `pactl` CPU seen over a 14 h
-    idle night. After nexusqd r13 replaced its own 1.5 s gate poll with a
-    persistent `pactl subscribe`, this is what remains. **Proposal:** take
-    volume/mute from **`nexusq-control`**, which already runs a persistent
-    `pactl subscribe` bridge and therefore knows the current value without
-    forking. See `docs/2026-08-13-idle-opp-residency-measurement.md`.
+  - `volume_pct`, `muted` — **since r4 (2026-08-20) asked from
+    `nexusq-control` over loopback first** (it holds a persistent `pactl
+    subscribe` bridge, so it knows the value without forking — one round trip,
+    no processes; 6 tests cover the bridge down/closing early/answering
+    garbage, telemetry never depends on it being healthy). Fallback = the old
+    mixer probes: TAS5713 hardware mixer while USB-audio's alsaloop bridges
+    the gadget straight to the amp (same `pgrep -x alsaloop` detection as
+    `nq-vol`), the uid-10000 PulseAudio default sink otherwise.
+    *(This closed the 2026-08-13 follow-up — the last idle `pactl` forker,
+    ≈0.09 % of a core; measured system fork rate 0.75 → 0.71/s. See
+    `docs/2026-08-13-idle-opp-residency-measurement.md`.)*
   - `services` — `{spotify, airplay, roon, usbaudio}` booleans (instant
     cgroup.procs read, the nexusq-control pattern)
   - `uptime_s`, `healthd_fresh`, `healthd_age_s`
+    ⚠️ `healthd_fresh:false` with `nq-healthd.service` active is not proof of
+    a dead sampler: device **r77–r79** (fixed **r80**, 2026-08-23) had a
+    healthd rotation bug that renamed `health.jsonl` without closing the
+    stream — the daemon wrote into a growing `health.jsonl.1` forever and
+    never recreated the path this daemon stats. Check
+    `ls -la /var/log/nq-health/` first.
+    `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`
 
 ## Home Assistant entities
 

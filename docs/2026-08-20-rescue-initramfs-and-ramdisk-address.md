@@ -327,6 +327,12 @@ image change, and DFS client scanning on a BCM4330 is not something to depend on
 Until then the Q has no route off the USB link: no NTP (hence a clock reading
 2000, and tar warning about every timestamp it extracts) and no apk or OTA.
 
+**Resolved 2026-08-23** — Petr pinned the router's 5 GHz radio to **channel
+36** as recommended; the Q re-associated on its own at **−52 dBm,
+ch36/5180 MHz**, timesyncd fixed the year-2000 clock, and MQTT telemetry came
+back (after two further bugs the outage had been masking — see
+`docs/2026-08-23-healthd-rotation-and-ota-holdback.md`).
+
 ## Still to do
 
 The **boot image the build produces does not carry the A/B initramfs** — it is

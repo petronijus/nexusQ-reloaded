@@ -91,6 +91,12 @@ gate ≤60 s) — so a healthd field rename/semantic change also breaks the MQTT
 Assistant view, and `systemctl status nexusq-mqtt` + the HA `nexusq` device are an
 extra remote health read when ssh is down (`nexusq/status` retained topic =
 online/offline LWT).
+⚠️ **`healthd_fresh:false` with `nq-healthd.service` active ≠ a dead sampler**
+— on device **r77–r79** (fixed **r80**, 2026-08-23) the C daemon's log rotation
+renamed `health.jsonl` without closing its stream, so it wrote into
+`health.jsonl.1` forever (unbounded) and `health.jsonl` was never recreated.
+Check `ls -la /var/log/nq-health/` first: `.jsonl` absent + a growing `.1` =
+that bug, not a hung daemon. `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`.
 
 ## 3. Hardware-inventory sweep (answer the concrete questions)
 
@@ -305,7 +311,10 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   ssh poll loop inflated `sshd`/`init.scope` so those two are NOT trustworthy —
   forks **2.59/s**; **`nq-healthd` 2.43 % is the new #1**, nexusqd 0.14 %, and
   **`brcmf` WiFi kworker at ~34–40 wakeups/s dominates all other wakeup sources
-  combined**); a
+  combined** — the healthd lead was closed 2026-08-20 by the **r77 C rewrite**
+  (3.08 → 0.55 % of a core, system forks 2.45 → 0.75/s; `nexusq-mqtt` r4 also
+  dropped its 30 s `pactl` poll), so on **r77+** expect healthd ≈0.55 % and
+  `brcmf` as the remaining lead); a
   sustained ~920 MHz idle hover on a ≥v1.8.2 image is a **regression** (that
   was the ondemand microburst sawtooth + healthd's own systemctl churn, both
   fixed in v1.8.2; healthd's PAM churn re-fixed r68, fork churn fixed r71,
