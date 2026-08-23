@@ -17,6 +17,10 @@ class MockClient implements NexusQClient {
   String _output = 'speaker';
   bool _playing = true;
   int _trackIdx = 0;
+  final Map<String, double> _eq = {'bass_db': 0.0, 'treble_db': 0.0};
+
+  Map<String, dynamic> get _eqState =>
+      {'supported': true, 'bass_db': _eq['bass_db'], 'treble_db': _eq['treble_db']};
 
   static const _outputs = [
     {'id': 'speaker', 'label': 'Reproduktor', 'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback', 'available': true},
@@ -138,6 +142,18 @@ class MockClient implements NexusQClient {
         _trackIdx = (_trackIdx - 1 + _tracks.length) % _tracks.length;
         _emitNowPlaying();
         return {};
+      case 'getEq':
+        return _eqState;
+      case 'setEq':
+        for (final k in ['bass_db', 'treble_db']) {
+          final v = p[k];
+          if (v != null) {
+            if (v is! num) throw NexusQError('bad_request', '$k must be a number');
+            _eq[k] = v.toDouble().clamp(-12.0, 12.0);
+          }
+        }
+        _events.add(NexusQEvent('eqChanged', _eqState));
+        return _eqState;
       default:
         throw NexusQError('unknown_method', method);
     }
