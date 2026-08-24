@@ -17,10 +17,47 @@ class MockClient implements NexusQClient {
   String _output = 'speaker';
   bool _playing = true;
   int _trackIdx = 0;
-  final Map<String, double> _eq = {'bass_db': 0.0, 'treble_db': 0.0};
+  // Mirrors the device's 7-band parametric EQ (PROTOCOL §14) closely enough that
+  // widget tests exercise the real shapes: bands in, bands out, plus the
+  // bass_db/treble_db compatibility view.
+  static const _eqDefaults = [
+    ['lowshelf', 100.0], ['peaking', 200.0], ['peaking', 430.0],
+    ['peaking', 900.0], ['peaking', 1800.0], ['peaking', 3800.0],
+    ['highshelf', 8000.0],
+  ];
+  late final List<Map<String, dynamic>> _eqBands = [
+    for (final d in _eqDefaults)
+      {'type': d[0], 'freq_hz': d[1], 'gain_db': 0.0,
+       'q': d[0] == 'peaking' ? 0.707 : 1.0, 'enabled': true}
+  ];
+  double _eqPreamp = 0.0;
 
-  Map<String, dynamic> get _eqState =>
-      {'supported': true, 'bass_db': _eq['bass_db'], 'treble_db': _eq['treble_db']};
+  double get _eqHeadroom {
+    var peak = 0.0;
+    for (final b in _eqBands) {
+      final g = (b['gain_db'] as num).toDouble();
+      if ((b['enabled'] as bool) && g > peak) peak = g;
+    }
+    return double.parse((peak + _eqPreamp).toStringAsFixed(2));
+  }
+
+  int _eqShelf(String type) => _eqBands.indexWhere((b) => b['type'] == type);
+
+  Map<String, dynamic> get _eqState => {
+        'supported': true,
+        'bands': [for (final b in _eqBands) Map<String, dynamic>.from(b)],
+        'preamp_db': _eqPreamp,
+        'headroom_db': _eqHeadroom,
+        'max_bands': _eqBands.length,
+        'limits': {
+          'gain_db': 12.0,
+          'freq_hz': [20.0, 20000.0],
+          'q': [0.3, 8.0],
+          'preamp_db': [-24.0, 0.0],
+        },
+        'bass_db': _eqBands[_eqShelf('lowshelf')]['gain_db'],
+        'treble_db': _eqBands[_eqShelf('highshelf')]['gain_db'],
+      };
 
   static const _outputs = [
     {'id': 'speaker', 'label': 'Reproduktor', 'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback', 'available': true},
@@ -145,15 +182,46 @@ class MockClient implements NexusQClient {
       case 'getEq':
         return _eqState;
       case 'setEq':
-        for (final k in ['bass_db', 'treble_db']) {
-          final v = p[k];
-          if (v != null) {
-            if (v is! num) throw NexusQError('bad_request', '$k must be a number');
-            _eq[k] = v.toDouble().clamp(-12.0, 12.0);
+        final bands = p['bands'];
+        if (bands != null) {
+          if (bands is! List) throw NexusQError('bad_params', 'bands must be a list');
+          for (var i = 0; i < bands.length && i < _eqBands.length; i++) {
+            final b = bands[i];
+            if (b is! Map) continue;
+            for (final k in ['freq_hz', 'gain_db', 'q']) {
+              final v = b[k];
+              if (v is num) _eqBands[i][k] = v.toDouble();
+            }
+            if (b['enabled'] is bool) _eqBands[i]['enabled'] = b['enabled'];
           }
+        }
+        for (final e in [['bass_db', 'lowshelf'], ['treble_db', 'highshelf']]) {
+          final v = p[e[0]];
+          if (v != null) {
+            if (v is! num) throw NexusQError('bad_params', '${e[0]} must be a number');
+            _eqBands[_eqShelf(e[1])]['gain_db'] = v.toDouble().clamp(-12.0, 12.0);
+          }
+        }
+        if (p['preamp_db'] is num) {
+          _eqPreamp = (p['preamp_db'] as num).toDouble().clamp(-24.0, 0.0);
+        }
+        if (p['auto_preamp'] == true) {
+          _eqPreamp = 0;
+          _eqPreamp = _eqHeadroom > 0 ? -_eqHeadroom : 0;
         }
         _events.add(NexusQEvent('eqChanged', _eqState));
         return _eqState;
+      case 'listEqPresets':
+        return {
+          'presets': [
+            {'id': 'flat', 'label': 'Flat', 'preamp_db': 0.0,
+             'bands': [for (final b in _eqBands)
+               {...b, 'gain_db': 0.0}]},
+            {'id': 'bass', 'label': 'Bass boost', 'preamp_db': -6.0,
+             'bands': [for (var i = 0; i < _eqBands.length; i++)
+               {..._eqBands[i], 'gain_db': i == 0 ? 6.0 : 0.0}]},
+          ]
+        };
       default:
         throw NexusQError('unknown_method', method);
     }

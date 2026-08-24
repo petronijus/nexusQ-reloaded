@@ -4,6 +4,7 @@ import '../protocol/models.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
 import '../widgets/device_sphere.dart';
+import '../widgets/eq_card.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
 import 'settings_screen.dart';
@@ -138,6 +139,13 @@ class HomeScreen extends StatelessWidget {
                       ),
 
                       // --- BRIGHTNESS ------------------------------------------
+                      // --- EQ --------------------------------------------------
+                      // Compact form: the curve and the presets, which is what
+                      // gets touched from the couch. Per-band editing lives in
+                      // Settings -> Sound so the home screen stays a remote.
+                      const _SectionHeader('EQUALIZER'),
+                      EqCard(client: controller.client, compact: true),
+
                       const _SectionHeader('BRIGHTNESS'),
                       Row(
                         children: [
