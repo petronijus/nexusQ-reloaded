@@ -52,6 +52,92 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > speaker tests) before handing the sliders to Petr. That same session should
 > carry the `down_threshold=60` listening test — one check, both changes.
 
+> ## 🎧 IN PROGRESS (2026-08-24) — PulseAudio burns ~25 % of a core on silence
+>
+> **Where we are:** `down_threshold=60` fixed the *power* (6.03× → 1.07×, 84 →
+> 68 °C, live on the device). What it did NOT fix is that the box still *does*
+> ~25 % of a core of work for a stream of digital silence. Petr: "to že se pořád
+> počítá ticho není úplně dobrej stav."
+>
+> **The one number that frames everything:** `alsaloop` moves the same 48 kHz
+> stereo stream one hop for **23 cycles/sample**; PulseAudio's sink thread costs
+> **664**. ~30× for the same job, so this is not "audio is expensive".
+> Full measurements: `docs/2026-08-24-usb-audio-idle-cost.md` § Follow-up.
+>
+> **Ground rules for this whole sequence:**
+> - **Everything below is measured on SILENCE**, so a badly-chosen resampler or
+>   latency cannot damage anything. Only the *final* config needs Petr's listening
+>   test. That is what makes it safe to be aggressive with the experiments.
+> - **One change at a time, measured before and after.** Two wrong guesses were
+>   already made on this problem by reasoning instead of measuring (`tsched=0` as
+>   a "leftover"; PA "restart-looping"). Do not repeat that.
+> - Baseline to compare against, per PA thread @ 350 MHz, USB Audio live, ring
+>   blanked: **sink 17.80 %, aloop source 4.47 %, PA main 3.67 %, alsaloop 0.63 %**;
+>   sink does **200 wakeups/s** and **664 cycles/sample**; period 1200 frames
+>   (25 ms), buffer 4800, `default-fragments=4 × 25 ms`, `resample-method=auto`,
+>   `tsched=0`, everything pinned to 48 kHz.
+>
+> ### Step 1 — get a profiler, or prove we can live without one ⬜
+> The kernel already has `CONFIG_PERF_EVENTS` (`perf_event_paranoid=2` exists);
+> only the userspace `perf` package is missing. Try `apk add perf` from the
+> pinned repos; if there is no armv7 build, fall back to Step 2's differential
+> method instead of burning time building perf. **Done when:** either a working
+> `perf record` on the sink thread, or a written decision that we go differential.
+>
+> ### Step 2 — split the 17.80 % into its parts ⬜
+> If perf: `perf record -t <sink tid> -F 199 -g -- sleep 60`, then report the
+> function breakdown (resampler vs format conversion vs mixing vs rewind vs
+> overhead). If no perf: A/B `resample-method` on silence —
+> `auto` (today) vs `trivial` (cheapest possible) vs `speex-fixed-1` (integer,
+> usually the right pick on ARM). `trivial` is a **diagnostic only**: it corrects
+> drift by dropping/duplicating samples, which clicks on real audio. The delta
+> `auto → trivial` *is* the resampler's share of the 17.80 %.
+> **Done when:** we can say what fraction is the resampler and what is not.
+>
+> ### Step 3 — chase the 5× wakeups ⬜
+> The sink wakes **200×/s** where a 25 ms period needs **40**. With `tsched=0` the
+> extra wakeups should be `module-loopback` pushing ~5 ms chunks plus rewinds.
+> Levers to test: an explicit `latency_msec` on the loopback (the journal shows it
+> losing the argument — `Cannot set requested sink latency of 40.00 ms, adjusting
+> to 100.00 ms`, and `Configured latency of 120.00 ms is smaller than minimum
+> latency`), and `default-fragment-size-msec`. Also check the odd **96000-frame
+> period** on the snd-aloop capture side — a 2 s period there looks wrong.
+> **Done when:** wakeups/s explained, and reduced or proven irreducible.
+>
+> ### Step 4 — pick the config, then ONE listening test ⬜
+> Combine whatever Steps 2–3 won, re-measure on silence, then hand Petr a single
+> listening test. **Bundle it with the two already-pending listening items so he
+> is asked once, not three times:** `down_threshold=60` and the hardware EQ.
+> **Do NOT touch `tsched=0`** as part of this — it is a deliberate fix for the
+> periodic playback crackle on this OMAP4 (`device-google-steelhead.trigger`),
+> not a leftover. It only moves if a listening test says so, on its own.
+>
+> ### Step 5 — deploy nexusqd r14 ⬜
+> Independent of everything above, already built, worth **−5.24 % of a core**
+> (of which two thirds is nexusqd's socket chatter with PA, not audio). Gates the
+> LED render tap on silence instead of on "a sink-input exists".
+>
+> ### Step 6 — stop computing silence at all ⬜ ← the real prize
+> Detect that the UAC2 stream is digital silence and cork or tear down the
+> loopback, so the loaded `module-suspend-on-idle` can finally suspend the sink
+> **and the amp powers down**. Worth ~20 % of a core plus the amp's own draw, and
+> it is the only step that addresses Petr's actual objection — that the work
+> happens at all. ⚠️ Delicate: must not clip the start of real audio; this is the
+> path that took r65→r70 to stabilise. Design it after Steps 2–3, because if the
+> per-sample cost collapses first, the urgency (and maybe the design) changes.
+>
+> ### Step 7 — the latency creep, on a long window ⬜
+> `module-loopback` logged `Source minimum latency increased to 16 → 26 → 36 ms`
+> over four hours on 2026-08-23 — the same shape as the 2026-08-08 runaway r65
+> was built to kill, in slow motion. Needs a multi-day passive window to see
+> whether it plateaus or keeps climbing. Do not act before there is data.
+>
+> ### Already queued, unrelated to PulseAudio (so it is not lost)
+> - **device r81** (`down_threshold=60`) — live on the device, **not in a built
+>   image**; needs a rootfs build.
+> - **kernel r49 + nexusq-control r31** — hardware EQ, built, undeployed.
+> - **app 1.14.0+35** — EQ card, built, **not released** (needs Petr's approval).
+
 > ## 🔴 NEXT SESSION — a complete COLD build (agreed with Petr, 2026-08-13)
 >
 > Everything we ship is built on the **warm** `nexusq-workdir` volume, which
