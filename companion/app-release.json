@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.13.1",
-  "versionCode": 34,
-  "notes": "Health panel: the permanent \"LED ring frame is stalled\" false alarm is gone. The ring's screensaver freezes a static frame by design, which drove the old counter-based rule forever; the Q now publishes a qualified verdict instead, so a genuine ring hang still shows and an idle device does not.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.13.1/nexusq-companion-1.13.1.apk",
+  "version": "1.14.0",
+  "versionCode": 35,
+  "notes": "Equalizer in Settings → Sound: bass and treble, ±12 dB, plus Flat. The filtering runs in the amplifier's own DSP, so it costs no CPU, adds no latency, and one setting covers Spotify, AirPlay, Roon and USB Audio alike. Needs kernel 6.12.12-r50 or newer — the card greys itself out on older ones.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.14.0/nexusq-companion-1.14.0.apk",
   "minAndroidSdk": 21
 }
