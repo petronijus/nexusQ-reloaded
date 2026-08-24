@@ -13,13 +13,21 @@ import '../theme/nexusq_theme.dart';
 /// Tapping another band moves the arming; tapping outside gives scrolling back.
 ///
 /// This is Petr's design and it replaces two failed attempts at out-competing
-/// the enclosing ListView in Flutter's gesture arena. Those attempts were the
-/// wrong shape of solution: a `pan` recognizer accepts after `kPanSlop` (36 px)
-/// where a scrollable's vertical drag accepts after `kTouchSlop` (18 px), so
-/// the scroll wins fairly; forcing acceptance makes BOTH run; and a vertical
-/// recognizer that should win on equal terms still did not, on a real finger.
-/// Arming sidesteps the contest entirely — while armed the scrollable is not in
-/// the arena, because the page is told not to scroll.
+/// the enclosing ListView in Flutter's gesture arena. Those were the wrong shape
+/// of solution: a `pan` recognizer accepts after `kPanSlop` (36 px) where a
+/// scrollable's vertical drag accepts after `kTouchSlop` (18 px), so the scroll
+/// wins fairly; forcing acceptance makes BOTH run; and a vertical recognizer
+/// that should win on equal terms still did not, on a real finger.
+///
+/// Arming settles it by making intent explicit. While a band is armed the curve
+/// CLAIMS the arena at pointer-down (`_ClaimingDragRecognizer`) — a legitimate
+/// win, so the scrollable is rejected rather than running alongside. Crucially
+/// the claim only exists inside the plot: a touch outside never reaches this
+/// recognizer, so the page scrolls from the very first gesture instead of
+/// needing one tap to disarm and a second to scroll.
+///
+/// While armed, the start of a drag also re-arms whatever band it began on, so
+/// switching bands is one gesture rather than a tap followed by a drag.
 ///
 /// Handles move vertically only; band frequencies are fixed and width/Q lives on
 /// the slider under the curve. Hit-testing is therefore by horizontal distance
@@ -105,9 +113,15 @@ class _EqCurveState extends State<EqCurve> {
       final enabled = widget.enabled;
 
       void start(DragStartDetails d) {
-        // Only an armed band moves. Without arming this would be competing with
-        // the page scroll again, which is what never worked.
-        _dragging = widget.armed.value ?? -1;
+        // Re-arm on whatever the gesture started on, so moving to another band
+        // is a single drag rather than tap-then-drag.
+        final i = _nearest(d.localPosition, size);
+        if (i < 0) return;
+        _dragging = i;
+        if (widget.armed.value != i) {
+          widget.armed.value = i;
+          widget.onSelect(i);
+        }
       }
 
       void update(DragUpdateDetails d) {
@@ -125,9 +139,9 @@ class _EqCurveState extends State<EqCurve> {
         behavior: HitTestBehavior.opaque,
         gestures: {
           if (enabled && widget.armed.value != null)
-            VerticalDragGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
-              () => VerticalDragGestureRecognizer(debugOwner: this),
+            _ClaimingDragRecognizer:
+                GestureRecognizerFactoryWithHandlers<_ClaimingDragRecognizer>(
+              () => _ClaimingDragRecognizer(debugOwner: this),
               (r) {
                 r.onStart = start;
                 r.onUpdate = update;
@@ -324,4 +338,22 @@ double plotFreq(List<EqBand> bands, double x, double w) {
   final span = w - 2 * _edgeInset;
   if (hi <= lo || span <= 0) return bands.first.freqHz;
   return math.exp(lo + ((x - _edgeInset) / span).clamp(0.0, 1.0) * (hi - lo));
+}
+
+/// A vertical drag that claims the arena the moment the finger lands.
+///
+/// Only attached while a band is armed, and only over the plot, so it cannot
+/// steal anything it should not: outside the curve this recognizer never sees
+/// the pointer and the page scrolls normally. Winning at pointer-down (rather
+/// than after the slop) is what makes an armed curve immune to the enclosing
+/// list — and doing it by `resolve(accepted)` is a real win, unlike overriding
+/// `rejectGesture`, which leaves the scrollable running too.
+class _ClaimingDragRecognizer extends VerticalDragGestureRecognizer {
+  _ClaimingDragRecognizer({super.debugOwner});
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    resolve(GestureDisposition.accepted);
+  }
 }

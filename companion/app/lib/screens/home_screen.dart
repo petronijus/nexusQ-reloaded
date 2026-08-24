@@ -21,12 +21,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  /// Which EQ band currently owns gestures, or null when the page may scroll.
+  /// Which EQ band currently owns gestures, or null.
   ///
-  /// Trying to out-compete the list for the drag failed twice; this instead
-  /// stops the competition existing. While a band is armed the list is given
-  /// NeverScrollableScrollPhysics, so only the curve is listening. A tap
-  /// anywhere outside the plot disarms and hands scrolling back.
+  /// While armed, the curve claims the gesture at pointer-down — but only
+  /// inside the plot, so the list stays fully scrollable everywhere else and a
+  /// drag that starts outside scrolls immediately rather than needing a tap to
+  /// disarm first. A touch outside also disarms, via the Listener below.
   final ValueNotifier<int?> _eqArmed = ValueNotifier<int?>(null);
   final GlobalKey _eqCurveKey = GlobalKey();
 
@@ -111,12 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onRetry: controller.reconnectNow,
                   ),
                 Expanded(
-                  child: ValueListenableBuilder<int?>(
-                    valueListenable: _eqArmed,
-                    builder: (context, armed, _) => ListView(
-                    physics: armed != null
-                        ? const NeverScrollableScrollPhysics()
-                        : null,
+                  child: ListView(
                     padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin,
                         8, NexusQSpace.standardMargin, 24),
                     children: [
@@ -324,7 +319,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         curveKey: _eqCurveKey,
                       ),
                     ],
-                  ),
                   ),
                 ),
               ],

@@ -420,6 +420,53 @@ void main() {
     expect(find.byType(EqCurve), findsOneWidget);
   });
 
+  testWidgets('armed, a drag starting outside the plot scrolls immediately',
+      (tester) async {
+    // Petr: "kdyz se tapne a rovnou draguje mimo ten equalizer, tak uz to zacne
+    // scrollovat" — it used to take one tap to disarm and a second gesture to
+    // scroll, because the whole list had been frozen. The claim is now scoped to
+    // the plot instead.
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(curve.center); // arm
+    await tester.pumpAndSettle();
+
+    final before = _scroll.offset;
+    await tester.dragFrom(
+        Offset(curve.center.dx, curve.bottom + 300), const Offset(0, -120));
+    await tester.pumpAndSettle();
+
+    expect(_scroll.offset, greaterThan(before),
+        reason: 'an armed EQ froze the whole page instead of just its plot');
+  });
+
+  testWidgets('armed, a drag switches to whatever band it started on',
+      (tester) async {
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(Offset(curve.left + 4, curve.center.dy)); // arm band 0
+    await tester.pumpAndSettle();
+
+    // now drag the LAST band directly, without tapping it first
+    await tester.dragFrom(
+        Offset(curve.right - 4, curve.center.dy), const Offset(0, -30));
+    await tester.pumpAndSettle();
+
+    final sent = (client.calls.last.$2!['bands'] as List)
+        .map((b) => ((b as Map)['gain_db'] as num).toDouble())
+        .toList();
+    expect(sent.last, greaterThan(0.5),
+        reason: 'the drag did not move the band it started on');
+    expect(sent.first, closeTo(0, 0.05),
+        reason: 'it moved the previously armed band instead');
+  });
+
   testWidgets('a preset is applied as one setEq with its bands and preamp',
       (tester) async {
     final client = _RecordingClient();
