@@ -29,9 +29,11 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > at the 100 Hz / 8 kHz design frequencies, independent bands, flat = true unity.
 > Full record: `docs/2026-08-24-eq-biquad-write-broken.md`.
 >
-> **Remaining:** a low-volume (≤1–2 %) listening test, and the **app 1.14.0+35
-> release, which needs Petr's approval**. All 14 biquads are currently at unity and
-> `/etc/nexusq/eq.json` is flat.
+> **✅ COMPLETE 2026-08-24.** App **1.14.0+35** built (23/23 tests, EQ verified
+> present in the binary), released as `app-v1.14.0`, and the OTA manifest points at
+> it — Petr updated over OTA, tried the sliders and confirmed: *"testoval jsem to a
+> funguje to výborně."* Issue #2 is done end to end: request → hardware EQ in the
+> amp's DSP → kernel r50 → app → heard and approved.
 >
 > ## 🎯 ORIGINAL PLAN (2026-08-23) — Hardware EQ (GitHub issue #2)
 >

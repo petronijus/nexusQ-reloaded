@@ -71,8 +71,10 @@ ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
    wire **and** by frequency response from coefficients read off the amp
    (+3.00 dB @ 20 Hz for bass +3, half-gain exactly at 100 Hz / 8 kHz, flat =
    unity). `docs/2026-08-24-eq-biquad-write-broken.md`.
-   **Still owed:** a ≤1–2 % listening test, and the **app 1.14.0+35 release —
-   needs Petr's approval**. Biquads are at unity, `eq.json` flat.
+   **✅ CLOSED.** App **1.14.0+35** released (`app-v1.14.0`), OTA manifest bumped,
+   Petr updated over OTA and confirmed the sliders work — *"funguje to výborně."*
+   **GitHub issue #2 is delivered end to end** and can be closed; a reply to
+   @terierbread360 is still owed (needs Petr's go-ahead — it is a public comment).
 2b. ✅ **DONE — Petr ran the listening test 2026-08-24 and passed it** ("za mě
    dobrý") for `down_threshold=60` **and** the NEON resampler. Objective backing
    from the same window: **94.28 % @ 350 MHz**, die **67 °C**, **777 governor

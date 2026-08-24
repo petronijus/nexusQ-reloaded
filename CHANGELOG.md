@@ -6,6 +6,18 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Shipped — hardware EQ, GitHub issue #2, end to end (2026-08-24, app **1.14.0+35**)
+- Companion app **1.14.0+35** built (23/23 tests, EQ strings verified present in the
+  binary rather than assumed), released as `app-v1.14.0`, OTA manifest bumped to
+  versionCode 35 and the download path checked live (HTTP 200, 55 809 137 B).
+- **Petr updated over OTA and confirmed it works.** Request → biquads in the
+  TAS5713's own DSP → kernel r49 → the 32-bit write bug → kernel r50 → app → heard
+  and approved, all in one day.
+- Release notes carry the one thing feature-detection cannot catch: on kernel r49
+  the controls exist so the card looks available, but the write path is broken.
+  r49 was published for a few hours and is superseded by r50.
+
+
 ### Fixed — the hardware EQ works: an upstream 32-bit bug (2026-08-24, kernel **r50**, patch **0046**)
 - `tas571x_coefficient_info()` advertises `uinfo->value.integer.max = 0xffffffff`,
   but `snd_ctl_elem_info` carries bounds in a `long` — **32-bit on armv7**, so the
