@@ -3,6 +3,56 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🎛 IN PROGRESS (2026-08-24) — parametric 7-band EQ with a live curve (Petr's ask)
+>
+> Petr, after using the bass/treble card: *"chtěl bych nějakej lepší equalizer, aby
+> byla vidět křivka a bylo tam víc handlů, prostě takovej ten pěknej moderní
+> standard"* — plus **presets**, and **on the home screen**. Chosen shape:
+> **fully parametric, draggable handles** (freq × gain, Q as a second gesture).
+>
+> **The hardware allows exactly this.** The TAS5713's main EQ bank is **7 biquads
+> per channel** (`CH1/CH2 - Biquad 0..6`); today only two are used (low shelf
+> 100 Hz, high shelf 8 kHz), so **five sit idle**. A 7-band parametric EQ fits
+> entirely in the amp's DSP — still zero CPU, still post-mix, still every source.
+> Measured 2026-08-24: engaging the EQ costs **nothing** (PulseAudio 22.24 % flat
+> vs 22.11 % at bass+6/treble+6; the biquad is in the path either way). The only
+> cost is the one-off ~300 ms write when a handle is released.
+>
+> ### Band model (stereo-linked: CH1 mirrored to CH2)
+> `{type, freq_hz, gain_db, q, enabled}` per band, 7 bands.
+> Defaults: band 0 **lowshelf 80 Hz**, bands 1–5 **peaking** at 200 / 500 / 1250 /
+> 3150 / 8000 Hz, band 6 **highshelf 12.5 kHz**. Limits: freq 20 Hz–20 kHz,
+> gain ±12 dB, Q 0.3–8. Coefficients stay RBJ at the chain's pinned 48 kHz.
+>
+> ### Preamp — part of "the modern standard", and a real safety item here
+> Seven bands can stack to well past +12 dB and clip. The amp's only gains
+> (`Master Volume`, `Speaker Volume`) are the **user's volume** and must not be
+> hijacked, so the preamp folds into **band 0's `b` coefficients** — exact and
+> free. `getEq` also returns the computed **`headroom_db`** (the summed response's
+> peak) so the app can offer one-tap auto-preamp. ⚠️ 3.23 is bounded to ±4.0, so
+> `_eq_pack` must gain a **range refusal** alongside its existing stability
+> refusal — a coefficient that would wrap is worse than a filter that is declined.
+>
+> ### Protocol §14 v2 — extend, do not break
+> `getEq` → `{bands[], preamp_db, headroom_db, max_bands, supported}` **and still
+> `bass_db`/`treble_db`** derived from bands 0/6, so the shipped **1.14.0** app
+> keeps working. `setEq` accepts either shape. New `listEqPresets`; applying a
+> preset is just `setEq` with its bands, so there is one write path, not two.
+>
+> ### App
+> Custom-painted curve (log-f 20 Hz–20 kHz × ±12 dB) with the summed magnitude
+> response, 7 draggable handles, Q gesture, headroom readout, preset chips. Full
+> editor in **Settings → Sound**; a compact read-only-ish card **on the home
+> screen**. The response math is already unit-tested on the device side — port the
+> same formulas so the drawn curve cannot disagree with what the amp does.
+>
+> ### Order of work
+> 1. Device: band model + coefficients + range/stability refusals + §14 v2 + tests.
+> 2. Verify **on the wire** (ftrace) and by transfer function — the acceptance test
+>    that caught the 32-bit bug; a drawn curve is not evidence.
+> 3. App: curve widget + handles + presets + home-screen card + widget tests.
+> 4. Build, release, listening test.
+
 > ## ✅ FIXED (2026-08-24) — Hardware EQ (GitHub issue #2): write path repaired in kernel r50
 >
 > **Deployed and unusable.** Kernel r49 exposes the 14 biquad controls and
