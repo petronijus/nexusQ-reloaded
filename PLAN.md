@@ -319,39 +319,84 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > happens at all. ⚠️ Delicate: must not clip the start of real audio; this is the
 > path that took r65→r70 to stabilise.
 >
-> **Reconnaissance done 2026-08-24 (read-only, on the live device). Two of this
-> step's founding assumptions were wrong — read this before designing anything:**
+> **Measured end to end 2026-08-25 on the live device, box genuinely idle. The
+> design below is determined by data, not assumed:**
 >
-> 1. ⛔ **"Digital silence" does not exist here.** A 2 s `parec` on `usb_in`
->    measured peak **541**, with **185 305 / 192 000 samples non-zero**. An
->    all-zeros test would never fire. The gate must be level-based, with a
->    threshold — which makes "don't clip real audio" a calibration problem, not
->    just a timing one.
-> 2. ⛔ **The host never closes the stream, so there is no free signal.** The
->    gadget capture PCM reports `hw_ptr = 1 401 513 792` frames ≈ **29 200 s = the
->    entire uptime**: the Xiaomi box streams continuously from boot. So UAC2
->    altsetting-0 detection — which would have been perfect, since the host itself
->    declares "not playing" and no audio can be lost — **is not available**. It is
->    worth re-checking against a different source before ruling it out for good.
-> 3. ✅ **The lever is confirmed.** `module-suspend-on-idle` is loaded and
->    demonstrably works on this system: the SPDIF sink reads **SUSPENDED** while
->    the TAS5713 sink reads **RUNNING** with exactly one input — the loopback. So
->    removing or corking that one sink-input is what powers the amp down. This was
->    the biggest unknown and it cost nothing to answer.
-> 4. The loopback runs at `s16le 2ch **48003 Hz**` — the resampler really is live
->    and is the expensive part, as Step 2 assumed.
+> ⚠️ **Correction to the 2026-08-24 note that briefly stood here.** It claimed
+> "digital silence does not exist here — peak 541, 96.5 % of samples non-zero".
+> That capture was taken while **Petr was playing music**; it measured his
+> content, not the idle floor. Re-measured with the source genuinely idle:
+> **960 000 samples, every one exactly 0, one distinct value in the whole
+> record.** The step's original assumption was right. This matters a lot — an
+> exact-zero test needs **no threshold**, so it can never mistake a quiet passage
+> for silence, and calibration disappears from the problem.
 >
-> ⚠️ **Not yet measured, and NOT to be guessed:** the source's true idle floor.
-> The quiet blocks in that capture (peak 9–16) were **gaps inside music Petr was
-> actually playing**, not the box idling — he stopped the session precisely
-> because it was live. Calibrating a threshold from those numbers would be
-> calibrating against content. Take a fresh capture with the box genuinely idle.
+> **1. Idle really is exact digital silence.** `parec` on `usb_in`, 10 s, box
+> idle: peak 0, rms 0, 0/960 000 non-zero. Detection is a zero-test, not a level
+> gate.
 >
-> **Next session, in order:** (a) confirm nothing is playing —
-> `pactl list short sink-inputs` plus a short `parec` peak; (b) capture the true
-> idle floor; (c) prove the amp actually powers down by removing the sink-input by
-> hand; (d) only then design the gate. Per-process CPU attribution was set up but
-> never run — the command is in the session log.
+> **2. The host never closes the stream.** The gadget capture advances 96 432
+> frames per 2 s and its `hw_ptr` covers the entire uptime, so the box streams
+> from boot to forever. UAC2 altsetting-0 detection — where the host itself would
+> declare "not playing" — is therefore unavailable. Worth re-testing against a
+> different source before ruling it out permanently.
+>
+> **3. What it costs, and what each remedy recovers** (60 s / 45 s arms, per
+> process, box idle throughout):
+>
+> | state | pulseaudio | nexusqd | alsaloop | total | amp sink | resume |
+> |---|---|---|---|---|---|---|
+> | today's idle | 27.17 % | 1.15 % | 0.52 % | **28.83 %** | RUNNING | — |
+> | unload `module-loopback` | 0.02 % | 0.07 % | 0.32 % | **0.40 %** | SUSPENDED | module rebuild |
+> | `suspend-sink` only | 9.11 % | 1.20 % | 0.51 % | **10.82 %** | SUSPENDED | 0 ms |
+> | **`suspend-source` + `suspend-sink`** | 0.02 % | 0.04 % | 0.33 % | **0.40 %** | SUSPENDED | **0 ms** |
+>
+> Percentages are of ONE core. So the idle cost is **28.8 %**, above the ~20 %
+> this step was written around, and PulseAudio's resampler is essentially all of
+> it. Suspending the sink alone is not enough: the loopback keeps pulling and
+> resampling into a suspended sink, wasting 9 %.
+>
+> **4. ✅ The lever, decided.** Suspending the **source and the sink together**
+> gives the full 72× saving *and* returns in 0 ms, with every module left loaded —
+> no teardown, no rebuild, and none of the volume/mute restoration the service
+> needs after a fresh `module-loopback` load. `module-suspend-on-idle` is loaded
+> and works here (SPDIF sits SUSPENDED as proof). `alsaloop` keeps running at
+> 0.33 %, which is wanted: the gadget stays drained and the aloop ring stays fresh
+> for an instant restart. (A `module-loopback` reload also measured 0 ms, but
+> suspend/resume avoids rebuilding state at all.)
+>
+> ### The design that follows
+>
+> Sleep on N seconds of exact zeros → `pactl suspend-source usb_in 1` +
+> `suspend-sink <tas5713> 1`. Wake on the first non-zero sample → the same two
+> calls with `0`.
+>
+> **The open problem is WHO WATCHES, and it is asymmetric.** Going to sleep may be
+> lazy and conservative; waking must beat the ~80 ms the aloop ring holds, or the
+> front of the track is lost.
+>
+> - ⛔ **nexusqd cannot do the wake half.** Its visualizer tap is an `arecord` on
+>   the active sink's **monitor** (`nexusqd.c:45`) — downstream of the sink, so a
+>   suspended sink produces nothing to watch. It already has a silence gate
+>   (`AGC_NOISE_FLOOR`) and an r13 sink-input gate, and it is worth reusing for the
+>   sleep half, but it is structurally blind to the return of audio.
+> - ⛔ A `parec` watcher on `usb_in` cannot watch while asleep either: connecting a
+>   stream to a suspended PA source **resumes it**, undoing the sleep.
+> - ✅ **While asleep the aloop capture is free** — PA has closed
+>   `hw:Loopback,1,0` — so a watcher can own it directly, read, and on the first
+>   non-zero close it and un-suspend. Resume is 0 ms and the ring covers ~80 ms,
+>   so nothing should be clipped.
+>
+> So: a small two-mode watcher — `parec` on `usb_in` (or nexusqd's existing
+> verdict) while awake, direct ALSA on `hw:Loopback,1,0` while asleep. Asleep it
+> costs about what alsaloop costs; call it ~0.7 % all-in against today's 28.8 %.
+>
+> **Still to prove when it is built:** that the first note of a track is not
+> clipped (record the sink monitor across a wake and compare against the source),
+> and that repeated sleep/wake cycles do not drift the resampler or leak modules.
+> Not yet measured: whether the amp's own power draw actually falls — the sink
+> suspends, but the TAS5713 `Speaker` mixer still read `[on]`, so the analogue
+> stage may still be biased. Check the codec's bias level, not just the PCM state.
 >
 > ### Step 7 — the latency creep, on a long window ⬜
 > `module-loopback` logged `Source minimum latency increased to 16 → 26 → 36 ms`

@@ -4,7 +4,7 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-24 (latest, night): **saved EQ presets shipped + released · iOS release plumbing created, blocked on one browser step · Step 6 recon corrected two wrong assumptions**
+## Session 2026-08-24/25 (latest, night): **saved EQ presets shipped + released · iOS release plumbing created, blocked on one browser step · Step 6 measured and designed — 28.8 % → 0.4 % of a core, amp suspends, 0 ms return**
 
 ### Shipped and released
 `nexusq-control` **r33** + app **1.16.2+46**, released as `app-v1.16.2` with the
@@ -92,22 +92,41 @@ The first `flutter build ipa` will validate them.
 
 ---
 
-### Step 6 (stop computing silence) — recon only, NOT implemented
+### Step 6 (stop computing silence) — MEASURED AND DESIGNED, not yet implemented
 
-Petr asked for it, then stopped the session because **he was listening to music at
-the time** and the remaining work all mutates the audio path. Nothing was changed
-on the device; every command was a read.
+Two passes: a read-only one while Petr was still listening (stopped as soon as he
+said so), then a full A/B once the source was genuinely idle. **PLAN.md Step 6 now
+carries the whole design and the numbers — read it before writing code.**
 
-**PLAN.md Step 6 has been rewritten with the measurements** — read it before
-designing, because two of that step's founding assumptions turned out to be
-wrong: the idle stream is **not** digital silence (peak 541, 96.5 % of samples
-non-zero), and the host **never closes the stream** (the gadget capture has been
-running for the entire 29 200 s uptime), which rules out the clean
-altsetting-based signal. What *is* confirmed is the lever: the SPDIF sink reads
-SUSPENDED while the amp sink is held awake by exactly one input, the loopback.
+⚠️ **One of my own findings needed correcting.** The first pass concluded "the
+idle stream is not digital silence (peak 541, 96.5 % non-zero)". That capture was
+taken **during his playback** — it measured his music. Re-measured properly:
+**960 000 samples, all exactly 0**. Idle IS digital silence, so detection needs no
+threshold and can never mistake a quiet passage for silence. The lesson is the
+obvious one: a measurement taken in the wrong state answers the wrong question.
 
-⚠️ Do not calibrate a threshold from that capture's quiet blocks — they are gaps
-inside real playback, not the source idling.
+**The cost, and the fix, both measured** (per-process, of one core, box idle):
+
+| state | total | amp sink | resume |
+|---|---|---|---|
+| today's idle | **28.83 %** (PA alone 27.17 %) | RUNNING | — |
+| unload `module-loopback` | 0.40 % | SUSPENDED | module rebuild |
+| `suspend-sink` only | 10.82 % | SUSPENDED | 0 ms |
+| **`suspend-source` + `suspend-sink`** | **0.40 %** | **SUSPENDED** | **0 ms** |
+
+So suspending source *and* sink together is the lever: **72× less CPU, amp sink
+suspended, instant return, nothing unloaded.** Sink-only is not enough — the
+loopback keeps resampling into a suspended sink for 9 %.
+
+**The remaining problem is who watches**, and it is asymmetric: sleeping may be
+lazy, waking must beat the aloop ring (~80 ms). nexusqd cannot do the wake half —
+its tap is on the sink *monitor*, downstream of the thing we suspend — and a
+`parec` watcher would resume the suspended source just by connecting. What works:
+while asleep the aloop capture is free, so a watcher owns `hw:Loopback,1,0`
+directly. Design and the open verification items are in PLAN.md.
+
+Device was left healthy and re-checked: service active, exactly one `alsaloop`,
+exactly two PA modules, sink RUNNING, silence still exactly zero.
 
 **New standing rule, saved to memory:** before mutating the audio path, check
 `pactl list short sink-inputs` and take a short `parec` peak. He may be listening.
