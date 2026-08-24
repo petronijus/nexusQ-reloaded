@@ -75,8 +75,12 @@ ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
    ⚠️ The amp **keeps coefficients across a warm reboot**; recovery is
    `i2cset -y -f 3 0x1b <reg> 00 80 00 00 00×16 i` for `0x29`–`0x36`. All 14 are
    currently unity and `/etc/nexusq/eq.json` is flat — leave it flat.
-2b. **A listening test is still owed for `down_threshold=60`** (does the clock
-   descend mid-track?) and optionally the NEON resampler. That one can go ahead.
+2b. ✅ **DONE — Petr ran the listening test 2026-08-24 and passed it** ("za mě
+   dobrý") for `down_threshold=60` **and** the NEON resampler. Objective backing
+   from the same window: **94.28 % @ 350 MHz**, die **67 °C**, **777 governor
+   transitions (0.37/s)** — the clock genuinely moved during playback — and
+   **zero xrun/underrun/dropout** in dmesg and journal. The governor work is
+   therefore **closed**. ⛔ This did NOT cover the EQ (item 2).
 3. **PLAN.md Step 6 — stop computing silence.** Now the only real fix left for the
    original complaint. Detect that the UAC2 stream is digital silence and cork or
    tear down the loopback so `module-suspend-on-idle` can suspend the sink **and

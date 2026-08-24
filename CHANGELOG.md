@@ -6,6 +6,16 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Confirmed — Petr's listening test passed for `down_threshold=60` + the NEON resampler (2026-08-24)
+- "za mě dobrý". The governor tuning is **closed**: it descends mid-track without
+  audible cost. Objective backing from the same window — **94.28 % @ 350 MHz**,
+  die **67 °C**, **777 transitions (0.37/s)** so the clock really was moving during
+  playback rather than parked, and **zero xrun/underrun/dropout** in dmesg and
+  journal.
+- ⛔ Does **not** cover the hardware EQ, which stays broken and excluded
+  (`docs/2026-08-24-eq-biquad-write-broken.md`).
+
+
 ### Deployed — kernel **r49** + `device-google-steelhead` **r81** (2026-08-24)
 - `nq-kernel-ota stage-latest` → trial slot → `try` → **auto-promoted unattended**
   (`trial boot marker found` → `healthy after 0s — promoting` → `promoted and

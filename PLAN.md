@@ -209,10 +209,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > period** on the snd-aloop capture side — a 2 s period there looks wrong.
 > **Done when:** wakeups/s explained, and reduced or proven irreducible.
 >
-> ### Step 4 — pick the config, then ONE listening test ⬜
-> Combine whatever Steps 2–3 won, re-measure on silence, then hand Petr a single
-> listening test. **Bundle it with the two already-pending listening items so he
-> is asked once, not three times:** `down_threshold=60` and the hardware EQ.
+> ### Step 4 — listening test ✅ PASSED 2026-08-24 (Petr) — for the governor + NEON, NOT the EQ
+> **Petr ran it and passed it** — "za mě dobrý". It covers what is live in the
+> audio path: **`down_threshold=60`** and the **NEON resampler**. Backed by data
+> from the same window: **94.28 % @ 350 MHz**, die **67 °C**, **777 governor
+> transitions (0.37/s)** — so the clock really was moving up and down during
+> playback, not sitting still — and **zero xrun/underrun/dropout** in dmesg and
+> journal. ⛔ It does **NOT** cover the hardware EQ, which is broken and was
+> deliberately excluded.
 > **Do NOT touch `tsched=0`** as part of this — it is a deliberate fix for the
 > periodic playback crackle on this OMAP4 (`device-google-steelhead.trigger`),
 > not a leftover. It only moves if a listening test says so, on its own.
