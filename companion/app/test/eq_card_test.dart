@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexusq_companion/models/eq.dart';
 import 'package:nexusq_companion/protocol/client.dart';
 import 'package:nexusq_companion/protocol/mock_client.dart';
 import 'package:nexusq_companion/widgets/eq_card.dart';
@@ -23,6 +24,9 @@ class _RecordingClient implements NexusQClient {
   final bool supported;
   final bool parametric;
   bool connected;
+
+  List<EqBand> get bandsModel =>
+      bands.map((b) => EqBand.fromJson(b)).toList();
 
   /// Bring the link up the way the real client does: a `connection` event.
   void goOnline() {
@@ -170,7 +174,9 @@ void main() {
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
 
-    expect(find.text('Equalizer'), findsOneWidget);
+    // No 'Equalizer' text inside the card on purpose: the section header above
+    // it already says that, and having it twice just ate vertical space.
+    expect(find.text('Equalizer'), findsNothing);
     expect(find.byType(EqCurve), findsOneWidget);
     expect(find.text('Bass boost'), findsOneWidget);
     // per-band editor: the width/slope slider plus the preamp slider
@@ -258,6 +264,65 @@ void main() {
     }
   });
 
+  testWidgets('a drag changes gain only — never the band frequency',
+      (tester) async {
+    // Handles used to move in both axes, which silently retuned bands nobody
+    // asked to retune. Petr: "jenom vertikálně nahoru a dolu by mely jit tahat".
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    final freqsBefore =
+        client.bands.map((b) => (b['freq_hz'] as num).toDouble()).toList();
+
+    // drag diagonally: the sideways component must be ignored
+    await tester.dragFrom(curve.center, const Offset(90, -30));
+    await tester.pumpAndSettle();
+
+    final sent = (client.calls.last.$2!['bands'] as List)
+        .map((b) => ((b as Map)['freq_hz'] as num).toDouble())
+        .toList();
+    expect(sent, freqsBefore, reason: 'a drag retuned a band');
+    expect(
+        (client.calls.last.$2!['bands'] as List)
+            .any((b) => ((b as Map)['gain_db'] as num) > 0.5),
+        isTrue,
+        reason: 'the vertical part of the drag was ignored too');
+  });
+
+  testWidgets('the whole column grabs a band, not just the dot',
+      (tester) async {
+    // "ty hit arey jsou hodne maly" — with fixed frequencies the entire
+    // vertical strip belongs to one band, so a touch near the top of the plot
+    // must still grab it.
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.dragFrom(
+        Offset(curve.center.dx, curve.top + 8), const Offset(0, 40));
+    await tester.pumpAndSettle();
+
+    expect(client.calls.where((c) => c.$1 == 'setEq'), isNotEmpty,
+        reason: 'a touch away from the dot did not grab the band');
+  });
+
+  testWidgets('the outer handles sit on the edges of the plot', (tester) async {
+    // "proc ten prvni bod neni uplne vlevo a ten posledni vpravo?"
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    final w = curve.width;
+    expect(plotX(client.bandsModel, client.bandsModel.first.freqHz, w),
+        lessThan(w * 0.1));
+    expect(plotX(client.bandsModel, client.bandsModel.last.freqHz, w),
+        greaterThan(w * 0.9));
+  });
+
   testWidgets('a preset is applied as one setEq with its bands and preamp',
       (tester) async {
     final client = _RecordingClient();
@@ -301,7 +366,6 @@ void main() {
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
 
-    expect(find.text('Equalizer'), findsOneWidget);
     expect(find.textContaining('device system update'), findsOneWidget);
     // nothing may be sent to a device that cannot run it
     await tester.dragFrom(

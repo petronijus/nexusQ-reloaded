@@ -8,31 +8,32 @@ import '../theme/nexusq_theme.dart';
 
 /// The EQ response curve with one draggable handle per band.
 ///
-/// Dragging moves a handle in both axes at once: horizontally it retunes the
-/// band (log frequency), vertically it sets the gain. Q is a separate control —
-/// a pinch gesture on a 7-handle curve on a phone is a good way to change the
-/// wrong band by accident, and every change here is an I2C write into a 25 W
-/// amplifier.
+/// Handles move **vertically only** — the band frequencies are fixed, so a
+/// sideways drag would silently retune a band nobody asked to retune. Width/Q
+/// is the slider under the curve.
+///
+/// Because the handles sit at fixed x positions, hit-testing is by horizontal
+/// distance alone: touching anywhere in a band's vertical strip grabs it. That
+/// makes the target the full height of the plot instead of a 44 px disc, which
+/// is what "the hit areas are very small" was about.
+///
+/// The x axis spans exactly the first to the last band frequency, so the
+/// outermost handles sit on the edges rather than floating a fifth of the way
+/// in. The trade is that the response below the low shelf and above the high
+/// shelf is off-screen; both are flat-ish there by construction, and having the
+/// handles reachable matters more.
 ///
 /// `onChanged` fires continuously so the curve tracks the finger; `onCommit`
 /// fires once on release and is what should reach the device.
 ///
-/// Winning the gesture from the enclosing scroll view took two attempts, so the
-/// reasoning is written down.
-///
-/// A `pan` recognizer LOSES to a ListView: pan accepts only after `kPanSlop`
-/// (36 px) while the scrollable's vertical drag accepts after `kTouchSlop`
-/// (18 px), so the scroll gets there first and wins fairly. Forcing the pan to
-/// accept anyway (overriding `rejectGesture`) does not fix it — the arena has
-/// already awarded the gesture to the scrollable, so BOTH run and the page
-/// scrolls while the handle moves.
-///
-/// The fix is to compete on equal terms: a vertical drag recognizer uses the
-/// same slop as the scrollable, and pointer events reach the innermost hit-test
-/// entry first, so this one accepts first and the scrollable is rejected
-/// properly. A horizontal recognizer sits alongside it for sideways retuning,
-/// which nothing outside competes for. Both feed the same handler and use
-/// `localPosition`, which is a full 2-D point regardless of which axis won.
+/// Winning the gesture from the enclosing scroll view is the other subtlety. A
+/// `pan` recognizer LOSES to a ListView: pan accepts after `kPanSlop` (36 px)
+/// while the scrollable's vertical drag accepts after `kTouchSlop` (18 px), so
+/// the scroll gets there first and wins fairly. Forcing the pan to accept
+/// anyway does not fix it — the arena has already awarded the gesture, so BOTH
+/// run and the page scrolls while the handle moves. A vertical drag recognizer
+/// competes on equal terms and, being the innermost hit-test entry, accepts
+/// first.
 class EqCurve extends StatefulWidget {
   const EqCurve({
     super.key,
@@ -48,7 +49,7 @@ class EqCurve extends StatefulWidget {
   final EqState state;
   final int selected;
   final ValueChanged<int> onSelect;
-  final void Function(int index, double freqHz, double gainDb) onChanged;
+  final void Function(int index, double gainDb) onChanged;
   final VoidCallback onCommit;
   final bool enabled;
   final double height;
@@ -60,35 +61,22 @@ class EqCurve extends StatefulWidget {
 class _EqCurveState extends State<EqCurve> {
   int _dragging = -1;
 
-  double _xOf(double f, double w) {
-    final lo = math.log(widget.state.minFreqHz), hi = math.log(widget.state.maxFreqHz);
-    return (math.log(f.clamp(widget.state.minFreqHz, widget.state.maxFreqHz)) - lo) /
-        (hi - lo) *
-        w;
-  }
-
-  double _freqOf(double x, double w) {
-    final lo = math.log(widget.state.minFreqHz), hi = math.log(widget.state.maxFreqHz);
-    return math.exp(lo + (x / w).clamp(0.0, 1.0) * (hi - lo));
-  }
-
-  double _yOf(double db, double h) {
-    final m = widget.state.maxGainDb;
-    return (m - db.clamp(-m, m)) / (2 * m) * h;
-  }
+  double _xOf(double f, double w) => plotX(widget.state.bands, f, w);
 
   double _dbOf(double y, double h) {
     final m = widget.state.maxGainDb;
     return (m - (y / h).clamp(0.0, 1.0) * 2 * m);
   }
 
+  /// Nearest band by HORIZONTAL distance only. With gain-only handles the whole
+  /// column belongs to one band, so there is no reason to make the user find a
+  /// small disc — and no radius limit, because every touch inside the plot
+  /// belongs to some band.
   int _nearest(Offset p, Size size) {
     var best = -1;
-    var bestD = 44.0; // generous target: fingers, not mice
+    var bestD = double.infinity;
     for (var i = 0; i < widget.state.bands.length; i++) {
-      final b = widget.state.bands[i];
-      final d = (Offset(_xOf(b.freqHz, size.width), _yOf(b.gainDb, size.height)) - p)
-          .distance;
+      final d = (_xOf(widget.state.bands[i].freqHz, size.width) - p.dx).abs();
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -112,11 +100,7 @@ class _EqCurveState extends State<EqCurve> {
 
       void update(DragUpdateDetails d) {
         if (_dragging < 0) return;
-        widget.onChanged(
-          _dragging,
-          _freqOf(d.localPosition.dx, size.width),
-          _dbOf(d.localPosition.dy, size.height),
-        );
+        widget.onChanged(_dragging, _dbOf(d.localPosition.dy, size.height));
       }
 
       void end(DragEndDetails d) {
@@ -131,15 +115,6 @@ class _EqCurveState extends State<EqCurve> {
           VerticalDragGestureRecognizer:
               GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
             () => VerticalDragGestureRecognizer(debugOwner: this),
-            (r) {
-              r.onStart = enabled ? start : null;
-              r.onUpdate = enabled ? update : null;
-              r.onEnd = enabled ? end : null;
-            },
-          ),
-          HorizontalDragGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<HorizontalDragGestureRecognizer>(
-            () => HorizontalDragGestureRecognizer(debugOwner: this),
             (r) {
               r.onStart = enabled ? start : null;
               r.onUpdate = enabled ? update : null;
@@ -184,10 +159,7 @@ class _EqPainter extends CustomPainter {
 
   static const _gridHz = [100.0, 1000.0, 10000.0];
 
-  double _x(double f, double w) {
-    final lo = math.log(state.minFreqHz), hi = math.log(state.maxFreqHz);
-    return (math.log(f) - lo) / (hi - lo) * w;
-  }
+  double _x(double f, double w) => plotX(state.bands, f, w);
 
   double _y(double db, double h) =>
       (state.maxGainDb - db.clamp(-state.maxGainDb, state.maxGainDb)) /
@@ -213,9 +185,11 @@ class _EqPainter extends CustomPainter {
           ..color = dim.withValues(alpha: 0.5)
           ..strokeWidth = 1);
     for (final f in _gridHz) {
-      canvas.drawLine(Offset(_x(f, w), 0), Offset(_x(f, w), h), grid);
+      final gx = _x(f, w);
+      if (gx < 2 || gx > w - 2) continue;   // outside the plotted band range
+      canvas.drawLine(Offset(gx, 0), Offset(gx, h), grid);
       _label(canvas, f >= 1000 ? '${(f / 1000).toStringAsFixed(0)}k' : '${f.toInt()}',
-          Offset(_x(f, w) + 4, h - 14), dim);
+          Offset(gx + 4, h - 14), dim);
     }
     _label(canvas, '+${state.maxGainDb.toInt()}', const Offset(4, 2), dim);
     _label(canvas, '−${state.maxGainDb.toInt()}', Offset(4, h - 14), dim);
@@ -269,8 +243,7 @@ class _EqPainter extends CustomPainter {
     const steps = 128;
     for (var i = 0; i <= steps; i++) {
       final x = size.width * i / steps;
-      final lo = math.log(state.minFreqHz), hi = math.log(state.maxFreqHz);
-      final f = math.exp(lo + (x / size.width) * (hi - lo));
+      final f = plotFreq(state.bands, x, size.width);
       final y = _y(db(f), size.height);
       i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
     }
@@ -291,4 +264,28 @@ class _EqPainter extends CustomPainter {
       old.enabled != enabled ||
       old.state.preampDb != state.preampDb ||
       !identical(old.state.bands, state.bands);
+}
+
+/// Shared axis between the painter and the hit-testing, so a handle can never be
+/// drawn somewhere other than where it is grabbed.
+///
+/// Spans the first to the last band frequency, inset by [_edgeInset] so the
+/// outermost handles sit on the edges and are still drawn whole.
+const double _edgeInset = 14;
+
+double plotX(List<EqBand> bands, double f, double w) {
+  if (bands.isEmpty) return 0;
+  final lo = math.log(bands.first.freqHz), hi = math.log(bands.last.freqHz);
+  final span = w - 2 * _edgeInset;
+  if (hi <= lo || span <= 0) return w / 2;
+  return _edgeInset +
+      ((math.log(f) - lo) / (hi - lo)).clamp(0.0, 1.0) * span;
+}
+
+double plotFreq(List<EqBand> bands, double x, double w) {
+  if (bands.isEmpty) return 1000;
+  final lo = math.log(bands.first.freqHz), hi = math.log(bands.last.freqHz);
+  final span = w - 2 * _edgeInset;
+  if (hi <= lo || span <= 0) return bands.first.freqHz;
+  return math.exp(lo + ((x - _edgeInset) / span).clamp(0.0, 1.0) * (hi - lo));
 }

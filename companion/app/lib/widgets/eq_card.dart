@@ -167,15 +167,11 @@ class _EqCardState extends State<EqCard> {
     }
   }
 
-  void _editBand(int i, {double? freqHz, double? gainDb, double? q}) {
+  /// Band frequencies are fixed — only gain and width are user-editable, so a
+  /// drag cannot silently retune a band.
+  void _editBand(int i, {double? gainDb, double? q}) {
     final bands = [..._st.bands];
-    // A shelf that can be dragged across the whole spectrum is a foot-gun; keep
-    // the outer bands in the half they belong to.
-    double? f = freqHz;
-    if (f != null && bands[i].isShelf) {
-      f = bands[i].type == 'lowshelf' ? f.clamp(20.0, 1000.0) : f.clamp(1000.0, 20000.0);
-    }
-    bands[i] = bands[i].copyWith(freqHz: f, gainDb: gainDb, q: q);
+    bands[i] = bands[i].copyWith(gainDb: gainDb, q: q);
     setState(() => _st = _st.copyWith(bands: bands));
   }
 
@@ -357,10 +353,9 @@ class _EqCardState extends State<EqCard> {
           children: [
             Row(
               children: [
-                const Expanded(
-                  child: Text('Equalizer',
-                      style: TextStyle(color: NexusQColors.white)),
-                ),
+                // No title here: the section header above the card already says
+                // Equalizer, and having it twice just eats vertical space.
+                const Spacer(),
                 TextButton(
                   onPressed: enabled && !_st.isFlat
                       ? () {
@@ -398,7 +393,7 @@ class _EqCardState extends State<EqCard> {
                 enabled: enabled,
                 height: 190,
                 onSelect: (i) => setState(() => _selected = i),
-                onChanged: (i, f, g) => _editBand(i, freqHz: f, gainDb: g),
+                onChanged: (i, g) => _editBand(i, gainDb: g),
                 onCommit: _commit,
               ),
               const SizedBox(height: 4),
