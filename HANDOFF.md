@@ -63,18 +63,16 @@ ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
    `nq-kernel-ota` (trial slot, health-gated), then install r81, then reboot.
    ⚠️ **Until this happens `down_threshold=60` is live-only**: any governor switch
    resets it to 20, and a reboot loses it.
-2. ⛔ **The EQ is BLOCKED — do not include it in a listening test.** Kernel r49 is
-   deployed and `getEq` says `supported: true`, but **every write through the
-   biquad controls puts `0xFFFFFFFF` into the amp**, confirmed on the I2C wire:
-   mainline's `tas571x_coefficient_info` sets the control max to `0xffffffff`,
-   which is **−1 in a 32-bit `long`**, so ALSA clamps every write. Fix patch 0045's
-   control bounds (`0x3FFFFFF`, 26-bit 3.23) → kernel **r50**, then re-verify with
-   ftrace on `i2c:i2c_write` — a correct unity write shows `[29-00-80-00-00-…]`,
-   not `ff`. `docs/2026-08-24-eq-biquad-write-broken.md`. App **1.14.0+35** stays
-   unreleased.
-   ⚠️ The amp **keeps coefficients across a warm reboot**; recovery is
-   `i2cset -y -f 3 0x1b <reg> 00 80 00 00 00×16 i` for `0x29`–`0x36`. All 14 are
-   currently unity and `/etc/nexusq/eq.json` is flat — leave it flat.
+2. ✅ **FIXED 2026-08-24 — kernel r50 (patch 0046).** The biquad controls were
+   writing `0xFFFFFFFF` into the amp because mainline's
+   `tas571x_coefficient_info` advertises `max = 0xffffffff`, which is **−1 in a
+   32-bit `long`**, so alsa-lib clamped every write. Patch 0046 advertises
+   `0x3ffffff` (26-bit 3.23) instead. Deployed and auto-promoted; verified on the
+   wire **and** by frequency response from coefficients read off the amp
+   (+3.00 dB @ 20 Hz for bass +3, half-gain exactly at 100 Hz / 8 kHz, flat =
+   unity). `docs/2026-08-24-eq-biquad-write-broken.md`.
+   **Still owed:** a ≤1–2 % listening test, and the **app 1.14.0+35 release —
+   needs Petr's approval**. Biquads are at unity, `eq.json` flat.
 2b. ✅ **DONE — Petr ran the listening test 2026-08-24 and passed it** ("za mě
    dobrý") for `down_threshold=60` **and** the NEON resampler. Objective backing
    from the same window: **94.28 % @ 350 MHz**, die **67 °C**, **777 governor

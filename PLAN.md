@@ -3,7 +3,7 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> ## ⛔ BLOCKED (2026-08-24) — Hardware EQ (GitHub issue #2): the write path is broken
+> ## ✅ FIXED (2026-08-24) — Hardware EQ (GitHub issue #2): write path repaired in kernel r50
 >
 > **Deployed and unusable.** Kernel r49 exposes the 14 biquad controls and
 > `getEq` reports `supported: true`, but **every write through them puts
@@ -21,14 +21,17 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > `/etc/nexusq/eq.json` is back to flat, which is what stops
 > `eq_restore_thread` re-applying it at boot.
 >
-> **To unblock:** patch 0045 must also fix the control bounds (26-bit 3.23 ⇒
-> `0x3FFFFFF`) — kernel **r50** — then re-verify **on the wire** (a correct unity
-> write must show `[29-00-80-00-00-…]`, not `ff`). Only then the listening test.
+> **✅ Fixed by patch 0046, shipped as kernel r50** (deployed, auto-promoted).
+> `amixer cget` now reports `max=67108863` instead of `max=-1`. Verified twice:
+> on the wire (`[29-00-80-00-00-…]` for unity, and `1000,2000,3000,4000,5000`
+> landing byte-exact) and by evaluating the coefficients read back **off the amp**
+> as a transfer function — **+3.00 dB @ 20 Hz** for bass +3, half the gain exactly
+> at the 100 Hz / 8 kHz design frequencies, independent bands, flat = true unity.
 > Full record: `docs/2026-08-24-eq-biquad-write-broken.md`.
 >
-> ⛔ **App 1.14.0+35 stays unreleased** and the EQ listening test must not happen
-> until the above is done. `nexusq-control` r31 is harmless meanwhile (flat stored
-> config ⇒ the restore thread returns early; the sliders are not in a released app).
+> **Remaining:** a low-volume (≤1–2 %) listening test, and the **app 1.14.0+35
+> release, which needs Petr's approval**. All 14 biquads are currently at unity and
+> `/etc/nexusq/eq.json` is flat.
 >
 > ## 🎯 ORIGINAL PLAN (2026-08-23) — Hardware EQ (GitHub issue #2)
 >

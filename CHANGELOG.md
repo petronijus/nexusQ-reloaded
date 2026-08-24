@@ -6,6 +6,36 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the hardware EQ works: an upstream 32-bit bug (2026-08-24, kernel **r50**, patch **0046**)
+- `tas571x_coefficient_info()` advertises `uinfo->value.integer.max = 0xffffffff`,
+  but `snd_ctl_elem_info` carries bounds in a `long` — **32-bit on armv7**, so the
+  control came out with `max = -1` and alsa-lib clamped **every** write to
+  `0xFFFFFFFF`. Patch 0046 advertises `0x3ffffff` instead (3.23 fixed point, 26
+  significant bits, unity `0x00800000`). Its own patch, not folded into 0045: it is
+  an upstream bug, and 64-bit builds never see it.
+- Deployed via `nq-kernel-ota` → trial slot → **auto-promoted unattended**.
+  `amixer cget` now reports `min=0,max=67108863`.
+- **Verified twice, neither by read-back alone.** On the wire: unity gives
+  `[29-00-80-00-00-…]` and `1000,2000,3000,4000,5000` gives
+  `[29-00-00-03-e8-00-00-07-d0-…]`, byte-exact. And by transfer function, from
+  coefficients read **off the amp**:
+
+  | | bass +3 | bass −6 / treble +6 | flat |
+  |---|---|---|---|
+  | 20 Hz | **+3.00 dB** | −5.99 dB | 0.00 |
+  | 100 Hz | +1.50 dB | −3.00 dB | 0.00 |
+  | 1 kHz | 0.00 | 0.00 | 0.00 |
+  | 8 kHz | 0.00 | +3.00 dB | 0.00 |
+  | 16 kHz | 0.00 | +5.92 dB | 0.00 |
+
+  Half the gain exactly at the design frequency is the textbook shelf midpoint.
+- ⚠️ Decode raw coefficients through **two's complement**: a naive `raw / 8388608`
+  shows `b1` as `+6.0170` and `a2` as `+7.0168` and reads as garbage — they are
+  −1.983 and −0.983.
+- Left at unity with `/etc/nexusq/eq.json` flat. **Remaining:** a ≤1–2 % listening
+  test and the **app 1.14.0+35 release, pending Petr's approval**.
+
+
 ### Confirmed — Petr's listening test passed for `down_threshold=60` + the NEON resampler (2026-08-24)
 - "za mě dobrý". The governor tuning is **closed**: it descends mid-track without
   audible cost. Objective backing from the same window — **94.28 % @ 350 MHz**,

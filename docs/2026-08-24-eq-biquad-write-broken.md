@@ -1,10 +1,11 @@
-# The hardware EQ writes 0xFF into the amp — kernel patch 0045 is broken on 32-bit (2026-08-24)
+# The hardware EQ wrote 0xFF into the amp — an upstream 32-bit bug, fixed by patch 0046 (2026-08-24)
 
-**Verdict: every write through the `CH1/CH2 - Biquad n` ALSA controls puts
+**Verdict: every write through the `CH1/CH2 - Biquad n` ALSA controls put
 `0xFFFFFFFF` into the TAS5713's coefficient RAM, whatever value was asked for.
-The EQ from GitHub issue #2 is DEPLOYED AND UNUSABLE. Confirmed on the I2C wire,
-not inferred. The amp was left with garbage coefficients for ~40 minutes and has
-been restored to unity.**
+Confirmed on the I2C wire, not inferred.**
+
+**✅ FIXED the same day — kernel patch 0046, shipped as r50 and verified on the
+wire and by frequency response. See *Resolution* at the end.**
 
 ## What was deployed first
 
@@ -94,24 +95,74 @@ block (`s`) would prepend a length byte and corrupt the register.
 - `/etc/nexusq/eq.json` reset to `{"bass_db": 0.0, "treble_db": 0.0}` — it had been
   left at `3.0` by a test, which `eq_restore_thread` **would have re-applied at the
   next boot**, putting the garbage straight back.
-- `nexusq-control` **r31** stays deployed. Harmless while the stored EQ is flat
-  (the restore thread returns early) and while the app that exposes the sliders is
-  **unreleased**. Anyone calling `setEq` over the protocol re-breaks the amp.
+- `nexusq-control` **r31** stays deployed — *(with r50 it now writes correct
+  coefficients; on r49 and earlier any `setEq` re-broke the amp)*.
 
-## What has to happen before the EQ can be used
+## What had to happen before the EQ could be used — all ✅ done, see *Resolution*
 
-1. **Fix the control bounds in patch 0045.** It currently just adds
-   `BIQUAD_COEFS(...)` entries and inherits mainline's broken
-   `tas571x_coefficient_info`. The patch must also give the control a max that
-   survives a 32-bit `long` — the coefficients are 3.23 in 26 bits, so
-   `0x3FFFFFF` is the honest bound; `0x7FFFFFFF` would also work. Kernel **r50**.
-2. **Re-verify on the wire, not by read-back** — the ftrace recipe above is the
-   acceptance test. A correct unity write must show
-   `[29-00-80-00-00-00-...]`, not `ff`.
-3. **Only then** hand Petr the sliders, and only at ≤1–2 % volume.
+1. ✅ Fix the control bounds — **patch 0046**, kernel **r50**.
+2. ✅ Re-verify **on the wire**, not by read-back.
+3. ✅ Then the sliders, at ≤1–2 % volume — now unblocked.
 
-⛔ **Until 1 and 2 are done the EQ listening test must not happen**, and the app
-release (1.14.0+35) stays blocked.
+## Resolution — kernel patch 0046, `linux-google-steelhead` r50 ✅
+
+`tas571x_coefficient_info()` now advertises a bound that fits a 32-bit `long`:
+
+```c
+/* 3.23 fixed point: 26 significant bits, unity = 0x00800000 */
+#define TAS571X_COEFFICIENT_MAX	0x3ffffff
+...
+	uinfo->value.integer.max = TAS571X_COEFFICIENT_MAX;
+```
+
+Kept as its own patch rather than folded into 0045 — it is an upstream bug, not
+part of exposing the controls, and 64-bit builds never see it, which is presumably
+how it survived upstream. Written by generating the hunk with `diff` after a
+hand-written one was rejected as malformed, and verified to apply with GNU
+`patch --fuzz=0` on the real series (0001 → 0038 → 0045 → 0046).
+
+Deployed the same way as r49: published → `stage-latest` → `try` → **auto-promoted
+unattended**. `amixer cget` now reports `min=0,max=67108863` instead of `max=-1`.
+
+### Acceptance test 1 — the wire
+
+```
+# asked for 8388608,0,0,0,0 (unity)
+[29-00-80-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00]
+
+# asked for 1000,2000,3000,4000,5000
+[29-00-00-03-e8-00-00-07-d0-00-00-0b-b8-00-00-0f-a0-00-00-13-88]
+     0x3e8=1000  0x7d0=2000  0xbb8=3000  0xfa0=4000  0x1388=5000
+```
+
+Every value lands exactly, and read-back returns what was written.
+
+### Acceptance test 2 — the actual frequency response
+
+Coefficients read back **off the amp**, decoded from 3.23 two's complement, and
+evaluated as a transfer function:
+
+| | bass +3 | bass −6 / treble +6 | flat |
+|---|---|---|---|
+| 20 Hz | **+3.00 dB** | −5.99 dB | 0.00 |
+| 100 Hz | +1.50 dB | −3.00 dB | 0.00 |
+| 1 kHz | 0.00 | 0.00 | 0.00 |
+| 8 kHz | 0.00 | +3.00 dB | 0.00 |
+| 16 kHz | 0.00 | +5.92 dB | 0.00 |
+
+Half the gain exactly at the design frequency (100 Hz / 8 kHz) is the textbook
+shelf midpoint; the two bands are independent; flat is true unity. `bass +3`
+decodes to `+1.0016, −1.9830, +0.9816, +1.9830, −0.9832`.
+
+⚠️ **Read those raw values through the two's complement.** A naive
+`raw / 8388608` prints `b1` as `+6.0170` and `a2` as `+7.0168` and looks like
+garbage — they are −1.983 and −0.983. That misreading cost a few minutes here.
+
+### State
+
+All 14 biquads at unity, `/etc/nexusq/eq.json` flat, kernel r50 with `apk` in
+agreement, `device` r81, `down_threshold=60`. **The EQ is ready for a low-volume
+listening test**, and app **1.14.0+35** is unblocked pending Petr's approval.
 
 ## Incidental
 
