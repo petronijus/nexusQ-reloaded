@@ -99,7 +99,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > track drift between snd-aloop and the amp. `resample-method = auto` →
 > `speex-float-1`.
 >
-> ### Step 2b — the resampler runs SCALAR on a NEON CPU ⬜ ← concrete, quality-free win
+> ### Step 2b — the resampler runs SCALAR on a NEON CPU ✅ IMPLEMENTED 2026-08-24, awaiting build
 > Confirmed two independent ways, not inferred:
 > - ELF attributes of `libspeexdsp.so.1.5.2`: `Tag_FP_arch: VFPv3-D16` and
 >   **no `Tag_Advanced_SIMD_arch` tag at all**.
@@ -127,10 +127,22 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > quality trade-off, and it speeds up **real** playback too (Spotify is 44.1 kHz
 > and hits this resampler on every track). speexdsp ships NEON inner-product
 > paths that only compile when the build enables them.
-> Wiring a new overlay package needs all three of: `docker-build.sh`'s APKBUILD
-> validation list, the pmaports copy step, **and** `publish-ota-repo.sh`
-> `OTA_PACKAGES` — a dependency missing from that last list makes apk silently
-> hold the old version.
+> **Done:** `pmos/speexdsp/APKBUILD` (`1.2.1-r100`, `--enable-neon`), wired into
+> `docker-build.sh` validation + the pmaports copy + the dos2unix sweep + a new
+> **Phase 7c6** that must run before Phase 8, `publish-ota-repo.sh`
+> `OTA_PACKAGES`, and a **Phase 10 SHIP CHECK** that reports whether the rootfs
+> actually got our `-r100` or fell back to Alpine's `-r2`. Two build gates stop a
+> silently-scalar rebuild: `#define USE_NEON` in `config.h`, and
+> `Tag_Advanced_SIMD_arch` on the linked `.so`.
+>
+> ⚠️ `pkgrel=100` is a version pin so apk prefers ours. **It only holds while
+> `pkgver` matches — an upstream `pkgver` bump makes Alpine's win again and we
+> silently lose NEON.** Re-base the aport on any upstream bump.
+>
+> **Still to do:** measure it. Re-run `perf record` on the sink thread after the
+> new package is on the device and compare against the 58.86 % / 664 cycles-per-
+> sample baseline. Expect 2–3× on the resampler; anything less means the NEON
+> inner product is not being reached and the win is elsewhere.
 >
 > ⛔ **Do NOT lower the resampler quality** (`speex-float-0`). `resample-method`
 > is global, so it would degrade Spotify's 44.1 → 48 conversion — audible on real
