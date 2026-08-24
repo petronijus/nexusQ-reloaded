@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=80
+pkgrel=81
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -396,11 +396,15 @@ package() {
 	ln -sf ../nexusq-wifi-watchdog.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-wifi-watchdog.service
 
-	# cpufreq idle tuning: ignore_nice_load=1 + down_threshold=40 on the
+	# cpufreq idle tuning: ignore_nice_load=1 + down_threshold=60 on the
 	# conservative governor. Measured 2026-08-16 to move idle 350 MHz residency
 	# 72.4 % -> 86.2 % with no change to how fast REAL load ramps the clock
 	# (docs/2026-08-16-idle-700mhz-deep-analysis.md). Pairs with the Nice=19 the
-	# housekeeping units now carry.
+	# housekeeping units now carry. down_threshold raised 40 -> 60 on 2026-08-24:
+	# with USB Audio enabled the 1 kHz gadget IRQ put every sampling window inside
+	# the 40..80 hold band and the clock parked at 1200 MHz / 84 degC / 6.0x the
+	# floor; at 60 it is 97.3 % at 350 MHz / 68 degC / 1.07x, ramp-up unchanged
+	# (docs/2026-08-24-usb-audio-idle-cost.md).
 	# Clock bootstrap without DNS — see the file's header for the deadlock it
 	# breaks (no RTC -> year 2000 -> DNSSEC "signature-expired" -> no DNS -> no
 	# NTP hostname resolution -> no clock).

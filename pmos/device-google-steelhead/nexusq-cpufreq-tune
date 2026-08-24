@@ -19,16 +19,37 @@
 #                       nexusq-control is deliberately NOT nice'd either: it
 #                       serves the app's volume RPC.
 #
-#   down_threshold=40   `conservative` HOLDS the frequency between
-#                       down_threshold and up_threshold, so at 20 % a mere 4 ms
-#                       of work per 20 ms window pinned the CPU at 700 MHz —
-#                       measured mean stay 318 ms per visit. At 40 it decays.
+#   down_threshold=60   `conservative` HOLDS the frequency between
+#                       down_threshold and up_threshold, and does nothing at all
+#                       to a load that sits inside that band — so whatever the
+#                       first spike raised the clock to, it stays. The knob is
+#                       therefore set just above wherever the idle load actually
+#                       lands. It has been raised twice, each time because a new
+#                       idle workload moved that load up into the hold band.
 #
-# Measured together, 12 min arms, idle: 350 MHz residency 72.4 % -> 86.2 %,
+# 20 -> 40 on 2026-08-16: at 20 a mere 4 ms of work per 20 ms window pinned the
+# CPU at 700 MHz, mean stay 318 ms per visit. Measured together with
+# ignore_nice_load over 12 min arms, idle: 350 MHz residency 72.4 % -> 86.2 %,
 # 920 MHz 5.70 -> 0.61 %, 1200 MHz 0.89 -> 0.05 %, ~22 % less relative dynamic
-# power. `sampling_rate` and `up_threshold` are deliberately LEFT ALONE: raising
-# them to 100 ms/95 measured 98.7 % but stretches a genuine ramp from ~60 ms to
-# ~300 ms, which needs a listening test before it can ship.
+# power.
+#
+# 40 -> 60 on 2026-08-24 (docs/2026-08-24-usb-audio-idle-cost.md). With
+# the USB Audio DAC path enabled the host streams silence 24/7, the gadget fires
+# 1000 IRQ/s, and the load of a typical 20 ms window landed squarely in the
+# 40..80 hold band — so the governor had no rule that could ever bring the clock
+# down and parked at 1200 MHz / 1380 mV 90 % of the time, 84 degC die, 6.0x a
+# locked-350 floor. That is the SAME failure the 20 -> 40 change fixed, one band
+# higher. At 60, with USB Audio still live: 350 MHz residency 97.3 %, 1.07x the
+# floor (better than this device's USB-off idle baseline of 1.16x), die 68 degC.
+# Mean stay at 350 is 9.35 s and the excursions to 700 last 156 ms, so it is
+# responsive, not oscillating (0.26 transitions/s).
+#
+# `sampling_rate`, `up_threshold` and `freq_step` are deliberately LEFT ALONE, so
+# a genuine ramp is still 3 x 20 ms ~= 60 ms — down_threshold governs only the
+# DESCENT. Raising sampling_rate/up_threshold to 100 ms/95 instead measured
+# 98.7 % on plain idle but only 35.2 % / 3.12x under the USB workload AND
+# stretches the ramp to ~300 ms, so it stays unshipped: down_threshold=60
+# dominates it on every axis.
 #
 # Idempotent, and a missing knob is never fatal — a governor change (or a kernel
 # without CONFIG_CPU_FREQ_GOV_CONSERVATIVE) must not fail the boot.
@@ -67,7 +88,7 @@ set_knob() {
 }
 
 set_knob ignore_nice_load 1
-set_knob down_threshold 40
+set_knob down_threshold 60
 
 log "governor=$(cat $POLICY/scaling_governor 2>/dev/null)" \
     "sampling_rate=$(cat $GOVDIR/sampling_rate 2>/dev/null)" \

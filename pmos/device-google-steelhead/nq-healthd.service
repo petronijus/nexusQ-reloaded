@@ -17,7 +17,8 @@ RestartSec=5
 # credited as idle, so this daemon's 5 s tick — 18 runs of >=16 ms per minute,
 # longest 40 ms — stops driving the CPU frequency altogether, while the audio
 # path (never nice'd) still ramps instantly. Measured worth, together with
-# down_threshold=40: 72.4 % -> 86.2 % of idle time at 350 MHz.
+# that day's down_threshold raise (20 -> 40; since raised again to 60, see
+# nexusq-cpufreq-tune for the current value): 72.4 % -> 86.2 % at 350 MHz.
 # `docs/2026-08-16-idle-700mhz-deep-analysis.md`
 Nice=19
 IOSchedulingClass=idle

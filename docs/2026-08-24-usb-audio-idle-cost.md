@@ -4,6 +4,11 @@
 1380 mV 84.65 % of the time and sits at a mean die temperature of 82.9 °C
 (peak 95.0 °C). The idle-OPP goal — 90.8 % @ 350 MHz — collapses to 0.58 %.**
 
+**Fixed the same day by one governor knob:** `conservative`'s `down_threshold`
+40 → 60 restores **97.33 % @ 350 MHz with USB Audio still live** — 1.07× a
+locked-350 floor, better than the shipped USB-off baseline, die 84 → 68 °C, and
+no change to how fast a real ramp climbs. Measured, not argued: see *Result*.
+
 This is the measurement PLAN.md's standing goal existed for, run for the first
 time with the USB DAC path *enabled*. Every idle-power win from 2026-08-13…16
 is erased by leaving this one toggle on.
@@ -71,37 +76,23 @@ OPP residency, kernel `time_in_state` deltas over the whole run — against the
 shipped feature and "leave it off" is not an answer. The toggle was left ON.
 
 The upstream cause is the host: the Xiaomi box keeps the UAC2 stream open and
-pushes **silence 24/7** (the aloop playback pointer advances continuously with
-nothing playing), so the 1 kHz gadget IRQ is not something the device can refuse
-while it is enumerated as a DAC. What IS ours is everything that reacts to that
-silence. Fixes, in the order they should be attempted:
+pushes **silence 24/7**, so the 1 kHz gadget IRQ cannot be refused while the Q
+is enumerated as a DAC. What IS ours is everything that reacts to it.
 
-1. **Stop burning CPU on silence — our two consumers, ~10.9 % of a core between
-   them.** This is first not only for its own sake: the governor parks high
-   because it *measures load*, so removing the load may let the OPP fall on its
-   own and fix the 1380 mV term for free.
-   - **nexusqd: gate the render tap on SIGNAL, not on a sink-input existing.**
-     r13's adaptive cadence caps the deadline at 0.25 s "while the tap is open",
-     and the USB loopback holds a sink-input open forever ⇒ the visualizer
-     renders 20 fps for a blanked ring. Worth ~2.1 % of a core.
-   - **PulseAudio: don't resample and don't hold the sink RUNNING on silence.**
-     The `module-loopback` sink-input sits at 48003 Hz (permanent rate-matching)
-     and `NexusQSpeaker` `pcm0p` has been `RUNNING` since boot, so
-     `module-suspend-on-idle` can never sleep the amp. Worth ~8.2 % of a core
-     plus the amp's own draw. ⚠️ delicate: must not clip the start of real
-     audio — this is the path that took r65→r70 to stabilise (delay runaway).
-2. **Re-measure the OPP after (1).** If it descends, done. If it stays parked,
-   the 1 kHz wakeups alone are holding it and the next lever is the governor.
-3. **Governor, if still needed.** `sampling_rate=100 ms` + `up_threshold=95`
-   measured 98.7 % @ 350 MHz on plain idle
-   (`docs/2026-08-16-idle-700mhz-deep-analysis.md`, known-but-unshipped). This
-   workload — very many very short wakeups — is exactly what it was designed
-   for. Needs Petr's listening test first (it stretches a genuine ramp
-   ~60 ms → ~300 ms), and with USB audio in the path that test matters more.
-4. **Host side, optional.** If the Xiaomi box can be made to close the stream
+**Answered by the arm series below: the fix is `down_threshold` 40 → 60**, a
+single governor tunable, worth 6.03× → 1.07× and −16 °C, with ramp-up behaviour
+unchanged. See *Result* for the mechanism and the numbers. The remaining items
+are correctness/efficiency, no longer power:
+
+1. **nexusqd r14** — gate the render tap on SIGNAL, not on a sink-input existing
+   (built, undeployed). ~3.9 % of a core at 350 MHz.
+2. **PulseAudio: don't resample and don't hold the sink RUNNING on silence.**
+   ~20.7 % of a core at 350 MHz plus the amp's own draw. ⚠️ delicate: must not
+   clip the start of real audio — this is the path that took r65→r70 to
+   stabilise (delay runaway).
+3. **Host side, optional.** If the Xiaomi box can be made to close the stream
    when idle (`~/Documents/Dev/xiaomi-tvbox-twilight`), the IRQ storm stops at
-   the source — but the device must behave well regardless, so this is a bonus,
-   never the fix.
+   the source — a bonus, never the fix; the device must behave regardless.
 
 ## Instrument note — the tooling already existed and was better
 
@@ -129,16 +120,79 @@ Fixed here as a result (2026-08-24):
   worth ~2.1 % of a core — but note it is **13 % of the CPU burn and ~0 % of the
   reason the clock is pinned**, so it is a correctness fix, not the answer.
 
-## Armed overnight (2026-08-24 01:16 → ~03:21)
+## Result — one governor knob recovers it (arm series 01:16 → 02:59)
 
-Governor arm series via the harness (`OUT=/var/log/nq-night-arms`, 120 s settle +
-1200 s each, `ALLOW_UNITS=nexusq-uac2-in.service`): `base` → `sr100up95` →
-`down60` → `powersave` (locked 350 MHz = the floor bound) → `base2` (restoration
-+ repeatability control). It measures **how much of the 5× is recoverable by
-governor policy alone**, given the IRQ storm cannot be refused while the box
-streams. Removing the *software* load is deliberately NOT in this series — it
-needs unloading the PA loopback, and a mid-arm crash would leave the audio path
-broken unattended; do that one attended.
+Five arms via the harness (`OUT=/var/log/nq-night-arms`, 120 s settle + 1200 s
+each, `ALLOW_UNITS=nexusq-uac2-in.service`, USB Audio live throughout), asking
+how much of the 5× is recoverable by governor policy alone:
+
+| arm | knobs | 350 MHz | 700 | 920 | 1200 | rel. power | die | trans/s |
+|---|---|---|---|---|---|---|---|---|
+| `base` | sr 20 ms, up 80, **down 40** (production) | 0.00 % | 0.00 | 9.95 | 90.05 | **6.03×** | 84.0 °C | 0.06 |
+| `sr100up95` | sr 100 ms, up 95, down 40 | 35.20 % | 28.09 | 15.08 | 21.62 | 3.12× | 68.6 °C | 0.004 |
+| **`down60`** | sr 20 ms, up 80, **down 60** | **97.33 %** | 1.74 | 0.38 | 0.55 | **1.07×** | 68.1 °C | 0.26 |
+| `powersave` | locked 350 MHz (floor bound) | 100.00 % | — | — | — | 1.00× | 66.5 °C | 0 |
+| `base2` | production, repeat | 0.00 % | 0.00 | 9.19 | 90.81 | 6.04× | 77.2 °C ↑ | 0.07 |
+
+**`down_threshold` 40 → 60 recovers 98 % of the loss: 1.07× against a floor of
+1.00×, with USB Audio live — better than the shipped USB-off idle baseline
+(1.16×). Die 84.0 → 68.1 °C.**
+
+- `base2` reproduces `base` to 0.2 % (6.04 vs 6.03×), so the knobs restored and
+  the measurement is repeatable. `base2`'s cooler 77.2 °C is thermal lag — it
+  started from `powersave`'s 66.5 °C and was still climbing at the post-snapshot
+  (pre 75.4 → post 77.2).
+- The arms are directly comparable: `musb` fired **1000.0 IRQ/s in every arm**
+  (the box never stopped streaming), and each cgroup's CPU normalised by mean
+  frequency is constant — nexusqd 15.6 / 14.2 / 14.0 / 15.6 MHz·%, user.slice
+  82.5 / 94.7 / 75.2 / 71.7 / 81.1. Same workload throughout; only the clock moved.
+
+### Why `down_threshold` is the whole story
+
+`conservative` **holds** the frequency between `down_threshold` and
+`up_threshold`. This is the *same* mechanism the 2026-08-16 20 → 40 change fixed,
+one band higher: the USB workload — 1 kHz gadget IRQ plus PulseAudio grinding
+silence — puts the load of a typical 20 ms window in the **40–60 dead band**, so
+at `down=40` the governor had no rule that could ever bring it down, and it stayed
+wherever the first load spike put it. At 60 those windows decay, and it walks to
+350 MHz and stays: mean visit **9.35 s**, and the 125 excursions to 700 MHz last
+**156 ms** each. It is responsive, it just no longer parks.
+
+**Ramp-up is byte-identical to production** — `up_threshold`, `sampling_rate` and
+`freq_step` are untouched, so a genuine ramp is still 3 × 20 ms ≈ 60 ms. This is
+the decisive advantage over `sr100up95`, which stretches it to ~300 ms.
+Transitions rise 0.06 → 0.26/s, which is not oscillation.
+
+### What this rules out
+
+- **`sr100up95` should stay unshipped.** It measured 98.7 % on *plain* idle but
+  only 35.20 % / 3.12× here, and costs ramp latency. `down60` dominates it on
+  every axis; there is no reason to take the listening-test risk for it.
+- **PulseAudio's silence-resampling is NOT what pinned the clock.** `down60`
+  reached 97.33 % @ 350 MHz with PA still resampling at 48003 Hz and the sink
+  still `RUNNING`. So the attended "unload the PA loopback" experiment is
+  **off the critical path as a power fix** — it stays a CPU-efficiency and
+  correctness item, not a prerequisite.
+- **350 MHz sustains the USB audio path with room to spare.** `powersave` held
+  the stream for 20 min at 100 % / 350 MHz and 20.4 % busy — roughly 4× headroom.
+  So `down60`'s 1.07× is within 7 % of the best physically available.
+
+### Still worth fixing, now on efficiency grounds only
+
+At 350 MHz the same silence costs **user.slice 20.7 % and nexusqd 3.9 % of one
+core** (the percentages rise as the clock falls; the *work* is unchanged). That
+is a quarter of a core burned on nothing. It no longer costs much power, but
+nexusqd **r14** (built, undeployed) and the PulseAudio suspend-on-idle work
+remain correct fixes.
+
+### Shipping gate
+
+`down_threshold=60` is applied live on the device (2026-08-24 10:20) and is one
+`echo` from reverting; a reboot restores the shipped 40. Before it goes into
+`nexusq-cpufreq-tune` permanently it needs **Petr's listening test**: the knob
+only governs the *descent*, so the exposure is the ramp production already ships
+with USB Audio off — but no measurement can substitute for hearing whether the
+clock descends mid-track.
 
 ## Incidental findings
 

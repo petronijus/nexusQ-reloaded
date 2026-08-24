@@ -2,6 +2,7 @@
 Description=Nexus Q cpufreq idle tuning (conservative: ignore_nice_load, down_threshold)
 Documentation=file:///usr/bin/nexusq-cpufreq-tune
 Documentation=file:///usr/share/doc/nexusq/2026-08-16-idle-700mhz-deep-analysis.md
+Documentation=file:///usr/share/doc/nexusq/2026-08-24-usb-audio-idle-cost.md
 # The governor's tunables appear when the cpufreq driver registers; the script
 # waits for them itself, so no ordering against a device unit is needed here.
 # Deliberately NO After= on one of our own services: an After=<our unit> formed

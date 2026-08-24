@@ -6,6 +6,42 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — USB Audio idle burned 5× the power; one governor knob recovers it (2026-08-24, `device-google-steelhead` **r81**)
+- With "USB Audio" enabled and **nothing playing**, the Q sat at 1200 MHz /
+  1380 mV **90 % of the time**, die **84 °C**, **6.0×** a locked-350 floor —
+  the whole idle-power programme (90.8 % @ 350 MHz) erased by one toggle.
+- Root cause is **not** load: the USB gadget fires **1000 IRQ/s** whenever the
+  host is attached, and `conservative` *holds* the clock anywhere between
+  `down_threshold` and `up_threshold`. That put every 20 ms window inside the
+  40–80 band, so the governor had **no rule that could ever descend** and
+  parked wherever the first spike left it. Tell: high OPP + a *low* transition
+  rate (0.06/s) + `scaling_min_freq` already at 350000.
+- Fix: `nexusq-cpufreq-tune` raises `down_threshold` **40 → 60** — the same
+  failure the 20 → 40 change fixed in 2026-08-16, one band higher. Measured
+  with USB Audio live: **97.3 % @ 350 MHz, 1.07× the floor, 68 °C** — better
+  than this device's USB-*off* idle baseline (1.16×). `up_threshold`,
+  `sampling_rate` and `freq_step` untouched ⇒ **ramp-up is unchanged** (3 ×
+  20 ms ≈ 60 ms).
+- Five-arm study (`nq-opp-study2.sh`, 20 min each): `base` 6.03× → `sr100up95`
+  3.12× → **`down60` 1.07×** → `powersave` (locked 350) 1.00× → `base2` 6.04×
+  (control: reproduces `base` to 0.2 %). `musb` held 1000.0 IRQ/s in every arm
+  and per-cgroup work normalised by frequency was constant, so the arms are
+  directly comparable. Full numbers: `docs/2026-08-24-usb-audio-idle-cost.md`.
+- Ruled out along the way: the `sampling_rate=100 ms`+`up_threshold=95`
+  variant (98.7 % on plain idle, but only **35 % / 3.12×** here *and* a ~300 ms
+  ramp) **stays unshipped**; and PulseAudio's silence-resampling is **not**
+  what pinned the clock — `down60` reached 97.3 % with PA still resampling at
+  48003 Hz, so the attended "unload the PA loopback" experiment is off the
+  critical path as a power fix.
+- ⚠️ Applied **live** on the device (holding 94 % @ 350 MHz, 84 → 74 °C) but
+  **not yet in a built image**: r81 needs a rootfs build + Petr's listening
+  test before the knob is permanent (it governs only the descent, so the
+  exposure is the ramp production already ships with USB Audio off).
+- Still open, now on **efficiency** grounds only, not power: at 350 MHz the
+  same silence costs `user.slice` 20.7 % and `nexusqd` 3.9 % of one core.
+  `nexusqd` **r14** (silent-tap render gate) is built and undeployed.
+
+
 ### Added — hardware EQ on the TAS5713 (GitHub issue #2) — CODE + BUILDS ONLY, not yet deployed (2026-08-23, kernel **r49** + `nexusq-control` **r31** + app **1.14.0+35**)
 - Issue #2 (terierbread360) asked for a bass control. Implemented **in the
   amp's own DSP**, not in software: kernel patch **0045** exposes the

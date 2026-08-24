@@ -45,11 +45,12 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > 4. **Later (phase 2, not now):** DRC as speaker protection / loudness,
 >    presets, per-source EQ memory if ever wanted.
 >
-> **Sequencing constraint:** the night USB-idle sampler runs on the Q tonight
-> (2026-08-23) — **no ssh/flash/reboot until the morning fetch**. Tonight =
-> code + builds only; tomorrow = deploy (kernel OTA + control apk OTA), then a
-> **low-volume** listening check (≤1–2 %, no risky speaker tests) before
-> handing the sliders to Petr.
+> **Status 2026-08-24:** the sequencing constraint is lifted — the overnight
+> USB-idle study is fetched and analysed
+> (`docs/2026-08-24-usb-audio-idle-cost.md`). Remaining: deploy (kernel OTA +
+> control apk OTA), then a **low-volume** listening check (≤1–2 %, no risky
+> speaker tests) before handing the sliders to Petr. That same session should
+> carry the `down_threshold=60` listening test — one check, both changes.
 
 > ## 🔴 NEXT SESSION — a complete COLD build (agreed with Petr, 2026-08-13)
 >
@@ -71,6 +72,16 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > This is the number every idle-power change is iterated against. It is not a
 > nice-to-have: 350 MHz is the only OPP at 1025 mV, so residency above it is
 > where the idle heat and the ~65 °C floor come from.
+>
+> - ⚠️ **Measure it with "USB Audio" ON.** Every figure below predates that
+>   toggle being exercised, and it is a *different regime*: the gadget fires
+>   1000 IRQ/s whenever the host is attached, which on 2026-08-24 was found to
+>   park the clock at 1200 MHz **90 % of the time / 6.0× the floor / 84 °C** —
+>   the entire programme erased by one switch. Fixed the same day by
+>   `down_threshold` 40 → 60, which lands **97.3 % @ 350 MHz / 1.07× / 68 °C
+>   with USB Audio live**, i.e. *better than the USB-off baseline below*.
+>   `docs/2026-08-24-usb-audio-idle-cost.md`. **A "USB Audio off" idle number is
+>   no longer a sufficient result.**
 >
 > - **Baseline to beat: 90.8 % @ 350 MHz** (device r76 / nexusqd r13 / kernel
 >   r48, **overnight passive HA window 2026-08-19**, 8 h idle — up from 70.7 %
