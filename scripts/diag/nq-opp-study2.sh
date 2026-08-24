@@ -155,7 +155,19 @@ snap() {
             printf '%s usage=%s time=%s\n' "$s" "$(cat $s/usage)" "$(cat $s/time)"
         done
         printf '@cgroups\n'
+        # The user manager's units live FOUR levels down
+        # (user.slice/user-N.slice/user@N.service/app.slice/foo.service), so the
+        # plain */*.service glob misses every one of them. That gap made the
+        # 2026-08-24 USB-audio study report a bare "user.slice 8.72 %" with no
+        # breakdown, and PulseAudio — the single largest consumer on the box —
+        # had to be attributed by `ps` instead of a kernel counter. Glob the
+        # user tree explicitly. Still no extra forks: this only widens the list
+        # of paths the one awk/grep per snapshot reads.
         for c in /sys/fs/cgroup/*.slice/*.service /sys/fs/cgroup/*.slice \
+                 /sys/fs/cgroup/*.slice/*.slice/*.service \
+                 /sys/fs/cgroup/*.slice/*.slice/*.scope \
+                 /sys/fs/cgroup/*.slice/*.slice/user@*.service \
+                 /sys/fs/cgroup/*.slice/*.slice/user@*.service/*.slice/*.service \
                  /sys/fs/cgroup/*.scope /sys/fs/cgroup; do
             [ -f "$c/cpu.stat" ] || continue
             printf '%s %s\n' "$c" "$(grep -E '^(usage_usec|user_usec|system_usec)' $c/cpu.stat | tr '\n' ' ')"

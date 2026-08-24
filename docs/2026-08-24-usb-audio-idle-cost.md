@@ -194,6 +194,100 @@ only governs the *descent*, so the exposure is the ramp production already ships
 with USB Audio off — but no measurement can substitute for hearing whether the
 clock descends mid-track.
 
+## Follow-up — is ~20 % of a core for silence *correct*? No. (2026-08-24, měřeno)
+
+Petr asked whether audio processing genuinely costs that much, or whether the
+number is a measurement artefact. It is neither an artefact nor proportionate.
+
+**The attribution was thin and is now solid.** The 8.72 % "user.slice ≈
+PulseAudio" in *Attribution* above came from `ps` TIME, not from a cgroup —
+`analyze-opp-snaps.py` prints `system.slice` children but only the *aggregate*
+for `user.slice`, so PA was never actually isolated. It is now, per-thread,
+against the live daemon (pid 620, up since boot — no restart loop; the extra
+`pulseaudio` pids seen mid-investigation were client autospawns caused by
+running `pactl` as root, "Denied access … invalid authentication data"):
+
+| thread | % of one core @ 350 MHz | what it is |
+|---|---|---|
+| `alsa-sink-40124` | **17.80 %** | writes to the amp |
+| `alsa-source-Loo` | 4.47 % | reads snd-aloop |
+| `pulseaudio` (main) | 3.67 % | almost entirely nexusqd's IPC |
+| `alsaloop` (separate proc) | **0.63 %** | the actual USB→aloop bridge |
+
+**The damning comparison is inside our own stack.** `alsaloop` moves the *same*
+48 kHz stereo stream one hop for **23 cycles/sample**. PulseAudio's sink thread
+costs **664 cycles/sample** — measured directly: 317 000 cycles per wakeup,
+**200 wakeups/s** where the 25 ms period (1200 frames, `default-fragments=4` ×
+`25 ms`) needs 40. **~30× the cost of a plain ALSA bridge for the same job.**
+So "audio processing is just expensive" is false; the ALSA path proves the work
+itself is nearly free.
+
+### Where the cost actually comes from — the chain changed
+
+The path is no longer r65's direct bridge. It is now:
+
+```
+USB gadget → alsaloop → snd-aloop → PulseAudio (module-loopback) → TAS5713
+```
+
+The PulseAudio hop was added to regain mixing and the LED visualiser (the
+snd-aloop plan in PLAN.md). r65's `alsaloop → amp` cost 0.63 % of a core; the
+PA hop costs ~25 %. **That is the price of the feature, and it is being paid
+24/7 in total silence** — because `module-loopback` is never corked, so the
+loaded `module-suspend-on-idle` can never suspend the sink and the amp never
+powers down. Nothing is broken; nothing ever stops.
+
+### LED tap — clean A/B (nexusqd stopped, `arecord` killed by pid)
+
+| | tap on | tap off | cost |
+|---|---|---|---|
+| `alsa-sink` | 17.80 | 16.44 | 1.36 |
+| `alsa-source-Loo` | 4.28 | 3.80 | 0.48 |
+| `pulseaudio` main | 3.44 | **0.04** | **3.40** |
+| total | 25.52 | 20.28 | **5.24 %** |
+
+The tap costs **5.2 % of a core, and two thirds of that is socket chatter with
+PA, not audio data**. `nexusqd` **r14** (built, undeployed) already gates the
+render tap on silence.
+
+### `tsched=0` is NOT the bug — do not "fix" it
+
+200 wakeups/s where 40 would do looks exactly like interrupt-mode overhead, and
+`module-udev-detect tsched=0` is forced by
+`device-google-steelhead.trigger`. **It is deliberate**: timer-based scheduling
+"was the biggest cause of the periodic playback crackle on this OMAP4". Flipping
+it back is a listening-test change, not a free optimisation. Recorded here so
+the next person does not re-derive it as a leftover — it is not.
+
+### What to do, in order
+
+1. **Stop computing silence at all.** Detect that the UAC2 stream is digital
+   silence and cork or tear down the loopback, so `module-suspend-on-idle`
+   suspends the sink *and* the amp powers down. Worth ~20 % of a core plus the
+   amp's own draw — and it is the only fix that addresses the user's actual
+   objection, which is that the work happens at all.
+2. **Deploy nexusqd r14** — −5.2 %, already built.
+3. **Leave `tsched=0`, `resample-method=auto`, the 48 kHz pinning alone** unless
+   a listening test backs the change. `avoid-resampling` is moot: both ends are
+   already 48 kHz; module-loopback resamples to track *drift*, not rate.
+
+### Latency creep is back (slower, not dead)
+
+`journalctl -t pulseaudio` over the 2026-08-23 window:
+
+```
+18:05  module-loopback.c: Source minimum latency increased to 16.00 ms
+18:13  module-loopback.c: Source minimum latency increased to 26.00 ms
+22:12  module-loopback.c: Source minimum latency increased to 36.00 ms
+```
+
+Same shape as the 2026-08-08 runaway that r65 was built to kill — 16 → 36 ms
+over four hours instead of minutes to *minutes* of delay, so the alsaloop
+bridge is holding the bulk of it, but the PA hop reintroduced a slow version of
+the original fault. Also logged once: `Cannot set requested sink latency of
+40.00 ms, adjusting to 100.00 ms`. **Open — watch it over a multi-day window
+before deciding whether it plateaus.**
+
 ## Incidental findings
 
 - **`10.42.0.2` is NOT the Nexus Q right now.** It pings and accepts ssh, but
