@@ -1,0 +1,73 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 24 Aug 2026 14:30:00 +0200
+Subject: [PATCH] ASoC: tas571x: fix biquad coefficient control max on 32-bit
+
+tas571x_coefficient_info() advertises
+
+	uinfo->value.integer.max = 0xffffffff;
+
+but snd_ctl_elem_info carries the bounds in a long. On a 32-bit target that
+constant does not fit, and the control comes out with
+
+	amixer cget 'CH1 - Biquad 0'
+	; type=INTEGER,access=rw------,values=5,min=0,max=-1,step=0
+
+max = -1. alsa-lib clamps every value the user writes into [min, max], so with
+max below min the clamp lands on -1 and the driver is handed -1 for all five
+coefficients. tas571x_reg_write_multiword() then puts 0xFFFFFFFF into the
+codec's coefficient RAM.
+
+Measured on a TAS5713 (Google Nexus Q, armv7) with ftrace on i2c:i2c_write --
+the requested value never reaches the wire:
+
+  # asked for 8388608,0,0,0,0 (unity, b0 = 0x00800000)
+  i2c_write: i2c-3 a=01b l=21 [29-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff]
+  # asked for 1000,2000,3000,4000,5000
+  i2c_write: i2c-3 a=01b l=21 [29-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff-ff]
+
+so any EQ written through these controls silently loads garbage biquads into
+the amplifier. Read-back is not affected and reports the damage honestly
+(0x3ffffff, the 26-bit mask of what was written), which makes the failure easy
+to misread as a broken get.
+
+64-bit builds are unaffected: there the constant fits in a long and the clamp
+is a no-op.
+
+Advertise the range the hardware actually accepts instead. The coefficients are
+3.23 fixed point -- 3 integer bits plus 23 fractional, 26 bits total, negative
+values in two's complement inside those 26 bits -- so 0..0x3ffffff covers every
+representable coefficient (unity is 0x00800000) and fits a 32-bit long with room
+to spare.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ sound/soc/codecs/tas571x.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
+--- a/sound/soc/codecs/tas571x.c
++++ b/sound/soc/codecs/tas571x.c
+@@ -226,6 +226,14 @@
+  * b0, b1, b2, a1, a2
+  */
+ 
++/*
++ * Coefficients are 3.23 fixed point: 26 significant bits, negatives in two's
++ * complement within those bits, unity = 0x00800000. Advertising 0xffffffff
++ * here overflows the long in snd_ctl_elem_info on 32-bit and yields max = -1,
++ * which makes alsa-lib clamp every write to 0xFFFFFFFF.
++ */
++#define TAS571X_COEFFICIENT_MAX	0x3ffffff
++
+ static int tas571x_coefficient_info(struct snd_kcontrol *kcontrol,
+ 				   struct snd_ctl_elem_info *uinfo)
+ {
+@@ -234,7 +242,7 @@
+ 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+ 	uinfo->count = numcoef;
+ 	uinfo->value.integer.min = 0;
+-	uinfo->value.integer.max = 0xffffffff;
++	uinfo->value.integer.max = TAS571X_COEFFICIENT_MAX;
+ 	return 0;
+ }
+ 
