@@ -92,7 +92,27 @@ The first `flutter build ipa` will validate them.
 
 ---
 
-### Step 6 (stop computing silence) — MEASURED AND DESIGNED, not yet implemented
+### Step 6 (stop computing silence) — ✅ SHIPPED, one link left to confirm
+
+**Done and deployed (device r82, committed).** `nq-uac2-silence` suspends the PA
+source on 10 s of digital silence: idle **28.83 % → 3.13 %** of a core, wake
+turnaround **1 ms**. Full write-up, numbers and the two traps it walked through
+are in PLAN.md Step 6 and the CHANGELOG.
+
+**FIRST THING TOMORROW:** play anything on the Xiaomi box for ten seconds and
+check the sound comes back. That is the only link proven by inspection rather
+than measurement — the box refuses adb (`device unauthorized`, wants a dialog
+accepted on the TV), so the wake path was proven by feeding the same aloop a
+silence-then-tone file instead. If USB audio does not wake:
+`systemctl --user restart nexusq-uac2-in` on the Q, and the watcher can simply be
+removed from `nexusq-uac2-in` if it needs backing out.
+
+**Then, if you want the rest:** the sink settles at IDLE rather than SUSPENDED,
+so the amp is not yet powered down — nexusqd's visualiser tap holds it open.
+Worth another 1.60 % plus the amp's own draw. (Also noted: nexusqd r14 IS
+installed; PLAN's Step 5 was stale in saying otherwise.)
+
+### How it got there
 
 Two passes: a read-only one while Petr was still listening (stopped as soon as he
 said so), then a full A/B once the source was genuinely idle. **PLAN.md Step 6 now
