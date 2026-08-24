@@ -51,14 +51,14 @@ notes in [`docs/`](docs/).
 |---|:---:|---|
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; boot log genuinely clean (`dmesg` err/warn empty) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
-| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; measured governor tuning keeps an idle box at 350 MHz ≈ 91 % of the time (device r73) |
+| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; governor tuning keeps an idle box at 350 MHz ~91 % of the time — including with USB Audio on, which used to pin it at 1200 MHz (device r81) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, one movable PulseAudio input · v1.6.15 |
 | 🍏 **AirPlay** (shairport-sync) | ✅ | a PA input like librespot, avahi-advertised, ports pinned · v1.11.0 |
 | 🎼 **Roon Bridge** (Roon Ready) | ✅ | glibc/Mono in a bwrap sandbox over a baked Debian base; validated against a real Core; default-OFF · v1.11.0 |
 | 🎚 **USB Audio input** — the Q as a USB DAC | ✅ | the orb enumerates as a USB speaker (UAC2 gadget) and **mixes** into PA via a stable-clock snd-aloop hop · v1.12.0. USB is the Q's only no-solder digital input — every built-in port is an output |
 | 🔊 **Audio output selection** | ✅ | speaker / optical / HDMI = the PA default sink, picked from the app · v1.7.0 |
-| 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; near-zero idle cost since nexusqd r13 |
+| 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
 | 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, the whole system, the **kernel** (health-gated trial slot) and an **A/B rootfs** — no cable, LED-narrated · v1.12.0+ |
 | 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (19 entities); the app is the only credential provisioner (PROTOCOL §13) |
@@ -222,6 +222,8 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.12.0 ─ ✦ OTA everywhere · MQTT telemetry · USB audio mixes in PA · iOS app       2026-08-12   ← latest tag
 (dev) ── ✦ idle diet — healthd + nexusqd rewrites; idle busy 18.2 → ~7.7 %         2026-08-13
 (dev) ── ✦ idle OPP root-caused → governor tuned: 91 % @ 350 MHz verified          2026-08-16
+(dev) ── ✦ USB Audio pinned the clock at 1200 MHz → one governor knob, 84→68 °C   2026-08-24
+(dev) ── ✦ speexdsp rebuilt with NEON — resampling 1.34-2.86x faster              2026-08-24
 (dev) ── ✦ kernel OTA (trial slot) + A/B rootfs + rescue initramfs · healthd in C  2026-08-18…21
 (dev) ── ✦ DFS ch100 mystery solved · healthd rotation leak (r80) · OTA-repo dep rule   2026-08-23
 ```

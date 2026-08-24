@@ -4,7 +4,84 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-23 (latest): **telemetry outage worked backwards — DFS fixed at the router · healthd rotation leak (r80) · the OTA repo had silently frozen the fleet at r77**
+## Session 2026-08-24 (latest): **USB Audio was costing 6× the idle power — one governor knob fixed it · profiling infrastructure · speexdsp rebuilt with NEON**
+
+Full record: `docs/2026-08-24-usb-audio-idle-cost.md`. Everything below is
+committed and pushed (`d902d71`…`a275f2d`); the OTA repo is republished.
+
+**The finding.** With "USB Audio" on and *nothing playing*, the Q sat at
+1200 MHz / 1380 mV **90 % of the time**, die **84 °C**, **6.03×** a locked-350
+floor — the whole idle-power programme erased by one toggle. It was never load
+(the box was ~10 % busy): `conservative` **holds** the clock anywhere between
+`down_threshold` and `up_threshold`, and the USB gadget's 1000 IRQ/s plus
+PulseAudio grinding silence put every 20 ms window inside the 40–80 band, so the
+governor had **no rule that could ever descend**. Tell: high OPP + a *low*
+transition rate (0.06/s) + `scaling_min_freq` already at 350000.
+
+**Fix: `down_threshold` 40 → 60** — the same failure the 20 → 40 change fixed on
+08-16, one band higher. Measured with USB Audio live: **97.3 % @ 350 MHz, 1.07×,
+68 °C** — better than this device's USB-*off* baseline (1.16×). Ramp-up is
+unchanged (`up_threshold`/`sampling_rate`/`freq_step` untouched).
+
+**Then: where does the remaining ~25 % of a core go?** `perf` (the kernel always
+had `CONFIG_PERF_EVENTS`; only the package was missing) put **58.86 %** of PA's
+sink thread inside `libspeexdsp`. Alpine's armv7 build is **scalar** — no
+`Tag_Advanced_SIMD_arch` — so `pmos/speexdsp/` now rebuilds it with NEON:
+**1.40× / 2.86× / 1.34×** on the three ratios this box runs. Real win, but **it
+does not solve the silence problem** — a 1.4× cheaper resampler still resamples
+silence forever.
+
+**Live on the device:** `speexdsp` r100, `nexusqd` r14, `nexusq-control` r31,
+kernel untouched at **r48**, `down_threshold=60`. Closing check, detached with no
+ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
+
+**Three self-inflicted lessons, all now closed in tooling or memory:**
+- `pactl`/`pulseaudio` as root without `PULSE_SERVER` left
+  `/run/user/10000/pulse` root-owned and **took USB Audio down for minutes while
+  `systemctl is-active` still said `active`**. Correct recipe + the fact that
+  `is-active` is not a health check for `nexusq-uac2-in` are in the doc.
+- **The governor invents benchmark results.** Three unpinned runs of the identical
+  library comparison gave **0.75×, 0.95×, 1.26×**; the first was written up as "the
+  NEON build is a regression". `scripts/diag/bench-speex-resampler.py` now pins the
+  CPU and restores the governor **and its tunables** (switching governor resets
+  them — that reverted `down_threshold` 60 → 20 mid-session).
+- `docker-build.sh` run on the **host** finds nothing and still **exits 0** — a
+  silent no-op that looks like a finished build. Entry point is
+  `build-and-flash.sh` / its `docker run`.
+
+### WHERE TO CONTINUE (2026-08-24)
+
+1. **Kernel r49 + `device` r81, one session, one reboot.** `device-google-steelhead`
+   r81 (carries `perf` and makes `down_threshold=60` permanent) is published but
+   **not installed**: `apk add --upgrade device-google-steelhead` drags
+   `linux-google-steelhead` r48 → r49 with it, and apk must never apply a kernel —
+   it deletes the running kernel's `/lib/modules`. Stage r49 through
+   `nq-kernel-ota` (trial slot, health-gated), then install r81, then reboot.
+   ⚠️ **Until this happens `down_threshold=60` is live-only**: any governor switch
+   resets it to 20, and a reboot loses it.
+2. **One listening test, three questions at once** (≤1–2 % volume, Petr drives):
+   `down_threshold=60` (does the clock descend mid-track?), the hardware **EQ**
+   sliders on kernel r49 + control r31, and — only if he wants it — whether the
+   NEON resampler changed anything audible. App **1.14.0+35** is built but
+   **unreleased**, pending his approval.
+3. **PLAN.md Step 6 — stop computing silence.** Now the only real fix left for the
+   original complaint. Detect that the UAC2 stream is digital silence and cork or
+   tear down the loopback so `module-suspend-on-idle` can suspend the sink **and
+   the amp powers down**. Worth ~20 % of a core plus the amp's draw. ⚠️ Delicate:
+   must not clip the start of real audio — this is the path that took r65→r70 to
+   stabilise.
+4. **PLAN.md Step 3 — the 5× wakeups**, if Step 6 does not make it moot: the sink
+   thread wakes **200×/s** where a 25 ms period needs 40. Do **not** touch
+   `tsched=0` as part of it — that is a deliberate fix for the periodic playback
+   crackle on this OMAP4, not a leftover.
+5. **PLAN.md Step 7 — the latency creep**, on a multi-day passive window:
+   `module-loopback` logged `Source minimum latency increased to 16 → 26 → 36 ms`
+   over four hours, the same shape as the 2026-08-08 runaway r65 killed, in slow
+   motion. Do not act before there is data.
+6. **Housekeeping:** `speexdsp`'s `pkgrel=100` is a version pin that only wins while
+   `pkgver` matches — an upstream bump silently restores Alpine's scalar build.
+
+## Session 2026-08-23: **telemetry outage worked backwards — DFS fixed at the router · healthd rotation leak (r80) · the OTA repo had silently frozen the fleet at r77**
 
 Full record: `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`. Working
 tree holds the r80 source (`nq-healthd.c` ×2, APKBUILD) + the

@@ -194,7 +194,7 @@ only governs the *descent*, so the exposure is the ramp production already ships
 with USB Audio off — but no measurement can substitute for hearing whether the
 clock descends mid-track.
 
-## Follow-up — is ~20 % of a core for silence *correct*? No. (2026-08-24, měřeno)
+## Follow-up — is ~20 % of a core for silence *correct*? No. (2026-08-24, measured)
 
 Petr asked whether audio processing genuinely costs that much, or whether the
 number is a measurement artefact. It is neither an artefact nor proportionate.
@@ -357,6 +357,78 @@ do it. It moves work out of vectorised code into scalar code. Dropped without
 testing on the device — proving a negative was not worth three PA restarts.
 
 **Which leaves exactly one fix for the resampler: rebuild `speexdsp` with NEON.**
+
+## Outcome — what shipped, and what the day did NOT fix
+
+### Shipped and live
+
+| | | |
+|---|---|---|
+| `down_threshold` 40 → 60 | governor | **6.03× → ~1.1× relative power, die 84 → 68 °C** |
+| `speexdsp` **1.2.1-r100** | NEON rebuild | resampler **1.34–2.86×** faster |
+| `nexusqd` **r14** | LED tap gated on silence | −5.2 % of a core |
+| `nexusq-control` **r31** | hardware EQ (§14) | inert until kernel r49 |
+| `perf` in the image | `device` **r81** | built + published, **not installed** (below) |
+
+Closing verification, taken **detached with no ssh session** over a 4 min window:
+
+| OPP | residency |
+|---|---|
+| **350 MHz** | **88.87 %** |
+| 700 MHz | 4.22 % |
+| 920 MHz | 3.81 % |
+| 1200 MHz | 3.10 % |
+
+die **67.5 °C**, relative dynamic power **1.36×** — against **0.58 % @ 350 MHz,
+82.9 °C and 6.03×** at the top of this document. (The overnight `down60` arm hit
+97.33 % / 1.07 %; this window started minutes after half an hour of benchmarking,
+so the box was still shedding heat. The die matches the arm's 68.1 °C exactly.)
+
+### The NEON resampler — a real win, but not for the problem it was chosen for
+
+Measured with `scripts/diag/bench-speex-resampler.py` (fixed ratio, CPU pinned):
+
+| ratio | Alpine r2 | ours r100 | |
+|---|---|---|---|
+| 48000 → 48003 (USB drift) | 2657 ns | 1898 ns | **1.40×** |
+| 48000 → 48000 (1:1) | 1368 ns | 478 ns | **2.86×** |
+| 44100 → 48000 (Spotify) | 2820 ns | 2105 ns | **1.34×** |
+
+**A 1.4× cheaper resampler still resamples silence forever.** The ~25 % of a core
+stands. This is a win for *real playback* — every Spotify track goes through this
+resampler — that happens to shave the idle case too. **Step 6 in PLAN.md (stop
+resampling silence at all) is now the only real fix left for the original problem.**
+
+### Two measurement traps, both closed in the tooling
+
+1. **Never measure a resampler in situ.** `module-loopback`'s rate controller
+   wanders between exactly 48000 and ~48003 Hz, and speex picks its inner loop from
+   the ratio's **denominator** — 1/1 and 147/160 take the NEON-accelerated direct
+   path, 16000/16001 falls to the interpolate path which has no NEON at all. Two PA
+   samples minutes apart compare different workloads.
+2. **Pin the CPU frequency or the governor invents the result.** Three *unpinned*
+   runs of the identical comparison gave **0.75×, 0.95× and 1.26×**; the first was
+   written up here as "the NEON build is a regression" before it was caught. Pinned
+   at 350 MHz, repeats agree to ~1.5 %. Switching governor also **resets the
+   `conservative` tunables** — that silently reverted `down_threshold` 60 → 20
+   mid-session. The tool now pins *and* restores both.
+
+Rejected on the fixed rig: **r101** (NEON via `CFLAGS` without `--enable-neon`) —
+0.99× / 2.15× / 0.98×, no better than stock except at 1:1. `--enable-neon`'s
+`-O3 -march=armv7-a` is what carries the non-NEON interpolate path. Deleted from
+both build volumes so a later publish cannot pick it up as "newest".
+
+### ⚠️ Left in a fragile state, deliberately
+
+**`device-google-steelhead` r81 is published but NOT installed.** Adding it drags
+`linux-google-steelhead` r48 → r49 (apk v3 upgrades an explicitly-added package's
+dependencies), and apk must never apply a kernel — it deletes the running kernel's
+`/lib/modules`, which is the rollback path the A/B design exists to protect. It
+goes on in the **same session as the kernel OTA**.
+
+Until then **`down_threshold=60` is live-only and fragile**: it is a governor
+tunable, so *any* governor switch resets it to the default 20 (this happened once
+during benchmarking), and a reboot loses it entirely.
 
 ## Incidental findings
 
