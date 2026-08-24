@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.14.0",
-  "versionCode": 35,
-  "notes": "Equalizer in Settings → Sound: bass and treble, ±12 dB, plus Flat. The filtering runs in the amplifier's own DSP, so it costs no CPU, adds no latency, and one setting covers Spotify, AirPlay, Roon and USB Audio alike. Needs kernel 6.12.12-r50 or newer — the card greys itself out on older ones.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.14.0/nexusq-companion-1.14.0.apk",
+  "version": "1.15.0",
+  "versionCode": 36,
+  "notes": "A real equalizer: seven parametric bands on a live response curve, draggable handles, presets, and a compact version on the home screen. Preamp with a clipping warning and one-tap auto. Still runs in the amplifier's own DSP, so it costs no CPU. Needs kernel r50+ and nexusq-control r32+ for all seven bands.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.15.0/nexusq-companion-1.15.0.apk",
   "minAndroidSdk": 21
 }
