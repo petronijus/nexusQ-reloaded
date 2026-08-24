@@ -77,22 +77,52 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   (25 ms), buffer 4800, `default-fragments=4 × 25 ms`, `resample-method=auto`,
 >   `tsched=0`, everything pinned to 48 kHz.
 >
-> ### Step 1 — get a profiler, or prove we can live without one ⬜
-> The kernel already has `CONFIG_PERF_EVENTS` (`perf_event_paranoid=2` exists);
-> only the userspace `perf` package is missing. Try `apk add perf` from the
-> pinned repos; if there is no armv7 build, fall back to Step 2's differential
-> method instead of burning time building perf. **Done when:** either a working
-> `perf record` on the sink thread, or a written decision that we go differential.
+> ### Step 1 — get a profiler ✅ DONE 2026-08-24
+> The kernel already had `CONFIG_PERF_EVENTS`; only userspace was missing.
+> `apk add perf` → **perf 7.1.5-r0** from `edge/main`, 3 packages
+> (`libtraceevent`, `libtraceevent-plugins`, `perf`), no upgrades, no conflicts.
+> Works against our 6.12.12 kernel. ⚠️ Installed **live only** — a reflash wipes
+> it; add it to the image if profiling becomes routine.
 >
-> ### Step 2 — split the 17.80 % into its parts ⬜
-> If perf: `perf record -t <sink tid> -F 199 -g -- sleep 60`, then report the
-> function breakdown (resampler vs format conversion vs mixing vs rewind vs
-> overhead). If no perf: A/B `resample-method` on silence —
-> `auto` (today) vs `trivial` (cheapest possible) vs `speex-fixed-1` (integer,
-> usually the right pick on ARM). `trivial` is a **diagnostic only**: it corrects
-> drift by dropping/duplicating samples, which clicks on real audio. The delta
-> `auto → trivial` *is* the resampler's share of the 17.80 %.
-> **Done when:** we can say what fraction is the resampler and what is not.
+> ### Step 2 — split the 17.80 % ✅ DONE 2026-08-24 — it is the RESAMPLER
+> `perf record -t <sink tid> -F 499` for 45 s, 7791 samples:
+>
+> | DSO | share of the sink thread |
+> |---|---|
+> | **`libspeexdsp`** | **58.86 %** |
+> | `libpulsecommon` | 14.01 % |
+> | `libpulsecore` | 11.39 % |
+> | `[kernel]` + `[snd_pcm]` | 10.46 % |
+> | everything else | ~5 % |
+>
+> **≈10.5 % of a core is the speex resampler alone**, converting 48000 → 48003 to
+> track drift between snd-aloop and the amp. `resample-method = auto` →
+> `speex-float-1`.
+>
+> ### Step 2b — the resampler runs SCALAR on a NEON CPU ⬜ ← concrete, quality-free win
+> Confirmed two independent ways, not inferred:
+> - ELF attributes of `libspeexdsp.so.1.5.2`: `Tag_FP_arch: VFPv3-D16` and
+>   **no `Tag_Advanced_SIMD_arch` tag at all**.
+> - Disassembly of the hot loop (0x5868–0x58ea): scalar `s`-registers only
+>   (`vmov s14`, `vcvt.f32.u32`, `vdiv.f32`) — no NEON `q`-register SIMD.
+>
+> That is Alpine's doing, not a bug: the `armv7` target is built for the common
+> denominator VFPv3-D16, because some ARMv7 parts have no NEON. **The OMAP4460
+> does** (`Features: … neon vfpv3`), and **we build our own image**, so this is
+> ours to fix. speexdsp ships NEON inner-product paths (`resample_neon.h`) that
+> only compile when the build enables NEON.
+>
+> Do, in this order:
+> 1. **Free A/B first, on silence:** `resample-method = speex-fixed-1` vs today's
+>    `speex-float-1` vs `trivial`. Integer MACs may already beat scalar VFP, and
+>    `trivial` bounds the maximum possible win. Costs one PA restart.
+> 2. **Then the real fix:** rebuild `speexdsp` with NEON in our aports overlay.
+>    Same math, vectorised — no quality trade-off, and it speeds up **real**
+>    playback too (Spotify is 44.1 kHz and hits the same resampler on every
+>    track). Expect 2–3× on the resampler.
+> 3. ⛔ **Do NOT just lower the quality** (`speex-float-0`). `resample-method` is
+>    global, so it would degrade Spotify's 44.1 → 48 conversion — audible on real
+>    music — to save CPU on silence. Wrong trade.
 >
 > ### Step 3 — chase the 5× wakeups ⬜
 > The sink wakes **200×/s** where a 25 ms period needs **40**. With `tsched=0` the
