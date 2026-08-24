@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- flutter_secure_storage keeps the MQTT broker login in the iOS Keychain
+	     (lib/mqtt/, added in app 1.12.0 — after the 2026-08-03 iOS port, which is
+	     why this file did not exist). Without an explicit access group the
+	     Keychain write fails with errSecMissingEntitlement on a REAL device;
+	     the simulator is permissive, so the port's simulator run could not have
+	     caught it. The group is the default app-identifier one — no sharing with
+	     other apps, just our own items. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(CFBundleIdentifier)</string>
+	</array>
+</dict>
+</plist>

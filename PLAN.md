@@ -312,13 +312,46 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > LED render tap on silence instead of on "a sink-input exists".
 >
 > ### Step 6 — stop computing silence at all ⬜ ← NOW THE ONLY REAL FIX LEFT
-> Detect that the UAC2 stream is digital silence and cork or tear down the
-> loopback, so the loaded `module-suspend-on-idle` can finally suspend the sink
+> Detect that the UAC2 stream carries nothing worth playing and cork or tear down
+> the loopback, so the loaded `module-suspend-on-idle` can finally suspend the sink
 > **and the amp powers down**. Worth ~20 % of a core plus the amp's own draw, and
 > it is the only step that addresses Petr's actual objection — that the work
 > happens at all. ⚠️ Delicate: must not clip the start of real audio; this is the
-> path that took r65→r70 to stabilise. Design it after Steps 2–3, because if the
-> per-sample cost collapses first, the urgency (and maybe the design) changes.
+> path that took r65→r70 to stabilise.
+>
+> **Reconnaissance done 2026-08-24 (read-only, on the live device). Two of this
+> step's founding assumptions were wrong — read this before designing anything:**
+>
+> 1. ⛔ **"Digital silence" does not exist here.** A 2 s `parec` on `usb_in`
+>    measured peak **541**, with **185 305 / 192 000 samples non-zero**. An
+>    all-zeros test would never fire. The gate must be level-based, with a
+>    threshold — which makes "don't clip real audio" a calibration problem, not
+>    just a timing one.
+> 2. ⛔ **The host never closes the stream, so there is no free signal.** The
+>    gadget capture PCM reports `hw_ptr = 1 401 513 792` frames ≈ **29 200 s = the
+>    entire uptime**: the Xiaomi box streams continuously from boot. So UAC2
+>    altsetting-0 detection — which would have been perfect, since the host itself
+>    declares "not playing" and no audio can be lost — **is not available**. It is
+>    worth re-checking against a different source before ruling it out for good.
+> 3. ✅ **The lever is confirmed.** `module-suspend-on-idle` is loaded and
+>    demonstrably works on this system: the SPDIF sink reads **SUSPENDED** while
+>    the TAS5713 sink reads **RUNNING** with exactly one input — the loopback. So
+>    removing or corking that one sink-input is what powers the amp down. This was
+>    the biggest unknown and it cost nothing to answer.
+> 4. The loopback runs at `s16le 2ch **48003 Hz**` — the resampler really is live
+>    and is the expensive part, as Step 2 assumed.
+>
+> ⚠️ **Not yet measured, and NOT to be guessed:** the source's true idle floor.
+> The quiet blocks in that capture (peak 9–16) were **gaps inside music Petr was
+> actually playing**, not the box idling — he stopped the session precisely
+> because it was live. Calibrating a threshold from those numbers would be
+> calibrating against content. Take a fresh capture with the box genuinely idle.
+>
+> **Next session, in order:** (a) confirm nothing is playing —
+> `pactl list short sink-inputs` plus a short `parec` peak; (b) capture the true
+> idle floor; (c) prove the amp actually powers down by removing the sink-input by
+> hand; (d) only then design the gate. Per-process CPU attribution was set up but
+> never run — the command is in the session log.
 >
 > ### Step 7 — the latency creep, on a long window ⬜
 > `module-loopback` logged `Source minimum latency increased to 16 → 26 → 36 ms`

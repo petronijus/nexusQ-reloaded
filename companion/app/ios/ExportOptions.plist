@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- App Store export for the Nexus Q companion app. Mirrors the Kulturní Přehled
+     setup: MANUAL signing, because the release build runs unattended on the
+     macOS VM where automatic signing has no Xcode account session to lean on.
+     The profile is "NexusQ Companion Distribution" (App ID org.nexusq.nexusqCompanion,
+     created 2026-08-24) and it is signed by the team's shared "Apple Distribution:
+     Petr Parkan Janda" certificate, the same one KP uses. -->
+<plist version="1.0">
+<dict>
+	<key>destination</key>
+	<string>export</string>
+	<key>method</key>
+	<string>app-store</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>teamID</key>
+	<string>ASFPR2T2DQ</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>org.nexusq.nexusqCompanion</key>
+		<string>NexusQ Companion Distribution</string>
+	</dict>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>uploadSymbols</key>
+	<false/>
+</dict>
+</plist>

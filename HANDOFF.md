@@ -4,7 +4,117 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-24 (latest, evening): **parametric 7-band EQ shipped — and three UI faults that shipped past green tests**
+## Session 2026-08-24 (latest, night): **saved EQ presets shipped + released · iOS release plumbing created, blocked on one browser step · Step 6 recon corrected two wrong assumptions**
+
+### Shipped and released
+`nexusq-control` **r33** + app **1.16.2+46**, released as `app-v1.16.2` with the
+OTA manifest bumped and the download verified live (HTTP 200, manifest live on
+raw.githubusercontent.com). Saved EQ presets live on the **device** in
+`/etc/nexusq/eq-presets.json` — a file of its own, so a mangled preset list can
+only cost presets and never the live EQ. Plus a 0 dB detent while dragging,
+frequency labels moved below the plot, a black card, and the permanent
+"runs in the amplifier hardware" line removed. Details in CHANGELOG.
+
+⚠️ **`dart format` must never be run on this app** — it rewrote 45 untouched
+files (~1600 lines) and buried the feature diff; the fix was
+`git checkout -- lib/ test/` and replaying the edits by hand. See the memory
+note of the same name.
+
+---
+
+### iOS / TestFlight — RESUME HERE
+
+**Petr's ask:** ship the companion app to TestFlight the way Kulturní Přehled
+does it. Deferred mid-session; everything below is done and pushed.
+
+**There is no half-finished iOS branch.** Checked `git fetch --all`, every local
+and remote ref, worktrees and stashes: the newest branch other than `main` is
+from 2026-06-30, while the iOS port is `5ba6a9e` (2026-08-03) and is **already in
+`main`**. Nothing to recover.
+
+**Done, in Petr's Apple account (team `ASFPR2T2DQ`, confirmed identical to the one
+already committed in the Xcode project):**
+
+| thing | value |
+|---|---|
+| App ID `org.nexusq.nexusqCompanion` | registered → `JY394URHWL` |
+| profile `NexusQ Companion Distribution` | created → `TY847W7VDT`, expires 2027-05-22 |
+| distribution certificate | `WCMJBXSM7T` "Apple Distribution: Petr Parkan Janda" — pre-existing, shared with KP |
+| `companion/app/ios/ExportOptions.plist` | written, mirrors KP (manual signing, app-store) |
+| Release config | switched to manual signing + that profile |
+| `companion/app/ios/Runner/Runner.entitlements` | **new** — Keychain access group |
+
+The ASC API key in 1Password (`Kulturni prehled ASC API Key`) is **team-scoped,
+not app-limited** — it lists bundle IDs, profiles and certificates for the whole
+team — so it is the right tool for all of the above.
+
+**🚧 THE ONE BLOCKER — only Petr can do it, in a browser.** The App Store Connect
+*app record* does not exist, and Apple forbids creating one over the API. Probed
+explicitly, this is not a guess:
+
+```
+POST /v1/apps -> HTTP 403
+"The resource 'apps' does not allow 'CREATE'.
+ Allowed operations are: GET_COLLECTION, GET_INSTANCE, UPDATE"
+```
+
+App Store Connect → My Apps → **+** → New App: platform iOS, Bundle ID
+`org.nexusq.nexusqCompanion` (already in the dropdown), SKU e.g.
+`NEXUSQ-COMPANION`, primary language English (U.S.), Full Access. **The name must
+be unique across the whole App Store even for a TestFlight-only app** — "Nexus Q"
+will likely collide with Google; the name is changeable later.
+
+**Also still open:** which Mac builds it. The Proxmox macOS VM (108) is stopped
+and **shares RAM with the Windows VM (106), which was running** — the KP flow
+shuts Windows down gracefully first (its guest agent answers). Petr has not
+approved that yet. The MacBook is the alternative (`ios-release-macbook` skill).
+
+**How current is iOS vs Android?** The Dart is shared, so every feature from 1.11
+through 1.16.2 is there. Three things are Android-only *by design*, documented in
+`docs/2026-08-03-ios-companion-port.md`: NFC tap-to-pair, first-time BT setup, and
+self-update. But **`ios/` had not been touched since the port**, and that hid a
+real defect, now fixed:
+
+- `Podfile.lock` is stale — it predates `flutter_secure_storage` (added in 1.12.0)
+  and `path_provider`. `pod install` regenerates it during the build; **commit the
+  regenerated lock afterwards.**
+- ⚠️ **No entitlements file existed, so the Keychain had no access group.**
+  `flutter_secure_storage` holds the MQTT broker login; without it the write fails
+  with `errSecMissingEntitlement` on a **real device**. The simulator is
+  permissive, which is exactly why the port's simulator verification could not
+  have caught it. Fixed by the new `Runner.entitlements`.
+- 🚨 **The app has never run on a physical iPhone** — only the iPhone 17
+  simulator. The first TestFlight build is also the first real-hardware run;
+  expect a round of fixes.
+
+None of the iOS changes above are build-verified — there was no Mac in the loop.
+The first `flutter build ipa` will validate them.
+
+---
+
+### Step 6 (stop computing silence) — recon only, NOT implemented
+
+Petr asked for it, then stopped the session because **he was listening to music at
+the time** and the remaining work all mutates the audio path. Nothing was changed
+on the device; every command was a read.
+
+**PLAN.md Step 6 has been rewritten with the measurements** — read it before
+designing, because two of that step's founding assumptions turned out to be
+wrong: the idle stream is **not** digital silence (peak 541, 96.5 % of samples
+non-zero), and the host **never closes the stream** (the gadget capture has been
+running for the entire 29 200 s uptime), which rules out the clean
+altsetting-based signal. What *is* confirmed is the lever: the SPDIF sink reads
+SUSPENDED while the amp sink is held awake by exactly one input, the loopback.
+
+⚠️ Do not calibrate a threshold from that capture's quiet blocks — they are gaps
+inside real playback, not the source idling.
+
+**New standing rule, saved to memory:** before mutating the audio path, check
+`pactl list short sink-inputs` and take a short `parec` peak. He may be listening.
+
+---
+
+## Session 2026-08-24 (evening): **parametric 7-band EQ shipped — and three UI faults that shipped past green tests**
 
 Full record: `PLAN.md` (the EQ block) and the CHANGELOG. All committed and pushed.
 
