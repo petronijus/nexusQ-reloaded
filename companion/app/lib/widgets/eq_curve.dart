@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/eq.dart';
 import '../theme/nexusq_theme.dart';
@@ -32,6 +33,11 @@ import '../theme/nexusq_theme.dart';
 /// Handles move vertically only; band frequencies are fixed and width/Q lives on
 /// the slider under the curve. Hit-testing is therefore by horizontal distance
 /// alone with no radius limit, so a band's whole column is its target.
+///
+/// There is a detent at 0 dB: come within a few pixels of flat and the band
+/// snaps exactly onto it, with a haptic click on the way in. Gain is continuous,
+/// so without one a band lands on ±0.1 dB and the curve never quite lies down —
+/// returning to flat by hand was luck.
 ///
 /// The x axis spans exactly the first to the last band frequency, so the outer
 /// handles sit on the edges. Painter and hit-testing share `plotX`, so a handle
@@ -68,11 +74,28 @@ class EqCurve extends StatefulWidget {
 class _EqCurveState extends State<EqCurve> {
   int _dragging = -1;
 
+  /// True while the current drag is being held at exactly 0 dB, so the haptic
+  /// fires on ENTERING the detent and not on every frame inside it.
+  bool _inDetent = false;
+
   double _xOf(double f, double w) => plotX(widget.state.bands, f, w);
 
   double _dbOf(double y, double h) {
     final m = widget.state.maxGainDb;
     return (m - (y / h).clamp(0.0, 1.0) * 2 * m);
+  }
+
+  /// Half-width of the detent at 0 dB, in PIXELS of finger travel rather than
+  /// dB: what makes flat hard to hit is the hand, not the scale, so the target
+  /// has to be the same size however tall the plot is or how wide its range.
+  static const double _detentPx = 7;
+
+  /// Snaps to exactly flat near 0 dB. Without it a band can only be returned to
+  /// flat by luck — the value is continuous, so ±0.1 dB is the norm and the
+  /// curve never quite lies down.
+  double _detent(double db) {
+    final perDb = widget.height / (2 * widget.state.maxGainDb);
+    return db.abs() * perDb <= _detentPx ? 0.0 : db;
   }
 
   /// Nearest band by HORIZONTAL distance only. With gain-only handles the whole
@@ -118,6 +141,7 @@ class _EqCurveState extends State<EqCurve> {
         final i = _nearest(d.localPosition, size);
         if (i < 0) return;
         _dragging = i;
+        _inDetent = false;
         if (widget.armed.value != i) {
           widget.armed.value = i;
           widget.onSelect(i);
@@ -126,12 +150,21 @@ class _EqCurveState extends State<EqCurve> {
 
       void update(DragUpdateDetails d) {
         if (_dragging < 0) return;
-        widget.onChanged(_dragging, _dbOf(d.localPosition.dy, size.height));
+        final db = _detent(_dbOf(d.localPosition.dy, size.height));
+        final nowFlat = db == 0.0;
+        if (nowFlat != _inDetent) {
+          _inDetent = nowFlat;
+          // A click on the way in only: the detent should be felt, not buzzed
+          // at, and leaving it is already obvious from the curve moving.
+          if (nowFlat) HapticFeedback.selectionClick();
+        }
+        widget.onChanged(_dragging, db);
       }
 
       void end(DragEndDetails d) {
         if (_dragging < 0) return;
         _dragging = -1;
+        _inDetent = false;
         widget.onCommit();
       }
 
@@ -164,7 +197,9 @@ class _EqCurveState extends State<EqCurve> {
           ),
         },
         child: SizedBox(
-          height: widget.height,
+          // `height` stays the height of the PLOT; the axis strip is extra, so
+          // making room for the labels never shrinks the curve.
+          height: widget.height + _axisGutter,
           width: double.infinity,
           child: CustomPaint(
             painter: _EqPainter(
@@ -202,7 +237,7 @@ class _EqPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
+    final w = size.width, h = size.height - _axisGutter;
     final dim = enabled ? NexusQColors.dim : NexusQColors.dim.withValues(alpha: 0.4);
 
     final fine = Paint()
@@ -246,7 +281,7 @@ class _EqPainter extends CustomPainter {
             : (f >= 1000
                 ? '${(f / 1000).toStringAsFixed(1)}k'
                 : '${f.round()}');
-        _labelCentred(canvas, text, gx, h - 12,
+        _labelCentred(canvas, text, gx, h + 5,
             i == armed ? NexusQColors.accent : dim, w);
       }
     }
@@ -305,7 +340,9 @@ class _EqPainter extends CustomPainter {
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2
-            ..color = NexusQColors.surface);
+            // Reads as a cut-out of the card behind it, so it has to be the
+            // card's colour — the EQ card is the black one.
+            ..color = NexusQColors.canvas);
     }
 
     // What the armed band is actually set to, pinned to the top of the plot:
@@ -329,7 +366,7 @@ class _EqPainter extends CustomPainter {
     for (var i = 0; i <= steps; i++) {
       final x = size.width * i / steps;
       final f = plotFreq(state.bands, x, size.width);
-      final y = _y(db(f), size.height);
+      final y = _y(db(f), size.height - _axisGutter);
       i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
     }
     return path;
@@ -375,6 +412,11 @@ class _EqPainter extends CustomPainter {
 /// Spans the first to the last band frequency, inset by [_edgeInset] so the
 /// outermost handles sit on the edges and are still drawn whole.
 const double _edgeInset = 14;
+
+/// Strip reserved BELOW the plot for the frequency axis. The labels used to be
+/// painted inside the plot's bottom edge, where they collided with the −12 dB
+/// label in the corner and sat under the curve itself.
+const double _axisGutter = 18;
 
 double plotX(List<EqBand> bands, double f, double w) {
   if (bands.isEmpty) return 0;

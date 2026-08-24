@@ -43,6 +43,34 @@ class MockClient implements NexusQClient {
 
   int _eqShelf(String type) => _eqBands.indexWhere((b) => b['type'] == type);
 
+  /// Presets the fake device holds: the ones it ships with, plus the ones
+  /// "saved" on it. Same shape and order as the daemon (PROTOCOL §14.5) —
+  /// built-ins first, every entry flagged — so a card that works against this
+  /// works against a real Q.
+  final List<Map<String, dynamic>> _eqUserPresets = [];
+
+  List<Map<String, dynamic>> get _eqBuiltinPresets => [
+        {'id': 'flat', 'label': 'Flat', 'preamp_db': 0.0, 'builtin': true,
+         'bands': [for (final b in _eqBands) {...b, 'gain_db': 0.0}]},
+        {'id': 'bass', 'label': 'Bass boost', 'preamp_db': -6.0, 'builtin': true,
+         'bands': [for (var i = 0; i < _eqBands.length; i++)
+           {..._eqBands[i], 'gain_db': i == 0 ? 6.0 : 0.0}]},
+      ];
+
+  Map<String, dynamic> get _eqPresets =>
+      {'presets': [..._eqBuiltinPresets, ..._eqUserPresets]};
+
+  /// Same derivation as the daemon: unicode-alnum kept, everything else a
+  /// separator, collapsed and trimmed.
+  static String _userPresetId(String name) {
+    final alnum = RegExp(r'[\p{L}\p{N}]', unicode: true);
+    final raw = name.trim().toLowerCase().split('')
+        .map((c) => alnum.hasMatch(c) ? c : '-').join();
+    final slug = raw.split('-').where((x) => x.isNotEmpty).join('-');
+    if (slug.isEmpty) return '';
+    return 'u:${slug.length > 32 ? slug.substring(0, 32) : slug}';
+  }
+
   Map<String, dynamic> get _eqState => {
         'supported': true,
         'bands': [for (final b in _eqBands) Map<String, dynamic>.from(b)],
@@ -212,16 +240,48 @@ class MockClient implements NexusQClient {
         _events.add(NexusQEvent('eqChanged', _eqState));
         return _eqState;
       case 'listEqPresets':
-        return {
-          'presets': [
-            {'id': 'flat', 'label': 'Flat', 'preamp_db': 0.0,
-             'bands': [for (final b in _eqBands)
-               {...b, 'gain_db': 0.0}]},
-            {'id': 'bass', 'label': 'Bass boost', 'preamp_db': -6.0,
-             'bands': [for (var i = 0; i < _eqBands.length; i++)
-               {..._eqBands[i], 'gain_db': i == 0 ? 6.0 : 0.0}]},
-          ]
+        return _eqPresets;
+      case 'saveEqPreset':
+        final name = (p['name'] as String? ?? '').trim();
+        final id = _userPresetId(name);
+        if (id.isEmpty) {
+          throw NexusQError('bad_params', 'name must be a non-empty string');
+        }
+        final entry = {
+          'id': id,
+          'label': name,
+          'builtin': false,
+          'preamp_db': (p['preamp_db'] as num?)?.toDouble() ?? _eqPreamp,
+          'bands': [
+            for (var i = 0; i < _eqBands.length; i++)
+              {
+                ..._eqBands[i],
+                ...?((p['bands'] as List?)?.elementAtOrNull(i) as Map?)
+                    ?.cast<String, dynamic>(),
+              }
+          ],
         };
+        // Saving the same name replaces, exactly as the daemon does (§14.6).
+        final at = _eqUserPresets.indexWhere((e) => e['id'] == id);
+        if (at >= 0) {
+          _eqUserPresets[at] = entry;
+        } else {
+          _eqUserPresets.add(entry);
+        }
+        _events.add(NexusQEvent('eqPresetsChanged', _eqPresets));
+        return {..._eqPresets, 'id': id};
+      case 'deleteEqPreset':
+        final delId = p['id'] as String? ?? '';
+        if (!delId.startsWith('u:')) {
+          throw NexusQError('bad_params', 'built-in presets cannot be deleted');
+        }
+        final before = _eqUserPresets.length;
+        _eqUserPresets.removeWhere((e) => e['id'] == delId);
+        if (_eqUserPresets.length == before) {
+          throw NexusQError('bad_params', 'no saved preset $delId');
+        }
+        _events.add(NexusQEvent('eqPresetsChanged', _eqPresets));
+        return _eqPresets;
       default:
         throw NexusQError('unknown_method', method);
     }

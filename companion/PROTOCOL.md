@@ -928,8 +928,51 @@ leaves the stored file matching what the chip actually runs.
 
 → `{}`
 
-← `{"presets": [{"id": "loudness", "label": "Loudness", "bands": [...], "preamp_db": -5.0}]}`
+← `{"presets": [{"id": "loudness", "label": "Loudness", "bands": [...], "preamp_db": -5.0, "builtin": true}]}`
 
 Presets live on the device so every client sees the same ones. Applying one is
 just a `setEq` with its `bands` and `preamp_db` — one write path, not two. Each
 ships with enough preamp not to clip.
+
+Built-ins come first and carry `"builtin": true`; the user's own saved presets
+follow with `"builtin": false`. Only the latter may be deleted — a client should
+offer delete on exactly the presets that flag marks.
+
+An older daemon omits `builtin` entirely; read a missing field as `true` (all
+built-in) and hide save/delete, since it has nowhere to put them.
+
+### 14.6 `saveEqPreset`
+
+→ `{"name": "Vinyl"}` — snapshots whatever the amplifier is running right now
+
+→ `{"name": "Vinyl", "bands": [...], "preamp_db": -3.0}` — saves an explicit curve
+
+← the full `listEqPresets` reply, plus `"id"` of the preset just written
+
+Saved on the Q, in `/etc/nexusq/eq-presets.json` — a file of its own, separate
+from the live `eq.json`, so a mangled preset list can only ever lose presets and
+never the EQ. The presets belong to the speaker: they survive reinstalling the
+app and every client sees them.
+
+The id is derived from the name, so **saving an existing name replaces it** —
+"Vinyl" saved twice is one preset, not two. Names are trimmed, at most 24
+characters, and must contain at least one letter or digit. At most 24 saved
+presets; replacing one still works at the cap.
+
+Bands are clamped through the same validator as `setEq`, on the way in *and* on
+the way out, so a hand-edited file can never hand the amplifier a coefficient
+`setEq` would have refused.
+
+Errors: `bad_params` (missing/blank/oversized name, a name with no alphanumeric
+character, more than `max_bands` bands, or the cap reached), `unavailable`
+(unwritable config file). Emits `eqPresetsChanged`.
+
+### 14.7 `deleteEqPreset`
+
+→ `{"id": "u:vinyl"}`
+
+← the full `listEqPresets` reply
+
+Errors: `bad_params` (no such saved preset, or an id that is not a saved one —
+built-ins are refused explicitly), `unavailable` (unwritable config file). Emits
+`eqPresetsChanged`.

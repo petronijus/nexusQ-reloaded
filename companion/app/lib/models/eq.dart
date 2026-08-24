@@ -222,11 +222,33 @@ class EqState {
 
 class EqPreset {
   const EqPreset({required this.id, required this.label, required this.bands,
-      required this.preampDb});
+      required this.preampDb, this.builtin = true});
   final String id;
   final String label;
   final List<EqBand> bands;
   final double preampDb;
+
+  /// Ships with the device, so it cannot be deleted. A daemon that predates
+  /// saved presets omits the field entirely — absent reads as built-in, which
+  /// leaves the card offering delete on exactly nothing. (PROTOCOL §14.5)
+  final bool builtin;
+
+  static final RegExp _alnum = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+  /// Mirrors the daemon's id derivation (PROTOCOL §14.6) so the app can tell,
+  /// before sending, that a name is going to REPLACE an existing preset rather
+  /// than add one. Unicode-aware on purpose: the daemon uses Python's
+  /// `str.isalnum()`, so "Večer" must slug to `u:večer` here too, not `u:ve-er`.
+  static String userIdFor(String name) {
+    final buf = StringBuffer();
+    for (final c in name.trim().toLowerCase().split('')) {
+      buf.write(_alnum.hasMatch(c) ? c : '-');
+    }
+    final slug =
+        buf.toString().split('-').where((part) => part.isNotEmpty).join('-');
+    final cut = slug.length > 32 ? slug.substring(0, 32) : slug;
+    return cut.isEmpty ? '' : 'u:$cut';
+  }
 
   static EqPreset fromJson(Map<String, dynamic> j) => EqPreset(
         id: j['id'] as String? ?? '',
@@ -237,5 +259,6 @@ class EqPreset {
                 .toList() ??
             const [],
         preampDb: (j['preamp_db'] as num?)?.toDouble() ?? 0,
+        builtin: j['builtin'] as bool? ?? true,
       );
 }

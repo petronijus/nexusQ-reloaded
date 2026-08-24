@@ -38,6 +38,11 @@ class EqCard extends StatefulWidget {
 class _EqCardState extends State<EqCard> {
   EqState _st = EqState.empty;
   List<EqPreset> _presets = const [];
+
+  /// Whether the device can store presets of its own. A daemon that predates
+  /// saveEqPreset marks nothing `builtin`, and there is no point offering a
+  /// save button that can only fail. (PROTOCOL §14.5)
+  bool _presetsEditable = false;
   int _selected = 0;
   bool _loaded = false;
   bool _sending = false;
@@ -51,9 +56,14 @@ class _EqCardState extends State<EqCard> {
     super.initState();
     _load();
     _evSub = widget.client.events.listen((e) {
-      if (e.event != 'eqChanged' || !mounted || _sending || _pending != null) {
+      if (!mounted) return;
+      if (e.event == 'eqPresetsChanged') {
+        // Another client — or another phone — saved or deleted one.
+        final list = _parsePresets(e.data);
+        if (list != null) setState(() => _presets = list);
         return;
       }
+      if (e.event != 'eqChanged' || _sending || _pending != null) return;
       setState(() => _st = _hydrate(e.data));
     });
     // The card mounts before the link is up, so the first getEq usually fails
@@ -99,17 +109,26 @@ class _EqCardState extends State<EqCard> {
   bool _legacyDaemon = false;
   late final ValueNotifier<int?> _armed = widget.armed ?? ValueNotifier<int?>(null);
 
+  /// A `presets` payload -> models, or null when it carries none. Also decides
+  /// whether this daemon can save: it can exactly when it bothered to tell us
+  /// which of the presets are built in.
+  List<EqPreset>? _parsePresets(Map<String, dynamic> d) {
+    final raw = (d['presets'] as List?)?.whereType<Map>().toList();
+    if (raw == null) return null;
+    _presetsEditable = raw.any((m) => m.containsKey('builtin'));
+    return raw.map((m) => EqPreset.fromJson(m.cast<String, dynamic>())).toList();
+  }
+
   Future<void> _load() async {
     try {
       final r = await widget.client.call('getEq');
       List<EqPreset> presets = const [];
+      // Re-decided from this reply alone: a device that got downgraded must not
+      // keep a save button it can no longer honour.
+      _presetsEditable = false;
       try {
-        final p = await widget.client.call('listEqPresets');
-        presets = (p['presets'] as List?)
-                ?.whereType<Map>()
-                .map((m) => EqPreset.fromJson(m.cast<String, dynamic>()))
-                .toList() ??
-            const [];
+        presets =
+            _parsePresets(await widget.client.call('listEqPresets')) ?? const [];
       } catch (_) {
         // Old daemon: no presets. Not an error — the EQ still works.
       }
@@ -191,6 +210,9 @@ class _EqCardState extends State<EqCard> {
   String _fmtHz(double f) =>
       f >= 1000 ? '${(f / 1000).toStringAsFixed(f >= 10000 ? 0 : 1)} kHz' : '${f.round()} Hz';
 
+  /// Problems only. The line used to explain, permanently, that the EQ runs in
+  /// the amplifier — true, but it is a fact you read once, and it sat under the
+  /// card forever after. Nothing wrong means nothing shown.
   Widget _hint() {
     final clipping = _st.headroomDb > 0.1;
     final String text;
@@ -209,8 +231,7 @@ class _EqCardState extends State<EqCard> {
           'clip. Tap auto to pull the preamp down.';
       color = Colors.orangeAccent;
     } else {
-      text = 'Runs in the amplifier hardware — applies to every source, costs no '
-          'CPU and adds no delay.';
+      return const SizedBox.shrink();
     }
     return Padding(
       padding: const EdgeInsets.only(top: 6, bottom: 2),
@@ -218,33 +239,140 @@ class _EqCardState extends State<EqCard> {
     );
   }
 
+  /// Every band to 0 dB and the preamp with it. Widths are left alone — a reset
+  /// that also threw away tuned Q values would be a bigger hammer than the
+  /// button reads as.
+  void _resetFlat() {
+    setState(() => _st = _st.copyWith(
+        bands: _st.bands.map((b) => b.copyWith(gainDb: 0)).toList(),
+        preampDb: 0));
+    _commit();
+  }
+
+  void _applyPreset(EqPreset p) {
+    setState(() {
+      _st = _st.copyWith(bands: p.bands, preampDb: p.preampDb);
+      _selected = 0;
+    });
+    _commit();
+  }
+
+  /// saveEqPreset and deleteEqPreset both answer with the whole list, so one
+  /// helper covers both: send, adopt the reply, and surface a failure in the
+  /// hint line rather than a toast that scrolls away unseen.
+  Future<void> _presetCall(String method, Map<String, dynamic> params) async {
+    try {
+      final r = await widget.client.call(method, params);
+      if (!mounted) return;
+      final list = _parsePresets(r);
+      setState(() {
+        if (list != null) _presets = list;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    }
+  }
+
+  /// Sends the bands the CARD is showing, not the device's idea of them: a
+  /// gesture can still be queued behind a ~300 ms write, and saving what the
+  /// user is looking at is the only answer that is never surprising.
+  Future<void> _savePreset() async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _SavePresetDialog(existingUserIds: {
+        for (final p in _presets)
+          if (!p.builtin) p.id,
+      }),
+    );
+    if (name == null || !mounted) return;
+    await _presetCall('saveEqPreset', {
+      'name': name,
+      'bands': _st.bands.map((b) => b.toJson()).toList(),
+      'preamp_db': _st.preampDb,
+    });
+  }
+
+  Future<void> _deletePreset(EqPreset p) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NexusQColors.surface,
+        title: Text('Delete "${p.label}"?',
+            style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
+        content: const Text(
+            'The preset is stored on the Q, so this removes it for every phone.',
+            style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: TextButton.styleFrom(foregroundColor: Colors.orangeAccent),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _presetCall('deleteEqPreset', {'id': p.id});
+  }
+
   Widget _presetChips() {
-    if (_presets.isEmpty) return const SizedBox.shrink();
     final enabled = _loaded && _st.supported;
+    final canSave = enabled && _presetsEditable && !_legacyDaemon;
+    if (_presets.isEmpty && !canSave) return const SizedBox.shrink();
+    final side = BorderSide(color: NexusQColors.dim.withValues(alpha: 0.4));
+    // Save sits OUTSIDE the scroller, pinned to the end of the row: inside it,
+    // every preset you save pushes it further off-screen — and the moment you
+    // need it most is when you already have several.
     return SizedBox(
-      height: 36,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _presets.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 6),
-        itemBuilder: (context, i) {
-          final p = _presets[i];
+      height: 40,
+      child: Row(children: [
+        Expanded(child: _presetScroller(side, enabled)),
+        if (canSave) ...[
+          const SizedBox(width: 6),
+          ActionChip(
+            avatar:
+                const Icon(Icons.add, size: 16, color: NexusQColors.accent),
+            label: const Text('Save', style: TextStyle(fontSize: 12)),
+            backgroundColor: NexusQColors.surface,
+            side: side,
+            onPressed: _savePreset,
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _presetScroller(BorderSide side, bool enabled) {
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      itemCount: _presets.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 6),
+      itemBuilder: (context, i) {
+        final p = _presets[i];
+        if (p.builtin) {
           return ActionChip(
             label: Text(p.label, style: const TextStyle(fontSize: 12)),
             backgroundColor: NexusQColors.surface,
-            side: BorderSide(color: NexusQColors.dim.withValues(alpha: 0.4)),
-            onPressed: enabled
-                ? () {
-                    setState(() {
-                      _st = _st.copyWith(bands: p.bands, preampDb: p.preampDb);
-                      _selected = 0;
-                    });
-                    _commit();
-                  }
-                : null,
+            side: side,
+            onPressed: enabled ? () => _applyPreset(p) : null,
           );
-        },
-      ),
+        }
+        // Yours: tap applies it, the × removes it. Only these carry a ×, so the
+        // affordance itself says which presets are yours to delete.
+        return InputChip(
+          label: Text(p.label, style: const TextStyle(fontSize: 12)),
+          backgroundColor: NexusQColors.surface,
+          side: side,
+          deleteIcon: const Icon(Icons.close, size: 16),
+          deleteButtonTooltipMessage: 'Delete ${p.label}',
+          onPressed: enabled ? () => _applyPreset(p) : null,
+          onDeleted: enabled ? () => _deletePreset(p) : null,
+        );
+      },
     );
   }
 
@@ -366,7 +494,9 @@ class _EqCardState extends State<EqCard> {
     // made during a write is not lost.
     final enabled = _loaded && _st.supported;
     return Card(
-      color: NexusQColors.surface,
+      // Black, not the usual grey surface: the plot is most of this card, and
+      // on the page's own black it stops reading as a panel bolted on top.
+      color: NexusQColors.canvas,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
         child: Column(
@@ -377,27 +507,19 @@ class _EqCardState extends State<EqCard> {
                 // No title here: the section header above the card already says
                 // Equalizer, and having it twice just eats vertical space.
                 const Spacer(),
-                TextButton(
-                  onPressed: enabled && !_st.isFlat
-                      ? () {
-                          final flat = _presets.isNotEmpty
-                              ? _presets
-                                  .firstWhere((p) => p.id == 'flat',
-                                      orElse: () => _presets.first)
-                                  .bands
-                              : _st.bands
-                                  .map((b) => b.copyWith(gainDb: 0))
-                                  .toList();
-                          setState(() =>
-                              _st = _st.copyWith(bands: flat, preampDb: 0));
-                          _commit();
-                        }
-                      : null,
-                  style: TextButton.styleFrom(
-                      foregroundColor: NexusQColors.accent,
-                      minimumSize: const Size(0, 32),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                  child: const Text('Flat'),
+                // Reset, not a "Flat" preset chip in disguise: flat is where the
+                // EQ starts, so undoing your edits is an action, not a choice
+                // among presets — and an icon leaves the width for the ones
+                // that are.
+                IconButton(
+                  onPressed: enabled && !_st.isFlat ? _resetFlat : null,
+                  icon: const Icon(Icons.restart_alt, size: 20),
+                  tooltip: 'Reset to flat',
+                  visualDensity: VisualDensity.compact,
+                  color: NexusQColors.accent,
+                  disabledColor: NexusQColors.dim.withValues(alpha: 0.4),
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+                  padding: EdgeInsets.zero,
                 ),
               ],
             ),
@@ -429,6 +551,84 @@ class _EqCardState extends State<EqCard> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Names a preset. Kept separate so the text field owns its own rebuilds — the
+/// card is expensive to rebuild on every keystroke, and it must not be, mid-EQ.
+class _SavePresetDialog extends StatefulWidget {
+  const _SavePresetDialog({required this.existingUserIds});
+  final Set<String> existingUserIds;
+
+  @override
+  State<_SavePresetDialog> createState() => _SavePresetDialogState();
+}
+
+class _SavePresetDialogState extends State<_SavePresetDialog> {
+  final _ctl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  /// The daemon derives the id from the name, so a name that slugs to one you
+  /// already have REPLACES it. Say so before the tap, not after.
+  bool get _replaces =>
+      widget.existingUserIds.contains(EqPreset.userIdFor(_ctl.text));
+
+  /// Blank or all-punctuation slugs to nothing and the daemon would refuse it —
+  /// disable the button rather than round-trip for the error.
+  bool get _valid => EqPreset.userIdFor(_ctl.text).isNotEmpty;
+
+  void _submit() {
+    if (_valid) Navigator.of(context).pop(_ctl.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: NexusQColors.surface,
+      title: const Text('Save preset',
+          style: TextStyle(color: NexusQColors.white, fontSize: 16)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _ctl,
+            autofocus: true,
+            maxLength: 24,
+            textCapitalization: TextCapitalization.sentences,
+            textInputAction: TextInputAction.done,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _submit(),
+            style: const TextStyle(color: NexusQColors.white),
+            decoration: const InputDecoration(
+                hintText: 'Vinyl, Night, Kitchen…', counterText: ''),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _replaces
+                ? 'Replaces the preset you already saved under this name.'
+                : 'Stored on the Q, so it is there on every phone.',
+            style: TextStyle(
+                color: _replaces ? Colors.orangeAccent : NexusQColors.dim,
+                fontSize: 11),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        TextButton(
+            onPressed: _valid ? _submit : null,
+            style: TextButton.styleFrom(foregroundColor: NexusQColors.accent),
+            child: Text(_replaces ? 'Replace' : 'Save')),
+      ],
     );
   }
 }

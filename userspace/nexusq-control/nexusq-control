@@ -701,6 +701,9 @@ def set_mqtt_config(p, path=None):
 # register state across sink suspend (PDN untouched after probe) but loses it on
 # power-off, so the stored eq.json is re-applied at every daemon start.
 EQ_CONF_PATH = os.environ.get("NEXUSQ_EQ_CONF", "/etc/nexusq/eq.json")
+# User presets sit beside it, in their own file: a corrupt or hand-edited
+# preset list must never be able to take the live EQ down with it.
+EQ_PRESETS_PATH = os.environ.get("NEXUSQ_EQ_PRESETS", "/etc/nexusq/eq-presets.json")
 EQ_FS = 48000
 EQ_BANDS = 7                      # the TAS5713 main EQ bank: 7 biquads per channel
 EQ_MAX_DB = 12.0
@@ -708,6 +711,9 @@ EQ_MIN_HZ, EQ_MAX_HZ = 20.0, 20000.0
 EQ_MIN_Q, EQ_MAX_Q = 0.3, 8.0
 EQ_PREAMP_MIN_DB = -24.0
 _EQ_UNITY = (0x00800000, 0, 0, 0, 0)  # b0 = 1.0 in 3.23, rest zero
+EQ_USER_PRESET_ID = "u:"          # namespace; a builtin id can never collide
+EQ_USER_PRESET_MAX = 24           # /etc is small and a chip row is finite
+EQ_PRESET_NAME_MAX = 24
 
 # Band 0 and band 6 keep the frequencies the bass/treble card used (100 Hz /
 # 8 kHz) so a device upgraded from the two-knob version sounds identical; the
@@ -939,7 +945,7 @@ def get_eq(path=None):
     return _eq_view(_eq_load(path))
 
 
-def list_eq_presets():
+def _eq_builtin_presets():
     out = []
     for pid, label, gains in EQ_PRESETS:
         bands = _eq_default_bands()
@@ -948,8 +954,147 @@ def list_eq_presets():
             if q is not None:
                 bands[idx]["q"] = q
         out.append({"id": pid, "label": label, "bands": bands,
-                    "preamp_db": min(0.0, -_eq_headroom_db(bands))})
-    return {"presets": out}
+                    "preamp_db": min(0.0, -_eq_headroom_db(bands)), "builtin": True})
+    return out
+
+
+def _eq_preset_slug(label):
+    """A stable id derived from the name, so saving the same name twice REPLACES
+    rather than piling up near-duplicates the user has to clean by hand."""
+    slug = "".join(c if c.isalnum() else "-" for c in label.lower())
+    slug = "-".join(part for part in slug.split("-") if part)[:32]
+    return EQ_USER_PRESET_ID + slug if slug else ""
+
+
+def _eq_user_presets_load(path=None):
+    """Stored user presets -> validated list. Anything unreadable, mistyped or
+    out of range is DROPPED, never raised: a bad presets file must leave the EQ
+    itself working, so this is only ever best-effort."""
+    try:
+        with open(path or EQ_PRESETS_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    raw = data.get("presets") if isinstance(data, dict) else data
+    if not isinstance(raw, list):
+        return []
+    out, seen = [], set()
+    defaults = _eq_default_bands()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        label = label.strip()[:EQ_PRESET_NAME_MAX]
+        pid = item.get("id")
+        if not isinstance(pid, str) or not pid.startswith(EQ_USER_PRESET_ID):
+            pid = _eq_preset_slug(label)
+        if not pid or pid in seen:
+            continue
+        raw_bands = item.get("bands")
+        if not isinstance(raw_bands, list):
+            continue
+        bands = [_eq_clean_band(raw_bands[i] if i < len(raw_bands) else None,
+                                defaults[i]) for i in range(EQ_BANDS)]
+        pre = item.get("preamp_db")
+        pre = float(pre) if isinstance(pre, (int, float)) and not isinstance(pre, bool) else 0.0
+        seen.add(pid)
+        out.append({"id": pid, "label": label, "bands": bands,
+                    "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)), "builtin": False})
+        if len(out) >= EQ_USER_PRESET_MAX:
+            break
+    return out
+
+
+def _eq_user_presets_write(presets, path=None):
+    path = path or EQ_PRESETS_PATH
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"presets": [{k: v for k, v in p.items() if k != "builtin"}
+                                   for p in presets]}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Err("unavailable", f"cannot persist presets: {e}")
+
+
+def list_eq_presets(path=None):
+    """Builtins first, then the user's own. `builtin` tells the client which of
+    them it may offer to delete."""
+    return {"presets": _eq_builtin_presets() + _eq_user_presets_load(path)}
+
+
+def save_eq_preset(p, path=None, eq_path=None):
+    """Store the current EQ (or an explicitly supplied one) under a name.
+
+    Saving an existing name replaces it — the id is derived from the name, so
+    "Vinyl" saved twice is one preset, not two."""
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise Err("bad_params", "name must be a non-empty string")
+    name = name.strip()
+    if len(name) > EQ_PRESET_NAME_MAX:
+        raise Err("bad_params", f"name must be at most {EQ_PRESET_NAME_MAX} characters")
+    pid = _eq_preset_slug(name)
+    if not pid:
+        raise Err("bad_params", "name must contain at least one letter or digit")
+
+    defaults = _eq_default_bands()
+    if "bands" in p:
+        if not isinstance(p["bands"], list):
+            raise Err("bad_params", "bands must be a list")
+        if len(p["bands"]) > EQ_BANDS:
+            raise Err("bad_params", f"at most {EQ_BANDS} bands")
+        bands = [_eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None,
+                                defaults[i]) for i in range(EQ_BANDS)]
+        pre = p.get("preamp_db")
+        pre = float(pre) if isinstance(pre, (int, float)) and not isinstance(pre, bool) else 0.0
+    else:
+        # No bands given: snapshot whatever the amplifier is running right now.
+        cur = _eq_load(eq_path)
+        bands, pre = cur["bands"], cur["preamp_db"]
+    entry = {"id": pid, "label": name, "bands": bands,
+             "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)), "builtin": False}
+
+    presets = _eq_user_presets_load(path)
+    replaced = False
+    for i, existing in enumerate(presets):
+        if existing["id"] == pid:
+            presets[i] = entry
+            replaced = True
+            break
+    if not replaced:
+        if len(presets) >= EQ_USER_PRESET_MAX:
+            raise Err("bad_params",
+                      f"at most {EQ_USER_PRESET_MAX} saved presets — delete one first")
+        presets.append(entry)
+    _eq_user_presets_write(presets, path)
+    log(f"eq preset {'replaced' if replaced else 'saved'}: {name}")
+    out = list_eq_presets(path)
+    out["id"] = pid
+    return out
+
+
+def delete_eq_preset(p, path=None):
+    pid = p.get("id")
+    if not isinstance(pid, str) or not pid:
+        raise Err("bad_params", "id must be a string")
+    if not pid.startswith(EQ_USER_PRESET_ID):
+        raise Err("bad_params", "built-in presets cannot be deleted")
+    presets = _eq_user_presets_load(path)
+    kept = [x for x in presets if x["id"] != pid]
+    if len(kept) == len(presets):
+        raise Err("bad_params", f"no saved preset {pid}")
+    _eq_user_presets_write(kept, path)
+    log(f"eq preset deleted: {pid}")
+    return list_eq_presets(path)
 
 
 def _eq_apply(st):
@@ -1592,6 +1737,14 @@ class Bridge:
             # Presets are device-side so every client sees the same ones, and
             # applying one is just a setEq with its bands — one write path.
             return list_eq_presets(), []
+        if method == "saveEqPreset":
+            # Saved on the Q, not in the phone: the presets belong to the
+            # speaker, so they survive a reinstall and every client sees them.
+            st = save_eq_preset(p)
+            return st, [("eqPresetsChanged", {"presets": st["presets"]})]
+        if method == "deleteEqPreset":
+            st = delete_eq_preset(p)
+            return st, [("eqPresetsChanged", st)]
 
         # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
         # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;

@@ -351,6 +351,142 @@ class TestPresets(unittest.TestCase):
                                  0.05, msg=p["id"])
 
 
+class TestUserPresets(unittest.TestCase):
+    """Saving your own preset writes a SEPARATE file from the live EQ, so the
+    worst a mangled preset list can do is lose presets — never the EQ."""
+
+    def paths(self, d):
+        return os.path.join(d, "eq-presets.json"), os.path.join(d, "eq.json")
+
+    def test_save_then_list_returns_it_after_the_builtins(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            bands = MOD._eq_default_bands()
+            bands[2]["gain_db"] = 4.5
+            r = MOD.save_eq_preset({"name": "Vinyl", "bands": bands, "preamp_db": -3.0},
+                                   path=pp)
+            self.assertEqual(r["id"], "u:vinyl")
+            presets = r["presets"]
+            builtin = [x for x in presets if x["builtin"]]
+            user = [x for x in presets if not x["builtin"]]
+            self.assertEqual(len(builtin), len(MOD.EQ_PRESETS))
+            self.assertEqual([x["id"] for x in user], ["u:vinyl"])
+            # builtins keep their place at the front
+            self.assertTrue(all(x["builtin"] for x in presets[:len(builtin)]))
+            self.assertEqual(user[0]["label"], "Vinyl")
+            self.assertEqual(user[0]["bands"][2]["gain_db"], 4.5)
+            self.assertEqual(user[0]["preamp_db"], -3.0)
+
+    def test_it_survives_a_restart(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            MOD.save_eq_preset({"name": "Night", "bands": MOD._eq_default_bands()}, path=pp)
+            again = MOD.list_eq_presets(path=pp)["presets"]
+            self.assertIn("u:night", [x["id"] for x in again])
+
+    def test_saving_the_same_name_replaces_rather_than_duplicates(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            b1 = MOD._eq_default_bands()
+            b1[0]["gain_db"] = 3.0
+            b2 = MOD._eq_default_bands()
+            b2[0]["gain_db"] = -3.0
+            MOD.save_eq_preset({"name": "Vinyl", "bands": b1}, path=pp)
+            r = MOD.save_eq_preset({"name": "vinyl ", "bands": b2}, path=pp)
+            user = [x for x in r["presets"] if not x["builtin"]]
+            self.assertEqual(len(user), 1)
+            self.assertEqual(user[0]["bands"][0]["gain_db"], -3.0)
+
+    def test_no_bands_given_snapshots_the_live_eq(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, ep = self.paths(d)
+            bands = MOD._eq_default_bands()
+            bands[5]["gain_db"] = -6.0
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok([])), \
+                 patch.object(MOD, "eq_supported", return_value=True):
+                MOD.set_eq({"bands": bands, "preamp_db": -2.0}, path=ep)
+            r = MOD.save_eq_preset({"name": "Now"}, path=pp, eq_path=ep)
+            saved = next(x for x in r["presets"] if x["id"] == "u:now")
+            self.assertEqual(saved["bands"][5]["gain_db"], -6.0)
+            self.assertEqual(saved["preamp_db"], -2.0)
+
+    def test_delete_removes_only_that_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            MOD.save_eq_preset({"name": "A", "bands": MOD._eq_default_bands()}, path=pp)
+            MOD.save_eq_preset({"name": "B", "bands": MOD._eq_default_bands()}, path=pp)
+            r = MOD.delete_eq_preset({"id": "u:a"}, path=pp)
+            self.assertEqual([x["id"] for x in r["presets"] if not x["builtin"]], ["u:b"])
+
+    def test_a_builtin_cannot_be_deleted(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            # refused for BEING a builtin, not merely for being absent from the
+            # user file — otherwise the guard could vanish and nothing would tell
+            with self.assertRaises(MOD.Err) as cm:
+                MOD.delete_eq_preset({"id": "loudness"}, path=pp)
+            self.assertIn("built-in", str(cm.exception))
+            with self.assertRaises(MOD.Err):
+                MOD.delete_eq_preset({"id": "u:nope"}, path=pp)
+            with self.assertRaises(MOD.Err):
+                MOD.delete_eq_preset({}, path=pp)
+
+    def test_a_nameless_or_symbol_only_name_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            for bad in ({}, {"name": "   "}, {"name": "***"}, {"name": 7},
+                        {"name": "x" * (MOD.EQ_PRESET_NAME_MAX + 1)}):
+                with self.assertRaises(MOD.Err, msg=bad):
+                    MOD.save_eq_preset(bad, path=pp)
+
+    def test_saved_presets_are_capped(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            for i in range(MOD.EQ_USER_PRESET_MAX):
+                MOD.save_eq_preset({"name": f"p{i}", "bands": MOD._eq_default_bands()},
+                                   path=pp)
+            with self.assertRaises(MOD.Err):
+                MOD.save_eq_preset({"name": "one too many",
+                                    "bands": MOD._eq_default_bands()}, path=pp)
+            # ...but replacing an existing one still works at the cap
+            MOD.save_eq_preset({"name": "p0", "bands": MOD._eq_default_bands()}, path=pp)
+
+    def test_a_corrupt_file_loses_presets_but_not_the_eq(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, ep = self.paths(d)
+            with open(pp, "w") as f:
+                f.write("{not json at all")
+            self.assertEqual([x for x in MOD.list_eq_presets(path=pp)["presets"]
+                              if not x["builtin"]], [])
+            self.assertEqual(len(MOD.get_eq(ep)["bands"]), MOD.EQ_BANDS)
+
+    def test_out_of_range_stored_values_are_clamped_not_trusted(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            bands = MOD._eq_default_bands()
+            bands[0]["gain_db"] = 99.0
+            with open(pp, "w") as f:
+                json.dump({"presets": [{"id": "u:evil", "label": "Evil",
+                                        "bands": bands, "preamp_db": -99.0}]}, f)
+            got = next(x for x in MOD.list_eq_presets(path=pp)["presets"]
+                       if x["id"] == "u:evil")
+            self.assertLessEqual(abs(got["bands"][0]["gain_db"]), MOD.EQ_MAX_DB)
+            self.assertGreaterEqual(got["preamp_db"], MOD.EQ_PREAMP_MIN_DB)
+            MOD._eq_words(got["bands"][0])  # still packable => still writable
+
+    def test_a_saved_preset_is_writable_like_a_builtin(self):
+        with tempfile.TemporaryDirectory() as d:
+            pp, _ = self.paths(d)
+            bands = MOD._eq_default_bands()
+            bands[1]["gain_db"] = 11.0
+            MOD.save_eq_preset({"name": "Loud", "bands": bands, "preamp_db": -11.0},
+                               path=pp)
+            got = next(x for x in MOD.list_eq_presets(path=pp)["presets"]
+                       if x["id"] == "u:loud")
+            for b in got["bands"]:
+                MOD._eq_words(b)
+
+
 class TestRestore(unittest.TestCase):
     def test_flat_config_skips_the_write(self):
         calls = []

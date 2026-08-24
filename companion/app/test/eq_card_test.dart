@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexusq_companion/models/eq.dart';
@@ -120,24 +121,88 @@ class _RecordingClient implements NexusQClient {
         }
         return _state;
       case 'listEqPresets':
-        if (!parametric) throw NexusQError('unknown_method', method);
-        return {
-          'presets': [
-            {'id': 'flat', 'label': 'Flat', 'preamp_db': 0.0, 'bands': bands},
-            {
-              'id': 'bass',
-              'label': 'Bass boost',
-              'preamp_db': -6.0,
-              'bands': [
-                for (var i = 0; i < bands.length; i++)
-                  {...bands[i], 'gain_db': i == 0 ? 6.0 : 0.0}
-              ]
-            },
-          ]
+        if (!parametric || !presetsVerb) {
+          throw NexusQError('unknown_method', method);
+        }
+        return presetList;
+      case 'saveEqPreset':
+        if (!savePresets) throw NexusQError('unknown_method', method);
+        final name = (params?['name'] as String? ?? '').trim();
+        if (name.isEmpty) throw NexusQError('bad_params', 'name required');
+        final id = EqPreset.userIdFor(name);
+        // Stores what was SENT, not the live bands: a fake that saved the
+        // device's own state would stay green even if the card sent the wrong
+        // curve, which is the exact bug worth catching.
+        final entry = {
+          'id': id,
+          'label': name,
+          'builtin': false,
+          'preamp_db': (params?['preamp_db'] as num?)?.toDouble() ?? 0.0,
+          'bands': [
+            for (var i = 0; i < bands.length; i++)
+              {
+                ...bands[i],
+                ...?((params?['bands'] as List?)?.elementAtOrNull(i) as Map?)
+                    ?.cast<String, dynamic>(),
+              }
+          ],
         };
+        final at = userPresets.indexWhere((e) => e['id'] == id);
+        if (at >= 0) {
+          userPresets[at] = entry;
+        } else {
+          userPresets.add(entry);
+        }
+        return {...presetList, 'id': id};
+      case 'deleteEqPreset':
+        if (!savePresets) throw NexusQError('unknown_method', method);
+        final delId = params?['id'] as String? ?? '';
+        if (!delId.startsWith('u:')) {
+          throw NexusQError('bad_params', 'built-in presets cannot be deleted');
+        }
+        final before = userPresets.length;
+        userPresets.removeWhere((e) => e['id'] == delId);
+        if (userPresets.length == before) {
+          throw NexusQError('bad_params', 'no saved preset $delId');
+        }
+        return presetList;
     }
     throw NexusQError('unknown_method', method);
   }
+
+  /// Presets saved on the fake device, and whether it can hold any at all —
+  /// `savePresets: false` is a daemon that predates them, which must leave the
+  /// card working WITHOUT a save button rather than showing one that fails.
+  final List<Map<String, dynamic>> userPresets = [];
+  bool savePresets = true;
+
+  /// A daemon so old it has no presets at ALL — `listEqPresets` itself is an
+  /// unknown method. Distinct from `savePresets: false`, which answers but
+  /// cannot save; only this one leaves the card with a reply to learn from.
+  bool presetsVerb = true;
+
+  Map<String, dynamic> get presetList => {
+        'presets': [
+          {
+            'id': 'flat',
+            'label': 'Flat',
+            'preamp_db': 0.0,
+            if (savePresets) 'builtin': true,
+            'bands': [for (final b in bands) {...b, 'gain_db': 0.0}],
+          },
+          {
+            'id': 'bass',
+            'label': 'Bass boost',
+            'preamp_db': -6.0,
+            if (savePresets) 'builtin': true,
+            'bands': [
+              for (var i = 0; i < bands.length; i++)
+                {...bands[i], 'gain_db': i == 0 ? 6.0 : 0.0}
+            ],
+          },
+          ...userPresets,
+        ]
+      };
 
   @override
   void notify(String method, [Map<String, dynamic>? params]) {}
@@ -571,9 +636,341 @@ void main() {
     await client.call('setEq', {'bass_db': 7.0});
     await tester.pumpAndSettle();
 
-    // the low shelf handle should now be off zero; Flat becomes available
-    final flat = tester.widget<TextButton>(
-        find.ancestor(of: find.text('Flat'), matching: find.byType(TextButton)));
-    expect(flat.onPressed, isNotNull);
+    // the low shelf handle should now be off zero; reset becomes available
+    expect(_resetButton(tester).onPressed, isNotNull);
+  });
+
+  group('flat detent', () {
+    // The plot's own geometry: EqCurve is given height 190 for the PLOT, the
+    // range is ±12 dB, and the frequency labels live in a strip below that.
+    // Computing y from dB here (rather than nudging by eyeballed pixels) is what
+    // makes "just inside the detent" mean what it says.
+    const plotH = 190.0, maxDb = 12.0;
+
+    double yFor(WidgetTester tester, double db) =>
+        tester.getRect(find.byType(EqCurve)).top +
+        (maxDb - db) / (2 * maxDb) * plotH;
+
+    double movedGain(_RecordingClient c) => c.bands
+        .map((b) => (b['gain_db'] as num).toDouble())
+        .reduce((a, b) => b.abs() > a.abs() ? b : a);
+
+    /// Arms the band under the middle of the plot, then drags it so the finger
+    /// ENDS at [toDb]. The travel has to clear kTouchSlop, so it always starts
+    /// from a long way off rather than nudging from where it already is.
+    Future<void> dragTo(WidgetTester tester, double fromDb, double toDb) async {
+      final x = tester.getRect(find.byType(EqCurve)).center.dx;
+      await tester.tapAt(Offset(x, yFor(tester, 0)));
+      await tester.pumpAndSettle();
+      await tester.dragFrom(Offset(x, yFor(tester, fromDb)),
+          Offset(0, yFor(tester, toDb) - yFor(tester, fromDb)));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a band released near flat lands exactly on flat',
+        (tester) async {
+      final client = _RecordingClient();
+      await tester.pumpWidget(_host(client));
+      await tester.pumpAndSettle();
+
+      await dragTo(tester, 0, 6);
+      expect(movedGain(client), closeTo(6, 0.3), reason: 'the drag did nothing');
+
+      await dragTo(tester, 6, 0.5);
+      // 0.5 dB is ~4 px on this plot — inside the detent
+      expect(client.bands.map((b) => b['gain_db']), everyElement(0.0));
+    });
+
+    testWidgets('the detent does not swallow a deliberate small boost',
+        (tester) async {
+      final client = _RecordingClient();
+      await tester.pumpWidget(_host(client));
+      await tester.pumpAndSettle();
+
+      await dragTo(tester, 6, 2);
+      // 2 dB is ~16 px away — well outside, and must arrive unrounded
+      expect(movedGain(client), closeTo(2, 0.3));
+    });
+
+    testWidgets('the detent clicks on the way in, once per entry',
+        (tester) async {
+      final haptics = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') {
+          haptics.add('${call.arguments}');
+        }
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null));
+
+      final client = _RecordingClient();
+      await tester.pumpWidget(_host(client));
+      await tester.pumpAndSettle();
+      final x = tester.getRect(find.byType(EqCurve)).center.dx;
+      await tester.tapAt(Offset(x, yFor(tester, 0)));
+      await tester.pumpAndSettle();
+
+      final g = await tester.startGesture(Offset(x, yFor(tester, 8)));
+      for (final db in [4.0, 0.3, -0.3, -4.0, -0.2]) {
+        await g.moveTo(Offset(x, yFor(tester, db)));
+        await tester.pump();
+      }
+      await g.up();
+      await tester.pumpAndSettle();
+
+      // entered at +0.3, stayed through −0.3, left at −4, entered again at −0.2
+      expect(haptics, ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.selectionClick']);
+    });
+  });
+
+  group('saved presets', () {
+    Future<_RecordingClient> pumpCard(WidgetTester tester,
+        {bool savePresets = true}) async {
+      final client = _RecordingClient()..savePresets = savePresets;
+      await tester.pumpWidget(_host(client));
+      await tester.pumpAndSettle();
+      return client;
+    }
+
+    /// The plot is arm-then-drag (Petr's model): a bare drag moves nothing, so
+    /// tap the band first — otherwise a test "moves a band" without moving one
+    /// and everything downstream of it is green for the wrong reason.
+    Future<void> armAndDrag(WidgetTester tester, double dy) async {
+      final curve = tester.getRect(find.byType(EqCurve));
+      await tester.tapAt(curve.center);
+      await tester.pumpAndSettle();
+      await tester.dragFrom(curve.center, Offset(0, dy));
+      await tester.pumpAndSettle();
+    }
+
+    /// Chips live in a horizontal scroller and it is lazy: on a phone-width
+    /// card a preset saved third is not merely off-screen, it is not BUILT. So
+    /// reveal it the way a person would — by scrolling that row — before
+    /// asserting on it or touching it.
+    final chipRow = find.byWidgetPredicate(
+        (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
+
+    Future<void> reveal(WidgetTester tester, Finder f) async {
+      if (tester.any(f)) {
+        await tester.ensureVisible(f);
+      } else {
+        await tester.scrollUntilVisible(f, 120, scrollable: chipRow);
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> saveAs(WidgetTester tester, String name) async {
+      await tester.tap(find.widgetWithText(ActionChip, 'Save'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), name);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('sends the whole curve on screen, not just a name',
+        (tester) async {
+      final client = await pumpCard(tester);
+      await armAndDrag(tester, -30);
+      await saveAs(tester, 'Vinyl');
+
+      final save = client.calls.lastWhere((c) => c.$1 == 'saveEqPreset');
+      expect(save.$2!['name'], 'Vinyl');
+      final sent = (save.$2!['bands'] as List).cast<Map<String, dynamic>>();
+      expect(sent.length, 7);
+      final shown = tester.widget<EqCurve>(find.byType(EqCurve)).state.bands;
+      for (var i = 0; i < 7; i++) {
+        expect(sent[i]['gain_db'], closeTo(shown[i].gainDb, 1e-9),
+            reason: 'band $i');
+      }
+      expect(save.$2!.containsKey('preamp_db'), isTrue);
+    });
+
+    testWidgets('reset flattens every band and the preamp with them',
+        (tester) async {
+      final client = await pumpCard(tester);
+      await armAndDrag(tester, -40);
+      expect(client.bands.any((b) => (b['gain_db'] as double).abs() > 0.05),
+          isTrue,
+          reason: 'the drag never moved anything');
+
+      await tester.tap(find.byTooltip('Reset to flat'));
+      await tester.pumpAndSettle();
+      final last = client.calls.lastWhere((c) => c.$1 == 'setEq').$2!;
+      expect((last['bands'] as List).map((b) => (b as Map)['gain_db']),
+          everyElement(closeTo(0, 1e-9)));
+      expect(last['preamp_db'], closeTo(0, 1e-9));
+      // the bands are still all there — it flattens, it does not drop tuning
+      expect((last['bands'] as List).length, 7);
+      expect(_resetButton(tester).onPressed, isNull,
+          reason: 'still offers reset');
+    });
+
+    testWidgets('the saved preset shows up as a chip you can apply back',
+        (tester) async {
+      final client = await pumpCard(tester);
+      await armAndDrag(tester, -40);
+      await saveAs(tester, 'Vinyl');
+      await reveal(tester, find.widgetWithText(InputChip, 'Vinyl'));
+      expect(find.widgetWithText(InputChip, 'Vinyl'), findsOneWidget);
+
+      final saved = client.userPresets.single['bands'] as List;
+      final savedGain = (saved[0] as Map)['gain_db'] as double;
+
+      // flatten, then tap the chip: the EQ must come back to what was saved
+      await tester.tap(find.byTooltip('Reset to flat'));
+      await tester.pumpAndSettle();
+      await reveal(tester, find.widgetWithText(InputChip, 'Vinyl'));
+      await tester.tap(find.widgetWithText(InputChip, 'Vinyl'));
+      await tester.pumpAndSettle();
+      expect(client.bands[0]['gain_db'], closeTo(savedGain, 1e-9));
+    });
+
+    testWidgets('the same name replaces instead of piling up', (tester) async {
+      final client = await pumpCard(tester);
+      await saveAs(tester, 'Vinyl');
+      await tester.tap(find.widgetWithText(ActionChip, 'Save'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'vinyl');
+      await tester.pumpAndSettle();
+      // the dialog says so before you commit to it
+      expect(find.textContaining('Replaces'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Replace'));
+      await tester.pumpAndSettle();
+
+      expect(client.userPresets.length, 1);
+      await reveal(tester, find.widgetWithText(InputChip, 'vinyl'));
+      expect(find.widgetWithText(InputChip, 'vinyl'), findsOneWidget);
+      expect(find.widgetWithText(InputChip, 'Vinyl'), findsNothing);
+    });
+
+    testWidgets('a name with nothing to slug cannot be submitted',
+        (tester) async {
+      final client = await pumpCard(tester);
+      await tester.tap(find.widgetWithText(ActionChip, 'Save'));
+      await tester.pumpAndSettle();
+      for (final bad in ['', '   ', '***']) {
+        await tester.enterText(find.byType(TextField), bad);
+        await tester.pumpAndSettle();
+        expect(
+            tester
+                .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
+                .onPressed,
+            isNull,
+            reason: 'accepted "$bad"');
+      }
+      await tester.enterText(find.byType(TextField), 'Kuchyň');
+      await tester.pumpAndSettle();
+      expect(
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
+              .onPressed,
+          isNotNull);
+      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      await tester.pumpAndSettle();
+      // Czech letters survive the slug — the daemon uses Python's isalnum(), so
+      // stripping them here would make app and device disagree about what
+      // replaces what
+      expect(client.userPresets.single['id'], 'u:kuchyň');
+    });
+
+    testWidgets('delete asks first, then removes it everywhere', (tester) async {
+      final client = await pumpCard(tester);
+      await saveAs(tester, 'Vinyl');
+
+      await reveal(tester, find.widgetWithText(InputChip, 'Vinyl'));
+      await tester.tap(find.byTooltip('Delete Vinyl'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(client.userPresets, hasLength(1), reason: 'cancel deleted it');
+      expect(client.calls.where((c) => c.$1 == 'deleteEqPreset'), isEmpty);
+
+      await reveal(tester, find.widgetWithText(InputChip, 'Vinyl'));
+      await tester.tap(find.byTooltip('Delete Vinyl'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(client.userPresets, isEmpty);
+      expect(find.widgetWithText(InputChip, 'Vinyl'), findsNothing);
+    });
+
+    testWidgets('save stays reachable however many presets you have',
+        (tester) async {
+      final client = await pumpCard(tester);
+      for (var i = 0; i < 8; i++) {
+        client.userPresets.add({
+          'id': 'u:p$i',
+          'label': 'Preset number $i',
+          'builtin': false,
+          'preamp_db': 0.0,
+          'bands': [for (final b in client.bands) {...b, 'gain_db': 0.0}],
+        });
+      }
+      client._events.add(NexusQEvent('eqPresetsChanged', client.presetList));
+      await tester.pumpAndSettle();
+      // no scrolling, no reveal: it is pinned outside the chip scroller
+      await tester.tap(find.widgetWithText(ActionChip, 'Save'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsOneWidget);
+    });
+
+    testWidgets('built-in presets offer no delete at all', (tester) async {
+      await pumpCard(tester);
+      expect(find.widgetWithText(ActionChip, 'Flat'), findsOneWidget);
+      expect(find.byTooltip('Delete Flat'), findsNothing);
+      expect(find.byTooltip('Delete Bass boost'), findsNothing);
+    });
+
+    testWidgets('a daemon that cannot save presets shows no save button',
+        (tester) async {
+      await pumpCard(tester, savePresets: false);
+      expect(find.widgetWithText(ActionChip, 'Flat'), findsOneWidget);
+      expect(find.widgetWithText(ActionChip, 'Save'), findsNothing);
+    });
+
+    testWidgets('a device downgraded past presets withdraws the save button',
+        (tester) async {
+      final client = await pumpCard(tester);
+      expect(find.widgetWithText(ActionChip, 'Save'), findsOneWidget);
+      // downgraded underneath us to a daemon with no preset verbs at all, then
+      // the link comes back: there is no reply left to learn "cannot save"
+      // from, so the flag has to be cleared before asking
+      client.presetsVerb = false;
+      client.goOnline();
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ActionChip, 'Flat'), findsNothing);
+      expect(find.widgetWithText(ActionChip, 'Save'), findsNothing);
+    });
+
+    testWidgets('another client saving one updates this card', (tester) async {
+      final client = await pumpCard(tester);
+      client.userPresets.add({
+        'id': 'u:night',
+        'label': 'Night',
+        'builtin': false,
+        'preamp_db': 0.0,
+        'bands': [for (final b in client.bands) {...b, 'gain_db': 0.0}],
+      });
+      client._events.add(NexusQEvent('eqPresetsChanged', client.presetList));
+      await tester.pumpAndSettle();
+      await reveal(tester, find.widgetWithText(InputChip, 'Night'));
+      expect(find.widgetWithText(InputChip, 'Night'), findsOneWidget);
+    });
+
+    testWidgets('a refused save is reported, not swallowed', (tester) async {
+      final client = await pumpCard(tester);
+      client.connected = false;
+      await saveAs(tester, 'Vinyl');
+      expect(find.textContaining('not connected'), findsOneWidget);
+    });
   });
 }
+
+/// The reset control is an icon, so there is no text to find it by — the
+/// tooltip is its name, for this test and for a screen reader alike.
+IconButton _resetButton(WidgetTester tester) => tester.widget<IconButton>(
+    find.ancestor(
+        of: find.byTooltip('Reset to flat'), matching: find.byType(IconButton)));

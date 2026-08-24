@@ -6,6 +6,58 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — save your own EQ presets (2026-08-24, `nexusq-control` **r33**, app **1.16.2+46**)
+- Petr, after the parametric EQ landed: *"jeste misto toho flat ikonka resetu a pak
+  tam moznost ulozit si co jsem si zrovna nakonfiguroval a pojmenovat a taky smazat.
+  Takze udelat si custom preset."*
+- **Flat is now a reset icon**, not a chip. Flat is where the EQ *starts*, so undoing
+  your edits is an action, not one preset among several — and the icon gives the row
+  back to the presets that are. It zeroes every band and the preamp; **widths are left
+  alone**, because a reset that also discarded tuned Q values is a bigger hammer than
+  the button reads as.
+- **Saved presets live on the Q**, in `/etc/nexusq/eq-presets.json` — a file of its
+  own, so a mangled preset list can only ever cost you presets, never the live EQ.
+  They belong to the speaker: they survive reinstalling the app and every phone sees
+  the same ones. Protocol §14.6 `saveEqPreset` / §14.7 `deleteEqPreset`, both
+  answering with the whole list and emitting `eqPresetsChanged`.
+- The **id is derived from the name**, so saving "Vinyl" twice replaces rather than
+  piling up near-duplicates — and the dialog says *Replaces…* before you commit,
+  because the app mirrors the daemon's slug rule exactly. Unicode-aware on both
+  sides: the daemon uses Python's `str.isalnum()`, so `Kuchyň` → `u:kuchyň`, not
+  `u:kuchy-`. Getting that wrong would make app and device disagree about what
+  replaces what.
+- Built-ins carry `"builtin": true` and offer no delete; only your own chips have a
+  ×, so the affordance itself says which presets are yours. A daemon that predates
+  saving omits the flag, and the card then shows **no save button** instead of one
+  that can only fail.
+- Stored bands are re-validated on the way **out** as well as in, so a hand-edited
+  file can never hand the amplifier a coefficient `setEq` would have refused. At most
+  24 presets, names ≤24 characters.
+- **Save is pinned outside the chip scroller** — a regression a test caught first:
+  inside it, every preset you saved pushed the save button further off-screen,
+  exactly when you had most use for it.
+- **Card polish, from looking at it on the phone (1.16.1):** the frequency labels
+  moved out of the plot into a strip of their own below it — inside, they collided
+  with the −12 dB label in the bottom-left corner and sat under the curve. The plot
+  keeps its full height; the strip is extra. The permanent "runs in the amplifier
+  hardware" line is gone: true, but you read it once and it sat there forever, so the
+  hint line now speaks only when something is wrong. And the card is **black instead
+  of grey** — the plot is most of it, and on the page's own black it stopped reading
+  as a panel bolted on top.
+- **A detent at 0 dB (1.16.2).** Petr: *"kdyz draguju ty body equalizeru a chci je
+  vratit na 0, muze tam bejt nejakej snap na ten flat? ted to nejde vubec chytit
+  perfektne."* Come within ~7 px of flat and the band snaps exactly onto it, with a
+  haptic click on the way in only. The half-width is in **pixels of finger travel,
+  not dB** — what makes flat hard to hit is the hand, not the scale, so the target
+  must be the same size whatever the plot's height or range. Gain is continuous, so
+  without it a band lands on ±0.1 dB and the curve never quite lies down.
+  A too-wide detent is caught by the existing drag tests, not just the new ones.
+- Verified on the device: save → daemon restart → still there; replace kept one
+  entry; blank / punctuation-only names and deleting a built-in all refused with the
+  right reason; the live EQ untouched throughout. 43 daemon tests, 64 app tests, and
+  **every new assertion was watched failing** — seven separate mutations, each
+  reddening exactly its own test.
+
 ### Added — parametric 7-band EQ (2026-08-24, `nexusq-control` **r32**, app **1.15.3+39**)
 - Petr, after using the bass/treble card: he wanted the modern-standard equalizer —
   a visible curve, more handles, presets, on the home screen. The hardware already
