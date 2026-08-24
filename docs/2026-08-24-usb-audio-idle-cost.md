@@ -288,6 +288,76 @@ the original fault. Also logged once: `Cannot set requested sink latency of
 40.00 ms, adjusting to 100.00 ms`. **Open — watch it over a multi-day window
 before deciding whether it plateaus.**
 
+## Talking to PulseAudio from root — the recipe, and the way I broke it
+
+`pactl` as root against the user's PA fails in three different ways, and one of
+the wrong attempts **took USB Audio down for several minutes** on 2026-08-24.
+Recorded so it is not rediscovered the hard way.
+
+**The only correct recipe** (it is what `nexusqd`'s `arecord` child already uses —
+read `/proc/<pid>/environ` of a working client if in doubt):
+
+```sh
+export PULSE_SERVER=unix:/run/user/10000/pulse/native
+export PULSE_COOKIE=/home/user/.config/pulse/cookie   # uid 10000 is `user`
+pactl info
+```
+
+Setting `PULSE_SERVER` explicitly is the important half: it stops libpulse from
+trying to create/validate `$XDG_RUNTIME_DIR/pulse`, which is where every failure
+below comes from.
+
+- ⚠️ **There are two home directories** — `/home/user` (uid 10000, the real one)
+  and `/home/nexusq`. Taking the first cookie `ls` returns gives
+  `Connection failure: Access denied`.
+- `XDG_RUNTIME_DIR=… pactl` as root → *"not owned by us (uid 0), but by uid
+  10000"*.
+- `su -s /bin/sh nexusq` → *"user does not exist"*; the account is **`user`**.
+- `setpriv --reuid=10000` and `systemd-run --machine=user@.host --user` both
+  still fail if the runtime dir ownership is wrong (below).
+
+**What I broke:** after several root-side `pactl` / `pulseaudio --dump-conf`
+invocations, `/run/user/10000/pulse` was left **`root:root` 700**. PulseAudio
+runs as uid 10000, so from that moment **no new client could connect** — and
+`nexusq-uac2-in`, which runs as `user` and calls `pactl` to load its two modules,
+sat in its "wait for PA" loop forever. The service reported `active` while
+`alsaloop` was not running and neither module was loaded: **USB Audio was down and
+looked healthy.** Fix:
+
+```sh
+chown 10000:10000 /run/user/10000/pulse
+systemctl --user --machine=user@.host restart nexusq-uac2-in.service
+```
+
+Verified restored: `alsaloop` running, `module-alsa-source` + `module-loopback`
+both loaded, sink-input unmuted at 100 %, not corked.
+
+**Two rules out of this:**
+1. **Never run `pactl` or the `pulseaudio` binary as root without `PULSE_SERVER`.**
+2. **`systemctl is-active` is not a health check for `nexusq-uac2-in`** — the
+   script is long-running and stays `active` while stuck waiting for PA. Check
+   `alsaloop` + both modules + the sink-input instead.
+
+### `module-loopback` has no `resample_method`
+
+Attempting `pactl load-module module-loopback … resample_method=speex-fixed-1`
+fails with *"Module initialization failed"* and leaves the loopback **unloaded** —
+that is how USB Audio went down. The resampler is chosen **daemon-globally**
+(`resample-method` in `daemon.conf`), so any resampler A/B costs a full PA
+restart, not a module reload.
+
+### …and the `speex-fixed-1` A/B would have been a regression anyway
+
+`libspeexdsp` on this device is a **float build** — the hot loop runs
+`vmla.f32`/`vmul.f32` on scalar `s`-registers; a FIXED_POINT build would use
+integer `smull`/`smlal`. PA's `speex-fixed-N` calls
+`speex_resampler_process_int`, which in a float build converts int16→float
+**internally and scalar**, instead of letting `libpulsecommon`'s NEON `pa_sconv`
+do it. It moves work out of vectorised code into scalar code. Dropped without
+testing on the device — proving a negative was not worth three PA restarts.
+
+**Which leaves exactly one fix for the resampler: rebuild `speexdsp` with NEON.**
+
 ## Incidental findings
 
 - **`10.42.0.2` is NOT the Nexus Q right now.** It pings and accepts ssh, but

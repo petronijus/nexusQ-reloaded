@@ -112,17 +112,29 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > ours to fix. speexdsp ships NEON inner-product paths (`resample_neon.h`) that
 > only compile when the build enables NEON.
 >
-> Do, in this order:
-> 1. **Free A/B first, on silence:** `resample-method = speex-fixed-1` vs today's
->    `speex-float-1` vs `trivial`. Integer MACs may already beat scalar VFP, and
->    `trivial` bounds the maximum possible win. Costs one PA restart.
-> 2. **Then the real fix:** rebuild `speexdsp` with NEON in our aports overlay.
->    Same math, vectorised — no quality trade-off, and it speeds up **real**
->    playback too (Spotify is 44.1 kHz and hits the same resampler on every
->    track). Expect 2–3× on the resampler.
-> 3. ⛔ **Do NOT just lower the quality** (`speex-float-0`). `resample-method` is
->    global, so it would degrade Spotify's 44.1 → 48 conversion — audible on real
->    music — to save CPU on silence. Wrong trade.
+> **The `speex-fixed-1` A/B was investigated and dropped — it would be a regression.**
+> `libspeexdsp` here is a **float build** (the hot loop runs `vmla.f32`/`vmul.f32`
+> on scalar `s`-registers; a FIXED_POINT build would use integer `smull`/`smlal`).
+> In a float build, `speex_resampler_process_int` — which is what PA's
+> `speex-fixed-N` calls — converts int16→float **internally and scalar**, instead
+> of letting `libpulsecommon`'s NEON `pa_sconv` do it. It moves work from
+> vectorised code into scalar code. Not worth three PA restarts to prove a
+> negative. Also note `module-loopback` has **no `resample_method` argument** — the
+> method is daemon-global, so any A/B costs a full PA restart.
+>
+> **So the fix is the NEON rebuild, and it is the only item here.** Rebuild
+> `speexdsp` with NEON in a `pmos/speexdsp/` overlay: same math, vectorised, no
+> quality trade-off, and it speeds up **real** playback too (Spotify is 44.1 kHz
+> and hits this resampler on every track). speexdsp ships NEON inner-product
+> paths that only compile when the build enables them.
+> Wiring a new overlay package needs all three of: `docker-build.sh`'s APKBUILD
+> validation list, the pmaports copy step, **and** `publish-ota-repo.sh`
+> `OTA_PACKAGES` — a dependency missing from that last list makes apk silently
+> hold the old version.
+>
+> ⛔ **Do NOT lower the resampler quality** (`speex-float-0`). `resample-method`
+> is global, so it would degrade Spotify's 44.1 → 48 conversion — audible on real
+> music — to save CPU on silence. Wrong trade.
 >
 > ### Step 3 — chase the 5× wakeups ⬜
 > The sink wakes **200×/s** where a 25 ms period needs **40**. With `tsched=0` the
