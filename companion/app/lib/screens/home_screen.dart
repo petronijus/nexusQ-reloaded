@@ -139,13 +139,6 @@ class HomeScreen extends StatelessWidget {
                       ),
 
                       // --- BRIGHTNESS ------------------------------------------
-                      // --- EQ --------------------------------------------------
-                      // Compact form: the curve and the presets, which is what
-                      // gets touched from the couch. Per-band editing lives in
-                      // Settings -> Sound so the home screen stays a remote.
-                      const _SectionHeader('EQUALIZER'),
-                      EqCard(client: controller.client, compact: true),
-
                       const _SectionHeader('BRIGHTNESS'),
                       Row(
                         children: [
@@ -276,6 +269,14 @@ class HomeScreen extends StatelessWidget {
                               color: NexusQColors.white),
                         ],
                       ),
+
+                      // --- EQ --------------------------------------------------
+                      // Last, and the ONLY place it lives: it is the tallest
+                      // control here and the least often touched, and a drag
+                      // inside the curve has to win over the page scroll, so it
+                      // does not belong in the middle of the list.
+                      const _SectionHeader('EQUALIZER'),
+                      EqCard(client: controller.client),
                     ],
                   ),
                 ),

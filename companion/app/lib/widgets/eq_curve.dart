@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../models/eq.dart';
@@ -15,6 +16,12 @@ import '../theme/nexusq_theme.dart';
 ///
 /// `onChanged` fires continuously so the curve tracks the finger; `onCommit`
 /// fires once on release and is what should reach the device.
+///
+/// The card lives inside a scrolling page, so a plain GestureDetector loses:
+/// the enclosing ListView claims every vertical drag and the handle never
+/// moves — the page just scrolls under your finger. `_EagerPanRecognizer`
+/// takes the gesture instead of yielding it. Scrolling past the EQ still works
+/// by dragging anywhere outside the curve, which is how every other EQ behaves.
 class EqCurve extends StatefulWidget {
   const EqCurve({
     super.key,
@@ -83,39 +90,49 @@ class _EqCurveState extends State<EqCurve> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final size = Size(c.maxWidth, widget.height);
-      return GestureDetector(
+      final enabled = widget.enabled;
+      return RawGestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTapDown: widget.enabled
-            ? (d) {
-                final i = _nearest(d.localPosition, size);
-                if (i >= 0) widget.onSelect(i);
-              }
-            : null,
-        onPanStart: widget.enabled
-            ? (d) {
-                final i = _nearest(d.localPosition, size);
-                if (i < 0) return;
-                _dragging = i;
-                widget.onSelect(i);
-              }
-            : null,
-        onPanUpdate: widget.enabled
-            ? (d) {
-                if (_dragging < 0) return;
-                widget.onChanged(
-                  _dragging,
-                  _freqOf(d.localPosition.dx, size.width),
-                  _dbOf(d.localPosition.dy, size.height),
-                );
-              }
-            : null,
-        onPanEnd: widget.enabled
-            ? (_) {
-                if (_dragging < 0) return;
-                _dragging = -1;
-                widget.onCommit();
-              }
-            : null,
+        gestures: {
+          _EagerPanRecognizer:
+              GestureRecognizerFactoryWithHandlers<_EagerPanRecognizer>(
+            () => _EagerPanRecognizer(debugOwner: this),
+            (r) {
+              r.onStart = !enabled
+                  ? null
+                  : (d) {
+                      final i = _nearest(d.localPosition, size);
+                      if (i < 0) return;
+                      _dragging = i;
+                      widget.onSelect(i);
+                    };
+              r.onUpdate = !enabled
+                  ? null
+                  : (d) {
+                      if (_dragging < 0) return;
+                      widget.onChanged(
+                        _dragging,
+                        _freqOf(d.localPosition.dx, size.width),
+                        _dbOf(d.localPosition.dy, size.height),
+                      );
+                    };
+              r.onEnd = !enabled
+                  ? null
+                  : (_) {
+                      if (_dragging < 0) return;
+                      _dragging = -1;
+                      widget.onCommit();
+                    };
+              // A tap without a drag still selects a band.
+              r.onDown = !enabled
+                  ? null
+                  : (d) {
+                      final i = _nearest(d.localPosition, size);
+                      if (i >= 0) widget.onSelect(i);
+                    };
+            },
+          ),
+        },
         child: SizedBox(
           height: widget.height,
           width: double.infinity,
@@ -248,4 +265,19 @@ class _EqPainter extends CustomPainter {
       old.enabled != enabled ||
       old.state.preampDb != state.preampDb ||
       !identical(old.state.bands, state.bands);
+}
+
+/// A pan recognizer that does not yield to an enclosing scrollable.
+///
+/// Flutter's gesture arena hands a vertical drag to the nearest scrollable, so
+/// inside a ListView a normal pan on this curve never fires — the page scrolls
+/// instead and the handle sits still. Accepting instead of rejecting claims the
+/// gesture for the curve. The cost is that a drag STARTING on the curve cannot
+/// scroll the page; that is the right trade for a purpose-built control, and it
+/// is what EQ curves elsewhere do.
+class _EagerPanRecognizer extends PanGestureRecognizer {
+  _EagerPanRecognizer({super.debugOwner});
+
+  @override
+  void rejectGesture(int pointer) => acceptGesture(pointer);
 }

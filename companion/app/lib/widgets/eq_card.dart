@@ -20,11 +20,8 @@ import 'eq_curve.dart';
 /// `treble_db` and commits in the old shape. Same curve, two handles instead of
 /// seven — an app updated ahead of its device still has a working EQ.
 class EqCard extends StatefulWidget {
-  const EqCard({super.key, required this.client, this.compact = false});
+  const EqCard({super.key, required this.client});
   final NexusQClient client;
-
-  /// Home-screen form: curve + presets, no per-band editing.
-  final bool compact;
 
   @override
   State<EqCard> createState() => _EqCardState();
@@ -38,6 +35,7 @@ class _EqCardState extends State<EqCard> {
   bool _sending = false;
   String? _error;
   StreamSubscription? _evSub;
+  StreamSubscription? _connSub;
 
   @override
   void initState() {
@@ -47,11 +45,23 @@ class _EqCardState extends State<EqCard> {
       if (e.event != 'eqChanged' || !mounted || _sending) return;
       setState(() => _st = _hydrate(e.data));
     });
+    // The card mounts before the link is up, so the first getEq usually fails
+    // with "not connected". That is not an EQ fault and must not be reported as
+    // one — wait for the link and load then.
+    _connSub = widget.client.connection.listen((up) {
+      if (!mounted) return;
+      if (up) {
+        _load();
+      } else {
+        setState(() => _loaded = false);
+      }
+    });
   }
 
   @override
   void dispose() {
     _evSub?.cancel();
+    _connSub?.cancel();
     super.dispose();
   }
 
@@ -95,11 +105,11 @@ class _EqCardState extends State<EqCard> {
         _error = null;
       });
     } catch (e) {
+      // Includes the ordinary "not connected" on a cold mount. Stay in the
+      // waiting state rather than accusing the EQ; the connection banner above
+      // already says what is wrong, and _connSub will retry.
       if (!mounted) return;
-      setState(() {
-        _loaded = true;
-        _error = 'EQ unavailable: $e';
-      });
+      setState(() => _loaded = false);
     }
   }
 
@@ -354,7 +364,7 @@ class _EqCardState extends State<EqCard> {
             if (!_loaded)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('Loading…',
+                child: Text('Waiting for the Q…',
                     style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
               )
             else ...[
@@ -362,18 +372,16 @@ class _EqCardState extends State<EqCard> {
                 state: _st,
                 selected: _selected,
                 enabled: enabled,
-                height: widget.compact ? 140 : 190,
+                height: 190,
                 onSelect: (i) => setState(() => _selected = i),
                 onChanged: (i, f, g) => _editBand(i, freqHz: f, gainDb: g),
                 onCommit: _commit,
               ),
               const SizedBox(height: 4),
               _presetChips(),
-              if (!widget.compact) ...[
-                const SizedBox(height: 4),
-                _bandEditor(),
-                if (!_legacyDaemon) _preampRow(),
-              ],
+              const SizedBox(height: 4),
+              _bandEditor(),
+              if (!_legacyDaemon) _preampRow(),
               _hint(),
             ],
           ],

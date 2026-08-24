@@ -6,7 +6,6 @@ import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
-import '../widgets/eq_card.dart';
 import 'debug_log_screen.dart';
 import 'health_screen.dart';
 import 'service_log_screen.dart';
@@ -487,7 +486,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // --- Sound: the TAS5713 hardware EQ (PROTOCOL §14) ---------------
             const SizedBox(height: 20),
             _sectionTitle('Sound'),
-            EqCard(client: widget.client),
 
             // --- HDMI desktop ------------------------------------------------
             const SizedBox(height: 20),

@@ -11,10 +11,18 @@ import 'package:nexusq_companion/widgets/eq_curve.dart';
 /// is the request shape, because a wrong one writes wrong coefficients into a
 /// 25 W amplifier.
 class _RecordingClient implements NexusQClient {
-  _RecordingClient({this.supported = true, this.parametric = true});
+  _RecordingClient(
+      {this.supported = true, this.parametric = true, this.connected = true});
 
   final bool supported;
   final bool parametric;
+  bool connected;
+
+  /// Bring the link up the way the real client does: a `connection` event.
+  void goOnline() {
+    connected = true;
+    _conn.add(true);
+  }
   final List<(String, Map<String, dynamic>?)> calls = [];
   final _events = StreamController<NexusQEvent>.broadcast();
   final _conn = StreamController<bool>.broadcast();
@@ -75,6 +83,7 @@ class _RecordingClient implements NexusQClient {
   Future<Map<String, dynamic>> call(String method,
       [Map<String, dynamic>? params]) async {
     calls.add((method, params));
+    if (!connected) throw NexusQError('unavailable', 'not connected');
     switch (method) {
       case 'getEq':
         return _state;
@@ -104,11 +113,23 @@ class _RecordingClient implements NexusQClient {
   void notify(String method, [Map<String, dynamic>? params]) {}
 }
 
-Widget _host(NexusQClient client, {bool compact = false}) => MaterialApp(
+/// The card ships inside a genuinely scrollable page, and that is the whole
+/// point: Flutter's gesture arena hands vertical drags to the nearest
+/// scrollable, so a curve drag competes with the scroll. An earlier version of
+/// this host had a scroll view with nothing to scroll — it never entered the
+/// arena, so the drag test passed while dragging was broken in the real app.
+/// The filler below makes the competition real.
+Widget _host(NexusQClient client) => MaterialApp(
       home: Scaffold(
         body: SingleChildScrollView(
-            child: SizedBox(
-                width: 380, child: EqCard(client: client, compact: compact))),
+          child: SizedBox(
+            width: 380,
+            child: Column(children: [
+              EqCard(client: client),
+              const SizedBox(height: 2000), // makes the page actually scroll
+            ]),
+          ),
+        ),
       ),
     );
 
@@ -220,14 +241,23 @@ void main() {
     expect(sets.last.$2!.containsKey('bass_db'), isTrue);
   });
 
-  testWidgets('compact form hides the per-band editor', (tester) async {
-    final client = MockClient();
-    await tester.pumpWidget(_host(client, compact: true));
+  testWidgets('a cold mount before the link is up waits, it does not accuse the EQ',
+      (tester) async {
+    // Regression: the card used to render "EQ unavailable: NexusQError not
+    // connected" because it loads in initState, before the client connects.
+    final client = _RecordingClient(connected: false);
+    await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
 
+    expect(find.textContaining('unavailable'), findsNothing);
+    expect(find.textContaining('not connected'), findsNothing);
+    expect(find.text('Waiting for the Q…'), findsOneWidget);
+
+    client.goOnline();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Waiting for the Q…'), findsNothing);
     expect(find.byType(EqCurve), findsOneWidget);
-    expect(find.text('Bass boost'), findsOneWidget); // presets stay
-    expect(find.byType(Slider), findsNothing);       // editing does not
   });
 
   testWidgets('reconciles from an eqChanged pushed by another client',
