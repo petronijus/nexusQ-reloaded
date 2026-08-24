@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.15.2",
-  "versionCode": 38,
-  "notes": "The equalizer curve can now actually be dragged. 1.15.1 claimed to fix this and did not — the handle followed your finger while the page scrolled underneath, so everything moved twice. Dragging outside the curve still scrolls normally.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.15.2/nexusq-companion-1.15.2.apk",
+  "version": "1.15.3",
+  "versionCode": 39,
+  "notes": "The equalizer stays usable after the first drag. Writing a band takes about 300 ms and the card used to switch itself off and discard anything you did during it, so it felt dead after one gesture.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.15.3/nexusq-companion-1.15.3.apk",
   "minAndroidSdk": 21
 }
