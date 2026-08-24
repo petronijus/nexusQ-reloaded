@@ -51,7 +51,11 @@ ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
 
 ### WHERE TO CONTINUE (2026-08-24)
 
-1. **Kernel r49 + `device` r81, one session, one reboot.** `device-google-steelhead`
+1. ✅ **DONE 2026-08-24 — kernel r49 + `device` r81 are deployed.** Auto-promote
+   worked unattended (`healthy after 0s — promoting`), `down_threshold 20 -> 60`
+   is set by the service at boot, `perf` is in the image. *(Original note kept
+   below for context.)*
+   ~~**Kernel r49 + `device` r81, one session, one reboot.**~~ `device-google-steelhead`
    r81 (carries `perf` and makes `down_threshold=60` permanent) is published but
    **not installed**: `apk add --upgrade device-google-steelhead` drags
    `linux-google-steelhead` r48 → r49 with it, and apk must never apply a kernel —
@@ -59,11 +63,20 @@ ssh: **88.87 % @ 350 MHz, die 67.5 °C, 1.36×**.
    `nq-kernel-ota` (trial slot, health-gated), then install r81, then reboot.
    ⚠️ **Until this happens `down_threshold=60` is live-only**: any governor switch
    resets it to 20, and a reboot loses it.
-2. **One listening test, three questions at once** (≤1–2 % volume, Petr drives):
-   `down_threshold=60` (does the clock descend mid-track?), the hardware **EQ**
-   sliders on kernel r49 + control r31, and — only if he wants it — whether the
-   NEON resampler changed anything audible. App **1.14.0+35** is built but
-   **unreleased**, pending his approval.
+2. ⛔ **The EQ is BLOCKED — do not include it in a listening test.** Kernel r49 is
+   deployed and `getEq` says `supported: true`, but **every write through the
+   biquad controls puts `0xFFFFFFFF` into the amp**, confirmed on the I2C wire:
+   mainline's `tas571x_coefficient_info` sets the control max to `0xffffffff`,
+   which is **−1 in a 32-bit `long`**, so ALSA clamps every write. Fix patch 0045's
+   control bounds (`0x3FFFFFF`, 26-bit 3.23) → kernel **r50**, then re-verify with
+   ftrace on `i2c:i2c_write` — a correct unity write shows `[29-00-80-00-00-…]`,
+   not `ff`. `docs/2026-08-24-eq-biquad-write-broken.md`. App **1.14.0+35** stays
+   unreleased.
+   ⚠️ The amp **keeps coefficients across a warm reboot**; recovery is
+   `i2cset -y -f 3 0x1b <reg> 00 80 00 00 00×16 i` for `0x29`–`0x36`. All 14 are
+   currently unity and `/etc/nexusq/eq.json` is flat — leave it flat.
+2b. **A listening test is still owed for `down_threshold=60`** (does the clock
+   descend mid-track?) and optionally the NEON resampler. That one can go ahead.
 3. **PLAN.md Step 6 — stop computing silence.** Now the only real fix left for the
    original complaint. Detect that the UAC2 stream is digital silence and cork or
    tear down the loopback so `module-suspend-on-idle` can suspend the sink **and

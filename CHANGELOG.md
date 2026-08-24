@@ -6,6 +6,37 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Deployed — kernel **r49** + `device-google-steelhead` **r81** (2026-08-24)
+- `nq-kernel-ota stage-latest` → trial slot → `try` → **auto-promoted unattended**
+  (`trial boot marker found` → `healthy after 0s — promoting` → `promoted and
+  disarmed` → package DB reconciled). The A/B kernel path proven again end to end.
+- `device` r81 live: `nexusq-cpufreq-tune` logs **`down_threshold 20 -> 60` at
+  boot**, so the idle-power fix is no longer a live-only knob. `perf` now ships in
+  the image.
+
+### ⛔ Broken — the hardware EQ writes `0xFFFFFFFF` into the amp (kernel patch 0045)
+- Kernel r49 exposes all 14 `CH1/CH2 - Biquad 0..6` controls and `getEq` reports
+  `supported: true` — but **every write through them puts `0xFFFFFFFF` into the
+  TAS5713's coefficient RAM, whatever value was asked for.** Confirmed with ftrace
+  on `i2c:i2c_write`, not inferred: asking for unity (`8388608,0,0,0,0`) and for
+  `1000,2000,3000,4000,5000` both produced `[29-ff-ff-ff…]`, 20 bytes of `0xFF`.
+- **Cause:** mainline's `tas571x_coefficient_info()` sets the control max to
+  `0xffffffff`; ALSA holds bounds in a `long`, which is **32-bit on armv7**, so the
+  max becomes **−1** and every write clamps to `0xFFFFFFFF`. An upstream bug that
+  cannot manifest on 64-bit. The tell is `amixer cget` printing `min=0,max=-1`.
+- `amixer cget` returning `67108863` is **not** a second bug — that is `0x3FFFFFF`,
+  the 26-bit mask of what was really written. Reads are honest.
+- ⚠️ **The amp keeps its coefficients across `systemctl reboot`** — the reboot does
+  not power-cycle the TAS5713, so garbage survived two reboots. All 14 biquads were
+  restored to unity with `i2cset -y -f 3 0x1b <reg> …` (regs `0x29`–`0x36`, mode
+  `i`) and **verified 14/14 by read-back**; `/etc/nexusq/eq.json` reset to flat,
+  which is what stops `eq_restore_thread` re-applying it at the next boot.
+- **Blocked until fixed:** patch 0045 must also set a real control bound (26-bit
+  3.23 ⇒ `0x3FFFFFF`) → kernel **r50**, then re-verify **on the wire**. ⛔ No EQ
+  listening test, and **app 1.14.0+35 stays unreleased**.
+  Full record: `docs/2026-08-24-eq-biquad-write-broken.md`.
+
+
 ### Added — speexdsp rebuilt with NEON: 1.34–2.86× faster resampling (2026-08-24, `speexdsp` **1.2.1-r100**, published + live)
 - `perf` put **58.86 %** of PulseAudio's sink thread inside `libspeexdsp`. Alpine's
   armv7 build is **scalar** — `Tag_FP_arch: VFPv3-D16`, no `Tag_Advanced_SIMD_arch`,

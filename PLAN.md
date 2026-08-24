@@ -3,7 +3,34 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> ## 🎯 IN PROGRESS (2026-08-23) — Hardware EQ (GitHub issue #2)
+> ## ⛔ BLOCKED (2026-08-24) — Hardware EQ (GitHub issue #2): the write path is broken
+>
+> **Deployed and unusable.** Kernel r49 exposes the 14 biquad controls and
+> `getEq` reports `supported: true`, but **every write through them puts
+> `0xFFFFFFFF` into the amp's coefficient RAM regardless of the value asked for** —
+> confirmed on the I2C wire with ftrace, not inferred.
+>
+> Cause: mainline's `tas571x_coefficient_info()` sets the control max to
+> `0xffffffff`, and ALSA carries bounds in a `long` — **32-bit on armv7**, so the
+> max becomes **−1** and every write clamps to `0xFFFFFFFF`. An upstream bug that
+> cannot appear on 64-bit. `amixer cget` shows it plainly: `min=0,max=-1`.
+>
+> ⚠️ The amp **keeps its coefficients across a warm reboot** — `systemctl reboot`
+> does not power-cycle the TAS5713 — so garbage stays loaded until overwritten.
+> All 14 biquads have been restored to unity with `i2cset -f` and verified.
+> `/etc/nexusq/eq.json` is back to flat, which is what stops
+> `eq_restore_thread` re-applying it at boot.
+>
+> **To unblock:** patch 0045 must also fix the control bounds (26-bit 3.23 ⇒
+> `0x3FFFFFF`) — kernel **r50** — then re-verify **on the wire** (a correct unity
+> write must show `[29-00-80-00-00-…]`, not `ff`). Only then the listening test.
+> Full record: `docs/2026-08-24-eq-biquad-write-broken.md`.
+>
+> ⛔ **App 1.14.0+35 stays unreleased** and the EQ listening test must not happen
+> until the above is done. `nexusq-control` r31 is harmless meanwhile (flat stored
+> config ⇒ the restore thread returns early; the sliders are not in a released app).
+>
+> ## 🎯 ORIGINAL PLAN (2026-08-23) — Hardware EQ (GitHub issue #2)
 >
 > **Request:** issue #2 (terierbread360) asks for an EQ in the app — mainly a
 > bass control (their Q drives a JBL Partybox donor speaker). Petr's call:
