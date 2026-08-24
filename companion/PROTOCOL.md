@@ -832,48 +832,104 @@ same trust level as every other verb (anyone on the LAN can already control
 the device). The alternative (a dedicated low-privilege broker user for the
 device) was rejected in favour of one household broker login.
 
-## 14. Hardware EQ (TAS5713 biquads) — v1.13.x (dev), kernel r49+
+## 14. Hardware EQ (TAS5713 biquads) — 7-band parametric, kernel r50+
 
 GitHub issue #2 asked for an EQ ("the bass is horrible" on a donor speaker).
-It is implemented **in the amplifier's own DSP**, not in software: the TAS5713
-has 7 programmable biquads per channel, and kernel **r49** exposes them as
-ALSA integer-array controls (`CH1/CH2 - Biquad 0..6`). Two user knobs map to
-two biquads, written identically to both channels:
+It is implemented **in the amplifier's own DSP**, not in software: the TAS5713's
+main EQ bank is **7 biquads per channel**, exposed by our kernel as ALSA
+integer-array controls (`CH1/CH2 - Biquad 0..6`). All seven are used, written
+identically to both channels (stereo-linked).
 
-| knob        | filter                    | biquad |
-|-------------|---------------------------|--------|
-| `bass_db`   | RBJ low-shelf @ 100 Hz    | 0      |
-| `treble_db` | RBJ high-shelf @ 8 kHz    | 1      |
+Filtering is post-mix in the amp die: one EQ covers Spotify/AirPlay/Roon/USB
+alike, **zero CPU, zero added latency** (measured 2026-08-24: PulseAudio 22.24 %
+flat vs 22.11 % at bass+6/treble+6 — the biquad is in the path either way), and
+the digital chain before the amp stays bit-exact. Coefficients are RBJ, computed
+for the chain's pinned 48 kHz and packed as 3.23 fixed point (TI convention:
+a1/a2 negated). The device persists state in `/etc/nexusq/eq.json` and re-applies
+it at every `nexusq-control` start (the DAP powers up flat).
 
-Both are **−12..+12 dB** (clamped, floats allowed); `0` = that knob is exact
-unity (pass-through coefficients, not a computed 0 dB shelf). Filtering is
-post-mix in the amp die: one EQ covers Spotify/AirPlay/Roon/USB alike, zero
-CPU, zero added latency, and the digital chain before the amp stays bit-exact.
-Coefficients are computed for the chain's pinned 48 kHz, packed as 3.23
-fixed-point (TI convention: a1/a2 negated), and an **unstable filter is
-refused before any register write** (speaker safety). The device persists the
-values in `/etc/nexusq/eq.json` and re-applies them at every `nexusq-control`
-start (the DAP powers up flat).
+⚠️ **Kernel r50 or newer is required.** r49 exposes the controls — so
+`supported` is `true` — but its write path is broken by an upstream 32-bit bug
+that loads `0xFFFFFFFF` into the amp whatever you ask for. That is **not**
+detectable from this API; see `docs/2026-08-24-eq-biquad-write-broken.md`.
 
-### 14.1 `getEq`
+### 14.1 Band model
+
+```json
+{"type": "peaking", "freq_hz": 900.0, "gain_db": -3.5, "q": 1.4, "enabled": true}
+```
+
+| field | values |
+|---|---|
+| `type` | `lowshelf` · `peaking` · `highshelf` |
+| `freq_hz` | 20 … 20000 |
+| `gain_db` | −12 … +12 (`0`, or `enabled:false`, writes exact unity — not a computed 0 dB filter) |
+| `q` | 0.3 … 8 — the **Q** of a peaking band; for a shelf it is RBJ's **S (slope)**, 1.0 being the maximally flat shelf |
+| `enabled` | bool |
+
+Defaults, chosen so a device upgraded from the two-knob version sounds
+identical (bands 0 and 6 keep the old 100 Hz / 8 kHz shelves):
+
+| band | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|---|
+| type | lowshelf | peaking | peaking | peaking | peaking | peaking | highshelf |
+| Hz | 100 | 200 | 430 | 900 | 1800 | 3800 | 8000 |
+
+Out-of-range numbers are **clamped**, not rejected; an unparseable band falls
+back to its default rather than failing the request — a corrupt stored file must
+never stop the daemon starting. What *is* refused outright, before any I2C
+write, is an **unstable filter** or a coefficient that will not fit 3.23: on a
+25 W amp a wrapped coefficient is worse than a declined filter, which is exactly
+what the 32-bit `max` bug produced.
+
+### 14.2 Preamp and headroom
+
+Seven bands can stack past +12 dB and clip. `preamp_db` (−24 … 0) attenuates the
+whole chain; it is folded into **band 0's feed-forward coefficients**, because
+the amp's only gains (`Master Volume`, `Speaker Volume`) are the **user's
+volume** and must never be hijacked for headroom.
+
+`headroom_db` is the peak of the summed response over a 1/12-octave grid,
+20 Hz–20 kHz, *including* `preamp_db`. Positive means the chain can clip.
+Sending `auto_preamp: true` sets `preamp_db` to exactly cancel that peak.
+
+### 14.3 `getEq`
 
 → `{}`
-← `{"supported": bool, "bass_db": float, "treble_db": float}`
 
-`supported=false` means the running kernel predates r49 (no biquad controls)
-— the app should show the EQ card disabled. The dB values are the *stored*
-ones either way.
+← ```json
+{"supported": true, "bands": [...7...], "preamp_db": 0.0, "headroom_db": 0.0,
+ "max_bands": 7, "limits": {...}, "bass_db": 0.0, "treble_db": 0.0}
+```
 
-### 14.2 `setEq`
+`supported=false` means a kernel without the biquad controls — show the EQ
+disabled. **`bass_db`/`treble_db` are still returned**, derived from the first
+`lowshelf` and last `highshelf` band, so the shipped **1.14.0** app (which knows
+only those two fields) keeps working against a newer daemon.
 
-→ `{"bass_db"?: number, "treble_db"?: number}`   (partial updates allowed;
-   values clamped to ±12)
+### 14.4 `setEq`
+
+→ `{"bands"?: [...], "preamp_db"?: number, "auto_preamp"?: bool,
+    "bass_db"?: number, "treble_db"?: number}`
+
 ← the same shape as `getEq`, after the hardware write.
 
-Errors: `bad_request` (non-numeric value), `unavailable` (kernel without the
-controls, a failed `amixer` write, or an unwritable config file). Hardware
-first, persist second — a failed write leaves the stored file matching what
-the chip actually runs.
+Either shape is accepted. `bass_db`/`treble_db` set the gain of the shelf bands
+and **leave the other five alone**, so an old client cannot silently wipe a
+parametric curve. A short `bands` array leaves the remaining bands unchanged.
+Emits `eqChanged` with the applied state.
 
-Event: `eqChanged` (the `getEq` shape) is pushed to every subscribed client
-so all open EQ cards reconcile.
+Errors: `bad_params` (wrong type, or more than `max_bands` bands),
+`unavailable` (kernel without the controls, a failed `amixer` write, or an
+unwritable config file). **Hardware first, persist second** — a failed write
+leaves the stored file matching what the chip actually runs.
+
+### 14.5 `listEqPresets`
+
+→ `{}`
+
+← `{"presets": [{"id": "loudness", "label": "Loudness", "bands": [...], "preamp_db": -5.0}]}`
+
+Presets live on the device so every client sees the same ones. Applying one is
+just a `setEq` with its `bands` and `preamp_db` — one write path, not two. Each
+ships with enough preamp not to clip.

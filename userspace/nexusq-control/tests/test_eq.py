@@ -1,16 +1,22 @@
 """Tests for the TAS5713 hardware-EQ verbs (PROTOCOL §14).
 
 The EQ writes 3.23 fixed-point biquad coefficients into a 25 W amplifier, so
-these tests pin the three things a slip would turn into a speaker hazard or a
+these tests pin the things a slip would turn into a speaker hazard or a
 silently-wrong EQ:
 
-  * the shelving math is verified by its measured frequency response
-    (full gain at the band edge, unity at the far edge, half-gain at the
-    corner) — independent of the formulas that produced the coefficients;
+  * the filter math is verified by its measured frequency response (shelves:
+    full gain at the band edge, unity at the far edge, half-gain at the corner;
+    peaking: full gain at f0, unity far away) — independent of the formulas
+    that produced the coefficients;
   * the register packing (3.23, low 26 bits, a1/a2 negated) is compared
     word-for-word against the packing logic of a known-good TAS5713
     implementation (kungpfui/tas5713-biquad);
-  * an unstable filter is refused outright, before any I2C write.
+  * an unstable filter is refused outright, before any I2C write, and so is a
+    coefficient that would not fit 3.23 — a wrapped coefficient is worse than a
+    declined filter (that is exactly what the 32-bit `max` bug produced);
+  * the preamp really attenuates, so an "auto" that promises headroom delivers it;
+  * the v1 two-knob config still loads, and v1 `bass_db`/`treble_db` requests
+    still work, so the shipped 1.14.0 app keeps working against this daemon.
 """
 
 import cmath
@@ -20,6 +26,7 @@ import json
 import math
 import os
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -41,21 +48,18 @@ MOD = load_daemon()
 
 
 def h_mag_db(coeffs, f, fs=48000):
-    """|H| in dB of (b0,b1,b2,a1,a2) at frequency f — evaluated from the
-    transfer function directly, so it checks the coefficients, not the code
-    that made them."""
+    """|H| in dB of (b0,b1,b2,a1,a2) at f — evaluated from the transfer function
+    directly, so it checks the coefficients, not the code that made them."""
     b0, b1, b2, a1, a2 = coeffs
-    z = cmath.exp(2j * math.pi * f / fs)
-    h = (b0 + b1 / z + b2 / z**2) / (1 + a1 / z + a2 / z**2)
+    z = cmath.exp(-2j * cmath.pi * f / fs)
+    h = (b0 + b1 * z + b2 * z * z) / (1 + a1 * z + a2 * z * z)
     return 20 * math.log10(abs(h))
 
 
 def reference_pack(b, a):
-    """The packing scheme of kungpfui/tas5713-biquad (ba_to_reg), reproduced
-    verbatim as the independent ground truth: 3.23 two's complement big-endian
-    words, top 6 bits masked, a1/a2 NEGATED, a0 omitted."""
-    reg = bytearray()
+    """Packing logic of kungpfui/tas5713-biquad, reproduced verbatim."""
     fmt = struct.Struct(">i")
+    reg = bytearray()
     for b_co in b:
         reg += fmt.pack(int(round(b_co * 2 ** 23)))
         reg[-4] &= 0x03
@@ -65,125 +69,308 @@ def reference_pack(b, a):
     return [struct.unpack(">I", reg[i:i + 4])[0] for i in range(0, 20, 4)]
 
 
-class TestShelfResponse(unittest.TestCase):
+def band(kind="peaking", f=1000.0, gain=0.0, q=0.707, enabled=True):
+    return {"type": kind, "freq_hz": f, "gain_db": gain, "q": q, "enabled": enabled}
+
+
+def amixer_ok(calls):
+    def fake(*args, timeout=4):
+        calls.append(args)
+        return subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
+    return fake
+
+
+class TestFilterResponse(unittest.TestCase):
     def test_unity_at_zero_gain(self):
-        self.assertEqual(MOD._eq_words("bass", 0.0), list(MOD._EQ_UNITY))
-        self.assertEqual(MOD._eq_words("treble", 0.0), list(MOD._EQ_UNITY))
+        self.assertEqual(MOD._eq_words(band(gain=0.0)), list(MOD._EQ_UNITY))
+        self.assertEqual(MOD._eq_words(band("lowshelf", 100.0, 0.0)),
+                         list(MOD._EQ_UNITY))
+
+    def test_disabled_band_is_unity_even_with_gain(self):
+        self.assertEqual(MOD._eq_words(band(gain=9.0, enabled=False)),
+                         list(MOD._EQ_UNITY))
 
     def test_low_shelf_response(self):
         for gain in (+6.0, -9.0, +12.0):
-            c = MOD._eq_shelf_coeffs("low", gain, MOD.EQ_BASS_HZ)
-            self.assertAlmostEqual(h_mag_db(c, 1), gain, delta=0.1)       # DC
-            self.assertAlmostEqual(h_mag_db(c, 23999), 0.0, delta=0.1)    # Nyquist
-            self.assertAlmostEqual(h_mag_db(c, MOD.EQ_BASS_HZ), gain / 2,
-                                   delta=0.35)                            # corner
+            c = MOD._eq_shelf_coeffs("lowshelf", gain, 100.0)
+            self.assertAlmostEqual(h_mag_db(c, 1), gain, delta=0.1)        # DC
+            self.assertAlmostEqual(h_mag_db(c, 23999), 0.0, delta=0.1)     # Nyquist
+            self.assertAlmostEqual(h_mag_db(c, 100.0), gain / 2, delta=0.35)
 
     def test_high_shelf_response(self):
         for gain in (+6.0, -12.0):
-            c = MOD._eq_shelf_coeffs("high", gain, MOD.EQ_TREBLE_HZ)
+            c = MOD._eq_shelf_coeffs("highshelf", gain, 8000.0)
             self.assertAlmostEqual(h_mag_db(c, 23000), gain, delta=0.25)
             self.assertAlmostEqual(h_mag_db(c, 10), 0.0, delta=0.1)
-            self.assertAlmostEqual(h_mag_db(c, MOD.EQ_TREBLE_HZ), gain / 2,
-                                   delta=0.35)
+            self.assertAlmostEqual(h_mag_db(c, 8000.0), gain / 2, delta=0.35)
+
+    def test_peaking_response(self):
+        for gain in (+6.0, -6.0, +12.0):
+            for f0, q in ((200.0, 1.0), (1000.0, 0.707), (5000.0, 4.0)):
+                c = MOD._eq_peak_coeffs(gain, f0, q)
+                self.assertAlmostEqual(h_mag_db(c, f0), gain, delta=0.1,
+                                       msg=f"{gain} dB @ {f0} Hz Q={q}")
+                # far below and far above the band it must not touch anything
+                self.assertAlmostEqual(h_mag_db(c, f0 / 40), 0.0, delta=0.3)
+                self.assertAlmostEqual(h_mag_db(c, min(23000, f0 * 40)), 0.0,
+                                       delta=0.5)
+
+    def test_higher_q_is_narrower(self):
+        wide = MOD._eq_peak_coeffs(6.0, 1000.0, 0.5)
+        tight = MOD._eq_peak_coeffs(6.0, 1000.0, 4.0)
+        # an octave away the tight filter must have fallen off much further
+        self.assertLess(h_mag_db(tight, 2000.0), h_mag_db(wide, 2000.0) - 1.0)
+
+    def test_chain_response_sums_the_bands(self):
+        bands = MOD._eq_default_bands()
+        bands[0]["gain_db"] = 6.0        # low shelf @ 100 Hz
+        bands[6]["gain_db"] = -6.0       # high shelf @ 8 kHz
+        self.assertAlmostEqual(MOD._eq_response_db(bands, 1.0), 6.0, delta=0.15)
+        self.assertAlmostEqual(MOD._eq_response_db(bands, 23000.0), -6.0, delta=0.3)
+        self.assertAlmostEqual(MOD._eq_response_db(bands, 1000.0), 0.0, delta=0.6)
+
+    def test_preamp_shifts_the_whole_chain(self):
+        bands = MOD._eq_default_bands()
+        for f in (50.0, 1000.0, 12000.0):
+            flat = MOD._eq_response_db(bands, f, 0.0)
+            cut = MOD._eq_response_db(bands, f, -6.0)
+            self.assertAlmostEqual(cut - flat, -6.0, delta=1e-6)
+
+
+class TestHeadroom(unittest.TestCase):
+    def test_flat_chain_has_zero_headroom(self):
+        self.assertAlmostEqual(MOD._eq_headroom_db(MOD._eq_default_bands()), 0.0,
+                               delta=0.05)
+
+    def test_boost_shows_positive_headroom(self):
+        bands = MOD._eq_default_bands()
+        bands[0]["gain_db"] = 9.0
+        self.assertAlmostEqual(MOD._eq_headroom_db(bands), 9.0, delta=0.4)
+
+    def test_auto_preamp_cancels_the_peak(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "eq.json")
+            bands = MOD._eq_default_bands()
+            bands[2]["gain_db"] = 8.0
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"bands": bands, "auto_preamp": True}, path=path)
+            self.assertLess(st["preamp_db"], 0.0)
+            # after auto-preamp the chain must no longer be able to clip
+            self.assertLessEqual(st["headroom_db"], 0.05)
 
 
 class TestPacking(unittest.TestCase):
     def test_matches_reference_implementation(self):
-        for kind, gain, f0 in (("low", +6.0, 100.0), ("low", -12.0, 100.0),
-                               ("high", +4.5, 8000.0), ("high", -7.0, 8000.0)):
-            b0, b1, b2, a1, a2 = MOD._eq_shelf_coeffs(kind, gain, f0)
+        cases = [MOD._eq_shelf_coeffs("lowshelf", +6.0, 100.0),
+                 MOD._eq_shelf_coeffs("lowshelf", -12.0, 100.0),
+                 MOD._eq_shelf_coeffs("highshelf", +4.5, 8000.0),
+                 MOD._eq_peak_coeffs(+6.0, 1000.0, 0.707),
+                 MOD._eq_peak_coeffs(-9.0, 300.0, 2.0)]
+        for b0, b1, b2, a1, a2 in cases:
             ours = MOD._eq_pack((b0, b1, b2, a1, a2))
-            ref = reference_pack([b0, b1, b2], [a1, a2])
-            self.assertEqual(ours, ref, f"packing diverges for {kind} {gain} dB")
+            self.assertEqual(ours, reference_pack([b0, b1, b2], [a1, a2]))
 
     def test_words_fit_26_bits(self):
         for gain in (-12.0, -0.5, 0.5, 12.0):
-            for w in MOD._eq_words("bass", gain) + MOD._eq_words("treble", gain):
-                self.assertLessEqual(w, 0x03FFFFFF)
+            for kind, f in (("lowshelf", 100.0), ("highshelf", 8000.0),
+                            ("peaking", 1000.0)):
+                for w in MOD._eq_words(band(kind, f, gain)):
+                    self.assertLessEqual(w, 0x03FFFFFF)
 
     def test_refuses_unstable(self):
-        # poles on/outside the unit circle must never reach the amp
         with self.assertRaises(MOD.Err):
             MOD._eq_pack((1.0, 0.0, 0.0, 0.0, 1.0))     # |a2| == 1
         with self.assertRaises(MOD.Err):
             MOD._eq_pack((1.0, 0.0, 0.0, -2.05, 1.05))  # pole at z ~ 1.02
 
+    def test_refuses_out_of_3_23_range(self):
+        # 3.23 holds [-4, 4); a coefficient past that must be declined, never
+        # wrapped — wrapping is what the 32-bit `max` bug did to the amp.
+        with self.assertRaises(MOD.Err):
+            MOD._eq_pack((4.5, 0.0, 0.0, 0.0, 0.0))
+
+    def test_preamp_scales_only_the_feed_forward_half(self):
+        b = band("peaking", 1000.0, 6.0, 1.0)
+        plain = MOD._eq_words(b)
+        quiet = MOD._eq_words(b, preamp_lin=0.5)
+        for i in range(3):                                  # b0, b1, b2 halve
+            self.assertAlmostEqual(_signed(quiet[i]), _signed(plain[i]) / 2,
+                                   delta=2)
+        for i in (3, 4):                                    # a1, a2 untouched
+            self.assertEqual(quiet[i], plain[i])
+
+    def test_preamp_on_a_flat_band_is_a_pure_gain(self):
+        w = MOD._eq_words(band(gain=0.0), preamp_lin=0.5)
+        self.assertEqual(w, [0x00400000, 0, 0, 0, 0])
+
+
+def _signed(word):
+    return word - (1 << 26) if word >= (1 << 25) else word
+
 
 class TestApplyAndPersist(unittest.TestCase):
-    def _amixer_ok(self, calls):
-        import subprocess
-
-        def fake(*args, timeout=4):
-            calls.append(args)
-            return subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
-        return fake
-
-    def test_set_eq_writes_both_channels_and_persists(self):
+    def test_writes_every_band_on_both_channels(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "eq.json")
-            with patch.object(MOD, "_amixer", side_effect=self._amixer_ok(calls)):
-                st = MOD.set_eq({"bass_db": 6.0, "treble_db": -3.0}, path=path)
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                MOD.set_eq({"bass_db": 6.0}, path=path)
             csets = [c for c in calls if c[0] == "cset"]
             names = sorted(c[1] for c in csets)
-            self.assertEqual(names, ["name=CH1 - Biquad 0", "name=CH1 - Biquad 1",
-                                     "name=CH2 - Biquad 0", "name=CH2 - Biquad 1"])
-            for c in csets:
-                self.assertEqual(len(c[2].split(",")), 5)
-            # CH1 and CH2 of the same knob get identical coefficients
+            self.assertEqual(names, sorted(
+                f"name=CH{ch} - Biquad {i}"
+                for ch in (1, 2) for i in range(MOD.EQ_BANDS)))
             by_name = {c[1]: c[2] for c in csets}
-            self.assertEqual(by_name["name=CH1 - Biquad 0"],
-                             by_name["name=CH2 - Biquad 0"])
-            self.assertEqual(st["bass_db"], 6.0)
-            self.assertEqual(st["treble_db"], -3.0)
+            for i in range(MOD.EQ_BANDS):          # both channels identical
+                self.assertEqual(by_name[f"name=CH1 - Biquad {i}"],
+                                 by_name[f"name=CH2 - Biquad {i}"])
+                self.assertEqual(len(by_name[f"name=CH1 - Biquad {i}"].split(",")), 5)
+
+    def test_bands_round_trip_and_persist(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "eq.json")
+            bands = MOD._eq_default_bands()
+            bands[3].update(gain_db=-4.5, freq_hz=1200.0, q=2.5)
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"bands": bands}, path=path)
+            self.assertEqual(st["bands"][3]["gain_db"], -4.5)
+            self.assertEqual(st["bands"][3]["freq_hz"], 1200.0)
+            self.assertEqual(st["bands"][3]["q"], 2.5)
             with open(path) as f:
-                self.assertEqual(json.load(f),
-                                 {"bass_db": 6.0, "treble_db": -3.0})
+                self.assertEqual(json.load(f)["bands"][3]["freq_hz"], 1200.0)
+            self.assertEqual(MOD.get_eq(path)["bands"][3]["gain_db"], -4.5)
 
-    def test_set_eq_clamps_to_range(self):
+    def test_clamps_every_field(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "eq.json")
-            with patch.object(MOD, "_amixer", side_effect=self._amixer_ok(calls)):
-                st = MOD.set_eq({"bass_db": 40, "treble_db": -99.9}, path=path)
-            self.assertEqual(st["bass_db"], MOD.EQ_MAX_DB)
-            self.assertEqual(st["treble_db"], -MOD.EQ_MAX_DB)
+            bands = MOD._eq_default_bands()
+            bands[1].update(gain_db=99.0, freq_hz=90000.0, q=500.0)
+            bands[2].update(gain_db=-99.0, freq_hz=0.1, q=0.001)
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"bands": bands, "preamp_db": -900.0}, path=path)
+            self.assertEqual(st["bands"][1]["gain_db"], MOD.EQ_MAX_DB)
+            self.assertEqual(st["bands"][1]["freq_hz"], MOD.EQ_MAX_HZ)
+            self.assertEqual(st["bands"][1]["q"], MOD.EQ_MAX_Q)
+            self.assertEqual(st["bands"][2]["gain_db"], -MOD.EQ_MAX_DB)
+            self.assertEqual(st["bands"][2]["freq_hz"], MOD.EQ_MIN_HZ)
+            self.assertEqual(st["bands"][2]["q"], MOD.EQ_MIN_Q)
+            self.assertEqual(st["preamp_db"], MOD.EQ_PREAMP_MIN_DB)
 
-    def test_set_eq_rejects_non_numbers(self):
-        for bad in ("loud", None, True, [6]):
+    def test_preamp_is_never_positive(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "eq.json")
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"preamp_db": 6.0}, path=path)
+            self.assertEqual(st["preamp_db"], 0.0)
+
+    def test_rejects_bad_shapes(self):
+        for p in ({"bands": "loud"}, {"bands": [{}] * (MOD.EQ_BANDS + 1)},
+                  {"bass_db": "loud"}, {"preamp_db": True}):
             with self.assertRaises(MOD.Err):
-                MOD.set_eq({"bass_db": bad}, path="/nonexistent/eq.json")
+                MOD.set_eq(p, path="/nonexistent/eq.json")
 
-    def test_set_eq_partial_update_keeps_other_knob(self):
+    def test_garbage_band_falls_back_to_default_not_an_error(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "eq.json")
-            with patch.object(MOD, "_amixer", side_effect=self._amixer_ok(calls)):
-                MOD.set_eq({"bass_db": 5.0}, path=path)
-                st = MOD.set_eq({"treble_db": 2.0}, path=path)
-            self.assertEqual(st["bass_db"], 5.0)
-            self.assertEqual(st["treble_db"], 2.0)
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"bands": ["nonsense", None, 7]}, path=path)
+            self.assertEqual(len(st["bands"]), MOD.EQ_BANDS)
+            self.assertEqual(st["bands"][0]["freq_hz"],
+                             MOD._eq_default_bands()[0]["freq_hz"])
 
     def test_failed_write_does_not_persist(self):
-        import subprocess
-
         def fail(*args, timeout=4):
-            return subprocess.CompletedProcess([], 1, stdout="", stderr="no such control")
+            return subprocess.CompletedProcess([], 1, stdout="",
+                                               stderr="no such control")
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "eq.json")
             with patch.object(MOD, "_amixer", side_effect=fail):
                 with self.assertRaises(MOD.Err):
-                    MOD.set_eq({"bass_db": 6.0}, path=path)
+                    MOD.set_eq({"bass_db": 3.0}, path=path)
             self.assertFalse(os.path.exists(path))
 
-    def test_eq_load_ignores_garbage(self):
+
+class TestLegacyCompat(unittest.TestCase):
+    """The shipped 1.14.0 app knows only bass_db/treble_db. It must keep working."""
+
+    def test_v1_config_file_migrates(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "eq.json")
-            for garbage in ("not json", "null", '{"bass_db": "x", "treble_db": 99}'):
-                with open(path, "w") as f:
-                    f.write(garbage)
-                self.assertEqual(MOD._eq_load(path),
-                                 {"bass_db": 0.0, "treble_db": 0.0})
+            with open(path, "w") as f:
+                json.dump({"bass_db": 4.0, "treble_db": -2.0}, f)
+            st = MOD._eq_load(path)
+            lo, hi = MOD._eq_legacy_indices(st["bands"])
+            self.assertEqual(st["bands"][lo]["gain_db"], 4.0)
+            self.assertEqual(st["bands"][hi]["gain_db"], -2.0)
+
+    def test_view_still_exposes_bass_and_treble(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "eq.json")
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                st = MOD.set_eq({"bass_db": 5.0, "treble_db": -3.0}, path=path)
+            self.assertEqual(st["bass_db"], 5.0)
+            self.assertEqual(st["treble_db"], -3.0)
+            self.assertEqual(st["max_bands"], MOD.EQ_BANDS)
+
+    def test_v1_request_leaves_the_other_bands_alone(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "eq.json")
+            bands = MOD._eq_default_bands()
+            bands[3]["gain_db"] = 5.0
+            with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)):
+                MOD.set_eq({"bands": bands}, path=path)
+                st = MOD.set_eq({"bass_db": 2.0}, path=path)
+            self.assertEqual(st["bands"][3]["gain_db"], 5.0)
+            self.assertEqual(st["bass_db"], 2.0)
+
+
+class TestPresets(unittest.TestCase):
+    def test_every_preset_is_writable_and_within_limits(self):
+        for p in MOD.list_eq_presets()["presets"]:
+            self.assertEqual(len(p["bands"]), MOD.EQ_BANDS)
+            self.assertLessEqual(p["preamp_db"], 0.0)
+            for b in p["bands"]:
+                self.assertLessEqual(abs(b["gain_db"]), MOD.EQ_MAX_DB)
+                # must actually pack — a preset that cannot be written is a bug
+                MOD._eq_words(b)
+
+    def test_flat_preset_is_flat(self):
+        flat = next(p for p in MOD.list_eq_presets()["presets"] if p["id"] == "flat")
+        self.assertTrue(all(abs(b["gain_db"]) < 0.05 for b in flat["bands"]))
+
+    def test_presets_carry_enough_preamp_not_to_clip(self):
+        for p in MOD.list_eq_presets()["presets"]:
+            self.assertLessEqual(MOD._eq_headroom_db(p["bands"], p["preamp_db"]),
+                                 0.05, msg=p["id"])
+
+
+class TestRestore(unittest.TestCase):
+    def test_flat_config_skips_the_write(self):
+        calls = []
+        with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)), \
+             patch.object(MOD, "_eq_load", return_value={
+                 "bands": MOD._eq_default_bands(), "preamp_db": 0.0}):
+            MOD.eq_restore_thread()
+        self.assertEqual(calls, [])
+
+    def test_non_flat_config_is_rewritten(self):
+        calls = []
+        bands = MOD._eq_default_bands()
+        bands[0]["gain_db"] = 3.0
+        with patch.object(MOD, "_amixer", side_effect=amixer_ok(calls)), \
+             patch.object(MOD, "eq_supported", return_value=True), \
+             patch.object(MOD, "_eq_load",
+                          return_value={"bands": bands, "preamp_db": 0.0}):
+            MOD.eq_restore_thread()
+        self.assertEqual(len([c for c in calls if c[0] == "cset"]),
+                         2 * MOD.EQ_BANDS)
 
 
 if __name__ == "__main__":

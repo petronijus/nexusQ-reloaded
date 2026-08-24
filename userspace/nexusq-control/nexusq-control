@@ -702,34 +702,64 @@ def set_mqtt_config(p, path=None):
 # power-off, so the stored eq.json is re-applied at every daemon start.
 EQ_CONF_PATH = os.environ.get("NEXUSQ_EQ_CONF", "/etc/nexusq/eq.json")
 EQ_FS = 48000
+EQ_BANDS = 7                      # the TAS5713 main EQ bank: 7 biquads per channel
 EQ_MAX_DB = 12.0
-EQ_BASS_HZ = 100.0
-EQ_TREBLE_HZ = 8000.0
+EQ_MIN_HZ, EQ_MAX_HZ = 20.0, 20000.0
+EQ_MIN_Q, EQ_MAX_Q = 0.3, 8.0
+EQ_PREAMP_MIN_DB = -24.0
 _EQ_UNITY = (0x00800000, 0, 0, 0, 0)  # b0 = 1.0 in 3.23, rest zero
-# control name -> which knob drives it (both channels get identical coefficients)
-_EQ_CONTROLS = {"bass": ("CH1 - Biquad 0", "CH2 - Biquad 0"),
-                "treble": ("CH1 - Biquad 1", "CH2 - Biquad 1")}
+
+# Band 0 and band 6 keep the frequencies the bass/treble card used (100 Hz /
+# 8 kHz) so a device upgraded from the two-knob version sounds identical; the
+# five idle biquads become log-spaced peaking bands between them.
+EQ_DEFAULT_BANDS = (
+    ("lowshelf",   100.0),
+    ("peaking",    200.0),
+    ("peaking",    430.0),
+    ("peaking",    900.0),
+    ("peaking",   1800.0),
+    ("peaking",   3800.0),
+    ("highshelf", 8000.0),
+)
+
+# Presets live HERE, not in the app: one source of truth, and applying one is just
+# a setEq with its bands, so there is a single write path to get wrong.
+# Each entry: (id, label, {band index: (gain_db, q_or_none)})
+EQ_PRESETS = (
+    ("flat",     "Flat",        {}),
+    ("loudness", "Loudness",    {0: (5.0, None), 3: (-2.0, None), 6: (4.0, None)}),
+    ("bass",     "Bass boost",  {0: (6.0, None), 1: (2.5, None)}),
+    ("speech",   "Speech",      {0: (-3.0, None), 3: (3.0, 1.2), 4: (2.0, 1.2)}),
+    ("warm",     "Warm",        {0: (2.5, None), 5: (-2.0, 1.0), 6: (-2.5, None)}),
+)
 
 
-def _eq_shelf_coeffs(kind, gain_db, f0, fs=EQ_FS):
-    """RBJ cookbook shelving filter (S=1), normalized by a0.
+def _eq_default_bands():
+    return [{"type": k, "freq_hz": f, "gain_db": 0.0, "q": 0.707 if k == "peaking" else 1.0,
+             "enabled": True} for k, f in EQ_DEFAULT_BANDS]
 
-    Returns (b0, b1, b2, a1, a2) as floats — the *mathematical* transfer
-    function H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2).
-    The TI-register negation of a1/a2 happens in _eq_pack()."""
+
+def _eq_shelf_coeffs(kind, gain_db, f0, s=1.0, fs=EQ_FS):
+    """RBJ cookbook shelving filter, normalized by a0.
+
+    `s` is the shelf SLOPE (RBJ's S), not a Q — S=1 is the maximally flat shelf
+    the two-knob version shipped. Returns the *mathematical* transfer function
+    H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2); the TI-register
+    negation of a1/a2 happens in _eq_pack()."""
     a = 10.0 ** (gain_db / 40.0)
     w0 = 2.0 * math.pi * f0 / fs
     cw, sw = math.cos(w0), math.sin(w0)
-    alpha = sw / 2.0 * math.sqrt(2.0)  # RBJ shelf, S=1
+    s = max(0.1, min(2.0, s))
+    alpha = sw / 2.0 * math.sqrt((a + 1.0 / a) * (1.0 / s - 1.0) + 2.0)
     two_sqrt_a_alpha = 2.0 * math.sqrt(a) * alpha
-    if kind == "low":
+    if kind == "lowshelf":
         b0 = a * ((a + 1) - (a - 1) * cw + two_sqrt_a_alpha)
         b1 = 2 * a * ((a - 1) - (a + 1) * cw)
         b2 = a * ((a + 1) - (a - 1) * cw - two_sqrt_a_alpha)
         a0 = (a + 1) + (a - 1) * cw + two_sqrt_a_alpha
         a1 = -2 * ((a - 1) + (a + 1) * cw)
         a2 = (a + 1) + (a - 1) * cw - two_sqrt_a_alpha
-    else:  # high shelf
+    else:
         b0 = a * ((a + 1) + (a - 1) * cw + two_sqrt_a_alpha)
         b1 = -2 * a * ((a - 1) + (a + 1) * cw)
         b2 = a * ((a + 1) + (a - 1) * cw - two_sqrt_a_alpha)
@@ -739,17 +769,42 @@ def _eq_shelf_coeffs(kind, gain_db, f0, fs=EQ_FS):
     return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
 
 
+def _eq_peak_coeffs(gain_db, f0, q, fs=EQ_FS):
+    """RBJ cookbook peaking EQ, normalized by a0."""
+    a = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * math.pi * f0 / fs
+    cw, sw = math.cos(w0), math.sin(w0)
+    alpha = sw / (2.0 * max(EQ_MIN_Q, q))
+    b0 = 1 + alpha * a
+    b1 = -2 * cw
+    b2 = 1 - alpha * a
+    a0 = 1 + alpha / a
+    a1 = -2 * cw
+    a2 = 1 - alpha / a
+    return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+
+def _eq_band_coeffs(band):
+    """One band -> (b0,b1,b2,a1,a2) floats, or None for a pass-through band."""
+    if not band.get("enabled", True) or abs(band["gain_db"]) < 0.05:
+        return None
+    if band["type"] == "peaking":
+        return _eq_peak_coeffs(band["gain_db"], band["freq_hz"], band["q"])
+    return _eq_shelf_coeffs(band["type"], band["gain_db"], band["freq_hz"], band["q"])
+
+
 def _eq_pack(coeffs):
     """(b0,b1,b2,a1,a2) floats -> 5 register words: 3.23 two's complement in the
     low 26 bits, a1/a2 NEGATED (TI DAP feedback convention). Refuses an unstable
     filter — an unstable biquad on a 25 W amp is a speaker hazard, never write
-    one no matter how it was produced."""
+    one no matter how it was produced — and refuses a coefficient that would not
+    fit 3.23, because a wrapped coefficient is worse than a declined filter."""
     b0, b1, b2, a1, a2 = coeffs
     # poles inside the unit circle: |a2| < 1 and |a1| < 1 + a2
     if not (abs(a2) < 1.0 and abs(a1) < 1.0 + a2):
         raise Err("internal", "unstable biquad refused")
     words = []
-    for i, c in enumerate((b0, b1, b2, -a1, -a2)):
+    for c in (b0, b1, b2, -a1, -a2):
         w = int(round(c * (1 << 23)))
         if not -(1 << 25) <= w < (1 << 25):  # 3.23 in 26 bits: [-4, 4)
             raise Err("internal", "coefficient out of 3.23 range")
@@ -757,18 +812,49 @@ def _eq_pack(coeffs):
     return words
 
 
-def _eq_words(kind, gain_db):
-    """Register words for one knob: exact unity at 0 dB, shelf otherwise."""
-    if abs(gain_db) < 0.05:
-        return list(_EQ_UNITY)
-    f0 = EQ_BASS_HZ if kind == "bass" else EQ_TREBLE_HZ
-    shelf = "low" if kind == "bass" else "high"
-    return _eq_pack(_eq_shelf_coeffs(shelf, gain_db, f0))
+def _eq_words(band, preamp_lin=1.0):
+    """Register words for one band. `preamp_lin` scales the feed-forward half,
+    which is exactly a gain in front of the filter — the amp's Master/Speaker
+    volumes are the USER's volume and must never be hijacked for headroom."""
+    c = _eq_band_coeffs(band)
+    if c is None:
+        if abs(preamp_lin - 1.0) < 1e-9:
+            return list(_EQ_UNITY)
+        c = (1.0, 0.0, 0.0, 0.0, 0.0)      # pure gain biquad
+    b0, b1, b2, a1, a2 = c
+    return _eq_pack((b0 * preamp_lin, b1 * preamp_lin, b2 * preamp_lin, a1, a2))
+
+
+def _eq_response_db(bands, freq_hz, preamp_db=0.0, fs=EQ_FS):
+    """Summed magnitude of the whole chain at one frequency, in dB."""
+    total = preamp_db
+    w = 2.0 * math.pi * freq_hz / fs
+    z = complex(math.cos(-w), math.sin(-w))
+    for band in bands:
+        c = _eq_band_coeffs(band)
+        if c is None:
+            continue
+        b0, b1, b2, a1, a2 = c
+        h = (b0 + b1 * z + b2 * z * z) / (1.0 + a1 * z + a2 * z * z)
+        total += 20.0 * math.log10(abs(h)) if abs(h) > 1e-12 else -240.0
+    return total
+
+
+def _eq_headroom_db(bands, preamp_db=0.0):
+    """Peak of the summed response over a log grid — what the app shows, and what
+    an auto-preamp would cancel. Positive means the chain can clip."""
+    peak = -240.0
+    for i in range(97):                     # 20 Hz .. 20 kHz, ~1/12 octave
+        f = EQ_MIN_HZ * (EQ_MAX_HZ / EQ_MIN_HZ) ** (i / 96.0)
+        peak = max(peak, _eq_response_db(bands, f, preamp_db))
+    return round(peak, 2)
 
 
 def eq_supported():
     """Does the running kernel expose the biquad controls? (r49+; feature-detect
-    so the app can grey the EQ card out on an older kernel)."""
+    so the app can grey the EQ card out on an older kernel). NOTE r49 exposes them
+    but its write path is broken by an upstream 32-bit bug — r50+ is required for
+    the EQ to actually work, and that is not detectable from here."""
     try:
         r = _amixer("cget", "name=CH1 - Biquad 0")
         return r.returncode == 0
@@ -776,51 +862,144 @@ def eq_supported():
         return False
 
 
+def _eq_clean_band(raw, default):
+    """Validate + clamp one band against its default. Anything unparseable falls
+    back to the default rather than raising: a corrupt stored file must not stop
+    the daemon from starting."""
+    b = dict(default)
+    if not isinstance(raw, dict):
+        return b
+    kind = raw.get("type")
+    if kind in ("peaking", "lowshelf", "highshelf"):
+        b["type"] = kind
+    for key, lo, hi in (("freq_hz", EQ_MIN_HZ, EQ_MAX_HZ),
+                        ("gain_db", -EQ_MAX_DB, EQ_MAX_DB),
+                        ("q", EQ_MIN_Q, EQ_MAX_Q)):
+        v = raw.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
+            b[key] = max(lo, min(hi, float(v)))
+    if isinstance(raw.get("enabled"), bool):
+        b["enabled"] = raw["enabled"]
+    return b
+
+
+def _eq_legacy_indices(bands):
+    """(bass index, treble index) for the two-knob compatibility view."""
+    lo = next((i for i, b in enumerate(bands) if b["type"] == "lowshelf"), None)
+    hi = next((i for i in range(len(bands) - 1, -1, -1)
+               if bands[i]["type"] == "highshelf"), None)
+    return lo, hi
+
+
 def _eq_load(path=None):
-    st = {"bass_db": 0.0, "treble_db": 0.0}
+    """Stored state -> {bands, preamp_db}. Migrates the two-knob v1 file."""
+    st = {"bands": _eq_default_bands(), "preamp_db": 0.0}
     try:
         with open(path or EQ_CONF_PATH) as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            for k in ("bass_db", "treble_db"):
-                v = data.get(k)
-                if isinstance(v, (int, float)) and abs(v) <= EQ_MAX_DB:
-                    st[k] = float(v)
     except (OSError, ValueError):
-        pass
+        return st
+    if not isinstance(data, dict):
+        return st
+    raw_bands = data.get("bands")
+    if isinstance(raw_bands, list):
+        st["bands"] = [_eq_clean_band(raw_bands[i] if i < len(raw_bands) else None,
+                                      st["bands"][i]) for i in range(EQ_BANDS)]
+    else:
+        # v1: {"bass_db": x, "treble_db": y} -> the two shelf bands.
+        lo, hi = _eq_legacy_indices(st["bands"])
+        for key, idx in (("bass_db", lo), ("treble_db", hi)):
+            v = data.get(key)
+            if idx is not None and isinstance(v, (int, float)) and not isinstance(v, bool):
+                st["bands"][idx]["gain_db"] = max(-EQ_MAX_DB, min(EQ_MAX_DB, float(v)))
+    v = data.get("preamp_db")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        st["preamp_db"] = max(EQ_PREAMP_MIN_DB, min(0.0, float(v)))
     return st
+
+
+def _eq_view(st):
+    """Wire representation. Keeps bass_db/treble_db so the shipped 1.14.0 app —
+    which knows only those two fields — keeps working against this daemon."""
+    lo, hi = _eq_legacy_indices(st["bands"])
+    return {
+        "bands": [dict(b) for b in st["bands"]],
+        "preamp_db": round(st["preamp_db"], 2),
+        "headroom_db": _eq_headroom_db(st["bands"], st["preamp_db"]),
+        "max_bands": EQ_BANDS,
+        "limits": {"gain_db": EQ_MAX_DB, "freq_hz": [EQ_MIN_HZ, EQ_MAX_HZ],
+                   "q": [EQ_MIN_Q, EQ_MAX_Q], "preamp_db": [EQ_PREAMP_MIN_DB, 0.0]},
+        "bass_db": round(st["bands"][lo]["gain_db"], 2) if lo is not None else 0.0,
+        "treble_db": round(st["bands"][hi]["gain_db"], 2) if hi is not None else 0.0,
+        "supported": eq_supported(),
+    }
 
 
 def get_eq(path=None):
-    st = _eq_load(path)
-    st["supported"] = eq_supported()
-    return st
+    return _eq_view(_eq_load(path))
+
+
+def list_eq_presets():
+    out = []
+    for pid, label, gains in EQ_PRESETS:
+        bands = _eq_default_bands()
+        for idx, (gain, q) in gains.items():
+            bands[idx]["gain_db"] = gain
+            if q is not None:
+                bands[idx]["q"] = q
+        out.append({"id": pid, "label": label, "bands": bands,
+                    "preamp_db": min(0.0, -_eq_headroom_db(bands))})
+    return {"presets": out}
 
 
 def _eq_apply(st):
-    """Write both knobs' coefficients to both channels. All-or-error: a failed
-    cset raises so the caller never reports an EQ the hardware doesn't run."""
-    for knob, controls in _EQ_CONTROLS.items():
-        words = _eq_words(knob, st[f"{knob}_db"])
+    """Write all 7 bands to both channels. All-or-error: a failed cset raises so
+    the caller never reports an EQ the hardware doesn't run. The preamp rides on
+    band 0 — one biquad carries it, the rest are untouched by it."""
+    preamp_lin = 10.0 ** (st["preamp_db"] / 20.0)
+    for i, band in enumerate(st["bands"]):
+        words = _eq_words(band, preamp_lin if i == 0 else 1.0)
         val = ",".join(str(w) for w in words)
-        for name in controls:
-            r = _amixer("cset", f"name={name}", val)
+        for ch in (1, 2):
+            r = _amixer("cset", f"name=CH{ch} - Biquad {i}", val)
             if r.returncode != 0:
                 raise Err("unavailable",
-                          f"biquad write failed ({name}): {(r.stderr or '').strip()}")
+                          f"biquad write failed (CH{ch} BQ{i}): "
+                          f"{(r.stderr or '').strip()}")
 
 
 def set_eq(p, path=None):
     """Validate + clamp, program the amp, then persist. Hardware first: if the
-    write fails the stored file still matches what the chip actually runs."""
+    write fails the stored file still matches what the chip actually runs.
+
+    Accepts either shape — `bands` (+ optional `preamp_db`), or the v1
+    `bass_db`/`treble_db`, so an older app talking to a newer daemon still works."""
     path = path or EQ_CONF_PATH
     st = _eq_load(path)
-    for k in ("bass_db", "treble_db"):
-        if k in p:
-            v = p[k]
+    if "bands" in p:
+        if not isinstance(p["bands"], list):
+            raise Err("bad_params", "bands must be a list")
+        if len(p["bands"]) > EQ_BANDS:
+            raise Err("bad_params", f"at most {EQ_BANDS} bands")
+        st["bands"] = [_eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None,
+                                      st["bands"][i]) for i in range(EQ_BANDS)]
+    lo, hi = _eq_legacy_indices(st["bands"])
+    for key, idx in (("bass_db", lo), ("treble_db", hi)):
+        if key in p:
+            v = p[key]
             if not isinstance(v, (int, float)) or isinstance(v, bool):
-                raise Err("bad_request", f"{k} must be a number")
-            st[k] = max(-EQ_MAX_DB, min(EQ_MAX_DB, float(v)))
+                raise Err("bad_params", f"{key} must be a number")
+            if idx is None:
+                raise Err("bad_params", f"no shelf band for {key}")
+            st["bands"][idx]["gain_db"] = max(-EQ_MAX_DB, min(EQ_MAX_DB, float(v)))
+    if "preamp_db" in p:
+        v = p["preamp_db"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise Err("bad_params", "preamp_db must be a number")
+        st["preamp_db"] = max(EQ_PREAMP_MIN_DB, min(0.0, float(v)))
+    if p.get("auto_preamp"):
+        st["preamp_db"] = max(EQ_PREAMP_MIN_DB,
+                              min(0.0, -_eq_headroom_db(st["bands"])))
     if not eq_supported():
         raise Err("unavailable", "kernel does not expose the TAS5713 biquads")
     _eq_apply(st)
@@ -829,7 +1008,7 @@ def set_eq(p, path=None):
     tmp = f"{path}.tmp.{os.getpid()}"
     try:
         with open(tmp, "w") as f:
-            json.dump(st, f)
+            json.dump({"bands": st["bands"], "preamp_db": st["preamp_db"]}, f)
         os.replace(tmp, path)
     except OSError as e:
         try:
@@ -837,8 +1016,17 @@ def set_eq(p, path=None):
         except OSError:
             pass
         raise Err("unavailable", f"cannot persist eq: {e}")
-    log(f"eq applied: bass {st['bass_db']:+.1f} dB, treble {st['treble_db']:+.1f} dB")
+    active = [f"{b['freq_hz']:.0f}Hz {b['gain_db']:+.1f}" for b in st["bands"]
+              if b.get("enabled", True) and abs(b["gain_db"]) >= 0.05]
+    log(f"eq applied: preamp {st['preamp_db']:+.1f} dB, "
+        + (", ".join(active) if active else "flat"))
     return get_eq(path)
+
+
+def _eq_is_flat(st):
+    return (abs(st["preamp_db"]) < 0.05
+            and all(not b.get("enabled", True) or abs(b["gain_db"]) < 0.05
+                    for b in st["bands"]))
 
 
 def eq_restore_thread():
@@ -847,14 +1035,13 @@ def eq_restore_thread():
     codec/ALSA is still probing when the bridge starts; gives up quietly on a
     flat config (nothing to restore) or a pre-r49 kernel."""
     st = _eq_load()
-    if abs(st["bass_db"]) < 0.05 and abs(st["treble_db"]) < 0.05:
+    if _eq_is_flat(st):
         return
     for _ in range(12):  # up to ~60 s
         if eq_supported():
             try:
                 _eq_apply(st)
-                log(f"eq restored: bass {st['bass_db']:+.1f} dB, "
-                    f"treble {st['treble_db']:+.1f} dB")
+                log("eq restored from", EQ_CONF_PATH)
             except Err as e:
                 log("eq restore failed:", e)
             return
@@ -1401,6 +1588,10 @@ class Bridge:
             st = set_eq(p)
             # Push the applied state so every client's sliders reconcile.
             return st, [("eqChanged", st)]
+        if method == "listEqPresets":
+            # Presets are device-side so every client sees the same ones, and
+            # applying one is just a setEq with its bands — one write path.
+            return list_eq_presets(), []
 
         # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
         # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;
