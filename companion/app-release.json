@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.15.1",
-  "versionCode": 37,
-  "notes": "Fixes the equalizer: the curve can actually be dragged (the page used to scroll instead), no more \"EQ unavailable\" on a cold start, and it lives in one place — the bottom of the home screen.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.15.1/nexusq-companion-1.15.1.apk",
+  "version": "1.15.2",
+  "versionCode": 38,
+  "notes": "The equalizer curve can now actually be dragged. 1.15.1 claimed to fix this and did not — the handle followed your finger while the page scrolled underneath, so everything moved twice. Dragging outside the curve still scrolls normally.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.15.2/nexusq-companion-1.15.2.apk",
   "minAndroidSdk": 21
 }
