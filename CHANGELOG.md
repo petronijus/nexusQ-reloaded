@@ -6,6 +6,29 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — `perf` in the image, and an audit that proves nothing else is live-only (2026-08-24, `device-google-steelhead` **r81**)
+- Profiling settled the PulseAudio question in one shot, so `perf` belongs in the
+  image rather than in whoever's ssh session. Added to `depends` next to the
+  existing `gdb`/`i2c-tools` diagnostics. Folded into **r81** (unpublished), no
+  extra revision. The kernel always had `CONFIG_PERF_EVENTS`; only userspace was
+  missing.
+- **Two commands now prove nothing is live-only** — do not rely on memory:
+  `cat /etc/apk/world` (anything our `depends=` does not pull is a live install a
+  reflash loses) and `apk audit --system` (files differing from their package).
+- Result of running them: the device is **clean**. `apk audit` reports exactly two
+  files — `gschemas.compiled` (glib regenerates it) and
+  `usr/share/pulseaudio/alsa-mixer/paths/analog-output-speaker.conf` (rewritten by
+  our own `device-google-steelhead.trigger`). Both expected, both in the build.
+- ⚠️ **Fixed a latent OTA trap:** `linux-google-steelhead` and `nexusq-mqtt` were
+  pinned in `world` as `name><Q1<checksum>=`. apk-tools 3 writes that when a
+  package is installed **from a local file** (`apk add /path/foo.apk`) rather than
+  a repo, which can make a later OTA silently refuse to upgrade it — the same
+  class of failure as a dependency missing from `publish-ota-repo.sh`. Cleared
+  with a plain `apk add linux-google-steelhead nexusq-mqtt`: rewrites the entries,
+  changes no packages. `nq-kernel-ota` was **not** the cause — it correctly
+  `apk fetch`es the payload and only ever `apk add --upgrade <name>`s by name.
+
+
 ### Fixed — USB Audio idle burned 5× the power; one governor knob recovers it (2026-08-24, `device-google-steelhead` **r81**)
 - With "USB Audio" enabled and **nothing playing**, the Q sat at 1200 MHz /
   1380 mV **90 % of the time**, die **84 °C**, **6.0×** a locked-350 floor —

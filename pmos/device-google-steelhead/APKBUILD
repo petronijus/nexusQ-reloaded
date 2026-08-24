@@ -53,6 +53,7 @@ depends="
 	openssh-server
 	openssh-client
 	gdb
+	perf
 	python3-dbg
 	i2c-tools
 	e2fsprogs
