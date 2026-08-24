@@ -4,7 +4,52 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-24 (latest): **USB Audio was costing 6× the idle power — one governor knob fixed it · profiling infrastructure · speexdsp rebuilt with NEON**
+## Session 2026-08-24 (latest, evening): **parametric 7-band EQ shipped — and three UI faults that shipped past green tests**
+
+Full record: `PLAN.md` (the EQ block) and the CHANGELOG. All committed and pushed.
+
+**What shipped.** `nexusq-control` **r32** + app **1.15.3+39**: the TAS5713's EQ
+bank is 7 biquads per channel and only two were used, so the other five now drive
+a fully parametric EQ — a live response curve with seven draggable handles, a Q /
+slope control, device-side presets, a preamp with a clipping warning and one-tap
+auto, at the bottom of the home screen. Protocol §14 v2 extends rather than
+breaks: `getEq` still returns `bass_db`/`treble_db`, so an app or daemon on either
+side of the upgrade keeps working.
+
+**Verified on the hardware**, not on the drawing: coefficients read back off the
+amp and evaluated as a transfer function measured within **0.25 dB** of the
+requested curve everywhere, auto-preamp cancelled the peak to −0.00 dB, both
+channels identical, Flat returned 14/14 unity.
+
+**Three faults reached Petr, each with a passing test.** The curve could not be
+dragged (the page scrolled instead, then — after a bad first fix — both moved at
+once); "EQ unavailable: not connected" on a cold start; and the card went dead
+after one drag because a real `setEq` takes ~300 ms and it both disabled itself
+and dropped anything arriving during it. Causes and fixes are in PLAN.md.
+
+⚠️ **The lesson worth carrying:** every one of those had a green test. The drag
+test's host was a scroll view with nothing tall enough to scroll, so it never
+entered the gesture arena; the fake client replied instantly, so the "sending"
+state never existed. **A test you have not watched fail is not a safety net** —
+each fix here was kept only after reverting the code and confirming the test goes
+red. The same trap cost a wrong conclusion on the NEON build the same morning.
+
+### WHERE TO CONTINUE
+
+1. **Petr is testing 1.15.3.** Outstanding question from me: whether the 44 px
+   handle target is comfortable on a phone — it was chosen at a desk.
+2. ⛔ **Do NOT "optimise" the EQ write** to skip unchanged bands. Petr declined it
+   explicitly ("to nemusí být okamžité, ať to zbytečně nezatěžujeme"); see PLAN.md
+   for why it also costs correctness.
+3. **GitHub issue #2 can be closed** — the EQ is delivered well past what was
+   asked. A public reply to @terierbread360 still needs Petr's go-ahead. He said
+   on 2026-08-24 to hold off while the EQ was not yet ideal; the parametric
+   version supersedes that.
+4. **PLAN.md Step 6 — stop computing silence** remains the only open item from the
+   idle-power work: ~20 % of a core plus the amp's draw, and the only real fix
+   left for the original complaint.
+
+## Session 2026-08-24: **USB Audio was costing 6× the idle power — one governor knob fixed it · profiling infrastructure · speexdsp rebuilt with NEON**
 
 Full record: `docs/2026-08-24-usb-audio-idle-cost.md`. Everything below is
 committed and pushed (`d902d71`…`a275f2d`); the OTA repo is republished.

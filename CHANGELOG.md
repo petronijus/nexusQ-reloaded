@@ -6,6 +6,46 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — parametric 7-band EQ (2026-08-24, `nexusq-control` **r32**, app **1.15.3+39**)
+- Petr, after using the bass/treble card: he wanted the modern-standard equalizer —
+  a visible curve, more handles, presets, on the home screen. The hardware already
+  allowed it: the TAS5713's EQ bank is **7 biquads per channel** and only two were
+  used, so five sat idle. All seven now drive a curve with **draggable handles**.
+- **Preamp** with a headroom readout, a clipping warning and one-tap auto. It folds
+  into band 0's feed-forward coefficients — the amp's `Master`/`Speaker` volumes are
+  the **user's** volume and are never hijacked for headroom.
+- Protocol §14 v2 **extends rather than breaks**: `getEq` still returns
+  `bass_db`/`treble_db` derived from the shelf bands, so the shipped 1.14.0 app kept
+  working, and an app updated ahead of its device falls back to two handles instead
+  of an empty panel.
+- **Verified on the hardware, not on the drawing**: coefficients read back off the
+  amp and evaluated as a transfer function measured **within 0.25 dB** of the
+  requested curve everywhere; auto-preamp cancelled the peak to −0.00 dB; both
+  channels identical; Flat returned 14/14 unity.
+
+### Fixed — three EQ UI faults that shipped past green tests (1.15.1 → 1.15.3)
+- **The curve could not be dragged — the page scrolled instead.** `pan` accepts
+  after `kPanSlop` (36 px), a scrollable's vertical drag after `kTouchSlop` (18 px),
+  so the scroll wins fairly. Overriding `rejectGesture` to accept does **not** take
+  the gesture back; the arena already awarded it, so both ran and everything moved
+  twice. Fixed with vertical + horizontal recognizers, which accept at the same
+  distance and are inner, so they win properly.
+- **"EQ unavailable: not connected"** on a cold start — the card loads in
+  `initState`, before the link is up. It now waits for the connection.
+- **Dead after the first drag.** A real `setEq` is ~300 ms (14 I2C writes); the card
+  disabled itself for that window *and* dropped anything arriving during it. It now
+  stays live and queues the newest write.
+- ⚠️ **All three had passing tests.** The drag test's host was a scroll view with
+  nothing tall enough to scroll, so it never entered the gesture arena; the fake
+  client replied instantly, so the "sending" state never existed. Both are fixed,
+  and every repair was kept only after reverting the code and watching the test go
+  red. **A test you have not seen fail is not a safety net.**
+- ⛔ **Rejected:** writing only changed bands (~40 ms instead of ~300 ms). Petr:
+  *"to nemusí být okamžité, ať to zbytečně nezatěžujeme."* The queue already makes
+  it feel fine, and skipping registers means tracking what the amp last received —
+  state that breaks the moment anything else writes a coefficient.
+
+
 ### Shipped — hardware EQ, GitHub issue #2, end to end (2026-08-24, app **1.14.0+35**)
 - Companion app **1.14.0+35** built (23/23 tests, EQ strings verified present in the
   binary rather than assumed), released as `app-v1.14.0`, OTA manifest bumped to

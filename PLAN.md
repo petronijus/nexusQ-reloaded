@@ -3,7 +3,7 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> ## 🎛 IN PROGRESS (2026-08-24) — parametric 7-band EQ with a live curve (Petr's ask)
+> ## ✅ SHIPPED (2026-08-24) — parametric 7-band EQ with a live curve
 >
 > Petr, after using the bass/treble card: *"chtěl bych nějakej lepší equalizer, aby
 > byla vidět křivka a bylo tam víc handlů, prostě takovej ten pěknej moderní
@@ -46,12 +46,42 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > screen**. The response math is already unit-tested on the device side — port the
 > same formulas so the drawn curve cannot disagree with what the amp does.
 >
-> ### Order of work
-> 1. Device: band model + coefficients + range/stability refusals + §14 v2 + tests.
-> 2. Verify **on the wire** (ftrace) and by transfer function — the acceptance test
->    that caught the 32-bit bug; a drawn curve is not evidence.
-> 3. App: curve widget + handles + presets + home-screen card + widget tests.
-> 4. Build, release, listening test.
+> ### Delivered
+> `nexusq-control` **r32** (7 bands, preamp, presets, §14 v2, 32 tests) and app
+> **1.15.3+39** (curve, 7 draggable handles, preset chips, preamp + auto,
+> home-screen placement, 45 tests). Verified on the hardware by reading the
+> coefficients back off the amp: a low-shelf −6 / +8 dB peak at 900 Hz / −5 dB dip
+> at 3.8 kHz curve measured **within 0.25 dB everywhere**, auto-preamp cancelled
+> the peak to −0.00 dB, both channels identical, Flat returned 14/14 unity.
+>
+> ### Three UI faults after the first release — and why the tests missed them
+> Petr hit all three; each had a test that was already green.
+> 1. **The curve could not be dragged, the page scrolled instead.** A `pan`
+>    recognizer accepts after `kPanSlop` (36 px) but a scrollable's vertical drag
+>    after `kTouchSlop` (18 px), so the scroll wins fairly. Overriding
+>    `rejectGesture` to accept does **not** take the gesture back — the arena has
+>    already awarded it, so BOTH ran and everything moved twice. Fixed by
+>    competing on equal terms: vertical + horizontal drag recognizers, inner ones
+>    accept first. *The drag test's host was a scroll view with nothing tall
+>    enough to scroll, so it never entered the arena and tested nothing.*
+> 2. **"EQ unavailable: not connected" on a cold start** — the card loads in
+>    `initState`, before the link is up, and reported that as an EQ fault.
+> 3. **Dead after the first drag.** A real `setEq` is ~300 ms (14 I2C writes) and
+>    the card both disabled itself and dropped anything arriving during it.
+>    *The fake client replied instantly, so the "sending" state never existed in
+>    tests.* Fixed by staying live and queueing the newest write.
+>
+> **The standing lesson, learned twice in one day:** a test you have not watched
+> fail is not a safety net. Every fix above was kept only after reverting the
+> code and confirming the test goes red.
+>
+> ### ⛔ Rejected: writing only the bands that changed
+> A single-band drag rewrites all 14 registers (~300 ms) where ~2 would do (~40 ms).
+> **Petr, 2026-08-24: "to nemusí být okamžité, ať to zbytečně nezatěžujeme."**
+> The write queue already makes the UI feel fine, and skipping registers means the
+> daemon must track what the amp last received — new state that goes wrong the
+> moment anything else writes a coefficient (`i2cset`, a second client, a recovery).
+> Do not implement this without a reason better than latency nobody is waiting on.
 
 > ## ✅ FIXED (2026-08-24) — Hardware EQ (GitHub issue #2): write path repaired in kernel r50
 >
