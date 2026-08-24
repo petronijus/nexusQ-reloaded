@@ -19,17 +19,41 @@
 #
 # speexdsp ships hand-written ARMv7 NEON assembly for the FLOAT inner product
 # (libspeexdsp/resample_neon.h, the `#else` branch of `#ifdef FIXED_POINT`),
-# processing 16 floats per iteration through q-registers. That is exactly the
-# path PA's `speex-float-1` takes. Same math, vectorised: no quality trade-off,
-# and it speeds up REAL playback too — Spotify is 44.1 kHz and hits this
-# resampler on every track.
+# processing 16 floats per iteration through q-registers.
 #
-# NOT the alternative fixes, both rejected on measurement:
-#   - `resample-method=speex-fixed-1` would be a REGRESSION here: in a float
-#     build `speex_resampler_process_int` converts int16->float internally and
-#     scalar, instead of letting libpulsecommon's NEON pa_sconv do it.
-#   - Lowering resampler quality (`speex-float-0`) is global, so it would degrade
-#     Spotify's 44.1 -> 48 conversion on real music to save CPU on silence.
+# MEASURED on-device with `scripts/diag/bench-speex-resampler.py`, which drives
+# both libraries directly through ctypes at a fixed ratio AND PINS THE CPU
+# FREQUENCY. Both controls are essential:
+#   * In-situ measurement inside PA is useless — module-loopback's rate controller
+#     wanders between exactly 48000 and ~48003 Hz, and those two ratios take
+#     different code paths, so two samples minutes apart measure different work.
+#   * Unpinned, the benchmark drags the clock up and the die throttles, so
+#     ns/frame depends on which OPP the sample landed on. Three unpinned runs of
+#     the SAME comparison reported 0.75x, 0.95x and 1.26x — one of them briefly
+#     convinced me this build was a regression. Pinned at 350 MHz, repeat runs
+#     agree to ~1.5 %.
+#
+#   ratio                        Alpine r2   this build   speed-up
+#   48000 -> 48003 (USB drift)     2657 ns     1898 ns     1.40x
+#   48000 -> 48000 (1:1)           1368 ns      478 ns     2.86x
+#   44100 -> 48000 (Spotify)       2820 ns     2105 ns     1.34x
+#
+# Faster in every ratio that occurs on this box. The spread is explained by which
+# inner loop speex picks from the ratio's DENOMINATOR: 1/1 and 147/160 use
+# `resampler_basic_direct_single`, which the NEON assembly accelerates outright;
+# the drift ratio 16000/16001 needs far too many filter phases for that table and
+# falls to the INTERPOLATE path, which has no NEON version — there the win comes
+# from the `-O3 -march=armv7-a` that `--enable-neon` also applies.
+#
+# ⚠️ This is a real win but it does NOT solve the ~25 % of a core the box spends
+# on SILENCE. A 1.4x cheaper resampler still resamples silence forever. That
+# needs the resampling to stop happening at all (PLAN.md Step 6).
+#
+# Tried and REJECTED (r101): NEON via `CFLAGS=-mfpu=neon` WITHOUT `--enable-neon`,
+# on the theory that the latter's forced `-O3 -march=armv7-a` was hurting. The
+# opposite is true — measured pinned, r101 is 0.99x / 2.15x / 0.98x against
+# Alpine, i.e. no better than stock except at 1:1. The -O3 is carrying the
+# interpolate path. Keep `--enable-neon`.
 #
 # ⚠️ THIS IS A VERSION-PINNED OVERRIDE. apk picks the highest version across
 # repos, so `pkgrel` is deliberately far above Alpine's (theirs: 1.2.1-r2) to win

@@ -99,7 +99,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > track drift between snd-aloop and the amp. `resample-method = auto` →
 > `speex-float-1`.
 >
-> ### Step 2b — the resampler runs SCALAR on a NEON CPU ✅ IMPLEMENTED 2026-08-24, awaiting build
+> ### Step 2b — resampler NEON build ✅ DONE 2026-08-24 — shipped, 1.34–2.86x, but NOT the answer
 > Confirmed two independent ways, not inferred:
 > - ELF attributes of `libspeexdsp.so.1.5.2`: `Tag_FP_arch: VFPv3-D16` and
 >   **no `Tag_Advanced_SIMD_arch` tag at all**.
@@ -139,10 +139,34 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > `pkgver` matches — an upstream `pkgver` bump makes Alpine's win again and we
 > silently lose NEON.** Re-base the aport on any upstream bump.
 >
-> **Still to do:** measure it. Re-run `perf record` on the sink thread after the
-> new package is on the device and compare against the 58.86 % / 664 cycles-per-
-> sample baseline. Expect 2–3× on the resampler; anything less means the NEON
-> inner product is not being reached and the win is elsewhere.
+> **Measured and deployed** (`speexdsp-1.2.1-r100` live on the device, published):
+>
+> | ratio | Alpine r2 | ours | speed-up |
+> |---|---|---|---|
+> | 48000 → 48003 (USB drift) | 2657 ns | 1898 ns | **1.40×** |
+> | 48000 → 48000 (1:1) | 1368 ns | 478 ns | **2.86×** |
+> | 44100 → 48000 (Spotify) | 2820 ns | 2105 ns | **1.34×** |
+>
+> Faster in every ratio that occurs here. But **this does not solve the problem
+> Step 6 exists for** — a 1.4× cheaper resampler still resamples silence forever.
+> Treat it as a win for real playback (every Spotify track) that happens to shave
+> the idle case too.
+>
+> **Two measurement traps this burned, both now fixed in the tooling:**
+> 1. **Never measure a resampler change in situ.** `module-loopback`'s rate
+>    controller wanders between exactly 48000 and ~48003 Hz, and those ratios take
+>    different code paths — so two PA samples minutes apart compare different
+>    workloads. Use `scripts/diag/bench-speex-resampler.py`.
+> 2. **Pin the CPU frequency, or the governor invents your result.** Three
+>    unpinned runs of the same comparison gave 0.75×, 0.95× and 1.26× — the first
+>    briefly "proved" the NEON build was a regression, and that near-wrong
+>    conclusion nearly got the package reverted. Pinned at 350 MHz, repeats agree
+>    to ~1.5 %. The tool now pins and restores automatically.
+>
+> Rejected on the same rig: **r101** (NEON via `CFLAGS` without `--enable-neon`) —
+> 0.99× / 2.15× / 0.98×, i.e. no better than stock except at 1:1. `--enable-neon`'s
+> `-O3 -march=armv7-a` is what carries the non-NEON interpolate path. Deleted from
+> the build volumes so a later publish cannot pick it up as "newest".
 >
 > ⛔ **Do NOT lower the resampler quality** (`speex-float-0`). `resample-method`
 > is global, so it would degrade Spotify's 44.1 → 48 conversion — audible on real
@@ -171,7 +195,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (of which two thirds is nexusqd's socket chatter with PA, not audio). Gates the
 > LED render tap on silence instead of on "a sink-input exists".
 >
-> ### Step 6 — stop computing silence at all ⬜ ← the real prize
+> ### Step 6 — stop computing silence at all ⬜ ← NOW THE ONLY REAL FIX LEFT
 > Detect that the UAC2 stream is digital silence and cork or tear down the
 > loopback, so the loaded `module-suspend-on-idle` can finally suspend the sink
 > **and the amp powers down**. Worth ~20 % of a core plus the amp's own draw, and
@@ -187,8 +211,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > whether it plateaus or keeps climbing. Do not act before there is data.
 >
 > ### Already queued, unrelated to PulseAudio (so it is not lost)
-> - **device r81** (`down_threshold=60`) — live on the device, **not in a built
->   image**; needs a rootfs build.
+> - **device r81** — BUILT and PUBLISHED, but **not installed on the device**:
+>   `apk add --upgrade device-google-steelhead` drags `linux-google-steelhead`
+>   r48 → r49 with it (apk v3 upgrades an explicitly-added package's deps), and a
+>   kernel must never be applied by apk — it deletes the running kernel's
+>   `/lib/modules`. Install it in the SAME session as the kernel OTA.
+>   ⚠️ Until then `down_threshold=60` is **live-only and fragile**: it is a
+>   governor tunable, and *any* governor switch resets it to the default 20. That
+>   already happened once during benchmarking. A reboot loses it too.
 > - **kernel r49 + nexusq-control r31** — hardware EQ, built, undeployed.
 > - **app 1.14.0+35** — EQ card, built, **not released** (needs Petr's approval).
 

@@ -6,6 +6,58 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — speexdsp rebuilt with NEON: 1.34–2.86× faster resampling (2026-08-24, `speexdsp` **1.2.1-r100**, published + live)
+- `perf` put **58.86 %** of PulseAudio's sink thread inside `libspeexdsp`. Alpine's
+  armv7 build is **scalar** — `Tag_FP_arch: VFPv3-D16`, no `Tag_Advanced_SIMD_arch`,
+  0 vector q-register f32 instructions — which is correct of Alpine (armv7 must run
+  on parts without NEON) but leaves the OMAP4460's NEON unused. New
+  `pmos/speexdsp/` overlay rebuilds it with `--enable-neon`: **NEONv1, 26 vector
+  instructions**.
+
+  | ratio | Alpine r2 | ours r100 | speed-up |
+  |---|---|---|---|
+  | 48000 → 48003 (USB drift) | 2657 ns | 1898 ns | **1.40×** |
+  | 48000 → 48000 (1:1) | 1368 ns | 478 ns | **2.86×** |
+  | 44100 → 48000 (Spotify) | 2820 ns | 2105 ns | **1.34×** |
+
+- ⚠️ **This does NOT fix the ~25 % of a core spent on silence.** A 1.4× cheaper
+  resampler still resamples silence forever; that needs the resampling to stop
+  (PLAN.md Step 6). Shipped because 1.34× on every Spotify track stands on its own.
+- Two build gates make a silently-scalar rebuild impossible: `#define USE_NEON` in
+  `config.h`, and `Tag_Advanced_SIMD_arch` on the linked `.so`. A **Phase 10 SHIP
+  CHECK** reports whether the rootfs got our `-r100` or fell back to Alpine's `-r2`.
+- ⚠️ `pkgrel=100` is a version pin so apk prefers ours. It holds only while `pkgver`
+  matches — an upstream bump silently returns the scalar build.
+
+### Added — `scripts/diag/bench-speex-resampler.py`, and two measurement traps it exists to close
+- **The governor invents benchmark results.** Three *unpinned* runs of the identical
+  library comparison reported **0.75×, 0.95× and 1.26×** — the first briefly
+  "proved" the NEON build was a regression and nearly got it reverted. The
+  benchmark drags the clock up, the die throttles, and ns/op then depends on which
+  OPP the sample landed on. Pinned at 350 MHz, repeats agree to **~1.5 %**.
+- **A resampler cannot be measured in situ.** `module-loopback`'s rate controller
+  wanders between exactly 48000 and ~48003 Hz, and speex picks a different inner
+  loop from the ratio's *denominator* (1/1 and 147/160 → the NEON-accelerated
+  direct path; 16000/16001 → the interpolate path, which has no NEON version). Two
+  PA samples minutes apart therefore compare different workloads.
+- The tool pins the governor and restores it **together with the `conservative`
+  tunables** — switching governor resets them, which silently reverted a measured
+  `down_threshold` 60 → 20 mid-session.
+- Rejected on the same rig: **r101** (NEON via `CFLAGS` without `--enable-neon`) —
+  0.99× / 2.15× / 0.98×, no better than stock except at 1:1. `--enable-neon`'s
+  `-O3 -march=armv7-a` is what carries the non-NEON interpolate path. Deleted from
+  the build volumes so a later publish cannot pick it up as "newest".
+
+### Deployed (2026-08-24) — `speexdsp` r100, `nexusqd` r14, `nexusq-control` r31
+- Installed with `apk add --upgrade <names>`, kernel untouched at r48, `world`
+  entries left as plain names.
+- ⚠️ **`device-google-steelhead` r81 is published but NOT installed**: adding it
+  drags `linux-google-steelhead` r48 → r49 (apk v3 upgrades an explicitly-added
+  package's dependencies), and apk must never apply a kernel — it deletes the
+  running kernel's `/lib/modules`. It goes on in the same session as the kernel OTA.
+  Until then `down_threshold=60` is live-only and any governor switch resets it.
+
+
 ### Added — `perf` in the image, and an audit that proves nothing else is live-only (2026-08-24, `device-google-steelhead` **r81**)
 - Profiling settled the PulseAudio question in one shot, so `perf` belongs in the
   image rather than in whoever's ssh session. Added to `depends` next to the
