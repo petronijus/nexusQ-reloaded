@@ -119,9 +119,12 @@ class _RecordingClient implements NexusQClient {
 /// this host had a scroll view with nothing to scroll — it never entered the
 /// arena, so the drag test passed while dragging was broken in the real app.
 /// The filler below makes the competition real.
+final _scroll = ScrollController();
+
 Widget _host(NexusQClient client) => MaterialApp(
       home: Scaffold(
         body: SingleChildScrollView(
+          controller: _scroll,
           child: SizedBox(
             width: 380,
             child: Column(children: [
@@ -134,6 +137,27 @@ Widget _host(NexusQClient client) => MaterialApp(
     );
 
 void main() {
+  setUp(() {
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  });
+
+  testWidgets('dragging outside the curve still scrolls the page',
+      (tester) async {
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    // The curve may not swallow the whole page: below it is filler, and a drag
+    // there must still scroll or the EQ has made the screen unusable.
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.dragFrom(
+        Offset(curve.center.dx, curve.bottom + 300), const Offset(0, -120));
+    await tester.pumpAndSettle();
+
+    expect(_scroll.offset, greaterThan(0));
+    expect(client.calls.where((c) => c.$1 == 'setEq'), isEmpty);
+  });
+
   testWidgets('draws the curve and the presets once loaded', (tester) async {
     final client = MockClient();
     await tester.pumpWidget(_host(client));
@@ -153,9 +177,16 @@ void main() {
     await tester.pumpAndSettle();
 
     final curve = tester.getRect(find.byType(EqCurve));
+    final before = _scroll.offset;
     // Band 3 (900 Hz) sits near the middle of a log 20 Hz..20 kHz axis.
     await tester.dragFrom(curve.center, const Offset(0, -30));
     await tester.pumpAndSettle();
+
+    // THE assertion this file was missing: dragging a handle must not also
+    // scroll the page. The first fix made the curve respond while the scroll
+    // kept running underneath, and a test that only checked setEq was happy.
+    expect(_scroll.offset, before,
+        reason: 'the page scrolled while a handle was dragged');
 
     final sets = client.calls.where((c) => c.$1 == 'setEq').toList();
     expect(sets, isNotEmpty);

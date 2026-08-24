@@ -17,11 +17,22 @@ import '../theme/nexusq_theme.dart';
 /// `onChanged` fires continuously so the curve tracks the finger; `onCommit`
 /// fires once on release and is what should reach the device.
 ///
-/// The card lives inside a scrolling page, so a plain GestureDetector loses:
-/// the enclosing ListView claims every vertical drag and the handle never
-/// moves — the page just scrolls under your finger. `_EagerPanRecognizer`
-/// takes the gesture instead of yielding it. Scrolling past the EQ still works
-/// by dragging anywhere outside the curve, which is how every other EQ behaves.
+/// Winning the gesture from the enclosing scroll view took two attempts, so the
+/// reasoning is written down.
+///
+/// A `pan` recognizer LOSES to a ListView: pan accepts only after `kPanSlop`
+/// (36 px) while the scrollable's vertical drag accepts after `kTouchSlop`
+/// (18 px), so the scroll gets there first and wins fairly. Forcing the pan to
+/// accept anyway (overriding `rejectGesture`) does not fix it — the arena has
+/// already awarded the gesture to the scrollable, so BOTH run and the page
+/// scrolls while the handle moves.
+///
+/// The fix is to compete on equal terms: a vertical drag recognizer uses the
+/// same slop as the scrollable, and pointer events reach the innermost hit-test
+/// entry first, so this one accepts first and the scrollable is rejected
+/// properly. A horizontal recognizer sits alongside it for sideways retuning,
+/// which nothing outside competes for. Both feed the same handler and use
+/// `localPosition`, which is a full 2-D point regardless of which axis won.
 class EqCurve extends StatefulWidget {
   const EqCurve({
     super.key,
@@ -91,40 +102,55 @@ class _EqCurveState extends State<EqCurve> {
     return LayoutBuilder(builder: (context, c) {
       final size = Size(c.maxWidth, widget.height);
       final enabled = widget.enabled;
+
+      void start(DragStartDetails d) {
+        final i = _nearest(d.localPosition, size);
+        if (i < 0) return;
+        _dragging = i;
+        widget.onSelect(i);
+      }
+
+      void update(DragUpdateDetails d) {
+        if (_dragging < 0) return;
+        widget.onChanged(
+          _dragging,
+          _freqOf(d.localPosition.dx, size.width),
+          _dbOf(d.localPosition.dy, size.height),
+        );
+      }
+
+      void end(DragEndDetails d) {
+        if (_dragging < 0) return;
+        _dragging = -1;
+        widget.onCommit();
+      }
+
       return RawGestureDetector(
         behavior: HitTestBehavior.opaque,
         gestures: {
-          _EagerPanRecognizer:
-              GestureRecognizerFactoryWithHandlers<_EagerPanRecognizer>(
-            () => _EagerPanRecognizer(debugOwner: this),
+          VerticalDragGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
+            () => VerticalDragGestureRecognizer(debugOwner: this),
             (r) {
-              r.onStart = !enabled
-                  ? null
-                  : (d) {
-                      final i = _nearest(d.localPosition, size);
-                      if (i < 0) return;
-                      _dragging = i;
-                      widget.onSelect(i);
-                    };
-              r.onUpdate = !enabled
-                  ? null
-                  : (d) {
-                      if (_dragging < 0) return;
-                      widget.onChanged(
-                        _dragging,
-                        _freqOf(d.localPosition.dx, size.width),
-                        _dbOf(d.localPosition.dy, size.height),
-                      );
-                    };
-              r.onEnd = !enabled
-                  ? null
-                  : (_) {
-                      if (_dragging < 0) return;
-                      _dragging = -1;
-                      widget.onCommit();
-                    };
-              // A tap without a drag still selects a band.
-              r.onDown = !enabled
+              r.onStart = enabled ? start : null;
+              r.onUpdate = enabled ? update : null;
+              r.onEnd = enabled ? end : null;
+            },
+          ),
+          HorizontalDragGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<HorizontalDragGestureRecognizer>(
+            () => HorizontalDragGestureRecognizer(debugOwner: this),
+            (r) {
+              r.onStart = enabled ? start : null;
+              r.onUpdate = enabled ? update : null;
+              r.onEnd = enabled ? end : null;
+            },
+          ),
+          TapGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+            () => TapGestureRecognizer(debugOwner: this),
+            (r) {
+              r.onTapDown = !enabled
                   ? null
                   : (d) {
                       final i = _nearest(d.localPosition, size);
@@ -265,19 +291,4 @@ class _EqPainter extends CustomPainter {
       old.enabled != enabled ||
       old.state.preampDb != state.preampDb ||
       !identical(old.state.bands, state.bands);
-}
-
-/// A pan recognizer that does not yield to an enclosing scrollable.
-///
-/// Flutter's gesture arena hands a vertical drag to the nearest scrollable, so
-/// inside a ListView a normal pan on this curve never fires — the page scrolls
-/// instead and the handle sits still. Accepting instead of rejecting claims the
-/// gesture for the curve. The cost is that a drag STARTING on the curve cannot
-/// scroll the page; that is the right trade for a purpose-built control, and it
-/// is what EQ curves elsewhere do.
-class _EagerPanRecognizer extends PanGestureRecognizer {
-  _EagerPanRecognizer({super.debugOwner});
-
-  @override
-  void rejectGesture(int pointer) => acceptGesture(pointer);
 }
