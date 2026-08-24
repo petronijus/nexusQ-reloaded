@@ -32,9 +32,15 @@ KEY=pmos@local-6a42e957
 # upgrades with --ignore linux-google-steelhead, and the device track lists its
 # packages explicitly). nq-kernel-ota fetches this apk, unpacks it, and writes a
 # boot image to the trial slot. docs/2026-08-18-kernel-ota-phase2.md
+# speexdsp is NOT one of ours by name — it is a version-pinned OVERRIDE of
+# Alpine's package, rebuilt with NEON (pmos/speexdsp/APKBUILD). It must be
+# published like any other, or a device that OTA-upgrades will keep Alpine's
+# SCALAR build and silently lose the resampler win. Same trap as
+# [nexusq-rootfs-ab missing here bit device r80].
 OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
               nexusq-kernel-ota nexusq-rootfs-ab linux-google-steelhead \
-              device-google-steelhead device-google-steelhead-nonfree-firmware)
+              device-google-steelhead device-google-steelhead-nonfree-firmware \
+              speexdsp)
 
 STAGE="$(mktemp -d)"
 trap 'sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT

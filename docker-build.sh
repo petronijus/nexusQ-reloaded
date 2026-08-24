@@ -28,7 +28,8 @@ for apkbuild in \
     "$SRC/pmos/nexusq-btagent/APKBUILD" \
     "$SRC/pmos/nexusq-mqtt/APKBUILD" \
     "$SRC/pmos/nexusq-kernel-ota/APKBUILD" \
-    "$SRC/pmos/nexusq-rootfs-ab/APKBUILD"; do
+    "$SRC/pmos/nexusq-rootfs-ab/APKBUILD" \
+    "$SRC/pmos/speexdsp/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -326,6 +327,16 @@ cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt.service"       "$NEXUSQMQTT_DIR/"
 cp "$SRC/userspace/nexusq-mqtt/96-nexusq-mqtt.preset"     "$NEXUSQMQTT_DIR/"
 echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
 
+# speexdsp: an OVERRIDE of Alpine's package, rebuilt with NEON. Not one of ours in
+# the usual sense — no payload files, just the APKBUILD. It exists because
+# Alpine's armv7 speexdsp is SCALAR (it must run on ARMv7 parts without NEON) and
+# PulseAudio's resampler is 58.86 % of the CPU the Q spends on silence.
+# See pmos/speexdsp/APKBUILD for the measurements and the version-pin warning.
+SPEEXDSP_DIR="$PMAPORTS/main/speexdsp"
+mkdir -p "$SPEEXDSP_DIR"
+cp "$SRC/pmos/speexdsp/APKBUILD"                          "$SPEEXDSP_DIR/"
+echo "  Installed: speexdsp (NEON override -> main/speexdsp)"
+
 NEXUSQKOTA_DIR="$PMAPORTS/main/nexusq-kernel-ota"
 mkdir -p "$NEXUSQKOTA_DIR"
 cp "$SRC/pmos/nexusq-kernel-ota/APKBUILD"                             "$NEXUSQKOTA_DIR/"
@@ -360,7 +371,7 @@ echo "  Installed: nexusq-rootfs-ab (aport + tools -> main/nexusq-rootfs-ab)"
 # whatever its provenance. To resurrect the override: git revert this commit.
 
 echo "  Converting line endings (CRLF -> LF)..."
-find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$NEXUSQKOTA_DIR" "$NEXUSQAB_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" -o -name "nq-slot" -o -name "nq-rootfs-ab" -o -name "nq-kernel-ota" \) -exec dos2unix -q {} +
+find "$PMAPORTS/device/testing/" "$NEXUSQD_DIR" "$NEXUSQCTL_DIR" "$NEXUSQSETUP_DIR" "$NEXUSQBTA_DIR" "$NEXUSQMQTT_DIR" "$NEXUSQKOTA_DIR" "$NEXUSQAB_DIR" "$SPEEXDSP_DIR" -type f \( -name "APKBUILD" -o -name "deviceinfo" -o -name "modules-initfs" -o -name "*.patch" -o -name "config-*" -o -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "*.service" -o -name "*.json" -o -name "*.preset" -o -name "nexusq-control" -o -name "nexusq-onevent" -o -name "nexusq-setupd" -o -name "nexusq-setup-needed" -o -name "nexusq-btagent" -o -name "nexusq-mqtt" -o -name "nq-slot" -o -name "nq-rootfs-ab" -o -name "nq-kernel-ota" \) -exec dos2unix -q {} +
 echo "  Done."
 
 echo ""
@@ -1090,6 +1101,40 @@ fi
 echo ""
 
 echo ""
+echo "=== Phase 7c6: Build speexdsp (NEON override of Alpine's scalar build) ==="
+set +e
+# MUST run before Phase 8: device-google-steelhead -> pulseaudio -> speexdsp, so
+# the device build would otherwise pull Alpine's binary and never build ours.
+# The APKBUILD self-gates on `#define USE_NEON` in config.h AND on
+# Tag_Advanced_SIMD_arch in the linked .so, so a silently-scalar rebuild fails
+# here rather than shipping.
+pmbootstrap --no-cross build speexdsp --arch armv7 --force 2>&1
+SPEEXDSP_RC=$?
+set -e
+echo "=== speexdsp build exit code: $SPEEXDSP_RC ==="
+if [ $SPEEXDSP_RC -eq 0 ]; then
+    # pkgrel-EXACT, same reason as nexusqd/nexusq-mqtt: never export a stale apk
+    # from the persistent work-volume repo.
+    _sdsp_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/speexdsp/APKBUILD" | head -1)
+    _sdsp_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/speexdsp/APKBUILD" | head -1)
+    SPEEXDSP_APK=$(find "$WORK/packages" -name "speexdsp-${_sdsp_pv}-r${_sdsp_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$SPEEXDSP_APK" ]; then
+        cp "$SPEEXDSP_APK" /tmp/output/ && echo "  Exported: $(basename "$SPEEXDSP_APK")"
+    else
+        echo "  WARNING: speexdsp apk built but not found under $WORK/packages"
+    fi
+else
+    echo "  ##############################################################"
+    echo "  # WARNING: speexdsp (NEON) FAILED TO BUILD."
+    echo "  # The image will silently fall back to Alpine's SCALAR build and"
+    echo "  # PulseAudio's resampler will cost ~3x what it should."
+    echo "  # This is a real regression, not a cosmetic one -- do not ship"
+    echo "  # without understanding why. See pmos/speexdsp/APKBUILD."
+    echo "  ##############################################################"
+    grep -n "ERROR\|error:\|FAILED\|USE_NEON\|Advanced_SIMD" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
 echo "=== Phase 8: Build all packages ==="
 echo "Running: pmbootstrap --no-cross build firmware-google-steelhead device-google-steelhead"
 # firmware-google-steelhead must be built EXPLICITLY. It is a SEPARATE aport that
@@ -1361,6 +1406,34 @@ print(f\"{p['start']} {p['size']} {ss}\")
             sync; sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
             exit 1
         fi
+        # SHIP CHECK: did our NEON speexdsp actually land, or did the rootfs
+        # silently take Alpine's scalar one? Checking the VERSION is enough and
+        # needs no readelf here: our -r100 can only exist if both NEON gates in
+        # pmos/speexdsp/APKBUILD passed at build time. Not fatal — unlike a
+        # missing libpython this yields a working image, just one where the
+        # resampler costs ~3x — but it must be impossible to miss in the log.
+        _ship_sdsp="$(sudo awk -v RS="" -v FS="\n" '
+            { pkg = ""; ver = ""
+              for (i = 1; i <= NF; i++) {
+                  if ($i == "P:speexdsp")            pkg = 1
+                  else if (substr($i, 1, 2) == "V:") ver = substr($i, 3)
+              }
+              if (pkg && ver) { print ver; exit } }' \
+            "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
+        case "${_ship_sdsp:-}" in
+            *-r100)
+                echo "  SHIP CHECK: speexdsp = $_ship_sdsp (our NEON build)." ;;
+            "")
+                echo "  SHIP CHECK: speexdsp not installed in the rootfs (?)." ;;
+            *)
+                echo "  ##########################################################"
+                echo "  # SHIP CHECK: speexdsp = $_ship_sdsp -- that is ALPINE'S"
+                echo "  # SCALAR build, not our NEON one. PulseAudio's resampler"
+                echo "  # will cost ~3x what it should. The image is usable but"
+                echo "  # this is a regression: see Phase 7c6 above for why the"
+                echo "  # NEON build did not win."
+                echo "  ##########################################################" ;;
+        esac
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"
         sudo python3 - "$RP_MNT/etc/shadow" <<'PYEOF'
 import sys

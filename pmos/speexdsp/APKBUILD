@@ -1,0 +1,110 @@
+# Maintainer: Petr Parkan Janda <petronijus@bastla.com>
+#
+# speexdsp, rebuilt with NEON — a straight override of Alpine's package.
+#
+# WHY (measured 2026-08-24, docs/2026-08-24-usb-audio-idle-cost.md):
+# with USB Audio enabled the Q burns ~25 % of a core on a stream of digital
+# silence. `perf record` on PulseAudio's sink thread put **58.86 % of it inside
+# libspeexdsp** — module-loopback resamples 48000 -> 48003 forever to track drift
+# between snd-aloop and the amp, at ~664 cycles per sample. For comparison
+# `alsaloop` moves the same 48 kHz stereo stream one hop for 23.
+#
+# The reason it is that expensive is that Alpine's build is SCALAR. Its
+# libspeexdsp.so.1.5.2 reports `Tag_FP_arch: VFPv3-D16` with **no
+# Tag_Advanced_SIMD_arch tag at all**, and the hot loop disassembles to scalar
+# s-register work (`vmov s14`, `vcvt.f32.u32`, `vmla.f32`). That is correct of
+# Alpine — the armv7 target must run on ARMv7 parts that have no NEON — but the
+# OMAP4460 does have NEON (`Features: ... neon vfpv3`), and we build our own
+# image, so we can use it.
+#
+# speexdsp ships hand-written ARMv7 NEON assembly for the FLOAT inner product
+# (libspeexdsp/resample_neon.h, the `#else` branch of `#ifdef FIXED_POINT`),
+# processing 16 floats per iteration through q-registers. That is exactly the
+# path PA's `speex-float-1` takes. Same math, vectorised: no quality trade-off,
+# and it speeds up REAL playback too — Spotify is 44.1 kHz and hits this
+# resampler on every track.
+#
+# NOT the alternative fixes, both rejected on measurement:
+#   - `resample-method=speex-fixed-1` would be a REGRESSION here: in a float
+#     build `speex_resampler_process_int` converts int16->float internally and
+#     scalar, instead of letting libpulsecommon's NEON pa_sconv do it.
+#   - Lowering resampler quality (`speex-float-0`) is global, so it would degrade
+#     Spotify's 44.1 -> 48 conversion on real music to save CPU on silence.
+#
+# ⚠️ THIS IS A VERSION-PINNED OVERRIDE. apk picks the highest version across
+# repos, so `pkgrel` is deliberately far above Alpine's (theirs: 1.2.1-r2) to win
+# on the device. That only holds while `pkgver` matches: **if Alpine moves to a
+# newer pkgver, their package wins again and we SILENTLY lose NEON.** Re-base
+# this aport on any upstream pkgver bump. The `Tag_Advanced_SIMD_arch` gate in
+# build() below is what stops a silently-scalar rebuild shipping.
+pkgname=speexdsp
+pkgver=1.2.1
+# Alpine ships -r2. Kept far above it on purpose; see the warning above.
+pkgrel=100
+pkgdesc="A voice compression format (DSP) — NEON build for the Nexus Q"
+url="https://www.speex.org/"
+# NEON is forced into CFLAGS below, so this package is NOT portable armv7.
+arch="armv7"
+options="!check"  # No test suite.
+license="BSD-3-Clause"
+makedepends="autoconf automake libtool"
+subpackages="$pkgname-dev $pkgname-doc"
+replaces="libspeex"
+source="https://gitlab.xiph.org/xiph/speexdsp/-/archive/SpeexDSP-$pkgver/speexdsp-SpeexDSP-$pkgver.tar.bz2"
+builddir="$srcdir/speexdsp-SpeexDSP-$pkgver"
+
+prepare() {
+	default_prepare
+	autoreconf -vif
+}
+
+build() {
+	# --enable-neon both defines USE_NEON and appends
+	# `-O3 -march=armv7-a -mfpu=neon` for arm hosts (configure.ac AC_ARG_ENABLE).
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--mandir=/usr/share/man \
+		--infodir=/usr/share/info \
+		--disable-static \
+		--enable-neon
+
+	# Gate 1: configure must actually have taken the NEON branch. Without this a
+	# toolchain change could quietly fall back to has_neon=no and we would ship a
+	# scalar library again — the exact bug this package exists to fix, and one
+	# that is invisible from the outside.
+	grep -q '^#define USE_NEON' config.h || {
+		echo "speexdsp: USE_NEON not defined after --enable-neon" >&2
+		echo "---- config.h ----" >&2; grep -i neon config.h >&2 || true
+		return 1
+	}
+
+	make
+
+	# Gate 2: the linked library must advertise Advanced SIMD. This is the exact
+	# check that diagnosed Alpine's build (readelf -A showed VFPv3-D16 and no
+	# Tag_Advanced_SIMD_arch), so it is the check that proves we fixed it.
+	_so=$(find . -name 'libspeexdsp.so.*.*.*' | head -1)
+	[ -n "$_so" ] || { echo "speexdsp: built library not found" >&2; return 1; }
+	command -v readelf >/dev/null || {
+		echo "speexdsp: readelf missing — cannot prove the NEON gate, refusing" >&2
+		return 1
+	}
+	readelf -A "$_so" | grep -q 'Tag_Advanced_SIMD_arch' || {
+		echo "speexdsp: $_so has NO Tag_Advanced_SIMD_arch — built scalar!" >&2
+		readelf -A "$_so" >&2
+		return 1
+	}
+	echo "speexdsp: NEON confirmed in $_so"
+	readelf -A "$_so" | grep -E 'Tag_(FP_arch|Advanced_SIMD_arch)'
+}
+
+package() {
+	make -j1 DESTDIR="$pkgdir" install
+}
+
+sha512sums="
+5b82a87390976cfe1272c896a6a29b6b7eacd0b747adf707e7286b9c5612d486686e24bdb3112e8b6b044f413e7cb9b6a580d0222def87fbbad58c0be49335ba  speexdsp-SpeexDSP-1.2.1.tar.bz2
+"
