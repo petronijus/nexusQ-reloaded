@@ -39,14 +39,24 @@ LOOPLAT="${NQ_UAC2_LOOPLAT:-120}"        # module-loopback latency_msec (lip-syn
 
 pa() { pactl "$@" 2>/dev/null; }         # returns pactl stdout (module index on load)
 
-ALPID=""; MOD_SRC=""; MOD_LB=""
+ALPID=""; MOD_SRC=""; MOD_LB=""; SILPID=""; MOD_CLI=""
 
 # On stop: tear the PA hop down cleanly (loopback first, then its source) and stop
 # alsaloop. No suspend-sink to undo — we never suspended. KillMode=mixed keeps
 # these pactl children alive past the shell's SIGTERM.
 stop_all() {
+	# The silence watcher goes FIRST: on SIGTERM it resumes the source it may
+	# have suspended, and it must get that chance while the source still exists.
+	if [ -n "$SILPID" ]; then
+		kill "$SILPID" 2>/dev/null
+		i=0
+		while [ "$i" -lt 20 ] && kill -0 "$SILPID" 2>/dev/null; do
+			i=$((i + 1)); sleep 0.1
+		done
+	fi
 	[ -n "$MOD_LB" ]  && pa unload-module "$MOD_LB"  >/dev/null 2>&1
 	[ -n "$MOD_SRC" ] && pa unload-module "$MOD_SRC" >/dev/null 2>&1
+	[ -n "$MOD_CLI" ] && pa unload-module "$MOD_CLI" >/dev/null 2>&1
 	[ -n "$ALPID" ]   && kill "$ALPID" 2>/dev/null
 	exit 0
 }
@@ -115,13 +125,38 @@ if [ -n "$MOD_LB" ]; then
 	fi
 fi
 
-# Supervise alsaloop: if it drops on its own (host stop/start, xrun) restart just
-# it; the PA modules stay loaded (the aloop capture underruns harmlessly in the
-# gap). A real stop runs the trap above instead. `wait` is interruptible so SIGTERM
-# fires the trap promptly even mid-wait.
+# Idle power: with nothing playing, the host still streams and PulseAudio still
+# resamples, which measured 28.83 % of one core (PA alone 27.17 %) and kept the amp
+# powered. nq-uac2-silence watches for digital silence and suspends the PA SOURCE
+# — never the sink — bringing that to 0.42 % with a 0 ms return. See that script
+# for why the sink must not be touched. Started last: it needs `usb_in` to exist.
+# The watcher resumes the source through PA's CLI socket rather than by forking
+# `pactl` (70 ms on this CPU, right inside the window where audio is lost). The
+# socket only exists while this module is loaded, so it is ours to load and to
+# unload; the watcher falls back to pactl if it is missing.
+MOD_CLI=$(pa load-module module-cli-protocol-unix)
+
+start_silence() {
+	nq-uac2-silence &
+	SILPID=$!
+}
+start_silence
+
+# Supervise both children: if alsaloop drops on its own (host stop/start, xrun)
+# restart just it — the PA modules stay loaded and the aloop capture underruns
+# harmlessly in the gap — and likewise re-spawn the watcher if it ever dies, which
+# would otherwise silently cost the idle power this service exists to save. A real
+# stop runs the trap above instead; the `wait` on a sleep is interruptible, so
+# SIGTERM still fires the trap promptly.
 while : ; do
-	wait "$ALPID"
-	ALPID=""
-	sleep 2
-	start_alsaloop
+	sleep 3 &
+	wait $!
+	if [ -n "$ALPID" ] && ! kill -0 "$ALPID" 2>/dev/null; then
+		ALPID=""
+		start_alsaloop
+	fi
+	if [ -n "$SILPID" ] && ! kill -0 "$SILPID" 2>/dev/null; then
+		echo "nexusq-uac2-in: silence watcher died, restarting it" >&2
+		start_silence
+	fi
 done

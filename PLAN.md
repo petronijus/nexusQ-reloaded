@@ -311,7 +311,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > (of which two thirds is nexusqd's socket chatter with PA, not audio). Gates the
 > LED render tap on silence instead of on "a sink-input exists".
 >
-> ### Step 6 — stop computing silence at all ⬜ ← NOW THE ONLY REAL FIX LEFT
+> ### Step 6 — stop computing silence at all ✅ SHIPPED 2026-08-25 (device r82)
 > Detect that the UAC2 stream carries nothing worth playing and cork or tear down
 > the loopback, so the loaded `module-suspend-on-idle` can finally suspend the sink
 > **and the amp powers down**. Worth ~20 % of a core plus the amp's own draw, and
@@ -397,6 +397,61 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > Not yet measured: whether the amp's own power draw actually falls — the sink
 > suspends, but the TAS5713 `Speaker` mixer still read `[on]`, so the analogue
 > stage may still be biased. Check the codec's bias level, not just the PCM state.
+>
+> ### Step 6 — what shipped, and what it measured
+>
+> `nq-uac2-silence`, spawned and reaped by `nexusq-uac2-in` (device **r82**).
+> Silence for 10 s → `suspend-source usb_in`; first non-zero frame → resume.
+>
+> | | before | after |
+> |---|---|---|
+> | idle CPU | **28.83 %** of a core | **3.13 %** |
+> | relative dynamic power | 1.26× | **1.09×** |
+> | PulseAudio alone | 27.17 % | 0.11 % |
+> | wake turnaround | — | **1 ms** |
+>
+> **Never the sink, only the source.** `suspend-sink` is a sticky *user* suspend:
+> with it set, a `paplay` stream created a sink-input and the sink still read
+> SUSPENDED — the audio went nowhere. Measured, so Spotify/AirPlay/Roon would have
+> been silently broken. Suspending only the source lets `module-suspend-on-idle`
+> take the sink down by itself, and any other player brings it straight back
+> (verified: SUSPENDED → IDLE the moment a second stream appeared).
+>
+> **The wake latency was 135 ms and is now 1 ms**, and neither number came from
+> where it looked. Shortening the ALSA period changed nothing — 512, 1024 and 2048
+> frames all measured the same. The 135 ms was **65 ms of waiting for a polite
+> SIGTERM to `arecord`** (which must let go of the aloop before PA can reopen it)
+> plus **70 ms of forking `pactl`** — the same `pactl` that round-trips in 0 ms
+> from a shell, because the cost is forking a Python interpreter on an OMAP4 at
+> 350 MHz, not PulseAudio. Fixed with SIGKILL (the readers are pure data pumps)
+> and a persistent connection to PA's CLI socket, which `nexusq-uac2-in` now loads
+> and owns. Instrument before optimising: the period was the obvious suspect and
+> was innocent three times over.
+>
+> **Verified**: a full sleep → wake → sleep cycle with a 14 s-silence-then-tone
+> feed into the same aloop the watcher reads, logged with timings; the real
+> service sleeping on the real chain; one `alsaloop`, one source module, one
+> loopback module after repeated restarts (no stacking, no leaks).
+>
+> ⬜ **The remaining prize is nexusqd's tap, and it is worth 1.60 % plus the amp's
+> own draw.** With the source asleep the sink sits at **IDLE, not SUSPENDED**,
+> because nexusqd's LED visualiser holds an uncorked source-output on the sink
+> monitor — its own comment says so (`nexusqd.c:45`). Its gate gives up the tap
+> when no sink-input exists, but `module-loopback`'s input persists through our
+> sleep, so the tap never stops and the amplifier never powers down. r14 **is**
+> installed (the note above saying Step 5 was undeployed was stale). Two ways
+> forward: extend nexusqd's gate to drop the tap on a suspended source, or have
+> the watcher unload/reload `module-loopback` over the now-fast CLI socket —
+> the second is cheap to do but risks `module-stream-restore` bringing the
+> reloaded stream back muted, which is why it was not done blind at 01:30.
+>
+> ⚠️ **One link is untested on the real source.** The wake path was proven by
+> feeding the aloop directly, because the Xiaomi box refuses adb (`device
+> unauthorized` — it wants a dialog accepted on the TV) and it is the only UAC2
+> host we have. The untested part is only "alsaloop delivers non-zero when the
+> box plays", which is what it does all day; the watcher's own code path is
+> identical either way. Still, confirm with 10 seconds of real playback. If USB
+> audio ever fails to wake: `systemctl --user restart nexusq-uac2-in`.
 >
 > ### Step 7 — the latency creep, on a long window ⬜
 > `module-loopback` logged `Source minimum latency increased to 16 → 26 → 36 ms`

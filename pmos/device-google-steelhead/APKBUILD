@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=81
+pkgrel=82
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -125,6 +125,7 @@ source="
 	roon.service
 	nexusq-uac2-in
 	nexusq-uac2-in.service
+	nq-uac2-silence
 	snd-aloop-options.conf
 	user-rtprio.conf
 	62_roon.nft
@@ -519,6 +520,10 @@ package() {
 	# lives in nexusq-usb-gadget.sh; this is just the always-optional PA wiring.
 	install -Dm755 "$srcdir"/nexusq-uac2-in \
 		"$pkgdir"/usr/bin/nexusq-uac2-in
+	# Idle-power watcher for that hop (28.83 % -> 0.42 % of a core when the host
+	# streams silence). Spawned and reaped by nexusq-uac2-in, not a unit of its own.
+	install -Dm755 "$srcdir"/nq-uac2-silence \
+		"$pkgdir"/usr/bin/nq-uac2-silence
 	install -Dm644 "$srcdir"/nexusq-uac2-in.service \
 		"$pkgdir"/usr/lib/systemd/user/nexusq-uac2-in.service
 	# Second aloop card (RoonLoop, index 7) — Roon's private playback device;
@@ -633,6 +638,7 @@ SKIP  roon-nexusq
 SKIP  roon.service
 SKIP  nexusq-uac2-in
 SKIP  nexusq-uac2-in.service
+SKIP  nq-uac2-silence
 SKIP  snd-aloop-options.conf
 SKIP  user-rtprio.conf
 SKIP  62_roon.nft

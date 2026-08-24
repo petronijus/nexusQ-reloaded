@@ -6,6 +6,44 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — USB audio stops computing silence (2026-08-25, device **r82**)
+- The UAC2 host never closes the stream: the gadget capture advances for the whole
+  uptime whether anything plays or not. So PulseAudio resampled 48000 → ~48003
+  forever, the amp sink never suspended, and **28.83 % of a core** went on silence
+  — of which PulseAudio alone was 27.17 %.
+- `nq-uac2-silence` watches for digital silence and suspends the PA **source**.
+  Idle → **3.13 %** of a core, relative dynamic power 1.26× → 1.09×, and the wake
+  turnaround is **1 ms**.
+- **Idle really is exact digital silence** — 960 000 samples captured with the box
+  idle, every one 0 — so the test is for zero with **no threshold**, and can never
+  mistake a quiet passage of real music for silence. (An earlier capture that
+  suggested otherwise was taken while Petr was playing something: it measured his
+  music. A measurement taken in the wrong state answers the wrong question.)
+- ⛔ **The sink is never suspended, only the source.** `suspend-sink` is a sticky
+  *user* suspend: with it set, a second player's stream created a sink-input and
+  the sink still read SUSPENDED — the audio went nowhere. Suspending the source
+  alone lets `module-suspend-on-idle` take the sink down, and any other player
+  brings it straight back. Both directions measured, not assumed.
+- **The wake latency was 135 ms; it is now 1 ms, and the obvious suspect was
+  innocent.** Shortening the ALSA period changed nothing at 512, 1024 or 2048
+  frames. The real cost was 65 ms waiting for a polite SIGTERM to `arecord` — it
+  must release the aloop before PulseAudio can reopen it — plus 70 ms forking
+  `pactl`, the same `pactl` that round-trips in 0 ms from a shell. Forking a
+  Python interpreter on an OMAP4 at 350 MHz is the expensive part, not
+  PulseAudio. Fixed with SIGKILL and a persistent PA CLI socket.
+- Watching is asymmetric and so is the watcher: awake, PulseAudio owns
+  `hw:Loopback,1,0` (arecord there gets EBUSY) so it watches through `parec`;
+  asleep, PA has closed it, so it owns the aloop directly. A `parec` watcher
+  cannot do the asleep half at all — connecting to a suspended source resumes it.
+- **Known issue:** the sink settles at IDLE rather than SUSPENDED, so the
+  amplifier is not yet powered down. nexusqd's LED visualiser holds an uncorked
+  source-output on the sink monitor and its gate only releases when no sink-input
+  exists, which `module-loopback`'s outlives. Worth a further 1.60 % plus the
+  amp's own draw — see PLAN.md Step 6.
+- ⚠️ The wake path was proven by feeding the aloop a 14 s-silence-then-tone file
+  and logging the transitions; the Xiaomi box refuses adb, so "alsaloop delivers
+  non-zero when the box plays" is the one link confirmed only by inspection.
+
 ### Added — save your own EQ presets (2026-08-24, `nexusq-control` **r33**, app **1.16.2+46**)
 - Petr, after the parametric EQ landed: *"jeste misto toho flat ikonka resetu a pak
   tam moznost ulozit si co jsem si zrovna nakonfiguroval a pojmenovat a taky smazat.

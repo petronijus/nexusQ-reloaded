@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""nq-uac2-silence — put the USB-audio hop to sleep while the host sends silence.
+
+The Xiaomi box (and every UAC2 host we have seen) never closes the stream: the
+gadget capture advances for the whole uptime whether anything is playing or not.
+So PulseAudio resamples 48000 -> ~48003 forever, the tas5713 sink never suspends,
+and the amplifier stays powered. Measured 2026-08-25 on the device: 28.83 % of one
+core while nothing plays, of which PulseAudio alone is 27.17 %.
+
+Suspending the PA SOURCE drops that to 0.42 % and returns in 0 ms.
+
+  * Only the SOURCE is ever suspended -- NEVER the sink. `suspend-sink` is a
+    sticky user suspend that PulseAudio will not lift on its own: with the sink
+    forced down, a paplay/Spotify/AirPlay stream still creates a sink-input but
+    the sink stays SUSPENDED and the audio goes nowhere. Measured, not assumed.
+    Suspending only the source lets `module-suspend-on-idle` take the sink down
+    by itself, which means any other player brings it straight back.
+  * Idle really is EXACT digital silence -- 960 000 samples captured with the box
+    idle, every one 0. So this tests for zero, with no threshold, and therefore
+    can never mistake a quiet passage of real music for silence.
+
+Watching is asymmetric, and so is this program:
+
+  AWAKE   PulseAudio owns hw:Loopback,1,0 (arecord there gets EBUSY), so we watch
+          through PA itself with `parec` on the source. Going to sleep may be as
+          lazy as we like -- SLEEP_AFTER seconds of unbroken zeros.
+  ASLEEP  PA has closed the aloop, so we own hw:Loopback,1,0 directly. alsaloop
+          keeps feeding it (0.33 % of a core, deliberately left running), so the
+          first non-zero frame appears here within one short period and we wake.
+          Waking must be prompt: whatever is still in flight beyond the aloop
+          ring is lost, so the period is kept small.
+
+A `parec` watcher cannot do the asleep half: connecting a stream to a suspended
+source RESUMES it, which would undo the sleep on the spot.
+"""
+
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+SOURCE = os.environ.get("NQ_UAC2_SOURCE", "usb_in")
+RATE = int(os.environ.get("NQ_UAC2_RATE", "48000"))
+ALOOP = os.environ.get("NQ_UAC2_ALOOP", "Loopback")
+SUB = os.environ.get("NQ_UAC2_ALOOP_SUB", "0")
+
+# Long enough that a gap between tracks does not churn: waking is free, but each
+# cycle restarts two helper processes. Ten seconds clears any inter-track gap.
+SLEEP_AFTER = float(os.environ.get("NQ_UAC2_SLEEP_AFTER", "10"))
+
+# Asleep, this sets both the detection granularity and the cost of waiting: every
+# period is a wakeup in arecord AND in this process. 2048 frames = ~43 ms at
+# 48 kHz, inside the aloop ring (~80 ms) with room to spare.
+#
+# Shortening it does NOT buy responsiveness -- 512, 1024 and 2048 all measured the
+# same wake latency, because the latency was never the period. It was 65 ms of
+# waiting for a polite SIGTERM to arecord plus 70 ms of forking `pactl`; with
+# SIGKILL and the CLI socket the whole turnaround is 1 ms. So take the cheap
+# period: 512 frames cost 1.57 % of a core purely to wait.
+WAKE_FRAMES = int(os.environ.get("NQ_UAC2_WAKE_FRAMES", "2048"))
+AWAKE_CHUNK = 16384                        # bytes; ~85 ms of s16le stereo
+
+BYTES_PER_FRAME = 4                        # s16le stereo
+_zero_cache = {}
+
+
+def log(msg):
+    print(f"nq-uac2-silence: {msg}", file=sys.stderr, flush=True)
+
+
+def is_silent(buf):
+    """True when every sample in `buf` is exactly zero.
+
+    `bytes` comparison against a cached zero block is a memcmp -- at 48 kHz
+    stereo this is the difference between a rounding error and a real cost."""
+    z = _zero_cache.get(len(buf))
+    if z is None:
+        z = _zero_cache[len(buf)] = b"\0" * len(buf)
+    return buf == z
+
+
+class PaCli:
+    """A persistent line connection to PulseAudio's CLI socket.
+
+    `pactl` from a shell round-trips in ~0 ms, but the same call through
+    subprocess from here measured 70 ms — forking a Python interpreter on an
+    OMAP4 at 350 MHz is not cheap, and it lands squarely in the window where
+    audio is being dropped. Writing one line to an already-open socket costs
+    nothing. Falls back to `pactl` whenever the socket is unavailable, so a
+    device without module-cli-protocol-unix still works, just slower."""
+
+    @staticmethod
+    def _path():
+        """Beside the native socket, whichever session that is.
+
+        Deriving it from our own uid is wrong the moment anything runs this as
+        root with PULSE_SERVER pointed at the user session — which is exactly how
+        it gets tested. PULSE_SERVER is the authority when it is set."""
+        override = os.environ.get("NQ_UAC2_PA_CLI")
+        if override:
+            return override
+        server = os.environ.get("PULSE_SERVER", "")
+        if server.startswith("unix:"):
+            native = server[len("unix:"):].split(" ")[0]
+            if native:
+                return os.path.join(os.path.dirname(native), "cli")
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        return os.path.join(runtime, "pulse", "cli")
+
+    def __init__(self):
+        self.sock = None
+
+    def connect(self):
+        path = self._path()
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(path)
+            self.sock = s
+            log(f"using the PA CLI socket at {path}")
+            return True
+        except OSError as e:
+            log(f"no PA CLI socket at {path} ({e}); falling back to pactl (~70 ms/call)")
+            self.sock = None
+            return False
+
+    def send(self, line):
+        if self.sock is None:
+            return False
+        try:
+            self.sock.sendall((line + "\n").encode())
+            return True
+        except OSError as e:
+            log(f"PA CLI write failed ({e}); dropping back to pactl")
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+            return False
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+
+_cli = PaCli()
+
+
+def pactl(*args):
+    try:
+        return subprocess.run(("pactl",) + args, timeout=10,
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def suspend(on):
+    arg = "1" if on else "0"
+    if _cli.send(f"suspend-source {SOURCE} {arg}"):
+        return True
+    ok = pactl("suspend-source", SOURCE, arg)
+    if not ok:
+        log(f"pactl suspend-source {SOURCE} {arg} FAILED")
+    return ok
+
+
+def spawn(cmd):
+    try:
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except OSError as e:
+        log(f"cannot start {cmd[0]}: {e}")
+        return None
+
+
+def kill(proc):
+    """SIGKILL, deliberately. These children are pure data pumps with nothing to
+    flush, and a polite SIGTERM cost 65 ms of arecord tidying itself up — inside
+    the window where the first note is being lost, because PulseAudio cannot
+    reopen the aloop until arecord has let go of it."""
+    if not proc:
+        return
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except subprocess.SubprocessError:
+        pass
+    except OSError:
+        pass
+
+
+class Watcher:
+    def __init__(self):
+        self.proc = None
+        self.asleep = False
+        self.stop = False
+
+    # -- awake: watch through PulseAudio ---------------------------------
+    def start_awake(self):
+        self.proc = spawn(["parec", f"--device={SOURCE}", "--format=s16le",
+                           f"--rate={RATE}", "--channels=2", "--raw"])
+        return self.proc is not None
+
+    # -- asleep: own the aloop capture directly --------------------------
+    def start_asleep(self):
+        self.proc = spawn(["arecord", "-D", f"hw:{ALOOP},1,{SUB}",
+                           "-f", "S16_LE", "-r", str(RATE), "-c", "2",
+                           "-t", "raw",
+                           "--period-size", str(WAKE_FRAMES),
+                           "--buffer-size", str(WAKE_FRAMES * 4)])
+        return self.proc is not None
+
+    def go_to_sleep(self):
+        # Kill the reader BEFORE suspending: a live source-output would make PA
+        # resume the source the instant we suspend it.
+        kill(self.proc)
+        self.proc = None
+        if not suspend(True):
+            return False
+        if not self.start_asleep():
+            suspend(False)                       # never strand it suspended
+            return False
+        self.asleep = True
+        log("silent -> source suspended (amp sink follows, ~0.4% of a core)")
+        return True
+
+    def wake_up(self, why, detected_at=None):
+        # ORDER MATTERS, and only the first two steps are on the critical path:
+        # arecord must let go of hw:Loopback,1,0 before PulseAudio can reopen it,
+        # and the source is live again the moment `suspend 0` returns. Starting
+        # the awake-mode reader afterwards keeps a ~25 ms process spawn out of the
+        # window where audio is being lost.
+        t0 = time.monotonic()
+        kill(self.proc)
+        self.proc = None
+        t_freed = time.monotonic()
+        suspend(False)
+        t_live = time.monotonic()
+        self.asleep = False
+        if not self.start_awake():
+            return False
+        # Whatever is still in flight beyond the aloop ring (~80 ms) is lost, so
+        # this is the honest measure of how much of the first note is at risk.
+        if detected_at is not None:
+            log(f"{why} -> source resumed ({(t_live - detected_at) * 1000:.0f} ms"
+                f": detect->free {(t_freed - t0) * 1000:.0f}, "
+                f"free->live {(t_live - t_freed) * 1000:.0f})")
+        else:
+            log(f"{why} -> source resumed")
+        return True
+
+    def run(self):
+        if not self.start_awake():
+            return 1
+        silent_since = None
+        while not self.stop:
+            want = WAKE_FRAMES * BYTES_PER_FRAME if self.asleep else AWAKE_CHUNK
+            buf = self.proc.stdout.read(want) if self.proc else b""
+            if not buf:
+                # The reader died (host stop/start, xrun, PA restart). Rebuild it
+                # rather than exiting -- the service supervises alsaloop the same way.
+                log("reader ended, restarting it")
+                kill(self.proc)
+                self.proc = None
+                time.sleep(1)
+                ok = self.start_asleep() if self.asleep else self.start_awake()
+                if not ok:
+                    time.sleep(4)
+                continue
+
+            if self.asleep:
+                if not is_silent(buf):
+                    self.wake_up("audio returned", time.monotonic())
+                    silent_since = None
+                continue
+
+            if is_silent(buf):
+                now = time.monotonic()
+                if silent_since is None:
+                    silent_since = now
+                elif now - silent_since >= SLEEP_AFTER:
+                    if not self.go_to_sleep():
+                        silent_since = None      # try again after another run
+            else:
+                silent_since = None
+        return 0
+
+    def shutdown(self, *_):
+        # Whatever happens, do not leave USB audio suspended: that would look
+        # exactly like the feature being broken.
+        self.stop = True
+        kill(self.proc)
+        self.proc = None
+        if self.asleep:
+            suspend(False)
+        sys.exit(0)
+
+
+def main():
+    _cli.connect()
+    w = Watcher()
+    signal.signal(signal.SIGTERM, w.shutdown)
+    signal.signal(signal.SIGINT, w.shutdown)
+    try:
+        return w.run()
+    finally:
+        if w.asleep:
+            suspend(False)
+        _cli.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
