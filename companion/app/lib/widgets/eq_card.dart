@@ -20,8 +20,16 @@ import 'eq_curve.dart';
 /// `treble_db` and commits in the old shape. Same curve, two handles instead of
 /// seven — an app updated ahead of its device still has a working EQ.
 class EqCard extends StatefulWidget {
-  const EqCard({super.key, required this.client});
+  const EqCard({super.key, required this.client, this.armed, this.curveKey});
   final NexusQClient client;
+
+  /// Which band owns gestures, or null when the page may scroll. Shared with
+  /// the host so it can freeze its scrollable while a band is armed; the card
+  /// makes its own if it has no host to cooperate with.
+  final ValueNotifier<int?>? armed;
+
+  /// Attached to the plot so the host can tell a tap inside from one outside.
+  final Key? curveKey;
 
   @override
   State<EqCard> createState() => _EqCardState();
@@ -65,6 +73,7 @@ class _EqCardState extends State<EqCard> {
   void dispose() {
     _evSub?.cancel();
     _connSub?.cancel();
+    if (widget.armed == null) _armed.dispose();
     super.dispose();
   }
 
@@ -88,6 +97,7 @@ class _EqCardState extends State<EqCard> {
   /// True when the daemon answered `getEq` without a `bands` array — the
   /// pre-parametric build. Drives both the hint and the commit shape.
   bool _legacyDaemon = false;
+  late final ValueNotifier<int?> _armed = widget.armed ?? ValueNotifier<int?>(null);
 
   Future<void> _load() async {
     try {
@@ -251,9 +261,16 @@ class _EqCardState extends State<EqCard> {
       children: [
         Row(
           children: [
-            Text('$label · ${_fmtHz(b.freqHz)}',
-                style: const TextStyle(color: NexusQColors.white, fontSize: 13)),
-            const Spacer(),
+            // Flexible + ellipsis: the label is a band name plus a frequency and
+            // the gain is beside it, which overflows a narrow phone outright.
+            Flexible(
+              child: Text('$label · ${_fmtHz(b.freqHz)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      const TextStyle(color: NexusQColors.white, fontSize: 13)),
+            ),
+            const SizedBox(width: 8),
             Text(_fmtDb(b.gainDb),
                 style: TextStyle(
                     color: b.isFlat ? NexusQColors.dim : NexusQColors.white,
@@ -264,8 +281,10 @@ class _EqCardState extends State<EqCard> {
         Row(
           children: [
             SizedBox(
-              width: 58,
+              width: 52,
               child: Text(b.isShelf ? 'Slope' : 'Width',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
             ),
             Expanded(
@@ -297,8 +316,10 @@ class _EqCardState extends State<EqCard> {
     return Row(
       children: [
         const SizedBox(
-          width: 58,
+          width: 52,
           child: Text('Preamp',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
         ),
         Expanded(
@@ -312,7 +333,7 @@ class _EqCardState extends State<EqCard> {
           ),
         ),
         SizedBox(
-          width: 56,
+          width: 52,
           child: Text(_fmtDb(_st.preampDb),
               textAlign: TextAlign.right,
               style: const TextStyle(
@@ -388,8 +409,10 @@ class _EqCardState extends State<EqCard> {
               )
             else ...[
               EqCurve(
+                key: widget.curveKey,
                 state: _st,
                 selected: _selected,
+                armed: _armed,
                 enabled: enabled,
                 height: 190,
                 onSelect: (i) => setState(() => _selected = i),

@@ -99,6 +99,25 @@ class _RecordingClient implements NexusQClient {
       case 'getEq':
         return _state;
       case 'setEq':
+        // Apply, like the daemon does, then echo. A fake that returns unchanged
+        // defaults quietly undoes every gesture and hides real bugs behind
+        // green tests.
+        final incoming = params?['bands'];
+        if (incoming is List) {
+          for (var i = 0; i < incoming.length && i < bands.length; i++) {
+            final b = incoming[i];
+            if (b is! Map) continue;
+            for (final k in ['freq_hz', 'gain_db', 'q']) {
+              if (b[k] is num) bands[i][k] = (b[k] as num).toDouble();
+            }
+          }
+        }
+        if (params?['bass_db'] is num) {
+          bands.first['gain_db'] = (params!['bass_db'] as num).toDouble();
+        }
+        if (params?['treble_db'] is num) {
+          bands.last['gain_db'] = (params!['treble_db'] as num).toDouble();
+        }
         return _state;
       case 'listEqPresets':
         if (!parametric) throw NexusQError('unknown_method', method);
@@ -191,7 +210,8 @@ void main() {
 
     final curve = tester.getRect(find.byType(EqCurve));
     final before = _scroll.offset;
-    // Band 3 (900 Hz) sits near the middle of a log 20 Hz..20 kHz axis.
+    await tester.tapAt(curve.center); // arm the band under the finger
+    await tester.pumpAndSettle();
     await tester.dragFrom(curve.center, const Offset(0, -30));
     await tester.pumpAndSettle();
 
@@ -227,10 +247,14 @@ void main() {
     }
 
     final curve = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(curve.center);
+    await tester.pump();
     await tester.dragFrom(curve.center, const Offset(0, -25));
     await tester.pump(const Duration(milliseconds: 50)); // write still in flight
 
     final before = client.calls.where((c) => c.$1 == 'setEq').length;
+    await tester.tapAt(Offset(curve.left + curve.width * 0.23, curve.center.dy));
+    await tester.pump();
     await tester.dragFrom(
         Offset(curve.left + curve.width * 0.23, curve.center.dy),
         const Offset(0, -25));
@@ -256,6 +280,8 @@ void main() {
 
     for (var n = 0; n < targets.length; n++) {
       final before = client.calls.where((c) => c.$1 == 'setEq').length;
+      await tester.tapAt(targets[n]);        // arm this band
+      await tester.pumpAndSettle();
       await tester.dragFrom(targets[n], const Offset(0, -25));
       await tester.pumpAndSettle();
       expect(client.calls.where((c) => c.$1 == 'setEq').length,
@@ -276,6 +302,8 @@ void main() {
     final freqsBefore =
         client.bands.map((b) => (b['freq_hz'] as num).toDouble()).toList();
 
+    await tester.tapAt(curve.center);
+    await tester.pumpAndSettle();
     // drag diagonally: the sideways component must be ignored
     await tester.dragFrom(curve.center, const Offset(90, -30));
     await tester.pumpAndSettle();
@@ -301,6 +329,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final curve = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(Offset(curve.center.dx, curve.top + 8));
+    await tester.pumpAndSettle();
     await tester.dragFrom(
         Offset(curve.center.dx, curve.top + 8), const Offset(0, 40));
     await tester.pumpAndSettle();
@@ -321,6 +351,73 @@ void main() {
         lessThan(w * 0.1));
     expect(plotX(client.bandsModel, client.bandsModel.last.freqHz, w),
         greaterThan(w * 0.9));
+  });
+
+  testWidgets('an un-armed curve does not swallow the drag — the page scrolls',
+      (tester) async {
+    // The contract Petr asked for: until you tap a point, the curve is inert and
+    // the page behaves normally.
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.dragFrom(curve.center, const Offset(0, -120));
+    await tester.pumpAndSettle();
+
+    expect(_scroll.offset, greaterThan(0), reason: 'the page should have scrolled');
+    expect(client.calls.where((c) => c.$1 == 'setEq'), isEmpty);
+  });
+
+  testWidgets('arming one band then another moves the second, not the first',
+      (tester) async {
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    final firstX = curve.left + curve.width * 0.02;   // band 0, on the left edge
+    final lastX = curve.right - curve.width * 0.02;   // band 6, on the right edge
+
+    await tester.tapAt(Offset(firstX, curve.center.dy));
+    await tester.pumpAndSettle();
+    await tester.dragFrom(Offset(firstX, curve.center.dy), const Offset(0, -30));
+    await tester.pumpAndSettle();
+
+    await tester.tapAt(Offset(lastX, curve.center.dy));
+    await tester.pumpAndSettle();
+    await tester.dragFrom(Offset(lastX, curve.center.dy), const Offset(0, -30));
+    await tester.pumpAndSettle();
+
+    final sent = (client.calls.last.$2!['bands'] as List)
+        .map((b) => ((b as Map)['gain_db'] as num).toDouble())
+        .toList();
+    expect(sent.first, greaterThan(0.5), reason: 'the first band lost its gain');
+    expect(sent.last, greaterThan(0.5), reason: 'the second arming did not take');
+  });
+
+  testWidgets('lays out without overflowing a narrow phone', (tester) async {
+    // A RenderFlex overflow paints a striped warning bar on a real device. This
+    // surfaced by accident once (11 px, the band-editor row); a width test makes
+    // it deliberate. Flutter fails the test on overflow, so rendering is the
+    // assertion.
+    final client = _RecordingClient();
+    tester.view.physicalSize = const Size(320 * 3, 640 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: SingleChildScrollView(child: EqCard(client: client))),
+    ));
+    await tester.pumpAndSettle();
+
+    // widest labels: a shelf name, a kHz frequency and a two-digit dB value
+    client.bands.last['gain_db'] = -12.0;
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(Offset(curve.right - 4, curve.center.dy));
+    await tester.pumpAndSettle();
+    expect(find.byType(EqCurve), findsOneWidget);
   });
 
   testWidgets('a preset is applied as one setEq with its bands and preamp',
@@ -368,8 +465,10 @@ void main() {
 
     expect(find.textContaining('device system update'), findsOneWidget);
     // nothing may be sent to a device that cannot run it
-    await tester.dragFrom(
-        tester.getRect(find.byType(EqCurve)).center, const Offset(0, -30));
+    final r0 = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(r0.center);
+    await tester.pumpAndSettle();
+    await tester.dragFrom(r0.center, const Offset(0, -30));
     await tester.pumpAndSettle();
     expect(client.calls.where((c) => c.$1 == 'setEq'), isEmpty);
   });
@@ -385,6 +484,8 @@ void main() {
     // Only two handles exist here (100 Hz and 8 kHz); the middle of a log axis
     // is ~630 Hz and belongs to neither, so grab the low shelf explicitly.
     final r = tester.getRect(find.byType(EqCurve));
+    await tester.tapAt(Offset(r.left + r.width * 0.23, r.center.dy));
+    await tester.pumpAndSettle();
     await tester.dragFrom(
         Offset(r.left + r.width * 0.23, r.center.dy), const Offset(0, -30));
     await tester.pumpAndSettle();

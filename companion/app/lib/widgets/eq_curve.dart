@@ -6,45 +6,44 @@ import 'package:flutter/material.dart';
 import '../models/eq.dart';
 import '../theme/nexusq_theme.dart';
 
-/// The EQ response curve with one draggable handle per band.
+/// The EQ response curve with one handle per band.
 ///
-/// Handles move **vertically only** — the band frequencies are fixed, so a
-/// sideways drag would silently retune a band nobody asked to retune. Width/Q
-/// is the slider under the curve.
+/// **Arm, then drag.** Tapping a band arms it: from then until you tap outside
+/// the plot, a drag moves that band and the page does not scroll at all.
+/// Tapping another band moves the arming; tapping outside gives scrolling back.
 ///
-/// Because the handles sit at fixed x positions, hit-testing is by horizontal
-/// distance alone: touching anywhere in a band's vertical strip grabs it. That
-/// makes the target the full height of the plot instead of a 44 px disc, which
-/// is what "the hit areas are very small" was about.
+/// This is Petr's design and it replaces two failed attempts at out-competing
+/// the enclosing ListView in Flutter's gesture arena. Those attempts were the
+/// wrong shape of solution: a `pan` recognizer accepts after `kPanSlop` (36 px)
+/// where a scrollable's vertical drag accepts after `kTouchSlop` (18 px), so
+/// the scroll wins fairly; forcing acceptance makes BOTH run; and a vertical
+/// recognizer that should win on equal terms still did not, on a real finger.
+/// Arming sidesteps the contest entirely — while armed the scrollable is not in
+/// the arena, because the page is told not to scroll.
 ///
-/// The x axis spans exactly the first to the last band frequency, so the
-/// outermost handles sit on the edges rather than floating a fifth of the way
-/// in. The trade is that the response below the low shelf and above the high
-/// shelf is off-screen; both are flat-ish there by construction, and having the
-/// handles reachable matters more.
+/// Handles move vertically only; band frequencies are fixed and width/Q lives on
+/// the slider under the curve. Hit-testing is therefore by horizontal distance
+/// alone with no radius limit, so a band's whole column is its target.
 ///
-/// `onChanged` fires continuously so the curve tracks the finger; `onCommit`
-/// fires once on release and is what should reach the device.
-///
-/// Winning the gesture from the enclosing scroll view is the other subtlety. A
-/// `pan` recognizer LOSES to a ListView: pan accepts after `kPanSlop` (36 px)
-/// while the scrollable's vertical drag accepts after `kTouchSlop` (18 px), so
-/// the scroll gets there first and wins fairly. Forcing the pan to accept
-/// anyway does not fix it — the arena has already awarded the gesture, so BOTH
-/// run and the page scrolls while the handle moves. A vertical drag recognizer
-/// competes on equal terms and, being the innermost hit-test entry, accepts
-/// first.
+/// The x axis spans exactly the first to the last band frequency, so the outer
+/// handles sit on the edges. Painter and hit-testing share `plotX`, so a handle
+/// can never be drawn anywhere other than where it is grabbed.
 class EqCurve extends StatefulWidget {
   const EqCurve({
     super.key,
     required this.state,
     required this.selected,
+    required this.armed,
     required this.onSelect,
     required this.onChanged,
     required this.onCommit,
     this.enabled = true,
     this.height = 190,
   });
+
+  /// Which band currently owns gestures, or null when the page may scroll.
+  /// Shared with whatever hosts this widget so it can freeze its scrollable.
+  final ValueNotifier<int?> armed;
 
   final EqState state;
   final int selected;
@@ -86,16 +85,29 @@ class _EqCurveState extends State<EqCurve> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    widget.armed.addListener(_onArmed);
+  }
+
+  @override
+  void dispose() {
+    widget.armed.removeListener(_onArmed);
+    super.dispose();
+  }
+
+  void _onArmed() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final size = Size(c.maxWidth, widget.height);
       final enabled = widget.enabled;
 
       void start(DragStartDetails d) {
-        final i = _nearest(d.localPosition, size);
-        if (i < 0) return;
-        _dragging = i;
-        widget.onSelect(i);
+        // Only an armed band moves. Without arming this would be competing with
+        // the page scroll again, which is what never worked.
+        _dragging = widget.armed.value ?? -1;
       }
 
       void update(DragUpdateDetails d) {
@@ -112,15 +124,16 @@ class _EqCurveState extends State<EqCurve> {
       return RawGestureDetector(
         behavior: HitTestBehavior.opaque,
         gestures: {
-          VerticalDragGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
-            () => VerticalDragGestureRecognizer(debugOwner: this),
-            (r) {
-              r.onStart = enabled ? start : null;
-              r.onUpdate = enabled ? update : null;
-              r.onEnd = enabled ? end : null;
-            },
-          ),
+          if (enabled && widget.armed.value != null)
+            VerticalDragGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
+              () => VerticalDragGestureRecognizer(debugOwner: this),
+              (r) {
+                r.onStart = start;
+                r.onUpdate = update;
+                r.onEnd = end;
+              },
+            ),
           TapGestureRecognizer:
               GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
             () => TapGestureRecognizer(debugOwner: this),
@@ -129,7 +142,9 @@ class _EqCurveState extends State<EqCurve> {
                   ? null
                   : (d) {
                       final i = _nearest(d.localPosition, size);
-                      if (i >= 0) widget.onSelect(i);
+                      if (i < 0) return;
+                      widget.onSelect(i);
+                      widget.armed.value = i;   // arm: the page stops scrolling
                     };
             },
           ),
@@ -141,6 +156,7 @@ class _EqCurveState extends State<EqCurve> {
             painter: _EqPainter(
               state: widget.state,
               selected: widget.selected,
+              armed: widget.armed.value,
               enabled: widget.enabled,
             ),
           ),
@@ -151,10 +167,15 @@ class _EqCurveState extends State<EqCurve> {
 }
 
 class _EqPainter extends CustomPainter {
-  _EqPainter({required this.state, required this.selected, required this.enabled});
+  _EqPainter(
+      {required this.state,
+      required this.selected,
+      required this.armed,
+      required this.enabled});
 
   final EqState state;
   final int selected;
+  final int? armed;
   final bool enabled;
 
   static const _gridHz = [100.0, 1000.0, 10000.0];
@@ -222,6 +243,20 @@ class _EqPainter extends CustomPainter {
       final b = state.bands[i];
       final c = Offset(_x(b.freqHz, w), _y(b.gainDb, h));
       final sel = i == selected;
+      final isArmed = i == armed;
+      if (isArmed) {
+        // The armed band owns the gestures and the page has stopped scrolling —
+        // that has to be visible, or the frozen page looks like a bug.
+        canvas.drawCircle(c, 18,
+            Paint()..color = NexusQColors.accent.withValues(alpha: 0.16));
+        canvas.drawCircle(
+            c,
+            14,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2
+              ..color = NexusQColors.accent.withValues(alpha: 0.7));
+      }
       canvas.drawCircle(
           c,
           sel ? 9 : 6,
@@ -261,6 +296,7 @@ class _EqPainter extends CustomPainter {
   @override
   bool shouldRepaint(_EqPainter old) =>
       old.selected != selected ||
+      old.armed != armed ||
       old.enabled != enabled ||
       old.state.preampDb != state.preampDb ||
       !identical(old.state.bands, state.bands);

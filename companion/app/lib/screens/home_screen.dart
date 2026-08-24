@@ -12,12 +12,44 @@ import 'settings_screen.dart';
 /// Faithful to the original Nexus Q app: the black "drop ball" sphere as the
 /// device, over a Holo-dark settings list (volume, brightness, light theme),
 /// plus a now-playing block (our addition, from librespot).
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.controller});
   final DeviceController controller;
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  /// Which EQ band currently owns gestures, or null when the page may scroll.
+  ///
+  /// Trying to out-compete the list for the drag failed twice; this instead
+  /// stops the competition existing. While a band is armed the list is given
+  /// NeverScrollableScrollPhysics, so only the curve is listening. A tap
+  /// anywhere outside the plot disarms and hands scrolling back.
+  final ValueNotifier<int?> _eqArmed = ValueNotifier<int?>(null);
+  final GlobalKey _eqCurveKey = GlobalKey();
+
+  @override
+  void dispose() {
+    _eqArmed.dispose();
+    super.dispose();
+  }
+
+  void _disarmIfOutside(Offset globalPos) {
+    if (_eqArmed.value == null) return;
+    final box = _eqCurveKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) {
+      _eqArmed.value = null;
+      return;
+    }
+    final rect = box.localToGlobal(Offset.zero) & box.size;
+    if (!rect.contains(globalPos)) _eqArmed.value = null;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
@@ -65,7 +97,12 @@ class HomeScreen extends StatelessWidget {
               ),
             ],
           ),
-          body: SafeArea(
+          // Listener, not GestureDetector: this must see every touch regardless
+          // of who wins the gesture, so a tap outside the plot always hands
+          // scrolling back even if something else consumes it.
+          body: Listener(
+            onPointerDown: (e) => _disarmIfOutside(e.position),
+            child: SafeArea(
             child: Column(
               children: [
                 if (!s.connected)
@@ -74,7 +111,12 @@ class HomeScreen extends StatelessWidget {
                     onRetry: controller.reconnectNow,
                   ),
                 Expanded(
-                  child: ListView(
+                  child: ValueListenableBuilder<int?>(
+                    valueListenable: _eqArmed,
+                    builder: (context, armed, _) => ListView(
+                    physics: armed != null
+                        ? const NeverScrollableScrollPhysics()
+                        : null,
                     padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin,
                         8, NexusQSpace.standardMargin, 24),
                     children: [
@@ -276,12 +318,18 @@ class HomeScreen extends StatelessWidget {
                       // inside the curve has to win over the page scroll, so it
                       // does not belong in the middle of the list.
                       const _SectionHeader('EQUALIZER'),
-                      EqCard(client: controller.client),
+                      EqCard(
+                        client: controller.client,
+                        armed: _eqArmed,
+                        curveKey: _eqCurveKey,
+                      ),
                     ],
+                  ),
                   ),
                 ),
               ],
             ),
+          ),
           ),
         );
       },
