@@ -33,6 +33,7 @@ class _EqCardState extends State<EqCard> {
   int _selected = 0;
   bool _loaded = false;
   bool _sending = false;
+  Map<String, dynamic>? _pending;
   String? _error;
   StreamSubscription? _evSub;
   StreamSubscription? _connSub;
@@ -42,7 +43,9 @@ class _EqCardState extends State<EqCard> {
     super.initState();
     _load();
     _evSub = widget.client.events.listen((e) {
-      if (e.event != 'eqChanged' || !mounted || _sending) return;
+      if (e.event != 'eqChanged' || !mounted || _sending || _pending != null) {
+        return;
+      }
       setState(() => _st = _hydrate(e.data));
     });
     // The card mounts before the link is up, so the first getEq usually fails
@@ -67,7 +70,12 @@ class _EqCardState extends State<EqCard> {
 
   /// Reply -> state, inventing the two legacy shelves when the daemon is old.
   EqState _hydrate(Map<String, dynamic> d) {
-    final s = EqState.fromJson(d);
+    var s = EqState.fromJson(d);
+    // `supported` comes from an amixer probe on the device; a transient failure
+    // in one reply must not permanently disable a card that was working.
+    if (!s.supported && _st.supported && _loaded) {
+      s = EqState.fromJson({...d, 'supported': true});
+    }
     if (s.isParametric || !s.supported) return s;
     final bass = (d['bass_db'] as num?)?.toDouble() ?? 0;
     final treble = (d['treble_db'] as num?)?.toDouble() ?? 0;
@@ -113,8 +121,16 @@ class _EqCardState extends State<EqCard> {
     }
   }
 
+  /// One write at a time, but never drop one: a setEq is ~300 ms (fourteen I2C
+  /// coefficient writes), and dropping whatever arrives during it is what made
+  /// the card feel dead after the first drag. Later gestures supersede earlier
+  /// ones — only the newest queued state is worth sending, since each carries
+  /// the whole EQ.
   Future<void> _send(Map<String, dynamic> params) async {
-    if (_sending) return;
+    if (_sending) {
+      _pending = params;
+      return;
+    }
     setState(() {
       _sending = true;
       _error = null;
@@ -128,7 +144,12 @@ class _EqCardState extends State<EqCard> {
       setState(() => _error = 'EQ write failed: $e');
       _load(); // resync with what the amp actually runs
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+        final next = _pending;
+        _pending = null;
+        if (next != null) _send(next);
+      }
     }
   }
 
@@ -193,7 +214,7 @@ class _EqCardState extends State<EqCard> {
 
   Widget _presetChips() {
     if (_presets.isEmpty) return const SizedBox.shrink();
-    final enabled = _loaded && _st.supported && !_sending;
+    final enabled = _loaded && _st.supported;
     return SizedBox(
       height: 36,
       child: ListView.separated(
@@ -225,7 +246,7 @@ class _EqCardState extends State<EqCard> {
     if (_st.bands.isEmpty) return const SizedBox.shrink();
     final i = _selected.clamp(0, _st.bands.length - 1);
     final b = _st.bands[i];
-    final enabled = _loaded && _st.supported && !_sending;
+    final enabled = _loaded && _st.supported;
     final label = b.type == 'peaking'
         ? 'Band ${i + 1}'
         : (b.type == 'lowshelf' ? 'Low shelf' : 'High shelf');
@@ -276,7 +297,7 @@ class _EqCardState extends State<EqCard> {
   }
 
   Widget _preampRow() {
-    final enabled = _loaded && _st.supported && !_sending && !_legacyDaemon;
+    final enabled = _loaded && _st.supported && !_legacyDaemon;
     return Row(
       children: [
         const SizedBox(
@@ -323,7 +344,10 @@ class _EqCardState extends State<EqCard> {
 
   @override
   Widget build(BuildContext context) {
-    final enabled = _loaded && _st.supported && !_sending;
+    // Deliberately NOT gated on _sending: a ~300 ms lockout after every gesture
+    // reads as "the EQ stopped working", and the queue above means a gesture
+    // made during a write is not lost.
+    final enabled = _loaded && _st.supported;
     return Card(
       color: NexusQColors.surface,
       child: Padding(

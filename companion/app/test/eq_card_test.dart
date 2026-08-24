@@ -12,7 +12,13 @@ import 'package:nexusq_companion/widgets/eq_curve.dart';
 /// 25 W amplifier.
 class _RecordingClient implements NexusQClient {
   _RecordingClient(
-      {this.supported = true, this.parametric = true, this.connected = true});
+      {this.supported = true, this.parametric = true, this.connected = true,
+       this.latency = Duration.zero});
+
+  /// A real setEq is ~300 ms: fourteen I2C coefficient writes. Modelling that
+  /// matters — with zero latency the card is never in its "sending" state, so a
+  /// lockout there is invisible to the tests.
+  final Duration latency;
 
   final bool supported;
   final bool parametric;
@@ -84,6 +90,7 @@ class _RecordingClient implements NexusQClient {
       [Map<String, dynamic>? params]) async {
     calls.add((method, params));
     if (!connected) throw NexusQError('unavailable', 'not connected');
+    if (latency > Duration.zero) await Future<void>.delayed(latency);
     switch (method) {
       case 'getEq':
         return _state;
@@ -197,6 +204,58 @@ void main() {
         .map((b) => (b as Map)['gain_db'] as num)
         .toList();
     expect(asked.any((g) => g > 0.5), isTrue);
+  });
+
+  testWidgets('drags keep working while a slow write is in flight',
+      (tester) async {
+    // The real device takes ~300 ms per setEq. If the card goes dead for that
+    // window, a normal person dragging one band after another finds that
+    // "nothing can be grabbed any more".
+    final client = _RecordingClient(latency: const Duration(milliseconds: 300));
+    await tester.pumpWidget(_host(client));
+    // pumpAndSettle does not move the clock when nothing schedules a frame, so
+    // the delayed replies need explicit pumps — and _load makes TWO sequential
+    // calls (getEq then listEqPresets), so one latency is not enough.
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    await tester.dragFrom(curve.center, const Offset(0, -25));
+    await tester.pump(const Duration(milliseconds: 50)); // write still in flight
+
+    final before = client.calls.where((c) => c.$1 == 'setEq').length;
+    await tester.dragFrom(
+        Offset(curve.left + curve.width * 0.23, curve.center.dy),
+        const Offset(0, -25));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    expect(client.calls.where((c) => c.$1 == 'setEq').length,
+        greaterThan(before),
+        reason: 'a drag during an in-flight write was swallowed');
+  });
+
+  testWidgets('a second drag still grabs a handle', (tester) async {
+    // Petr on 1.15.2: the first handle moved fine, then nothing could be
+    // grabbed. One drag proving the gesture works is not enough.
+    final client = _RecordingClient();
+    await tester.pumpWidget(_host(client));
+    await tester.pumpAndSettle();
+
+    final curve = tester.getRect(find.byType(EqCurve));
+    // band 3 (900 Hz) is near the middle of a log axis; band 0 (100 Hz) at ~23 %
+    final targets = [curve.center, Offset(curve.left + curve.width * 0.23, curve.center.dy)];
+
+    for (var n = 0; n < targets.length; n++) {
+      final before = client.calls.where((c) => c.$1 == 'setEq').length;
+      await tester.dragFrom(targets[n], const Offset(0, -25));
+      await tester.pumpAndSettle();
+      expect(client.calls.where((c) => c.$1 == 'setEq').length,
+          greaterThan(before),
+          reason: 'drag #${n + 1} did not reach the device');
+    }
   });
 
   testWidgets('a preset is applied as one setEq with its bands and preamp',
