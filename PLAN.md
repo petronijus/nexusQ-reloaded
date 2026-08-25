@@ -447,11 +447,17 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > sink-inputs — a corked input is not feeding the sink, so it should not hold the
 > tap open), shipped as nexusqd **r15**, and then judged a regression because a
 > settled nexusqd (0.08 %) was compared against a freshly restarted one (1.38 %).
-> **The same trap, in reverse.** It was reverted and republished as **r16**,
-> whose apk is byte-identical in size to r14's; the idea itself was never
-> disproved, only its benefit — which today measures zero, because the sink
-> suspends without it. If it is ever revisited, the tests for the streaming
-> "Corked: no" counter were good and are worth rewriting.
+> **The same trap, in reverse**, so the revert (r16) was itself unfounded. The
+> change is back in as **r17** — it was never disproved, only its benefit, and
+> the streaming "Corked: no" counter carries good tests (six of them, both
+> mutations watched failing).
+>
+> ⏳ **Overnight passive measurement running from 2026-08-25 23:35** (`ARM_S=25200`,
+> `SETTLE_S=600`, arm `overnight_r17:-:-:-:-:-:-:-` — every knob a dash, so it
+> changes nothing and only snapshots). Output in `/var/log/nq-opp-study2-r17` on
+> the device; analyse with `scripts/diag/analyze-opp-snaps.py`. This is the first
+> reading of this whole question taken with everything settled and over hours
+> rather than over 90 s, which is what both wrong conclusions above lacked.
 >
 > ⚠️ **Rule that came out of this:** never A/B a restarted daemon against a
 > long-running one. Check `ps -o etimes= -p $(pgrep -x nexusqd)` and wait past

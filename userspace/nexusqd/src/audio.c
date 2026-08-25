@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
 
 float audio_mean_abs(const int16_t *samples, int n) {
     if (n <= 0) return 0.0f;
@@ -58,11 +59,26 @@ void audio_close(int *fd, pid_t *pid) {
 }
 
 int pa_sink_inputs_active(void) {
-    /* Count PA playback streams without a shell: fork/exec `pactl list short
-     * sink-inputs`, read its stdout, count non-empty lines. If pactl is missing
-     * or PulseAudio is down it prints nothing on stdout and exits non-zero, so
-     * we see 0 lines — treated (safely) as "no streams". SIGCHLD is SIG_IGN in
-     * the daemon, so the child is auto-reaped; we just read to EOF and close. */
+    /* Count PA playback streams that are actually FEEDING the sink — that is,
+     * sink-inputs which are not corked. If pactl is missing or PulseAudio is
+     * down it prints nothing and exits non-zero, so we see 0 — treated (safely)
+     * as "no streams". SIGCHLD is SIG_IGN in the daemon, so the child is
+     * auto-reaped; we just read to EOF and close.
+     *
+     * Why not the cheaper `list short` line count it used to be: a CORKED input
+     * still appears there. The USB-audio idle fix (nq-uac2-silence) suspends the
+     * PA source when the host streams silence, PulseAudio corks module-loopback's
+     * sink-input in response, and the sink drops to IDLE — but the old count
+     * still saw one input, kept this tap running, and the tap is precisely what
+     * holds the sink out of suspend-on-idle. Result: 1.60 % of a core and an
+     * amplifier that never powered down. Counting only uncorked inputs closes
+     * that, and does the same for any paused stream.
+     *
+     * `list sink-inputs` (verbose) is the only listing that carries the state, so
+     * this counts "Corked: no" occurrences and streams the output rather than
+     * buffering it: the verbose form is ~1 KB per input, and a fixed buffer that
+     * silently truncated would UNDERCOUNT and switch the visualizer off during
+     * real playback. LC_ALL=C keeps the field name untranslated. */
     int pf[2];
     if (pipe(pf) != 0) return 0;
     pid_t p = fork();
@@ -72,27 +88,56 @@ int pa_sink_inputs_active(void) {
         close(pf[0]); close(pf[1]);
         int dn = open("/dev/null", O_WRONLY);
         if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
-        setenv("LC_ALL", "C", 1);   /* keep pactl's output untranslated (see below) */
-        execlp("pactl", "pactl", "list", "short", "sink-inputs", (char *)NULL);
+        setenv("LC_ALL", "C", 1);   /* keep pactl's output untranslated */
+        execlp("pactl", "pactl", "list", "sink-inputs", (char *)NULL);
         _exit(127);
     }
     close(pf[1]);
-    char buf[8192];
-    int total = 0;
+
+    struct pa_cork_scan sc;
+    pa_cork_scan_init(&sc);
+    char buf[4096];
     ssize_t n;
-    while (total < (int)sizeof buf &&
-           (n = read(pf[0], buf + total, sizeof buf - (size_t)total)) > 0)
-        total += (int)n;
-    close(pf[0]);   /* if output overflowed the buffer, this SIGPIPEs pactl */
-    /* count non-empty lines (each sink-input is one line) */
-    int count = 0;
-    for (int i = 0; i < total; ) {
-        int j = i;
-        while (j < total && buf[j] != '\n') j++;
-        if (j > i) count++;
-        i = j + 1;
+    while ((n = read(pf[0], buf, sizeof buf)) > 0)
+        pa_cork_scan_feed(&sc, buf, (size_t)n);
+    close(pf[0]);
+    return sc.count;
+}
+
+/* Streaming "Corked: no" counter. Split out from the fork/exec above so the
+ * boundary handling is testable: the verbose listing arrives in arbitrary read
+ * chunks, and a needle straddling two of them must still be counted exactly
+ * once. Getting that wrong UNDERCOUNTS, which switches the visualizer off
+ * during real playback -- a silent, intermittent fault. */
+static void count_hit(struct pa_cork_scan *s) { s->count++; }
+
+void pa_cork_scan_init(struct pa_cork_scan *s) {
+    s->clen = 0;
+    s->count = 0;
+}
+
+void pa_cork_scan_feed(struct pa_cork_scan *s, const char *buf, size_t n) {
+    static const char NEEDLE[] = "Corked: no";
+    const size_t nlen = sizeof(NEEDLE) - 1;
+    while (n > 0) {
+        /* Work a window at a time: whatever was carried over, plus as much of
+         * this chunk as fits. */
+        size_t room = PA_CORK_WIN - s->clen;
+        size_t take = n < room ? n : room;
+        char win[PA_CORK_WIN];
+        size_t wlen = s->clen;
+        if (wlen) memcpy(win, s->carry, wlen);
+        memcpy(win + wlen, buf, take);
+        wlen += take;
+        for (size_t i = 0; i + nlen <= wlen; ) {
+            if (memcmp(win + i, NEEDLE, nlen) == 0) { count_hit(s); i += nlen; }
+            else i++;
+        }
+        s->clen = wlen < nlen - 1 ? wlen : nlen - 1;
+        memcpy(s->carry, win + wlen - s->clen, s->clen);
+        buf += take;
+        n -= take;
     }
-    return count;
 }
 
 int pa_subscribe_open(pid_t *pid) {

@@ -49,9 +49,12 @@
  * OMAP4 doing nothing (top idle-heat contributor). Fix: only run the tap while a
  * real playback stream (a PA *sink-input*) exists — then PA suspends the sink at
  * true idle (CPU -> ~0, like the untapped spdif) yet the LED still reacts on
- * play. The gate signal is the sink-input COUNT, never captured silence: a quiet
- * passage / paused-connected stream still has a sink-input, so the tap stays on
- * through it. To keep idle overhead near zero we run `pactl` only at a possible
+ * play. The gate signal is the count of UNCORKED sink-inputs, never captured
+ * silence: a quiet passage still has an uncorked input, so the tap stays on
+ * through it, while a corked one (paused stream, or module-loopback whose source
+ * nq-uac2-silence has suspended) does not — that last case is why corked inputs
+ * stopped counting, since otherwise this tap kept the amplifier powered through
+ * every silence. To keep idle overhead near zero we run `pactl` only at a possible
  * transition — while the tap is OFF (watch for a stream starting) and while it is
  * ON but raw-silent for TAP_QUIET_S (watch for the stream ending); while music
  * actually flows we never poll. */
@@ -419,10 +422,20 @@ int main(void) {
             }
         }
 
-        /* PA subscribe feed: assemble lines, flag a sink-input membership event
-         * for the gate at the top of the loop. 'change' events (volume moves,
-         * prop updates — constant during playback) do not alter the COUNT, so
-         * they are deliberately ignored. EOF/HUP = subscriber (or PA) died:
+        /* PA subscribe feed: assemble lines, flag a sink-input event for the gate
+         * at the top of the loop.
+         *
+         * 'new'/'remove' always count. 'change' is admitted ONLY while nothing is
+         * actually playing — the tap is off, or it is on but the captured audio
+         * has gone quiet. Corking is a 'change', and since the gate now counts
+         * uncorked inputs (see audio.h) a cork/uncork really does move the count:
+         * ignoring it outright would leave the tap running through a sleeping USB
+         * source until the 30 s safety re-count, and would take up to 60 s to
+         * light the visualizer again after unpausing. Admitting it unconditionally
+         * is what the original code rightly refused: 'change' fires constantly
+         * during playback and every one would fork a `pactl`. The quiet test
+         * keeps r12's "while music flows we never poll" intact. EOF/HUP =
+         * subscriber (or PA) died:
          * close and let the gate respawn it after PA_SUB_RESPAWN_S, with timed
          * polling covering the gap. */
         if (pi >= 0 && (pfds[pi].revents & (POLLIN | POLLHUP | POLLERR))) {
@@ -431,9 +444,13 @@ int main(void) {
                 for (ssize_t si = 0; si < sr; si++) {
                     if (sb[si] == '\n') {
                         sline[slen] = 0; slen = 0;
-                        if (strstr(sline, "on sink-input") &&
-                            (strstr(sline, "'new'") || strstr(sline, "'remove'")))
-                            pa_check = 1;
+                        if (strstr(sline, "on sink-input")) {
+                            if (strstr(sline, "'new'") || strstr(sline, "'remove'"))
+                                pa_check = 1;
+                            else if (strstr(sline, "'change'") &&
+                                     (!tap_should_run || quiet_since >= 0.0))
+                                pa_check = 1;   /* cork/uncork, and nothing playing */
+                        }
                     } else if (slen < (int)sizeof(sline) - 1) {
                         sline[slen++] = (char)sb[si];
                     }

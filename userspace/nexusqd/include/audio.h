@@ -45,10 +45,30 @@ int   audio_open(pid_t *pid);
  * within ~one period regardless. Safe with *fd<0 / *pid<0. Resets *fd and *pid. */
 void  audio_close(int *fd, pid_t *pid);
 
-/* Sink-input gate (idle-CPU fix, see audio.c): run `pactl list short sink-inputs`
- * and return the number of real PA playback streams (non-empty output lines), or
- * 0 if pactl fails / PulseAudio is down (safe: no streams -> keep the tap off). */
+/* Sink-input gate (idle-CPU fix, see audio.c): return how many PA playback
+ * streams are actually FEEDING the sink -- sink-inputs that are not corked -- or
+ * 0 if pactl fails / PulseAudio is down (safe: no streams -> keep the tap off).
+ *
+ * Corked inputs are excluded deliberately. A corked stream still appears in
+ * `pactl list short sink-inputs`, so the old line count kept this tap running
+ * while nothing was being played, and the tap is exactly what holds the sink out
+ * of suspend-on-idle. That cost 1.60 % of a core and left the amplifier powered
+ * whenever the USB-audio watcher put its source to sleep, and equally for any
+ * paused stream. */
 int   pa_sink_inputs_active(void);
+
+/* Streaming counter behind it, exposed for tests: the verbose listing arrives in
+ * arbitrary read chunks and a "Corked: no" split across two of them must still
+ * count exactly once. PA_CORK_WIN only has to exceed the needle; it is the
+ * scratch window, not a limit on the listing. */
+#define PA_CORK_WIN 512
+struct pa_cork_scan {
+    char   carry[PA_CORK_WIN];
+    size_t clen;
+    int    count;
+};
+void pa_cork_scan_init(struct pa_cork_scan *s);
+void pa_cork_scan_feed(struct pa_cork_scan *s, const char *buf, size_t n);
 
 /* Event feed for the sink-input gate (r13 idle-CPU fix): spawn a persistent
  * `pactl subscribe` child and return a non-blocking read fd on its stdout (or
