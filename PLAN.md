@@ -433,17 +433,33 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > service sleeping on the real chain; one `alsaloop`, one source module, one
 > loopback module after repeated restarts (no stacking, no leaks).
 >
-> ⬜ **The remaining prize is nexusqd's tap, and it is worth 1.60 % plus the amp's
-> own draw.** With the source asleep the sink sits at **IDLE, not SUSPENDED**,
-> because nexusqd's LED visualiser holds an uncorked source-output on the sink
-> monitor — its own comment says so (`nexusqd.c:45`). Its gate gives up the tap
-> when no sink-input exists, but `module-loopback`'s input persists through our
-> sleep, so the tap never stops and the amplifier never powers down. r14 **is**
-> installed (the note above saying Step 5 was undeployed was stale). Two ways
-> forward: extend nexusqd's gate to drop the tap on a suspended source, or have
-> the watcher unload/reload `module-loopback` over the now-fast CLI socket —
-> the second is cheap to do but risks `module-stream-restore` bringing the
-> reloaded stream back muted, which is why it was not done blind at 01:30.
+> ✅ **The "remaining prize" turned out not to exist — it was a measurement
+> artifact, and correcting it is the main finding of 2026-08-25.** The claim that
+> nexusqd's visualiser tap holds the amplifier awake (sink stuck at IDLE, 1.60 %
+> of a core) came from a reading taken **45 s after a service restart**. After a
+> restart nexusqd animates the breathing screensaver and commits frames to the
+> AVR at ~1.4 % of a core; at ~300 s the static-screensaver memcmp gate
+> suppresses the writes and it settles to ~0.07 %. Sliced by the minute:
+> `1.42, 1.43, 1.22, 0.08, 0.07, 0.07, 0.07`. In steady state the sink reads
+> **SUSPENDED** and nexusqd costs **0.10 %** — there was nothing left to fix.
+>
+> A gate change was built on that artifact anyway (count only UNCORKED
+> sink-inputs — a corked input is not feeding the sink, so it should not hold the
+> tap open), shipped as nexusqd **r15**, and then judged a regression because a
+> settled nexusqd (0.08 %) was compared against a freshly restarted one (1.38 %).
+> **The same trap, in reverse.** It was reverted and republished as **r16**,
+> whose apk is byte-identical in size to r14's; the idea itself was never
+> disproved, only its benefit — which today measures zero, because the sink
+> suspends without it. If it is ever revisited, the tests for the streaming
+> "Corked: no" counter were good and are worth rewriting.
+>
+> ⚠️ **Rule that came out of this:** never A/B a restarted daemon against a
+> long-running one. Check `ps -o etimes= -p $(pgrep -x nexusqd)` and wait past
+> ~300 s before any idle measurement.
+>
+> **Steady state as shipped (device r82 + nexusqd r16), source idle, 120 s:**
+> pulseaudio 0.03 %, alsaloop 1.01 %, watcher 0.53 %, its arecord 0.35 %,
+> nexusqd 0.10 % — **2.05 % of a core, sink SUSPENDED**, against 28.83 % before.
 >
 > ⚠️ **One link is untested on the real source.** The wake path was proven by
 > feeding the aloop directly, because the Xiaomi box refuses adb (`device

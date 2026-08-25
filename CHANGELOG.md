@@ -35,11 +35,16 @@ All notable changes to Nexus Q Reloaded. Format follows
   `hw:Loopback,1,0` (arecord there gets EBUSY) so it watches through `parec`;
   asleep, PA has closed it, so it owns the aloop directly. A `parec` watcher
   cannot do the asleep half at all — connecting to a suspended source resumes it.
-- **Known issue:** the sink settles at IDLE rather than SUSPENDED, so the
-  amplifier is not yet powered down. nexusqd's LED visualiser holds an uncorked
-  source-output on the sink monitor and its gate only releases when no sink-input
-  exists, which `module-loopback`'s outlives. Worth a further 1.60 % plus the
-  amp's own draw — see PLAN.md Step 6.
+- **Correction (2026-08-25): the "sink settles at IDLE" known issue was a
+  measurement artifact and is withdrawn.** It came from a reading 45 s after a
+  service restart, when nexusqd animates its screensaver at ~1.4 % of a core
+  until the memcmp gate settles it to ~0.07 % at ~300 s. In steady state the sink
+  reads SUSPENDED and nexusqd costs 0.10 %. A nexusqd gate change built on the
+  artifact (r15) was then judged a regression by comparing a settled daemon
+  against a freshly restarted one — the same trap in reverse — and reverted as
+  r16. **Never A/B a restarted daemon against a long-running one.**
+- **Steady state as shipped** (device r82 + nexusqd r16), source idle:
+  **2.05 % of a core, sink SUSPENDED**, against 28.83 % before.
 - ⚠️ The wake path was proven by feeding the aloop a 14 s-silence-then-tone file
   and logging the transitions; the Xiaomi box refuses adb, so "alsaloop delivers
   non-zero when the box plays" is the one link confirmed only by inspection.
