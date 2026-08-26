@@ -75,7 +75,7 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
   "theme": "blue", "scene": "waveform",
   "output": "speaker",
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
-                  "artUrl": "...", "source": "spotify" } }
+                  "artUrl": "...", "source": "spotify", "transport": "spotify-web" } }
 ```
 - `output`: id of the active audio output (the current PulseAudio default sink) —
   one of `speaker` (TAS5713 banana terminals) / `spdif` (optical) / `hdmi`.
@@ -120,12 +120,42 @@ switched off for `spdif`/`hdmi`.
 > **`mblink R G B | mblink stop`** (an autonomous mute-LED blink) — driven by the
 > bridge during a system update, see **§12.3**. They are not app-facing methods.
 
-### Now-playing  (→ librespot `--onevent`, see §6)
+### Now-playing  (→ per-source backends, see §6)
 | Method | params | result | Event |
 |---|---|---|---|
-| `getPlayState` | — | `nowPlaying` object | `nowPlayingChanged` (pushed on every librespot track/state change) |
-| `playPause` | — | `{ playing }` | **`unavailable` in v1** — librespot is a Spotify-Connect receiver with no local transport API; control from the Spotify app. Reserved (§5) |
-| `next` / `previous` | — | `{ }` | **`unavailable` in v1** — see `playPause`. Reserved (§5) |
+| `getPlayState` | — | `nowPlaying` object | `nowPlayingChanged` (pushed on every track/state change from any source) |
+| `playPause` | — | `{ playing }` | `nowPlayingChanged`. Routed to whichever source is playing — see `transport` below. `unavailable` when the active source cannot be driven from the device. |
+| `next` / `previous` | — | `{ }` | as `playPause` |
+
+#### `transport` — who can drive the current source
+
+Transport is **not a property of the bridge, it is a property of the source that
+happens to be playing**, and the three sources differ. `nowPlaying.transport`
+says which mechanism applies, so a client never has to hardcode source names:
+
+| value | meaning | what the client does |
+|---|---|---|
+| `device` | the bridge can drive it | call `playPause` / `next` / `previous` here |
+| `spotify-web` | only Spotify's own Web API can | the client drives Spotify directly; the bridge is not involved |
+| `none` | nothing is playing, or the source is unknown | disable the controls |
+
+- **AirPlay → `device`.** shairport-sync's metadata pipe delivers the sender's
+  DACP-ID, its Active-Remote token and the port to send to (`daid` / `acre` /
+  `dapo`), which is enough to send transport commands straight back to the phone.
+- **Roon → `device`.** RoonBridge is only an audio endpoint and accepts nothing;
+  the commands go to the Roon **Core**, which the bridge talks to as a registered
+  extension.
+- **Spotify → `spotify-web`.** librespot is deliberately a *pure Connect
+  implementation* with no local control interface — verified against upstream:
+  its changelog has never carried an API, D-Bus, MPRIS or socket, and the request
+  is open as issues #457 and #1473. Upstream's own answer is that control comes
+  either from another Spotify client or from the Web API. So the client does that
+  and the device is left alone — deliberately, rather than swapping librespot for
+  something with a local API.
+
+⚠️ A client should drive `playPause` from `transport`, **never** from `source`.
+The mapping above is the bridge's to change (a future Spotify backend would flip
+that row to `device` with no client change).
 
 ### Device info
 | Method | params | result |
@@ -161,9 +191,11 @@ graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
 - **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 7,
   shown while audio plays — below the breathing override).
 - **LED brightness** → a nexusqd `brightness` command + a software brightness scalar.
-- **now-playing** → `librespot --onevent <hook>` publishes track/artist/album/art + play state to
-  the bridge (read-only metadata). **Transport (playPause/next/previous) is `unavailable` in v1** —
-  librespot exposes no local transport API; control happens from the Spotify app.
+- **now-playing** → each source publishes track/artist/album/art + play state to the bridge:
+  `librespot --onevent <hook>` for Spotify, shairport-sync's metadata pipe for AirPlay, the Roon
+  Core for Roon. **Transport is per-source and advertised as `nowPlaying.transport`** (see §5):
+  AirPlay via DACP and Roon via the Core are driven by the bridge; Spotify is driven by the client
+  against Spotify's Web API, because librespot has no local transport API by design.
 - **state readback** → the bridge owns current state (nexusqd's `status` is unimplemented); it
   caches what it sets + what librespot/ALSA report.
 

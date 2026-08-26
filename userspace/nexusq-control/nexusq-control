@@ -1485,6 +1485,10 @@ class Bridge:
         self.pulse = Pulse()
         self.mixer = Mixer()
         self.lock = threading.Lock()
+        # source id -> transport backend (see transport_for / dispatch_transport).
+        # Empty until a backend registers itself, which is deliberate: an absent
+        # backend must report `none`, not a promise it cannot keep.
+        self.transports = {}
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -1506,7 +1510,8 @@ class Bridge:
             "scene": "waveform",
             "output": output,
             "nowPlaying": {"playing": False, "artist": "", "track": "",
-                           "album": "", "artUrl": "", "source": ""},
+                           "album": "", "artUrl": "", "source": "",
+                           "transport": "none"},
             "name": DEVICE_NAME,
         }
         # Boot default OUTPUT: on a fresh boot PA's default is just its first
@@ -1644,12 +1649,13 @@ class Bridge:
             return {"brightness": b}, [("brightnessChanged", {"brightness": b})]
         if method == "getPlayState":
             with self.lock:
-                return dict(self.state["nowPlaying"]), []
+                np = dict(self.state["nowPlaying"])
+            # Recomputed on read, not served from the cache: a backend can
+            # register (or lose its sender) after the last metadata event, and a
+            # stale `transport` is exactly what makes a button lie.
+            return self._apply_transport(np), []
         if method in ("playPause", "next", "previous"):
-            # v1: librespot is a Spotify-Connect receiver with no local transport
-            # API — control happens from the Spotify app. Reserved for a future
-            # backend (e.g. go-librespot's HTTP API). See PROTOCOL.md §5.
-            raise Err("unavailable", "transport control not available in v1")
+            return self.dispatch_transport(method)
         if method == "startSetupMode":
             return start_setup_mode(), []
 
@@ -1994,6 +2000,76 @@ class Bridge:
                   ("volumeChanged", {"volume": vol_out, "muted": muted_out})]
         return {"output": oid}, events
 
+    # --- transport routing (PROTOCOL §5) --------------------------------
+    # Transport belongs to whatever is PLAYING, not to the bridge, and the three
+    # sources differ:
+    #
+    #   airplay  the sender's own DACP endpoint -- we have its id, token and port
+    #            from shairport-sync's metadata pipe, so the bridge can drive it
+    #   roon     RoonBridge is only an endpoint and accepts nothing; commands go
+    #            to the Roon Core, which the bridge talks to as an extension
+    #   spotify  librespot is a pure Connect implementation with no local control
+    #            interface, on purpose (upstream issues #457/#1473). Its own
+    #            answer is "use another Spotify client or the Web API", so the
+    #            APP does that and the device stays out of it
+    #
+    # This reports what is ACTUALLY WIRED, never what is possible in principle:
+    # advertising `device` for a backend that is absent would put dead buttons
+    # back in the app, which is the exact fault this field exists to remove.
+    def transport_for(self, source):
+        if source == "spotify":
+            return "spotify-web"
+        backend = self.transports.get(source)
+        if backend is not None and backend.can_control():
+            return "device"
+        return "none"
+
+    def _apply_transport(self, np):
+        np["transport"] = self.transport_for(np.get("source", ""))
+        if not np.get("source"):
+            np["transport"] = "none"
+        return np
+
+    def dispatch_transport(self, method):
+        """Route playPause/next/previous to whatever is playing (PROTOCOL §5)."""
+        with self.lock:
+            np = dict(self.state["nowPlaying"])
+        source = np.get("source", "")
+        route = self.transport_for(source)
+
+        if route == "spotify-web":
+            # Not a gap to be filled later: librespot has no local control
+            # interface by design. The app is expected to read
+            # nowPlaying.transport and drive Spotify's Web API itself, so
+            # reaching here means a client ignored the field.
+            raise Err("unavailable",
+                      "Spotify is driven through Spotify's own Web API by the "
+                      "client, not by the device (nowPlaying.transport = "
+                      "spotify-web)")
+        if route != "device":
+            raise Err("unavailable",
+                      "nothing is playing that this device can control")
+
+        backend = self.transports[source]
+        try:
+            result = backend.command(method)
+        except Err:
+            raise
+        except Exception as e:
+            raise Err("unavailable", f"{source} transport failed: {e}")
+
+        # A backend that knows the new play state says so; otherwise leave the
+        # cached state alone and let the source's own metadata feed correct it,
+        # rather than guessing and flickering the app's button.
+        events = []
+        if isinstance(result, dict) and "playing" in result:
+            np["playing"] = bool(result["playing"])
+            self._apply_transport(np)
+            with self.lock:
+                self.state["nowPlaying"] = np
+            events.append(("nowPlayingChanged", np))
+        return (result if isinstance(result, dict) else {}), events
+
     # --- librespot hook (internal, over the unix socket) ----------------
     def on_hook(self, obj):
         kind = obj.get("kind", "")
@@ -2023,6 +2099,7 @@ class Bridge:
                            {"volume": vol, "muted": self.state["muted"]})
             return
         if np is not None:
+            self._apply_transport(np)
             with self.lock:
                 self.state["nowPlaying"] = np
             self.broadcast("nowPlayingChanged", np)
