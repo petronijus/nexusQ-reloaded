@@ -452,12 +452,54 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > the streaming "Corked: no" counter carries good tests (six of them, both
 > mutations watched failing).
 >
-> ⏳ **Overnight passive measurement running from 2026-08-25 23:35** (`ARM_S=25200`,
-> `SETTLE_S=600`, arm `overnight_r17:-:-:-:-:-:-:-` — every knob a dash, so it
-> changes nothing and only snapshots). Output in `/var/log/nq-opp-study2-r17` on
-> the device; analyse with `scripts/diag/analyze-opp-snaps.py`. This is the first
-> reading of this whole question taken with everything settled and over hours
-> rather than over 90 s, which is what both wrong conclusions above lacked.
+> ✅ **Overnight passive measurement, 2026-08-25 23:35 → 06:45 (25 224 s), everything
+> settled, source idle throughout** (`ARM_S=25200 SETTLE_S=600`, arm
+> `overnight_r17:-:-:-:-:-:-:-` — every knob a dash, so it changed nothing and
+> only snapshotted). Raw snaps: `/var/log/nq-opp-study2-r17` on the device.
+>
+> | | |
+> |---|---|
+> | 350 MHz residency | **97.57 %** |
+> | relative dynamic power | **1.08×** a locked-350 floor — *below* the published 2026-08-19 idle baseline of **1.16×**, and that baseline was plain idle with no USB audio at all |
+> | `nexusq-uac2-in` cgroup | **2.158 %** of one core (alsaloop + watcher + its arecord) |
+> | `nexusqd` cgroup | **0.148 %** — settled; it was never the problem |
+> | governor transitions | 4848 (0.19/s), mean 350 MHz visit 15.6 s |
+> | die temp at end | **56.2 °C** |
+>
+> Source and sink read SUSPENDED for the whole window and the watcher logged no
+> transitions, because nothing played. No crashes, no module or process leaks.
+>
+> **r17 vs r16 is indistinguishable at this resolution.** The settled r16 spot
+> reading was ~2.02 % of a core; overnight r17 is ~2.31 % counting nexusqd and PA
+> — different windows, so neither is evidence of a difference. That is exactly
+> what "the sink already suspends without the change" predicts. r17 is harmless
+> and better-reasoned, but its benefit remains unproven; do not claim one.
+>
+> ### ⬜ NEXT, and it is bigger than anything left above: the USB gadget IRQ floor
+>
+> With **everything asleep**, `musb-hdrc` fires **~2000 interrupts per second**,
+> continuously — two lines at exactly 1000.00/s each, 25.2 million apiece across
+> the window, and re-confirmed live at **2006 IRQ/s**. That is the host's
+> isochronous stream being serviced once per USB frame whether it carries audio
+> or digital silence, which follows directly from the host never closing the
+> stream.
+>
+> The consequences are visible in the same capture and they are large:
+>
+> * **38 % of all busy CPU is outside every cgroup** (IRQ/softirq/kthreads) —
+>   **2.957 % of a core**, MORE than the entire USB-audio service we spent this
+>   work shrinking.
+> * **cpu0 reaches idle only 32.6 % of the time, mean 297 µs per idle spell**,
+>   against cpu1 at **94 % / 833 µs**. Woken roughly every 500 µs, cpu0 can never
+>   descend into deep idle at all.
+>
+> Nothing in PulseAudio, nexusqd or the watcher can touch this — it is below
+> userspace. Worth investigating: whether the UAC2 gadget can be told to stop
+> servicing the stream (or the UDC suspended) while the watcher knows the audio
+> is silent, without the host seeing the device disappear. Measure the actual
+> power delta first: 2000 IRQ/s on an OMAP4 may cost more in lost deep-idle
+> residency than in CPU time, and the CPU time alone is already 2.96 %.
+
 >
 > ⚠️ **Rule that came out of this:** never A/B a restarted daemon against a
 > long-running one. Check `ps -o etimes= -p $(pgrep -x nexusqd)` and wait past
