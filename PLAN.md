@@ -545,10 +545,20 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > | 5 (2 ms) | 388 B | fits the FIFO, endpoint enables — but the stream collapses to ~3000 of 48 000 frames/s |
 > | 6 (4 ms) | 772 B | > 512 B, refused outright |
 >
-> So even the size that fits does not work: musb's ISO scheduling will not carry
-> an interval longer than one frame either. **1 ms is forced, and ~2000 IRQ/s
+> So even the size that fits does not work. **1 ms is forced, and ~2000 IRQ/s
 > with it.** Both attempts reverted cleanly and the host resumed streaming
 > immediately each time.
+>
+> ⚠️ **Only bInterval 6 is fully explained.** The FIFO check accounts for it
+> exactly. bInterval 5 was *observed* to break — 3016 of 48 000 frames/s, with no
+> `usb_ep_enable` failure in dmesg — but not root-caused; "musb cannot schedule an
+> ISO interval longer than one frame" is an inference, not a measurement. Two
+> loose threads for anyone who revisits: musb's FIFO table is a platform
+> `fifo_cfg` and could in principle give that endpoint more than the default
+> 512 B, and at bInterval 6 the HOST reported `Data packet interval: 125 us`,
+> which is bInterval 1 and not what we asked for — so the descriptor the host
+> actually read may not have carried the value f_uac2 was given. Neither was
+> chased, because by then the change was being reverted.
 >
 > 🚨 **A landmine this created, and the lesson in it.** r83 shipped a gadget
 > script that *set* bInterval 6 at every boot. On the old kernel that write was
@@ -559,11 +569,14 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > designed for the wrong failure: it handled "the kernel says no" and not "the
 > kernel says yes and the hardware says no".
 >
-> **State:** kernel r51 stays (it boots fine and patch 0047 is inert while
-> nothing sets the value); device r84 no longer sets it and carries the whole
-> measurement table as a comment so nobody retries it. Patch 0047 should simply
-> be dropped at the next kernel rebuild — it enables nothing this hardware can
-> use.
+> **State: fully reverted, on the device and in the tree.** Patch 0047 is deleted
+> and the kernel is back to stock behaviour as **6.12.12-r52** — verified in the
+> artifact (`usb_f_uac2.ko` carries `1-4: fixed` again and `1-6` not at all),
+> trial-booted in 40 s, auto-promoted, both slots matching. Device **r84** no
+> longer sets the interval and carries the measurement table above as a comment
+> so nobody retries it. After the reboot: all services active, `c_hs_bint` back
+> to auto, host streaming 48 272 frames/s, source and sink SUSPENDED, and **zero**
+> `usb_ep_enable` failures.
 >
 > **What is left, if anything:** the only remaining way to stop the interrupts is
 > for the HOST to stop streaming. `dumpsys audio` shows `usb_device(4000)` as the
