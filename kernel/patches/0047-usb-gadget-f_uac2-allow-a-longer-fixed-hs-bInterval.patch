@@ -1,0 +1,81 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 26 Aug 2026 10:20:00 +0200
+Subject: [PATCH] usb: gadget: f_uac2: allow a longer fixed high-speed bInterval
+
+configfs refuses any fixed c_hs_bint/p_hs_bint above 4:
+
+	configfs-gadget.g1 gadget.0: Error: incorrect capture HS/SS
+	bInterval (1-4: fixed, 0: auto)
+
+That is a bare range check in afunc_validate_opts() with no bandwidth
+reasoning behind it. The actual bandwidth guard lives in
+set_ep_max_packet_size_bint(), which computes wMaxPacketSize for the
+requested interval and refuses to exceed the 1024-byte high-speed
+isochronous ceiling; this patch does not touch it.
+
+The interval matters on a small SoC because every service opportunity costs
+an endpoint interrupt AND a DMA-completion interrupt. On the Nexus Q
+(OMAP4460, musb) the UAC2 host is an Android TV box that never closes the
+stream -- its audio HAL keeps the streaming interface in altsetting 1
+permanently -- so the gadget takes a packet every frame whether it carries
+audio or digital silence. Measured over a seven-hour idle window: two musb
+IRQ lines at exactly 1000/s each, 25.2 million interrupts apiece, ~3 % of a
+core spent in IRQ/softirq outside every cgroup, and cpu0 reaching idle only
+32.6 % of the time with a mean idle spell of 297 us against cpu1's 833 us.
+
+Raising the cap to 6 lets that stream be serviced every 4 ms instead of every
+1 ms, cutting the interrupt rate fourfold, at the cost of 3 ms of buffering
+that an audio path with tens of milliseconds of cushion does not notice.
+
+6 and no further: for 2ch/16-bit/48 kHz async the packet is 196 B at
+bInterval 4 (confirmed against the host's own view -- Linux reports
+"Packet Size = 196, Data packet interval: 1000 us"), 388 B at 5 and 772 B at
+6, but 1544 B at 7. Past the ceiling the driver clamps wMaxPacketSize and
+silently drops audio, which is worse than refusing the setting.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+--- a/drivers/usb/gadget/function/f_uac2.c
++++ b/drivers/usb/gadget/function/f_uac2.c
+@@ -22,6 +22,26 @@
+ #define UAC2_CHANNEL_MASK 0x07FFFFFF
+ 
+ /*
++ * Largest FIXED high-speed bInterval configfs will accept. Upstream caps this at
++ * 4 (1 ms) with a bare range check that carries no bandwidth reasoning; the real
++ * guard is set_ep_max_packet_size_bint(), which computes wMaxPacketSize for the
++ * requested interval and refuses to exceed the 1024-byte high-speed isochronous
++ * ceiling. That guard is left untouched here.
++ *
++ * A longer interval is worth having on a small SoC, because every service
++ * opportunity costs an endpoint interrupt AND a DMA-completion interrupt. On the
++ * Nexus Q (OMAP4460) the UAC2 host never closes the stream, so musb runs at
++ * ~2000 IRQ/s around the clock even while the host sends nothing but digital
++ * silence -- roughly 3 % of a core on its own, and enough to hold cpu0 out of
++ * deep idle (32.6 % idle residency, woken every ~500 us).
++ *
++ * 6 (4 ms) and no further: for 2ch/16-bit/48 kHz async the packet is 196 B at
++ * bInterval 4, 388 B at 5 and 772 B at 6 -- but 1544 B at 7, past the ceiling,
++ * where the driver clamps wMaxPacketSize and silently drops audio.
++ */
++#define UAC2_MAX_HS_BINT 6
++
++/*
+  * The driver implements a simple UAC_2 topology.
+  * USB-OUT -> IT_1 -> FU -> OT_3 -> ALSA_Capture
+  * ALSA_Playback -> IT_2 -> FU -> OT_4 -> USB-IN
+@@ -1006,10 +1026,10 @@
+ 	else if ((opts->c_volume_max - opts->c_volume_min) % opts->c_volume_res)
+ 		msg = "incorrect capture volume resolution";
+ 
+-	else if ((opts->p_hs_bint < 0) || (opts->p_hs_bint > 4))
+-		msg = "incorrect playback HS/SS bInterval (1-4: fixed, 0: auto)";
+-	else if ((opts->c_hs_bint < 0) || (opts->c_hs_bint > 4))
+-		msg = "incorrect capture HS/SS bInterval (1-4: fixed, 0: auto)";
++	else if ((opts->p_hs_bint < 0) || (opts->p_hs_bint > UAC2_MAX_HS_BINT))
++		msg = "incorrect playback HS/SS bInterval (1-6: fixed, 0: auto)";
++	else if ((opts->c_hs_bint < 0) || (opts->c_hs_bint > UAC2_MAX_HS_BINT))
++		msg = "incorrect capture HS/SS bInterval (1-6: fixed, 0: auto)";
+ 
+ 	if (msg) {
+ 		dev_err(dev, "Error: %s\n", msg);

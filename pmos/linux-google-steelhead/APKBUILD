@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.12.12
-pkgrel=50
+pkgrel=51
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -77,6 +77,7 @@ source="
 	0044-ARM-OMAP4-steelhead-reboot-reason-scratchpad-fastboot.patch
 	0045-ASoC-tas571x-tas5713-expose-biquad-eq-controls.patch
 	0046-ASoC-tas571x-fix-biquad-coefficient-max-on-32-bit.patch
+	0047-usb-gadget-f_uac2-allow-a-longer-fixed-hs-bInterval.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -173,4 +174,5 @@ SKIP  0043-ARM-dts-omap4-steelhead-wifi-local-mac-address.patch
 SKIP  0044-ARM-OMAP4-steelhead-reboot-reason-scratchpad-fastboot.patch
 SKIP  0045-ASoC-tas571x-tas5713-expose-biquad-eq-controls.patch
 SKIP  0046-ASoC-tas571x-fix-biquad-coefficient-max-on-32-bit.patch
+SKIP  0047-usb-gadget-f_uac2-allow-a-longer-fixed-hs-bInterval.patch
 "

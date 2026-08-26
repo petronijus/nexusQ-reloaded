@@ -92,6 +92,22 @@ if [ ! -d "$G/functions/uac2.0" ]; then
 		echo 48000 > "$G/functions/uac2.0/c_srate"  2>/dev/null || true  # 48 kHz
 		echo 2     > "$G/functions/uac2.0/c_ssize"  2>/dev/null || true  # 16-bit
 		echo 0     > "$G/functions/uac2.0/p_chmask" 2>/dev/null || true  # no mic back to host
+		# Isochronous service interval. Every service opportunity costs musb TWO
+		# interrupts (the endpoint's and the DMA completion's), and the host here
+		# never closes the stream -- it holds altsetting 1 permanently and sends
+		# digital silence when nothing plays -- so at the default 1 ms that is
+		# ~2000 IRQ/s around the clock, about 3 % of a core and enough to keep
+		# cpu0 out of deep idle. 6 = 4 ms cuts that fourfold; the packet grows
+		# 196 -> 772 B, still inside the 1024 B high-speed ISO ceiling, and the
+		# 3 ms of extra buffering is nothing against the tens of ms of cushion
+		# downstream. Needs kernel patch 0047 (upstream caps fixed bInterval at
+		# 4); on a kernel without it the write is REFUSED and we fall back to
+		# auto, which is exactly the previous behaviour -- so this is safe to
+		# ship in either order.
+		if ! echo 6 > "$G/functions/uac2.0/c_hs_bint" 2>/dev/null; then
+			echo 0 > "$G/functions/uac2.0/c_hs_bint" 2>/dev/null || true
+			log "uac2: kernel refuses bInterval 6, using auto (1 ms)"
+		fi
 	else
 		log "uac2 function unavailable (no CONFIG_USB_CONFIGFS_F_UAC2?) — rndis+acm only"
 	fi
