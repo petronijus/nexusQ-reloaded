@@ -523,11 +523,52 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   is **linked into a config** (`Resource busy`) — unbinding the UDC is not
 >   enough, the symlink has to come out first.
 >
-> **So the next step, if it is taken, is a kernel patch** raising that cap from 4
-> to 6 and leaving every other guard alone. Then the open question becomes the
-> host's: does the Xiaomi box accept a 4 ms isochronous interval? Nothing can
-> answer that short of trying it, and `nq-kernel-ota`'s trial slot with
-> health-gated promote is exactly the right vehicle. Expected payoff: IRQ/softirq
-> CPU 2.957 % → roughly 0.7 %, and — probably worth more — cpu0 woken every ~2 ms
-> instead of every ~500 µs, which is what currently keeps its idle residency down
-> at 32.6 %.
+> #### ⛔ TRIED AND CLOSED 2026-08-26 — the interval cannot be lengthened on this SoC
+>
+> Kernel patch **0047** lifts f_uac2's own 1-4 cap and works: `c_hs_bint = 6` is
+> accepted, and it shipped as **6.12.12-r51** (trial-booted, healthy,
+> auto-promoted). The gadget then would not come up:
+>
+> ```
+> configfs-gadget.g1 gadget.0: usb_ep_enable failed for out_ep (-22)
+> ```
+>
+> **The ceiling is not the USB spec's 1024 B — it is musb's per-endpoint FIFO,
+> 512 B in the default config.** `musb_gadget_enable()` checks
+> `if (tmp > hw_ep->max_packet_sz_rx)` → *"packet size beyond hardware FIFO
+> size"* → `-EINVAL`. My arithmetic checked the spec ceiling and never the
+> hardware's, which is the whole mistake in one line.
+>
+> | bInterval | packet | result on the device |
+> |---|---|---|
+> | 4 (1 ms) | 196 B | works; what auto picks |
+> | 5 (2 ms) | 388 B | fits the FIFO, endpoint enables — but the stream collapses to ~3000 of 48 000 frames/s |
+> | 6 (4 ms) | 772 B | > 512 B, refused outright |
+>
+> So even the size that fits does not work: musb's ISO scheduling will not carry
+> an interval longer than one frame either. **1 ms is forced, and ~2000 IRQ/s
+> with it.** Both attempts reverted cleanly and the host resumed streaming
+> immediately each time.
+>
+> 🚨 **A landmine this created, and the lesson in it.** r83 shipped a gadget
+> script that *set* bInterval 6 at every boot. On the old kernel that write was
+> refused and fell back to auto — which is why it looked safe to ship in either
+> order — but on r51 the kernel ACCEPTS it and the endpoint then fails to enable,
+> so **USB audio would have been dead after every reboot**. Defused on the device
+> within a minute and removed properly in **r84**. The graceful fallback was
+> designed for the wrong failure: it handled "the kernel says no" and not "the
+> kernel says yes and the hardware says no".
+>
+> **State:** kernel r51 stays (it boots fine and patch 0047 is inert while
+> nothing sets the value); device r84 no longer sets it and carries the whole
+> measurement table as a comment so nobody retries it. Patch 0047 should simply
+> be dropped at the next kernel rebuild — it enables nothing this hardware can
+> use.
+>
+> **What is left, if anything:** the only remaining way to stop the interrupts is
+> for the HOST to stop streaming. `dumpsys audio` shows `usb_device(4000)` as the
+> active output for every stream and the Amlogic HAL never enters standby, so the
+> streaming interface sits in altsetting 1 permanently. That is a change to Petr's
+> TV box, not to this repo, and it would remove the interrupts entirely rather
+> than by a factor — worth a look if the idle power ever matters more than it
+> does now.

@@ -92,22 +92,28 @@ if [ ! -d "$G/functions/uac2.0" ]; then
 		echo 48000 > "$G/functions/uac2.0/c_srate"  2>/dev/null || true  # 48 kHz
 		echo 2     > "$G/functions/uac2.0/c_ssize"  2>/dev/null || true  # 16-bit
 		echo 0     > "$G/functions/uac2.0/p_chmask" 2>/dev/null || true  # no mic back to host
-		# Isochronous service interval. Every service opportunity costs musb TWO
-		# interrupts (the endpoint's and the DMA completion's), and the host here
-		# never closes the stream -- it holds altsetting 1 permanently and sends
-		# digital silence when nothing plays -- so at the default 1 ms that is
-		# ~2000 IRQ/s around the clock, about 3 % of a core and enough to keep
-		# cpu0 out of deep idle. 6 = 4 ms cuts that fourfold; the packet grows
-		# 196 -> 772 B, still inside the 1024 B high-speed ISO ceiling, and the
-		# 3 ms of extra buffering is nothing against the tens of ms of cushion
-		# downstream. Needs kernel patch 0047 (upstream caps fixed bInterval at
-		# 4); on a kernel without it the write is REFUSED and we fall back to
-		# auto, which is exactly the previous behaviour -- so this is safe to
-		# ship in either order.
-		if ! echo 6 > "$G/functions/uac2.0/c_hs_bint" 2>/dev/null; then
-			echo 0 > "$G/functions/uac2.0/c_hs_bint" 2>/dev/null || true
-			log "uac2: kernel refuses bInterval 6, using auto (1 ms)"
-		fi
+		# ⛔ Do NOT set c_hs_bint here. The isochronous service interval looks
+		# like the obvious idle-power lever -- the host never closes the stream, so
+		# at the default 1 ms musb takes ~2000 IRQ/s around the clock (an endpoint
+		# interrupt AND a DMA completion per packet), about 3 % of a core, and it
+		# keeps cpu0 out of deep idle. A longer interval would cut that
+		# proportionally. It does not work on THIS hardware, measured 2026-08-26:
+		#
+		#   bInterval 4 (1 ms)  packet 196 B  -- works, and is what auto picks
+		#   bInterval 5 (2 ms)  packet 388 B  -- endpoint enables, but the stream
+		#                                        collapses to ~3000 of 48000 frames/s
+		#   bInterval 6 (4 ms)  packet 772 B  -- refused outright:
+		#       usb_ep_enable failed for out_ep (-22)
+		#
+		# The ceiling is not the USB spec's 1024 B but musb's per-endpoint FIFO,
+		# 512 B in the default config, checked in musb_gadget_enable():
+		#       if (tmp > hw_ep->max_packet_sz_rx) -> "packet size beyond hardware
+		#       FIFO size" -> -EINVAL
+		# and 5, which does fit, still breaks -- so musb's ISO scheduling will not
+		# carry an interval longer than one frame either way. Kernel patch 0047
+		# (which lifts f_uac2's own 1-4 cap) is therefore inert here; it was written
+		# before this was known and is harmless only because nothing sets the value.
+		# Leaving it unset means auto, which walks 4 down to 1 and lands on 4.
 	else
 		log "uac2 function unavailable (no CONFIG_USB_CONFIGFS_F_UAC2?) — rndis+acm only"
 	fi
