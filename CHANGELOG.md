@@ -6,6 +6,34 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Found — Roon costs 36 % of a core doing nothing, and does not stop when switched off (2026-08-26)
+- A four-hour "every service on, nothing playing" benchmark, with zero playback
+  events in the journal: **pulseaudio 34.10 % of a core** (0.02 % without Roon),
+  nexusqd 7.43 %, die **72–78 °C** against 55–59 °C. RoonBridge holds its aloop
+  stream open while idle, so its `module-loopback` never corks, PulseAudio
+  resamples forever and the sink never suspends — **structurally the same fault
+  Step 6 removed from USB audio**, arriving through a different source.
+- ⛔ **`setService roon off` does not stop it.** The unit goes inactive and every
+  Roon process exits, but `roon-nexusq` never unloads the two PA modules it
+  loaded, so PulseAudio kept burning **34.58 %** from a source with nothing
+  behind it. Turning Roon off in the app leaves the device hot until PulseAudio
+  restarts. `nexusq-uac2-in` already unloads its modules in a SIGTERM trap and is
+  the model to copy. Not yet fixed — PLAN.md Step 8a.
+- Nothing here is a regression from our work: the watcher suspended `usb_in`
+  correctly throughout. It simply cannot win while another source holds the sink.
+
+### Added — per-source transport routing (2026-08-26, `nexusq-control` r33+)
+- `nowPlaying.transport` (`device` / `spotify-web` / `none`) tells a client
+  whether its buttons work without knowing which source is playing. It reports
+  what is **actually wired**, never what is possible in principle — a source
+  whose backend is missing, or present but not yet able to control, says `none`.
+  Advertising a capability we do not have would just move the dead buttons.
+- **librespot stays.** Checked against upstream rather than our own comment: its
+  changelog has never carried an API, D-Bus, MPRIS or socket, and the request is
+  open as issues #457/#1473. Upstream's answer is "another Spotify client, or the
+  Web API" — so the app will do that and the device is left alone, instead of
+  swapping in go-librespot (twice the binary, native deps, our own Go build).
+
 ### Fixed — USB audio stops computing silence (2026-08-25, device **r82**)
 - The UAC2 host never closes the stream: the gadget capture advances for the whole
   uptime whether anything plays or not. So PulseAudio resampled 48000 → ~48003

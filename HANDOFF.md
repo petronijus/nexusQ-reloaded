@@ -4,7 +4,125 @@
 
 Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
 
-## Session 2026-08-24/25 (latest, night): **saved EQ presets shipped + released · iOS release plumbing created, blocked on one browser step · Step 6 measured and designed — 28.8 % → 0.4 % of a core, amp suspends, 0 ms return**
+## Session 2026-08-26 (latest): **Roon costs 36 % of a core doing nothing — and leaks its PA modules when you turn it off · USB IRQ floor closed · transport routing landed · two of my own measurement traps corrected**
+
+### 🔴 THE FINDING OF THE DAY — Roon, and it is not small
+
+A four-hour "everything on, nothing playing" benchmark was supposed to be
+boring. It was not:
+
+| | Roon off | Roon on |
+|---|---|---|
+| pulseaudio | 0.02 % of a core | **34.10 %** |
+| nexusqd | 0.06 % | 7.43 % |
+| die temp | 55–59 °C | **72–78 °C** |
+
+Nothing played during the window — zero playback events in the journal.
+RoonBridge holds its aloop stream open while idle, so `roon_in` stays RUNNING,
+its `module-loopback` stays uncorked, PulseAudio resamples forever and the sink
+never suspends. **It is the same pathology Step 6 spent two days removing from
+USB audio, arriving through a different door.** Our watcher behaves correctly
+throughout — it suspends `usb_in` — but it cannot help, because Roon holds the
+sink awake and that keeps the USB loopback uncorked too.
+
+### 🔴 WORSE: turning Roon off does not stop the cost
+
+`setService roon off` leaves the unit `inactive`/`disabled` and every Roon
+process gone — but its **PulseAudio modules stay loaded**, and PA kept burning
+**34.58 %** from a source with nothing behind it. `roon-nexusq` loads
+`module-alsa-source` + `module-loopback` and never unloads them;
+`nexusq-uac2-in` does exactly this correctly, in a SIGTERM trap, and is the
+model to copy.
+
+In practice: **turn Roon off in the app and the device stays hot forever**, until
+PulseAudio restarts. Cleared by hand today (unload loopback, then its source);
+verified afterwards that the unit, every process, the PA modules and all four
+`RoonLoop` substreams were gone/closed.
+
+⚠️ While clearing them I also lost the USB loopback (`lb=0`) — USB audio would
+not have played. Caught on the pre-flight check before starting the next
+measurement and fixed by restarting `nexusq-uac2-in`. Check `src=1 lb=1` after
+touching PA modules.
+
+### ⏳ Running right now
+Overnight passive measurement, started 18:30, 15 min settle + a **10 h window**,
+ending ~05:00: `/var/log/nq-opp-study2-noroon` on the device, arm
+`noroon:-:-:-:-:-:-:-` (every knob a dash — changes nothing). Spotify and AirPlay
+ON and idle, USB audio ON and asleep, Roon OFF and verified gone. Analyse with
+`scripts/diag/analyze-opp-snaps.py`. Its question: do librespot and
+shairport-sync cost anything at all when idle?
+
+### Shipped today
+- **Transport routing** (`241b48c`): `nowPlaying.transport` = `device` /
+  `spotify-web` / `none`, so a client decides whether its buttons work without
+  knowing the source. Reports what is **actually wired**, never what is possible
+  in principle. 11 tests, three mutations watched failing — one exposed a weak
+  test of my own. No backends yet, so everything except Spotify says `none`.
+- **Kernel 6.12.12-r52 + device r84**: the USB-interrupt investigation, reverted.
+- **nexusqd r17**: the uncorked-sink-input gate, restored after a wrong revert.
+
+### Corrected today — two traps, both mine
+1. **nexusqd needs ~300 s after a restart** before any idle measurement: it
+   animates the screensaver at ~1.4 % of a core until the memcmp gate settles it
+   to ~0.07 %. Comparing a fresh instance against a settled one invented the
+   "the visualiser tap holds the amp awake" problem AND then declared the fix for
+   it a regression. Both were artifacts. Memory:
+   `nexusqd-needs-300s-before-measuring`.
+2. **The "latency creep" was a start-up ramp.** `16 → 26 → 36 ms` arrives within
+   one second of every loopback load and stops there. Step 7 closed, not deferred.
+3. **I truncated PLAN.md by 1200 lines** in `5c11183` and did not notice; three
+   commits built on the wreck. Restored in `ccb32f3`. Cause: splicing by a
+   searched anchor that had been re-wrapped, so `find()` returned −1 and the
+   slice kept almost nothing. Assert BOTH ends, or splice by line index.
+
+---
+
+## 🔜 NEXT SESSION — in priority order
+
+1. **Collect the overnight `noroon` measurement** (~05:00). Answers whether
+   Spotify/AirPlay idle cost anything.
+2. **Fix the Roon PA-module leak** — `roon-nexusq` must unload its two modules on
+   stop, in a trap, loopback before source. Mirror `nexusq-uac2-in`'s `stop_all`.
+   This is a user-visible bug: turning Roon off leaves the device hot.
+3. **Roon silence watcher** — `nq-uac2-silence` is already parameterised
+   (`NQ_UAC2_SOURCE`, `NQ_UAC2_ALOOP`), so `roon_in` + `RoonLoop` should need no
+   new code, only a second instance and a rename. Verify RoonBridge keeps feeding
+   `RoonLoop` while the PA source is suspended — the whole wake path depends on it.
+4. **Transport backends** (PROTOCOL §5 contract is already in):
+   - **AirPlay**: shairport-sync's build has `--metadata-enable`,
+     `--metadata-pipename`, `-g` and a DACP monitor compiled in, but our config
+     enables none of it. The pipe gives `daid` / `acre` / `dapo` (DACP id, token,
+     PORT). ⚠️ Still unknown: where the sender's **IP** comes from — check
+     shairport-sync's `ssnc` codes before writing the client.
+   - **Roon**: register as an extension with the Core (192.168.20.105) and drive
+     transport on the zone. **Petr must enable it once** in Roon → Settings →
+     Extensions.
+5. **Spotify transport = Web API, in the app.** Decided after checking upstream:
+   librespot has no local control interface by design (issues #457/#1473) and
+   upstream's own answer is "another client, or the Web API". **librespot stays.**
+   Petr must register an app on developer.spotify.com (client ID + redirect URI)
+   and log in once; needs Premium. Gate the buttons on `GET /me/player` showing
+   the Nexus Q as the active device, or a pause would stop his laptop instead.
+6. **App**: drive the transport buttons from `nowPlaying.transport`, never from
+   `source`. Today they are dead for every source and nothing says so.
+7. **iOS release** — App ID, distribution profile, ExportOptions and the Keychain
+   entitlement are all done and committed. Blocked on Petr: create the App Store
+   Connect record (name + SKU; Apple forbids it over the API) and choose the Mac
+   (the macOS VM needs Windows shut down first, or use the MacBook).
+8. **The stray file on the Nokia** — `ssh root@10.42.0.2 'rm -f
+   /usr/bin/nexusq-control'`. Confirmed mine by md5. See
+   `verify-host-identity-before-writing`.
+
+### Not worth doing
+- **Lengthening the USB isochronous interval.** Closed with measurements: musb's
+  512 B per-endpoint FIFO refuses the 772 B a 4 ms interval needs, and the 388 B
+  of 2 ms breaks the stream anyway. ~2000 IRQ/s is forced. Only the HOST could
+  stop it, and its HAL never enters standby. Full table in PLAN.md Step 6.
+
+---
+
+
+## Session 2026-08-24/25 (night): **saved EQ presets shipped + released · iOS release plumbing created, blocked on one browser step · Step 6 measured and designed — 28.8 % → 0.4 % of a core, amp suspends, 0 ms return**
 
 ### Shipped and released
 `nexusq-control` **r33** + app **1.16.2+46**, released as `app-v1.16.2` with the

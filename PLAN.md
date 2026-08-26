@@ -618,6 +618,53 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > that day's experiments reloaded it repeatedly. No window has ever passed
 > 36 ms. Nothing to chase.
 >
+> ### Step 8 — Roon idles exactly like USB audio used to ⬜ ← THE BIG ONE NOW
+> Found by the 2026-08-26 "everything on, nothing playing" benchmark, which was
+> meant to be boring. Four hours, zero playback events in the journal:
+>
+> | | Roon off | Roon on |
+> |---|---|---|
+> | pulseaudio | 0.02 % of a core | **34.10 %** |
+> | nexusqd | 0.06 % | 7.43 % |
+> | die temp | 55–59 °C | **72–78 °C** |
+> | CPU busy over the window | ~2 % | **31.42 %** |
+>
+> RoonBridge holds its aloop stream open while idle, so `roon_in` stays RUNNING,
+> its `module-loopback` stays uncorked, PulseAudio resamples forever and the sink
+> never suspends. **Structurally identical to what Step 6 removed from USB
+> audio.** The watcher behaves correctly throughout — it suspends `usb_in` — but
+> cannot help: Roon holds the sink awake, and an awake sink keeps the USB
+> loopback uncorked as well. nexusqd's 7.43 % is the same story one level up, its
+> visualiser tap running because uncorked inputs exist.
+>
+> #### 8a. The module leak — fix this first, it is user-visible ⬜
+> `setService roon off` leaves the unit `inactive`/`disabled` and every Roon
+> process gone, but its **PA modules stay loaded** and PulseAudio kept burning
+> **34.58 %** from a source with nothing behind it. `roon-nexusq` loads
+> `module-alsa-source` + `module-loopback` (see its lines ~85-89) and never
+> unloads them. So **turning Roon off in the app leaves the device hot forever**,
+> until PulseAudio restarts.
+>
+> `nexusq-uac2-in` already does this correctly and is the model: a SIGTERM trap
+> that unloads the **loopback first, then its source**, with `KillMode=mixed` so
+> the `pactl` children survive the shell's own SIGTERM long enough to finish.
+>
+> ⚠️ Clearing the leak by hand also dropped the USB loopback (`lb=0`) — USB audio
+> would not have played. After touching PA modules, always re-check
+> `src=1 lb=1`; `systemctl --user restart nexusq-uac2-in` rebuilds the hop.
+>
+> #### 8b. A silence watcher for Roon ⬜
+> `nq-uac2-silence` was written parameterised — `NQ_UAC2_SOURCE` and
+> `NQ_UAC2_ALOOP` — so `roon_in` + `RoonLoop` should need **no new code**, only a
+> second instance and a name that no longer says "uac2".
+>
+> ⚠️ **Verify one assumption before building:** the wake path needs RoonBridge to
+> keep feeding `hw:RoonLoop,0,0` while the PA source is suspended, exactly as
+> `alsaloop` does for USB. If RoonBridge stops writing when PA closes the capture
+> side, the watcher goes deaf and the design does not transfer. Check it first;
+> do not assume it because the shape looks the same.
+>
+
 > ### Already queued, unrelated to PulseAudio — ALL LANDED as of 2026-08-26
 > Every item here has since shipped; kept so the trail is legible, not as work.
 > - **device r81** → superseded; **r84** is installed. The warning attached to it
