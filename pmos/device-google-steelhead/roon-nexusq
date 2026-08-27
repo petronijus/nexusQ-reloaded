@@ -22,6 +22,32 @@
 # the chroot is root-owned 0700 and NOT writable (measured 2026-07-17).
 set -e
 
+# --- teardown (ExecStopPost) ------------------------------------------------
+# The PA modules loaded below MUST be unloaded when Roon stops, and this script
+# cannot do it itself: it ends in `exec bwrap`, which replaces the shell, so any
+# trap it might set is gone by then. `exec` is deliberate — signals should reach
+# the sandbox directly, and there is nothing here to supervise — so the cleanup
+# belongs in the unit's ExecStopPost rather than in a trap.
+#
+# Without it, turning Roon off left `roon_in` and its loopback loaded, and
+# PulseAudio kept resampling from a source with nothing behind it: measured
+# 2026-08-26 at **34.58 % of a core, indefinitely**, with the amp sink held awake
+# and the die ~17 °C hotter. `setService roon off` looked like it had worked.
+#
+# Loopback FIRST, then its source — the same order nexusq-uac2-in unwinds in.
+# Unloading the source first leaves the loopback briefly pointing at nothing.
+if [ "${1:-}" = "--teardown" ]; then
+	for m in $(pactl list short modules 2>/dev/null \
+	           | grep -e "source=roon_in" | cut -f1); do
+		pactl unload-module "$m" >/dev/null 2>&1 || true
+	done
+	for m in $(pactl list short modules 2>/dev/null \
+	           | grep -e "source_name=roon_in" | cut -f1); do
+		pactl unload-module "$m" >/dev/null 2>&1 || true
+	done
+	exit 0
+fi
+
 ROOT=/opt/glibc-rt
 APPDIR="$ROOT/opt/RoonBridge"
 RB_URL="https://download.roonlabs.com/builds/RoonBridge_linuxarmv7hf.tar.bz2"

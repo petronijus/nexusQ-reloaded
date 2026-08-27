@@ -24,6 +24,13 @@ ConditionPathExists=/opt/glibc-rt/bin/bash
 
 [Service]
 ExecStart=/usr/bin/roon-nexusq
+# Unload the PA source + loopback the launcher created. It cannot do this itself:
+# it ends in `exec bwrap`, so no trap of its own survives. Without this,
+# `setService roon off` left PulseAudio resampling from a source with nothing
+# behind it — measured 2026-08-26 at 34.58 % of a core, indefinitely, with the
+# amp sink held awake and the die ~17 °C hotter. ExecStopPost runs whether the
+# unit stopped cleanly or died.
+ExecStopPost=/usr/bin/roon-nexusq --teardown
 # First run has to fetch RoonBridge over the network; if that (or the Bridge)
 # fails, back off and retry rather than give up.
 Restart=on-failure

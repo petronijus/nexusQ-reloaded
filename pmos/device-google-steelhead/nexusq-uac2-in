@@ -99,18 +99,24 @@ sleep 1   # let alsaloop open the playback side before PA opens the capture side
 # PA reads the stable capture side and loops it into the default sink (mixes with
 # everything, follows output switching). Load the source FIRST so it pins the pair
 # at s16le/48k, then the loopback.
-MOD_SRC=$(pa load-module module-alsa-source device="hw:$ALOOP,1,$SUB" \
-	source_name="$SRC" source_properties=device.description=USBAudio \
-	rate=48000 channels=2 format=s16le)
-MOD_LB=$(pa load-module module-loopback source="$SRC" latency_msec="$LOOPLAT")
-
+start_source() {
+	MOD_SRC=$(pa load-module module-alsa-source device="hw:$ALOOP,1,$SUB" \
+		source_name="$SRC" source_properties=device.description=USBAudio \
+		rate=48000 channels=2 format=s16le)
+}
+start_loopback() {
+	MOD_LB=$(pa load-module module-loopback source="$SRC" latency_msec="$LOOPLAT")
+	fix_loopback_volume
+}
 # module-loopback's sink-input can come up MUTED / attenuated: module-stream-restore
 # restores a saved volume/mute for the "Loopback from USBAudio" stream, and a stale
 # 0%/muted entry makes USB audio silent while everything else (amp, source) looks
 # fine. Force the stream to unity, unmuted — USB audio is a full-level passthrough;
 # loudness belongs to the sink (ring) + the source, not this internal hop. Retry a
-# few ticks because the sink-input appears just after the module loads.
-if [ -n "$MOD_LB" ]; then
+# few ticks because the sink-input appears just after the module loads. Runs after
+# EVERY loopback load, including a re-load by the supervisor below.
+fix_loopback_volume() {
+	[ -n "$MOD_LB" ] || return 0
 	j=0
 	while [ "$j" -lt 10 ]; do
 		si=$(pactl list sink-inputs 2>/dev/null | awk -v m="$MOD_LB" '
@@ -123,7 +129,36 @@ if [ -n "$MOD_LB" ]; then
 		pa set-sink-input-mute "$si" 0
 		pa set-sink-input-volume "$si" 100%
 	fi
-fi
+}
+
+# Is a module index still loaded?
+mod_alive() {
+	[ -n "$1" ] || return 1
+	pa list short modules 2>/dev/null | cut -f1 | grep -qx "$1"
+}
+
+# Our two PA modules can vanish underneath us WITHOUT this service being touched.
+# Measured 2026-08-27: unloading ANY other module-alsa-source — turning Roon off
+# does exactly that — takes our module-loopback with it, reproducibly, and then
+# USB audio is silent while the unit still reads `active`, alsaloop still runs and
+# the source module is still there. Nothing logs it. So the service supervises the
+# modules it owns, exactly as it supervises alsaloop and the watcher; the source
+# goes first because the loopback is meaningless without it.
+ensure_modules() {
+	if ! mod_alive "$MOD_SRC"; then
+		echo "nexusq-uac2-in: PA source module vanished, reloading" >&2
+		start_source
+		MOD_LB=""            # a loopback pointing at the old source is useless
+	fi
+	if ! mod_alive "$MOD_LB"; then
+		echo "nexusq-uac2-in: PA loopback module vanished, reloading" >&2
+		start_loopback
+	fi
+}
+
+start_source
+start_loopback
+
 
 # Idle power: with nothing playing, the host still streams and PulseAudio still
 # resamples, which measured 28.83 % of one core (PA alone 27.17 %) and kept the amp
@@ -159,4 +194,5 @@ while : ; do
 		echo "nexusq-uac2-in: silence watcher died, restarting it" >&2
 		start_silence
 	fi
+	ensure_modules
 done
