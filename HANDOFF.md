@@ -44,13 +44,15 @@ not have played. Caught on the pre-flight check before starting the next
 measurement and fixed by restarting `nexusq-uac2-in`. Check `src=1 lb=1` after
 touching PA modules.
 
-### ⏳ Running right now
-Overnight passive measurement, started 18:30, 15 min settle + a **10 h window**,
-ending ~05:00: `/var/log/nq-opp-study2-noroon` on the device, arm
-`noroon:-:-:-:-:-:-:-` (every knob a dash — changes nothing). Spotify and AirPlay
-ON and idle, USB audio ON and asleep, Roon OFF and verified gone. Analyse with
-`scripts/diag/analyze-opp-snaps.py`. Its question: do librespot and
-shairport-sync cost anything at all when idle?
+### ✅ Collected 2026-08-27 — Spotify and AirPlay are free, Roon is the whole problem
+The 10 h no-Roon window came back at **1.04× a locked-350 floor**, the lowest
+figure this project has ever measured — lower than the 2026-08-19 idle baseline
+of 1.16×, and that window contains **2 h 25 min of Petr actually listening**
+(dated precisely by the watcher's own log). Per service: `librespot` does not
+appear in the cgroup listing at all, `shairport-sync` is 0.66 %, and PulseAudio's
+6.32 % is almost entirely the playback. **Leaving Spotify and AirPlay on costs
+nothing.** The watcher woke three times, 2–3 ms each, unnoticed. Full table in
+PLAN.md.
 
 ### Shipped today
 - **Transport routing** (`241b48c`): `nowPlaying.transport` = `device` /
@@ -79,8 +81,7 @@ shairport-sync cost anything at all when idle?
 
 ## 🔜 NEXT SESSION — in priority order
 
-1. **Collect the overnight `noroon` measurement** (~05:00). Answers whether
-   Spotify/AirPlay idle cost anything.
+1. ~~Collect the overnight `noroon` measurement~~ — done, see above.
 2. **Fix the Roon PA-module leak** — `roon-nexusq` must unload its two modules on
    stop, in a trap, loopback before source. Mirror `nexusq-uac2-in`'s `stop_all`.
    This is a user-visible bug: turning Roon off leaves the device hot.

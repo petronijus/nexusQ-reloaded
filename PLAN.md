@@ -665,6 +665,50 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > do not assume it because the shape looks the same.
 >
 
+> ### Measured 2026-08-27 — what each service actually costs ✅
+> A 10 h window, 2026-08-26 18:45 → 08-27 04:46, Spotify + AirPlay + USB audio
+> on, Roon off and verified gone (unit, processes, PA modules and all four
+> `RoonLoop` substreams). Raw: `/var/log/nq-opp-study2-noroon`.
+>
+> ⚠️ **Not a pure idle window — Petr listened.** The watcher's own log dates it
+> exactly: awake 20:08:36 → 20:43:39 and 20:44:28 → 22:35:03, so about **2 h 25
+> min of real playback** inside 10 hours, plus an 11-second blip from the box at
+> 04:33. That makes this a realistic evening-plus-night figure rather than an
+> idle floor, which is the more useful number of the two — but do not quote it as
+> idle.
+>
+> | | |
+> |---|---|
+> | **relative dynamic power** | **1.04×** a locked-350 floor |
+> | 350 MHz residency | 98.36 % |
+> | CPU busy | 10.47 % |
+> | governor | 0.25 transitions/s, mean 350 MHz visit **9.3 s** |
+>
+> **1.04× is the lowest we have ever measured — below the 2026-08-19 idle
+> baseline of 1.16 %, and with two and a half hours of music inside it.** Not a
+> contradiction: the work happened at 350 MHz, where a second is cheap, so more
+> CPU time bought less energy. It is the clearest argument yet for judging this
+> device by the OPP mix and not by CPU per cent.
+>
+> **Per service (% of one core, averaged over the window):**
+>
+> ```
+> pulseaudio        6.32 %   <- almost entirely the 2 h 25 of playback
+> nexusq-uac2-in    2.54 %
+> nexusqd           2.23 %   <- visualiser tap, running while music played
+> shairport-sync    0.66 %
+> librespot           --     <- does not appear in the cgroup listing at all
+> ```
+>
+> **So leaving Spotify Connect and AirPlay switched on costs nothing worth
+> measuring** — librespot is not even visible, shairport-sync is 0.66 %. The only
+> service with a real idle cost is **Roon at ~34 %** (Step 8). That is the answer
+> to "what does having everything on cost": everything except Roon is free.
+>
+> The watcher also proved itself in production over that window: **three wakes,
+> 2–3 ms each**, and Petr did not notice one.
+>
+
 > ### Already queued, unrelated to PulseAudio — ALL LANDED as of 2026-08-26
 > Every item here has since shipped; kept so the trail is legible, not as work.
 > - **device r81** → superseded; **r84** is installed. The warning attached to it
