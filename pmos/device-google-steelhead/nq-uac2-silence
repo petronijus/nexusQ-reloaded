@@ -41,6 +41,23 @@ import subprocess
 import sys
 import time
 
+# Two ways to know a source is idle, because the two sources idle differently:
+#
+#   silence   (USB audio) the host NEVER stops streaming -- it holds altsetting 1
+#             forever and sends digital silence -- so idleness has to be read out
+#             of the samples themselves.
+#   producer  (Roon) RoonBridge writes nothing at all when idle: it does not even
+#             open the aloop playback side. Measured 2026-08-27 -- with Roon on
+#             and nothing playing, `/proc/asound/RoonLoop/pcm0p` reads `closed`
+#             and 0 frames/s. The cost is PulseAudio reading an aloop capture
+#             side with no producer behind it, and snd-aloop dutifully handing it
+#             generated silence. So there is nothing to scan: watching whether
+#             the producer has the PCM open is the whole answer, and it costs one
+#             small /proc read a few times a second instead of decoding 48 kHz.
+MODE = os.environ.get("NQ_WATCH_MODE", "silence")
+PRODUCER_PCM = os.environ.get("NQ_PRODUCER_PCM", "")
+PRODUCER_POLL = float(os.environ.get("NQ_PRODUCER_POLL", "0.2"))
+
 SOURCE = os.environ.get("NQ_UAC2_SOURCE", "usb_in")
 RATE = int(os.environ.get("NQ_UAC2_RATE", "48000"))
 ALOOP = os.environ.get("NQ_UAC2_ALOOP", "Loopback")
@@ -257,7 +274,56 @@ class Watcher:
             log(f"{why} -> source resumed")
         return True
 
+    # -- producer mode: is anything holding the feeding PCM open? ---------
+    def producer_active(self):
+        """True while the producer has its PCM open.
+
+        A missing file counts as INACTIVE, not as an error: the aloop card can
+        disappear between polls, and an unreadable state must never be read as
+        "audio is playing" -- that would just pin the source awake forever, which
+        is the condition this exists to remove."""
+        try:
+            with open(PRODUCER_PCM) as f:
+                first = f.readline().strip()
+        except OSError:
+            return False
+        return first != "closed"
+
+    def run_producer(self):
+        """Suspend while nothing feeds the source; resume the moment something
+        does. No audio is read at all."""
+        idle_since = None
+        while not self.stop:
+            active = self.producer_active()
+            if self.asleep:
+                if active:
+                    t0 = time.monotonic()
+                    suspend(False)
+                    self.asleep = False
+                    log(f"producer opened {PRODUCER_PCM} -> source resumed "
+                        f"({(time.monotonic() - t0) * 1000:.0f} ms)")
+                    idle_since = None
+            elif active:
+                idle_since = None
+            else:
+                now = time.monotonic()
+                if idle_since is None:
+                    idle_since = now
+                elif now - idle_since >= SLEEP_AFTER:
+                    if suspend(True):
+                        self.asleep = True
+                        log("producer idle -> source suspended")
+                    idle_since = None
+            time.sleep(PRODUCER_POLL)
+        return 0
+
     def run(self):
+        if MODE == "producer":
+            if not PRODUCER_PCM:
+                log("NQ_WATCH_MODE=producer needs NQ_PRODUCER_PCM")
+                return 1
+            log(f"watching {PRODUCER_PCM} for {SOURCE}")
+            return self.run_producer()
         if not self.start_awake():
             return 1
         silent_since = None

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=85
+pkgrel=86
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -123,6 +123,7 @@ source="
 	61_airplay.nft
 	roon-nexusq
 	roon.service
+	nexusq-roon-idle.service
 	nexusq-uac2-in
 	nexusq-uac2-in.service
 	nq-uac2-silence
@@ -512,6 +513,10 @@ package() {
 		"$pkgdir"/usr/bin/roon-nexusq
 	install -Dm644 "$srcdir"/roon.service \
 		"$pkgdir"/usr/lib/systemd/user/roon.service
+	# Idle guard for the Roon PA hop (see the unit header). No preset/symlink:
+	# roon.service Wants= it, so it follows Roon without being enabled.
+	install -Dm644 "$srcdir"/nexusq-roon-idle.service \
+		"$pkgdir"/usr/lib/systemd/user/nexusq-roon-idle.service
 	# USB Audio input: UAC2 gadget capture -> alsaloop -> snd-aloop (Loopback) ->
 	# PA module-alsa-source usb_in -> module-loopback -> default sink, so it mixes
 	# with Spotify/AirPlay/Roon (see nexusq-uac2-in for the stable-clock rationale).
@@ -636,6 +641,7 @@ SKIP  shairport-sync.conf
 SKIP  61_airplay.nft
 SKIP  roon-nexusq
 SKIP  roon.service
+SKIP  nexusq-roon-idle.service
 SKIP  nexusq-uac2-in
 SKIP  nexusq-uac2-in.service
 SKIP  nq-uac2-silence

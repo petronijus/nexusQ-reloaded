@@ -17,6 +17,9 @@ Documentation=https://roonlabs.com
 Documentation=file:///../docs/2026-07-17-roon-tidal-feasibility.md
 After=pulseaudio.service network-online.target
 Wants=pulseaudio.service network-online.target
+# Idle guard: pulled in here rather than enabled, because Roon itself is never
+# auto-enabled (the app toggles it). It BindsTo this unit, so it stops with Roon.
+Wants=nexusq-roon-idle.service
 # Pin to the appliance user, and refuse to start if the baked glibc base is
 # somehow absent (rather than fail obscurely inside bwrap).
 ConditionUser=10000

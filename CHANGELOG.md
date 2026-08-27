@@ -6,6 +6,37 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — Roon idle cost, and the USB audio it took down with it (2026-08-27, device **r85** + **r86**)
+- **Roon on and idle: PulseAudio 12.60 % → 0.82 % of a core**, sink suspended,
+  wake 0 ms. `nexusq-roon-idle.service` suspends the PA source while nothing
+  plays.
+- **The expected design was wrong, and checking it first is why it got better.**
+  The plan assumed Roon idled like USB audio — a producer streaming silence
+  forever — so it called for a silence watcher. It does not: RoonBridge writes
+  nothing while idle and does not even open the aloop playback side
+  (`/proc/asound/RoonLoop/pcm0p` = `closed`, 0 frames/s). The cost was PulseAudio
+  reading an aloop **capture** side with no producer behind it, which snd-aloop
+  answers with generated silence. So there is nothing to scan: the watcher gained
+  a `producer` mode that reads one small `/proc` file 5×/s instead of decoding
+  48 kHz.
+- **The module leak is fixed** with `ExecStopPost=roon-nexusq --teardown`, not a
+  trap: the launcher ends in `exec bwrap`, so no trap of its own survives.
+- 🔴 **And the leak fix exposed a worse fault: unloading ANY
+  `module-alsa-source` takes our USB `module-loopback` with it.** Isolated —
+  unloading Roon's loopback leaves ours alone, unloading Roon's alsa-source kills
+  it, reproducibly; the teardown was checked and matches only Roon's own modules,
+  so this is PulseAudio's behaviour. The effect was that **turning Roon off
+  silenced USB audio** while the unit read `active`, `alsaloop` ran, the source
+  module was present and nothing was logged. `nexusq-uac2-in` now supervises the
+  modules it owns in the loop that already watches alsaloop, reloading the source
+  first and then the loopback with its volume fix-up — which became a function so
+  a reload gets it too, or `module-stream-restore` could bring the stream back
+  muted.
+- The guard needs no preset and no enable symlink: `roon.service` `Wants=` it and
+  it `BindsTo` roon.service, because Roon itself is deliberately never
+  auto-enabled. Verified both directions — Roon on brings it up, Roon off takes it
+  down leaving zero modules, zero processes and the USB chain intact.
+
 ### Found — Roon costs 36 % of a core doing nothing, and does not stop when switched off (2026-08-26)
 - A four-hour "every service on, nothing playing" benchmark, with zero playback
   events in the journal: **pulseaudio 34.10 % of a core** (0.02 % without Roon),

@@ -1,0 +1,32 @@
+# Roon idle guard — suspend the PA source while RoonBridge is not playing.
+#
+# Roon on and idle cost 12-34 % of a core with nothing playing, and it is NOT the
+# shape USB audio has: RoonBridge writes nothing when idle and does not even open
+# the aloop playback side (measured 2026-08-27 — `/proc/asound/RoonLoop/pcm0p`
+# reads `closed`, 0 frames/s). The cost is PulseAudio reading an aloop CAPTURE
+# side with no producer behind it, which snd-aloop happily answers with generated
+# silence. So there is nothing to scan for: watching whether the producer holds
+# its PCM open is the whole signal, and suspending `roon_in` on that took
+# PulseAudio from 12.60 % to 0.80 % with the sink suspended and a 0 ms return.
+#
+# NO [Install] section on purpose. roon.service is a user unit that is
+# deliberately never auto-enabled — the app turns Roon on and off — so this one
+# is pulled in by roon.service's own `Wants=` instead of by an enable symlink or
+# a preset. BindsTo+After then make it stop with Roon and never before it.
+[Unit]
+Description=Roon idle guard (suspends the PulseAudio source while nothing plays)
+BindsTo=roon.service
+After=roon.service
+ConditionUser=10000
+
+[Service]
+Environment=NQ_WATCH_MODE=producer
+Environment=NQ_PRODUCER_PCM=/proc/asound/RoonLoop/pcm0p/sub0/status
+Environment=NQ_UAC2_SOURCE=roon_in
+ExecStart=/usr/bin/nq-uac2-silence
+# On stop it resumes the source it may have suspended, so Roon is never left
+# muted by its own guard; give the trap room to run.
+KillMode=mixed
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
