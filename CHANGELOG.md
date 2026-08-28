@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — the device name is shown once, in the theme's colour (2026-08-28, app **1.17.1+48**)
+- The name was printed twice on the home screen: in the app bar and again under
+  the sphere. The app-bar copy is gone; the one under the sphere stays, where it
+  reads as a label for the ring above it.
+- It now takes the colour of the selected **light theme** and follows it when the
+  theme changes.
+- ⚠️ Not simply `theme.primary`: the **Off** theme is `0xFF000000`, and black on
+  this black canvas would erase the only text saying which box you are looking
+  at. Anything too dark to read falls back to white, decided by relative
+  luminance rather than by theme name, so a future dark preset is covered too.
+  The threshold is pinned by tests from both sides — `off` must fall back,
+  `smoke` (the darkest shipped colour) must not.
+
 ### Fixed — a second Nexus Q shared the first one's Bluetooth and WiFi identity (2026-08-28)
 - The DTS hardcodes two **per-device** values that every build shares:
   `local-bd-address` (BT) and `local-mac-address` (WiFi). A second unit

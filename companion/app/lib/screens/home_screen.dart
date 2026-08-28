@@ -12,6 +12,20 @@ import 'settings_screen.dart';
 /// Faithful to the original Nexus Q app: the black "drop ball" sphere as the
 /// device, over a Holo-dark settings list (volume, brightness, light theme),
 /// plus a now-playing block (our addition, from librespot).
+/// Colour for the device name under the sphere: the light theme's own colour,
+/// so the name reads as a label for the ring it sits beneath and follows it
+/// when the theme changes.
+///
+/// ⚠️ Not simply `theme.primary`. The **Off** theme is `0xFF000000`, and black
+/// on this black canvas would erase the name — the one piece of text that says
+/// which box you are looking at. Any theme too dark to read falls back to
+/// white. Relative luminance, not a name check, so a future dark preset is
+/// covered too.
+Color nameColorFor(LedTheme theme) {
+  final c = theme.primary;
+  return c.computeLuminance() < 0.06 ? NexusQColors.white : c;
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.controller});
   final DeviceController controller;
@@ -58,7 +72,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final np = s.nowPlaying;
         return Scaffold(
           appBar: AppBar(
-            title: Text(s.deviceName.toUpperCase()),
+            // No title: the device name is shown once, under the sphere, where it
+            // reads as a label for the thing above it. It used to appear here as
+            // well, which was the same word twice on one screen.
             actions: [
               // Debug mode (Devices → Developer): quick access to the connection
               // log, right where the "Disconnected" banner appears — so the user
@@ -127,8 +143,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 14),
                       Center(
                         child: Text(s.deviceName,
-                            style: const TextStyle(
-                                color: NexusQColors.white, fontSize: 20, fontWeight: FontWeight.w300)),
+                            style: TextStyle(
+                                color: nameColorFor(theme),
+                                fontSize: 20,
+                                fontWeight: FontWeight.w300)),
                       ),
                       if (!np.isEmpty)
                         Padding(
