@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.17.0",
-  "versionCode": 47,
-  "notes": "Rename your Nexus Q from the app — Settings › This device. Until now the name could only be changed by walking through the Bluetooth setup flow, so it depended on the box being paired. Now it goes over the normal network link, and the app keeps its connection while the box renames itself.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.17.0/nexusq-companion-1.17.0.apk",
+  "version": "1.17.1",
+  "versionCode": 48,
+  "notes": "The device name now appears once, under the sphere, in the colour of the light theme you picked — it used to be printed twice on the same screen.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.17.1/nexusq-companion-1.17.1.apk",
   "minAndroidSdk": 21
 }
