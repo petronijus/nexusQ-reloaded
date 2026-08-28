@@ -6,6 +6,35 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a second Nexus Q shared the first one's Bluetooth and WiFi identity (2026-08-28)
+- The DTS hardcodes two **per-device** values that every build shares:
+  `local-bd-address` (BT) and `local-mac-address` (WiFi). A second unit
+  therefore came up as `f8:8f:ca:20:49:e5` / `f8:8f:ca:20:48:e1` — the first
+  box's addresses. One phone cannot hold two bonds on one BD_ADDR, so pairing
+  the second Q would have overwritten the first one's pairing record.
+- Given per-unit addresses derived from its own serial, **by patching the DTB
+  appended to `boot.img` in place** — no kernel rebuild. 26 bytes changed in the
+  whole image: 3 + 3 payload, plus the 20-byte SHA1 the packer recomputes. Full
+  recipe in `docs/2026-08-28-per-unit-bt-wifi-identity.md`, including the decoy
+  `d00dfeed` inside the compressed zImage that must not be mistaken for the real
+  DTB (its `totalsize` reads 204 MB; the real one ends exactly at the kernel end).
+- ⚠️ **Ethernet was never affected** — its DTS node has no `mac-address`, so
+  smsc95xx uses the LAN9500A's own EEPROM. Two identities collided, not three.
+- 🔴 **And the flash alone was not enough: the baked WiFi profile overrode the
+  fix.** `cloned-mac-address=F8:8F:CA:20:48:E1` had been kept as "harmless
+  belt-and-braces" once the DTS pin made it redundant. It silently forced the
+  first unit's MAC back onto the correctly-flashed second one, with nothing
+  logged — two boxes, one MAC, no error anywhere. Now `permanent`, matching what
+  `eth-lan`/`eth-direct` always did. **A redundant override stops being harmless
+  the moment the value it duplicates becomes per-device.**
+- Verified on the device: `Controller F8:8F:CA:73:AC:9C`, `wlan0
+  f8:8f:ca:05:1f:11`, WiFi associated.
+- Recorded but not done: the real fix is `CONFIG_CMDLINE_EXTEND` plus programming
+  both addresses from the bootloader cmdline, so every unit identifies itself.
+  Today's are synthesized from the serial, not the factory values — those are
+  unreachable because `CONFIG_CMDLINE_FORCE=y` discards the only cmdline that
+  carries them.
+
 ### Added — rename the Q from the app, over the LAN (2026-08-28, `nexusq-control` **r34**, app **1.17.0+47**)
 - **Settings → This device** shows the name and room and lets you change them.
   Until now `setName` existed only in `nexusq-setupd`, i.e. only over a bonded

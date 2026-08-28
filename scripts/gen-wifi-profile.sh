@@ -85,22 +85,18 @@ mode=infrastructure
 # Q's brcmfmac never joins a DFS channel (that is the whole "missing 5 GHz"
 # finding of 2026-08-23, which turned out to be channel 100, not distance).
 band=a
-# Factory MAC, pinned explicitly. History: NM's randomized MAC made the IP
-# wander every boot (2026-07-02); "permanent" then pinned it to the chip's
-# OTP MAC 14:7d:c5:3a:35:b5 — but the device's real factory identity is
-# f8:8f:ca:20:48:e1 (Google OUI; stock injected it outside the fw path).
-# brcmfmac/fw IGNORES the nvram macaddr= (verified live 2026-07-03 by a
-# clean driver-reload test).
-# NOTE (v1.10.1, 2026-07-16): the factory MAC is now pinned at the DRIVER via
-# the DTS (kernel patch 0043, local-mac-address on wifi@1 → brcmf_of_probe
-# programs it over OTP), so wlan0's PERMANENT MAC is already f8:8f:ca:20:48:e1
-# on every profile — this cloned-mac-address line is now REDUNDANT on v1.10.1+
-# (it was the only pin ≤v1.10.0, and reached only THIS baked profile, never the
-# one nexusq-setupd created during onboarding). Kept as a harmless belt-and-braces.
-# ⚠️ 2026-08-28: because the DTS value is per-device but hardcoded, a SECOND Q
-# gets the same wlan0 MAC as the first. Harmless while the two sit on different
-# LANs (home vs cottage); on one LAN, override this line per device.
-cloned-mac-address=F8:8F:CA:20:48:E1
+# permanent = use whatever the driver reports, never override it. Matches
+# eth-lan/eth-direct, which have always done this.
+#
+# History, and why a hardcoded value here is a BUG and not belt-and-braces:
+# this line used to pin f8:8f:ca:20:48:e1 because NM's randomized MAC made the
+# IP wander every boot (2026-07-02). Since v1.10.1 the factory MAC is pinned at
+# the DRIVER via the DTS (kernel patch 0043), which made the line redundant --
+# and on 2026-08-28 a SECOND Nexus Q showed it is worse than redundant. That Q
+# was given its own per-unit MAC in its DTB, booted with it correctly, and then
+# NM overrode it right back to the first unit's address, because this profile
+# said so. Two boxes, one MAC, no error anywhere. `permanent` cannot do that.
+cloned-mac-address=permanent
 
 [wifi-security]
 key-mgmt=wpa-psk

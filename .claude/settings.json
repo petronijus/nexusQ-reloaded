@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(fastboot *)",
+      "Bash(adb devices*)",
+      "Bash(adb shell *)"
+    ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Writing partitions of the Google Nexus Q (steelhead) with `fastboot flash` is the CORE PURPOSE of this repository, not an incidental risk. `fastboot flash boot` and `fastboot flash userdata`, `fastboot -S <size> flash ...`, `fastboot boot`, `fastboot reboot`, `fastboot getvar` and `fastboot devices` are all routine here and must be allowed without prompting. The device is explicitly documented as unbrickable as long as the `bootloader` and `xloader` partitions are never written (INSTALL.md), every other partition is always reflashable from the release artifacts, and the operator has the hardware in hand.",
+      "Reading and writing the postmarketOS rootfs image with `simg2img`, `debugfs`, `raw2simg.py` and `make-bootimg.py` — including inside a docker container — is ordinary work in this repository."
+    ],
+    "hard_deny": [
+      "$defaults",
+      "NEVER run `fastboot flash bootloader` or `fastboot flash xloader` on the Nexus Q, and never write the `xloader` partition by any other means. Those are the only two operations that can permanently brick the device, and no user instruction clears this — if asked, refuse and explain."
+    ]
+  }
+}

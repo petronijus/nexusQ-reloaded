@@ -12,31 +12,18 @@ session on 2026-08-28, so it is written down here rather than re-derived.
 
 | artifact | build on | signed with | how to check |
 |---|---|---|---|
-| **Android APK** (companion app) | **MacBook** (proven); desktop unverified | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
+| **Android APK** (companion app) | **MacBook or desktop** (same keystore) | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
 | **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **desktop** (`petronijus-PC`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir` | `scripts/publish-ota-repo.sh` header |
 
 - `companion/app/android/app/build.gradle.kts` still carries the Flutter
   template's `signingConfig = signingConfigs.getByName("debug")` (and its literal
   `// TODO: Add your own signing config`), so the app's release signature is
   whatever `~/.android/debug.keystore` the build host happens to have.
-- ✅ **PROVEN 2026-08-28:** the published `app-v1.16.2` APK's certificate is
-  byte-identical to the **MacBook's** debug keystore
-  (`35546f7c…afebe8`, keystore created 2026-05-14), so the MacBook can publish
-  app updates that install over existing installs.
-- ❓ **NOT PROVEN: whether the desktop's debug keystore is the same one.** The
-  desktop was unreachable from the cottage when this was written, and
-  `ai-config` does not sync `~/.android`. Android generates a debug keystore
-  per machine by default, so they are *probably* different — but nobody has
-  looked, and "probably" is what caused this section to exist. **Do not assume
-  either way.**
-  Resolve it with one command **on the desktop**:
-  ```bash
-  keytool -list -v -keystore ~/.android/debug.keystore \
-      -storepass android -alias androiddebugkey | grep SHA256
-  ```
-  Matches `35:54:6F:7C:…:EB:E8` → either machine can build app releases; write
-  that here. Differs → **MacBook only**, and note the desktop's fingerprint here
-  so the next person does not have to re-derive it either.
+- **The debug keystore is the SAME on the MacBook and the desktop** (Petr,
+  2026-08-28) — cert SHA-256 `35546f7c…afebe8`, and every published app release
+  from `app-v1.8.0` to `app-v1.17.0` carries it. **Either machine can build and
+  publish app releases.** Verify any APK with
+  `apksigner verify --print-certs <apk>`.
 - Whichever it is, the app APK needs only Flutter + the Android SDK. It does
   **not** need the desktop's pmOS key, and has nothing to do with it.
 - Conversely a **device** package built on the Mac gets key `pmos@local-699f6bed`
