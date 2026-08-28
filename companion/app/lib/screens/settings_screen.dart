@@ -33,6 +33,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _error;
   Timer? _poll;
 
+  // --- device identity (name / room) ---
+  String _deviceName = '';
+  String _deviceRoom = '';
+  bool _renaming = false;
+
   // --- app update state ---
   bool _checkingUpdate = false;
   AppRelease? _update; // non-null = a newer app version is available
@@ -361,8 +366,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _refresh() async {
     final services = await _call('listServices');
     final desktop = await _call('getDesktop');
+    final info = await _call('getDeviceInfo');
     if (!mounted) return;
     setState(() {
+      // A poll must never clobber the field the user is typing into.
+      if (info != null && !_renaming) {
+        _deviceName = info['name'] as String? ?? _deviceName;
+        _deviceRoom = info['room'] as String? ?? _deviceRoom;
+      }
       if (services != null) {
         final fresh =
             (services['services'] as List? ?? []).cast<Map<String, dynamic>>();
@@ -422,7 +433,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: const TextStyle(color: Colors.orangeAccent)),
               ),
 
+            // --- this device -------------------------------------------------
+            _sectionTitle('This device'),
+            Card(
+              color: NexusQColors.surface,
+              child: ListTile(
+                leading: const Icon(Icons.label_outline,
+                    color: NexusQColors.dim),
+                title: Text(_deviceName.isEmpty ? 'Nexus Q' : _deviceName,
+                    style: const TextStyle(color: NexusQColors.white)),
+                subtitle: Text(
+                  _deviceRoom.isEmpty
+                      ? 'Tap to rename. The name is what you see when the app '
+                          'finds it on the network, and what Spotify Connect shows.'
+                      : 'In $_deviceRoom · tap to rename',
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+                ),
+                trailing: _renaming
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.edit_outlined, color: NexusQColors.dim),
+                onTap: _renaming ? null : _promptRename,
+              ),
+            ),
+
             // --- streaming services ------------------------------------------
+            const SizedBox(height: 20),
             _sectionTitle('Streaming services'),
             if (_services.isEmpty)
               const Padding(
@@ -798,6 +836,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// Rename the Q. The device keeps serving this very connection through the
+  /// rename (nexusq-control re-advertises mDNS in-process rather than
+  /// restarting itself), so there is no reconnect to wait out — but the mDNS
+  /// name DOES change, which is what a *next* launch will discover it by.
+  Future<void> _promptRename() async {
+    setState(() => _renaming = true);
+    final res = await showDialog<(String, String)>(
+      context: context,
+      builder: (_) => _RenameDialog(name: _deviceName, room: _deviceRoom),
+    );
+    if (!mounted) return;
+    if (res == null || res.$1.isEmpty) {
+      setState(() => _renaming = false);
+      return;
+    }
+    // silent: false — a rename is a user action, so a failure belongs on screen.
+    final r = await _call('setName', {'name': res.$1, 'room': res.$2}, false);
+    if (!mounted) return;
+    setState(() {
+      _renaming = false;
+      // Trust the device's echo, not what was typed: it is the side that
+      // decides (it trims, and it is the one that actually renamed).
+      if (r != null) {
+        _deviceName = r['name'] as String? ?? res.$1;
+        _deviceRoom = r['room'] as String? ?? res.$2;
+      }
+    });
+  }
+
   Widget _sectionTitle(String s) => Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 6),
         child: Text(s,
@@ -854,5 +921,88 @@ class _SettingsScreenState extends State<SettingsScreen> {
       default:
         return 'A streaming input.';
     }
+  }
+}
+
+/// The rename dialog, as its own widget so it OWNS its controllers.
+///
+/// It used to build the TextFields inline and dispose their controllers as soon
+/// as showDialog returned — which throws "A TextEditingController was used after
+/// being disposed": the dialog is still animating out, and still rebuilding
+/// those fields, for a couple of hundred milliseconds after the pop. Owning them
+/// here ties their lifetime to the route's, which is the only correct answer.
+///
+/// Pops `(name, room)` — both trimmed — or null when cancelled.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.name, required this.room});
+  final String name;
+  final String room;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.name);
+  late final TextEditingController _room =
+      TextEditingController(text: widget.room);
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _room.dispose();
+    super.dispose();
+  }
+
+  void _submit() =>
+      Navigator.of(context).pop((_name.text.trim(), _room.text.trim()));
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: NexusQColors.surface,
+      title: const Text('Rename this Nexus Q',
+          style: TextStyle(color: NexusQColors.white)),
+      // Scrollable: with a software keyboard up (or a short test viewport) two
+      // TextFields plus their counters do not fit, and an AlertDialog gives its
+      // content a tight height — an unscrollable Column just overflows.
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _name,
+              autofocus: true,
+              maxLength: 48,
+              style: const TextStyle(color: NexusQColors.white),
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                labelStyle: TextStyle(color: NexusQColors.dim),
+                counterStyle: TextStyle(color: NexusQColors.dim),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            TextField(
+              controller: _room,
+              maxLength: 48,
+              style: const TextStyle(color: NexusQColors.white),
+              decoration: const InputDecoration(
+                labelText: 'Room (optional)',
+                labelStyle: TextStyle(color: NexusQColors.dim),
+                counterStyle: TextStyle(color: NexusQColors.dim),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        TextButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
   }
 }

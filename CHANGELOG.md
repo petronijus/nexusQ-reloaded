@@ -6,6 +6,34 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — rename the Q from the app, over the LAN (2026-08-28, `nexusq-control` **r34**, app **1.17.0+47**)
+- **Settings → This device** shows the name and room and lets you change them.
+  Until now `setName` existed only in `nexusq-setupd`, i.e. only over a bonded
+  **Bluetooth** RFCOMM link, so renaming an appliance depended on its pairing
+  state — and with two Nexus Qs bonded to one phone it could be out of reach
+  entirely. PROTOCOL **§15**.
+- **The rename does not drop the app's connection.** setupd ends its version by
+  restarting nexusq-control; this one *is* nexusq-control, and the reply still
+  has to travel over that socket, so it re-advertises mDNS **in-process**
+  instead. Verified on the device: the same connection answered `getDeviceInfo`
+  with the new name straight after, exactly one `avahi-publish-service` was
+  left running, and the browse showed one record (`Šumperák`) with no stale
+  `Nexus Q` beside it.
+- `sanitize_hostname` is duplicated from setupd **on purpose** — the two daemons
+  are separate packages and this one is stdlib-only by standing rule — and both
+  copies are pinned by the same test cases. Change one, change the other.
+- `room` defaults to the **current** room, not to empty: a rename that omits it
+  must not silently clear it.
+- **Two real defects, both caught by tests that were written first and watched
+  fail.** (1) The controllers were disposed as soon as `showDialog` returned,
+  while the dialog was still animating out and still rebuilding its fields —
+  "A TextEditingController was used after being disposed". Fixed by giving the
+  dialog its own widget, so controller lifetime is the route's. (2) The content
+  `Column` overflowed by 99 692 px with no scroll view. Both would have shipped;
+  the EQ card cost three releases to learn this exact lesson.
+- ⚠️ `pumpAndSettle` can never settle on this screen (a 3 s poll timer keeps a
+  timer pending forever). Its tests pump a bounded number of frames instead.
+
 ### Fixed — Roon idle cost, and the USB audio it took down with it (2026-08-27, device **r85** + **r86**)
 - **Roon on and idle: PulseAudio 12.60 % → 0.82 % of a core**, sink suspended,
   wake 0 ms. `nexusq-roon-idle.service` suspends the PA source while nothing

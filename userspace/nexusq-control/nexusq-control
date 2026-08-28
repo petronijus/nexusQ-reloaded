@@ -40,6 +40,7 @@ import socket
 import subprocess
 import threading
 import time
+import unicodedata
 
 HOST = os.environ.get("NEXUSQ_BIND_HOST", "0.0.0.0")
 PORT = int(os.environ.get("NEXUSQ_BIND_PORT", "45015"))
@@ -72,6 +73,20 @@ def load_identity(path=None):
     except (OSError, ValueError):
         pass
     return ident
+
+
+def sanitize_hostname(name):
+    """Display name -> RFC-952-ish hostname: ascii-fold, lowercase,
+    non-alnum runs -> '-', trimmed, <=63 chars, fallback 'nexusq'.
+
+    Byte-for-byte the same rule as nexusq-setupd's, on purpose: the two daemons
+    are separate packages (this one is stdlib-only by standing rule, so there is
+    no shared module to put it in), but a rename MUST land on the same hostname
+    whether it arrived over Bluetooth setup or over the LAN link. If you change
+    one, change the other -- tests on both sides pin the same cases."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    clean = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")[:63].strip("-")
+    return clean or "nexusq"
 
 
 _IDENT = load_identity()
@@ -1658,6 +1673,11 @@ class Bridge:
             return self.dispatch_transport(method)
         if method == "startSetupMode":
             return start_setup_mode(), []
+        if method == "setName":
+            r = set_name(p)
+            # Tell every connected client, not just the caller: a second phone
+            # showing the old name would be wrong the moment this returns.
+            return r, [("deviceInfoChanged", {"name": r["name"], "room": r["room"]})]
 
         # --- Bluetooth (PROTOCOL §9) ---------------------------------------
         # All of it is forwarded to nexusq-btagent over its unix socket. This
@@ -2231,17 +2251,98 @@ def serve_unix(bridge):
         threading.Thread(target=hook_thread, args=(bridge, conn), daemon=True).start()
 
 
+_MDNS = None
+_MDNS_LOCK = threading.Lock()
+
+
 def publish_mdns():
-    """Best-effort _nexusq._tcp advertisement via avahi (if present)."""
+    """Best-effort _nexusq._tcp advertisement via avahi (if present).
+
+    Idempotent and RE-callable: setName re-advertises under the new name by
+    calling this again, so any previous avahi-publish-service is replaced rather
+    than left running beside the new one (two records for one device is worse
+    than none -- the app resolves the FIRST hit and would keep landing on the
+    stale name)."""
+    global _MDNS
+    with _MDNS_LOCK:
+        if _MDNS is not None:
+            try:
+                _MDNS.terminate()
+                _MDNS.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            _MDNS = None
+        try:
+            _MDNS = subprocess.Popen(
+                ["avahi-publish-service", DEVICE_NAME, "_nexusq._tcp", str(PORT),
+                 "proto=1", f"name={DEVICE_NAME}", "model=steelhead", f"room={DEVICE_ROOM}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            log("avahi-publish-service not found; mDNS disabled (connect by host:port)")
+            _MDNS = None
+        return _MDNS
+
+
+def set_name(p):
+    """PROTOCOL §15 -- rename the device over the LAN link.
+
+    Mirrors nexusq-setupd's setName so a rename means the same thing whichever
+    way it arrives: hostname, /etc/nexusq/device.json and the mDNS advertisement
+    all move together, and librespot is restarted so Spotify Connect shows the
+    new name too.
+
+    ONE deliberate difference: setupd finishes by restarting nexusq-control,
+    which is how the old name left the mDNS record. We cannot -- we ARE
+    nexusq-control, and the reply still has to travel over this connection. So
+    we re-advertise in-process instead, which is also faster and costs the app
+    no reconnect.
+
+    Validate-before-side-effects, like the rest of this daemon: a malformed
+    request must not leave a changed hostname behind a failed identity write."""
+    global DEVICE_NAME, DEVICE_ROOM
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise Err("bad_request", "name required")
+    room = p.get("room", DEVICE_ROOM)
+    if not isinstance(room, str):
+        raise Err("bad_request", "room must be a string")
+    name = name.strip()
+    room = room.strip()
+    host = sanitize_hostname(name)
+
     try:
-        return subprocess.Popen(
-            ["avahi-publish-service", DEVICE_NAME, "_nexusq._tcp", str(PORT),
-             "proto=1", f"name={DEVICE_NAME}", "model=steelhead", f"room={DEVICE_ROOM}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
-        log("avahi-publish-service not found; mDNS disabled (connect by host:port)")
-        return None
+        r = subprocess.run(["hostnamectl", "set-hostname", host],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Err("unavailable", f"hostname change failed: {e}")
+    if r.returncode != 0:
+        raise Err("internal", "hostname change failed")
+
+    path = IDENTITY_PATH
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"name": name, "room": room}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Err("internal", f"cannot write identity: {e}")
+
+    DEVICE_NAME, DEVICE_ROOM = name, room
+    publish_mdns()
+    # librespot reads the Spotify device name once, at start. Best-effort: the
+    # rename itself has already succeeded and must not be reported as failed
+    # because Spotify happens to be switched off.
+    try:
+        _systemctl_user("restart", "librespot.service", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {"name": name, "room": room, "hostname": host, "mdns": host + ".local"}
 
 
 def pa_watch_thread(bridge):
@@ -2296,7 +2397,7 @@ def main():
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
-    mdns = publish_mdns()
+    publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -2311,8 +2412,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if mdns:
-            mdns.terminate()
+        if _MDNS:
+            _MDNS.terminate()
         srv.close()
 
 

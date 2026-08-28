@@ -1008,3 +1008,50 @@ character, more than `max_bands` bands, or the cap reached), `unavailable`
 Errors: `bad_params` (no such saved preset, or an id that is not a saved one —
 built-ins are refused explicitly), `unavailable` (unwritable config file). Emits
 `eqPresetsChanged`.
+
+---
+
+## 15. Rename over the LAN link — `setName` (nexusq-control r34+)
+
+Until r34 a device could only be renamed through **§8**, i.e. over a bonded
+Bluetooth RFCOMM link, because `setName` lived in `nexusq-setupd`. That made an
+ordinary settings change depend on the pairing state — and with two Nexus Qs on
+one phone it could be unreachable entirely. `nexusq-control` now serves the same
+verb over the normal TCP link.
+
+```jsonc
+→ {"id":9,"method":"setName","params":{"name":"Šumperák","room":"cottage"}}
+← {"id":9,"result":{"name":"Šumperák","room":"cottage",
+                    "hostname":"sumperak","mdns":"sumperak.local"}}
+```
+
+`room` is **optional and defaults to the current room**, not to empty: a rename
+that omits it must not silently clear it.
+
+What it changes, all together:
+- the system **hostname** (`hostnamectl`), via the same `sanitize_hostname` rule
+  as setupd — ascii-fold, lowercase, non-alnum runs → `-`, ≤63 chars, fallback
+  `nexusq`. The two implementations are deliberately identical and pinned by
+  tests on both sides; **change one, change the other**;
+- `/etc/nexusq/device.json`, written atomically;
+- the **mDNS advertisement** (§2), re-published under the new name.
+
+⚠️ **It does NOT restart nexusq-control**, which is the one thing it does
+differently from setupd's version. setupd can restart the bridge — it is a
+different process. This one *is* the bridge, and the reply still has to travel
+over the connection, so it re-advertises in-process instead. The practical
+effect is better: the app keeps its link through a rename and has no reconnect
+to wait out. The **mDNS name does change**, so a *later* launch discovers the
+device under the new name.
+
+librespot is restarted best-effort (it reads the Spotify Connect device name
+once, at start). Spotify being switched off must never turn a successful rename
+into an error — by then the name is already on disk.
+
+Emits `deviceInfoChanged` `{name, room}` to every subscriber, so a second phone
+does not keep showing the old name.
+
+Errors: `bad_request` (missing/blank/non-string name, non-string room),
+`internal` (hostname change or identity write failed — validated before any side
+effect, so a refusal leaves no half-rename behind), `unavailable`
+(`hostnamectl` unreachable).
