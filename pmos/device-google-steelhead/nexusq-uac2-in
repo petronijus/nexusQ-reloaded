@@ -131,10 +131,12 @@ fix_loopback_volume() {
 	fi
 }
 
-# Is a module index still loaded?
+# Is a module index still loaded, according to a module list captured by the
+# caller? Takes the list as $2 so ONE `pactl` covers both checks — see
+# ensure_modules for why that matters.
 mod_alive() {
 	[ -n "$1" ] || return 1
-	pa list short modules 2>/dev/null | cut -f1 | grep -qx "$1"
+	printf '%s\n' "$2" | cut -f1 | grep -qx "$1"
 }
 
 # Our two PA modules can vanish underneath us WITHOUT this service being touched.
@@ -144,13 +146,32 @@ mod_alive() {
 # the source module is still there. Nothing logs it. So the service supervises the
 # modules it owns, exactly as it supervises alsaloop and the watcher; the source
 # goes first because the loopback is meaningless without it.
+# ⚠️ COSTS REAL POWER — do not make this check more eager. Forking `pactl` costs
+# ~70 ms of CPU on this SoC (measured independently twice: once profiling the
+# silence watcher's wake path, once here). The first version of this ran TWO
+# `pactl` calls every 3 s, which is 0.67 forks/s and measured **+4.6 % of a core
+# at idle** — the service's cgroup went from ~1.3 % to 5.98 %, the governor
+# bounced 350<->700 at 0.43/s, and a whole overnight window came out at 1.29x the
+# 350 MHz floor instead of 1.04x. Per-process sampling did not show it, because
+# the forks are shorter than the sample interval; only the cgroup total did.
+#
+# So: ONE `pactl` for both checks, and only every MOD_CHECK_TICKS-th pass. At
+# 5 ticks x 3 s that is one fork per 15 s (~0.23 % of a core) and bounds the
+# window in which USB audio could be silent after another source's alsa-source is
+# unloaded — which was previously permanent, so 15 s is a fine trade.
+MOD_CHECK_TICKS=${NQ_UAC2_MOD_CHECK_TICKS:-5}
+mod_tick=0
 ensure_modules() {
-	if ! mod_alive "$MOD_SRC"; then
+	mod_tick=$((mod_tick + 1))
+	[ "$mod_tick" -ge "$MOD_CHECK_TICKS" ] || return 0
+	mod_tick=0
+	_mods=$(pa list short modules 2>/dev/null)
+	[ -n "$_mods" ] || return 0        # PA down/restarting: nothing to conclude
+	if ! mod_alive "$MOD_SRC" "$_mods"; then
 		echo "nexusq-uac2-in: PA source module vanished, reloading" >&2
 		start_source
 		MOD_LB=""            # a loopback pointing at the old source is useless
-	fi
-	if ! mod_alive "$MOD_LB"; then
+	elif ! mod_alive "$MOD_LB" "$_mods"; then
 		echo "nexusq-uac2-in: PA loopback module vanished, reloading" >&2
 		start_loopback
 	fi
