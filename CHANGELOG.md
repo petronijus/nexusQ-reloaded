@@ -6,6 +6,46 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a UAC2 host that stops sending without closing the stream cooked the Q for 28 h (2026-08-30, device **r88**)
+- **Found by picking up a routine idle-OPP measurement.** From 2026-08-28 19:14
+  the Prague unit sat at **1200 MHz / 1380 mV, die 77.8 °C mean and 90.6 °C peak,
+  with 350 MHz residency at 0.1 %** (median; the idle goal is >90 %). It stayed
+  there for 28 hours and nothing noticed.
+- **Root cause, and it is not what XRUN suggests.** The USB host stopped sending
+  but left the stream open. The gadget capture substream then reads
+  `state: RUNNING` with **`hw_ptr` frozen at 0** — live-looking, delivering
+  nothing. alsaloop has no input, so the aloop playback side **underruns** into
+  XRUN, and `--sync=simple` never recovers. alsaloop then neither exits nor
+  blocks: it **spins**, 19–25 % of a core, 13 h 33 min of CPU over 1 d 15 h wall.
+- Two separate blind spots let it run unattended for a day and a half:
+  - `nexusq-uac2-in` supervised alsaloop with **`kill -0`** — process liveness,
+    which a spinning process passes forever. Its own comment assumed an xrun
+    would make alsaloop *exit*.
+  - `nq-uac2-silence` sat in a **blocking `Popen.stdout.read(n)`**. With the
+    producer wedged it never returned, so the watcher stopped logging entirely
+    at 19:14:03 and was simply absent for 28 h.
+- **Fixed by measuring the right thing: is INPUT arriving.**
+  - `nexusq-uac2-in` tracks the gadget's `hw_ptr`. Input frozen ⇒ the host is
+    gone ⇒ **park alsaloop** rather than restart it, and duty-cycle a short probe
+    (~4 s per 30 s) to notice the host coming back — parked, `hw_ptr` cannot be
+    watched, and the gadget exposes no "streaming" flag (its configfs attributes
+    are all static). Input flowing but XRUN persisting ⇒ a genuinely wedged
+    alsaloop ⇒ restart it. Restarting into an absent host only re-wedges, which
+    an intermediate version did every 9 s until the gate on `INPUT_MOVING` was
+    added — an empty previous reading must not count as movement.
+  - `nq-uac2-silence` reads through `select()` with a timeout
+    (`NQ_UAC2_READ_TIMEOUT_S`, default 5 s) and reports a producer that has gone
+    quiet instead of disappearing. Readers now spawn with `bufsize=0`, because
+    `select()` polls the descriptor and would miss bytes parked in a Python-side
+    buffer.
+- Verified on the device: parked cleanly (`no input from the USB host for 12 s`),
+  **1200 MHz / 85 °C → 350 MHz / 63 °C, 94 % idle**, alsaloop absent 28 s out of
+  every 32. Both new paths unit-tested off-device (wedged reader, EOF, short and
+  full reads; XRUN transient vs confirmed, counter reset, missing status file).
+- ⚠️ The probe still costs ~1–2 s of alsaloop spin per 30 s while parked.
+  `NQ_UAC2_PARK_RETRY_S` / `NQ_UAC2_PROBE_S` tune it; a cheaper probe that does
+  not involve alsaloop at all is the obvious follow-up.
+
 ### Fixed — a build-time gate for the cloned MAC, because fixing the generator was not enough (2026-08-29)
 - The 2026-08-28 per-unit identity fix is correct in the repo and **still left a
   device wearing the wrong MAC**. `wifi-sumperak-internety.nmconnection` was

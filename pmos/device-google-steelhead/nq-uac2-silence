@@ -35,6 +35,7 @@ source RESUMES it, which would undo the sleep on the spot.
 """
 
 import os
+import select
 import signal
 import socket
 import subprocess
@@ -78,6 +79,11 @@ SLEEP_AFTER = float(os.environ.get("NQ_UAC2_SLEEP_AFTER", "10"))
 # period: 512 frames cost 1.57 % of a core purely to wait.
 WAKE_FRAMES = int(os.environ.get("NQ_UAC2_WAKE_FRAMES", "2048"))
 AWAKE_CHUNK = 16384                        # bytes; ~85 ms of s16le stereo
+# Ceiling on one read. Long enough that a normal wait for the next block is
+# never mistaken for a stall, short enough that a wedged producer is reported
+# in seconds rather than never.
+READ_TIMEOUT_S = float(os.environ.get("NQ_UAC2_READ_TIMEOUT_S", "5"))
+STALLED = object()                         # sentinel: no data, reader still open
 
 BYTES_PER_FRAME = 4                        # s16le stereo
 _zero_cache = {}
@@ -191,8 +197,13 @@ def suspend(on):
 
 def spawn(cmd):
     try:
+        # bufsize=0 -> stdout is a raw FileIO, not a BufferedReader. Required by
+        # read_with_timeout: select() polls the file DESCRIPTOR, so bytes sitting
+        # in a Python-side buffer would leave it "not ready" while data was in
+        # fact waiting, and every read would time out with the buffer still full.
+        # Unbuffered also drops one copy on a path that moves 48 kHz stereo.
         return subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.DEVNULL, bufsize=0)
     except OSError as e:
         log(f"cannot start {cmd[0]}: {e}")
         return None
@@ -234,6 +245,41 @@ class Watcher:
                            "--period-size", str(WAKE_FRAMES),
                            "--buffer-size", str(WAKE_FRAMES * 4)])
         return self.proc is not None
+
+    def read_with_timeout(self, want):
+        """Read up to `want` bytes, or return STALLED if the reader goes quiet.
+
+        `Popen.stdout.read(n)` blocks until it has all n bytes or EOF, which is
+        indistinguishable from a healthy wait for audio -- and if the producer
+        wedges instead of dying, it never returns at all and this whole watcher
+        stops existing without a single log line. select() puts a ceiling on that
+        wait so the loop always comes back around.
+
+        Returns b"" on EOF (reader died -> caller rebuilds it), STALLED on
+        timeout, otherwise the bytes read (possibly a short read, which is fine:
+        every caller only inspects the samples for silence).
+        """
+        fd = self.proc.stdout
+        chunks, got = [], 0
+        deadline = time.monotonic() + READ_TIMEOUT_S
+        while got < want:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                ready, _, _ = select.select([fd], [], [], left)
+            except (OSError, ValueError):
+                return b""                       # fd closed under us == EOF
+            if not ready:
+                break
+            block = fd.read1(want - got) if hasattr(fd, "read1") else fd.read(want - got)
+            if not block:
+                return b"".join(chunks) if chunks else b""
+            chunks.append(block)
+            got += len(block)
+        if not chunks:
+            return STALLED
+        return b"".join(chunks)
 
     def go_to_sleep(self):
         # Kill the reader BEFORE suspending: a live source-output would make PA
@@ -327,9 +373,25 @@ class Watcher:
         if not self.start_awake():
             return 1
         silent_since = None
+        stalled_reads = 0
         while not self.stop:
             want = WAKE_FRAMES * BYTES_PER_FRAME if self.asleep else AWAKE_CHUNK
-            buf = self.proc.stdout.read(want) if self.proc else b""
+            buf = self.read_with_timeout(want) if self.proc else b""
+            if buf is STALLED:
+                # A reader that neither delivers nor ends. Asleep we own the aloop
+                # capture side directly, so this means the PLAYBACK side stopped
+                # producing -- an alsaloop wedged in XRUN. The service's supervisor
+                # restarts it; we only have to keep TURNING so we notice and say so,
+                # instead of parking in read() forever the way this loop did for 28 h
+                # on 2026-08-29 (last log 19:14:03, then nothing at all).
+                stalled_reads += 1
+                if stalled_reads in (1, 20) or stalled_reads % 100 == 0:
+                    log(f"reader has delivered nothing for "
+                        f"{stalled_reads * READ_TIMEOUT_S:.0f} s "
+                        f"({'asleep' if self.asleep else 'awake'}) — "
+                        f"waiting for the producer to come back")
+                continue
+            stalled_reads = 0
             if not buf:
                 # The reader died (host stop/start, xrun, PA restart). Rebuild it
                 # rather than exiting -- the service supervises alsaloop the same way.

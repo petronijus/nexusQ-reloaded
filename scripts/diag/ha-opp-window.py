@@ -25,6 +25,7 @@ Needs `op-cache` for the HA token (1Password item "Homeassistant API Token").
 """
 import argparse
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -32,7 +33,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-HA = "http://homeassistant.home.arpa:8123"
+# `home.arpa` only resolves on the home LAN, and HA is not on Tailscale — from
+# anywhere else, tunnel to it and point this at the near end, e.g.
+#   ssh -fN -L 8123:192.168.20.200:8123 root@100.110.110.100   # via Proxmox
+#   NQ_HA_URL=http://127.0.0.1:8123 scripts/diag/ha-opp-window.py --days 2
+HA = os.environ.get("NQ_HA_URL", "http://homeassistant.home.arpa:8123")
 CEST = timezone(timedelta(hours=2))
 
 OPP_MHZ = (350, 700, 920, 1200)

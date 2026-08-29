@@ -198,6 +198,45 @@ start_silence() {
 }
 start_silence
 
+# alsaloop can WEDGE WITHOUT DYING, so process liveness is not enough — `kill -0`
+# sees a perfectly healthy process the whole time it is burning a core.
+#
+# The failure that cost us this (2026-08-29, the Prague unit, 28 h): a UAC2 host
+# stops sending but LEAVES THE STREAM OPEN. The gadget capture substream then sits
+# in `state: RUNNING` with `hw_ptr` frozen at 0 forever — it looks live and
+# delivers nothing. alsaloop has nothing to read, so the aloop playback side
+# underruns into XRUN, and `--sync=simple` never recovers from that. alsaloop
+# neither exits nor blocks: it SPINS. Measured 19-25 % of a core instantaneous,
+# 13 h 33 min of CPU over 1 d 15 h wall, holding the MPU at 1200 MHz / 1380 mV and
+# the die at 78 °C mean / 90.6 °C peak. Stopping the hop dropped it to 350 MHz and
+# 66 °C within seconds.
+#
+# So the health of this bridge is "is INPUT arriving", which is `hw_ptr` on the
+# gadget capture side. XRUN alone is the wrong trigger: restarting alsaloop into a
+# host that is not sending just re-wedges it every few seconds.
+#
+#   input advancing + XRUN persists  -> a genuinely stuck loop, restart alsaloop
+#   input frozen                     -> the host is gone; PARK alsaloop entirely
+#
+# Parked, we cannot watch `hw_ptr` any more (with nothing holding the substream it
+# reads `closed`), and the gadget exposes no "host is streaming" flag — its configfs
+# attributes are all static. So the parked state duty-cycles a probe instead:
+# briefly run alsaloop every PARK_RETRY_S and keep it only if input moves. That
+# trades the 46 %-of-a-core spin for roughly 2 s of work every 30 s.
+GADGET_STATUS="/proc/asound/$CARD/pcm0c/sub$SUB/status"
+ALOOP_STATUS="/proc/asound/$ALOOP/pcm0p/sub$SUB/status"
+XRUN_TICKS=0
+XRUN_CONFIRM="${NQ_UAC2_XRUN_CONFIRM:-3}"
+IDLE_TICKS=0
+IDLE_CONFIRM="${NQ_UAC2_IDLE_CONFIRM:-4}"      # ~12 s of no input before parking
+PARK_RETRY_S="${NQ_UAC2_PARK_RETRY_S:-30}"
+PROBE_S="${NQ_UAC2_PROBE_S:-2}"
+PARKED=0
+PARK_WAIT=0
+LAST_HW=""
+
+hw_ptr() { sed -n 's/^hw_ptr *: *//p' "$GADGET_STATUS" 2>/dev/null; }
+
 # Supervise both children: if alsaloop drops on its own (host stop/start, xrun)
 # restart just it — the PA modules stay loaded and the aloop capture underruns
 # harmlessly in the gap — and likewise re-spawn the watcher if it ever dies, which
@@ -207,9 +246,84 @@ start_silence
 while : ; do
 	sleep 3 &
 	wait $!
-	if [ -n "$ALPID" ] && ! kill -0 "$ALPID" 2>/dev/null; then
+	if [ "$PARKED" = 0 ] && [ -n "$ALPID" ] && ! kill -0 "$ALPID" 2>/dev/null; then
 		ALPID=""
 		start_alsaloop
+		LAST_HW=""
+	fi
+
+	if [ "$PARKED" = 1 ]; then
+		# Duty-cycled probe: is the host sending again?
+		PARK_WAIT=$((PARK_WAIT + 3))
+		if [ "$PARK_WAIT" -ge "$PARK_RETRY_S" ]; then
+			PARK_WAIT=0
+			start_alsaloop
+			sleep "$PROBE_S"
+			_a=$(hw_ptr); sleep 1; _b=$(hw_ptr)
+			if [ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" != "$_b" ]; then
+				echo "nexusq-uac2-in: input resumed (hw_ptr $_a -> $_b)" \
+				     "— USB audio live again" >&2
+				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW="$_b"
+			else
+				kill "$ALPID" 2>/dev/null
+				wait "$ALPID" 2>/dev/null
+				ALPID=""
+			fi
+		fi
+		ensure_modules
+		continue
+	fi
+
+	# Health of the bridge = is INPUT arriving on the gadget capture side.
+	#
+	# "Moving" needs TWO non-empty readings that differ. An empty LAST_HW (first
+	# tick, or just after a restart) must NOT read as movement: that false
+	# positive let the XRUN branch below fire first and reset this tracking, so
+	# the idle counter never reached its threshold and the supervisor flapped
+	# alsaloop every 9 s instead of parking it. Absence of evidence counts
+	# toward idle — the safe direction, since parking is cheap and reversible.
+	NOW_HW=$(hw_ptr)
+	INPUT_MOVING=0
+	[ -n "$NOW_HW" ] && [ -n "$LAST_HW" ] && [ "$NOW_HW" != "$LAST_HW" ] \
+		&& INPUT_MOVING=1
+	if [ -n "$ALPID" ] && kill -0 "$ALPID" 2>/dev/null && [ "$INPUT_MOVING" = 0 ]; then
+		IDLE_TICKS=$((IDLE_TICKS + 1))
+		if [ "$IDLE_TICKS" -ge "$IDLE_CONFIRM" ]; then
+			echo "nexusq-uac2-in: no input from the USB host for" \
+			     "$((IDLE_TICKS * 3)) s (hw_ptr parked at $NOW_HW," \
+			     "stream still open) — stopping alsaloop instead of" \
+			     "letting it spin; probing every ${PARK_RETRY_S}s" >&2
+			kill "$ALPID" 2>/dev/null
+			wait "$ALPID" 2>/dev/null
+			ALPID=""
+			PARKED=1; PARK_WAIT=0; IDLE_TICKS=0; XRUN_TICKS=0
+			ensure_modules
+			continue
+		fi
+	else
+		IDLE_TICKS=0
+	fi
+	LAST_HW="$NOW_HW"
+
+	# Input IS arriving but the loop is stuck: a genuinely wedged alsaloop.
+	# Gated on INPUT_MOVING — restarting into a host that is not sending only
+	# re-wedges it, which is what the park branch above is for.
+	if [ "$INPUT_MOVING" = 1 ] && [ -n "$ALPID" ] && kill -0 "$ALPID" 2>/dev/null \
+	   && grep -qx "state: XRUN" "$ALOOP_STATUS" 2>/dev/null; then
+		XRUN_TICKS=$((XRUN_TICKS + 1))
+		if [ "$XRUN_TICKS" -ge "$XRUN_CONFIRM" ]; then
+			echo "nexusq-uac2-in: $ALOOP playback stuck in XRUN for" \
+			     "$((XRUN_TICKS * 3)) s while input flows —" \
+			     "restarting a wedged alsaloop" >&2
+			kill "$ALPID" 2>/dev/null
+			wait "$ALPID" 2>/dev/null
+			ALPID=""
+			start_alsaloop
+			XRUN_TICKS=0
+			LAST_HW=""
+		fi
+	else
+		XRUN_TICKS=0
 	fi
 	if [ -n "$SILPID" ] && ! kill -0 "$SILPID" 2>/dev/null; then
 		echo "nexusq-uac2-in: silence watcher died, restarting it" >&2
