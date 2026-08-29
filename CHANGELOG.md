@@ -6,6 +6,23 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the WiFi/BT firmware fetch 404'd, and the build called that success (2026-08-30)
+- linux-firmware's canonical home moved to GitLab, so the kernel.org cgit
+  `plain/brcm/brcmfmac4330-sdio.bin` path hardcoded in `docker-build.sh` now
+  answers **404** — and the failure branch merely warned before falling through
+  to the **empty `firmware-google-steelhead` package**. A green build, a
+  flashable image, **no wlan0 and no BT**. This is the exact trap that bit the
+  first v1.8.1 flash, re-armed by an upstream URL change rather than a mistake.
+- `BRCMFMAC_URL` is now an ordered mirror list (GitLab canonical, kernel.org
+  second). More importantly the fallthrough is gone **for maintainer builds**:
+  when the proprietary overlay is present — i.e. a build meant to be flashed —
+  an unfetchable blob is now `exit 1` naming the cache path, instead of a
+  silently crippled image. A public clone with no overlay still gets the empty
+  package and a green build, unchanged: that asymmetry is the point.
+- The blob is cached at `./firmware/brcmfmac4330-sdio.bin` (gitignored).
+  v1.14.0 is **not** affected — its `firmware-google-steelhead-1-r2.apk` is
+  181316 B of real blobs; the empty fallback is 1203 B.
+
 ### Fixed — a UAC2 host that stops sending without closing the stream cooked the Q for 28 h (2026-08-30, device **r88**)
 - **Found by picking up a routine idle-OPP measurement.** From 2026-08-28 19:14
   the Prague unit sat at **1200 MHz / 1380 mV, die 77.8 °C mean and 90.6 °C peak,

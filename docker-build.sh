@@ -243,7 +243,14 @@ else
 fi
 
 FW_APORT="$PMAPORTS/device/testing/firmware-google-steelhead"
-BRCMFMAC_URL="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/brcm/brcmfmac4330-sdio.bin"
+# Mirrors for the redistributable brcmfmac firmware, tried in order. linux-firmware's
+# canonical home moved to GitLab; the old kernel.org cgit `plain/brcm/...` path now
+# answers 404, which used to degrade SILENTLY into the EMPTY firmware package below
+# (green build, image with no wlan0 and no BT -- 2026-08-30). Keep more than one.
+BRCMFMAC_URLS="
+https://gitlab.com/kernel-firmware/linux-firmware/-/raw/main/brcm/brcmfmac4330-sdio.bin
+https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/brcm/brcmfmac4330-sdio.bin
+"
 if [ -f "$SRC/firmware/bcm4330.hcd" ] && [ -f "$SRC/firmware/bcmdhd.cal" ]; then
     cp "$SRC/firmware/bcm4330.hcd" "$FW_APORT/BCM4330B1.hcd"
     cp "$SRC/firmware/bcmdhd.cal"  "$FW_APORT/brcmfmac4330-sdio.txt"
@@ -252,9 +259,24 @@ if [ -f "$SRC/firmware/bcm4330.hcd" ] && [ -f "$SRC/firmware/bcmdhd.cal" ]; then
         echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (local cache)"
     else
         echo "  Fetching redistributable brcmfmac4330-sdio.bin from upstream linux-firmware..."
-        curl -fsSL "$BRCMFMAC_URL" -o "$FW_APORT/brcmfmac4330-sdio.bin" \
-            && echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (downloaded)" \
-            || { echo "  ERROR: could not fetch brcmfmac4330-sdio.bin -- WiFi firmware will be missing"; rm -f "$FW_APORT/brcmfmac4330-sdio.bin"; }
+        for _u in $BRCMFMAC_URLS; do
+            if curl -fsSL --max-time 120 "$_u" -o "$FW_APORT/brcmfmac4330-sdio.bin"; then
+                echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (downloaded from $_u)"
+                break
+            fi
+            echo "  (mirror failed: $_u)"
+            rm -f "$FW_APORT/brcmfmac4330-sdio.bin"
+        done
+        if [ ! -f "$FW_APORT/brcmfmac4330-sdio.bin" ]; then
+            # The proprietary overlay IS present, so this is a maintainer build meant
+            # for flashing: refuse to fall through to the empty package. Cache the file
+            # in ./firmware/brcmfmac4330-sdio.bin (gitignored) and re-run.
+            echo "  ERROR: could not fetch brcmfmac4330-sdio.bin from any mirror."
+            echo "         The firmware overlay is present, so this build would ship an"
+            echo "         image with NO WiFi and NO BT. Cache the blob at"
+            echo "         ./firmware/brcmfmac4330-sdio.bin and re-run."
+            exit 1
+        fi
     fi
 fi
 if [ ! -f "$FW_APORT/BCM4330B1.hcd" ] || [ ! -f "$FW_APORT/brcmfmac4330-sdio.bin" ]; then
