@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 
 # `home.arpa` only resolves on the home LAN, and HA is not on Tailscale — from
 # anywhere else, tunnel to it and point this at the near end, e.g.
-#   ssh -fN -L 8123:192.168.20.200:8123 root@100.110.110.100   # via Proxmox
+#   ssh -fN -L 8123:<ha-host>:8123 root@<jump-host>   # via Proxmox
 #   NQ_HA_URL=http://127.0.0.1:8123 scripts/diag/ha-opp-window.py --days 2
 HA = os.environ.get("NQ_HA_URL", "http://homeassistant.home.arpa:8123")
 CEST = timezone(timedelta(hours=2))

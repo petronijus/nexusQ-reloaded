@@ -28,7 +28,7 @@ journal line above is the whole diagnosis; look there first.
 ## 2. The cottage broker was loopback-only
 
 Mosquitto 2.0.21 *was* running at the cottage, on the DietPi
-(`192.168.48.52`) — but `conf.d/zigbee2mqtt.conf` bound it to localhost, because
+(`<cottage-pi>`) — but `conf.d/zigbee2mqtt.conf` bound it to localhost, because
 it had only ever served zigbee2mqtt on the same host:
 
 ```
@@ -37,14 +37,14 @@ allow_anonymous true
 ```
 
 From the Q: `ConnectionRefusedError: [Errno 111]`. And there is no fallback —
-the Q is **not** on Tailscale, so the Prague broker (`100.110.110.102`) is
+the Q is **not** on Tailscale, so the Prague broker (`<broker-host>`) is
 unroutable from it. `ping` to that address fails from the device.
 
 Note for future probing: the Q's busybox `sh` has no `/dev/tcp`, so the port
 check has to go through Python:
 
 ```sh
-python3 -c 'import socket;s=socket.socket();s.settimeout(3);s.connect(("192.168.48.52",1883))'
+python3 -c 'import socket;s=socket.socket();s.settimeout(3);s.connect(("<cottage-pi>",1883))'
 ```
 
 ### What was changed on the Pi
@@ -52,7 +52,7 @@ python3 -c 'import socket;s=socket.socket();s.settimeout(3);s.connect(("192.168.
 `conf.d/zigbee2mqtt.conf` now binds `0.0.0.0`, still anonymous — the cottage
 WLAN is the trust boundary, chosen deliberately over a password file. And the
 bridge to Prague (`conf.d/bridge-home.conf`, `home-truenas` →
-`100.110.110.102` over Tailscale) gained one rule:
+`<broker-host>` over Tailscale) gained one rule:
 
 ```
 topic nexusq-sumperak/# out 1
@@ -67,8 +67,8 @@ state topic that never arrives. Backups of both files are on the Pi as
 
 Provisioning with the default `prefix` made it immediately visible that **two
 devices were publishing to `nexusq/health/state`**: one payload with
-`wifi_ssid: "Sumperak-Internety"`, the next with
-`"Svatovitske-Internety-5g"`.
+`wifi_ssid: "<cottage-ssid>"`, the next with
+`"<home-ssid>"`.
 
 The topics are built as `<prefix>/health/state` and `<prefix>/status` with **no
 per-device component** (`nexusq-mqtt` lines 795–797) — only the HA discovery
@@ -88,8 +88,8 @@ wlan0 in use     f8:8f:ca:20:48:e1   ← the FIRST (Prague) box
 wlan0 permanent  f8:8f:ca:05:1f:11   ← its own, from DTS kernel patch 0043
 ```
 
-`wifi-sumperak-internety.nmconnection` carried
-`cloned-mac-address=F8:8F:CA:20:48:E1`. The `wifi-svatovitske-internety-5g`
+`wifi-<cottage-site>.nmconnection` carried
+`cloned-mac-address=<first-unit-mac>`. The `wifi-<home-site>`
 profile on the *same device* was correctly on `permanent`.
 
 ### Why the 2026-08-28 fix did not cover it
@@ -137,7 +137,7 @@ identity had escaped.
 
 Set the profile to `permanent` and reconnect. The change is safe to do remotely
 when the profile is `method=manual` — the static address survives the MAC change
-(the cottage Q kept `192.168.51.240` throughout). It was applied through a
+(the cottage Q kept `<cottage-q>` throughout). It was applied through a
 detached `systemd-run` unit carrying its own revert: restore the backup and
 reconnect if the link does not come back within 90 s, so a bad edit cannot
 strand a device that is only reachable over that link. It came back in 7 s.
@@ -168,7 +168,7 @@ Two Home Assistant devices, two topic trees, no shared identity.
 
 ## Follow-ups not done
 
-- The cottage profile has `dns=192.168.1.20;1.1.1.1;`. The first is a Prague
+- The cottage profile has `dns=<home-dns>;1.1.1.1;`. The first is a Prague
   resolver, unreachable at the cottage; resolution works only via the 1.1.1.1
   fallback, after that one times out.
 - Provisioning still has no self-healing story after a reflash. The companion

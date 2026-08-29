@@ -70,7 +70,7 @@ The appended DTB is editable in place. Full recipe:
 ## 🔴 The trap on the other side: the NM profile overrode it right back
 
 After the flash, BT read the new address — and **WiFi still read the OLD one**.
-The baked WiFi profile carried `cloned-mac-address=F8:8F:CA:20:48:E1`, a line
+The baked WiFi profile carried `cloned-mac-address=<first-unit-mac>`, a line
 kept "as harmless belt-and-braces" since the DTS pin made it redundant. It is
 not harmless: it overrode the correct per-unit MAC with the first unit's, and
 nothing logged a thing. Two boxes, one MAC, no error anywhere.
@@ -108,14 +108,14 @@ ramdisk-less boot. Test on hardware with a rescue path ready.
 ```
 Controller F8:8F:CA:73:AC:9C sumperak [default]
 wlan0      f8:8f:ca:05:1f:11
-Sumperak-Internety:wlan0:activated
+<cottage-ssid>:wlan0:activated
 ```
 
 ## ⚠️ Addendum (2026-08-29): the verification above did not hold
 
 The next day the same unit was found on the air as **`f8:8f:ca:20:48:e1`** — the
-first box's MAC again — because `wifi-sumperak-internety.nmconnection` on its
-rootfs still carried `cloned-mac-address=F8:8F:CA:20:48:E1`. That profile was
+first box's MAC again — because `wifi-<cottage-site>.nmconnection` on its
+rootfs still carried `cloned-mac-address=<first-unit-mac>`. That profile was
 generated in the hours between `1fb7f33` (multi-site, still hardcoded) and
 `50e57c0` (the fix on this page) and was never regenerated afterwards.
 
