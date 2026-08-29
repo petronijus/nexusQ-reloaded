@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.14.0] — unreleased — rename the Q from the app · per-unit Bluetooth/WiFi identity · the name once, in your colour
+
+The first release with **two Nexus Qs in mind**: one box can now be renamed from
+the phone without a cable, and a second unit no longer inherits the first one's
+Bluetooth address and WiFi MAC. The image itself keeps the DTS defaults — a
+second unit gets its own addresses by the documented in-place DTB patch
+(`docs/2026-08-28-per-unit-bt-wifi-identity.md`), which needs no kernel rebuild.
+
+Device side: `nexusq-control` **r34** (setName over the LAN) and **r35**
+(`getState` stops serving the boot-time name). Companion app **1.17.2+49**,
+released separately as `app-v1.17.2`.
+
+
 ### Fixed — a rename did not reach the home screen (2026-08-29, app **1.17.2+49**)
 - Renaming the Q from Settings changed it everywhere except the one place it is
   actually read: the name under the sphere kept showing the old one.
@@ -90,6 +103,8 @@ All notable changes to Nexus Q Reloaded. Format follows
   the EQ card cost three releases to learn this exact lesson.
 - ⚠️ `pumpAndSettle` can never settle on this screen (a 3 s poll timer keeps a
   timer pending forever). Its tests pump a bounded number of frames instead.
+
+## [1.13.0] — 2026-08-28 — hardware EQ · idle power down 20× · Roon fixed
 
 ### Fixed — Roon idle cost, and the USB audio it took down with it (2026-08-27, device **r85** + **r86**)
 - **Roon on and idle: PulseAudio 12.60 % → 0.82 % of a core**, sink suspended,

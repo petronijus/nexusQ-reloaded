@@ -33,11 +33,34 @@ check_absent() {
     echo "OK: no $what ($path)"
 }
 
+# A whole DIRECTORY, not one filename. `gen-wifi-profile.sh` grew multi-site
+# support on 2026-08-28 and now writes wifi-<site>.nmconnection alongside the
+# plain wifi.nmconnection — a gate that greps for one hardcoded name would wave
+# the others through, and every one of them carries the PSK in plain text. The
+# rule is: NO connection profile of any name may be in a public image.
+check_dir_empty() {
+    local dir="$1" what="$2" listing found
+    listing=$(debugfs -R "ls -p $dir" "$IMG" 2>/dev/null || true)
+    if [ -z "$listing" ]; then
+        echo "OK: no $what (no $dir)"
+        return 0
+    fi
+    # debugfs -p output is /inode/perm/uid/gid/name/size/ per entry, one per line.
+    found=$(printf '%s\n' "$listing" | awk -F/ 'NF>5 && $6 != "." && $6 != ".." {print $6}')
+    if [ -n "$found" ]; then
+        echo "FAIL: $what present in the image ($dir):"
+        printf '        %s\n' $found
+        return 1
+    fi
+    echo "OK: no $what ($dir is empty)"
+}
+
 fail=0
-check_absent "/etc/NetworkManager/system-connections/wifi.nmconnection" \
-    "WiFi profile (contains the WPA PSK!)" || fail=1
+check_dir_empty "/etc/NetworkManager/system-connections" \
+    "WiFi profiles (they contain the WPA PSK!)" || fail=1
 check_absent "/root/.ssh/authorized_keys" "root ssh authorized_keys" || fail=1
 check_absent "/etc/skel/.ssh/authorized_keys" "skel ssh authorized_keys" || fail=1
+check_absent "/home/user/.ssh/authorized_keys" "user ssh authorized_keys" || fail=1
 
 if [ "$fail" -ne 0 ]; then
     cat >&2 <<'MSG'

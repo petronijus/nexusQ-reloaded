@@ -37,7 +37,65 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
-## Session 2026-08-26 (latest): **Roon costs 36 % of a core doing nothing — and leaks its PA modules when you turn it off · USB IRQ floor closed · transport routing landed · two of my own measurement traps corrected**
+## ⬜ OPEN HANDOVER → desktop (`petronijus-PC`): cut the public image release **v1.14.0**
+
+Prepared on the MacBook 2026-08-29 (Petr: "udelej release vseho co jsme delali
+public"). Everything that does not need the build host is already done and
+pushed: `CHANGELOG.md` is closed into `## [1.14.0]` (its body IS the release
+note), the app is out as `app-v1.17.2`, and `nexusq-control` is at **r35**.
+
+**The build cannot run on the MacBook** — it needs the docker pmbootstrap
+workdir and the `pmos@local-6a42e957` key, both of which live only on the
+desktop. Todoist: AI-handover.
+
+```bash
+git pull
+
+# 1. CLEAN image — PUBLIC_RELEASE=1 bakes NO ssh keys and NO WiFi profile.
+#    Without it the rootfs would ship Petr's WPA PSK in plain text to GitHub.
+PUBLIC_RELEASE=1 ./docker-build.sh                      # ~70 min cold
+
+# 2. The gate. Non-negotiable, and it now checks the WHOLE
+#    /etc/NetworkManager/system-connections directory (multi-site profiles are
+#    named wifi-<site>.nmconnection, which the old one-filename check missed).
+scripts/release-preflight-no-secrets.sh output/google-steelhead.img
+
+# 3. Package
+cp output/boot.img output/nexusq-boot-v1.14.0.img
+python3 raw2simg.py output/google-steelhead.img output/nexusq-rootfs-v1.14.0-sparse.img
+zstd -19 output/nexusq-rootfs-v1.14.0-sparse.img
+cd output && sha256sum nexusq-boot-v1.14.0.img nexusq-rootfs-v1.14.0-sparse.img.zst > sha256sums.txt
+
+# 4. Publish
+git tag v1.14.0 && git push origin v1.14.0
+# release notes = the CHANGELOG section itself (sed '$d' drops the next heading)
+sed -n '/^## \[1.14.0\]/,/^## \[1.13.0\]/p' CHANGELOG.md | sed '$d' > /tmp/notes-v1.14.0.md
+gh release create v1.14.0 output/nexusq-boot-v1.14.0.img \
+  output/nexusq-rootfs-v1.14.0-sparse.img.zst output/sha256sums.txt \
+  --title "v1.14.0 — rename the Q from the app · per-unit Bluetooth/WiFi identity" \
+  --notes-file /tmp/notes-v1.14.0.md
+
+# 5. Then date the heading: "## [1.14.0] — unreleased" -> "— 2026-XX-XX", commit.
+```
+
+Two things that are NOT part of this release and must not be conflated:
+
+- **Personal flashing needs a SECOND build** without `PUBLIC_RELEASE=1` — the
+  released image deliberately has no ssh keys and no WiFi, so flashing it to
+  your own box means onboarding by hand.
+- **`nexusq-control` r35 for the two boxes already in the field** goes out over
+  the OTA repo (`scripts/publish-ota-repo.sh`), not by reflashing — separate
+  AI-handover task. The v1.14.0 image contains r35 either way, since
+  `docker-build.sh` builds the packages from `userspace/`.
+
+The per-unit BT/WiFi identity fix is **not baked into the image** and must not
+be: the released DTB keeps the DTS defaults, and a second unit gets its own
+addresses by patching its own `boot.img` in place, per
+`docs/2026-08-28-per-unit-bt-wifi-identity.md`.
+
+---
+
+## Session 2026-08-26: **Roon costs 36 % of a core doing nothing — and leaks its PA modules when you turn it off · USB IRQ floor closed · transport routing landed · two of my own measurement traps corrected**
 
 ### 🔴 THE FINDING OF THE DAY — Roon, and it is not small
 
