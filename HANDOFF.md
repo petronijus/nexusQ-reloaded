@@ -37,61 +37,61 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
-## ⬜ OPEN HANDOVER → desktop (`petronijus-PC`): cut the public image release **v1.14.0**
+## Session 2026-08-29: **v1.14.0 cut ON THE MACBOOK — and the two traps it walked into**
 
-Prepared on the MacBook 2026-08-29 (Petr: "udelej release vseho co jsme delali
-public"). Everything that does not need the build host is already done and
-pushed: `CHANGELOG.md` is closed into `## [1.14.0]` (its body IS the release
-note), the app is out as `app-v1.17.2`, and `nexusq-control` is at **r35**.
+The desktop was offline (Tailscale: last seen 1 d), so the public image release
+was built here. It works, and the two things that nearly made it a bad release
+are worth keeping.
 
-**The build cannot run on the MacBook** — it needs the docker pmbootstrap
-workdir and the `pmos@local-6a42e957` key, both of which live only on the
-desktop. Todoist: AI-handover.
+### The MacBook CAN build the image
 
-```bash
-git pull
+`docker build -t nexusq-builder . && docker run --privileged -e PUBLIC_RELEASE=1
+-v $PWD:/src:ro -v nexusq-output:/tmp/output -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap
+nexusq-builder /src/docker-build.sh` — Docker Desktop on Apple Silicon runs it
+as an aarch64 native chroot cross-compiling to armv7 "qemu-only". Cold build
+≈2 h (kernel ≈1 h 15 under qemu); the second pass, kernel cached, ≈25 min.
 
-# 1. CLEAN image — PUBLIC_RELEASE=1 bakes NO ssh keys and NO WiFi profile.
-#    Without it the rootfs would ship Petr's WPA PSK in plain text to GitHub.
-PUBLIC_RELEASE=1 ./docker-build.sh                      # ~70 min cold
+What is machine-bound is not the image — it is the **signing key**, and only for
+the OTA repo. See below.
 
-# 2. The gate. Non-negotiable, and it now checks the WHOLE
-#    /etc/NetworkManager/system-connections directory (multi-site profiles are
-#    named wifi-<site>.nmconnection, which the old one-filename check missed).
-scripts/release-preflight-no-secrets.sh output/google-steelhead.img
+### ⚠️ TRAP 1 — a clean clone silently builds an image with NO WiFi and NO Bluetooth
 
-# 3. Package
-cp output/boot.img output/nexusq-boot-v1.14.0.img
-python3 raw2simg.py output/google-steelhead.img output/nexusq-rootfs-v1.14.0-sparse.img
-zstd -19 output/nexusq-rootfs-v1.14.0-sparse.img
-cd output && sha256sum nexusq-boot-v1.14.0.img nexusq-rootfs-v1.14.0-sparse.img.zst > sha256sums.txt
+`firmware/bcm4330.hcd` and `firmware/bcmdhd.cal` are gitignored (proprietary),
+and `docker-build.sh` falls back to an **EMPTY** `firmware-google-steelhead`
+when they are missing. It says so in one line among hundreds:
 
-# 4. Publish
-git tag v1.14.0 && git push origin v1.14.0
-# release notes = the CHANGELOG section itself (sed '$d' drops the next heading)
-sed -n '/^## \[1.14.0\]/,/^## \[1.13.0\]/p' CHANGELOG.md | sed '$d' > /tmp/notes-v1.14.0.md
-gh release create v1.14.0 output/nexusq-boot-v1.14.0.img \
-  output/nexusq-rootfs-v1.14.0-sparse.img.zst output/sha256sums.txt \
-  --title "v1.14.0 — rename the Q from the app · per-unit Bluetooth/WiFi identity" \
-  --notes-file /tmp/notes-v1.14.0.md
-
-# 5. Then date the heading: "## [1.14.0] — unreleased" -> "— 2026-XX-XX", commit.
+```
+WARNING: BCM4330 firmware blobs incomplete -> building EMPTY firmware-google-steelhead
 ```
 
-Two things that are NOT part of this release and must not be conflated:
+and then the build SUCCEEDS. The first v1.14.0 build was exactly that image.
+The blobs live in the private overlay — `cp private/firmware/bcm4330.hcd
+private/firmware/bcmdhd.cal firmware/` before building, and confirm the log says
+`Staged BCM4330 firmware`. Verify in the finished rootfs, not in the log:
 
-- **Personal flashing needs a SECOND build** without `PUBLIC_RELEASE=1` — the
-  released image deliberately has no ssh keys and no WiFi, so flashing it to
-  your own box means onboarding by hand.
-- **`nexusq-control` r35 for the two boxes already in the field** goes out over
-  the OTA repo (`scripts/publish-ota-repo.sh`), not by reflashing — separate
-  AI-handover task. The v1.14.0 image contains r35 either way, since
-  `docker-build.sh` builds the packages from `userspace/`.
+```
+debugfs -R "stat /lib/firmware/brcm/BCM4330B1.hcd" output/google-steelhead.img   # 51813 B
+```
 
-The per-unit BT/WiFi identity fix is **not baked into the image** and must not
-be: the released DTB keeps the DTS defaults, and a second unit gets its own
-addresses by patching its own `boot.img` in place, per
-`docs/2026-08-28-per-unit-bt-wifi-identity.md`.
+md5 `7e5bb859e33142e94052c76fba23b9e6` is the correct steelhead "Phantasm"
+patchram (firmware/README.md); 51 813 B is its size, and a wrong-board blob is a
+different size — so the size check is a real check.
+
+### ⚠️ TRAP 2 — the OTA repo is signed with a key no current image trusts
+
+Found the same evening, on the live Šumperák box: `apk update` →
+`UNTRUSTED signature`, our repo unusable, so both update buttons in the app are
+silently dead there. `publish-ota-repo.sh` hardcoded `pmos@local-6a42e957` while
+the v1.13.0 image baked `pmos@local-6a913e9e`. The script now discovers its key
+and refuses to publish under one that differs from
+`pmos/ota-signing-key.rsa.pub`. Full write-up + the fleet repair plan:
+`docs/2026-08-29-ota-key-drift.md`.
+
+**v1.14.0 trusts `pmos@local-6a93112c`** (this MacBook's build key). Until the
+fleet converges on one key, a v1.14.0 box cannot OTA — flash-only. Converging
+means: pick the key, commit its public half, ship an image that bakes it, and
+`scp` it into `/etc/apk/keys` on every box already in the field. The Šumperák
+box is reachable; the home box needs someone on its LAN.
 
 ---
 

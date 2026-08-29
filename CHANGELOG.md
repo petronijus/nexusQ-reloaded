@@ -6,7 +6,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-## [1.14.0] — unreleased — rename the Q from the app · per-unit Bluetooth/WiFi identity · the name once, in your colour
+## [1.14.0] — 2026-08-29 — rename the Q from the app · per-unit Bluetooth/WiFi identity · the name once, in your colour
 
 The first release with **two Nexus Qs in mind**: one box can now be renamed from
 the phone without a cable, and a second unit no longer inherits the first one's
@@ -18,6 +18,40 @@ Device side: `nexusq-control` **r34** (setName over the LAN) and **r35**
 (`getState` stops serving the boot-time name). Companion app **1.17.2+49**,
 released separately as `app-v1.17.2`.
 
+
+### Fixed — release engineering: the secrets gate, the packaging, and a signing key that had drifted (2026-08-29)
+- The **no-secrets gate could not run on macOS** (it needs `debugfs`), so the one
+  step that stops a WPA PSK reaching GitHub was quietly a Linux-only step. It
+  now re-execs itself in a container when `debugfs` is missing. Proven both
+  ways: it passes a clean image and aborts on a purpose-built image carrying
+  `wifi-sumperak.nmconnection`.
+- It also checked **one filename**. `gen-wifi-profile.sh` grew multi-site support
+  the day before and writes `wifi-<site>.nmconnection` too, so a single
+  hardcoded name waves the rest through. Widening it to the whole
+  `/etc/NetworkManager/system-connections` directory then failed the release on
+  `eth-direct` / `eth-lan` — wired profiles the device package ships **by
+  design**, with no secret in them. A gate that cries wolf gets skipped, so it
+  now checks the property that matters: it reads each profile and refuses one
+  that stores a secret (`psk=`, `password=`, `wep-key=`, …) or is a WiFi profile
+  at all (the SSID is personal even with the key elsewhere). Verified against
+  both — a planted `wifi-sumperak.nmconnection` aborts, the shipped ethernet
+  pair passes.
+- **`scripts/package-release.sh`** — packaging was prose in HANDOFF.md, retyped
+  by hand each release. It is a script now, with the gate wired in front of it.
+- **The OTA repo is signed with a key no current image trusts.** The published
+  index carries `pmos@local-6a42e957`; the v1.13.0 image bakes
+  `pmos@local-6a913e9e`, so a freshly flashed Q answers every `apk update` with
+  `UNTRUSTED signature` and both update buttons in the app are silently dead.
+  `publish-ota-repo.sh` now discovers its key and refuses to publish under one
+  that differs from `pmos/ota-signing-key.rsa.pub`.
+  ⚠️ The guard prevents the next outage; it does not repair the current one —
+  the fleet still has to converge on one key. `docs/2026-08-29-ota-key-drift.md`.
+- ⚠️ **A clean clone builds an image with no WiFi and no Bluetooth.** The BCM4330
+  blobs are gitignored, and the build falls back to an EMPTY
+  `firmware-google-steelhead` with a single warning — and then succeeds. The
+  first v1.14.0 build was exactly that. Copy `private/firmware/*` into
+  `firmware/` first, and verify in the finished rootfs (`BCM4330B1.hcd` must be
+  51 813 B), not in the log.
 
 ### Fixed — a rename did not reach the home screen (2026-08-29, app **1.17.2+49**)
 - Renaming the Q from Settings changed it everywhere except the one place it is

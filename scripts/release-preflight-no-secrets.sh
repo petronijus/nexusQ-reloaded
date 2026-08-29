@@ -46,31 +46,41 @@ check_absent() {
     echo "OK: no $what ($path)"
 }
 
-# A whole DIRECTORY, not one filename. `gen-wifi-profile.sh` grew multi-site
-# support on 2026-08-28 and now writes wifi-<site>.nmconnection alongside the
-# plain wifi.nmconnection — a gate that greps for one hardcoded name would wave
-# the others through, and every one of them carries the PSK in plain text. The
-# rule is: NO connection profile of any name may be in a public image.
-check_dir_empty() {
-    local dir="$1" what="$2" listing found
+# Not one filename, and not the whole directory either — the PROPERTY that
+# matters. `gen-wifi-profile.sh` grew multi-site support on 2026-08-28 and now
+# writes wifi-<site>.nmconnection beside the plain one, so a check that greps
+# for a single hardcoded name waves the rest through. But the device package
+# also ships eth-direct/eth-lan BY DESIGN, and those are wired profiles with no
+# secret in them — failing on those would just teach everyone to skip the gate.
+#
+# So: read every connection profile and refuse the ones that actually leak —
+# any stored secret, or any WiFi profile (its SSID is personal even when the
+# key is stored elsewhere).
+check_connections() {
+    local dir="/etc/NetworkManager/system-connections" listing names f body bad=0
     listing=$(debugfs -R "ls -p $dir" "$IMG" 2>/dev/null || true)
-    if [ -z "$listing" ]; then
-        echo "OK: no $what (no $dir)"
+    names=$(printf '%s\n' "$listing" | awk -F/ 'NF>5 && $6 != "." && $6 != ".." {print $6}')
+    if [ -z "$names" ]; then
+        echo "OK: no NetworkManager connection profiles at all"
         return 0
     fi
-    # debugfs -p output is /inode/perm/uid/gid/name/size/ per entry, one per line.
-    found=$(printf '%s\n' "$listing" | awk -F/ 'NF>5 && $6 != "." && $6 != ".." {print $6}')
-    if [ -n "$found" ]; then
-        echo "FAIL: $what present in the image ($dir):"
-        printf '        %s\n' $found
-        return 1
-    fi
-    echo "OK: no $what ($dir is empty)"
+    for f in $names; do
+        body=$(debugfs -R "cat $dir/$f" "$IMG" 2>/dev/null || true)
+        if printf '%s\n' "$body" | grep -Eqi '^[[:space:]]*(psk|password|wep-key[0-9]?|private-key-password|pin)[[:space:]]*='; then
+            echo "FAIL: $f stores a secret (this is what must never reach GitHub)"
+            bad=1
+        elif printf '%s\n' "$body" | grep -Eqi '^[[:space:]]*type[[:space:]]*=[[:space:]]*(wifi|802-11-wireless)'; then
+            echo "FAIL: $f is a WiFi profile — personal, even with no key in it"
+            bad=1
+        else
+            echo "OK: $f carries no secret (wired profile shipped by the device package)"
+        fi
+    done
+    return $bad
 }
 
 fail=0
-check_dir_empty "/etc/NetworkManager/system-connections" \
-    "WiFi profiles (they contain the WPA PSK!)" || fail=1
+check_connections || fail=1
 check_absent "/root/.ssh/authorized_keys" "root ssh authorized_keys" || fail=1
 check_absent "/etc/skel/.ssh/authorized_keys" "skel ssh authorized_keys" || fail=1
 check_absent "/home/user/.ssh/authorized_keys" "user ssh authorized_keys" || fail=1
