@@ -19,8 +19,41 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VOL=nexusq-workdir
-KEY=pmos@local-6a42e957
+VOL="${VOL:-nexusq-workdir}"
+
+# The signing key is DISCOVERED, not hardcoded. It used to be pinned to
+# `pmos@local-6a42e957`, and on 2026-08-29 that name had silently drifted from
+# reality: the published index was signed with 6a42e957 while the v1.13.0 image
+# baked 6a913e9e into /etc/apk/keys, so a freshly flashed Q answered every
+# `apk update` with "UNTRUSTED signature" and could not OTA at all. A hardcoded
+# name cannot notice that; a discovered one plus the check below can.
+KEY="${KEY:-}"
+if [ -z "$KEY" ]; then
+    KEY=$(docker run --rm -v "$VOL":/w alpine sh -c \
+        'ls -1 /w/config_abuild/*.rsa.pub 2>/dev/null | head -1' \
+        | xargs -r basename | sed 's/\.rsa\.pub$//')
+fi
+[ -n "$KEY" ] || { echo "ERROR: no signing key in volume $VOL/config_abuild" >&2; exit 1; }
+echo "signing key: $KEY"
+
+# And the drift guard: the fleet's recorded public key. Devices trust what was
+# baked into their image, so publishing under a key no device holds is a silent
+# outage. Refuse it.
+FLEET_KEY="$REPO_ROOT/pmos/ota-signing-key.rsa.pub"
+if [ -f "$FLEET_KEY" ]; then
+    HOST_KEY=$(docker run --rm -v "$VOL":/w alpine cat "/w/config_abuild/$KEY.rsa.pub")
+    if [ "$HOST_KEY" != "$(cat "$FLEET_KEY")" ]; then
+        cat >&2 <<MSG
+ERROR: this build host signs with $KEY, which is NOT the fleet key recorded in
+       pmos/ota-signing-key.rsa.pub. Publishing would produce a repo that every
+       device rejects as UNTRUSTED (this exact drift broke OTA once already).
+       Either build on the host that holds the fleet key, or re-key the fleet
+       deliberately: update pmos/ota-signing-key.rsa.pub, ship an image that
+       bakes it, and install it into /etc/apk/keys on every box in the field.
+MSG
+        exit 1
+    fi
+fi
 # The four daemons + the device CONFIG package (device-google-steelhead) and its
 # firmware subpackage — all now under GitHub's 100 MB limit after the glibc-rt
 # split (2026-08-02). This is what the app's SYSTEM update pulls (the base

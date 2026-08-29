@@ -17,8 +17,21 @@ if [ ! -f "$IMG" ]; then
     echo "ERROR: rootfs image not found: $IMG" >&2
     exit 1
 fi
+# The gate reads ext4 with debugfs, which macOS does not have. Rather than make
+# the gate a Linux-only step (and therefore a step that gets skipped on the
+# machine that happens to be doing the release), re-run ourselves inside a
+# throwaway container. Guarded against recursion: inside, debugfs exists.
 if ! command -v debugfs >/dev/null; then
-    echo "ERROR: debugfs (e2fsprogs) required" >&2
+    if command -v docker >/dev/null; then
+        echo "debugfs absent -> running the gate in a container"
+        exec docker run --rm \
+            -v "$(cd "$(dirname "$IMG")" && pwd):/img:ro" \
+            -v "$(cd "$(dirname "$0")/.." && pwd)/scripts:/scripts:ro" \
+            alpine:3.21 sh -c \
+            "apk add --no-cache --quiet bash e2fsprogs-extra >/dev/null && \
+             bash /scripts/$(basename "$0") /img/$(basename "$IMG")"
+    fi
+    echo "ERROR: debugfs (e2fsprogs) required, and no docker to borrow it from" >&2
     exit 1
 fi
 
