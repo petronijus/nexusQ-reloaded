@@ -6,6 +6,18 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.14.1] — 2026-08-30 — a stuck USB-audio bridge that cooked the box, and two gates that should have caught it
+
+A bug-fix release, found by picking up a routine idle-OPP measurement and
+discovering the Prague unit had spent **28 hours at 1200 MHz and ~78 °C** because
+a USB-audio bridge was spinning on a host that had stopped sending. The device
+fix is `device-google-steelhead` **r88**.
+
+The other two entries are gates for failures that were **silent by
+construction** — an upstream firmware URL that started 404ing into an image with
+no WiFi and no BT, and a stale WiFi profile pinning another unit's MAC. Both
+would have passed every check this project had.
+
 ### Fixed — the WiFi/BT firmware fetch 404'd, and the build called that success (2026-08-30)
 - linux-firmware's canonical home moved to GitLab, so the kernel.org cgit
   `plain/brcm/brcmfmac4330-sdio.bin` path hardcoded in `docker-build.sh` now
