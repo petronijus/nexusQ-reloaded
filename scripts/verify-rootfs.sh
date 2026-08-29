@@ -109,7 +109,44 @@ if [ -f "$MNT/usr/bin/nexusq-btagent" ]; then
 fi
 
 say ""
-say "=== 4. streaming / Roon layout ==="
+say "=== 4. per-unit network identity ==="
+# No baked connection profile may pin a literal MAC. Since v1.10.1 the factory
+# WiFi MAC comes from the DRIVER (DTS, kernel patch 0043) and a second unit gets
+# its own address by the in-place DTB patch; a `cloned-mac-address=<literal>`
+# in a profile silently overrides that and hands the second box the first one's
+# identity, with nothing logged (2026-08-28).
+#
+# This gate exists because the fix did not reach a profile that had ALREADY been
+# written. `wifi-sumperak-internety.nmconnection` was generated in the few hours
+# between 1fb7f33 (multi-site, still hardcoded) and 50e57c0 (permanent) and was
+# never regenerated, so the cottage Q ran the Prague Q's MAC until 2026-08-29 --
+# both boxes then shared one Home Assistant device.
+# docs/2026-08-29-mqtt-at-the-cottage-and-a-cloned-mac.md
+NMDIR="$MNT/etc/NetworkManager/system-connections"
+if [ -d "$NMDIR" ]; then
+    bad_mac=""
+    for prof in "$NMDIR"/*.nmconnection; do
+        [ -f "$prof" ] || continue
+        val=$(sed -n 's/^cloned-mac-address=//p' "$prof" | head -1)
+        # absent is fine (NM's wifi-stable-mac.conf default applies); a literal
+        # address is not. `permanent`/`preserve` name the hardware, they do not
+        # override it.
+        case "${val:-}" in
+            ""|permanent|preserve) ;;
+            *) bad_mac="$bad_mac $(basename "$prof")=$val" ;;
+        esac
+    done
+    if [ -n "$bad_mac" ]; then
+        bad "no profile pins a literal MAC" "$bad_mac"
+    else
+        ok "no profile pins a literal MAC" "$(ls "$NMDIR" 2>/dev/null | tr '\n' ' ')"
+    fi
+else
+    say "  (no /etc/NetworkManager/system-connections in this image)"
+fi
+
+say ""
+say "=== 5. streaming / Roon layout ==="
 chk_has opt/glibc-rt/bin/bash                                        "glibc-rt present"
 if has opt/glibc-rt/opt/RoonBridge; then
     bad "RoonBridge NOT baked" "present — must be lazy-fetched at runtime"
@@ -124,7 +161,7 @@ else
 fi
 
 say ""
-say "=== 5. python3 integrity gate ==="
+say "=== 6. python3 integrity gate ==="
 # The gate takes the .so itself, not a rootfs root — find it inside the image.
 # This is the [[sparse-dontcare-stale-emmc-corrupts-flash]] backstop: a
 # libpython whose zero-regions came back as device garbage SIGSEGVs on boot.
@@ -141,7 +178,7 @@ else
 fi
 
 say ""
-say "=== 6. boot.img ==="
+say "=== 7. boot.img ==="
 if [ -n "$BOOTIMG" ] && [ -f "$BOOTIMG" ]; then
     sz=$(stat -c %s "$BOOTIMG")
     if [ "$sz" -le $((8*1024*1024)) ]; then

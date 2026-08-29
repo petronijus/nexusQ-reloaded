@@ -149,7 +149,28 @@ systemctl restart nexusq-mqtt   # Condition* is only evaluated at start
 Only `host`, `username`, `password` are required; the rest defaults as shown.
 `interval_s` is clamped to 10–600. (In Petr's home the Q logs in with the
 household broker user — a dedicated device user was rejected + deleted
-2026-08-10.)
+2026-08-10.) An anonymous broker (`allow_anonymous true`, no `password_file`)
+still needs both credential fields filled — mosquitto accepts and ignores a
+username on such a listener, and the validator has no way to tell the two cases
+apart.
+
+### 🚨 One `prefix` per device — the state topic has no device component
+
+`<prefix>/health/state` and `<prefix>/status` are **flat**. Only the HA
+discovery configs are namespaced (by `node_id`, from the factory WiFi MAC), so
+two Qs left on the default `nexusq` prefix publish into the *same* topic and
+their payloads alternate — every consumer sees the two devices' values
+interleaved. Give each additional device its own prefix
+(`nexusq-sumperak`, …) and, if the telemetry crosses an MQTT bridge, add the
+matching `topic <prefix>/# out 1` rule — discovery rides `homeassistant/#`, the
+state does not, and the failure mode is entities that exist but never update.
+
+Two devices sharing a `node_id` is worse and less obvious: they share the HA
+device registry entry and every `unique_id`, and they overwrite each other's
+retained discovery configs on every reconnect. That is a **MAC** problem, not an
+MQTT one — verify with `ethtool -P wlan0` against
+`cat /sys/class/net/wlan0/address` before blaming this daemon. Both traps, hit
+on the same evening: `docs/2026-08-29-mqtt-at-the-cottage-and-a-cloned-mac.md`.
 
 ## Enablement
 

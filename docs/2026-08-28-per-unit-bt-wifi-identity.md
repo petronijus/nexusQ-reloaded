@@ -110,3 +110,26 @@ Controller F8:8F:CA:73:AC:9C sumperak [default]
 wlan0      f8:8f:ca:05:1f:11
 Sumperak-Internety:wlan0:activated
 ```
+
+## ⚠️ Addendum (2026-08-29): the verification above did not hold
+
+The next day the same unit was found on the air as **`f8:8f:ca:20:48:e1`** — the
+first box's MAC again — because `wifi-sumperak-internety.nmconnection` on its
+rootfs still carried `cloned-mac-address=F8:8F:CA:20:48:E1`. That profile was
+generated in the hours between `1fb7f33` (multi-site, still hardcoded) and
+`50e57c0` (the fix on this page) and was never regenerated afterwards.
+
+So the fix is correct and complete **in the repo**, and incomplete on any device
+that was flashed or injected from an image built inside that window. Bluetooth
+was unaffected — the BD_ADDR above is still right — because it comes from the
+DTB alone, with no NetworkManager layer able to override it.
+
+Consequence, and how it surfaced: both units reported one `node_id`, so they
+shared a single Home Assistant device and overwrote each other's retained MQTT
+discovery configs. `scripts/verify-rootfs.sh` section 4 now fails any image
+whose baked profiles pin a literal MAC. Full account:
+`docs/2026-08-29-mqtt-at-the-cottage-and-a-cloned-mac.md`.
+
+Check a live unit with `ethtool -P wlan0` (permanent) against
+`cat /sys/class/net/wlan0/address` (in use), and grep **every** profile in
+`/etc/NetworkManager/system-connections/`, not just the active one.

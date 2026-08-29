@@ -6,6 +6,51 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a build-time gate for the cloned MAC, because fixing the generator was not enough (2026-08-29)
+- The 2026-08-28 per-unit identity fix is correct in the repo and **still left a
+  device wearing the wrong MAC**. `wifi-sumperak-internety.nmconnection` was
+  generated between `1fb7f33` (multi-site profiles, MAC still hardcoded) and
+  `50e57c0` (`cloned-mac-address=permanent`) — a few hours the same day — then
+  injected and never regenerated. A fix to a generator does not reach the
+  artifacts it has already written, and NetworkManager logs nothing when a
+  profile's explicit `cloned-mac-address` overrides the `wifi-stable-mac.conf`
+  default. The cottage Q therefore ran the Prague Q's `f8:8f:ca:20:48:e1` while
+  its own `f8:8f:ca:05:1f:11` sat unused in `ethtool -P`.
+- **`scripts/verify-rootfs.sh` section 4** now fails any image whose baked
+  `*.nmconnection` pins a literal MAC (absent / `permanent` / `preserve` pass).
+  Tested both ways. This catches at build time what nothing catches at runtime.
+- Bluetooth was never affected — the BD_ADDR comes from the DTB with no NM layer
+  above it. `docs/2026-08-28-per-unit-bt-wifi-identity.md` carries an addendum
+  saying its own "verified on the device" block stopped being true the next day.
+
+### Fixed — the second Q's MQTT telemetry, and the shared identity it exposed (2026-08-29)
+- The cottage Q had simply never been provisioned: `nexusq-mqtt.service` skipped
+  every boot on `ConditionPathExists=/etc/nexusq/mqtt.json`, which a reflash had
+  removed. **A reflash silently un-provisions telemetry** and the only symptom
+  is silence — that journal line is the whole diagnosis.
+- Its broker was reachable in principle and not in practice: mosquitto at the
+  cottage was bound `127.0.0.1` (a zigbee2mqtt-only config), and the Prague
+  broker is unroutable from the Q, which is not on Tailscale. Fixed on the Pi:
+  LAN listener plus a `topic nexusq-sumperak/# out 1` bridge rule, because
+  discovery rides the existing `homeassistant/#` rule but the **state does
+  not** — without it HA creates entities that never update.
+- 🔴 **`<prefix>/health/state` is flat** — no per-device component, only the
+  discovery configs are namespaced by `node_id`. Two Qs on the default prefix
+  interleave their payloads into one topic. Documented as a hard requirement in
+  `userspace/nexusq-mqtt/README.md`; one prefix per device.
+- And underneath it, both units reported `node_id nexusq_f88fca2048e1` — the
+  cloned-MAC fault above — so they shared one Home Assistant device, every
+  `unique_id`, and overwrote each other's retained discovery configs on each
+  reconnect. Both now publish independently:
+  `nexusq_f88fca2048e1 → nexusq/#` (Praha),
+  `nexusq_f88fca051f11 → nexusq-sumperak/#` (chalupa).
+- Repair note for a live unit: flipping the profile to `permanent` keeps the IP
+  when it is `method=manual`, and belongs in a detached `systemd-run` unit that
+  restores the backup if the link does not return — the profile being edited is
+  usually the only way in. Afterwards restart `nexusq-mqtt` on the *other* Q so
+  it republishes the discovery configs that were overwritten.
+  `docs/2026-08-29-mqtt-at-the-cottage-and-a-cloned-mac.md`
+
 ## [1.14.0] — 2026-08-29 — rename the Q from the app · per-unit Bluetooth/WiFi identity · the name once, in your colour
 
 The first release with **two Nexus Qs in mind**: one box can now be renamed from
