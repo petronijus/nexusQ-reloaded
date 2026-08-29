@@ -46,7 +46,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 1.13.0 — the app PROVISIONS the Q's MQTT credentials (setMqttConfig, §13):
 #          saving the Connect-to-MQTT dialog hands the same broker login to
 #          the device (control r28) — nothing hand-edited on the Q anymore.
-version: 1.17.1+48
+version: 1.17.2+49
 
 environment:
   sdk: ^3.12.0

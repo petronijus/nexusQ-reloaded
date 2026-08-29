@@ -6,6 +6,21 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a rename did not reach the home screen (2026-08-29, app **1.17.2+49**)
+- Renaming the Q from Settings changed it everywhere except the one place it is
+  actually read: the name under the sphere kept showing the old one.
+- Two independent causes, both fixed:
+  - the bridge broadcasts `deviceInfoChanged` on every rename (to every client,
+    so a second phone follows along too) and the app's controller simply had no
+    case for that event;
+  - `getState` carries a `name` that nexusq-control snapshots at start-up and
+    never refreshed, so even once the event landed, the next 25 s heartbeat
+    probe would have restored the pre-rename name — permanently.
+- The app now takes identity from `getDeviceInfo` + `deviceInfoChanged` only and
+  ignores `getState`'s copy of it, which makes the fix work against a device
+  that has not been updated yet. `nexusq-control` **r35** additionally keeps its
+  own state dict in sync, so `getState` stops lying to any other client.
+
 ### Changed — the device name is shown once, in the theme's colour (2026-08-28, app **1.17.1+48**)
 - The name was printed twice on the home screen: in the app bar and again under
   the sphere. The app-bar copy is gone; the one under the sphere stays, where it

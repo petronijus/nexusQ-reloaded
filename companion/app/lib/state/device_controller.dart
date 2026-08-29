@@ -222,6 +222,13 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       state.applyOutputs(o);
       notifyListeners();
     } catch (_) {/* keep the default output set until it's available */}
+    try {
+      // Identity is asked for separately because `getState`'s copy of the name
+      // goes stale on rename (see DeviceState.applyJson).
+      final i = await _client.call('getDeviceInfo');
+      state.applyIdentity(i);
+      notifyListeners();
+    } catch (_) {/* keep the last known name */}
   }
 
   void _onEvent(NexusQEvent e) {
@@ -239,6 +246,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
         if (e.data['output'] is String) state.output = e.data['output'] as String;
       case 'nowPlayingChanged':
         state.nowPlaying = NowPlaying.fromJson(e.data);
+      case 'deviceInfoChanged':
+        // Broadcast by the bridge on every rename, to every client — so the
+        // home screen follows a rename done from this phone AND from another.
+        state.applyIdentity(e.data);
     }
     notifyListeners();
   }

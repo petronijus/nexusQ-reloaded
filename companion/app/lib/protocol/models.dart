@@ -157,7 +157,18 @@ class DeviceState {
     if (j['scene'] is String) scene = j['scene'] as String;
     if (j['output'] is String) output = j['output'] as String;
     if (j['nowPlaying'] is Map) nowPlaying = NowPlaying.fromJson(Map<String, dynamic>.from(j['nowPlaying']));
-    if (j['name'] is String) deviceName = j['name'] as String;
+    // NB: `getState` also carries a `name`, and it is deliberately IGNORED here.
+    // The bridge snapshots it into its state dict at start-up and never
+    // refreshes it, so after a rename that field serves the OLD name — and the
+    // 25 s heartbeat probe would drag it back over the new one, forever.
+    // Identity has one source: [applyIdentity].
+  }
+
+  /// Apply `getDeviceInfo` / a `deviceInfoChanged` event — the authoritative
+  /// identity of the box, the only thing allowed to set [deviceName].
+  void applyIdentity(Map<String, dynamic> j) {
+    final n = j['name'];
+    if (n is String && n.trim().isNotEmpty) deviceName = n.trim();
   }
 
   /// Apply a `listOutputs` result: the available outputs + the active one.

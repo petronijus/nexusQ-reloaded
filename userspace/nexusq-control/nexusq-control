@@ -1675,6 +1675,11 @@ class Bridge:
             return start_setup_mode(), []
         if method == "setName":
             r = set_name(p)
+            # `self.state` snapshots the name at start-up; without this, every
+            # later getState (the app's 25 s heartbeat) still serves the OLD
+            # name and undoes the rename in the UI.
+            with self.lock:
+                self.state["name"] = r["name"]
             # Tell every connected client, not just the caller: a second phone
             # showing the old name would be wrong the moment this returns.
             return r, [("deviceInfoChanged", {"name": r["name"], "room": r["room"]})]
