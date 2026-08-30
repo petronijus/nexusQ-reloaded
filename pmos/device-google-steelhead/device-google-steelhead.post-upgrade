@@ -1,0 +1,56 @@
+#!/bin/sh
+# Restore the access files .pre-upgrade stashed, if the new package did not ship
+# them. See device-google-steelhead.pre-upgrade for why this pair exists.
+#
+# Runs AFTER apk has unpacked the new version and removed the files that left the
+# package's file list — which, from r91 on, is exactly these three.
+#
+# Deliberately conservative:
+#   * only restores a file that is now MISSING or EMPTY. A newer package that
+#     legitimately ships one wins; we never clobber what apk just installed.
+#   * keeps the stash on any failure, so a half-finished migration can be
+#     retried by hand instead of having silently eaten the only copy.
+set -e
+
+STASH=/var/lib/nexusq/access-migration
+[ -d "$STASH" ] || exit 0
+
+restored=0
+failed=0
+
+for f in /root/.ssh/authorized_keys \
+         /etc/skel/.ssh/authorized_keys \
+         /etc/NetworkManager/system-connections/wifi.nmconnection; do
+	src="$STASH$f"
+	[ -s "$src" ] || continue
+	[ -s "$f" ] && continue          # the package brought its own — leave it
+	dir=$(dirname "$f")
+	# .ssh must be 0700 or sshd ignores it; system-connections is 0755 root.
+	case "$dir" in
+		*/.ssh) mkdir -p "$dir" && chmod 700 "$dir" ;;
+		*)      mkdir -p "$dir" ;;
+	esac
+	if cp -p "$src" "$f"; then
+		# cp -p preserves the mode, but be explicit: NetworkManager silently
+		# IGNORES a profile that is not 0600, and a silently ignored profile
+		# is a box that boots with no WiFi and no clue why.
+		chmod 600 "$f"
+		chown root:root "$f" 2>/dev/null || true
+		restored=$((restored + 1))
+	else
+		echo "nexusq: ERROR could not restore $f from $src" >&2
+		failed=$((failed + 1))
+	fi
+done
+
+if [ "$failed" -eq 0 ]; then
+	rm -rf "$STASH"
+	rmdir /var/lib/nexusq 2>/dev/null || true
+	[ "$restored" -gt 0 ] && echo "nexusq: restored $restored baked access file(s);" \
+		"they are now unowned by apk and no longer shipped in any package" >&2
+else
+	echo "nexusq: $failed file(s) NOT restored — stash kept at $STASH," \
+	     "restore by hand before rebooting" >&2
+fi
+
+exit 0

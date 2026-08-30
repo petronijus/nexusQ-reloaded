@@ -64,6 +64,26 @@ done
 echo "==> Release gate: no baked-in personal access"
 scripts/release-preflight-no-secrets.sh "$RAW"
 
+# ...and the install guide has to be about THIS release. INSTALL.md went four
+# releases stale while looking maintained -- it kept gaining correct new sections
+# bolted onto a v1.11.0-era spine, because nothing in the release process owned
+# it, and the artifact filenames it tells people to flash were the wrong ones.
+echo "==> Release gate: the install guide names this release"
+GUIDE_VER="$(sed -n 's/^<!-- RELEASE: \(v[0-9][^ ]*\) -->$/\1/p' INSTALL.md | head -1)"
+if [ -z "$GUIDE_VER" ]; then
+    echo "ERROR: INSTALL.md has no '<!-- RELEASE: vX.Y.Z -->' marker on its first line," >&2
+    echo "       so this gate cannot tell which release it documents. Add one." >&2
+    exit 1
+fi
+if [ "$GUIDE_VER" != "$VER" ]; then
+    echo "ERROR: INSTALL.md documents $GUIDE_VER but you are cutting $VER." >&2
+    echo "       Update the marker AND the artifact filenames it tells people to" >&2
+    echo "       flash (nexusq-boot-$VER.img, nexusq-rootfs-$VER-sparse.img.zst)," >&2
+    echo "       then re-run. A guide naming last-but-four's files is worse than none." >&2
+    exit 1
+fi
+echo "  INSTALL.md documents $GUIDE_VER"
+
 echo "==> Boot image"
 cp "$BOOT" "$OUT/nexusq-boot-$VER.img"
 

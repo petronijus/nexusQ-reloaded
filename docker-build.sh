@@ -218,29 +218,15 @@ done
 # world. scripts/release-preflight-no-secrets.sh additionally hard-fails the
 # release if a candidate image contains either file.
 DEV_APORT="$PMAPORTS/device/testing/device-google-steelhead"
-if [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
-    : > "$DEV_APORT/ssh-authorized-keys"
-    : > "$DEV_APORT/wifi.nmconnection"
-    echo "  PUBLIC_RELEASE=1 -> access staging SKIPPED (clean release image)"
-elif [ -f "$SRC/private/access/authorized_keys" ]; then
-    cp "$SRC/private/access/authorized_keys" "$DEV_APORT/ssh-authorized-keys"
-    echo "  Staged ssh-authorized-keys (private overlay)"
-else
-    : > "$DEV_APORT/ssh-authorized-keys"
-    echo "  WARNING: private/access/authorized_keys absent -> no ssh keys baked"
-fi
-if [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
-    # Already truncated above -- NEVER stage the WiFi PSK into a release image.
-    # (This guard must mirror the ssh one: a bare `if -f private/...` here once
-    # re-staged the PSK right over the truncated placeholder. 2026-07-04.)
-    :
-elif [ -f "$SRC/private/access/wifi.nmconnection" ]; then
-    cp "$SRC/private/access/wifi.nmconnection" "$DEV_APORT/wifi.nmconnection"
-    echo "  Staged wifi.nmconnection (private overlay)"
-else
-    : > "$DEV_APORT/wifi.nmconnection"
-    echo "  WARNING: private/access/wifi.nmconnection absent -> WiFi not preconfigured"
-fi
+# NOTHING is staged into the aport any more. Up to r90 the access files were
+# copied here and device-google-steelhead installed them -- which put the WPA PSK
+# into a package published on a PUBLIC branch (r62..r90, found 2026-08-30). They
+# are now written directly into the rootfs at the end of Phase 10, unowned by
+# apk, so the image still comes up reachable after a flash while the package
+# stays publishable. Any stale copies from an older build of this volume would
+# be picked up by nothing, but delete them so nobody is misled.
+rm -f "$DEV_APORT/ssh-authorized-keys" "$DEV_APORT/wifi.nmconnection"
+echo "  access files are NOT staged into the aport (baked into the rootfs in Phase 10)"
 
 FW_APORT="$PMAPORTS/device/testing/firmware-google-steelhead"
 # Mirrors for the redistributable brcmfmac firmware, tried in order. linux-firmware's
@@ -1530,6 +1516,44 @@ PYEOF
         else
             echo "  WARNING: $ROOTFS/boot/vmlinuz not found -- shipped /boot stays EMPTY, the mkinitfs trigger WILL fail on-device"
         fi
+        # --- Baked-in device access, written into the ROOTFS, not into a package ---
+        # Until r90 these three files were installed BY device-google-steelhead,
+        # which is published to a PUBLIC GitHub Pages branch -- so every apk from
+        # r62 to r90 handed out the WPA PSK and the ssh keys (found 2026-08-30).
+        # They still have to be in the image, because a flash wipes the rootfs and
+        # a box that comes up with no WiFi and no keys is unreachable (bitten
+        # 2026-06-28 and 2026-07-02). So they go in HERE, owned by no package:
+        # never redistributed, and never removable by an apk upgrade.
+        # PUBLIC_RELEASE=1 skips this entirely -- releases publish the rootfs.
+        if [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
+            echo "  PUBLIC_RELEASE=1 -> no access baked into the rootfs (clean image)"
+        else
+            _baked=0
+            if [ -s "$SRC/private/access/authorized_keys" ]; then
+                sudo install -dm700 "$RP_MNT/root/.ssh" "$RP_MNT/etc/skel/.ssh"
+                sudo install -Dm600 "$SRC/private/access/authorized_keys" \
+                    "$RP_MNT/root/.ssh/authorized_keys"
+                sudo install -Dm600 "$SRC/private/access/authorized_keys" \
+                    "$RP_MNT/etc/skel/.ssh/authorized_keys"
+                _baked=$((_baked + 2))
+            else
+                echo "  WARNING: private/access/authorized_keys absent -> no ssh keys baked" >&2
+            fi
+            if [ -s "$SRC/private/access/wifi.nmconnection" ]; then
+                sudo install -dm755 "$RP_MNT/etc/NetworkManager/system-connections"
+                # NetworkManager IGNORES a profile that is not 0600 root-owned,
+                # silently -- a box that boots with no WiFi and no error in the log.
+                sudo install -Dm600 "$SRC/private/access/wifi.nmconnection" \
+                    "$RP_MNT/etc/NetworkManager/system-connections/wifi.nmconnection"
+                _baked=$((_baked + 1))
+            else
+                echo "  WARNING: private/access/wifi.nmconnection absent -> WiFi not preconfigured" >&2
+            fi
+            sudo chown -R 0:0 "$RP_MNT/root/.ssh" "$RP_MNT/etc/skel/.ssh" \
+                "$RP_MNT/etc/NetworkManager/system-connections" 2>/dev/null || true
+            echo "  Baked $_baked access file(s) into the rootfs (unowned by apk)"
+        fi
+
         sync
         sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
         echo "  Rootfs post-processed: /boot fstab entry dropped, root unlocked, /boot kernel payload restored"

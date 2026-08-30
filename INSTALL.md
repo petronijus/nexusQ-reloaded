@@ -1,4 +1,17 @@
-# Nexus Q Reloaded -- Install Guide (v1.11.0)
+<!-- RELEASE: v1.14.2 -->
+# Nexus Q Reloaded -- Install Guide
+
+**This guide describes release `v1.14.2`** (device r89, kernel `6.12.12-r52`,
+46 patches through `0046`).
+
+> The version lives in the `<!-- RELEASE: ... -->` marker on the first line, and
+> `scripts/package-release.sh` **refuses to cut a release that this guide does not
+> name**. That gate exists because this file went four releases stale while
+> looking maintained: it kept gaining correct new sections (§1c, the key-drift
+> note) bolted onto a v1.11.0-era spine, because nothing in the release process
+> owned it. Update the marker and the artifact names below in the same change
+> that cuts the tag.
+
 
 Flashing postmarketOS onto a Google Nexus Q ("steelhead") using the release
 images. Takes ~10 minutes. The device is **unbrickable** as long as you never
@@ -12,9 +25,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.11.0.img` (~5.3 MiB), `nexusq-rootfs-v1.11.0-sparse.img.zst`
-  (~2.1 GiB raw; the rootfs is zstd-compressed for distribution -- install `zstd` to
-  decompress it, see step 2), `nexusq-v1.11.0.sha256`
+- release artifacts: `nexusq-boot-v1.14.2.img` (~6.2 MiB), `nexusq-rootfs-v1.14.2-sparse.img.zst`
+  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.14.2.txt`
   - **The v1.11.0 kernel bumps to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
     the only kernel change from v1.10.1's r44 is **patch 0044**, which restores the stock
     reboot-reason write (`omap44xx_restart()` → SAR RAM `0x4A326A0C`) so the device can be

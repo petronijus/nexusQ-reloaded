@@ -97,17 +97,53 @@ Device **r90**. Full record:
   `publish-ota-repo.sh` ahead of the push: it opens every apk and fails on a
   `*.nmconnection` carrying `psk=`, a non-empty `authorized_keys`, a private key,
   or a shadow file. Fails closed when it cannot read an apk.
-- **`device-google-steelhead` is held back from OTA entirely** until its baked
-  access stops being package content. A clean rebuild of the *same* package is not
-  a safe substitute: apk deletes files that leave a package's file list, so a
-  device upgrading from a personal build to a clean one loses its WiFi profile and
-  its root `authorized_keys` — offline and locked out. `pmos/ota-packages.list`
-  carries the reasoning; the daemons keep updating over the air.
+- **`device-google-steelhead` was held back from OTA entirely**, because a clean
+  rebuild of the *same* package is not a safe substitute: apk deletes files that
+  leave a package's file list, so a device upgrading from a personal build to a
+  clean one loses its WiFi profile and its root `authorized_keys` — offline and
+  locked out. The daemons kept updating over the air throughout. The holdback was
+  lifted the same day by r91, which moves the access out of the package properly
+  and migrates existing boxes across (see the next section).
 - **`gh-pages` history rewritten** to a single parentless commit; a fresh clone
   carries none of the 43 affected commits. ⚠️ A force-push does not garbage-collect
   — the old commits stay fetchable from the GitHub API **by SHA** until GitHub GCs
   them, so **the PSK must be treated as compromised and rotated.** That rotation,
   not the rewrite, is the actual remediation.
+
+### Changed — baked access left the package, so the config package can be published again (2026-08-30, device **r91**)
+- Holding `device-google-steelhead` back from OTA fixed the leak but cost the
+  ability to ship device config over the air at all. The real fix is that the
+  access files stop being **package content**:
+  - the APKBUILD no longer installs `/root/.ssh/authorized_keys`,
+    `/etc/skel/.ssh/authorized_keys` or the NetworkManager WiFi profile;
+  - `docker-build.sh` writes them straight into the rootfs at the end of Phase 10
+    — where it already loop-mounts the image for the ship gate — so a fresh flash
+    still comes up reachable, which is the entire reason they were baked;
+  - `PUBLIC_RELEASE=1` skips that step, as before.
+- **Existing boxes are migrated, not broken.** apk DELETES files that leave a
+  package's file list, so an unguarded r90 → r91 upgrade would take a device's
+  WiFi profile and root `authorized_keys` with it — offline *and* locked out.
+  `device-google-steelhead.pre-upgrade` stashes them (preserving mode: NM
+  silently ignores a profile that is not 0600, and a silently ignored profile is
+  a box that boots with no WiFi and no clue why) and `.post-upgrade` restores
+  whatever the new package did not bring back, then clears the stash.
+- Tested off-device in `pmos/device-google-steelhead/tests/test_access_migration.sh`
+  — 9 cases in a throwaway container playing the part of the device, including
+  mode preservation, not clobbering a file the new package legitimately ships,
+  and a second run not resurrecting a since-deleted file. **Watched failing:**
+  with the migration stubbed out, the three "files survive" cases go red, which
+  is precisely the outage being prevented.
+- `device-google-steelhead` is back in `pmos/ota-packages.list`.
+
+### Fixed — the install guide can no longer go stale in silence (2026-08-30)
+- `INSTALL.md` was still titled *v1.11.0* and told people to flash
+  `nexusq-boot-v1.11.0.img`, four releases on. Not neglect: it had twelve commits
+  and kept gaining correct new sections, all bolted onto a v1.11.0-era spine,
+  because **nothing in the release process owned it** — `package-release.sh`
+  produces `nexusq-boot-<ver>.img` and never looks at the guide.
+- It now carries a `<!-- RELEASE: vX.Y.Z -->` marker, and `package-release.sh`
+  **refuses to cut a release the guide does not name**. Artifact list corrected to
+  the v1.14.2 files.
 
 ### Known issues
 - **`Capture Rate` has only ever been observed reading 0.** That it goes non-zero

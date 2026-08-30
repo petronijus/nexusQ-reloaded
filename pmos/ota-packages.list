@@ -35,26 +35,20 @@ nexusq-rootfs-ab
 # trial slot. docs/2026-08-18-kernel-ota-phase2.md
 linux-google-steelhead
 
-# ⛔ HELD BACK 2026-08-30 — device-google-steelhead must NOT be published until the
-# baked access moves out of it. When built from the private overlay the APKBUILD
-# installs `etc/NetworkManager/system-connections/wifi.nmconnection` (WPA PSK in
-# plain text), `root/.ssh/authorized_keys` and `etc/skel/.ssh/authorized_keys`. Every
-# published revision from r62 (2026-08-02) to r90 carried them on a PUBLIC branch.
+# Re-enabled 2026-08-30 (r91) after the reason for holding it back was removed.
+# Up to r90 this package INSTALLED the device's access files — the WiFi profile
+# with the WPA PSK in plain text and two authorized_keys — so publishing it put
+# them on a public branch (r62..r90). From r91 the package ships none of them:
+# docker-build.sh writes them straight into the rootfs at the end of Phase 10,
+# unowned by apk, so a fresh flash still comes up reachable.
 #
-# Re-enabling it needs a real fix, not a clean rebuild:
-#   * a clean (PUBLIC_RELEASE=1) build of the SAME package is NOT safe to publish
-#     over a personal one — apk deletes files that leave a package's file list, so a
-#     device upgrading from personal to clean loses its WiFi profile and its root
-#     authorized_keys: offline AND locked out, with no way back in for the cottage
-#     unit.
-#   * the access files have to stop being package content — provisioned at flash
-#     time or by nexusq-setupd — after which this package is publishable again and
-#     these two lines come back.
-# Until then the config package ships only by flashing. The daemons below are
-# unaffected and keep updating over the air.
-#
-# device-google-steelhead
-# device-google-steelhead-nonfree-firmware
+# Boxes already in the field are carried across by the package's .pre-upgrade /
+# .post-upgrade pair, because apk DELETES files that leave a package's file list
+# and an unguarded r90 -> r91 upgrade would take a device's WiFi profile and root
+# authorized_keys with it. Tested in pmos/device-google-steelhead/tests/
+# test_access_migration.sh, including watching it fail without the migration.
+device-google-steelhead
+device-google-steelhead-nonfree-firmware
 
 # Not one of ours by name — a version-pinned OVERRIDE of Alpine's package,
 # rebuilt with NEON (pmos/speexdsp/APKBUILD). It must be published like any

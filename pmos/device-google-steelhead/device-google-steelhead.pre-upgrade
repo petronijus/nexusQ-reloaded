@@ -1,0 +1,46 @@
+#!/bin/sh
+# Preserve this box's baked-in access across the r91 migration.
+#
+# Up to r90 this package OWNED the device's access files:
+#
+#   /root/.ssh/authorized_keys
+#   /etc/skel/.ssh/authorized_keys
+#   /etc/NetworkManager/system-connections/wifi.nmconnection   (WPA PSK, mode 600)
+#
+# They were installed from the private overlay on every personal build — which is
+# also how the WPA PSK ended up published to a public GitHub Pages branch in every
+# apk from r62 to r90 (2026-08-30). From r91 the package ships none of them, and
+# docker-build.sh writes them straight into the rootfs instead, unowned by apk.
+#
+# But apk REMOVES files that leave a package's file list. Without this pair of
+# scripts, upgrading a box from r90 to r91 would delete its WiFi profile and its
+# root authorized_keys in the same transaction: offline AND locked out, which for
+# the cottage unit means a car journey. So: copy them aside here, restore in
+# .post-upgrade if the new version did not bring them back.
+#
+# Runs BEFORE the new files are unpacked, with the old package still installed.
+set -e
+
+STASH=/var/lib/nexusq/access-migration
+
+for f in /root/.ssh/authorized_keys \
+         /etc/skel/.ssh/authorized_keys \
+         /etc/NetworkManager/system-connections/wifi.nmconnection; do
+	[ -s "$f" ] || continue
+	d="$STASH/$(dirname "$f")"
+	mkdir -p "$d"
+	# -p keeps mode/ownership, which matters: NetworkManager REFUSES a
+	# connection profile that is not 0600 root-owned, and sshd ignores an
+	# authorized_keys that is group/world writable. A restore that loses the
+	# mode is the same outage as a restore that never happened.
+	cp -p "$f" "$d/" || {
+		echo "nexusq: WARNING could not stash $f — upgrade may lose it" >&2
+	}
+done
+
+if [ -d "$STASH" ]; then
+	chmod 700 /var/lib/nexusq/access-migration
+	echo "nexusq: stashed baked access for the r91 migration ($STASH)" >&2
+fi
+
+exit 0

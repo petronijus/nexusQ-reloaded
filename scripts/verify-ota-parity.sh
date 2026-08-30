@@ -29,8 +29,10 @@
 # Env:
 #   OTA_INDEX_URL   override the published index (default: the live gh-pages one)
 #
-# Read-only: mounts the image with -o ro and never writes to it. Needs sudo for
-# the loop mount (SUDO_PASS via op-cache is picked up automatically if present).
+# Read-only, and NO root: the image is parsed with debugfs rather than mounted,
+# so this gate runs unprivileged and works on macOS too (it borrows debugfs from
+# a container when the host has none). A release gate that only runs on one
+# machine is a release gate that gets skipped.
 #
 # FAILS CLOSED, on purpose. Every "cannot look" path below is a failure, not a
 # shrug — the two release gates fixed earlier the same day both reported success
@@ -44,37 +46,38 @@ INDEX_URL="${OTA_INDEX_URL:-https://petronijus.github.io/nexusQ-reloaded/nexusq/
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OTA_LIST="$REPO_ROOT/pmos/ota-packages.list"
 
-MNT="$(mktemp -d)"
 TMP="$(mktemp -d)"
 RAW=""
 PASS=0
 FAIL=0
 
-cleanup() {
-    mountpoint -q "$MNT" 2>/dev/null && sudo umount "$MNT"
-    rmdir "$MNT" 2>/dev/null
-    rm -rf "$TMP"
-    [ -n "$RAW" ] && [ -f "$RAW" ] && rm -f "$RAW"
-}
+cleanup() { rm -rf "$TMP"; [ -n "$RAW" ] && [ -f "$RAW" ] && rm -f "$RAW"; }
 trap cleanup EXIT
 
 say() { printf '%s\n' "$*"; }
 ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %-52s %s\n' "$1" "${2:-}"; }
 bad() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m  %-52s %s\n' "$1" "${2:-}"; }
 
-# Same sudo convenience as verify-rootfs.sh: a cached 1Password sudo password if
-# one is available, so a release run does not stall on a prompt. Skipped entirely
-# when already root — this gate is expected to run inside the privileged builder
-# container when `op` is signed out on the host (which is exactly how the r90
-# rootfs was verified), and there `sudo` is not installed at all.
-if [ "$(id -u)" != 0 ] && [ -z "${SUDO_PASS:-}" ] && command -v op-cache >/dev/null 2>&1; then
-    SUDO_PASS="$(op-cache "sudo $(hostname)" password 2>/dev/null || true)"
+# The image is read with debugfs, which parses ext4 WITHOUT mounting it: no root,
+# no loop device, and therefore no reason for this gate to be a Linux-only step —
+# which would mean a gate skipped on whichever machine happens to be cutting the
+# release. macOS has neither debugfs nor loop mounts, so borrow them from a
+# container, exactly as release-preflight-no-secrets.sh does. Guarded against
+# recursion: inside, debugfs exists.
+if ! command -v debugfs >/dev/null 2>&1; then
+    if command -v docker >/dev/null 2>&1; then
+        say "debugfs absent -> running the gate in a container"
+        exec docker run --rm --network host \
+            -v "$(cd "$(dirname "$IMG")" && pwd)":/img:ro \
+            -v "$REPO_ROOT":/repo:ro \
+            -e "OTA_INDEX_URL=$INDEX_URL" \
+            alpine:3.21 sh -c \
+            "apk add --no-cache --quiet bash e2fsprogs-extra android-tools curl tar >/dev/null 2>&1; \
+             bash /repo/scripts/$(basename "$0") /img/$(basename "$IMG")"
+    fi
+    echo "ERROR: debugfs (e2fsprogs) required, and no docker to borrow it from" >&2
+    exit 2
 fi
-sudo_() {
-    if [ "$(id -u)" = 0 ]; then "$@"
-    elif [ -n "${SUDO_PASS:-}" ]; then printf '%s\n' "$SUDO_PASS" | sudo -S "$@"
-    else sudo "$@"; fi
-}
 
 [ -f "$OTA_LIST" ] || { say "FAIL: missing $OTA_LIST — nothing to compare"; exit 2; }
 mapfile -t PKGS < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
@@ -82,17 +85,19 @@ mapfile -t PKGS < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$'
 
 # --- sparse -> raw if needed (same magic test as verify-rootfs.sh) ------------
 if [ "$(od -An -tx4 -N4 "$IMG" | tr -d ' ')" = "ed26ff3a" ]; then
-    RAW="$(mktemp --suffix=.img)"
+    RAW="$TMP/raw.img"
     say "sparse image detected, converting -> $RAW"
     simg2img "$IMG" "$RAW" || { say "FAIL: simg2img failed — cannot read the image"; exit 2; }
     IMG="$RAW"
 fi
 
-say "=== mounting $IMG read-only ==="
-sudo_ mount -o loop,ro "$IMG" "$MNT" || { say "FAIL: mount failed — cannot read the image"; exit 2; }
+# debugfs prints its own banner and "cat" errors to stderr; keep stdout clean.
+img_cat() { debugfs -R "cat $1" "$IMG" 2>/dev/null; }
 
-DB="$MNT/lib/apk/db/installed"
-[ -r "$DB" ] || { say "FAIL: cannot read $DB — the gate cannot see what the image ships"; exit 2; }
+say "=== reading $IMG (debugfs, no mount) ==="
+img_cat /lib/apk/db/installed > "$TMP/installed"
+[ -s "$TMP/installed" ] || { say "FAIL: cannot read /lib/apk/db/installed from the image — the gate cannot see what it ships"; exit 2; }
+DB="$TMP/installed"
 
 say "=== fetching the published index ==="
 say "  $INDEX_URL"
@@ -136,7 +141,8 @@ done
 
 say ""
 say "=== 2. signing key: what the image trusts vs what signed the repo ==="
-mapfile -t BAKED < <(ls -1 "$MNT/etc/apk/keys/" 2>/dev/null | sed -n 's/\.rsa\.pub$//p' | grep '^pmos@local-')
+mapfile -t BAKED < <(debugfs -R "ls -p /etc/apk/keys" "$IMG" 2>/dev/null \
+    | awk -F/ '{print $6}' | sed -n 's/\.rsa\.pub$//p' | grep '^pmos@local-')
 if [ "${#BAKED[@]}" -eq 0 ]; then
     bad "image bakes a pmos signing key" "none in /etc/apk/keys — it can never OTA"
 elif [ -z "$IDX_KEY" ]; then
@@ -153,8 +159,9 @@ fi
 FLEET_KEY="$REPO_ROOT/pmos/ota-signing-key.rsa.pub"
 if [ ! -f "$FLEET_KEY" ]; then
     bad "fleet key is recorded in the repo" "pmos/ota-signing-key.rsa.pub missing"
-elif [ -n "$IDX_KEY" ] && [ -r "$MNT/etc/apk/keys/$IDX_KEY.rsa.pub" ]; then
-    if cmp -s "$FLEET_KEY" "$MNT/etc/apk/keys/$IDX_KEY.rsa.pub"; then
+elif [ -n "$IDX_KEY" ] && img_cat "/etc/apk/keys/$IDX_KEY.rsa.pub" > "$TMP/baked.pub" \
+     && [ -s "$TMP/baked.pub" ]; then
+    if cmp -s "$FLEET_KEY" "$TMP/baked.pub"; then
         ok "baked key is byte-identical to the recorded fleet key" "$IDX_KEY"
     else
         bad "baked key is byte-identical to the recorded fleet key" \

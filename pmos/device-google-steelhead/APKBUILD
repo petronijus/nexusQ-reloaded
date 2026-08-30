@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=90
+pkgrel=91
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -64,7 +64,7 @@ depends="
 	tzdata
 	alsa-utils"
 makedepends="devicepkg-dev"
-install="$pkgname.post-install"
+install="$pkgname.post-install $pkgname.pre-upgrade $pkgname.post-upgrade"
 # apk trigger: patch pulseaudio's tas5713 mixer path AFTER pulseaudio is unpacked
 # (.post-install runs too early — it fires before late-unpacked deps' files exist).
 triggers="$pkgname.trigger=/usr/share/pulseaudio/alsa-mixer/paths:/etc/pulse:/etc/xdg/lxqt-tablet/autostart"
@@ -101,8 +101,6 @@ source="
 	pulse-client-no-autospawn.conf
 	50-nexusq-48k.conf
 	nm-lo-unmanaged.conf
-	ssh-authorized-keys
-	wifi.nmconnection
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
 	nexusq-usb-gadget.sh
@@ -139,6 +137,8 @@ source="
 	nexusq-resize-rootfs.service
 	nexusq.preset
 	$pkgname.post-install
+	$pkgname.pre-upgrade
+	$pkgname.post-upgrade
 "
 
 build() {
@@ -313,26 +313,22 @@ package() {
 	ln -sf ../pulseaudio.service \
 		"$pkgdir"/usr/lib/systemd/user/default.target.wants/pulseaudio.service
 
-	# Baked-in device access. Both files are staged into this aport by
-	# docker-build.sh (Phase 6) from the PRIVATE overlay (private/access/) —
-	# the WiFi PSK is a secret and the ssh pubkeys are personal, so neither
-	# lives in the public tree. On a public build the staged files are EMPTY
-	# placeholders and the [ -s ] guards skip them (no access baked; configure
-	# by hand after flashing). This is what makes a clean reflash come up
-	# reachable: root+user ssh keys and the WiFi profile live in the rootfs,
-	# which a flash wipes (bitten 2026-06-28 and again 2026-07-02).
-	if [ -s "$srcdir"/ssh-authorized-keys ]; then
-		install -dm700 "$pkgdir"/root/.ssh
-		install -Dm600 "$srcdir"/ssh-authorized-keys \
-			"$pkgdir"/root/.ssh/authorized_keys
-		install -dm700 "$pkgdir"/etc/skel/.ssh
-		install -Dm600 "$srcdir"/ssh-authorized-keys \
-			"$pkgdir"/etc/skel/.ssh/authorized_keys
-	fi
-	if [ -s "$srcdir"/wifi.nmconnection ]; then
-		install -Dm600 "$srcdir"/wifi.nmconnection \
-			"$pkgdir"/etc/NetworkManager/system-connections/wifi.nmconnection
-	fi
+	# Baked-in device access is NOT packaged. It used to be: up to r90 this
+	# package installed the private overlay's ssh authorized_keys and the WiFi
+	# profile (WPA PSK in plain text) whenever they were staged non-empty. That
+	# is also how the PSK reached a PUBLIC GitHub Pages branch in every published
+	# apk from r62 to r90 — four weeks, found 2026-08-30. A package that is
+	# published cannot carry secrets, and this one is published.
+	#
+	# From r91 docker-build.sh writes those files straight into the rootfs at the
+	# end of Phase 10 instead, so they are present on a fresh flash exactly as
+	# before (that is the whole point — a flash wipes the rootfs, bitten
+	# 2026-06-28 and 2026-07-02) but owned by no package and never redistributed.
+	#
+	# Existing boxes are carried across by $pkgname.pre-upgrade / .post-upgrade:
+	# apk REMOVES files that leave a package's file list, so without them an
+	# r90 -> r91 upgrade would delete a device's WiFi profile and root
+	# authorized_keys in the same transaction.
 
 	# Disable brcmfmac P2P: the BCM4330 firmware advertises "p2p" but cannot create
 	# the P2P_DEVICE interface (p2p_disc handshake times out), so wpa_supplicant/NM
@@ -632,8 +628,6 @@ SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf
 SKIP  50-nexusq-48k.conf
 SKIP  nm-lo-unmanaged.conf
-SKIP  ssh-authorized-keys
-SKIP  wifi.nmconnection
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  nexusq-usb-gadget.sh
@@ -667,4 +661,6 @@ SKIP  nexusq-resize-rootfs
 SKIP  nexusq-resize-rootfs.service
 SKIP  nexusq.preset
 SKIP  device-google-steelhead.post-install
+SKIP  device-google-steelhead.pre-upgrade
+SKIP  device-google-steelhead.post-upgrade
 "

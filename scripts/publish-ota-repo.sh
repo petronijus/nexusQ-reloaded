@@ -138,7 +138,14 @@ echo "=== secrets gate: nothing personal inside the packages ==="
 
 echo "=== publishing to the gh-pages branch ==="
 WT="$STAGE/gh-pages-wt"
-git -C "$REPO_ROOT" worktree add "$WT" gh-pages
+# Publish onto what the REMOTE actually has, not onto whatever the local branch
+# happens to point at. On 2026-08-30 gh-pages was rewritten to an orphan commit to
+# purge a leaked secret; the local branch still held the old history, so this
+# worktree checked THAT out, committed r91 on top of it, and the push was refused
+# as non-fast-forward -- while the script had already printed a perfectly normal
+# "[gh-pages abc1234] OTA apk repo — ..." line. A publish that did not publish.
+git -C "$REPO_ROOT" fetch --quiet origin gh-pages
+git -C "$REPO_ROOT" worktree add --detach "$WT" origin/gh-pages
 rm -rf "$WT/nexusq"
 cp -r "$STAGE/nexusq" "$WT/"
 
@@ -196,7 +203,10 @@ else
     | awk '/^P:/{p=$0} /^V:/{print p" "$0}' | sed 's/P://;s/V://' | tr '\n' ' ')"
   git -C "$WT" -c user.email=petronijus@bastla.com -c user.name="Petr Parkan Janda" \
     commit -m "OTA apk repo — $VERS"
-  git -C "$WT" push origin gh-pages
+  # Detached HEAD -> name the destination branch explicitly. Not --force: a
+  # rejected push here means someone else moved gh-pages and this run would
+  # discard their work, which is exactly the failure to stop on.
+  git -C "$WT" push origin "HEAD:refs/heads/gh-pages"
   echo "published: $VERS"
 fi
 git -C "$REPO_ROOT" worktree remove "$WT" --force
