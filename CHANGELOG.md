@@ -145,11 +145,38 @@ Device **r90**. Full record:
   **refuses to cut a release the guide does not name**. Artifact list corrected to
   the v1.14.2 files.
 
+### Verified on the live unit — the fast path works, and playback is free (2026-08-30, 21:59)
+- **`Capture Rate` goes non-zero during real playback**, confirmed with Petr
+  playing from the TV box. Until then it had only ever been *observed* reading 0,
+  so only half the mechanism was proven: parking when the host goes quiet. The
+  unpark half was inferred from how `u_audio` works, not seen. The whole cycle is
+  now on record:
+  ```
+  Capture Rate = 48000                                   (was 0 all day)
+  hw_ptr 8580720 -> 8677296 over 2 s                     audio genuinely flowing
+  alsaloop running (pid 6727)                            the bridge came back
+  21:59:04 nexusq-uac2-in: host started streaming at 48000 Hz — USB audio live again
+  ```
+- **And playing music costs the same as sitting idle.** 240 s, detached, box
+  actually playing:
+
+  | | idle (parked) | **playing** | this morning: idle with the probe |
+  |---|---|---|---|
+  | 350 MHz | 90.40 % | **90.11 %** | 85.40 % |
+  | 1200 MHz | 0.17 % | **0.29 %** | 7.05 % |
+  | CPU busy (of 2 cores) | 9.6 % | **33.7 %** | 8.2 % |
+  | die | 58.7 °C | **60.2 °C** | 59.0 °C |
+  | relative dynamic power | 1.21× | **1.19×** | 1.54× |
+
+  The CPU does 3.5× the work and the energy does not move, because all of it
+  happens at 350 MHz where a second is cheap. **A Q playing music now costs less
+  than a silent one did this morning** (1.19× vs 1.54×) — one more argument for
+  judging this device by its OPP mix and never by CPU per cent.
+- ⚠️ A spot read taken *inside* an ssh session said 1200 MHz / 65.4 °C and looked
+  like a regression. It was the ssh session: an open shell drags the OPP up within
+  seconds. Only the detached sampler above is evidence.
+
 ### Known issues
-- **`Capture Rate` has only ever been observed reading 0.** That it goes non-zero
-  during real playback is inferred, not seen; it needs one listening test. The
-  logic is conservative if it never does (the wedge branch still probes), but the
-  fast path is unproven until someone presses play.
 - **The Šumperák Q still cannot OTA at all** — it trusts `pmos@local-6a913e9e`
   while the index is signed `6a42e957`, so it is still exposed to the 28-hour spin
   and cannot receive this fix over the air. Needs the key copied into

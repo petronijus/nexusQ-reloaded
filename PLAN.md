@@ -810,6 +810,15 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   **So the honest idle number is now measured in three states: USB off, USB on
 >   and playing, and USB on and idle.** The last one was invisible for weeks.
 >
+> - ✅ **Measured 2026-08-30 21:59, detached, 240 s, actually playing over USB:
+>   90.11 % @ 350 MHz, 0.29 % @ 1200, die 60.2 °C, 1.19× a locked-350 floor** —
+>   i.e. **indistinguishable from parked idle (1.21×)**, while doing 3.5× the CPU
+>   work (33.7 % of two cores against 9.6 %). All of it lands at 350 MHz, where a
+>   second costs 1.0 instead of 6.2, so the energy does not move. A Q *playing*
+>   now draws less than a silent one did that morning (1.54× with the probe).
+>   ⚠️ Do NOT spot-read this over ssh: an open session reported 1200 MHz / 65.4 °C
+>   for the same music. Only a detached sampler is evidence.
+>
 > - **Baseline to beat: 90.8 % @ 350 MHz** (device r76 / nexusqd r13 / kernel
 >   r48, **overnight passive HA window 2026-08-19**, 8 h idle — up from 70.7 %
 >   on 08-16, 60.5 % on 08-13, 56.7 % on v1.8.2 and 25.6 % on v1.8.1). Residual:

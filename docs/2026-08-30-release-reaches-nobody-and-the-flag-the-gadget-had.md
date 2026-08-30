@@ -268,10 +268,8 @@ the device**, and a monitor that never fires does not degrade gracefully — USB
 audio would simply never come back. Worth doing as the primary with this poll
 kept as the backstop.
 
-Also unverified, and it needs Petr: that `Capture Rate` reads **non-zero during
-real playback**. Every observation here is of the 0 state. The logic is
-conservative if it never goes non-zero (the wedge branch still probes), but the
-fast path is unproven until someone presses play.
+~~Also unverified, and it needs Petr: that `Capture Rate` reads **non-zero during
+real playback**.~~ **Resolved the same evening — see §5.**
 
 ---
 
@@ -348,3 +346,60 @@ the image while the identical secret shipped in the package. None of them were
 missing ideas. Each was a check that could not see the thing it was written to
 protect, and reported success. That is the failure mode to design against here —
 not the absence of a gate, but a gate looking slightly to one side of the danger.
+
+
+---
+
+## 5. The half that was still a guess, settled at 21:59
+
+Everything above observes `Capture Rate` in the **0** state. That proves the
+cheap half — the bridge parks when the host goes quiet — and leaves the other
+half inferred from how `u_audio` is written rather than seen. A flag that never
+comes back would not degrade loudly; USB audio would simply stop working, which
+is the worst way for an assumption to be wrong.
+
+Petr pressed play. The whole cycle, on the wire:
+
+```
+Capture Rate = 48000                                (0 all day until now)
+hw_ptr 8580720 -> 8677296 over 2 s                  audio genuinely flowing
+alsaloop running (pid 6727)                         the bridge came back on its own
+21:59:04 nexusq-uac2-in: host started streaming at 48000 Hz — USB audio live again
+```
+
+So r91 rests on nothing unproven.
+
+### And the number that actually matters
+
+240 s, detached sampler, box genuinely playing:
+
+| | idle (parked) | **playing** | this morning: idle with the probe |
+|---|---|---|---|
+| 350 MHz | 90,40 % | **90,11 %** | 85,40 % |
+| 700 MHz | 7,45 % | 9,07 % | 5,20 % |
+| 1200 MHz | 0,17 % | **0,29 %** | 7,05 % |
+| CPU busy (of 2 cores) | 9,6 % | **33,7 %** | 8,2 % |
+| die | 58,7 °C | **60,2 °C** | 59,0 °C |
+| relative dynamic power | 1,21× | **1,19×** | 1,54× |
+
+**Playing music is energetically free.** The CPU does 3.5× the work — 33,7 %
+against 9,6 % — and the power does not move, because every bit of that work
+happens at 350 MHz, where a second costs 1,0 instead of 6,2. The device ends the
+day in a state where **a Q playing music draws less than a silent one did that
+morning**: 1,19× against 1,54×.
+
+This is the same lesson the project keeps re-learning and it is worth stating
+once more plainly: **CPU per cent is not power on this SoC.** The probe looked
+cheap by CPU time (30 % of two cores for 9 % of the time) and was expensive
+because of *where* on the frequency curve it ran; playback looks expensive by CPU
+time and is nearly free for the same reason inverted.
+
+### One more observer-bias trap, caught in the act
+
+A spot read taken from inside an ssh session reported **1200 MHz / 65,4 °C** and
+looked like playback had regressed. It had not — that was the ssh session, which
+drags the OPP up within seconds (the reason `ha-opp-window.py` exists at all).
+The detached sampler said 90,11 % @ 350 MHz for the same music.
+
+Sixth time in one day that a reading meant something other than what it appeared
+to: this one at least was recognised before it was written down as a finding.
