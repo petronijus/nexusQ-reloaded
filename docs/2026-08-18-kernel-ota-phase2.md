@@ -1,11 +1,34 @@
 # 2026-08-18 — Kernel OTA (Phase 2): the trial-slot design, and what the bootloader will and won't do
 
-Phase 1 (apk OTA) has shipped userspace since 2026-08-02. **Phase 2 — applying a
-kernel without a cable — was never started**: it was scoped out on day one
-("applying a kernel is a boot-partition flash, not an `apk upgrade`") and stayed
-out, because `fastboot-over-ssh` (patch 0044, 2026-07-30) appeared to have solved
-the problem: `systemctl reboot --reboot-argument=bootloader` lands in fastboot, so
-"no more mains power-cycle".
+> ## ✅ STATUS: SHIPPED AND PROVEN ON HARDWARE (2026-08-18)
+>
+> **A kernel can be applied to this Q without a cable.** `nq-kernel-ota
+> stage-latest` → trial slot → `try` → auto-promotion, all proven end to end on
+> the device (`6.12.12` → `6.12.12-r48`, SSH back in 36 s, promoted
+> unattended). Shipped as the `nexusq-kernel-ota` aport. Slot A is never written
+> with an image that has not already booted.
+>
+> **The one thing still open:** a kernel that *boots* is safe to deploy
+> remotely; a kernel that *does not* still needs someone at the device — the
+> SAR-RAM-vs-power-cycle question below is unresolved. So the trial slot turns
+> the risk into "you may have to drive there", not "you bricked it".
+>
+> The narrative below opens with the OUTAGE THAT PROVOKED this work. Read it as
+> history, not as current status: everything it describes as missing was built
+> in the same session. See **Proven end to end on the live device**, **How to
+> update a kernel now**, and **Status** at the foot.
+>
+> *(This banner exists because the opening paragraph was misread as the
+> conclusion on 2026-08-30 — the bold "was never started" is 270 lines above the
+> "✅ proven end to end" that retires it, and someone acting on the first
+> sentence would wrongly plan a kernel bump as cable-only.)*
+
+Phase 1 (apk OTA) has shipped userspace since 2026-08-02. Before this session,
+**Phase 2 — applying a kernel without a cable — had never been started**: it was
+scoped out on day one ("applying a kernel is a boot-partition flash, not an `apk
+upgrade`") and stayed out, because `fastboot-over-ssh` (patch 0044, 2026-07-30)
+appeared to have solved the problem: `systemctl reboot
+--reboot-argument=bootloader` lands in fastboot, so "no more mains power-cycle".
 
 **That assumption broke on 2026-08-18.** The Q lives on WiFi with nothing plugged
 into its micro-USB. Sending it to the bootloader worked perfectly — and left it
