@@ -100,8 +100,16 @@ separately, not part of this repo's docs.
 - **Repo email** — any commit you make uses `petronijus@bastla.com` only. Prefer to
   leave changes uncommitted and report them unless told to commit.
 - **A failure is documentation too** — a notable dead-end (e.g. "fakeroot-tcp does
-  NOT fix the qemu hang", "python3.14.5-r2 armv7 is an upstream miscompile") is
-  worth a dated docs/ note + a CHANGELOG/known-issues line so it isn't re-attempted.
+  NOT fix the qemu hang") is worth a dated docs/ note + a CHANGELOG/known-issues
+  line so it isn't re-attempted.
+- **…and so is a dead-end that turned out to be wrong.** This bullet used to offer
+  *"python3.14.5-r2 armv7 is an upstream miscompile"* as its second example. That
+  claim was **disproven**: the SIGSEGV came from the `raw2simg.py` `DONT_CARE`
+  sparse-flash bug letting stale eMMC show through the image's zero regions, not
+  from qemu or the compiler. Recording a theory is fine; leaving it recorded after
+  it is refuted is how a wrong lead outlives the evidence against it. When a
+  documented dead-end is later disproven, **go back and mark it disproven** rather
+  than quietly dropping it — the correction is the more useful record of the two.
 
 ## 3. Output
 Return a tight list: each doc you changed and the one-line reason, plus any NEW

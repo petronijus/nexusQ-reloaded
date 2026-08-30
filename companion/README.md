@@ -77,7 +77,12 @@ phone app** (installing the app restarts the phone). **System** — the whole-ap
 *apt upgrade* (`checkSystemUpdate`/`installSystemUpdate`, **§12b**): `apk upgrade
 --available` for every package **minus the kernel**, reboot-aware. Both hit a **signed
 apk repo on GitHub Pages** the Q already trusts (`pmos@local` key in `/etc/apk/keys`) —
-no reflash. The **glibc-rt split** (`nexusq-glibc-rt`, `device-google-steelhead` r62)
+no reflash. ⚠️ **Unless the keys differ:** a Q flashed from **v1.14.0/1/2** bakes
+`pmos@local-6a93112c` while the repo is signed `pmos@local-6a42e957`, so every check
+answers `UNTRUSTED signature` and the app simply keeps saying *up to date*; a release
+can no longer ship that mismatch (`scripts/verify-ota-parity.sh`, 2026-08-30), and an
+affected box is repaired by copying `pmos/ota-signing-key.rsa.pub` into
+`/etc/apk/keys` — see INSTALL.md §1c. The **glibc-rt split** (`nexusq-glibc-rt`, `device-google-steelhead` r62)
 made the device config OTA-shippable (~191 MB → 58 KB). **Proven end-to-end live
 2026-08-02** (daemons `nexusqd` r10 / control r16 → r11 / r19 from the app; system OTA
 upgraded systemd 261.1→261.2). ⚠️ the device/system install restarts the control bridge

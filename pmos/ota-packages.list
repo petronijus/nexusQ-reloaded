@@ -1,0 +1,63 @@
+# The OTA package set — one name per line, `#` comments and blank lines ignored.
+#
+# This list is the SINGLE SOURCE OF TRUTH, read by:
+#   scripts/publish-ota-repo.sh    — what gets copied into the signed repo
+#   scripts/verify-ota-parity.sh   — what the release gate compares
+#
+# It exists because the set used to live only inside publish-ota-repo.sh, and a
+# package missing from it fails SILENTLY: apk simply never offers the newer
+# version, so the device holds the old one and every UI says "up to date". That
+# is how device r80 shipped against a missing nexusq-rootfs-ab. A second copy of
+# the list in the gate would reproduce the same trap one level up — a gate that
+# checks the subset it happens to know about is a gate that agrees with the bug.
+#
+# ADDING A PACKAGE: any new runtime dependency of something already here belongs
+# here too, or apk resolves the upgrade against a dependency it cannot fetch and
+# holds the whole transaction back.
+#
+# NOT here, deliberately:
+#   nexusq-glibc-rt   ~180 MB static Roon base — over GitHub's 100 MB limit,
+#                     flash-only. It changes about never.
+#   the kernel itself is here only as a PAYLOAD (see linux-google-steelhead
+#   below), never as something apk installs.
+
+nexusq-control
+nexusqd
+nexusq-btagent
+nexusq-setupd
+nexusq-mqtt
+nexusq-kernel-ota
+nexusq-rootfs-ab
+
+# A payload source for nq-kernel-ota, NOT an installable: apk never applies a
+# kernel. nexusq-control upgrades with `--ignore linux-google-steelhead`, and
+# nq-kernel-ota fetches this apk, unpacks it and writes a boot image to the
+# trial slot. docs/2026-08-18-kernel-ota-phase2.md
+linux-google-steelhead
+
+# ⛔ HELD BACK 2026-08-30 — device-google-steelhead must NOT be published until the
+# baked access moves out of it. When built from the private overlay the APKBUILD
+# installs `etc/NetworkManager/system-connections/wifi.nmconnection` (WPA PSK in
+# plain text), `root/.ssh/authorized_keys` and `etc/skel/.ssh/authorized_keys`. Every
+# published revision from r62 (2026-08-02) to r90 carried them on a PUBLIC branch.
+#
+# Re-enabling it needs a real fix, not a clean rebuild:
+#   * a clean (PUBLIC_RELEASE=1) build of the SAME package is NOT safe to publish
+#     over a personal one — apk deletes files that leave a package's file list, so a
+#     device upgrading from personal to clean loses its WiFi profile and its root
+#     authorized_keys: offline AND locked out, with no way back in for the cottage
+#     unit.
+#   * the access files have to stop being package content — provisioned at flash
+#     time or by nexusq-setupd — after which this package is publishable again and
+#     these two lines come back.
+# Until then the config package ships only by flashing. The daemons below are
+# unaffected and keep updating over the air.
+#
+# device-google-steelhead
+# device-google-steelhead-nonfree-firmware
+
+# Not one of ours by name — a version-pinned OVERRIDE of Alpine's package,
+# rebuilt with NEON (pmos/speexdsp/APKBUILD). It must be published like any
+# other, or a device that OTA-upgrades keeps Alpine's SCALAR build and silently
+# loses the resampler win.
+speexdsp

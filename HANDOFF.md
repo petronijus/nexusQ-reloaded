@@ -13,7 +13,15 @@ session on 2026-08-28, so it is written down here rather than re-derived.
 | artifact | build on | signed with | how to check |
 |---|---|---|---|
 | **Android APK** (companion app) | **MacBook or desktop** (same keystore) | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
-| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **desktop** (`petronijus-PC`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir` | `scripts/publish-ota-repo.sh` header |
+| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **desktop** (`petronijus-PC`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
+
+**And a release is BOTH tracks.** The image (GitHub Releases) reaches whoever
+holds a USB cable; everything already in the field updates from the OTA apk repo.
+`scripts/package-release.sh` now does both and then gates on them agreeing — see
+"…and the release only ever published half of itself" below for why that gate
+exists. Which packages belong in the OTA set lives in **`pmos/ota-packages.list`**,
+read by both the publisher and the gate; adding a package anywhere else fails
+*silently*, because apk simply never offers the newer version.
 
 - `companion/app/android/app/build.gradle.kts` still carries the Flutter
   template's `signingConfig = signingConfigs.getByName("debug")` (and its literal
@@ -43,35 +51,50 @@ Mac bakes the Mac's key into `/etc/apk/keys`**, and that inverts the problem:
 They differ, so **a Q freshly flashed from v1.14.0, v1.14.1 or v1.14.2 — all cut
 on the MacBook — cannot OTA at all.** `apk update` answers `UNTRUSTED signature`,
 which is precisely the outage of 2026-08-29, recurring from the opposite side.
-The published images are affected; the two boxes in the field were flashed from
-older, desktop-built images and are believed unaffected, **but that was not
-verified — neither Q was reachable at the time.** Check before assuming:
 
-```sh
-ssh root@<device> ls /etc/apk/keys/          # what the box trusts
-curl -s https://petronijus.github.io/nexusQ-reloaded/nexusq/armv7/APKINDEX.tar.gz \
-  | tar tz | head -1                          # what the repo is signed with
-```
+#### ✅ RESOLVED 2026-08-30 on the desktop — option 1 taken
 
-**And the guard written to catch exactly this could never fire.** On 2026-08-29
-`publish-ota-repo.sh` gained a fleet-key drift check — wrapped in
-`if [ -f "$REPO_ROOT/pmos/ota-signing-key.rsa.pub" ]`, with no `else`. That file
-**was never committed**, so the check silently did nothing, always. It now fails
-closed (`FLEET_KEY_OVERRIDE=1` for a deliberate re-key), but the reference file
-still has to be recorded — and recording it is a **fleet-wide decision**, not a
-tidy-up: it declares which key every future image must bake.
+The open question above ("neither Q was reachable at the time") is answered. The
+Prague Q was reached and read directly:
 
-The choice, to be made on the desktop where the other key lives:
+| | key |
+|---|---|
+| Prague Q `/etc/apk/keys/` | `pmos@local-6a42e957` (and nothing else but pmOS's) |
+| desktop `nexusq-workdir/config_abuild` | `pmos@local-6a42e957` |
+| published `APKINDEX.tar.gz` signature | `pmos@local-6a42e957` |
 
-1. **Build release images on the desktop.** They bake `6a42e957`, matching the
-   published repo. Nothing in the field changes. Simplest, and it restores the
-   invariant the HANDOFF table above already assumes.
-2. **Re-key the fleet** to the Mac's `6a93112c`: publish the repo from the Mac,
-   ship an image baking it, and install it into `/etc/apk/keys` on every box by
-   hand. Only worth it to make the Mac the release machine on purpose.
+All three **byte-identical** (`sha256` compared, not just filenames). So
+**option 1 costs nothing in the field**: build releases on the desktop, publish
+OTA from the desktop, and the Prague box takes updates as-is.
+
+- `pmos/ota-signing-key.rsa.pub` is now **committed** — copied from the live
+  device, not from what we believed — so the drift guard finally has a reference
+  and fails closed on any other host, the MacBook included.
+- The private half is backed up in **1Password → "nexusQ OTA signing key
+  (fleet)"**. Until 2026-08-30 its only copy was inside the `nexusq-workdir`
+  docker volume; losing that volume would have meant re-keying every box by hand.
+
+⚠️ Still open: **the Šumperák Q trusts `pmos@local-6a913e9e`** and therefore
+still cannot OTA. It needs `pmos/ota-signing-key.rsa.pub` copied into its
+`/etc/apk/keys`, or a reflash from a desktop-built image.
 
 ⚠️ Do **not** simply run `publish-ota-repo.sh` on whichever machine is in front
-of you. That is the whole failure mode.
+of you. That is the whole failure mode — and now the guard says so out loud.
+
+### 🔴 …and the release only ever published half of itself (2026-08-30)
+
+Separately from the key, `package-release.sh` (image → GitHub Releases) and
+`publish-ota-repo.sh` (apks → gh-pages) were independent commands with nothing
+tying them together. **v1.14.2 shipped device r89 as an image while the repo kept
+serving r87**, last published two days earlier — so nothing in the field could be
+offered it, and every UI said "up to date" because a device cannot be behind a
+version its repo does not carry.
+
+`package-release.sh` now runs the OTA publish and then gates on the two matching
+(`scripts/verify-ota-parity.sh`: same package versions in the released rootfs and
+the published index, same signing key baked as signed). `--no-ota` skips the
+publish; **nothing skips the gate.** Details:
+`docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
 
 🔒 **Known weakness, not yet fixed:** the app self-updates, and its signing key is
 a debug keystore whose password is the well-known `android`. The signature
@@ -216,13 +239,10 @@ PLAN.md.
 ## 🔜 NEXT SESSION — in priority order
 
 1. ~~Collect the overnight `noroon` measurement~~ — done, see above.
-2. **Fix the Roon PA-module leak** — `roon-nexusq` must unload its two modules on
-   stop, in a trap, loopback before source. Mirror `nexusq-uac2-in`'s `stop_all`.
-   This is a user-visible bug: turning Roon off leaves the device hot.
-3. **Roon silence watcher** — `nq-uac2-silence` is already parameterised
-   (`NQ_UAC2_SOURCE`, `NQ_UAC2_ALOOP`), so `roon_in` + `RoonLoop` should need no
-   new code, only a second instance and a rename. Verify RoonBridge keeps feeding
-   `RoonLoop` while the PA source is suspended — the whole wake path depends on it.
+2. ~~Fix the Roon PA-module leak~~ — done 2026-08-27 (`c4c1b3d`, device r85/r86,
+   shipped in v1.13.0); see CHANGELOG [1.13.0].
+3. ~~Roon silence watcher~~ — done 2026-08-28 (`fdbf82c`, `nexusq-roon-idle.service`:
+   PA 12.60 % → 0.82 % of a core, 0 ms wake); see CHANGELOG [1.13.0].
 4. **Transport backends** (PROTOCOL §5 contract is already in):
    - **AirPlay**: shairport-sync's build has `--metadata-enable`,
      `--metadata-pipename`, `-g` and a DACP monitor compiled in, but our config

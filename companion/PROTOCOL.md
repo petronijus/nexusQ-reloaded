@@ -731,7 +731,9 @@ There are **two tracks**, surfaced in the app's Settings as **two Update items**
 
 A signed **apk repository on GitHub Pages** hosts the device packages:
 `https://petronijus.github.io/nexusQ-reloaded/nexusq` (the `gh-pages` branch,
-republished after a build with `scripts/publish-ota-repo.sh`). The device **already
+republished by `scripts/publish-ota-repo.sh` — which `scripts/package-release.sh`
+now runs itself, so cutting a release publishes both tracks and then gates on them
+agreeing; `pmos/ota-packages.list` is the published set, 2026-08-30). The device **already
 trusts the `pmos@local` build key** (baked in `/etc/apk/keys` at image build), which
 signs every one of our packages — so `apk` installs them straight from the repo with
 **no new key and no reflash**. `nexusq-control` adds the repo to
@@ -741,8 +743,11 @@ signs every one of our packages — so `apk` installs them straight from the rep
 its firmware subpackage are now published — the ~180 MB glibc-rt Roon base was **split
 into its own aport `nexusq-glibc-rt`** (flash-only), so the config apk dropped from
 ~191 MB to 58 KB and fits the 100 MB limit. `publish-ota-repo.sh` refuses any apk
-≥ 99 MB. **Flash-only (never OTA'd):** `nexusq-glibc-rt` (~182 MB) and the **kernel**
-(a boot-partition flash / fastboot-over-ssh — §—see INSTALL). ⚠️ A pre-split device
+≥ 99 MB. **Flash-only (never OTA'd):** `nexusq-glibc-rt` (~182 MB). *(The **kernel**
+was in that sentence too until 2026-08-18: kernel-OTA Phase 2 applies one from the
+trial slot via `nexusq-kernel-ota`, and `linux-google-steelhead` has been published
+since 2026-08-23 as that updater's **payload source** — never as something `apk`
+installs. `apk` still applies no kernel; see §12b.)* ⚠️ A pre-split device
 must be **reflashed once** to adopt the split (it can't OTA config r62 without the
 flash-only glibc-rt dep); afterward the config is incremental.
 
@@ -801,10 +806,13 @@ from the Alpine·pmOS mirrors + our config + daemons from the OTA repo) — the
 | `checkSystemUpdate` | — | `{ packages: [{ name, installed, available }], updateAvailable: bool, kernel, repo }` — `apk update` + `apk version -l '<'`, **minus the kernel**; `kernel` is the running `uname -r` (read-only). Installs nothing. Does **NOT** blink the mute LED (that stays the §12a "daemon available" indicator). |
 | `installSystemUpdate` | — | `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons off-thread, **reboots if base libc/init churned**. |
 
-**Kernel is never OTA'd.** No repo the device reads offers a newer kernel, and applying
-a kernel is a **boot-partition flash = Phase 2** (fastboot / fastboot-over-ssh, see
-INSTALL). `checkSystemUpdate` skips `linux-google-steelhead`; `installSystemUpdate`
-runs `--available` (which the mirrors never offer a newer kernel for).
+**This track never applies a kernel.** Applying one is a boot-partition write, which
+since 2026-08-18 has its own path — `nexusq-kernel-ota`'s health-gated trial slot
+(kernel-OTA Phase 2), with fastboot / fastboot-over-ssh as bootstrap and rescue.
+`checkSystemUpdate` skips `linux-google-steelhead`; `installSystemUpdate` runs
+`--available` **with `--ignore linux-google-steelhead`** — the OTA repo *does* carry
+that apk (as the trial-slot updater's payload source since 2026-08-23), so "the
+mirrors never offer a newer kernel" is no longer what protects this path.
 
 **Reboot contract.** `rebootRecommended` (and the actual `systemctl reboot`) fire when
 any changed package name starts with **`musl` / `systemd` / `kmod` / `eudev` /

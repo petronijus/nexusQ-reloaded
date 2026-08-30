@@ -65,3 +65,25 @@ The fleet has to converge on ONE key:
 
 Until step 4, device packages remain bound to the host holding the key — see
 HANDOFF.md "WHICH MACHINE BUILDS WHAT".
+
+---
+
+## Resolved 2026-08-30 (steps 1, 2 and 4) — see the next day's note
+
+- **Step 1 done.** `pmos/ota-signing-key.rsa.pub` is committed — copied from the
+  **live Prague Q**, not from what we believed, and verified byte-identical to the
+  desktop's `nexusq-workdir/config_abuild` key and to the `.SIGN.RSA` member of the
+  published `APKINDEX.tar.gz`. All three are `pmos@local-6a42e957`. So the drift
+  guard added here finally has a reference and fails closed; until the file existed
+  it was wrapped in `if [ -f … ]` with no `else` and **did nothing, always**.
+- **Step 2 done, differently.** Rather than trusting the bake, the release now
+  *checks* it: `scripts/verify-ota-parity.sh` (run by `package-release.sh`, and not
+  skippable) fails a release whose image bakes a different key from the one that
+  signed the index.
+- **Step 4 done.** The private half is backed up in 1Password, document
+  **"nexusQ OTA signing key (fleet)"**. Until 2026-08-30 its only copy was inside
+  the `nexusq-workdir` docker volume.
+- **Step 3 still open for the Šumperák Q**, which trusts `pmos@local-6a913e9e` and
+  therefore still cannot OTA at all.
+
+Full record: `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.

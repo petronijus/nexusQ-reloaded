@@ -27,7 +27,8 @@ annoyed). While the build runs, report to the controller via the SendMessage
 tool with `to: "main"`:
 
 1. **Every phase transition** — one line: phase name, what it does, rough ETA
-   (e.g. `Phase 7d: python3 armv7 under qemu — the slowest phase, ~30–60 min`).
+   (e.g. `Phase 8: build all packages — the kernel compile under qemu is the
+   slowest stretch, ~30 min on a cold volume`).
 2. **A heartbeat every ~10 min inside any long phase** — one line: elapsed
    time + the last build-log line as proof of life.
 3. **Immediately on any retry/failure** — what failed, which catalog entry it
@@ -152,10 +153,15 @@ that first pass has regressed — fix the pass, do not re-introduce the ordering
 workaround.)
 
 ⚠️ **PUBLISH-LIST RULE (2026-08-23): a new runtime `depends=` of an OTA-shipped
-package MUST be added to `scripts/publish-ota-repo.sh`'s `OTA_PACKAGES` array in
-the same change** (this is a *different* list from `docker-build.sh`'s
-`OTA_PACKAGES` build env var — the publish list decides what the device can
-actually fetch). The failure mode is **silent everywhere**: build OK, publish
+package MUST be added to the publish set in the same change.** Since 2026-08-30 that
+set lives in **`pmos/ota-packages.list`** (one name per line, `#` comments) — it moved
+**out of `publish-ota-repo.sh`'s `OTA_PACKAGES` array** so that the publisher and the
+release parity gate read the *same* list; a second copy inside the gate would have let
+the gate check the same subset as the bug. ⚠️ Three different things are called
+`OTA_PACKAGES` — `docker-build.sh`'s **build** env var (what to compile),
+`nexusq-control`'s python constant (what the app's *App update* upgrades), and the old
+publisher array (now the file). The publish set is the one that decides what the device
+can actually **fetch**. The failure mode is **silent everywhere**: build OK, publish
 OK, and on the device `apk add --upgrade <pkg>` **exits 0 and keeps the old
 version** because the new pkgrel's dependency is unsatisfiable in the repo. It
 bit `device-google-steelhead` r78–r80 via the new `nexusq-rootfs-ab` dep — the
@@ -163,6 +169,23 @@ fleet sat frozen at r77 with no error anywhere. Diagnose with **`apk policy
 <pkg>`** (is the new rel offered?) then **`apk add <pkg>=<ver>`** (forcing the
 version makes apk finally print the unsatisfiable dep).
 `docs/2026-08-23-healthd-rotation-and-ota-holdback.md`.
+
+⚠️ **A RELEASE IS TWO PUBLISHES, AND `package-release.sh` DOES BOTH (2026-08-30).**
+Do not hand back "image built, now run `publish-ota-repo.sh`" as a separate manual
+step — `scripts/package-release.sh <vX.Y.Z>` publishes the OTA repo itself and then
+runs **`scripts/verify-ota-parity.sh`** against the *released rootfs*: every package in
+`pmos/ota-packages.list` must be at the same version in the image and in the published
+index, and the key baked into the image must be the key that signed the index.
+`--no-ota` skips the publish; **nothing skips the gate**. This exists because v1.14.2
+shipped device r89 as an image while the repo kept serving r87 — every box in the field
+stayed two revisions behind and every UI said "up to date".
+⚠️ **Where you build decides whether the fleet can install it.** Package apks are signed
+with the abuild key in the `nexusq-workdir` volume; the fleet key is
+`pmos@local-6a42e957`, recorded as **`pmos/ota-signing-key.rsa.pub`** (private half in
+1Password, "nexusQ OTA signing key (fleet)"). Publishing from a host with a different
+key re-signs the index and takes OTA away from every box — `publish-ota-repo.sh` now
+fails closed on that. `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`,
+`docs/2026-08-29-ota-key-drift.md`, HANDOFF "WHICH MACHINE BUILDS WHAT".
 
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
@@ -214,22 +237,23 @@ hangs), the Phase 6b patch failed to apply — check the build log for
 `only N/3 patterns matched` (pmbootstrap changed its `run_abuild`/`backend.py`; the
 three string replacements need re-targeting). That, not fakeroot-tcp, is the fix.
 
-### The python3 override (Phase 6 stage + gated Phase 7d build + Phase 10 ship gate)
+### python3 — the override is RETIRED; only the ship gate remains (2026-08-17)
 
-Alpine's stock **python3-3.14.5-r2 SIGSEGVs on real ARMv7** (`python3 -S -c ''` →
-rc 139), which kills every python consumer on the device (`onboard`,
-`blueman-applet`, `sleep-inhibitor.service`, and `gdb`). The build ships a local
-override `pmos/python3/` (same version, now **r5**, higher pkgrel supersedes Alpine's
-r2): **Phase 6** stages it into `$PMAPORTS/main/python3`; **Phase 7d** builds it with
-`pmbootstrap --no-cross build python3 --arch armv7 --force` (full CPython compile
-under qemu — slow).
+**There is no `pmos/python3` any more, no Phase 7d, and no `PYTHON3_VALIDATE_RUNS`.**
+The rootfs ships **Alpine's stock `python3 3.14.7-r0`**, and that is correct — do not
+try to "restore" the override, and do not report its absence as a build defect.
+
+**Why it existed:** Alpine's stock `python3-3.14.5-r2` SIGSEGVed on real ARMv7
+(`python3 -S -c ''` → rc 139), killing every python consumer on the device (`onboard`,
+`blueman-applet`, `sleep-inhibitor.service`, `gdb`), so the build staged a local
+higher-pkgrel rebuild (`3.14.5-r5`, plain default-linker/bfd) over pmaports' `main/python3`.
 
 ⚠️ **Root cause (settled 2026-06-28) — the on-device crash was a FLASH bug, not a
 build/compiler/CPython bug.** The `raw2simg.py` `DONT_CARE` deployment bug (see the
 raw2simg warning below) left stale eMMC garbage in libpython's should-be-zero
 `.PyRuntime`/`.data.rel.ro` on re-flash → `interp->types.builtins.num_initialized`
-reads `0xf0012b00` → wild type-index deref in `Py_Initialize` → SIGSEGV. The override
-is therefore just a **plain default-linker (bfd) rebuild** that supersedes Alpine's r2.
+reads `0xf0012b00` → wild type-index deref in `Py_Initialize` → SIGSEGV. The built apk
+was always clean; `raw2simg.py` now writes **every block RAW**.
 **DISPROVEN, do not re-tread:** LTO/PGO; LDREXD misalignment; gnu2/TLSDESC; optimization
 level; **and a qemu-user "mmap zero-fill corrupts the build" theory + a gold-linker
 workaround (`-fuse-ld=gold -Wl,--no-mmap-output-file`) — both tried and DROPPED as
@@ -238,31 +262,37 @@ unnecessary** (6 independent bfd builds all gate-clean, and a bfd build — md5
 "byte-identical `.text`, opposite outcome" coin-flip evidence was almost certainly a
 post-flash device pull misread as build corruption.
 
-**What ships, and the kept safety net (all in tree):**
-1. **r5 is a plain bfd build** — drops `--with-lto` + `--enable-optimizations`, keeps
-   stock `-O2`, **default linker** (no gold; `binutils-gold` removed from makedepends).
-2. **`scripts/verify-libpython-clean.py`** — a deterministic build-integrity gate
-   (flags long non-zero runs in `.PyRuntime`/`.data.rel.ro`; clean ≤52 B, corrupt
-   ≥22000 B, threshold 256). It does NOT run the binary, so it is optimisation- and
-   qemu-independent. Kept as a cheap **safety net** that catches zero-region corruption
-   from ANY source — not as "the gold fix" (there is no gold).
-3. **Phase 7d gate+retry + Phase 10 ship gate** — Phase 7d extracts each freshly-built
-   libpython and runs the gate, rebuilding (`--force`, up to 4×) on any residual
-   corruption and **aborting** if never clean; it selects the apk by its **exact
-   `pkgver-pkgrel`** name (`python3-3.14.5-r5`), not a bare `r*.apk` glob (which could
-   gate/export a stale r3/r4 from the persistent work-volume repo). Phase 10 re-gates
-   the **installed** rootfs libpython before emitting an image. This also fixed the old
-   "rootfs ships a *different* r4 than the exported apk" stale-glob selection bug.
+⚠️ **Why it was removed, and the lesson to keep:** the 2026-08-17 cold build showed the
+override had gone **inert**. Alpine edge moved to `python3 3.14.7` and **apk compares
+`pkgver` before `pkgrel`**, so our `3.14.5-r5` stopped winning: Phase 7d still built it,
+still gate-passed it ("CLEAN, attempt 1"), still exported it and still printed
+*"supersedes Alpine's -r2"* — while the rootfs installed **3.14.7-r0 regardless**
+(proved by libpython md5: rootfs `d7952ba7…` vs our apk `3ad0ce88…`). A warm build could
+never have shown it — the cached APKINDEX still listed the old upstream version.
+**A safety net that silently stops being installed is worse than none.** Same trap as
+the speexdsp `pkgrel=100` pin: a version pin only holds while `pkgver` matches.
+
+**What remains, and what you verify:**
+1. **`scripts/verify-libpython-clean.py`** — a deterministic integrity gate (flags long
+   non-zero runs in `.PyRuntime`/`.data.rel.ro`; clean ≤52 B, corrupt ≥22000 B, threshold
+   256). It does NOT run the binary, so it is optimisation- and qemu-independent, and it
+   judges whatever libpython is present regardless of provenance.
+2. **The Phase 10 SHIP GATE** — it prints *which* python3 the rootfs actually contains
+   (read from apk's own db, the question nobody had been asking), gates the **installed**
+   `usr/lib/libpython3.14.so.1.0`, and treats a **missing** python3 as a hard FAILURE
+   (`nexusq-control`, `nexusq-mqtt`, `nexusq-btagent`, `nexusq-nfc` are all stdlib-python
+   daemons). ⚠️ Its `awk` runs in paragraph mode and needs `FS="\n"` — `/^P:python3$/`
+   with `RS=""` anchors to the *record*, not the line, and silently never matches.
+3. `scripts/verify-rootfs.sh` re-runs the same gate as its section 6, resolving the gate
+   script **from its own location** (a bare relative path made it silently skip whenever
+   the cwd was not the repo root — fixed 2026-08-30, v1.14.2).
 
 **Clean build is necessary but NOT sufficient — the flash must be byte-exact (all-RAW),
-which is what actually fixed the device.** Watch Phase 7d's
-`=== python3 build result: rc=N ===` and the per-attempt `CLEAN`/`CORRUPT` gate lines;
-a non-clean exit aborts the build (good — don't flash a fallback-r2 rootfs). A green
-build is still not on its own proof of *runtime* health — when you have a device, prefer
-to **validate `python3 -S -c ''` over ssh** (qemu's own `-S -c ''` check is a false
-pass; the integrity gate is the build-side authority). `PYTHON3_VALIDATE_RUNS=N` forces
-N rebuilds + gates each (this session: 6/6 clean). See
-`docs/2026-06-28-session-findings.md`.
+which is what actually fixed the device.** A green build is still not proof of *runtime*
+health: when you have a device, **validate `python3 -S -c ''` over ssh** (qemu's own
+`-S -c ''` check is a false pass; the integrity gate is the build-side authority).
+See `docs/2026-06-28-session-findings.md` (root cause) and CHANGELOG
+"Removed — the python3 override, which had quietly stopped being installed (2026-08-17)".
 
 ## Artifacts
 
@@ -365,9 +395,8 @@ the same night).
 | `losetup: ...: failed to set up loop device: Permission denied` (Phase 10 post-process) | the rootfs post-process (strip /boot fstab, unlock root) ran without sudo as the `pmos` user | FIXED — Phase 10 runs losetup/mount/sed/python3/umount via `sudo` |
 | `cc: fatal error: cannot execute 'cc1': posix_spawnp` (Phase 7c nexusqd, exit 3) | crossdirect (cross-compile accelerator) is broken in this image | FIXED — Phase 7c builds nexusqd with `--no-cross` (qemu-only), matching Phase 8 |
 | `Writing 'boot' FAILED! error=-27` (at flash time) | boot.img > 8 MB (initramfs bundled) | Phase 10 ramdisk-less repack; verify boot.img ≤ 8 MB |
-| Phase 7d `python3 build result: rc=N` (N≠0) / `no clean python3 apk after N attempt(s)` — build ABORTS | python3 override build failed or never gated clean | a compile error won't fix on retry — read the log. Gate-CORRUPT every attempt is unexpected (6/6 bfd builds were clean this session) — inspect the libpython before assuming a build defect; the gate is a safety net for rare residual corruption. Do NOT flash a fallback-r2 rootfs |
-| Phase 7d attempt logs `CORRUPT: ... FAILED the gate` then rebuilds | a rare residual zero-region corruption in a built libpython | EXPECTED-rare; the gate+retry loop re-rolls it (`--force`). Only a problem if all 4 attempts are CORRUPT (see row above) |
-| Phase 10 `SHIP GATE FAILED: the rootfs libpython is corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). If persistent, check the pkgrel-exact apk selection in Phase 7d |
+| Phase 10 `SHIP GATE FAILED: the rootfs libpython is corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). There is no Phase 7d and no python3 override any more (retired 2026-08-17) — the rootfs installs Alpine's stock python3, so a persistent CORRUPT here points at the work volume or the extraction, not at our aport |
+| Phase 10 `SHIP GATE FAILED: no ... libpython ... python3 is` — build exits | the rootfs has no python3 at all | a hard failure by design: `nexusq-control`, `nexusq-mqtt`, `nexusq-btagent` and `nexusq-nfc` are stdlib-python daemons. Check the device aport's `depends=` and the apk db line the gate prints (`SHIP GATE: rootfs python3 = …`) |
 | python crashes on device (`onboard`/`blueman`/`sleep-inhibitor`/`gdb` SIGSEGV) | the **flash** re-corrupted libpython's `.PyRuntime`/`.data.rel.ro` (NOT a compiler/LTO/alignment/CPython-source/qemu-build bug — all disproven) | FIXED 2026-06-28 by the **all-RAW `raw2simg.py`** (byte-exact flash) + the integrity gate ensuring a clean build feeds it. Verify `python3 -S -c ''` **on device** (qemu is a false pass); confirm on-device `libpython` md5 == the clean image's |
 | python crashes on device **even though the built image gates CLEAN** | the FLASH re-corrupted it: a `DONT_CARE`-chunked sparse skipped zero blocks on the non-erasing U-Boot, leaving STALE eMMC garbage in libpython's zero-regions (this was the **actual** root cause; a clean build is necessary but not sufficient) | `raw2simg.py` must be **all-RAW** (byte-exact) — never `DONT_CARE`. Re-encode + reflash; confirm on-device `libpython` md5 == the clean image's and `python3 -S -c ''` rc 0. See §7 / the raw2simg warning above |
 | rc 128, git error | building from a `git worktree` | build from the main repo |
@@ -443,7 +472,8 @@ Check and REPORT each (PASS/FAIL + evidence):
   `nexusq-kernel-ota` + `nexusq-rootfs-ab` ARE published as payload sources for
   the trial-slot updater)*;
   `publish-ota-repo.sh` ships the daemons + `device-google-steelhead` + its firmware
-  subpackage with a **size guard ≥ 99 MB → skip**. A pre-split device can't OTA the
+  subpackage with a **size guard ≥ 99 MB → skip** (the set is `pmos/ota-packages.list`
+  since 2026-08-30). A pre-split device can't OTA the
   config (needs the flash-only glibc dep) → **one reflash** to adopt. See
   `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
 - **onboarding + BT-pairing stack (**v1.10.1**, released 2026-07-16 = device **r49** /
@@ -482,7 +512,7 @@ Check and REPORT each (PASS/FAIL + evidence):
   🆕 **`nexusq-mqtt` (2026-08-10, 0.1.0-r0, noarch — Phase 7c5):** the MQTT health
   telemetry publisher (`userspace/nexusq-mqtt/`, staged in Phase 5 like the other
   daemons, in the dos2unix list, `device-google-steelhead` r67 `depends=` it, in
-  `publish-ota-repo.sh`'s `OTA_PACKAGES`). Stdlib-only python; **no ordering
+  the OTA publish set, today `pmos/ota-packages.list`). Stdlib-only python; **no ordering
   constraint** on the other daemon phases. Gate on the built rootfs:
   `usr/bin/nexusq-mqtt` present, `nexusq-mqtt.service` + its
   `multi-user.target.wants` symlink + `96-nexusq-mqtt.preset` installed, and
@@ -541,11 +571,14 @@ Check and REPORT each (PASS/FAIL + evidence):
   be `root:root` (uid 0), and there must be **zero** files owned by uid 12345 in the
   rootfs — `find usr etc lib -uid 12345` returns nothing. uid-12345-owned files would
   mean abuild ran unprivileged and faked was bypassed wrongly.
-- **python is the r5 (default-linker / bfd) build AND gate-clean** (Phase 10 already
-  runs this ship gate; re-confirm on the mounted rootfs): `usr/lib/libpython3.14.so.1.0`
-  exists, the installed package is `python3-3.14.5-r5` (not Alpine's r2), and
-  `python3 scripts/verify-libpython-clean.py <mnt>/usr/lib/libpython3.14.so.1.0`
-  reports CLEAN. A CORRUPT result means a corrupt libpython slipped through — that rootfs
+- **python3 is PRESENT and gate-clean** (Phase 10 already runs this ship gate; re-confirm
+  on the mounted rootfs): `usr/lib/libpython3.14.so.1.0` exists, the installed package is
+  Alpine's stock **`python3-3.14.7-r0`** *(there has been **no local override since
+  2026-08-17** — it had gone inert because apk compares `pkgver` before `pkgrel`; a rootfs
+  shipping `3.14.5-r5` would mean the retirement got reverted, not that things are well)*,
+  and `python3 scripts/verify-libpython-clean.py <mnt>/usr/lib/libpython3.14.so.1.0`
+  reports CLEAN. A **missing** python3 is a hard failure (four stdlib-python daemons
+  depend on it). A CORRUPT result means a corrupt libpython slipped through — that rootfs
   will SIGSEGV `onboard`/`blueman`/`sleep-inhibitor`/`gdb` on device. Rebuild; do not
   ship it. **A gate-clean rootfs is necessary but NOT sufficient on its own:** it must
   also be flashed **byte-exact** — sparse-convert with the all-RAW `raw2simg.py` (never

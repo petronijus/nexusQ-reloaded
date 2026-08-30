@@ -49,6 +49,23 @@ no fastboot, no cable — from a **signed apk repo on GitHub Pages**
 already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs
 our signed packages straight from it. Two Settings items in the companion app:
 
+⚠️ **A Q flashed from v1.14.0, v1.14.1 or v1.14.2 cannot OTA at all** (found
+2026-08-30). Those three images were cut on a machine whose build key is
+`pmos@local-6a93112c`, while the published repo is signed `pmos@local-6a42e957`, so
+every `apk update` answers `UNTRUSTED signature` and no update is ever offered — the
+app just keeps saying "up to date". Repair over ssh, no reflash needed:
+
+```bash
+scp pmos/ota-signing-key.rsa.pub \
+    root@<device>:/etc/apk/keys/pmos@local-6a42e957.rsa.pub
+```
+
+(or reflash from an image built on the machine holding that key). Since 2026-08-30
+a release can no longer ship the mismatch: `scripts/package-release.sh` publishes the
+OTA repo and then gates on the image's baked key being the key that signed the index
+(`scripts/verify-ota-parity.sh`). See CHANGELOG `[Unreleased]` and
+`docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
+
 - **App update** — the phone app **and** the four device daemons (`nexusq-control` ·
   `nexusqd` · `nexusq-btagent` · `nexusq-setupd`), versioned together. On the device
   side this calls `checkNexusUpdate`/`installNexusUpdate` (PROTOCOL §12a); the ring shows

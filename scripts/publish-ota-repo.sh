@@ -12,10 +12,17 @@
 # Run it AFTER a build that bumped any of the OTA packages. `apk upgrade` on the
 # device (or the app's "Nexus Q" update) then pulls the new versions.
 #
+# NOT a separate step when cutting a release: since 2026-08-30 scripts/package-
+# release.sh runs this itself and then gates on the image and the repo agreeing
+# (scripts/verify-ota-parity.sh). Running it by hand is for an OTA-only push --
+# a daemon/config apk shipped without a new image.
+#
 # The daemons + the device config now fit: the ~180 MB glibc-rt Roon base was
 # split into its own package (nexusq-glibc-rt, 2026-08-02), so device-google-
 # steelhead dropped under GitHub's 100 MB limit and its config is OTA-shippable.
-# nexusq-glibc-rt (still big, static) and the kernel stay flash-only.
+# nexusq-glibc-rt (still big, static) stays flash-only. The KERNEL apk is
+# published too (since 2026-08-23) but only as nq-kernel-ota's PAYLOAD source --
+# apk never applies a kernel; see pmos/ota-packages.list.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -75,26 +82,15 @@ MSG
         exit 1
     fi
 fi
-# The four daemons + the device CONFIG package (device-google-steelhead) and its
-# firmware subpackage — all now under GitHub's 100 MB limit after the glibc-rt
-# split (2026-08-02). This is what the app's SYSTEM update pulls (the base
-# packages come from the Alpine/pmOS mirrors; the ~180 MB nexusq-glibc-rt base and
-# the kernel are deliberately NOT here — flash-only). A size guard below refuses
-# to publish anything ≥99 MB so a mistaken big apk can never break the push.
-# linux-google-steelhead is here as a PAYLOAD SOURCE for nq-kernel-ota, not as
-# something the device installs: `apk` never applies a kernel (nexusq-control
-# upgrades with --ignore linux-google-steelhead, and the device track lists its
-# packages explicitly). nq-kernel-ota fetches this apk, unpacks it, and writes a
-# boot image to the trial slot. docs/2026-08-18-kernel-ota-phase2.md
-# speexdsp is NOT one of ours by name — it is a version-pinned OVERRIDE of
-# Alpine's package, rebuilt with NEON (pmos/speexdsp/APKBUILD). It must be
-# published like any other, or a device that OTA-upgrades will keep Alpine's
-# SCALAR build and silently lose the resampler win. Same trap as
-# [nexusq-rootfs-ab missing here bit device r80].
-OTA_PACKAGES=(nexusq-control nexusqd nexusq-btagent nexusq-setupd nexusq-mqtt \
-              nexusq-kernel-ota nexusq-rootfs-ab linux-google-steelhead \
-              device-google-steelhead device-google-steelhead-nonfree-firmware \
-              speexdsp)
+# The OTA package set lives in pmos/ota-packages.list — one place, because the
+# release gate (scripts/verify-ota-parity.sh) must judge the SAME set. It used to
+# be this array, and a second copy in the gate would let the gate agree with the
+# very bug it exists to catch. A size guard below still refuses to publish
+# anything ≥99 MB, so a mistaken big apk can never break the push.
+OTA_LIST="$REPO_ROOT/pmos/ota-packages.list"
+[ -f "$OTA_LIST" ] || { echo "ERROR: missing $OTA_LIST — refusing to publish an unknown package set" >&2; exit 1; }
+mapfile -t OTA_PACKAGES < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
+[ "${#OTA_PACKAGES[@]}" -gt 0 ] || { echo "ERROR: $OTA_LIST lists no packages" >&2; exit 1; }
 
 STAGE="$(mktemp -d)"
 trap 'sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
@@ -122,6 +118,15 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
   abuild-sign -k $HOME/.abuild/'"$KEY"'.rsa APKINDEX.tar.gz
   chmod -R a+rw /out
 '
+
+# THE SECRETS GATE. gh-pages is PUBLIC, and `device-google-steelhead` bakes the
+# WiFi profile (PSK in plain text) and ssh authorized_keys when built from the
+# private overlay. That went unnoticed from r62 (2026-08-02) to r90 (2026-08-30):
+# four weeks of publishing the WPA PSK to a public URL, while the image-side gate
+# `release-preflight-no-secrets.sh` sat right there catching the identical bytes
+# in the rootfs. It was never pointed at the packages. It is now.
+echo "=== secrets gate: nothing personal inside the packages ==="
+"$REPO_ROOT/scripts/verify-apk-no-secrets.sh" "$STAGE"/nexusq/armv7/*.apk
 
 echo "=== publishing to the gh-pages branch ==="
 WT="$STAGE/gh-pages-wt"

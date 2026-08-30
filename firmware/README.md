@@ -95,6 +95,17 @@ yourself (see below). `brcmfmac4330-sdio.bin` is redistributable; it is gitignor
 too but `docker-build.sh` will fetch it from upstream linux-firmware if it is not
 already cached in `./firmware`.
 
+> ⚠️ **That fetch is a mirror LIST now, and it can FAIL the build (2026-08-30, v1.14.1).**
+> linux-firmware's canonical home moved to GitLab and the hardcoded kernel.org cgit
+> `plain/brcm/brcmfmac4330-sdio.bin` path started answering **404** — while the failure
+> branch merely warned and fell through to the empty package below: a green build and a
+> flashable image with **no WiFi and no BT**. `BRCMFMAC_URLS` is now ordered (GitLab
+> canonical, kernel.org second), and **when the proprietary overlay is present** — i.e. a
+> build meant to be flashed — an unfetchable blob is now `exit 1` naming the cache path,
+> not a warning. A public clone without the overlay still gets the empty package and a
+> green build; that asymmetry is the point. Cache the blob at
+> `./firmware/brcmfmac4330-sdio.bin` (gitignored) to skip the fetch entirely.
+
 ## Getting the blobs
 
 **Maintainer (private overlay):** the blobs live in the `nexusQ-reloaded-private`

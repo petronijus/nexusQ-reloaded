@@ -6,6 +6,119 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+Device **r90**. Full record:
+`docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
+
+### Fixed — a release is two publishes, and only one of them ran (2026-08-30)
+- **v1.14.2 shipped device r89 as an image while the OTA repo still served r87.**
+  The `gh-pages` branch was last published on 08-28; the GitHub release was cut on
+  08-30. Both come out of the same build volume, but `package-release.sh` and
+  `publish-ota-repo.sh` were independent commands and nothing tied them together —
+  `package-release.sh` did not contain the string "OTA". So nothing already in the
+  field could be *offered* the release, and every UI said "up to date", because a
+  device cannot be behind a version its repo does not carry. Confirmed on the
+  Prague Q: `device-google-steelhead-1.0-r87` installed, with `apk audit` reporting
+  `U usr/bin/nexusq-uac2-in` — the r88 fix hand-copied over an r87 package, which
+  any `apk fix` or reflash would have silently undone.
+- **`package-release.sh` now publishes the OTA repo and then gates on parity.**
+  `--no-ota` skips the publish; nothing skips the gate.
+- **`scripts/verify-ota-parity.sh`** — new. Every package in the OTA set must be at
+  the same version in the *released rootfs* and the *published index*, and the key
+  baked into the image must be the key that signed the index. Judged against the
+  rootfs, never against the build volume the apks came from: that comparison is
+  circular and agrees with itself however far behind the repo has fallen. Fails
+  closed on every "cannot look" path — an unfetchable index is a failure, not an
+  assumption.
+- **`pmos/ota-signing-key.rsa.pub`** — the fleet's public key, recorded at last.
+  The drift guard added on 08-29 was wrapped in `if [ -f … ]` with no `else` and
+  this file was never committed, so the one check written to stop key drift did
+  nothing, always. Verified byte-identical against the live device before being
+  committed. Its private half is now also backed up in 1Password ("nexusQ OTA
+  signing key (fleet)"); until today its only copy was inside a docker volume.
+  **The Prague Q trusts `pmos@local-6a42e957` — the same key this desktop signs
+  with**, which answers the question the MacBook's handover could not (neither box
+  was reachable from there) and makes "build releases on the desktop" free.
+- **`pmos/ota-packages.list`** — the OTA package set in one place, read by both the
+  publisher and the gate. It previously existed only inside `publish-ota-repo.sh`,
+  where an omission fails silently (how r80 shipped against a missing
+  `nexusq-rootfs-ab`); a second copy inside the gate would have let the gate check
+  the same subset as the bug.
+- Tests: `scripts/tests/test-verify-ota-parity.sh`, 7 cases. The gate was then
+  **mutated** to prove they are not decorative — disabling the version comparison
+  turns test 2 red, downgrading the unfetchable-index failure turns test 6 red.
+
+### Fixed — the USB-audio park probe was 99 % of all time above 350 MHz (2026-08-30, device **r90**)
+- r88 parks `alsaloop` when the USB host stops sending, then duty-cycles a probe to
+  notice it coming back — its comment budgeted "roughly 2 s of work every 30 s".
+  Measured at 1 Hz for 300 s, detached: the probe ran **9,0 % of wall time and sat
+  at 1200 MHz for 77,3 % of it**, against 0,11 % while parked. Relative dynamic
+  power **1,13× → 1,54×** — a permanent +36 % on idle MPU power for as long as the
+  TV box is powered on and not playing. The unit's own accounting: `Consumed
+  1h 13min 26s CPU over 17h 45min wall` = 6,9 % of a core.
+- The comment said the gadget exposes no "host is streaming" flag. It does:
+  `u_audio` registers `numid=4,iface=PCM,name='Capture Rate'` on the gadget card,
+  and it read **0 throughout two probe cycles including while the probe held the
+  PCM open** — so it tracks the host's alt-setting, not our own open. It was missed
+  because it is `iface=PCM`, not `MIXER`, so `cget name=…` returns nothing.
+- **`nexusq-uac2-in` now polls that flag instead of starting a bridge to see whether
+  one would have anything to carry.** Not as "non-zero means wake": the flag says
+  whether the stream is OPEN, not whether audio is ARRIVING, and parked from a
+  wedge that distinction is the whole bug — a naive version unparks, finds input
+  still frozen, re-parks, and flaps forever. The action depends on why we parked,
+  in `park_action()`, kept pure and marked `TESTABLE:` so
+  `pmos/device-google-steelhead/tests/test_uac2_park_action.sh` extracts the real
+  function; the naive version turns 4 of its 8 cases red.
+- **The replacement's own cost was measured before shipping**, because this file
+  already carries a scar about `pactl` forks costing 4,6 % of a core: `amixer cget`
+  is **19,5 ms at 1200 MHz (~67 ms at 350)** — *more* expensive than that `pactl`
+  call. Polled every tick it would have burned ~2,2 % of a core, so it is thinned
+  to every 4th tick (12 s).
+- Result, same sampler and an idle box: **350 MHz 85,40 % → 90,40 %**, 1200 MHz
+  **7,05 % → 0,17 %**, gadget substream open 9,0 % → **0,0 %**, relative dynamic
+  power **1,54× → 1,21×**. Waking is also *faster* than before: ≤12 s against the
+  old 30 s retry. A/B'd rather than guessed — a 30 s poll gives 91,37 %, so the
+  fork costs ~1 pp and 12 s buys back up to 18 s of music after pressing play.
+  `NQ_UAC2_PARK_POLL_TICKS` moves it.
+
+### Security — the OTA repo published the WiFi PSK for four weeks (2026-08-30)
+- **Every `device-google-steelhead-*.apk` published to the PUBLIC `gh-pages` branch
+  from r62 (2026-08-02) through r90 contained
+  `etc/NetworkManager/system-connections/wifi.nmconnection` with the WPA PSK in
+  plain text**, plus `root/.ssh/authorized_keys` and `etc/skel/.ssh/authorized_keys`.
+  The APKBUILD installs those files whenever they are staged non-empty, which is
+  what a build from the private overlay does; `PUBLIC_RELEASE=1` truncates them to
+  empty placeholders and the package then ships none of them.
+- **Why nothing caught it.** `scripts/release-preflight-no-secrets.sh` has guarded
+  the rootfs IMAGE since 2026-07-02 and does its job. The identical bytes travel
+  one directory away inside the *package*, which goes to a public URL — and no gate
+  was ever pointed at the packages. Found only because a release-time run of the
+  image gate reported "PERSONAL build" and prompted a look inside the apk.
+- **`scripts/verify-apk-no-secrets.sh`** — new, and wired into
+  `publish-ota-repo.sh` ahead of the push: it opens every apk and fails on a
+  `*.nmconnection` carrying `psk=`, a non-empty `authorized_keys`, a private key,
+  or a shadow file. Fails closed when it cannot read an apk.
+- **`device-google-steelhead` is held back from OTA entirely** until its baked
+  access stops being package content. A clean rebuild of the *same* package is not
+  a safe substitute: apk deletes files that leave a package's file list, so a
+  device upgrading from a personal build to a clean one loses its WiFi profile and
+  its root `authorized_keys` — offline and locked out. `pmos/ota-packages.list`
+  carries the reasoning; the daemons keep updating over the air.
+- **`gh-pages` history rewritten** to a single parentless commit; a fresh clone
+  carries none of the 43 affected commits. ⚠️ A force-push does not garbage-collect
+  — the old commits stay fetchable from the GitHub API **by SHA** until GitHub GCs
+  them, so **the PSK must be treated as compromised and rotated.** That rotation,
+  not the rewrite, is the actual remediation.
+
+### Known issues
+- **`Capture Rate` has only ever been observed reading 0.** That it goes non-zero
+  during real playback is inferred, not seen; it needs one listening test. The
+  logic is conservative if it never does (the wedge branch still probes), but the
+  fast path is unproven until someone presses play.
+- **The Šumperák Q still cannot OTA at all** — it trusts `pmos@local-6a913e9e`
+  while the index is signed `6a42e957`, so it is still exposed to the 28-hour spin
+  and cannot receive this fix over the air. Needs the key copied into
+  `/etc/apk/keys` by hand, or a reflash from an image built on the desktop.
+
 ## [1.14.2] — 2026-08-30 — Spotify Connect survives a DHCP move, and two gates stop lying
 
 Device **r89**. A small release with a common thread: three of the four things
@@ -128,7 +241,9 @@ would have passed every check this project had.
   full reads; XRUN transient vs confirmed, counter reset, missing status file).
 - ⚠️ The probe still costs ~1–2 s of alsaloop spin per 30 s while parked.
   `NQ_UAC2_PARK_RETRY_S` / `NQ_UAC2_PROBE_S` tune it; a cheaper probe that does
-  not involve alsaloop at all is the obvious follow-up.
+  not involve alsaloop at all is the obvious follow-up. *(Follow-up taken the
+  same day — and the cost was ~4× that estimate: see `[Unreleased]`, device
+  **r90**, which reads the gadget's `Capture Rate` control instead of probing.)*
 
 ### Fixed — a build-time gate for the cloned MAC, because fixing the generator was not enough (2026-08-29)
 - The 2026-08-28 per-unit identity fix is correct in the repo and **still left a

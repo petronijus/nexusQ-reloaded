@@ -7,9 +7,20 @@
 # release — which is how you eventually ship a rootfs that still has someone's
 # WPA PSK in it. It is a script now, and the gate is not optional.
 #
-# Usage: scripts/package-release.sh v1.14.0 [--from-volume]
+# A RELEASE IS BOTH TRACKS. The image assets below reach only someone holding a
+# USB cable; everything already in the field updates from the OTA apk repo, and
+# the two used to be separate commands nothing tied together. On 2026-08-30
+# v1.14.2 shipped device r89 as an image while the repo kept serving r87 — last
+# published two days earlier — so no box in the field could even be offered it,
+# and every UI said "up to date" because a device cannot be behind a version its
+# repo does not carry. So this script now publishes the OTA repo too, and then
+# GATES on the two actually matching. The publish is skippable; the gate is not.
+#
+# Usage: scripts/package-release.sh v1.14.0 [--from-volume] [--no-ota]
 #   --from-volume   first copy the artifacts out of the `nexusq-output` docker
 #                   volume into output/ (what docker-build.sh writes into)
+#   --no-ota        do not publish the OTA repo (the parity gate still runs, so
+#                   this only helps when the repo is ALREADY current)
 #
 # Produces in output/:
 #   nexusq-boot-<ver>.img
@@ -21,10 +32,18 @@ cd "$(dirname "$0")/.."
 VER="${1:-}"
 case "$VER" in
     v[0-9]*.[0-9]*.[0-9]*) ;;
-    *) echo "usage: $0 v<MAJOR>.<MINOR>.<PATCH> [--from-volume]" >&2; exit 2 ;;
+    *) echo "usage: $0 v<MAJOR>.<MINOR>.<PATCH> [--from-volume] [--no-ota]" >&2; exit 2 ;;
 esac
+shift
 FROM_VOLUME=0
-[ "${2:-}" = "--from-volume" ] && FROM_VOLUME=1
+PUBLISH_OTA=1
+for arg in "$@"; do
+    case "$arg" in
+        --from-volume) FROM_VOLUME=1 ;;
+        --no-ota)      PUBLISH_OTA=0 ;;
+        *) echo "unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
 OUT=output
 mkdir -p "$OUT"
@@ -64,3 +83,25 @@ command -v sha256sum >/dev/null || SHA="shasum -a 256"
 echo
 ls -lh "$OUT/nexusq-boot-$VER.img" "$OUT/nexusq-rootfs-$VER-sparse.img.zst" "$OUT/sha256sums.txt"
 cat "$OUT/sha256sums.txt"
+
+# --- the other half of the release -------------------------------------------
+if [ "$PUBLISH_OTA" = "1" ]; then
+    echo
+    echo "==> Publishing the OTA apk repo (the half that reaches the field)"
+    scripts/publish-ota-repo.sh
+else
+    echo
+    echo "==> --no-ota: skipping the OTA publish (the parity gate below still runs)"
+fi
+
+echo
+echo "==> Release gate: the OTA repo actually carries this release"
+# Judged against $RAW, the uncompressed rootfs that IS the release — not against
+# the build volume the apks came from, which would be circular and would agree
+# with itself no matter how far behind the published repo had fallen.
+scripts/verify-ota-parity.sh "$RAW"
+
+echo
+echo "Both tracks carry $VER. Upload the assets above with:"
+echo "  gh release create $VER output/nexusq-boot-$VER.img \\"
+echo "      output/nexusq-rootfs-$VER-sparse.img.zst output/sha256sums.txt"

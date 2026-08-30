@@ -51,12 +51,12 @@ notes in [`docs/`](docs/).
 |---|:---:|---|
 | 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; boot log genuinely clean (`dmesg` err/warn empty) · v1.6.10 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
-| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; governor tuning keeps an idle box at 350 MHz ~91 % of the time — including with USB Audio on, which used to pin it at 1200 MHz (device r81) |
+| 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; an idle box sits at 350 MHz ~90 % of the time even with a USB host attached and not playing · device r90 (2026-08-30) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, one movable PulseAudio input · v1.6.15 |
 | 🍏 **AirPlay** (shairport-sync) | ✅ | a PA input like librespot, avahi-advertised, ports pinned · v1.11.0 |
 | 🎼 **Roon Bridge** (Roon Ready) | ✅ | glibc/Mono in a bwrap sandbox over a baked Debian base; validated against a real Core; default-OFF · v1.11.0 |
-| 🎚 **USB Audio input** — the Q as a USB DAC | ✅ | the orb enumerates as a USB speaker (UAC2 gadget) and **mixes** into PA via a stable-clock snd-aloop hop · v1.12.0. USB is the Q's only no-solder digital input — every built-in port is an output |
+| 🎚 **USB Audio input** — the Q as a USB DAC | ✅ | the orb enumerates as a USB speaker (UAC2 gadget) and **mixes** into PA via a stable-clock snd-aloop hop, and costs nothing while the host is idle · v1.12.0 · device r90 |
 | 🔊 **Audio output selection** | ✅ | speaker / optical / HDMI = the PA default sink, picked from the app · v1.7.0 |
 | 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
@@ -104,7 +104,8 @@ flowchart LR
 
 **PulseAudio is the hub**: every input (librespot, AirPlay, Roon, BT A2DP, USB) is
 a PA client, and the active **output** — TAS5713 speaker, optical SPDIF, or HDMI —
-is the PA default sink, chosen from the companion app. The LED daemon reads the
+is the PA default sink, chosen from the companion app. USB is the orb's only
+no-solder digital *input* — every built-in port is an output. The LED daemon reads the
 active sink's **monitor**, runs an FFT with an auto-gain stage, and animates the
 ring — so the orb glows in time with whatever you're playing, at any volume.
 
@@ -164,8 +165,8 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **45 patches** in `kernel/patches/`), the
-local `python3` override, the device daemons (`nexusqd` · `nexusq-control` ·
+It builds the kernel (mainline 6.12.12 + **46 patches** in `kernel/patches/`), the
+device daemons (`nexusqd` · `nexusq-control` ·
 `nexusq-btagent` · `nexusq-setupd` · `nexusq-mqtt`), and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
 the hard-won gotchas live in `HANDOFF.md`. (⚠️ The daemon build **phase order is
@@ -173,8 +174,8 @@ load-bearing**: `nexusq-btagent` must build *before* `nexusq-setupd`, which depe
 on it — the reverse order fails every clean build on checksums.)
 
 ```
-kernel/      dts · defconfig · 45 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
-pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-btagent · nexusq-setupd · nexusq-mqtt · python3
+kernel/      dts · defconfig · 46 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
+pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-btagent · nexusq-setupd · nexusq-mqtt · speexdsp · ota-packages.list + the fleet signing key
 userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-btagent (BT pairing agent) · nexusq-setupd (BT WiFi provisioning) · nexusq-mqtt (MQTT health telemetry)
 companion/   Flutter companion app + PROTOCOL.md (built on the phone, not in the image)
 reverse-eng/ ground truth extracted from the factory kernel
@@ -219,13 +220,19 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 (dev) ── ✦ full-system OTA + glibc-rt split (config apk 191 MB → 58 KB)            2026-08-02
 (dev) ── ✦ USB-audio delay/heat fixed — bounded direct alsaloop bridge             2026-08-09
 (dev) ── ✦ MQTT health telemetry → Home Assistant + app health panel               2026-08-10
-1.12.0 ─ ✦ OTA everywhere · MQTT telemetry · USB audio mixes in PA · iOS app       2026-08-12   ← latest tag
+1.12.0 ─ ✦ OTA everywhere · MQTT telemetry · USB audio mixes in PA · iOS app       2026-08-12
 (dev) ── ✦ idle diet — healthd + nexusqd rewrites; idle busy 18.2 → ~7.7 %         2026-08-13
 (dev) ── ✦ idle OPP root-caused → governor tuned: 91 % @ 350 MHz verified          2026-08-16
 (dev) ── ✦ USB Audio pinned the clock at 1200 MHz → one governor knob, 84→68 °C   2026-08-24
 (dev) ── ✦ speexdsp rebuilt with NEON — resampling 1.34-2.86x faster              2026-08-24
 (dev) ── ✦ kernel OTA (trial slot) + A/B rootfs + rescue initramfs · healthd in C  2026-08-18…21
 (dev) ── ✦ DFS ch100 mystery solved · healthd rotation leak (r80) · OTA-repo dep rule   2026-08-23
+1.13.0 ─ ✦ hardware EQ (7-band TAS5713 biquads) · Roon idle guard · idle power 20× down   2026-08-28
+1.14.0 ─ ✦ rename the Q from the app · per-unit Bluetooth/WiFi identity            2026-08-29
+1.14.1 ─ ✦ a wedged USB-audio bridge that cooked the box for 28 h — closed         2026-08-30
+1.14.2 ─ ✦ Spotify Connect survives a DHCP move · two release gates stop lying     2026-08-30   ← latest tag
+(dev) ── ✦ a release publishes BOTH tracks now — image + OTA repo, gated on parity   2026-08-30
+(dev) ── ✦ USB-audio park reads the gadget's own flag — 350 MHz 85.4 → 90.4 %      2026-08-30
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

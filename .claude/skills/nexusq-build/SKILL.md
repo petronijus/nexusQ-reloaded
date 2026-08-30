@@ -51,22 +51,34 @@ it reports back, relay the verification result and the flash commands to the use
 flash only on explicit go-ahead, and follow the
 [[always-preserve-working-image]] rule — snapshot any image that boots.
 
-The build also stages + builds a local **`python3` override** (Phase 6/7d, now **r5**,
-**default linker / bfd**) — a plain rebuild whose higher pkgrel supersedes Alpine's
-broken armv7 python3-3.14.5-r2. ✅ **FIXED 2026-06-28 (hardware-verified).** The
-on-device `Py_Initialize` SIGSEGV was a **FLASH bug, not a build/compiler/CPython bug**:
-the old `DONT_CARE`-chunked `raw2simg.py` left stale eMMC bytes in libpython's
-should-be-zero regions on re-flash — fixed by the **all-RAW (byte-exact) `raw2simg.py`**.
-(A qemu-user build-corruption theory + a gold-linker workaround were investigated and
-**DROPPED as unnecessary** — 6/6 default-linker builds were gate-clean, one ran rc 0 on
-device.) Kept as a **safety net** (not "the gold fix"): Phase 7d gates every build with
-`scripts/verify-libpython-clean.py` (rebuild-on-corruption) and Phase 10 re-gates the
-installed rootfs libpython (ship gate), with pkgrel-exact apk selection — so a corrupt
-python can't reach a flashable image. The agent's verification gate confirms the rootfs
-ships the gate-clean r5. qemu's own `python3 -S -c ''` build check is still a false pass;
-trust the integrity gate (build-side) and `python3 -S -c ''` **on device**. ⚠️ A clean
-build is **necessary but not sufficient** — the FLASH must also be byte-exact: never
-re-introduce `DONT_CARE` in `raw2simg.py`, or the Nexus Q's non-erasing U-Boot leaves
-stale eMMC bytes in libpython and re-corrupts the (clean) image on-device. Shipped in
-**v1.6.0** (python works from a clean flash). See
-`docs/2026-06-28-session-findings.md`.
+**python3: the local override is RETIRED (2026-08-17) — the rootfs ships Alpine's stock
+`python3 3.14.7-r0`, and that is correct.** There is no `pmos/python3`, no Phase 7d and
+no `PYTHON3_VALIDATE_RUNS`; do not report their absence as a defect. Why it existed: the
+on-device `Py_Initialize` SIGSEGV, which was a **FLASH bug, not a build/compiler/CPython
+bug** (✅ root-caused 2026-06-28, hardware-verified) — the old `DONT_CARE`-chunked
+`raw2simg.py` left stale eMMC bytes in libpython's should-be-zero regions on re-flash,
+fixed by the **all-RAW (byte-exact) `raw2simg.py`**. (A qemu-user build-corruption theory
++ a gold-linker workaround were investigated and **DROPPED as unnecessary**.) Why it went:
+Alpine moved to python3 3.14.7 and **apk compares `pkgver` before `pkgrel`**, so our
+`3.14.5-r5` stopped winning — the build still built, gated and exported it while the
+rootfs installed the stock binary anyway, and a safety net that silently stops being
+installed is worse than none. What remains is the **Phase 10 SHIP GATE**, which gates the
+libpython actually present in the rootfs whatever its provenance, prints which python3 the
+rootfs contains, and fails hard when there is none. ⚠️ Never re-introduce `DONT_CARE` in
+`raw2simg.py`: the Nexus Q's non-erasing U-Boot would re-corrupt a clean image on-device.
+See `docs/2026-06-28-session-findings.md` and CHANGELOG (2026-08-17, "Removed — the
+python3 override, which had quietly stopped being installed").
+
+⚠️ **After the build, a release is TWO publishes — and one command does both
+(2026-08-30).** `scripts/package-release.sh v<X.Y.Z>` writes the release assets,
+**publishes the OTA apk repo itself**, and then gates on the two agreeing
+(`scripts/verify-ota-parity.sh`: every package in `pmos/ota-packages.list` at the same
+version in the released rootfs and the published index, and the key baked in the image
+being the key that signed the index). `--no-ota` skips the publish; **nothing skips the
+gate.** Never hand back "now run `publish-ota-repo.sh`" as a separate step: when the two
+were separate, v1.14.2 shipped device r89 as an image while the fleet kept getting r87.
+⚠️ And **build/publish on the machine that holds the fleet key** `pmos@local-6a42e957`
+(recorded as `pmos/ota-signing-key.rsa.pub`, private half in 1Password) — an image or an
+index signed with any other key means `UNTRUSTED signature` and no OTA at all. See
+`docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md` and HANDOFF
+"WHICH MACHINE BUILDS WHAT".
