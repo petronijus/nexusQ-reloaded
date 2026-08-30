@@ -9,7 +9,7 @@
 # addresses"), never an interface name. That address is therefore captured once,
 # at process start, and never re-read.
 #
-# On 2026-08-30 the Q moved from a static 192.168.51.240 to DHCP. librespot kept
+# On 2026-08-30 the Q moved from a static address to DHCP. librespot kept
 # announcing on the address that no longer existed:
 #
 #   libmdns::fsm error sending packet Os { code: 99, kind: AddrNotAvailable }
