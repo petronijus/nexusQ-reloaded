@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nexusQ-reloaded — OTA repository</title>
+<meta name="description" content="Signed apk OTA repository for postmarketOS on the Google Nexus Q (steelhead).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c10;
+    --panel: #11151c;
+    --panel-edge: #1d2430;
+    --text: #e7eaef;
+    --muted: #8b93a1;
+    --accent: #4cc2ff;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 56px 24px 72px; }
+
+  /* ── hero ─────────────────────────────────────────────── */
+  header { display: flex; align-items: center; gap: 28px; margin-bottom: 44px; }
+  .ring {
+    --size: 96px;
+    width: var(--size); height: var(--size); border-radius: 50%;
+    background: conic-gradient(#ff3b30, #ff9500, #ffe100, #34e07a, #21c4ff, #6a5bff, #d63bff, #ff3b30);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 14px), #000 calc(100% - 13px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 14px), #000 calc(100% - 13px));
+    animation: spin 14s linear infinite;
+    flex: none;
+  }
+  .ring-glow { position: relative; flex: none; }
+  .ring-glow::after {
+    content: ""; position: absolute; inset: -18px; border-radius: 50%;
+    background: conic-gradient(#ff3b3040, #ff950040, #ffe10040, #34e07a40, #21c4ff40, #6a5bff40, #d63bff40, #ff3b3040);
+    filter: blur(26px); z-index: -1;
+    animation: spin 14s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .ring, .ring-glow::after { animation: none; } }
+
+  h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 6px; }
+  h1 .accent { color: var(--accent); }
+  .tagline { color: var(--muted); margin: 0; font-size: 16.5px; }
+  .tagline a { color: var(--muted); }
+
+  /* ── sections ─────────────────────────────────────────── */
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 40px 0 14px;
+  }
+  p { margin: 0 0 14px; color: var(--text); }
+  p.dim, li.dim { color: var(--muted); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 6px; padding: 1px 6px;
+  }
+  pre {
+    font-family: var(--mono); font-size: 14px; line-height: 1.7;
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 10px; padding: 16px 20px; overflow-x: auto; margin: 0 0 14px;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  pre .c { color: var(--muted); }
+
+  /* ── package table ────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--panel-edge); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--panel-edge); }
+  tr:last-child td { border-bottom: none; }
+  th {
+    background: var(--panel); color: var(--muted); font-weight: 600;
+    font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  td.pkg { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; }
+  td.ver { font-family: var(--mono); font-size: 13.5px; color: var(--accent); white-space: nowrap; }
+  td.size { font-family: var(--mono); font-size: 13.5px; color: var(--muted); white-space: nowrap; text-align: right; }
+  td.desc { color: var(--muted); }
+  .published { color: var(--muted); font-size: 13.5px; margin-top: 10px; }
+
+  footer {
+    margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--panel-edge);
+    color: var(--muted); font-size: 13.5px;
+  }
+  footer code { font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="ring-glow"><div class="ring" role="img" aria-label="Nexus Q LED ring"></div></div>
+    <div>
+      <h1>nexusQ<span class="accent">-reloaded</span></h1>
+      <p class="tagline">Signed apk OTA repository — mainline Linux &amp; postmarketOS on the
+        <a href="https://en.wikipedia.org/wiki/Nexus_Q">Google Nexus Q</a> (steelhead).</p>
+    </div>
+  </header>
+
+  <p>Over-the-air updates for the device software: the on-device daemons
+  (<code>nexusqd</code>, <code>nexusq-control</code>, <code>nexusq-btagent</code>,
+  <code>nexusq-setupd</code>, <code>nexusq-mqtt</code>), the device configuration
+  package, the A/B rootfs &amp; kernel-OTA tooling, and the kernel apk that
+  <code>nq-kernel-ota</code> uses as its boot-image payload. All packages are signed —
+  the device already trusts the build key in <code>/etc/apk/keys</code>.</p>
+
+  <h2>Use on the device</h2>
+  <pre><code><span class="c"># one-time: add the repository</span>
+echo https://petronijus.github.io/nexusQ-reloaded/nexusq &gt;&gt; /etc/apk/repositories
+
+<span class="c"># update (or use the companion app's "Nexus Q" update button)</span>
+apk update &amp;&amp; apk upgrade --ignore linux-google-steelhead</code></pre>
+  <p class="dim">Kernel updates are not applied by <code>apk</code> — the kernel apk here is
+  fetched by <code>nq-kernel-ota</code>, written to the trial boot slot, and promoted only
+  after the device boots healthy.</p>
+
+  <h2>Published packages</h2>
+  <!-- OTA:TABLE:START — this block is regenerated by scripts/publish-ota-repo.sh; do not edit by hand -->
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Package</th><th>Version</th><th style="text-align:right">Size</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td class="pkg">linux-google-steelhead</td><td class="ver">6.12.12-r52</td><td class="size">8.8 MB</td><td class="desc">Mainline kernel for Google Nexus Q</td></tr>
+      <tr><td class="pkg">nexusq-btagent</td><td class="ver">0.1.0-r5</td><td class="size">19.9 KB</td><td class="desc">Nexus Q Bluetooth Just-Works pairing agent + pairing-exposure LED</td></tr>
+      <tr><td class="pkg">nexusq-control</td><td class="ver">0.1.0-r35</td><td class="size">35.2 KB</td><td class="desc">Nexus Q companion control bridge (LAN ↔ nexusqd/PulseAudio/librespot)</td></tr>
+      <tr><td class="pkg">nexusq-kernel-ota</td><td class="ver">0.1.0-r3</td><td class="size">12.9 KB</td><td class="desc">Nexus Q kernel OTA — trial-slot writer with health-gated promotion</td></tr>
+      <tr><td class="pkg">nexusq-mqtt</td><td class="ver">0.1.0-r4</td><td class="size">14.2 KB</td><td class="desc">Nexus Q MQTT health telemetry publisher (HA discovery + app feed)</td></tr>
+      <tr><td class="pkg">nexusq-rootfs-ab</td><td class="ver">0.1.0-r1</td><td class="size">7.8 KB</td><td class="desc">Nexus Q rootfs A/B — slot marker, slot population and health-gated commit</td></tr>
+      <tr><td class="pkg">nexusq-setupd</td><td class="ver">0.1.0-r4</td><td class="size">11.5 KB</td><td class="desc">Nexus Q BT RFCOMM WiFi-provisioning daemon (setup mode)</td></tr>
+      <tr><td class="pkg">nexusqd</td><td class="ver">0.1.0-r17</td><td class="size">25.3 KB</td><td class="desc">Nexus Q LED ring daemon (steelhead-avr)</td></tr>
+      <tr><td class="pkg">speexdsp</td><td class="ver">1.2.1-r100</td><td class="size">43.4 KB</td><td class="desc">A voice compression format (DSP) — NEON build for the Nexus Q</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="published">Last published: 2026-08-30</p>
+  <!-- OTA:TABLE:END -->
+
+  <footer>
+    Signing key <code>pmos@local-6a42e957</code> · repo index
+    <a href="nexusq/armv7/APKINDEX.tar.gz">APKINDEX.tar.gz</a> ·
+    project sources on <a href="https://github.com/petronijus/nexusQ-reloaded">GitHub</a>
+  </footer>
+
+</div>
+</body>
+</html>
