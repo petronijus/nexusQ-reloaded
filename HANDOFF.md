@@ -74,6 +74,38 @@ OTA from the desktop, and the Prague box takes updates as-is.
   (fleet)"**. Until 2026-08-30 its only copy was inside the `nexusq-workdir`
   docker volume; losing that volume would have meant re-keying every box by hand.
 
+#### ✅ ANY machine can cut a release now (2026-08-30)
+
+The old rule — "build releases on the desktop" — was never about the desktop. It
+was about **which machine happened to hold the fleet key**, because pmbootstrap
+runs `abuild-keygen` the first time a build volume is initialised and every
+machine therefore invented its own. That is now fixable in one command:
+
+```sh
+scripts/install-fleet-signing-key.sh          # install it here
+scripts/install-fleet-signing-key.sh --check  # report only, change nothing
+```
+
+It streams the private key from **1Password → "nexusQ OTA signing key (fleet)"**
+straight into the build volume (never onto the host filesystem, never echoed),
+and installs it only after **openssl derives the public half from it and finds it
+byte-identical to `pmos/ota-signing-key.rsa.pub`** — a name match would prove
+nothing, which is exactly how the drift went unnoticed. Any other key already in
+the volume is moved to `config_abuild/retired/`, because `publish-ota-repo.sh`
+discovers the key by globbing and alphabetical order is not a decision.
+
+Two guards now make a wrong-key release impossible rather than merely unlikely:
+
+| where | behaviour |
+|---|---|
+| `docker-build.sh`, before building | key ≠ fleet key → **warning**; with `PUBLIC_RELEASE=1` → **hard failure** (that image could never OTA) |
+| `publish-ota-repo.sh`, before pushing | key ≠ fleet key → refuses to publish (and prefers the fleet key when several are present) |
+| `verify-ota-parity.sh`, at release | the key baked into the released rootfs must be the key that signed the published index |
+
+**On the MacBook, once:** `op signin`, then run the script, then **rebuild** —
+packages already in that volume were signed with the old key and are still
+sitting in `packages/edge/armv7`.
+
 ⚠️ Still open: **the Šumperák Q trusts `pmos@local-6a913e9e`** and therefore
 still cannot OTA. It needs `pmos/ota-signing-key.rsa.pub` copied into its
 `/etc/apk/keys`, or a reflash from a desktop-built image.

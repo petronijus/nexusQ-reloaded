@@ -34,11 +34,19 @@ VOL="${VOL:-nexusq-workdir}"
 # baked 6a913e9e into /etc/apk/keys, so a freshly flashed Q answered every
 # `apk update` with "UNTRUSTED signature" and could not OTA at all. A hardcoded
 # name cannot notice that; a discovered one plus the check below can.
+# Discovery PREFERS the recorded fleet key. It used to be `ls | head -1`, i.e.
+# alphabetical order, which is not a decision — a volume holding two keys would
+# sign with whichever sorted first. scripts/install-fleet-signing-key.sh retires
+# stray keys for this reason, but a machine that has not run it yet must still
+# not silently pick the wrong one.
 KEY="${KEY:-}"
 if [ -z "$KEY" ]; then
-    KEY=$(docker run --rm -v "$VOL":/w alpine sh -c \
-        'ls -1 /w/config_abuild/*.rsa.pub 2>/dev/null | head -1' \
-        | xargs -r basename | sed 's/\.rsa\.pub$//')
+    KEY=$(docker run --rm -v "$VOL":/w -v "$REPO_ROOT/pmos/ota-signing-key.rsa.pub":/fleet.pub:ro alpine sh -c '
+        for k in /w/config_abuild/*.rsa.pub; do
+            [ -e "$k" ] || continue
+            cmp -s "$k" /fleet.pub && { basename "$k" .rsa.pub; exit 0; }
+        done
+        ls -1 /w/config_abuild/*.rsa.pub 2>/dev/null | head -1 | xargs -r basename | sed "s/\\.rsa\\.pub$//"' 2>/dev/null)
 fi
 [ -n "$KEY" ] || { echo "ERROR: no signing key in volume $VOL/config_abuild" >&2; exit 1; }
 echo "signing key: $KEY"

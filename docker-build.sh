@@ -823,6 +823,41 @@ sudo mkdir -p "$WORK/config_abuild"
 sudo chown -R 12345:12345 "$WORK/config_abuild"
 echo "  $WORK/config_abuild now owned by uid 12345 (chroot abuild signing key)"
 
+# THE FLEET-KEY CHECK. The key in this volume is not just what SIGNS packages --
+# pmbootstrap also bakes its public half into the rootfs's /etc/apk/keys, so it
+# decides whether the image that comes out of this build can EVER use the OTA
+# repo. Each machine's volume gets its own key from `abuild-keygen` on first
+# init, and that drift is silent in both directions: v1.14.0/1/2 were all cut on
+# a MacBook whose key was pmos@local-6a93112c, so every Q flashed from them
+# answers `apk update` with UNTRUSTED signature and can never OTA (2026-08-30).
+# Recorded fleet key: pmos/ota-signing-key.rsa.pub. Fix a mismatch with
+# scripts/install-fleet-signing-key.sh (pulls it from 1Password, verifies the
+# private half actually derives the recorded public half, installs it here).
+if [ -f "$SRC/pmos/ota-signing-key.rsa.pub" ]; then
+    _fleet_ok=0
+    for _k in "$WORK"/config_abuild/*.rsa.pub; do
+        [ -e "$_k" ] || continue
+        if sudo cmp -s "$_k" "$SRC/pmos/ota-signing-key.rsa.pub"; then _fleet_ok=1; break; fi
+    done
+    if [ "$_fleet_ok" = "1" ]; then
+        echo "  signing key MATCHES the recorded fleet key -- images from this build can OTA"
+    elif [ "${PUBLIC_RELEASE:-0}" = "1" ]; then
+        # A release image with the wrong key is the exact artifact that bricked
+        # OTA three times. Never ship one by accident.
+        echo "  ERROR: this volume's abuild key is NOT the fleet key, and PUBLIC_RELEASE=1." >&2
+        echo "         An image built here would bake a key no Nexus Q trusts, so every" >&2
+        echo "         apk update on it answers UNTRUSTED signature and OTA is dead." >&2
+        echo "         Fix: scripts/install-fleet-signing-key.sh   (then rebuild)" >&2
+        exit 1
+    else
+        echo "  WARNING: this volume's abuild key is NOT the recorded fleet key." >&2
+        echo "           Fine for a personal build; a RELEASE from here could not OTA." >&2
+        echo "           Run scripts/install-fleet-signing-key.sh before cutting one." >&2
+    fi
+else
+    echo "  WARNING: pmos/ota-signing-key.rsa.pub absent -- cannot check the fleet key" >&2
+fi
+
 # Same EACCES root cause, fourth spot: the shared distfiles cache. abuild-fetch
 # (run inside the buildroot chroot as uid 12345) creates a `<tarball>.lock` file
 # in /var/cache/distfiles (bind-mounted from $WORK/cache_distfiles) before it
