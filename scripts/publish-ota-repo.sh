@@ -40,6 +40,27 @@ echo "signing key: $KEY"
 # baked into their image, so publishing under a key no device holds is a silent
 # outage. Refuse it.
 FLEET_KEY="$REPO_ROOT/pmos/ota-signing-key.rsa.pub"
+if [ ! -f "$FLEET_KEY" ]; then
+    # The guard used to be `if [ -f ]` … with no else, so the ONE check written to
+    # stop key drift did nothing whenever its reference file was absent — and the
+    # file was never committed, so it did nothing always. Found 2026-08-30, when
+    # this Mac (pmos@local-6a93112c) would have happily republished a repo that
+    # every device flashed to trust pmos@local-6a42e957 rejects as UNTRUSTED.
+    # A guard conditional on data nobody supplied is not a guard.
+    cat >&2 <<MSG
+ERROR: pmos/ota-signing-key.rsa.pub is missing, so the fleet-key drift check
+       cannot run — and publishing under the wrong key is a SILENT outage:
+       every device answers "UNTRUSTED signature" and OTA stops dead.
+       Record the fleet's public key first. It is the one baked into the
+       devices' /etc/apk/keys, readable from a running Q:
+           ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub
+       or from an image that boots on the fleet today. Then commit it as
+       pmos/ota-signing-key.rsa.pub so this check has something to compare.
+       Override for a deliberate re-key: FLEET_KEY_OVERRIDE=1
+MSG
+    [ "${FLEET_KEY_OVERRIDE:-0}" = "1" ] || exit 1
+    echo "FLEET_KEY_OVERRIDE=1 set — publishing WITHOUT the drift check" >&2
+fi
 if [ -f "$FLEET_KEY" ]; then
     HOST_KEY=$(docker run --rm -v "$VOL":/w alpine cat "/w/config_abuild/$KEY.rsa.pub")
     if [ "$HOST_KEY" != "$(cat "$FLEET_KEY")" ]; then

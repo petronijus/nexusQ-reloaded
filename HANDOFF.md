@@ -30,6 +30,49 @@ session on 2026-08-28, so it is written down here rather than re-derived.
   and the Q refuses it over OTA, because `/etc/apk/keys` holds the desktop's.
   That direction IS settled.
 
+### 🔴 The OTHER direction, found 2026-08-30 — and it is the one that ships
+
+The note above only covers *packages* built on the Mac. **The IMAGE built on the
+Mac bakes the Mac's key into `/etc/apk/keys`**, and that inverts the problem:
+
+| | key |
+|---|---|
+| baked into the image this Mac builds (verified in v1.14.2's rootfs) | `pmos@local-6a93112c` |
+| the published OTA repo's `APKINDEX.tar.gz` is signed with | `pmos@local-6a42e957` |
+
+They differ, so **a Q freshly flashed from v1.14.0, v1.14.1 or v1.14.2 — all cut
+on the MacBook — cannot OTA at all.** `apk update` answers `UNTRUSTED signature`,
+which is precisely the outage of 2026-08-29, recurring from the opposite side.
+The published images are affected; the two boxes in the field were flashed from
+older, desktop-built images and are believed unaffected, **but that was not
+verified — neither Q was reachable at the time.** Check before assuming:
+
+```sh
+ssh root@<device> ls /etc/apk/keys/          # what the box trusts
+curl -s https://petronijus.github.io/nexusQ-reloaded/nexusq/armv7/APKINDEX.tar.gz \
+  | tar tz | head -1                          # what the repo is signed with
+```
+
+**And the guard written to catch exactly this could never fire.** On 2026-08-29
+`publish-ota-repo.sh` gained a fleet-key drift check — wrapped in
+`if [ -f "$REPO_ROOT/pmos/ota-signing-key.rsa.pub" ]`, with no `else`. That file
+**was never committed**, so the check silently did nothing, always. It now fails
+closed (`FLEET_KEY_OVERRIDE=1` for a deliberate re-key), but the reference file
+still has to be recorded — and recording it is a **fleet-wide decision**, not a
+tidy-up: it declares which key every future image must bake.
+
+The choice, to be made on the desktop where the other key lives:
+
+1. **Build release images on the desktop.** They bake `6a42e957`, matching the
+   published repo. Nothing in the field changes. Simplest, and it restores the
+   invariant the HANDOFF table above already assumes.
+2. **Re-key the fleet** to the Mac's `6a93112c`: publish the repo from the Mac,
+   ship an image baking it, and install it into `/etc/apk/keys` on every box by
+   hand. Only worth it to make the Mac the release machine on purpose.
+
+⚠️ Do **not** simply run `publish-ota-repo.sh` on whichever machine is in front
+of you. That is the whole failure mode.
+
 🔒 **Known weakness, not yet fixed:** the app self-updates, and its signing key is
 a debug keystore whose password is the well-known `android`. The signature
 authenticates nobody — anyone could sign a substitute update. A real keystore
