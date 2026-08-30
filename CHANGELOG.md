@@ -6,6 +6,14 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.14.2] — 2026-08-30 — Spotify Connect survives a DHCP move, and two gates stop lying
+
+Device **r89**. A small release with a common thread: three of the four things
+fixed here were **invisible while broken** — a service that stayed alive and
+listening while the device vanished from the network, a build gate that passed
+because it could not read the files it judges, and another that quietly did not
+run at all.
+
 ### Fixed — two release gates that reported success when they had not looked (2026-08-30)
 - **Section 4 passed when it could not READ the profiles.** The MAC gate added a
   day earlier parses `cloned-mac-address` out of each `*.nmconnection` — files
