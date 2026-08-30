@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=88
+pkgrel=89
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -117,6 +117,7 @@ source="
 	10-nexusq-ntp-by-ip.conf
 	librespot.service
 	librespot-nexusq
+	85-nexusq-zeroconf-rebind
 	shairport-sync.service
 	shairport-nexusq
 	shairport-sync.conf
@@ -460,6 +461,15 @@ package() {
 		"$pkgdir"/etc/asound.conf
 	install -Dm755 "$srcdir"/librespot-nexusq \
 		"$pkgdir"/usr/bin/librespot-nexusq
+	# librespot 0.8.0 takes only an ADDRESS for --zeroconf-interface, captured
+	# once at start, so a DHCP move leaves it announcing on an address that no
+	# longer exists -- alive, listening, and invisible to every Spotify client,
+	# with nothing in the service state to show it (2026-08-30). This dispatcher
+	# re-pins it when wlan0's IPv4 actually changes, and is a no-op on an
+	# ordinary lease renewal. avahi needs none of it: it is bound by interface
+	# NAME, which no address change can invalidate.
+	install -Dm755 "$srcdir"/85-nexusq-zeroconf-rebind \
+		"$pkgdir"/etc/NetworkManager/dispatcher.d/85-nexusq-zeroconf-rebind
 	install -Dm644 "$srcdir"/librespot.service \
 		"$pkgdir"/usr/lib/systemd/user/librespot.service
 	ln -sf ../librespot.service \
@@ -635,6 +645,7 @@ SKIP  nexusq-wifi-watchdog
 SKIP  nexusq-wifi-watchdog.service
 SKIP  librespot.service
 SKIP  librespot-nexusq
+SKIP  85-nexusq-zeroconf-rebind
 SKIP  shairport-sync.service
 SKIP  shairport-nexusq
 SKIP  shairport-sync.conf

@@ -6,6 +6,32 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a service pinned to an IP address it never re-reads (2026-08-30, device **r89**)
+- Moving the cottage Q from a static address to DHCP made it **vanish from
+  Spotify Connect**, and nothing said so. `librespot-nexusq` passes
+  `--zeroconf-interface <wlan0 IPv4>` because librespot 0.8.0 ships only the
+  libmdns backend, which otherwise also advertises the unreachable usb0 gadget
+  IP — and 0.8.0 accepts **only an address** there, never an interface name. So
+  the address is captured once, at start, and never re-read. Afterwards:
+
+  ```
+  libmdns::fsm error sending packet Os { code: 99, kind: AddrNotAvailable }
+  ```
+
+  librespot stayed alive and listening on 37879, so systemd saw a perfectly
+  healthy service while the Q was invisible to every client. A DHCP lease landing
+  on a different address does the same thing.
+- **`85-nexusq-zeroconf-rebind`**, a NetworkManager dispatcher, now compares the
+  live wlan0 IPv4 against the address librespot is *actually* running with, read
+  from its own `/proc` cmdline — reality against reality, no state file to drift
+  — and restarts it only when they genuinely differ. Verified both ways on the
+  device: an address change re-pinned it, and a second `con up` on the **same**
+  address left the pid untouched, so a lease renewal is a no-op.
+- avahi was never affected: it is constrained by interface **name**
+  (`allow-interfaces=`), which no address change can invalidate. The lesson is
+  the narrow one — *pinning to a name survives what pinning to an address does
+  not*, and where an API allows only the address, something has to watch it.
+
 ## [1.14.1] — 2026-08-30 — a stuck USB-audio bridge that cooked the box, and two gates that should have caught it
 
 A bug-fix release, found by picking up a routine idle-OPP measurement and

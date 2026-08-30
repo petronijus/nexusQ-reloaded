@@ -1,0 +1,67 @@
+#!/bin/sh
+# NetworkManager dispatcher: re-pin librespot's zeroconf when wlan0's IPv4 moves.
+#
+# WHY THIS EXISTS
+# librespot 0.8.0 here ships only the libmdns zeroconf backend, which advertises
+# on EVERY interface — including the usb0 gadget IP (172.16.42.1), unreachable
+# from a phone. So librespot-nexusq pins it with `--zeroconf-interface <wlan0
+# IPv4>`, and 0.8.0 accepts only an ADDRESS there ("Comma-separated interface IP
+# addresses"), never an interface name. That address is therefore captured once,
+# at process start, and never re-read.
+#
+# On 2026-08-30 the Q moved from a static 192.168.51.240 to DHCP. librespot kept
+# announcing on the address that no longer existed:
+#
+#   libmdns::fsm error sending packet Os { code: 99, kind: AddrNotAvailable }
+#
+# It stayed alive and listening on 37879, so nothing looked broken — systemd saw
+# a healthy service — but the Q had silently vanished from Spotify Connect on
+# every client. A DHCP lease that lands on a different address does this too, and
+# nothing would report it.
+#
+# WHAT IT DOES
+# Compares the live wlan0 IPv4 against the address librespot is ACTUALLY running
+# with, read out of its own /proc cmdline. Reality against reality: no state file
+# to drift, and a librespot started by hand with a different pin is judged the
+# same way. Restarts it only when the two genuinely differ, so an ordinary DHCP
+# renewal (same address) is a no-op — this must not restart on every lease tick.
+#
+# Restarting cuts an in-flight stream. That is accepted: if wlan0's address just
+# changed, the socket carrying that stream is dead anyway, and being invisible on
+# the network is the worse failure.
+#
+# avahi needs none of this — it is constrained by interface NAME
+# (allow-interfaces=wlan0 in the package post-install), which no address change
+# can invalidate.
+
+IFACE="$1"
+ACTION="$2"
+
+[ "$IFACE" = "wlan0" ] || exit 0
+
+case "$ACTION" in
+	up|dhcp4-change) ;;
+	*) exit 0 ;;
+esac
+
+log() { logger -t nexusq-zeroconf-rebind -- "$*"; }
+
+now=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+[ -n "$now" ] || exit 0          # no address yet: the wrapper's own poll covers it
+
+pid=$(pgrep -x librespot 2>/dev/null | head -1)
+[ -n "$pid" ] || exit 0          # not running: systemd/user will start it pinned correctly
+
+pinned=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null \
+	| grep -A1 -x -- --zeroconf-interface | tail -1)
+[ -n "$pinned" ] || exit 0       # unpinned build: nothing to go stale
+
+[ "$pinned" = "$now" ] && exit 0 # the common case, including every DHCP renewal
+
+log "wlan0 IPv4 $pinned -> $now; librespot's zeroconf is pinned to the old one, restarting it"
+if systemctl --user -M user@ restart librespot 2>/dev/null; then
+	log "librespot restarted, now pinned to $now"
+else
+	log "ERROR: could not restart librespot — Spotify Connect stays invisible"
+	exit 1
+fi
