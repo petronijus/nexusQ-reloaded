@@ -125,8 +125,19 @@ say "=== 4. per-unit network identity ==="
 NMDIR="$MNT/etc/NetworkManager/system-connections"
 if [ -d "$NMDIR" ]; then
     bad_mac=""
+    unreadable=""
     for prof in "$NMDIR"/*.nmconnection; do
         [ -f "$prof" ] || continue
+        # These are mode 600 root-owned, so a non-root run cannot read them --
+        # and an unreadable file yields an EMPTY cloned-mac-address, which the
+        # test below would happily accept as "absent is fine". A gate that
+        # reports PASS precisely when it could not look is worse than no gate;
+        # caught 2026-08-30 on the r89 build, where section 4 printed
+        # "Permission denied" for every profile and passed anyway.
+        if [ ! -r "$prof" ]; then
+            unreadable="$unreadable $(basename "$prof")"
+            continue
+        fi
         val=$(sed -n 's/^cloned-mac-address=//p' "$prof" | head -1)
         # absent is fine (NM's wifi-stable-mac.conf default applies); a literal
         # address is not. `permanent`/`preserve` name the hardware, they do not
@@ -136,7 +147,10 @@ if [ -d "$NMDIR" ]; then
             *) bad_mac="$bad_mac $(basename "$prof")=$val" ;;
         esac
     done
-    if [ -n "$bad_mac" ]; then
+    if [ -n "$unreadable" ]; then
+        bad "no profile pins a literal MAC" \
+            "could not READ:$unreadable — re-run as root; this gate cannot judge what it cannot open"
+    elif [ -n "$bad_mac" ]; then
         bad "no profile pins a literal MAC" "$bad_mac"
     else
         ok "no profile pins a literal MAC" "$(ls "$NMDIR" 2>/dev/null | tr '\n' ' ')"
@@ -165,10 +179,14 @@ say "=== 6. python3 integrity gate ==="
 # The gate takes the .so itself, not a rootfs root — find it inside the image.
 # This is the [[sparse-dontcare-stale-emmc-corrupts-flash]] backstop: a
 # libpython whose zero-regions came back as device garbage SIGSEGVs on boot.
-GATE=scripts/verify-libpython-clean.py
+# Resolved from THIS script's location, not the cwd. As a bare relative path it
+# silently did nothing whenever the script was run from anywhere but the repo
+# root -- and it announced that with `say`, which counts as neither pass nor
+# fail, so the run just quietly had one gate fewer (2026-08-30, r89 build).
+GATE="$(dirname "$0")/verify-libpython-clean.py"
 LIBPY="$(find "$MNT/usr/lib" -maxdepth 1 -name 'libpython3*.so*' -type f 2>/dev/null | head -1)"
 if [ ! -f "$GATE" ]; then
-    say "  (skipped: $GATE not found)"
+    bad "libpython clean" "gate script missing: $GATE"
 elif [ -z "$LIBPY" ]; then
     bad "libpython present" "no libpython3*.so under usr/lib"
 elif python3 "$GATE" "$LIBPY" >/dev/null 2>&1; then

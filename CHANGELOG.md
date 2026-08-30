@@ -6,6 +6,27 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — two release gates that reported success when they had not looked (2026-08-30)
+- **Section 4 passed when it could not READ the profiles.** The MAC gate added a
+  day earlier parses `cloned-mac-address` out of each `*.nmconnection` — files
+  that are mode 600 and root-owned. Run as a non-root user, every `sed` failed
+  with "Permission denied", each value came back **empty**, and empty is the
+  "absent is fine" case: **PASS**. A gate whose entire purpose is catching a
+  pinned MAC returned green precisely when it had been unable to open a single
+  file. An unreadable profile is now a **failure** that names the files and says
+  to re-run as root.
+- **The python3 integrity gate silently did not run.** `GATE` was the bare
+  relative path `scripts/verify-libpython-clean.py`, so it resolved only when the
+  cwd happened to be the repo root; anywhere else it printed a `say` line —
+  neither pass nor fail — and the run quietly had one gate fewer. It now resolves
+  from the script's own location, and a missing gate script is a failure rather
+  than a shrug.
+- Both surfaced on the r89 build, from a run that reported **28 passed** instead
+  of 29 with no failures shown. The r89 verification itself was re-run as root
+  from the repo root and is sound (29/0) — what was broken was the gates' ability
+  to *report* being unable to check, which is the failure mode a release gate
+  exists to prevent.
+
 ### Fixed — a service pinned to an IP address it never re-reads (2026-08-30, device **r89**)
 - Moving the cottage Q from a static address to DHCP made it **vanish from
   Spotify Connect**, and nothing said so. `librespot-nexusq` passes
