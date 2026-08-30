@@ -25,6 +25,19 @@ if [ -z "$APP_VERSION" ]; then
 	exit 1
 fi
 
+# The OTA check compares the `+N` build number, so a version without one leaves
+# the app unable to place itself against the manifest. It fails safe now (no
+# update offered) rather than looping, but a release still has to carry it.
+case "$APP_VERSION" in
+	*+*) ;;
+	*)
+		echo "ERROR: version '$APP_VERSION' has no '+N' build number." >&2
+		echo "       pubspec.yaml must read 'version: X.Y.Z+N' — the +N IS" >&2
+		echo "       Android's versionCode and what the OTA check compares." >&2
+		exit 1
+		;;
+esac
+
 echo "Building companion app v$APP_VERSION (build $BUILD_TAG) $MODE"
 flutter build apk "$MODE" \
 	--dart-define=APP_VERSION="$APP_VERSION" \

@@ -100,7 +100,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (rel == null) {
         _update = null;
         _updateError = 'Update check failed — check your connection.';
-      } else if (rel.versionCode <= AppUpdate.currentVersionCode) {
+      } else if (!AppUpdate.knowsOwnVersion) {
+        // A build with no APP_VERSION cannot compare itself to anything. Saying
+        // so beats offering an update it would install forever (see AppUpdate).
+        _update = null;
+        _updateError = 'This build has no version stamp — build with '
+            'build-apk.sh to enable update checks.';
+      } else if (rel.versionCode <= AppUpdate.currentVersionCode!) {
         _update = null; // genuinely up to date
       } else {
         _update = rel;

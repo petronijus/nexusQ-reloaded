@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.17.2",
-  "versionCode": 49,
-  "notes": "Renaming the Q now updates the name on the home screen right away — it used to keep showing the old one until the app was reinstalled.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.17.2/nexusq-companion-1.17.2.apk",
+  "version": "1.17.3",
+  "versionCode": 50,
+  "notes": "Fixes an endless \"update available\" loop: apks built without a version stamp reported themselves as older than every release, so the app kept offering an update it had already installed.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.17.3/nexusq-companion-1.17.3.apk",
   "minAndroidSdk": 21
 }

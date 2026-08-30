@@ -60,12 +60,30 @@ class AppUpdate {
   static const manifestUrl =
       'https://raw.githubusercontent.com/petronijus/nexusQ-reloaded/main/companion/app-release.json';
 
-  /// This build's Android versionCode = the `+N` in kAppVersion ("1.8.0+17").
-  static int get currentVersionCode {
+  /// This build's Android versionCode = the `+N` in kAppVersion ("1.8.0+17"),
+  /// or **null when this build does not know its own version**.
+  ///
+  /// [kAppVersion] comes from `--dart-define=APP_VERSION`, which `build-apk.sh`
+  /// fills from pubspec — but a plain `flutter build apk` leaves it at its
+  /// `'dev'` default, and both published 1.17.1 and 1.17.2 apks were cut that
+  /// way. This used to return **0** for that case, which does not mean "unknown",
+  /// it means "older than everything": the manifest's versionCode was forever
+  /// greater, so the app offered an update to the very build it was already
+  /// running, installed it, and offered it again — an endless loop that no
+  /// amount of updating could clear (2026-08-30, seen on the phone as
+  /// "App update available — App v1.17.2" on an installed 1.17.2+49).
+  ///
+  /// Not knowing your version is not the same as being out of date. Unknown now
+  /// suppresses the update offer instead of guaranteeing it: the worst case is a
+  /// hand-built apk that never nags, rather than one that nags forever.
+  static int? get currentVersionCode {
     final plus = kAppVersion.indexOf('+');
-    if (plus < 0) return 0;
-    return int.tryParse(kAppVersion.substring(plus + 1)) ?? 0;
+    if (plus < 0) return null;
+    return int.tryParse(kAppVersion.substring(plus + 1));
   }
+
+  /// True when this build can be compared against the manifest at all.
+  static bool get knowsOwnVersion => currentVersionCode != null;
 
   /// Fetch the manifest. Returns the release, or null on any failure (offline,
   /// malformed) — an update check must never throw into the UI.
@@ -102,9 +120,16 @@ class AppUpdate {
   static Future<AppRelease?> checkForUpdate() async {
     final rel = await fetchLatest();
     if (rel == null) return null;
-    if (rel.versionCode <= currentVersionCode) {
+    final mine = currentVersionCode;
+    if (mine == null) {
       AppLog.add('update',
-          'up to date (installed $currentVersionCode, latest ${rel.versionCode})');
+          'build does not know its own version (APP_VERSION="$kAppVersion") — '
+          'not offering ${rel.versionCode}; build with build-apk.sh');
+      return null;
+    }
+    if (rel.versionCode <= mine) {
+      AppLog.add(
+          'update', 'up to date (installed $mine, latest ${rel.versionCode})');
       return null;
     }
     AppLog.add('update',
