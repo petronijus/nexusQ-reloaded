@@ -241,8 +241,9 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > paths that only compile when the build enables them.
 > **Done:** `pmos/speexdsp/APKBUILD` (`1.2.1-r100`, `--enable-neon`), wired into
 > `docker-build.sh` validation + the pmaports copy + the dos2unix sweep + a new
-> **Phase 7c6** that must run before Phase 8, `publish-ota-repo.sh`
-> `OTA_PACKAGES`, and a **Phase 10 SHIP CHECK** that reports whether the rootfs
+> **Phase 7c6** that must run before Phase 8, the OTA publish set (that list moved
+> out of `publish-ota-repo.sh` into `pmos/ota-packages.list` on 2026-08-30, so the
+> release parity gate reads the same set), and a **Phase 10 SHIP CHECK** that reports whether the rootfs
 > actually got our `-r100` or fell back to Alpine's `-r2`. Two build gates stop a
 > silently-scalar rebuild: `#define USE_NEON` in `config.h`, and
 > `Tag_Advanced_SIMD_arch` on the linked `.so`.
@@ -790,6 +791,24 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 >   with USB Audio live**, i.e. *better than the USB-off baseline below*.
 >   `docs/2026-08-24-usb-audio-idle-cost.md`. **A "USB Audio off" idle number is
 >   no longer a sufficient result.**
+>
+> - ⚠️⚠️ **And there is a THIRD regime, worse than either: host attached but
+>   NOT streaming.** Added 2026-08-30. It is the normal state of the TV box —
+>   powered on, not playing — so it is what the Q sits in most of the time, and
+>   both figures above are blind to it. Two costs were found there:
+>   - the r88 **park probe**: `alsaloop` restarted for ~3 s every 30 s to check
+>     whether the host was back, which ran 9.0 % of wall time at **77.3 %
+>     @ 1200 MHz** — **99 % of ALL time above 350 MHz was the probe**, for
+>     1.13× → **1.54×** relative dynamic power, permanently. Fixed in **r90** by
+>     reading the gadget's own `Capture Rate` control instead of starting a
+>     bridge to find out: **85.40 % → 90.40 % @ 350 MHz, 1200 MHz 7.05 % →
+>     0.17 %, 1.54× → 1.21×**.
+>   - before that, the same regime is what wedged the box for **29 h at 0.1 %
+>     @ 350 MHz, die 90.6 °C peak** (r88's own bug report; independently
+>     re-found from HA history on 08-30).
+>   `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
+>   **So the honest idle number is now measured in three states: USB off, USB on
+>   and playing, and USB on and idle.** The last one was invisible for weeks.
 >
 > - **Baseline to beat: 90.8 % @ 350 MHz** (device r76 / nexusqd r13 / kernel
 >   r48, **overnight passive HA window 2026-08-19**, 8 h idle — up from 70.7 %

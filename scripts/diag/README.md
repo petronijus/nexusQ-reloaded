@@ -245,20 +245,46 @@ and mix into the default PulseAudio sink (TAS5713); Roon (`roon.service`) + **US
 (`nexusq-uac2-in.service`, the Q as a UAC2 USB DAC — kernel r46
 `CONFIG_USB_CONFIGFS_F_UAC2`) are **default-OFF**, so an inactive one is **normal, not a
 `failed_unit`**.
-⚠️ **USB Audio is EXCLUSIVE and bypasses PulseAudio (rewritten 2026-08-09, device r65).**
-When USB Audio is ON, the healthy tells are DIFFERENT from the other inputs: the
-`UAC2Gadget` ALSA capture card is present, an **`alsaloop` process is running**
-(`hw:UAC2Gadget` → `hw:NexusQSpeaker`, `--sync=simple`), and **PulseAudio's tas5713
-sink is SUSPENDED** — that suspended sink is **NORMAL while USB audio is on, NOT a
-fault** (alsaloop owns the TAS5713 card directly; PA is handed back on stop). Volume is
-driven via the TAS5713 **hardware** mixer (`amixer` Master/Speaker via `nq-vol`), not
-PA. `alsaloop` sits at **~0 %** CPU; die temp is **76–79 °C** with USB audio playing.
+⚠️ **USB Audio runs THROUGH PulseAudio over a stable-clock snd-aloop hop** *(was
+EXCLUSIVE and PA-bypassing in the r65 rewrite of 2026-08-09; changed 2026-08-12,
+device r70)*. Healthy tells when it is ON **and the host is streaming**: the
+`UAC2Gadget` capture card is present, an **`alsaloop` process is running**
+(`hw:UAC2Gadget` → `hw:Loopback,0,0`, `--sync=simple`), PA carries a source **`usb_in`**
+plus a `module-loopback` into the default sink, and the tas5713 sink is **RUNNING** —
+a SUSPENDED tas5713 sink is **no longer** the expected state. Volume is the ordinary
+unified PA volume and the LED visualizer **does** react to USB playback (both were the
+point of the hop; the old "visualizer is blind to USB audio" note is retired).
+`alsaloop` sits at **~0 %** CPU; die temp is **76–79 °C** with USB audio playing.
+⚠️ **A PARKED bridge is normal, not a fault (device r88 → r90, 2026-08-30).** With the
+USB host attached but not streaming, `nexusq-uac2-in` stops `alsaloop` altogether:
+`systemctl is-active` says **active** with **no `alsaloop` process** and no `usb_in`
+source. Do not read that as a dead service. Ground truth for *is the host streaming*,
+read off the gadget card itself:
+
+```sh
+amixer -c UAC2Gadget controls | grep 'Capture Rate'   # numid=4,iface=PCM,name='Capture Rate'
+amixer -c UAC2Gadget cget numid=<N>                   # values=0 -> host is NOT streaming
+```
+
+The control is `iface=PCM`, **not** MIXER — `cget name='Capture Rate'` returns nothing,
+which is why it was missed for months — and it tracks the **host's** alt-setting, so it
+reads 0 even while we hold the PCM open. Parked, the service polls it every 4th 3 s tick
+(12 s) instead of duty-cycling an `alsaloop` probe every 30 s, which cost **99 % of all
+time above 350 MHz** while idle (350 MHz residency 85.40 → **90.40 %**, 1200 MHz 7.05 →
+**0.17 %**, relative dynamic power 1.54× → **1.21×**). It still probes deliberately when
+it parked from a *wedge* (rate non-zero, input frozen), and falls back to the old probe —
+announced loudly at startup — on a kernel without the control. Journal lines to expect:
+`host stream is closed; polling the rate flag every 12s` and
+`host started streaming at <rate> Hz`.
+⚠️ **The 28 h spin (fixed in r88, 2026-08-30).** A host that stops sending *without*
+closing the stream leaves the gadget substream at `state: RUNNING` with `hw_ptr` frozen;
+`alsaloop` then spun at 19–25 % of a core, holding 1200 MHz and ~78 °C for a day and a
+half while `kill -0` supervision called it healthy. Tell: 350 MHz residency near 0 with
+nothing playing. `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
 ✅ **The old PA-bridge bugs are FIXED here** — the multi-minute playback drift (bogus
 `module-alsa-source` latency poisoning `module-loopback`) and the idle CPU/heat burn
-(never-corked loopback sink-input) are gone with the direct-alsaloop rewrite; do NOT
-re-flag them. **Note:** the nexusqd LED music visualizer taps the PA source, so it does
-**not** react to USB-audio playback (a known minor limitation, not a fault). See
-`docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
+(never-corked loopback sink-input) are gone since the alsaloop bridge; do NOT re-flag
+them. See `docs/2026-08-08-usb-audio-playback-delay-and-ota-publish.md`.
 The Q has **no optical/HDMI/line input** — every port is an OUTPUT.
 
 ## Finding kinds (from `nq-health-report`)

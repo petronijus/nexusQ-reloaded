@@ -133,8 +133,11 @@ Findings are tagged by `kind`; interpret them like this:
   `onboard` / `blueman-applet` / `sleep-inhibitor.service` / `gdb`. **Fixed in v1.6.0
   (2026-06-28)** by the byte-exact **all-RAW `raw2simg.py`** flash — the old `DONT_CARE`
   blocks left STALE eMMC data on the non-erasing U-Boot, re-corrupting a *clean*
-  libpython on reflash. (v1.6.0 ships a plain default-linker python3 rebuild + a
-  build-integrity gate as a safety net; a gold-linker workaround was tried and dropped as
+  libpython on reflash. (v1.6.0 shipped a local default-linker python3 rebuild as a
+  safety net; that override was **RETIRED 2026-08-17** — Alpine moved to 3.14.7 and apk
+  compares `pkgver` before `pkgrel`, so it had silently gone inert — and the image now
+  ships **stock `python3 3.14.7-r0`**, gated at build time by
+  `scripts/verify-libpython-clean.py`. A gold-linker workaround was tried and dropped as
   unnecessary.) Confirm on device with `python3 -S -c ''; echo rc=$?` — rc 139 = a
   pre-v1.6.0 corrupt python is flashed (needs a v1.6.0 all-RAW image), rc 0 = fixed. See
   `docs/2026-06-28-session-findings.md`.
@@ -150,12 +153,14 @@ Findings are tagged by `kind`; interpret them like this:
   right after a System update is expected. See
   `docs/2026-08-02-device-ota-and-wifi-nogw-heal.md` +
   `docs/2026-08-02-full-system-ota-and-glibc-rt-split.md`.
-  ⚠️ **KNOWN OPEN (2026-08-08): a System OTA reports "system update failed" even though
-  the packages installed.** `apk fix -s` shows a **persistent pending
-  `postmarketos-mkinitfs` trigger** (`1 error`, re-fails every apk run): `boot-deploy`
-  can't find a kernel in `/boot` (empty plain dir on this ramdisk-less device — kernel
-  is in the flashed boot partition). Verify with `apk info` (packages committed); don't
-  read it as a broken update. NOT fixed, Phase-2 territory. See
+  ✅ **FIXED later the same day (2026-08-08, Option A; re-verified live 2026-08-10) — do
+  NOT re-flag.** A System OTA used to report "system update failed" even though the
+  packages installed: `apk fix -s` showed a **persistent pending `postmarketos-mkinitfs`
+  trigger** (`1 error`, re-failing on every apk run) because `boot-deploy` found no kernel
+  in `/boot` — an empty plain dir on this ramdisk-less device. The fix keeps the kernel
+  payload (vmlinuz + dtbs) in `/boot` so the trigger no-ops; `docker-build.sh` ships a
+  populated `/boot`. If a pending mkinitfs trigger ever reappears, that `/boot` payload
+  has been stripped again — do not re-introduce the strip. See
   `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 - **nexusqd_down / nexusqd_restart / librespot_restart** — service died or
   flapped; check the `nexusqd recent journal` section of `snapshot.txt`.

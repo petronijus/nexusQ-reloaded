@@ -218,11 +218,29 @@ start_silence
 #   input advancing + XRUN persists  -> a genuinely stuck loop, restart alsaloop
 #   input frozen                     -> the host is gone; PARK alsaloop entirely
 #
-# Parked, we cannot watch `hw_ptr` any more (with nothing holding the substream it
-# reads `closed`), and the gadget exposes no "host is streaming" flag — its configfs
-# attributes are all static. So the parked state duty-cycles a probe instead:
-# briefly run alsaloop every PARK_RETRY_S and keep it only if input moves. That
-# trades the 46 %-of-a-core spin for roughly 2 s of work every 30 s.
+# Parked, we cannot watch `hw_ptr` any more — with nothing holding the substream it
+# reads `closed`. The first version of this concluded the gadget exposes no "host is
+# streaming" flag (its configfs attributes are indeed all static) and duty-cycled a
+# probe: briefly run alsaloop every PARK_RETRY_S and keep it only if input moved.
+#
+# It does expose one. u_audio registers a read-only ALSA control on the gadget card,
+# `iface=PCM,name='Capture Rate'`, which reports the sample rate the HOST has
+# selected and reads 0 while the host is not streaming. Measured 2026-08-30 across
+# two probe cycles on the Prague unit: it stayed 0 throughout, INCLUDING while the
+# probe held the PCM open — so it tracks the host's alt-setting, not our open, which
+# is exactly the signal the park state needs and cannot be faked by our own activity.
+#
+# That matters because the probe was not cheap. Measured over 300 s, 1 Hz, detached:
+# it ran 9.0 % of wall time, and inside those windows the MPU sat at 1200 MHz 77.3 %
+# of the time against 0.1 % while parked. 99 % of ALL time above 350 MHz was the
+# probe looking for a host that was not there — 350 MHz residency 93.7 % parked vs
+# 85.4 % overall, relative dynamic power 1.13x -> 1.54x, die +5.7 C, paid around the
+# clock for as long as the TV box is powered on and not playing.
+#
+# So the park state now READS the flag every tick instead of spawning anything. The
+# duty-cycled probe remains as a fallback for a kernel without the control, because
+# a silent fallback to "never unpark" would lose USB audio altogether — it is
+# announced once, loudly, so it cannot masquerade as the cheap path.
 GADGET_STATUS="/proc/asound/$CARD/pcm0c/sub$SUB/status"
 ALOOP_STATUS="/proc/asound/$ALOOP/pcm0p/sub$SUB/status"
 XRUN_TICKS=0
@@ -230,12 +248,76 @@ XRUN_CONFIRM="${NQ_UAC2_XRUN_CONFIRM:-3}"
 IDLE_TICKS=0
 IDLE_CONFIRM="${NQ_UAC2_IDLE_CONFIRM:-4}"      # ~12 s of no input before parking
 PARK_RETRY_S="${NQ_UAC2_PARK_RETRY_S:-30}"
+PARK_POLL_TICKS="${NQ_UAC2_PARK_POLL_TICKS:-4}"  # poll the rate flag every Nth 3 s tick
 PROBE_S="${NQ_UAC2_PROBE_S:-2}"
 PARKED=0
 PARK_WAIT=0
+PARK_POLL=0
+PARK_RATE=0        # host sample rate observed when we parked (see the park branch)
 LAST_HW=""
 
 hw_ptr() { sed -n 's/^hw_ptr *: *//p' "$GADGET_STATUS" 2>/dev/null; }
+
+# Resolve `Capture Rate` by NAME once — numid is an allocation order, not an API,
+# and hardcoding 4 would silently read a different control if the gadget ever
+# registers another one first. Empty RATE_NUMID means "no such control": the park
+# state falls back to the old probe.
+RATE_NUMID="$(amixer -c "$CARD" controls 2>/dev/null \
+    | sed -n "s/^numid=\([0-9]*\),iface=PCM,name='Capture Rate'$/\1/p" | head -1)"
+if [ -n "$RATE_NUMID" ]; then
+    echo "nexusq-uac2-in: host-streaming flag is control numid=$RATE_NUMID" \
+         "('Capture Rate' on $CARD) — parking will poll it instead of probing" >&2
+else
+    echo "nexusq-uac2-in: WARNING no 'Capture Rate' control on $CARD — falling back" \
+         "to the alsaloop probe every ${PARK_RETRY_S}s, which costs about 8 pp of" \
+         "350 MHz residency while the host is idle" >&2
+fi
+
+# 0 (or empty) = the host is not streaming. The READ is one ioctl — but reaching
+# it costs a fork, and on this SoC a fork is never free.
+#
+# ⚠️ MEASURED, do not make this more eager. `amixer cget` costs 19.5 ms of CPU at
+# 1200 MHz (100 invocations, 1.95 s CPU) — about 67 ms at 350 MHz, where this
+# service actually lives, which makes it MORE expensive than the `pactl` call the
+# comment above warns about (51 ms by the same measurement). Polled every 3 s tick
+# it would burn ~2.2 % of a core forever, and each ~67 ms burst is itself a run
+# well past the 16 ms that makes `conservative` ramp — trading a 1200 MHz probe
+# for a permanent 700 MHz nudge is not a win.
+#
+# So the park state polls it every PARK_POLL_TICKS-th tick: 12 s by default, for
+# ~0.55 % of a core, still 2.5x quicker to wake than the 30 s probe it replaces.
+#
+# The zero-cost version would be `alsactl monitor`, one long-lived process woken by
+# the control-change notification instead of asking. NOT taken here because whether
+# u_audio actually emits a notification on this control was not verified on the
+# device, and a monitor that never fires does not degrade — USB audio would simply
+# never come back. Worth doing as a primary with this poll kept as the backstop.
+capture_rate() {
+    [ -n "$RATE_NUMID" ] || return 1
+    amixer -c "$CARD" cget "numid=$RATE_NUMID" 2>/dev/null \
+        | sed -n 's/^  : values=//p' | head -1
+}
+
+# TESTABLE:park_action — kept pure (arguments in, one word out, no side effects)
+# so the decision table can be tested off-device; the tests extract exactly this
+# block. $1 = rate observed when we parked, $2 = rate now.
+#
+#   park_rate 0     -> the host had CLOSED the stream. Any rate means it is back.
+#   park_rate != 0  -> we parked mid-stream, i.e. the host claimed to be sending
+#                      and was not: the wedge. The flag cannot distinguish wedged
+#                      from playing at the same rate, so only a transition through
+#                      0 is trustworthy and everything else must be MEASURED.
+#
+# Getting this wrong is not a small bug: treating "non-zero" as "wake up" while
+# parked from a wedge unparks, finds input still frozen, re-parks 12 s later and
+# repeats forever — a flap that costs more than the probe it replaced.
+park_action() {
+	if [ "$1" = 0 ]; then
+		[ "$2" = 0 ] && echo stay || echo unpark
+	else
+		[ "$2" = 0 ] && echo closed || echo probe
+	fi
+}
 
 # Supervise both children: if alsaloop drops on its own (host stop/start, xrun)
 # restart just it — the PA modules stay loaded and the aloop capture underruns
@@ -253,7 +335,48 @@ while : ; do
 	fi
 
 	if [ "$PARKED" = 1 ]; then
-		# Duty-cycled probe: is the host sending again?
+		# Ask the gadget whether the HOST is streaming — reading a flag instead
+		# of starting a bridge to see whether one would have anything to carry.
+		# Unparking also gets FASTER than the old 30 s retry: up to 30 s of a
+		# track used to be missed, now at most PARK_POLL_TICKS x 3 s = 12 s.
+		#
+		# Which answer means "wake up" depends on WHY we parked, and conflating
+		# the two would turn the 28 h wedge into a flapping loop: parked with the
+		# host still claiming 48000 Hz, a bare "rate is non-zero -> unpark" would
+		# unpark, find input still frozen, re-park 12 s later, and repeat forever.
+		if [ -n "$RATE_NUMID" ]; then
+			# Thinned to one fork per PARK_POLL_TICKS ticks — see capture_rate.
+			PARK_POLL=$((PARK_POLL + 1))
+			if [ "$PARK_POLL" -lt "$PARK_POLL_TICKS" ]; then
+				ensure_modules
+				continue
+			fi
+			PARK_POLL=0
+			_r=$(capture_rate); _r=${_r:-0}
+			case "$(park_action "$PARK_RATE" "$_r")" in
+			stay)
+				ensure_modules
+				continue ;;
+			unpark)
+				echo "nexusq-uac2-in: host started streaming at ${_r} Hz" \
+				     "— USB audio live again" >&2
+				start_alsaloop
+				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW=""
+				ensure_modules
+				continue ;;
+			closed)
+				# The wedge resolved itself: the host let go of the stream, so
+				# the cheap flag is trustworthy again from here on.
+				echo "nexusq-uac2-in: host closed the stream (was $PARK_RATE Hz)" \
+				     "— polling the flag instead of probing" >&2
+				PARK_RATE=0
+				ensure_modules
+				continue ;;
+			esac
+			# probe: fall through and MEASURE, because asking cannot answer.
+		fi
+
+		# Ambiguous or no control: duty-cycled probe, as before.
 		PARK_WAIT=$((PARK_WAIT + 3))
 		if [ "$PARK_WAIT" -ge "$PARK_RETRY_S" ]; then
 			PARK_WAIT=0
@@ -289,14 +412,30 @@ while : ; do
 	if [ -n "$ALPID" ] && kill -0 "$ALPID" 2>/dev/null && [ "$INPUT_MOVING" = 0 ]; then
 		IDLE_TICKS=$((IDLE_TICKS + 1))
 		if [ "$IDLE_TICKS" -ge "$IDLE_CONFIRM" ]; then
-			echo "nexusq-uac2-in: no input from the USB host for" \
-			     "$((IDLE_TICKS * 3)) s (hw_ptr parked at $NOW_HW," \
-			     "stream still open) — stopping alsaloop instead of" \
-			     "letting it spin; probing every ${PARK_RETRY_S}s" >&2
 			kill "$ALPID" 2>/dev/null
 			wait "$ALPID" 2>/dev/null
 			ALPID=""
-			PARKED=1; PARK_WAIT=0; IDLE_TICKS=0; XRUN_TICKS=0
+			PARKED=1; PARK_WAIT=0; PARK_POLL=0; IDLE_TICKS=0; XRUN_TICKS=0
+			# Why we parked, in the gadget's own terms: 0 = the host closed
+			# the stream (cheap flag poll suffices), non-zero = it still
+			# claims to stream but sends nothing (the wedge — needs probing).
+			# Read AFTER alsaloop is gone, so the answer describes the host
+			# rather than anything we were still holding open.
+			_pr=$(capture_rate); PARK_RATE=${_pr:-0}
+			# Say which of the two we are in — they cost very different
+			# amounts, and "probing every 30s" printed while actually polling
+			# a flag sent the next reader looking for the wrong thing.
+			if [ -z "$RATE_NUMID" ]; then
+				_how="probing every ${PARK_RETRY_S}s"
+			elif [ "$PARK_RATE" = 0 ]; then
+				_how="host stream is closed; polling the rate flag every $((PARK_POLL_TICKS * 3))s"
+			else
+				_how="host still claims ${PARK_RATE} Hz, so probing every ${PARK_RETRY_S}s"
+			fi
+			echo "nexusq-uac2-in: no input from the USB host for" \
+			     "$((IDLE_CONFIRM * 3)) s (hw_ptr parked at $NOW_HW," \
+			     "stream still open) — stopping alsaloop instead of" \
+			     "letting it spin; $_how" >&2
 			ensure_modules
 			continue
 		fi
