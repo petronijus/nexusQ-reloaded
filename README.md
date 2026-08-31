@@ -5,7 +5,7 @@
 ### Google's glowing orb from 2012 — reborn on **mainline Linux**.
 
 [![release](https://img.shields.io/github/v/release/petronijus/nexusQ-reloaded?sort=semver&color=8957e5&label=release)](https://github.com/petronijus/nexusQ-reloaded/releases)
-[![kernel](https://img.shields.io/badge/kernel-Linux%206.12%20LTS-orange)](kernel/)
+[![kernel](https://img.shields.io/badge/kernel-Linux%206.18%20LTS-orange)](kernel/)
 [![postmarketOS](https://img.shields.io/badge/OS-postmarketOS%20·%20systemd-008b8b)](https://postmarketos.org)
 [![arch](https://img.shields.io/badge/SoC-OMAP4460%20·%20armv7%20·%20dual%20Cortex--A9-informational)](#-hardware)
 [![unbrickable](https://img.shields.io/badge/unbrickable-✓-brightgreen)](INSTALL.md)
@@ -33,7 +33,7 @@ a TI OMAP4460, a 25&nbsp;W amplifier, a ring of 32 RGB LEDs, and an Android buil
 that did almost nothing. Google cancelled it before it ever really shipped.
 
 **Nexus Q Reloaded** throws away the Android stack and boots a **mainline Linux
-6.12 LTS** kernel under **postmarketOS** — reverse-engineering the factory kernel
+6.18 LTS** kernel under **postmarketOS** — reverse-engineering the factory kernel
 where mainline fell short, and bringing the orb back as something genuinely useful.
 
 > It plays music. It glows in time. It runs `python3`, `ssh`, and a desktop. On a
@@ -49,7 +49,7 @@ notes in [`docs/`](docs/).
 
 | Subsystem | Status | Notes |
 |---|:---:|---|
-| 🐧 **Boot** — mainline 6.12 + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; boot log genuinely clean (`dmesg` err/warn empty) · v1.6.10 |
+| 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; boot log genuinely clean (`dmesg` err/warn empty). Moved 6.12.12 → 6.18.48 in v1.15.0; upstream-supported to Dec 2028 |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; an idle box sits at 350 MHz ~90 % of the time even with a USB host attached and not playing · device r90 (2026-08-30) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
@@ -165,7 +165,7 @@ One command, fully dockerized (pmbootstrap under the hood):
 ./docker-build.sh        # → output/boot.img + output/google-steelhead.img
 ```
 
-It builds the kernel (mainline 6.12.12 + **46 patches** in `kernel/patches/`), the
+It builds the kernel (mainline 6.18.48 + **44 patches** in `kernel/patches/`), the
 device daemons (`nexusqd` · `nexusq-control` ·
 `nexusq-btagent` · `nexusq-setupd` · `nexusq-mqtt`), and a full systemd rootfs, then repacks a
 ramdisk-less boot image and verifies the result by **mounting** it. Build notes and

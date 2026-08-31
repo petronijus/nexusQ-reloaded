@@ -8,83 +8,38 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Desktop (petronijus-PC) — 2026-08-31 evening: v1.15.0 is a DRAFT, two steps left
+## Desktop (petronijus-PC) — 2026-08-31: v1.15.0 SHIPPED
 
-Session was restarted here. **A background task that was waiting for the perf
-study died with it** — the study itself survives (it was started `setsid nohup`),
-but nothing will collect it. Pick these up in order.
+Both steps this section used to list are done, so it is trimmed to what is still
+live. **v1.15.0 is published** (mainline 6.18 LTS, cross-native build), the
+cross-native kernel **booted** on the Prague Q, and the `k618b` perf study came
+back clean — no regression, and the earlier "regression" turned out to be the
+collector's own ssh polling. Full record:
+`docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
 
-### State right now
+**Still open, and none of it is a blocker for what shipped:**
 
-- **v1.15.0 is built, packaged, gated and uploaded — but it is a GitHub DRAFT.**
-  All three assets are attached (boot 6 713 344 B, rootfs .zst 661 977 028 B,
-  sha256sums). 13/13 release gates passed. It became a draft by accident (a
-  `gh release create` upload timed out), and that accident is *useful*: it puts
-  the boot test before publication instead of after.
-- `main` is pushed and carries everything: the 6.18 bump, the kernel-OTA rollback
-  fix, and the full cross-native build.
-- The Prague Q at **192.168.20.246** runs 6.18.48-r0 — but the **qemu-built**
-  kernel, because staging picked the newest apk in the volume and that was build B.
-  The **release image contains the cross-native build**, which has never booted.
-  That is the gap the boot test closes.
-- ⚠️ **`172.16.42.1` is the Lumia, not the Q.** `nqctl` auto-mode tries USB before
-  WiFi and calls the Q unreachable when OPNsense is down. `hostname` first, always.
+- **Ethernet after a cold power-cycle is unverified on 6.18.** Patches
+  0006/0008/0012 exist for exactly that path and it only proves itself cold, with
+  a cable. HDMI, fastboot-over-ssh (0044), USB-host re-probe and USB Audio are
+  likewise unexercised.
+- **The kernel-OTA rollback fix was seen failing, not seen working.** It needs the
+  next kernel OTA cycle to prove itself.
+- **The app cannot offer a kernel update.** `checkSystemUpdate` filters the kernel
+  out — correctly, since apk must never apply one — so a kernel reaches a device
+  only via `nq-kernel-ota` over ssh. A proper fix gives the kernel its own track.
+  Rationale and consequence are written into `nexusq-control` at `_KERNEL_PKG`.
+- **Šumperák** still trusts a different signing key and cannot OTA at all.
 
-### 1. Collect the perf study (do this first, it is time-sensitive)
+**Two live traps worth keeping in front of anyone touching this:**
 
-Arm `k618b` was started at device uptime 9156 s: `ARM_S=7200`, `SETTLE_S=180`, so
-it ends around **uptime 16 536 s** and writes `/tmp/study2.done` when it exits.
-Results land in `/var/log/nq-opp-study2-k618b/`.
-
-```sh
-ssh root@192.168.20.246 'cat /tmp/study2.done; tail -5 /var/log/nq-opp-study2-k618b/run.log'
-scp root@192.168.20.246:/var/log/nq-opp-study2-k618b/* nq-captures/opp-k618b/
-```
-
-**Do not poll the device while an arm is running.** The first study (`k618`) was
-invalidated exactly that way: the collector ssh'd in once a minute for 50 minutes,
-53 logins inside the measurement window, and the memory note for this method says
-in as many words *run detached and fetch once*.
-
-Compare against the archived **old-kernel** runs on the device,
-`/var/log/nq-opp-study2-allon2` and `-allon3`, which used the same arm shape.
-Price the OPP mix by V²f, never by CPU time: 700 MHz = 2.75x, 920 MHz = 4.34x,
-**1200 MHz = 6.21x** the cost of 350 MHz. And note the two old runs disagree with
-each other by 1.20x, so treat anything inside that spread as noise.
-
-### 2. Boot the cross-native kernel, then publish
-
-The kernel apk rebuilt cross-native sits in the build volume (16:22). Verify which
-build an image carries by decompressing its LZMA payload and reading the banner:
-`armv7-alpine-linux-musleabihf-gcc` = cross-native, plain `cc` = qemu.
-
-```sh
-docker run --rm -v nexusq-workdir:/w -v /tmp/k:/out alpine sh -c \
-  'cp /w/packages/edge/armv7/linux-google-steelhead-6.18.48-r0.apk /out/'
-scp /tmp/k/linux-google-steelhead-6.18.48-r0.apk root@192.168.20.246:/tmp/
-ssh root@192.168.20.246 'nq-kernel-ota stage-apk /tmp/linux-google-steelhead-6.18.48-r0.apk'
-ssh root@192.168.20.246 'NQ_KOTA_YES=1 nq-kernel-ota try'
-```
-
-⚠️ **A trial boot cannot be undone remotely.** Stock u-boot has no bootcount and
-does not fall back: if it does not boot, the Q stops at the bootloader and needs
-hands on it. Do it with the device in reach. Slot A and
-`/var/lib/nexusq-kernel-ota/slot-a-backup.img` are untouched either way.
-
-Then the full `nexusq-diag` sweep, and only then:
-
-```sh
-gh release edit v1.15.0 --draft=false
-```
-
-### 3. Still unverified on 6.18 — say so, do not quietly tick it off
-
-**Ethernet after a cold power-cycle** (patches 0006/0008/0012 exist for it and it
-only proves itself cold), HDMI, fastboot-over-ssh (0044), USB-host re-probe, USB
-Audio latency. Also: the kernel-OTA rollback fix was **seen failing, not seen
-working** — it needs the next OTA cycle.
-
----
+- 🚨 **`172.16.42.1` is the Lumia, not the Q.** Both projects share the USB-gadget
+  subnet, and `nqctl` auto-mode tries USB *before* WiFi. It also reports the Q
+  unreachable when OPNsense is down, because it resolves the WiFi lease through
+  it. `hostname` first, always. The Q lives at **192.168.20.246**.
+- 🚨 **One build at a time on `nexusq-workdir`, across all sessions.** A second
+  build zaps the first one's chroots mid-compile and the victim sees a *fake
+  toolchain error*. `docker ps` before starting anything.
 
 ## Desktop (petronijus-PC) — 2026-08-31: the 6.18 kernel rebase is done but UNBUILT
 

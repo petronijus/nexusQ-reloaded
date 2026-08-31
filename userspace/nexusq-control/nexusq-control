@@ -1339,10 +1339,26 @@ def install_nexus_update():
 # The DEVICE track above upgrades only our four daemons. The SYSTEM track here is
 # the "apt upgrade" of the whole appliance: every package with a newer candidate
 # (base musl/systemd/python from the Alpine·pmOS mirrors + our config + daemons
-# from the OTA repo). The KERNEL (linux-google-steelhead) is never touched — no
-# repo the device reads offers a newer one, and applying a kernel is a
-# boot-partition flash (phase 2), not an apk upgrade. `apk version -l '<'` reports
-# what is upgradable; the running kernel is shown read-only.
+# from the OTA repo). The KERNEL (linux-google-steelhead) is never touched — but
+# ⚠️ NOT for the reason this comment used to give. It said "no repo the device
+# reads offers a newer one", and that has been false since 2026-08-18: the OTA
+# repo publishes the kernel as nq-kernel-ota's payload source, and as of
+# 2026-08-31 it serves 6.18.48-r0. (The `--ignore` further down always knew this;
+# this docstring simply went stale and contradicted it.)
+#
+# The real reason is stronger and unchanged: **apk must never apply a kernel.**
+# It would install /boot and /lib/modules while writing NOTHING to the boot
+# partition, and delete the running kernel's modules on the way — no cfg80211,
+# no WiFi, no way back in. Kernels are applied by nq-kernel-ota, which writes the
+# trial slot and health-gates the promotion. `apk version -l '<'` reports what is
+# upgradable; the running kernel is shown read-only.
+#
+# CONSEQUENCE, worth fixing one day: because the kernel is filtered out of
+# checkSystemUpdate entirely, the app can never OFFER a kernel update, so a
+# kernel reaches a device only by someone running nq-kernel-ota over ssh. A
+# proper fix reports the kernel as its own track and routes install through
+# nq-kernel-ota, with the "a trial boot cannot be undone remotely" warning
+# surfaced in the UI.
 _KERNEL_PKG = "linux-google-steelhead"
 # Base packages whose upgrade only fully takes effect after a reboot (libc/init).
 _REBOOT_HINTS = ("musl", "systemd", "kmod", "eudev", "busybox", "openrc")

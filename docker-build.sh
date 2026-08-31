@@ -1028,11 +1028,16 @@ set +e
 # Checksums for every aport were regenerated in Phase 7b (the nexusqd sources are
 # staged flat into the aport — frame.c, fx_*.c, ... — under a sha512sums="SKIP"
 # placeholder that abuild would otherwise reject).
-# --no-cross (qemu-only), matching Phase 8: crossdirect (the default cross-compile
-# accelerator) is broken in this image -- it cannot exec cc1 ("cc: fatal error:
-# cannot execute 'cc1': posix_spawnp: No such file or directory") and the build
-# fails (exit 3). Forcing qemu-only sidesteps the broken crossdirect toolchain and
-# builds nexusqd reliably, exactly as the real Phase 8 build already does.
+# ⚠️ REFUTED 2026-08-31. This used to force --no-cross, on the grounds that
+# "crossdirect is broken in this image -- it cannot exec cc1 (cc: fatal error:
+# cannot execute 'cc1': posix_spawnp: No such file or directory)". That verdict
+# does not survive: the identical signature is what ANY build sees when a
+# concurrent pmbootstrap zaps its buildroot mid-compile, which was reproduced
+# live that day with two sessions on one volume. The toolchain was never broken;
+# the volume is single-writer. Cross-compiling everything took a full build from
+# 4080 s to 399 s. See docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-
+# disarmed-itself.md and the memory note `build-volume-is-single-writer`.
+# $_ucross is empty by default; NEXUSQ_NO_CROSS=1 restores the old qemu path.
 pmbootstrap $_ucross build nexusqd --arch armv7 --force 2>&1
 NEXUSQD_RC=$?
 set -e
@@ -1231,8 +1236,13 @@ echo "=== Phase 7e: Build the kernel CROSS-NATIVE (native x86_64 speed) ==="
 # occurrences) and are ARM movw immediates -- addresses of shifted data, not
 # different code generation; the dense 13-15 MB block is address-indexed kallsyms,
 # which a 93-byte shift rewrites wholesale (2.23M of the 2.34M differing bytes).
-# NOT YET BOOTED, though: structural equivalence is not a boot. The first
-# cross-native kernel on the device gets the full diag sweep, not a spot check.
+# ✅ BOOTED 2026-08-31 23:14 — and it was the v1.15.0 release artifact itself that
+# was staged and run, not a rebuild of it: up in 46 s, health-gated promote,
+# 0 dmesg errors, 0 failed units, nq-collect verdict OK, every subsystem present.
+# One more piece of evidence turned up while checking whether swapping builds
+# could strand the device: the two builds ship BYTE-IDENTICAL modules
+# (cfg80211.ko, 1 061 336 B, cmp-identical), so the 93-byte shift is confined to
+# vmlinux's .rodata and there is no MODVERSIONS hazard either way.
 #
 # The comment this replaces asserted the cross toolchain was "broken in this image"
 # ("cannot execute cc1: posix_spawn: No such file or directory"). That signature is
