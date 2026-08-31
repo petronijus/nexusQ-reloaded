@@ -4,6 +4,28 @@ set -euo pipefail
 DEVICE="google-steelhead"
 SRC="/src"
 
+# CROSS-COMPILE EVERYTHING, not just the kernel (2026-08-31).
+#
+# Every pmbootstrap call here used to pass --no-cross, so every armv7 package was
+# compiled under qemu-user emulation. The justification in the old comments was a
+# `cannot execute cc1: posix_spawn` error blamed on "crossdirect is broken in this
+# image". That verdict does not survive: the identical signature is what a build
+# sees when a CONCURRENT pmbootstrap zaps its buildroot mid-compile, which was
+# reproduced live today (two sessions, one volume). The toolchain was never the
+# problem -- see docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-
+# itself.md and the memory note `build-volume-is-single-writer`.
+#
+# The kernel already builds cross-native via its aport's `pmb:cross-native`
+# (Phase 7e) at 108 s instead of 1983 s. Everything else now gets crossdirect.
+# Escape hatch, both together or separately:
+#   NEXUSQ_NO_CROSS=1         userspace packages back on qemu
+#   NEXUSQ_KERNEL_NO_CROSS=1  kernel back on qemu
+_ucross=""
+if [ "${NEXUSQ_NO_CROSS:-0}" = "1" ]; then
+    _ucross="--no-cross"
+    echo "NEXUSQ_NO_CROSS=1 -> userspace packages forced back onto qemu"
+fi
+
 echo "=== Phase 1: Validate DTS syntax ==="
 if command -v dtc &>/dev/null; then
     cpp -nostdinc -undef -x assembler-with-cpp \
@@ -953,7 +975,7 @@ if [ "${OTA_PACKAGES_ONLY:-0}" = "1" ]; then
         set +e
         # --force: a bumped pkgrel must not be skipped by a stale same-name apk
         # in the warm repo.
-        pmbootstrap --no-cross build "$_ota_pkg" --arch armv7 --force 2>&1
+        pmbootstrap $_ucross build "$_ota_pkg" --arch armv7 --force 2>&1
         _ota_rc=$?
         set -e
         echo "=== $_ota_pkg build exit code: $_ota_rc ==="
@@ -1011,7 +1033,7 @@ set +e
 # cannot execute 'cc1': posix_spawnp: No such file or directory") and the build
 # fails (exit 3). Forcing qemu-only sidesteps the broken crossdirect toolchain and
 # builds nexusqd reliably, exactly as the real Phase 8 build already does.
-pmbootstrap --no-cross build nexusqd --arch armv7 --force 2>&1
+pmbootstrap $_ucross build nexusqd --arch armv7 --force 2>&1
 NEXUSQD_RC=$?
 set -e
 echo "=== nexusqd build exit code: $NEXUSQD_RC ==="
@@ -1040,7 +1062,7 @@ echo ""
 echo "=== Phase 7c2: Build nexusq-control package (noarch) ==="
 set +e
 # Pure-Python (stdlib) bridge; noarch, no compiler/qemu needed. Checksums: 7b.
-pmbootstrap --no-cross build nexusq-control --arch armv7 --force 2>&1
+pmbootstrap $_ucross build nexusq-control --arch armv7 --force 2>&1
 NEXUSQCTL_RC=$?
 set -e
 echo "=== nexusq-control build exit code: $NEXUSQCTL_RC ==="
@@ -1073,7 +1095,7 @@ set +e
 # Phase 7b checksums every aport up front, that constraint is GONE: the phases
 # may run in any order. The dependency-first sequence is kept only because it
 # reads naturally.
-pmbootstrap --no-cross build nexusq-btagent --arch armv7 --force 2>&1
+pmbootstrap $_ucross build nexusq-btagent --arch armv7 --force 2>&1
 NEXUSQBTA_RC=$?
 set -e
 echo "=== nexusq-btagent build exit code: $NEXUSQBTA_RC ==="
@@ -1099,7 +1121,7 @@ set +e
 # compiler/qemu needed. Checksums: 7b -- which is also what makes it safe for
 # this to sit after 7c3 by convention rather than by necessity (it `depends=`
 # nexusq-btagent; see the order note there).
-pmbootstrap --no-cross build nexusq-setupd --arch armv7 --force 2>&1
+pmbootstrap $_ucross build nexusq-setupd --arch armv7 --force 2>&1
 NEXUSQSETUP_RC=$?
 set -e
 echo "=== nexusq-setupd build exit code: $NEXUSQSETUP_RC ==="
@@ -1126,7 +1148,7 @@ set +e
 # Checksums: 7b. device-google-steelhead `depends=` this package, so before 7b
 # covered everything, building the device package first would drag this one in
 # unchecksummed and fail the run (2026-08-13, the OTA path).
-pmbootstrap --no-cross build nexusq-mqtt --arch armv7 --force 2>&1
+pmbootstrap $_ucross build nexusq-mqtt --arch armv7 --force 2>&1
 NEXUSQMQTT_RC=$?
 set -e
 echo "=== nexusq-mqtt build exit code: $NEXUSQMQTT_RC ==="
@@ -1156,7 +1178,7 @@ set +e
 # The APKBUILD self-gates on `#define USE_NEON` in config.h AND on
 # Tag_Advanced_SIMD_arch in the linked .so, so a silently-scalar rebuild fails
 # here rather than shipping.
-pmbootstrap --no-cross build speexdsp --arch armv7 --force 2>&1
+pmbootstrap $_ucross build speexdsp --arch armv7 --force 2>&1
 SPEEXDSP_RC=$?
 set -e
 echo "=== speexdsp build exit code: $SPEEXDSP_RC ==="
@@ -1253,7 +1275,7 @@ fi
 
 echo ""
 echo "=== Phase 8: Build all packages ==="
-echo "Running: pmbootstrap --no-cross build firmware-google-steelhead device-google-steelhead"
+echo "Running: pmbootstrap ${_ucross:-<cross>} build firmware-google-steelhead device-google-steelhead"
 # firmware-google-steelhead must be built EXPLICITLY. It is a SEPARATE aport that
 # nothing build-depends on: it is only a *runtime* depend of the
 # device-google-steelhead-nonfree-firmware SUBPACKAGE. So `build device-google-steelhead`
@@ -1267,7 +1289,7 @@ echo "Running: pmbootstrap --no-cross build firmware-google-steelhead device-goo
 # skip the rebuild and reuse a stale kernel/DTB (this is exactly how build #1
 # shipped the pre-fix DTB). Force a rebuild so the current patches always apply.
 set +e
-pmbootstrap --no-cross build --force firmware-google-steelhead device-google-steelhead 2>&1
+pmbootstrap $_ucross build --force firmware-google-steelhead device-google-steelhead 2>&1
 BUILD_RC=$?
 set -e
 echo ""
@@ -1322,7 +1344,7 @@ if [ $BUILD_RC -eq 0 ]; then
     # (Phase 7d) which also passes --arch armv7. No --force here: warm volumes
     # with the armv7 systemd apk already cached skip the compile.
     set +e
-    pmbootstrap --no-cross build systemd --arch armv7 2>&1
+    pmbootstrap $_ucross build systemd --arch armv7 2>&1
     SYSTEMD_RC=$?
     set -e
     echo "=== systemd pre-build exit code: $SYSTEMD_RC ==="
