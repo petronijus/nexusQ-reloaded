@@ -669,7 +669,12 @@ extra_packages = none
 is_default_channel = True
 boot_size = 512
 build_default_device_arch = False
-ccache_size = 5G
+# 20G, not the old 5G: with the kernel now built cross-native (Phase 7e) there are
+# TWO hot caches to hold -- cache_ccache_armv7 for everything still built under
+# qemu, and cache_ccache_x86_64 for the cross-compiled kernel. The measured cost of
+# a cold kernel cache is 1946 s vs 800 s warm, so evicting it is expensive and disk
+# is not: 405 GB free on the build volume's filesystem.
+ccache_size = 20G
 extra_space = 0
 jobs = $(nproc)
 kernel = stable
@@ -1175,6 +1180,75 @@ else
     echo "  # without understanding why. See pmos/speexdsp/APKBUILD."
     echo "  ##############################################################"
     grep -n "ERROR\|error:\|FAILED\|USE_NEON\|Advanced_SIMD" "$WORK/log.txt" 2>/dev/null | tail -30
+fi
+
+echo ""
+echo "=== Phase 7e: Build the kernel CROSS-NATIVE (native x86_64 speed) ==="
+# The kernel is by far the most expensive package in the tree, and until now it was
+# compiled -- like everything else here -- under qemu-arm emulation, because every
+# pmbootstrap invocation in this file passes --no-cross. That flag is GLOBAL: it
+# forces CrossCompile.QEMU_ONLY for every package, this one included, even though
+# pmos/linux-google-steelhead/APKBUILD has carried `options="... pmb:cross-native"`
+# all along. cross-native builds the kernel in the x86_64 chroot with Alpine's
+# gcc-armv7 cross toolchain -- the same gcc 15.2.0 the armv7 chroot uses natively --
+# at full host speed, and runs package() natively too, so no fakeroot/qemu concerns.
+#
+# Measured A/B on petronijus-PC (i9-12900K, jobs=24), same tree, 6.18.48, both to a
+# finished boot.img -- the qemu side run via NEXUSQ_KERNEL_NO_CROSS=1 below:
+#   cross-native   108 s    vmlinuz 5 654 568 B    boot.img 5618 KB
+#   qemu-only     1983 s    vmlinuz 5 652 944 B    boot.img 5616 KB
+# 18.4x. (An earlier extrapolation in this comment guessed ~4 min from a partial
+# run; the real figure is 108 s. Historical qemu runs from log.txt agree with the
+# 1983 s: 1946 s cold, 800 s with a warm ccache.)
+#
+# The two kernels are NOT bit-identical and cannot be: the compiler driver name is
+# baked into the image ("armv7-alpine-linux-musleabihf-gcc ..." vs "cc ..."), 31
+# bytes longer, 3 occurrences, a 93-byte shift. Verified equivalent rather than
+# assumed: both LZMA payloads decompress to exactly 19 999 328 bytes; 99% of the
+# differing 4-byte words carry a small constant delta (+92 dominating, 30 719
+# occurrences) and are ARM movw immediates -- addresses of shifted data, not
+# different code generation; the dense 13-15 MB block is address-indexed kallsyms,
+# which a 93-byte shift rewrites wholesale (2.23M of the 2.34M differing bytes).
+# NOT YET BOOTED, though: structural equivalence is not a boot. The first
+# cross-native kernel on the device gets the full diag sweep, not a spot check.
+#
+# The comment this replaces asserted the cross toolchain was "broken in this image"
+# ("cannot execute cc1: posix_spawn: No such file or directory"). That signature is
+# what a build sees when ANOTHER pmbootstrap run zaps its buildroot mid-compile:
+# pmbootstrap 3.11 zaps buildroots on every `build` in strict mode, so two
+# concurrent runs against the shared nexusq-workdir volume produce exactly this
+# fake toolchain error -- the compiler is gone because the chroot is gone. It was
+# reproduced live on 2026-08-31 (two sessions, one volume) and the old diagnosis
+# corrected: the toolchain is fine, the VOLUME IS SINGLE-WRITER. Run one build at
+# a time. (--no-cross is kept for the userspace packages below: those would use
+# crossdirect, which is a different mechanism and has not been re-tested.)
+#
+# --force is here for Phase 8's reason (defeat the warm-volume cache so the current
+# patches always apply). It does NOT cause a double build: pmbootstrap applies
+# --force only to packages named on the command line, never to dependencies
+# (pmb/build/_package.py queues a dep only when get_status() says necessary), so
+# Phase 8's `--force ... device-google-steelhead` reuses the apk built here.
+#
+# Escape hatch: NEXUSQ_KERNEL_NO_CROSS=1 restores the old qemu-only kernel build.
+_kernel_cross=""
+if [ "${NEXUSQ_KERNEL_NO_CROSS:-0}" = "1" ]; then
+    _kernel_cross="--no-cross"
+    echo "  NEXUSQ_KERNEL_NO_CROSS=1 -> forcing the slow qemu-only kernel build"
+fi
+set +e
+pmbootstrap $_kernel_cross build linux-google-steelhead --arch armv7 --force 2>&1
+KERNEL_RC=$?
+set -e
+echo "=== kernel build exit code: $KERNEL_RC ==="
+if [ $KERNEL_RC -ne 0 ]; then
+    echo "=== KERNEL BUILD FAILED ==="
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -40
+    echo ""
+    echo "  NOTE: there is deliberately NO automatic retry under qemu. A compiler"
+    echo "        error here is a real source/API problem and would fail identically"
+    echo "        under qemu, only ~8x slower. If you genuinely suspect the cross"
+    echo "        toolchain, re-run with NEXUSQ_KERNEL_NO_CROSS=1 and compare."
+    exit 1
 fi
 
 echo ""

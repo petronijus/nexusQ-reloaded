@@ -130,18 +130,29 @@ cat > "$XDG_CONFIG_HOME/pmbootstrap_v3.cfg" <<CFGEOF
 aports = $PMAPORTS
 work = $WORK
 device = google-steelhead
-ui = weston
+# ui + service manager MUST match docker-build.sh Phase 7, or this script and the
+# full build fight over the work volume. The service manager selects the apk
+# CHANNEL (systemd -> systemd-edge, openrc -> edge), and pmbootstrap refuses to
+# reuse a chroot built for the other channel -- so alternating between the two
+# scripts recreated every chroot each time, and the kernel apk this script built
+# landed in packages/edge where the full build (systemd-edge) could never see it.
+# `systemd = default` was ALSO the pre-3.11 key name, silently ignored since, which
+# is how this script quietly ended up on openrc/edge in the first place.
+ui = lxqt
 build_pkgs_on_install = True
 hostname = steelhead
 is_default_channel = True
 build_default_device_arch = False
-ccache_size = 5G
+# 20G: holds both hot caches (armv7 for the qemu-built packages, x86_64 for the
+# cross-native kernel). Cold kernel cache costs 1946 s vs 800 s warm; disk is cheap.
+ccache_size = 20G
 jobs = $(nproc)
 kernel = stable
 locale = en_US.UTF-8
 ssh_keys = False
 sudo_timer = False
-systemd = default
+service_manager = systemd
+auto_zap_misconfigured_chroots = silently
 timezone = GMT
 user = user
 [providers]
@@ -165,12 +176,25 @@ echo "=== Phase 8: Build linux-google-steelhead (armv7) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 pmbootstrap checksum linux-google-steelhead 2>&1 || true
 set +e
-# --no-cross (qemu-only), matching docker-build.sh Phase 8: the cross toolchain /
-# crossdirect is broken in this image. The cross-native gcc aborts kconfig with
-# "armv7-alpine-linux-musleabihf-gcc: unknown assembler invoked" /
-# "Kconfig.include: Sorry, this assembler is not supported." Force qemu-only so the
-# build uses the armv7 chroot's own (working) native gcc/as, exactly as Phase 8 does.
-pmbootstrap --no-cross build linux-google-steelhead --arch armv7 --force 2>&1
+# CROSS-NATIVE, not --no-cross. This aport declares `options="... pmb:cross-native"`,
+# so pmbootstrap builds it in the x86_64 chroot with Alpine's gcc-armv7 (the same
+# gcc 15.2.0 the armv7 chroot runs natively) at full host speed, and runs package()
+# natively too. Measured A/B on petronijus-PC (i9-12900K, jobs=24), same 6.18.48
+# tree, both to a finished boot.img: cross-native 108 s vs qemu-only 1983 s = 18.4x
+# (boot.img 5618 vs 5616 KB; the images are equivalent but not bit-identical -- the
+# compiler driver name is baked in, shifting addresses by 93 bytes). Full evidence
+# and the corrected diagnosis of the
+# old "cross toolchain is broken in this image" verdict live in docker-build.sh
+# Phase 7e; the short version is that `cannot execute cc1: posix_spawn` is what a
+# build sees when a CONCURRENT pmbootstrap run zaps its buildroot out from under it
+# (3.11 zaps buildroots on every `build`), not a toolchain fault. ONE BUILD AT A
+# TIME against nexusq-workdir. NEXUSQ_KERNEL_NO_CROSS=1 restores the qemu path.
+_kernel_cross=""
+if [ "${NEXUSQ_KERNEL_NO_CROSS:-0}" = "1" ]; then
+    _kernel_cross="--no-cross"
+    echo "  NEXUSQ_KERNEL_NO_CROSS=1 -> forcing the slow qemu-only kernel build"
+fi
+pmbootstrap $_kernel_cross build linux-google-steelhead --arch armv7 --force 2>&1
 RC=$?
 set -e
 echo "=== kernel build exit: $RC ==="
