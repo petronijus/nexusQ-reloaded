@@ -41,71 +41,10 @@ this unit's stock kernel and confirmed against its live PRM_VC + TWL6030.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/arch/arm/mach-omap2/vc.h	2026-06-25 23:22:00.083483486 +0200
-+++ b/arch/arm/mach-omap2/vc.h	2026-06-25 23:26:17.040874754 +0200
-@@ -128,6 +128,8 @@
- 			u8 target_vsel, u8 current_vsel);
- int omap_vc_bypass_scale(struct voltagedomain *voltdm,
- 			 unsigned long target_volt);
-+int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
-+				u8 reg_addr, u8 data);
- 
- #endif
- 
---- a/arch/arm/mach-omap2/vc.c	2026-06-25 23:22:00.081541824 +0200
-+++ b/arch/arm/mach-omap2/vc.c	2026-06-25 23:26:14.671824432 +0200
-@@ -236,6 +236,49 @@
- 	return 0;
- }
- 
-+/*
-+ * omap_vc_bypass_send_i2c_msg - VC-bypass write of one arbitrary (reg, data)
-+ * byte to a PMIC on the SR-i2c. Same PRM_VC_VAL_BYPASS transaction as
-+ * omap_vc_bypass_scale(), but for registers other than the voltage register
-+ * (e.g. the TPS62361 ramp/control regs) and without the voltage-scale
-+ * bookkeeping. Mirrors the stock omap4_twl_tps62361_enable() helper.
-+ */
-+int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
-+				u8 reg_addr, u8 data)
-+{
-+	struct omap_vc_channel *vc = voltdm->vc;
-+	u32 loop_cnt = 0, retries_cnt = 0;
-+	u32 vc_valid, vc_bypass_val_reg, vc_bypass_value;
-+
-+	vc_valid = vc->common->valid;
-+	vc_bypass_val_reg = vc->common->bypass_val_reg;
-+	vc_bypass_value = (data << vc->common->data_shift) |
-+		(reg_addr << vc->common->regaddr_shift) |
-+		(slave_addr << vc->common->slaveaddr_shift);
-+
-+	voltdm->write(vc_bypass_value, vc_bypass_val_reg);
-+	voltdm->write(vc_bypass_value | vc_valid, vc_bypass_val_reg);
-+
-+	vc_bypass_value = voltdm->read(vc_bypass_val_reg);
-+	while (!(vc_bypass_value & vc_valid)) {
-+		loop_cnt++;
-+
-+		if (retries_cnt > 10) {
-+			pr_warn("%s: Retry count exceeded\n", __func__);
-+			return -ETIMEDOUT;
-+		}
-+
-+		if (loop_cnt > 50) {
-+			retries_cnt++;
-+			loop_cnt = 0;
-+			udelay(10);
-+		}
-+		vc_bypass_value = voltdm->read(vc_bypass_val_reg);
-+	}
-+
-+	return 0;
-+}
-+
- /* Convert microsecond value to number of 32kHz clock cycles */
- static inline u32 omap_usec_to_32k(u32 usec)
- {
---- a/arch/arm/mach-omap2/omap_twl.c	2026-06-25 23:22:00.089553505 +0200
-+++ b/arch/arm/mach-omap2/omap_twl.c	2026-06-26 00:00:45.680714693 +0200
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index 912124e51..d838ad41c 100644
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
 @@ -14,9 +14,11 @@
  #include <linux/io.h>
  #include <linux/kernel.h>
@@ -118,7 +57,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  
  #include "pm.h"
  
-@@ -292,6 +294,153 @@
+@@ -292,6 +294,153 @@ int __init omap4_twl_init(void)
  	return 0;
  }
  
@@ -272,30 +211,11 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  int __init omap3_twl_init(void)
  {
  	struct voltagedomain *voltdm;
---- a/arch/arm/mach-omap2/pm.h	2026-06-25 23:22:51.174164801 +0200
-+++ b/arch/arm/mach-omap2/pm.h	2026-06-25 23:26:20.315944306 +0200
-@@ -103,6 +103,7 @@
- #ifdef CONFIG_TWL4030_CORE
- extern int omap3_twl_init(void);
- extern int omap4_twl_init(void);
-+extern int omap4460_vdd_mpu_retask(void);
- #else
- static inline int omap3_twl_init(void)
- {
-@@ -112,6 +113,10 @@
- {
- 	return -EINVAL;
- }
-+static inline int omap4460_vdd_mpu_retask(void)
-+{
-+	return -EINVAL;
-+}
- #endif
- 
- #if IS_ENABLED(CONFIG_MFD_CPCAP)
---- a/arch/arm/mach-omap2/pm.c	2026-06-25 23:22:00.085470389 +0200
-+++ b/arch/arm/mach-omap2/pm.c	2026-06-25 23:26:23.141004287 +0200
-@@ -147,6 +147,13 @@
+diff --git a/arch/arm/mach-omap2/pm.c b/arch/arm/mach-omap2/pm.c
+index 700869c9e..70108c47c 100644
+--- a/arch/arm/mach-omap2/pm.c
++++ b/arch/arm/mach-omap2/pm.c
+@@ -147,6 +147,13 @@ static int __init omap2_common_pm_late_init(void)
  	omap4_cpcap_init();
  	omap_voltage_late_init();
  
@@ -308,4 +228,94 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +
  	/* Smartreflex device init */
  	omap_devinit_smartreflex();
+ 
+diff --git a/arch/arm/mach-omap2/pm.h b/arch/arm/mach-omap2/pm.h
+index f97ff93f2..c484dec9f 100644
+--- a/arch/arm/mach-omap2/pm.h
++++ b/arch/arm/mach-omap2/pm.h
+@@ -103,6 +103,7 @@ static inline int omap_devinit_smartreflex(void)
+ #ifdef CONFIG_TWL4030_CORE
+ extern int omap3_twl_init(void);
+ extern int omap4_twl_init(void);
++extern int omap4460_vdd_mpu_retask(void);
+ #else
+ static inline int omap3_twl_init(void)
+ {
+@@ -112,6 +113,10 @@ static inline int omap4_twl_init(void)
+ {
+ 	return -EINVAL;
+ }
++static inline int omap4460_vdd_mpu_retask(void)
++{
++	return -EINVAL;
++}
+ #endif
+ 
+ #if IS_ENABLED(CONFIG_MFD_CPCAP)
+diff --git a/arch/arm/mach-omap2/vc.c b/arch/arm/mach-omap2/vc.c
+index fc26b96a2..a2fa9f614 100644
+--- a/arch/arm/mach-omap2/vc.c
++++ b/arch/arm/mach-omap2/vc.c
+@@ -236,6 +236,49 @@ int omap_vc_bypass_scale(struct voltagedomain *voltdm,
+ 	return 0;
+ }
+ 
++/*
++ * omap_vc_bypass_send_i2c_msg - VC-bypass write of one arbitrary (reg, data)
++ * byte to a PMIC on the SR-i2c. Same PRM_VC_VAL_BYPASS transaction as
++ * omap_vc_bypass_scale(), but for registers other than the voltage register
++ * (e.g. the TPS62361 ramp/control regs) and without the voltage-scale
++ * bookkeeping. Mirrors the stock omap4_twl_tps62361_enable() helper.
++ */
++int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
++				u8 reg_addr, u8 data)
++{
++	struct omap_vc_channel *vc = voltdm->vc;
++	u32 loop_cnt = 0, retries_cnt = 0;
++	u32 vc_valid, vc_bypass_val_reg, vc_bypass_value;
++
++	vc_valid = vc->common->valid;
++	vc_bypass_val_reg = vc->common->bypass_val_reg;
++	vc_bypass_value = (data << vc->common->data_shift) |
++		(reg_addr << vc->common->regaddr_shift) |
++		(slave_addr << vc->common->slaveaddr_shift);
++
++	voltdm->write(vc_bypass_value, vc_bypass_val_reg);
++	voltdm->write(vc_bypass_value | vc_valid, vc_bypass_val_reg);
++
++	vc_bypass_value = voltdm->read(vc_bypass_val_reg);
++	while (!(vc_bypass_value & vc_valid)) {
++		loop_cnt++;
++
++		if (retries_cnt > 10) {
++			pr_warn("%s: Retry count exceeded\n", __func__);
++			return -ETIMEDOUT;
++		}
++
++		if (loop_cnt > 50) {
++			retries_cnt++;
++			loop_cnt = 0;
++			udelay(10);
++		}
++		vc_bypass_value = voltdm->read(vc_bypass_val_reg);
++	}
++
++	return 0;
++}
++
+ /* Convert microsecond value to number of 32kHz clock cycles */
+ static inline u32 omap_usec_to_32k(u32 usec)
+ {
+diff --git a/arch/arm/mach-omap2/vc.h b/arch/arm/mach-omap2/vc.h
+index 9e861dbc2..92c7c2351 100644
+--- a/arch/arm/mach-omap2/vc.h
++++ b/arch/arm/mach-omap2/vc.h
+@@ -128,6 +128,8 @@ void omap_vc_post_scale(struct voltagedomain *voltdm,
+ 			u8 target_vsel, u8 current_vsel);
+ int omap_vc_bypass_scale(struct voltagedomain *voltdm,
+ 			 unsigned long target_volt);
++int omap_vc_bypass_send_i2c_msg(struct voltagedomain *voltdm, u8 slave_addr,
++				u8 reg_addr, u8 data);
+ 
+ #endif
  

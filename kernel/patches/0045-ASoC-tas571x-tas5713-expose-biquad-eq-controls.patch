@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000045 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] ASoC: tas571x: TAS5713 (steelhead) — expose the hardware biquad EQ controls
 
@@ -23,10 +24,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  sound/soc/codecs/tas571x.c | 24 ++++++++++++++++++++++++
  1 file changed, 24 insertions(+)
-
---- a/sound/soc/codecs/tas571x.c	2026-08-23 19:41:44.540496699 +0200
-+++ b/sound/soc/codecs/tas571x.c	2026-08-23 19:42:09.892997140 +0200
-@@ -811,6 +811,30 @@
+---
+diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
+index ceb81b3ad..0c58ce42d 100644
+--- a/sound/soc/codecs/tas571x.c
++++ b/sound/soc/codecs/tas571x.c
+@@ -924,6 +924,30 @@ static const struct snd_kcontrol_new tas5713_controls[] = {
  		   TAS571X_SOFT_MUTE_REG,
  		   TAS571X_SOFT_MUTE_CH1_SHIFT, TAS571X_SOFT_MUTE_CH2_SHIFT,
  		   1, 1),

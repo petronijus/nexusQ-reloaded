@@ -24,8 +24,10 @@ is set; this patch + the DTS (vbb-supply, abb_mpu min/max, the 1.2 GHz OPP) wire
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 10:46:42.153390766 +0200
-+++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 10:48:48.867350524 +0200
+diff --git a/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c
+index ef68aa29c..2ae2f473e 100644
+--- a/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c
++++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c
 @@ -13,22 +13,49 @@
   * DVFS; this ultimately programs the TPS62361 SET1 register over the PRM VC.
   * SmartReflex is off, so the OPP voltages are the stock-measured open-loop
@@ -76,7 +78,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  static int vc_mpu_set_voltage(struct regulator_dev *rdev, int min_uV,
  			      int max_uV, unsigned int *selector)
  {
-@@ -36,13 +63,24 @@
+@@ -36,13 +63,24 @@ static int vc_mpu_set_voltage(struct regulator_dev *rdev, int min_uV,
  	int ret;
  
  	/*
@@ -107,7 +109,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	if (!ret)
  		vr->cur_uV = min_uV;
  	return ret;
-@@ -74,6 +112,7 @@
+@@ -74,6 +112,7 @@ static int vc_mpu_probe(struct platform_device *pdev)
  	struct regulator_config cfg = { };
  	struct regulator_dev *rdev;
  	struct vc_mpu_reg *vr;
@@ -115,7 +117,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  
  	vr = devm_kzalloc(dev, sizeof(*vr), GFP_KERNEL);
  	if (!vr)
-@@ -84,6 +123,16 @@
+@@ -84,6 +123,16 @@ static int vc_mpu_probe(struct platform_device *pdev)
  		return -EPROBE_DEFER;	/* omap_voltage layer not up yet */
  	vr->cur_uV = 1025000;		/* 350 MHz boot OPP (current rail) */
  

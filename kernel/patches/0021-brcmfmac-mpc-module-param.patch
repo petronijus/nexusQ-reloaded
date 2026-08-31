@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000021 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] brcmfmac: expose "mpc" as a module parameter
 
@@ -21,13 +22,15 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  .../broadcom/brcm80211/brcmfmac/common.c          | 8 +++++++-
  1 file changed, 7 insertions(+), 1 deletion(-)
-
+---
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
+index 688f16c51..e768d7b05 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
-@@ -61,6 +61,11 @@ static int brcmf_roamoff;
+@@ -63,6 +63,11 @@ static int brcmf_roamoff;
  module_param_named(roamoff, brcmf_roamoff, int, 0400);
  MODULE_PARM_DESC(roamoff, "Do not use internal roaming engine");
-
+ 
 +static int brcmf_mpc = 1;
 +module_param_named(mpc, brcmf_mpc, int, 0400);
 +MODULE_PARM_DESC(mpc,
@@ -38,7 +41,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  MODULE_PARM_DESC(iapp, "Enable partial support for the obsoleted Inter-Access Point Protocol");
 @@ -404,7 +409,7 @@ int brcmf_c_preinit_dcmds(struct brcmf_if *ifp)
  	}
-
+ 
  	/* set mpc */
 -	err = brcmf_fil_iovar_int_set(ifp, "mpc", 1);
 +	err = brcmf_fil_iovar_int_set(ifp, "mpc", brcmf_mpc);

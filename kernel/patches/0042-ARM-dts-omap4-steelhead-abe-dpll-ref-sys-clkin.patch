@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000042 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] ARM: dts: omap4-steelhead: rebase DPLL_ABE reference to sys_clkin (stock)
 
@@ -18,10 +19,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/omap4-steelhead.dts | 22 +++++++++++++++++++++-
  1 file changed, 21 insertions(+), 1 deletion(-)
-
+---
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+index ffe15395d..39b627c84 100644
 --- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -801,11 +801,31 @@
+@@ -798,11 +798,31 @@ &mcbsp2 {
  	 * The internal SRG already runs at 24.576 MHz via the bit-26 default;
  	 * we now set the parents explicitly so the intent is unambiguous and the
  	 * invalid -EINVAL reparent is gone.

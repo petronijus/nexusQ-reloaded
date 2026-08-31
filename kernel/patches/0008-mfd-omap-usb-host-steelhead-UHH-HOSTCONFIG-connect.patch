@@ -21,9 +21,11 @@ traffic on hardware.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/mfd/omap-usb-host.c b/drivers/mfd/omap-usb-host.c
+index 4d29a6e2e..0ae40d6b7 100644
 --- a/drivers/mfd/omap-usb-host.c
 +++ b/drivers/mfd/omap-usb-host.c
-@@ -445,7 +445,16 @@
+@@ -445,7 +445,16 @@ static void omap_usbhs_init(struct device *dev)
  	reg |= (OMAP_UHH_HOSTCONFIG_INCR4_BURST_EN
  			| OMAP_UHH_HOSTCONFIG_INCR8_BURST_EN
  			| OMAP_UHH_HOSTCONFIG_INCR16_BURST_EN);

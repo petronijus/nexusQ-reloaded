@@ -1,10 +1,11 @@
 #!/bin/sh
-# Proper out-of-the-box build: fresh linux-6.12.12 tree + all repo patches
-# (0001-0005) + steelhead_defconfig, build vmlinux + modules to get a real
+# Proper out-of-the-box build: fresh linux-$KVER tree + the early repo patches
+# + steelhead_defconfig, build vmlinux + modules to get a real
 # Module.symvers, yielding clean-CRC modules that load WITHOUT force on the
 # device's matching #3 kernel. WSL only, no Docker.
 set -e
 
+KVER="${KVER:-6.18.48}"
 BASE="/home/petronijus/nexusq-build"
 TCBIN="$BASE/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-linux-gnueabihf/bin"
 REPO="/mnt/d/nexusQ-reloaded"
@@ -15,11 +16,12 @@ export CROSS_COMPILE="$TCBIN/arm-none-linux-gnueabihf-"
 
 echo "=== fresh tree ==="
 rm -rf "$BD"; mkdir -p "$BD"; cd "$BD"
-tar xf "$BASE/linux-6.12.12.tar.xz"
-cd linux-6.12.12
+tar xf "$BASE/linux-$KVER.tar.xz"
+cd "linux-$KVER"
 
-echo "=== apply patches 0001-0005 ==="
-for p in 0001 0002 0003 0004 0005; do
+echo "=== apply the early patches ==="
+# 0004 is deliberately absent: upstream fixed it at the 6.18 bump.
+for p in 0001 0002 0003 0005; do
     f=$(ls "$REPO"/kernel/patches/${p}-*.patch)
     echo "  applying $(basename "$f")"
     patch -p1 < "$f"

@@ -29,15 +29,17 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  drivers/clk/ti/composite.c | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
-
+---
+diff --git a/drivers/clk/ti/composite.c b/drivers/clk/ti/composite.c
+index 8cba25918..afd2afc5d 100644
 --- a/drivers/clk/ti/composite.c
 +++ b/drivers/clk/ti/composite.c
-@@ -29,13 +29,13 @@
- static long ti_composite_round_rate(struct clk_hw *hw, unsigned long rate,
- 				    unsigned long *prate)
+@@ -29,13 +29,13 @@ static unsigned long ti_composite_recalc_rate(struct clk_hw *hw,
+ static int ti_composite_determine_rate(struct clk_hw *hw,
+ 				       struct clk_rate_request *req)
  {
 -	return -EINVAL;
-+	return ti_clk_divider_ops.round_rate(hw, rate, prate);
++	return ti_clk_divider_ops.determine_rate(hw, req);
  }
  
  static int ti_composite_set_rate(struct clk_hw *hw, unsigned long rate,

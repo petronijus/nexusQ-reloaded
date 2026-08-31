@@ -10,12 +10,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  Documentation/devicetree/bindings/sound/ti,tas57xx.yaml | 1 +
  1 file changed, 1 insertion(+)
-
+---
 diff --git a/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml b/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
-index abcdef1..abcdef2 100644
+index 0b013a34e..8c1a95a5d 100644
 --- a/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
 +++ b/Documentation/devicetree/bindings/sound/ti,tas57xx.yaml
-@@ -16,6 +16,7 @@ properties:
+@@ -15,6 +15,7 @@ properties:
        - ti,tas5707
        - ti,tas5711
        - ti,tas5717
@@ -23,5 +23,3 @@ index abcdef1..abcdef2 100644
        - ti,tas5719
        - ti,tas5721
        - ti,tas5733
--- 
-2.43.0

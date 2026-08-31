@@ -30,6 +30,8 @@ fastboot with no hands on the power cord.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mach-omap2/omap4-restart.c b/arch/arm/mach-omap2/omap4-restart.c
+index 56f621314..56c2b08aa 100644
 --- a/arch/arm/mach-omap2/omap4-restart.c
 +++ b/arch/arm/mach-omap2/omap4-restart.c
 @@ -5,9 +5,54 @@

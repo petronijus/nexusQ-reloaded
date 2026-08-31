@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000041 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] dma: omap: high L3 read-priority for the cyclic (audio) sDMA channel
 
@@ -23,13 +24,15 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  drivers/dma/ti/omap-dma.c | 21 +++++++++++++++++++--
  1 file changed, 19 insertions(+), 2 deletions(-)
-
+---
+diff --git a/drivers/dma/ti/omap-dma.c b/drivers/dma/ti/omap-dma.c
+index 73ed4b794..743946bab 100644
 --- a/drivers/dma/ti/omap-dma.c
 +++ b/drivers/dma/ti/omap-dma.c
-@@ -1197,6 +1197,20 @@
+@@ -1197,6 +1197,20 @@ static struct dma_async_tx_descriptor *omap_dma_prep_dma_cyclic(
  	else
  		d->ccr |= CCR_DST_AMODE_CONSTANT | CCR_SRC_AMODE_POSTINC;
-
+ 
 +	/*
 +	 * Nexus Q (steelhead): raise this channel's L3 READ priority. Cyclic
 +	 * DMA on this appliance is the audio path (McBSP2 -> TAS5713 / McASP
@@ -47,15 +50,15 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	d->cicr = CICR_DROP_IE;
  	if (flags & DMA_PREP_INTERRUPT)
  		d->cicr |= CICR_FRAME_IE;
-@@ -1827,7 +1841,10 @@
+@@ -1831,7 +1845,10 @@ static int omap_dma_probe(struct platform_device *pdev)
  		}
  	}
-
+ 
 -	omap_dma_init_gcr(od, DMA_DEFAULT_ARB_RATE, DMA_DEFAULT_FIFO_DEPTH, 0);
 +	/* tparams=1: reserve one high-priority sDMA thread (GCR HI_THREAD_RESERVED,
 +	 * stock steelhead value 0x11010) so the audio channel's CCR_READ_PRIORITY
 +	 * above has a reserved FIFO slot to win L3 arbitration. */
 +	omap_dma_init_gcr(od, DMA_DEFAULT_ARB_RATE, DMA_DEFAULT_FIFO_DEPTH, 1);
-
+ 
  	if (od->cfg->needs_busy_check) {
  		od->nb.notifier_call = omap_dma_busy_notifier;

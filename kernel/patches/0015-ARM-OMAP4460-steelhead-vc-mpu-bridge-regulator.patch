@@ -25,45 +25,11 @@ force-update path) at the safe 350 MHz boot point before higher OPPs are added.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/arch/arm/mach-omap2/voltage.c	2026-06-26 00:53:40.418660437 +0200
-+++ b/arch/arm/mach-omap2/voltage.c	2026-06-26 00:54:22.066202587 +0200
-@@ -140,6 +140,23 @@
- }
- 
- /**
-+ * omap_voltage_scale_voltage() - scale a voltage domain to a target voltage
-+ * @voltdm:		the voltage domain to scale
-+ * @target_volt:	target voltage in microvolts (snapped to the OPP volt_data)
-+ *
-+ * Public wrapper around voltdm_scale() so SoC / regulator code can drive DVFS
-+ * through the voltage layer -- i.e. the configured voltdm->scale, which on OMAP4
-+ * is omap_vp_forceupdate_scale (VP force-update with ramp/timeout supervision),
-+ * the same path stock uses for runtime MPU scaling. Used by the steelhead
-+ * VC-bridge cpu-supply regulator.
-+ */
-+int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
-+			       unsigned long target_volt)
-+{
-+	return voltdm_scale(voltdm, target_volt);
-+}
-+
-+/**
-  * omap_voltage_get_volttable() - API to get the voltage table associated with a
-  *				particular voltage domain.
-  * @voltdm:	pointer to the VDD for which the voltage table is required
---- a/arch/arm/mach-omap2/voltage.h	2026-06-26 00:53:40.420540551 +0200
-+++ b/arch/arm/mach-omap2/voltage.h	2026-06-26 00:54:24.906274286 +0200
-@@ -164,5 +164,7 @@
- struct voltagedomain *voltdm_lookup(const char *name);
- void voltdm_init(struct voltagedomain **voltdm_list);
- void voltdm_reset(struct voltagedomain *voltdm);
-+int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
-+			       unsigned long target_volt);
- unsigned long voltdm_get_voltage(struct voltagedomain *voltdm);
- #endif
---- a/arch/arm/mach-omap2/Makefile	2026-06-26 00:43:14.812590589 +0200
-+++ b/arch/arm/mach-omap2/Makefile	2026-06-26 00:43:49.754503765 +0200
-@@ -128,6 +128,7 @@
+diff --git a/arch/arm/mach-omap2/Makefile b/arch/arm/mach-omap2/Makefile
+index daf21127c..c79579f3e 100644
+--- a/arch/arm/mach-omap2/Makefile
++++ b/arch/arm/mach-omap2/Makefile
+@@ -128,6 +128,7 @@ obj-$(CONFIG_ARCH_OMAP3)		+= $(voltagedomain-common)
  obj-$(CONFIG_ARCH_OMAP3)		+= voltagedomains3xxx_data.o
  obj-$(CONFIG_ARCH_OMAP4)		+= $(voltagedomain-common)
  obj-$(CONFIG_ARCH_OMAP4)		+= voltagedomains44xx_data.o
@@ -71,8 +37,11 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  obj-$(CONFIG_SOC_AM33XX)		+= $(voltagedomain-common)
  obj-$(CONFIG_SOC_AM43XX)		+= $(voltagedomain-common)
  obj-$(CONFIG_SOC_OMAP5)			+= $(voltagedomain-common)
---- /dev/null	2026-06-24 10:40:12.838001481 +0200
-+++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c	2026-06-26 00:55:31.114940685 +0200
+diff --git a/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c
+new file mode 100644
+index 000000000..ef68aa29c
+--- /dev/null
++++ b/arch/arm/mach-omap2/steelhead-vc-mpu-regulator.c
 @@ -0,0 +1,113 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
@@ -187,3 +156,43 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +	},
 +};
 +builtin_platform_driver(vc_mpu_driver);
+diff --git a/arch/arm/mach-omap2/voltage.c b/arch/arm/mach-omap2/voltage.c
+index 000c2bca5..95e27e038 100644
+--- a/arch/arm/mach-omap2/voltage.c
++++ b/arch/arm/mach-omap2/voltage.c
+@@ -139,6 +139,23 @@ void voltdm_reset(struct voltagedomain *voltdm)
+ 	voltdm_scale(voltdm, target_volt);
+ }
+ 
++/**
++ * omap_voltage_scale_voltage() - scale a voltage domain to a target voltage
++ * @voltdm:		the voltage domain to scale
++ * @target_volt:	target voltage in microvolts (snapped to the OPP volt_data)
++ *
++ * Public wrapper around voltdm_scale() so SoC / regulator code can drive DVFS
++ * through the voltage layer -- i.e. the configured voltdm->scale, which on OMAP4
++ * is omap_vp_forceupdate_scale (VP force-update with ramp/timeout supervision),
++ * the same path stock uses for runtime MPU scaling. Used by the steelhead
++ * VC-bridge cpu-supply regulator.
++ */
++int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
++			       unsigned long target_volt)
++{
++	return voltdm_scale(voltdm, target_volt);
++}
++
+ /**
+  * omap_voltage_get_volttable() - API to get the voltage table associated with a
+  *				particular voltage domain.
+diff --git a/arch/arm/mach-omap2/voltage.h b/arch/arm/mach-omap2/voltage.h
+index e610f63a0..c9784c044 100644
+--- a/arch/arm/mach-omap2/voltage.h
++++ b/arch/arm/mach-omap2/voltage.h
+@@ -164,5 +164,7 @@ extern void omap54xx_voltagedomains_init(void);
+ struct voltagedomain *voltdm_lookup(const char *name);
+ void voltdm_init(struct voltagedomain **voltdm_list);
+ void voltdm_reset(struct voltagedomain *voltdm);
++int omap_voltage_scale_voltage(struct voltagedomain *voltdm,
++			       unsigned long target_volt);
+ unsigned long voltdm_get_voltage(struct voltagedomain *voltdm);
+ #endif

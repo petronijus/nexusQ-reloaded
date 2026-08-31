@@ -23,9 +23,11 @@ mute/volume/rotation events appear immediately.)
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/leds/leds-steelhead-avr.c b/drivers/leds/leds-steelhead-avr.c
+index 2eaf38874..64e15da1e 100755
 --- a/drivers/leds/leds-steelhead-avr.c
 +++ b/drivers/leds/leds-steelhead-avr.c
-@@ -452,6 +452,28 @@
+@@ -452,6 +452,28 @@ static int avr_probe(struct i2c_client *client)
  					"steelhead-avr", a);
  	if (ret)
  		return dev_err_probe(&client->dev, ret, "irq request failed\n");

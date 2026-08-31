@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000039 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] nfc: hci: shdlc: gate the frame hexdumps behind dynamic-debug
 
@@ -17,10 +18,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  net/nfc/hci/llc_shdlc.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
-
+---
+diff --git a/net/nfc/hci/llc_shdlc.c b/net/nfc/hci/llc_shdlc.c
+index 08c8aa153..f3bafc8b0 100644
 --- a/net/nfc/hci/llc_shdlc.c
 +++ b/net/nfc/hci/llc_shdlc.c
-@@ -101,7 +101,7 @@
+@@ -101,7 +101,7 @@ enum uframe_modifier {
  #define SHDLC_DUMP_SKB(info, skb)				  \
  do {								  \
  	pr_debug("%s:\n", info);				  \
@@ -28,3 +31,4 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +	print_hex_dump_debug("shdlc: ", DUMP_PREFIX_OFFSET, \
  		       16, 1, skb->data, skb->len, 0);		  \
  } while (0)
+ 

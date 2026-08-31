@@ -28,6 +28,8 @@ correct.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index d838ad41c..d9d8525df 100644
 --- a/arch/arm/mach-omap2/omap_twl.c
 +++ b/arch/arm/mach-omap2/omap_twl.c
 @@ -14,6 +14,7 @@
@@ -38,7 +40,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  #include <linux/workqueue.h>
  
  #include "soc.h"
-@@ -55,6 +56,35 @@
+@@ -55,6 +56,35 @@ static u8 smps_offset;
  
  #define REG_SMPS_OFFSET         0xE0
  
@@ -74,7 +76,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  static unsigned long twl4030_vsel_to_uv(const u8 vsel)
  {
  	return (((vsel * 125) + 6000)) * 100;
-@@ -75,11 +105,7 @@
+@@ -75,11 +105,7 @@ static unsigned long twl6030_vsel_to_uv(const u8 vsel)
  	 * is programmed to all 0's where as starting from
  	 * TWL6030 ES1.1 the efuse is programmed to 1
  	 */
@@ -87,7 +89,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  
  	if (!vsel)
  		return 0;
-@@ -109,11 +135,7 @@
+@@ -109,11 +135,7 @@ static u8 twl6030_uv_to_vsel(unsigned long uv)
  	 * is programmed to all 0's where as starting from
  	 * TWL6030 ES1.1 the efuse is programmed to 1
  	 */

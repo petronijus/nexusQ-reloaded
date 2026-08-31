@@ -14,9 +14,11 @@ VDD_MPU. The table must hold the exact stock nominals for correct DVFS. OPP50
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/arch/arm/mach-omap2/opp4xxx_data.c	2026-06-26 09:43:36.315406452 +0200
-+++ b/arch/arm/mach-omap2/opp4xxx_data.c	2026-06-26 09:44:06.593135236 +0200
-@@ -57,10 +57,18 @@
+diff --git a/arch/arm/mach-omap2/opp4xxx_data.c b/arch/arm/mach-omap2/opp4xxx_data.c
+index a98518860..e1bb13f8b 100644
+--- a/arch/arm/mach-omap2/opp4xxx_data.c
++++ b/arch/arm/mach-omap2/opp4xxx_data.c
+@@ -57,10 +57,18 @@ struct omap_volt_data omap443x_vdd_core_volt_data[] = {
  	VOLT_DATA_DEFINE(0, 0, 0, 0),
  };
  

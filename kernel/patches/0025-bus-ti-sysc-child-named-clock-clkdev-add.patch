@@ -21,9 +21,11 @@ clk_get(dev, "fck").
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/bus/ti-sysc.c b/drivers/bus/ti-sysc.c
+index b15f825b1..d2ee2d780 100644
 --- a/drivers/bus/ti-sysc.c
 +++ b/drivers/bus/ti-sysc.c
-@@ -2376,9 +2376,25 @@
+@@ -2344,9 +2344,25 @@ static int sysc_child_add_named_clock(struct sysc *ddata,
  	if (IS_ERR(clk))
  		return -ENODEV;
  

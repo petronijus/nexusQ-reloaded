@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000038 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] ASoC: tas571x: TAS5713 (steelhead) master volume scale — no PA software boost
 
@@ -17,10 +18,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  sound/soc/codecs/tas571x.c | 28 ++++++++++++++++++++++++++--
  1 file changed, 26 insertions(+), 2 deletions(-)
-
---- a/sound/soc/codecs/tas571x.c	2026-07-08 14:54:06.586221433 +0200
-+++ b/sound/soc/codecs/tas571x.c	2026-07-08 14:54:06.594445267 +0200
-@@ -785,11 +785,39 @@
+---
+diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
+index 698389ccc..ceb81b3ad 100644
+--- a/sound/soc/codecs/tas571x.c
++++ b/sound/soc/codecs/tas571x.c
+@@ -898,11 +898,39 @@ static const struct tas571x_chip tas5721_chip = {
  	.vol_reg_size			= 1,
  };
  

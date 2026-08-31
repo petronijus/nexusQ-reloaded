@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000022 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Mon, 29 Jun 2026 23:10:00 +0200
 Subject: [PATCH] ASoC: omap-mcbsp: derive CLKGDV from fclk for simple-audio-card
@@ -23,11 +24,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  sound/soc/ti/omap-mcbsp.c | 36 +++++++++++++++++++++++++++++------
  1 file changed, 30 insertions(+), 6 deletions(-)
-
+---
 diff --git a/sound/soc/ti/omap-mcbsp.c b/sound/soc/ti/omap-mcbsp.c
+index 411970399..7c8c45d20 100644
 --- a/sound/soc/ti/omap-mcbsp.c
 +++ b/sound/soc/ti/omap-mcbsp.c
-@@ -1029,13 +1029,37 @@
+@@ -1029,13 +1029,37 @@ static int omap_mcbsp_dai_hw_params(struct snd_pcm_substream *substream,
  	 * by _counting_ BCLKs. Calculate frame size in BCLKs */
  	master = mcbsp->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK;
  	if (master == SND_SOC_DAIFMT_BP_FP) {

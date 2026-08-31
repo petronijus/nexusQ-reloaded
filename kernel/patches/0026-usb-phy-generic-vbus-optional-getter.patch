@@ -19,9 +19,11 @@ usable regulator when one is wired in the DT.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/usb/phy/phy-generic.c b/drivers/usb/phy/phy-generic.c
+index 8423be59e..3a34b15f4 100644
 --- a/drivers/usb/phy/phy-generic.c
 +++ b/drivers/usb/phy/phy-generic.c
-@@ -256,7 +256,15 @@
+@@ -256,7 +256,15 @@ int usb_phy_gen_create_phy(struct device *dev, struct usb_phy_generic *nop)
  		return dev_err_probe(dev, PTR_ERR(nop->vcc),
  				     "could not get vcc regulator\n");
  

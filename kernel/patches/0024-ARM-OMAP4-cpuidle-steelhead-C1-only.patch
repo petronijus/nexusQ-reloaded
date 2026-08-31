@@ -23,6 +23,8 @@ dropped from the defconfig in the same batch.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+index df106524d..2f74d78c3 100644
 --- a/arch/arm/mach-omap2/cpuidle44xx.c
 +++ b/arch/arm/mach-omap2/cpuidle44xx.c
 @@ -11,6 +11,7 @@
@@ -33,7 +35,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  #include <linux/tick.h>
  
  #include <asm/cpuidle.h>
-@@ -326,5 +327,20 @@
+@@ -326,5 +327,20 @@ int __init omap4_idle_init(void)
  	if (!cpu_clkdm[0] || !cpu_clkdm[1])
  		return -ENODEV;
  

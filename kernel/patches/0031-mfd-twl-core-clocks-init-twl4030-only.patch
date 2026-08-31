@@ -19,9 +19,11 @@ procedure by class instead; the only CFG_BOOT consumer
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/mfd/twl-core.c b/drivers/mfd/twl-core.c
+index c69defc50..b16b727cc 100644
 --- a/drivers/mfd/twl-core.c
 +++ b/drivers/mfd/twl-core.c
-@@ -650,6 +650,19 @@
+@@ -650,6 +650,19 @@ static void clocks_init(struct device *dev)
  	u32 rate;
  	u8 ctrl = HFCLK_FREQ_26_MHZ;
  

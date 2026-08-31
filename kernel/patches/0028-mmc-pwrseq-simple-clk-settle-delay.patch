@@ -16,9 +16,11 @@ unaffected.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/mmc/core/pwrseq_simple.c b/drivers/mmc/core/pwrseq_simple.c
+index 4b47e6c3b..f300f7abd 100644
 --- a/drivers/mmc/core/pwrseq_simple.c
 +++ b/drivers/mmc/core/pwrseq_simple.c
-@@ -25,6 +25,7 @@
+@@ -27,6 +27,7 @@
  struct mmc_pwrseq_simple {
  	struct mmc_pwrseq pwrseq;
  	bool clk_enabled;
@@ -26,7 +28,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	u32 post_power_on_delay_ms;
  	u32 power_off_delay_us;
  	struct clk *ext_clk;
-@@ -65,6 +66,18 @@
+@@ -67,6 +68,18 @@ static void mmc_pwrseq_simple_pre_power_on(struct mmc_host *host)
  	if (!IS_ERR(pwrseq->ext_clk) && !pwrseq->clk_enabled) {
  		clk_prepare_enable(pwrseq->ext_clk);
  		pwrseq->clk_enabled = true;
@@ -44,9 +46,9 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +			msleep(pwrseq->clk_settle_delay_ms);
  	}
  
- 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
-@@ -129,6 +142,8 @@
- 		return dev_err_probe(dev, PTR_ERR(pwrseq->reset_gpios), "reset GPIOs not ready\n");
+ 	if (pwrseq->reset_ctrl) {
+@@ -156,6 +169,8 @@ static int mmc_pwrseq_simple_probe(struct platform_device *pdev)
+ 		}
  	}
  
 +	device_property_read_u32(dev, "clk-settle-delay-ms",

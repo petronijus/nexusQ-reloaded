@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000043 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] ARM: dts: omap4-steelhead: pin the factory WiFi MAC in DT
 
@@ -29,11 +30,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/omap4-steelhead.dts | 4 ++++
  1 file changed, 4 insertions(+)
-
+---
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+index 39b627c84..aab408870 100644
 --- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -694,6 +694,10 @@
- 		reg = <1>;
+@@ -658,6 +658,10 @@ brcmf: wifi@1 {
  		interrupt-parent = <&gpio2>;
  		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>; /* gpio_53 */
  		interrupt-names = "host-wake";
@@ -43,4 +45,4 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +		local-mac-address = [f8 8f ca 20 48 e1];
  	};
  };
-
+ 

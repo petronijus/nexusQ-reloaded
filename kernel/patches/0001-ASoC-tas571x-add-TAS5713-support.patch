@@ -15,12 +15,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  sound/soc/codecs/tas571x.c | 12 ++++++++++++
  1 file changed, 12 insertions(+)
-
+---
 diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
-index abcdef1..abcdef2 100644
+index 41d73f470..698389ccc 100644
 --- a/sound/soc/codecs/tas571x.c
 +++ b/sound/soc/codecs/tas571x.c
-@@ -785,6 +785,15 @@
+@@ -898,6 +898,15 @@ static const struct tas571x_chip tas5721_chip = {
  	.vol_reg_size			= 1,
  };
  
@@ -36,21 +36,19 @@ index abcdef1..abcdef2 100644
  static const struct snd_soc_dapm_widget tas571x_dapm_widgets[] = {
  	SND_SOC_DAPM_DAC("DACL", NULL, SND_SOC_NOPM, 0, 0),
  	SND_SOC_DAPM_DAC("DACR", NULL, SND_SOC_NOPM, 0, 0),
-@@ -944,6 +953,7 @@
- 	{ .compatible = "ti,tas5719", .data = &tas5717_chip, },
+@@ -1058,6 +1067,7 @@ static const struct of_device_id tas571x_of_match[] __maybe_unused = {
  	{ .compatible = "ti,tas5721", .data = &tas5721_chip, },
  	{ .compatible = "ti,tas5733", .data = &tas5733_chip, },
+ 	{ .compatible = "ti,tas5753", .data = &tas5753_chip, },
 +	{ .compatible = "ti,tas5713", .data = &tas5713_chip, },
  	{ }
  };
  MODULE_DEVICE_TABLE(of, tas571x_of_match);
-@@ -955,6 +965,7 @@
- 	{ "tas5719", (kernel_ulong_t) &tas5717_chip },
+@@ -1070,6 +1080,7 @@ static const struct i2c_device_id tas571x_i2c_id[] = {
  	{ "tas5721", (kernel_ulong_t) &tas5721_chip },
  	{ "tas5733", (kernel_ulong_t) &tas5733_chip },
+ 	{ "tas5753", (kernel_ulong_t) &tas5753_chip },
 +	{ "tas5713", (kernel_ulong_t) &tas5713_chip },
  	{ }
  };
  MODULE_DEVICE_TABLE(i2c, tas571x_i2c_id);
--- 
-2.43.0

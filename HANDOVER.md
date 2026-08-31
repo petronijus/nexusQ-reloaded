@@ -8,6 +8,115 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Desktop (petronijus-PC) — 2026-08-31: the 6.18 kernel rebase is done but UNBUILT
+
+### Why this is in this file
+
+The rebase is **not in git**. It lives in `~/nexusq-build/kstack` (2.1 GB) on the
+desktop only, so a `git pull` on the MacBook gets you nothing and re-doing it
+there would be an hour wasted. Everything below happens on `petronijus-PC`.
+The repo itself is clean — no APKBUILD or patch changes were committed.
+
+### What is already done
+
+`kernel/patches/` was replayed from 6.12.12 onto **6.18.48** (the newest LTS;
+Petr's call over 7.1, which is what `linux-postmarketos-omap` runs, and over
+staying on 6.12). Method and rationale: memory `kernel-bump-git-patch-stack`.
+
+| | |
+|---|---|
+| patches in | 46 |
+| applied | **44**, every one verified to apply to a pristine 6.18.48 with GNU `patch` |
+| dropped | **0004**, **0032** — upstream fixed both, independently |
+| conflicts | 3, all trivial |
+| staged series | `~/nexusq-build/kstack/patches-6.18.48` |
+| git stack | `~/nexusq-build/kstack/linux`, branch `steelhead`, tags `base-6.12.12` / `base-6.18.48`, `rerere` on |
+
+The two dropped patches were checked, not assumed:
+
+- **0004** (twl-core clock cell for TWL6030) — mainline now carries our exact
+  `twl_class_is_6030()` condition *plus* a dedicated `twl6030-clk` cell, and
+  `clk-twl.c`'s id table maps that cell to the same clk32kg + clk32kaudio data.
+  The BCM4330 sleep clock survives. Upstream's version is better than ours.
+- **0032** (omap-usb-host depopulate on remove) — upstream fixed the same bug in
+  the same place with `if (pdev->dev.of_node) of_platform_depopulate()`.
+  Equivalent for a DT-only platform, which is what we are.
+
+The whole `arch/arm/mach-omap2` block — 12 patches covering VDD_MPU, VC, ABB,
+OPP, cpuidle, restart and SMP — had **zero upstream churn** and rebased
+untouched. That is the part that was expected to hurt, and it did not.
+
+### Resume here
+
+1. **Do NOT renumber the patches.** `git format-patch` emitted 0001-0044, but the
+   docs and the memory index refer to patches by number ("patch 0046 = the biquad
+   fix", "0044 = reboot reason", "0018 = the ti-abb catch-22"). Re-export keeping
+   the original names, leaving **gaps at 0004 and 0032**. Renumbering silently
+   breaks every one of those references.
+2. `pmos/linux-google-steelhead/APKBUILD`: `pkgver=6.18.48`, `pkgrel=0`, and drop
+   the 0004 and 0032 lines from `source=`. Then `pmbootstrap checksum
+   linux-google-steelhead`. apk still sees this as an upgrade from `6.12.12-r52`
+   — `pkgver` dominates `pkgrel`.
+   ⚠️ `prepare()` rewrites `CONFIG_LOCALVERSION="-r$pkgrel"`, so pkgrel=0 gives
+   `-r0` and therefore a `/lib/modules/6.18.48-r0` of its own. That is correct and
+   is exactly what the kernel-OTA rollback path depends on — do not "tidy" it.
+3. Build via the `nexusq-build` subagent.
+4. **Measure `boot.img` against the 8 MB boot partition.** It is 6.2 MB on 6.12;
+   six minor versions of growth is the one thing that can still sink this plan.
+5. Take the authoritative Kconfig diff **from the pipeline**. The 781-line diff
+   taken on 2026-08-31 was run with the host gcc, so half of it is `CC_HAS_*` and
+   `AS_VERSION` noise. `olddefconfig` did succeed and every critical symbol
+   survived (TAS571X, LEDS_STEELHEAD_AVR, MFD_OMAP_USB_HOST, USB_EHCI_HCD_OMAP,
+   REGULATOR_TI_ABB, BRCMFMAC, NFC_PN544_I2C, SMP).
+6. Deploy to the **trial slot p8 via kernel OTA**, not to the production slot.
+   The health gate rolls a bad kernel back on its own; nothing needs a cable.
+7. Then the full `nexusq-diag` sweep before calling it good.
+
+### Found at build time (2026-08-31)
+
+- **Three patches applied with zero fuzz and still did not compile** against 6.18:
+  0005 and 0029 (upstream constified the sysfs `bin_attribute` API) and 0007
+  (upstream migrated clk from `.round_rate` to `.determine_rate(hw, req)`, and
+  git's 3-way merge planted our body into the new signature, where the old
+  parameters no longer exist). All three are fixed and compile-verified.
+  **A clean `patch` apply says nothing about compiling** — the GNU-patch gate is
+  necessary, not sufficient, and it cannot see a 3-way-merge hazard like 0007.
+
+  **Pre-flight before booking the shared build volume**, which catches all of them
+  in one pass in ~102 s with no docker and no volume:
+
+  ```sh
+  cd ~/nexusq-build/kstack/linux            # the patch stack, branch `steelhead`
+  export ARCH=arm CROSS_COMPILE=~/Documents/Dev/nexusQ-reloaded/build/\
+  arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-linux-gnueabihf/bin/arm-none-linux-gnueabihf-
+  cp ../../../Documents/Dev/nexusQ-reloaded/kernel/configs/steelhead_defconfig .config
+  make olddefconfig && make -j"$(nproc)" all
+  ```
+
+  ⚠️ **A green build here is NOT proof the shipped kernel is good.** This is
+  arm-gnu 13.3 against glibc headers; the kernel actually ships built with Alpine
+  gcc 15.2.0 for musl. It is a fast *API-drift* gate, nothing more — the real
+  build still has to run, and the device still has to boot it.
+- **Only one build may run on this machine at a time**, across all sessions — see
+  memory `build-volume-is-single-writer`. A second build zaps the first one's
+  chroots mid-compile and the victim sees a *fake toolchain error*
+  (`cannot execute cc1: posix_spawn`). `docker ps` before starting anything.
+- **`sha512sums` must be trimmed alongside `source=`.** Dropping 0004 and 0032
+  from `source=` while leaving their `SKIP` lines aborts abuild with
+  "Number of checksums(96 / 2) does not correspond to number of sources(46)".
+
+### A patch worth sending upstream
+
+Mainline's `tas571x_coefficient_info()` **still** sets
+`uinfo->value.integer.max = 0xffffffff`, which is `-1` in a 32-bit `long`, so
+every biquad coefficient write is clamped. That is our patch 0046. As of 6.18.48
+it is unfixed and now also reaches TAS5717/5719 and the newly added TAS5733 on
+every 32-bit host. Small, clean, defensible — worth a post to ASoC.
+
+Full state: memory `kernel-618-rebase-result`.
+
+---
+
 ## MacBook — 2026-08-30: you can cut releases here now, after one command
 
 ### Why this exists

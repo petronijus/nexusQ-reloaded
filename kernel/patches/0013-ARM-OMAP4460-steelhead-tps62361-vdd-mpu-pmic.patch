@@ -23,8 +23,10 @@ pr_info logs the selected MPU PMIC for validation.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/arch/arm/mach-omap2/omap_twl.c	2026-06-25 09:18:23.839103289 +0200
-+++ b/arch/arm/mach-omap2/omap_twl.c	2026-06-25 09:20:07.363710766 +0200
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index d4dab0413..912124e51 100644
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
 @@ -36,6 +36,18 @@
  #define OMAP4_VDD_CORE_SR_VOLT_REG	0x61
  #define OMAP4_VDD_CORE_SR_CMD_REG	0x62
@@ -44,7 +46,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  static bool is_offset_valid;
  static u8 smps_offset;
  
-@@ -124,6 +136,21 @@
+@@ -124,6 +136,21 @@ static u8 twl6030_uv_to_vsel(unsigned long uv)
  		return DIV_ROUND_UP(uv - 607700, 12660) + 1;
  }
  
@@ -66,7 +68,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  static struct omap_voltdm_pmic omap3_mpu_pmic = {
  	.slew_rate		= 4000,
  	.step_size		= 12500,
-@@ -174,6 +201,29 @@
+@@ -174,6 +201,29 @@ static struct omap_voltdm_pmic omap4_mpu_pmic = {
  	.uv_to_vsel		= twl6030_uv_to_vsel,
  };
  
@@ -96,7 +98,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  static struct omap_voltdm_pmic omap4_iva_pmic = {
  	.slew_rate		= 4000,
  	.step_size		= 12660,
-@@ -213,13 +263,25 @@
+@@ -213,13 +263,25 @@ static struct omap_voltdm_pmic omap4_core_pmic = {
  int __init omap4_twl_init(void)
  {
  	struct voltagedomain *voltdm;

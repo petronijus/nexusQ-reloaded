@@ -25,9 +25,34 @@ stock explicitly unmaps it (twl_set_4460vcore, "unmap APE VCORE3").
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index d9d8525df..33c7d178d 100644
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -310,6 +310,18 @@ int __init omap4_twl_init(void)
+ 	voltdm = voltdm_lookup("iva");
+ 	omap_voltage_register_pmic(voltdm, &omap4_iva_pmic);
+ 
++	/*
++	 * OMAP4460: VDD_CORE sits on TWL6030 VCORE1 (volt/cmd 0x55/0x56) -
++	 * VCORE3, the OMAP4430 core SMPS these defaults point at, is unused
++	 * and the stock kernel explicitly unmaps it ("unmap APE VCORE3",
++	 * twl_set_4460vcore). Retarget the VC core channel accordingly, or
++	 * any future VC-driven core transition would program a phantom SMPS.
++	 */
++	if (soc_is_omap446x()) {
++		omap4_core_pmic.volt_reg_addr = OMAP4_VDD_MPU_SR_VOLT_REG;
++		omap4_core_pmic.cmd_reg_addr = OMAP4_VDD_MPU_SR_CMD_REG;
++	}
++
+ 	voltdm = voltdm_lookup("core");
+ 	omap_voltage_register_pmic(voltdm, &omap4_core_pmic);
+ 
+diff --git a/arch/arm/mach-omap2/vc44xx_data.c b/arch/arm/mach-omap2/vc44xx_data.c
+index 0c70c0815..9a9fffbb2 100644
 --- a/arch/arm/mach-omap2/vc44xx_data.c
 +++ b/arch/arm/mach-omap2/vc44xx_data.c
-@@ -86,30 +86,40 @@
+@@ -86,30 +86,40 @@ struct omap_vc_channel omap4_vc_core = {
  };
  
  /*
@@ -77,24 +102,3 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	.ret			= OMAP4_RET_VOLTAGE_UV,
  	.off			= OMAP4_OFF_VOLTAGE_UV,
  };
---- a/arch/arm/mach-omap2/omap_twl.c
-+++ b/arch/arm/mach-omap2/omap_twl.c
-@@ -310,6 +310,18 @@
- 	voltdm = voltdm_lookup("iva");
- 	omap_voltage_register_pmic(voltdm, &omap4_iva_pmic);
- 
-+	/*
-+	 * OMAP4460: VDD_CORE sits on TWL6030 VCORE1 (volt/cmd 0x55/0x56) -
-+	 * VCORE3, the OMAP4430 core SMPS these defaults point at, is unused
-+	 * and the stock kernel explicitly unmaps it ("unmap APE VCORE3",
-+	 * twl_set_4460vcore). Retarget the VC core channel accordingly, or
-+	 * any future VC-driven core transition would program a phantom SMPS.
-+	 */
-+	if (soc_is_omap446x()) {
-+		omap4_core_pmic.volt_reg_addr = OMAP4_VDD_MPU_SR_VOLT_REG;
-+		omap4_core_pmic.cmd_reg_addr = OMAP4_VDD_MPU_SR_CMD_REG;
-+	}
-+
- 	voltdm = voltdm_lookup("core");
- 	omap_voltage_register_pmic(voltdm, &omap4_core_pmic);
- 

@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000037 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Subject: [PATCH] nfc: pn544: RATS-activate all ISO-DEP targets, not just DESFire
 
@@ -23,10 +24,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  drivers/nfc/pn544/pn544.c | 14 ++++++++++----
  1 file changed, 10 insertions(+), 4 deletions(-)
-
+---
+diff --git a/drivers/nfc/pn544/pn544.c b/drivers/nfc/pn544/pn544.c
+index 32a61a185..e29ee64c6 100644
 --- a/drivers/nfc/pn544/pn544.c
 +++ b/drivers/nfc/pn544/pn544.c
-@@ -556,10 +556,16 @@
+@@ -556,10 +556,16 @@ static int pn544_hci_complete_target_discovered(struct nfc_hci_dev *hdev,
  		}
  	} else if (target->supported_protocols & NFC_PROTO_ISO14443_MASK) {
  		/*

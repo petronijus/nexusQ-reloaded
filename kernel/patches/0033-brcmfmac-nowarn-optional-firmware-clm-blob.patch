@@ -15,9 +15,11 @@ driver itself declares optional. Non-optional items are unchanged.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
+index ef79924fd..aa4b6f17a 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c
-@@ -666,6 +666,16 @@
+@@ -670,6 +670,16 @@ static int brcmf_fw_request_firmware(const struct firmware **fw,
  	}
  
  fallback:

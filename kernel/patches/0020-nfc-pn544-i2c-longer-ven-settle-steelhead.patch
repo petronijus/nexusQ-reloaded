@@ -11,9 +11,11 @@ the runtime enable paths, to match stock timing.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/drivers/nfc/pn544/i2c.c	2026-06-26 14:38:00.394446930 +0200
-+++ b/drivers/nfc/pn544/i2c.c	2026-06-26 15:48:33.029428658 +0200
-@@ -204,7 +204,14 @@
+diff --git a/drivers/nfc/pn544/i2c.c b/drivers/nfc/pn544/i2c.c
+index a0dfb3f98..f926f889d 100644
+--- a/drivers/nfc/pn544/i2c.c
++++ b/drivers/nfc/pn544/i2c.c
+@@ -204,7 +204,14 @@ static void pn544_hci_i2c_platform_init(struct pn544_i2c_phy *phy)
  
  			/* power on */
  			gpiod_set_value_cansleep(phy->gpiod_en, phy->en_polarity);
@@ -29,7 +31,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  
  			/* send reset */
  			dev_dbg(&phy->i2c_dev->dev, "Sending reset cmd\n");
-@@ -230,7 +237,7 @@
+@@ -230,7 +237,7 @@ static void pn544_hci_i2c_enable_mode(struct pn544_i2c_phy *phy, int run_mode)
  {
  	gpiod_set_value_cansleep(phy->gpiod_fw, run_mode == PN544_FW_MODE ? 1 : 0);
  	gpiod_set_value_cansleep(phy->gpiod_en, phy->en_polarity);

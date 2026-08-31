@@ -6,7 +6,8 @@
 # device during development (insmod ... || modprobe --force).
 set -e
 
-TREE="${LINUX_TREE:-/home/petronijus/nexusq-build/linux-6.12.12}"
+KVER="${KVER:-6.18.48}"
+TREE="${LINUX_TREE:-/home/petronijus/nexusq-build/linux-$KVER}"
 TCBIN="${ARM_TCBIN:-/home/petronijus/nexusq-build/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-linux-gnueabihf/bin}"
 SRC="${REPO_DRIVERS:-/mnt/d/nexusQ-reloaded/kernel/drivers}"
 MB="${MODBUILD:-/home/petronijus/nexusq-build/modbuild}"

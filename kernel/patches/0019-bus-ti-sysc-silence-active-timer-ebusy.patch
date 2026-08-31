@@ -21,9 +21,11 @@ boot-time error line.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/drivers/bus/ti-sysc.c	2026-06-26 14:14:04.737380313 +0200
-+++ b/drivers/bus/ti-sysc.c	2026-06-26 14:14:19.900248271 +0200
-@@ -3224,6 +3224,16 @@
+diff --git a/drivers/bus/ti-sysc.c b/drivers/bus/ti-sysc.c
+index 610354ce7..b15f825b1 100644
+--- a/drivers/bus/ti-sysc.c
++++ b/drivers/bus/ti-sysc.c
+@@ -3198,6 +3198,16 @@ static int sysc_probe(struct platform_device *pdev)
  	error = sysc_check_active_timer(ddata);
  	if (error == -ENXIO)
  		ddata->reserved = true;

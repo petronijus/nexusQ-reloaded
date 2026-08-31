@@ -18,15 +18,17 @@ kernels); reading is also generally useful for debugging the ring.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/leds/leds-steelhead-avr.c b/drivers/leds/leds-steelhead-avr.c
+index 64e15da1e..b05dfd880 100755
 --- a/drivers/leds/leds-steelhead-avr.c
 +++ b/drivers/leds/leds-steelhead-avr.c
-@@ -260,7 +260,39 @@
+@@ -260,7 +260,39 @@ static ssize_t frame_write(struct file *fp, struct kobject *kobj,
  	mutex_unlock(&a->io_lock);
  	return ret ? ret : (ssize_t)count;
  }
 -static BIN_ATTR(frame, 0200, NULL, frame_write, AVR_RING_LEDS * 3);
 +static ssize_t frame_read(struct file *fp, struct kobject *kobj,
-+			  struct bin_attribute *attr, char *buf,
++			  const struct bin_attribute *attr, char *buf,
 +			  loff_t off, size_t count)
 +{
 +	struct device *dev = kobj_to_dev(kobj);

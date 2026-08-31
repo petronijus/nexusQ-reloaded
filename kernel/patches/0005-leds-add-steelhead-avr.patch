@@ -23,12 +23,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  create mode 100644 drivers/leds/leds-steelhead-avr-test.c
  create mode 100644 drivers/leds/leds-steelhead-avr.c
  create mode 100644 drivers/leds/steelhead_avr.h
-
+---
 diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
-index b784bb74a..ff81ae1c2 100644
+index 06e6291be..1b6114143 100644
 --- a/drivers/leds/Kconfig
 +++ b/drivers/leds/Kconfig
-@@ -959,6 +959,20 @@ config LEDS_ACER_A500
+@@ -1020,6 +1020,20 @@ config LEDS_ACER_A500
  	  This option enables support for the Power Button LED of
  	  Acer Iconia Tab A500.
  
@@ -50,10 +50,10 @@ index b784bb74a..ff81ae1c2 100644
  
  comment "Flash and Torch LED drivers"
 diff --git a/drivers/leds/Makefile b/drivers/leds/Makefile
-index 18afbb5a2..aa4f13419 100644
+index 9a0333ec1..f523eae82 100644
 --- a/drivers/leds/Makefile
 +++ b/drivers/leds/Makefile
-@@ -101,6 +101,8 @@ obj-$(CONFIG_LEDS_CR0014114)		+= leds-cr0014114.o
+@@ -107,6 +107,8 @@ obj-$(CONFIG_LEDS_CR0014114)		+= leds-cr0014114.o
  obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
  obj-$(CONFIG_LEDS_EL15203000)		+= leds-el15203000.o
  obj-$(CONFIG_LEDS_SPI_BYTE)		+= leds-spi-byte.o
@@ -64,7 +64,7 @@ index 18afbb5a2..aa4f13419 100644
  obj-$(CONFIG_LEDS_USER)			+= uleds.o
 diff --git a/drivers/leds/leds-steelhead-avr-test.c b/drivers/leds/leds-steelhead-avr-test.c
 new file mode 100755
-index 000000000..8090e1121
+index 000000000..c6e394a4e
 --- /dev/null
 +++ b/drivers/leds/leds-steelhead-avr-test.c
 @@ -0,0 +1,58 @@
@@ -128,7 +128,7 @@ index 000000000..8090e1121
 +MODULE_LICENSE("GPL");
 diff --git a/drivers/leds/leds-steelhead-avr.c b/drivers/leds/leds-steelhead-avr.c
 new file mode 100755
-index 000000000..75598e846
+index 000000000..2eaf38874
 --- /dev/null
 +++ b/drivers/leds/leds-steelhead-avr.c
 @@ -0,0 +1,472 @@
@@ -368,7 +368,7 @@ index 000000000..75598e846
 +}
 +
 +static ssize_t frame_write(struct file *fp, struct kobject *kobj,
-+			   struct bin_attribute *attr, char *buf,
++			   const struct bin_attribute *attr, char *buf,
 +			   loff_t off, size_t count)
 +{
 +	struct device *dev = kobj_to_dev(kobj);
@@ -437,7 +437,7 @@ index 000000000..75598e846
 +static struct attribute *avr_attrs[] = {
 +	&dev_attr_commit_mode.attr, &dev_attr_mute.attr, NULL,
 +};
-+static struct bin_attribute *avr_bin_attrs[] = { &bin_attr_frame, NULL };
++static const struct bin_attribute *const avr_bin_attrs[] = { &bin_attr_frame, NULL };
 +static const struct attribute_group avr_group = {
 +	.attrs = avr_attrs, .bin_attrs = avr_bin_attrs,
 +};
@@ -606,7 +606,7 @@ index 000000000..75598e846
 +MODULE_LICENSE("GPL");
 diff --git a/drivers/leds/steelhead_avr.h b/drivers/leds/steelhead_avr.h
 new file mode 100755
-index 000000000..c9575ac65
+index 000000000..31fe6a9c9
 --- /dev/null
 +++ b/drivers/leds/steelhead_avr.h
 @@ -0,0 +1,50 @@

@@ -18,9 +18,11 @@ blank-inducing 1440x900/1280x1024). Pair with video=HDMI-A-1:1280x720@60.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/gpu/drm/omapdrm/dss/hdmi4.c b/drivers/gpu/drm/omapdrm/dss/hdmi4.c
+index 3cd612af2..79f3b33b8 100644
 --- a/drivers/gpu/drm/omapdrm/dss/hdmi4.c
 +++ b/drivers/gpu/drm/omapdrm/dss/hdmi4.c
-@@ -491,8 +491,28 @@
+@@ -491,8 +491,28 @@ static const struct drm_edid *hdmi4_bridge_edid_read(struct drm_bridge *bridge,
  	return drm_edid;
  }
  

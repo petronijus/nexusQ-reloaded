@@ -26,42 +26,11 @@ retask work as soon as twl is up. Zero prints, identical behaviour.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
---- a/drivers/mfd/twl-core.c
-+++ b/drivers/mfd/twl-core.c
-@@ -413,6 +413,20 @@
- EXPORT_SYMBOL(twl_rev);
- 
- /**
-+ * twl_is_ready - can twl_i2c_read/write actually reach the chip yet?
-+ *
-+ * Lets early platform code (e.g. the OMAP4 voltage layer, which runs from a
-+ * late_initcall long before the DT-probed twl i2c device binds) check for
-+ * readiness instead of issuing doomed transfers that each log
-+ * "twl: not initialized".
-+ */
-+bool twl_is_ready(void)
-+{
-+	return twl_priv && twl_priv->ready;
-+}
-+EXPORT_SYMBOL_GPL(twl_is_ready);
-+
-+/**
-  * twl_get_regmap - Get the regmap associated with the given module
-  * @mod_no: module number
-  *
---- a/include/linux/mfd/twl.h
-+++ b/include/linux/mfd/twl.h
-@@ -152,6 +152,7 @@
- #define TWL4030_CLASS_ID 		0x4030
- #define TWL6030_CLASS_ID 		0x6030
- unsigned int twl_rev(void);
-+bool twl_is_ready(void);
- #define GET_TWL_REV (twl_rev())
- #define TWL_CLASS_IS(class, id)			\
- static inline int twl_class_is_ ##class(void)	\
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index 33c7d178d..ced7e71a8 100644
 --- a/arch/arm/mach-omap2/omap_twl.c
 +++ b/arch/arm/mach-omap2/omap_twl.c
-@@ -61,7 +61,15 @@
+@@ -61,7 +61,15 @@ static void twl6030_read_smps_offset(void)
  	if (is_offset_valid)
  		return;
  
@@ -78,7 +47,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  			     REG_SMPS_OFFSET)) {
  		is_offset_valid = true;
  		return;
-@@ -443,10 +451,12 @@
+@@ -443,10 +451,12 @@ static int omap4460_vdd_mpu_do_retask(void)
  static void omap4460_vdd_mpu_retask_work(struct work_struct *work)
  {
  	static int attempts;
@@ -94,7 +63,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  		if (++attempts < 60) {
  			schedule_delayed_work(to_delayed_work(work),
  					      msecs_to_jiffies(500));
-@@ -457,6 +467,10 @@
+@@ -457,6 +467,10 @@ static void omap4460_vdd_mpu_retask_work(struct work_struct *work)
  		return;
  	}
  
@@ -105,3 +74,40 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	omap4460_vdd_mpu_do_retask();
  }
  static DECLARE_DELAYED_WORK(omap4460_mpu_retask_dwork,
+diff --git a/drivers/mfd/twl-core.c b/drivers/mfd/twl-core.c
+index f89eda4a1..c69defc50 100644
+--- a/drivers/mfd/twl-core.c
++++ b/drivers/mfd/twl-core.c
+@@ -412,6 +412,20 @@ unsigned int twl_rev(void)
+ }
+ EXPORT_SYMBOL(twl_rev);
+ 
++/**
++ * twl_is_ready - can twl_i2c_read/write actually reach the chip yet?
++ *
++ * Lets early platform code (e.g. the OMAP4 voltage layer, which runs from a
++ * late_initcall long before the DT-probed twl i2c device binds) check for
++ * readiness instead of issuing doomed transfers that each log
++ * "twl: not initialized".
++ */
++bool twl_is_ready(void)
++{
++	return twl_priv && twl_priv->ready;
++}
++EXPORT_SYMBOL_GPL(twl_is_ready);
++
+ /**
+  * twl_get_regmap - Get the regmap associated with the given module
+  * @mod_no: module number
+diff --git a/include/linux/mfd/twl.h b/include/linux/mfd/twl.h
+index b31e07fa4..d268c995e 100644
+--- a/include/linux/mfd/twl.h
++++ b/include/linux/mfd/twl.h
+@@ -152,6 +152,7 @@ enum twl6030_module_ids {
+ #define TWL4030_CLASS_ID 		0x4030
+ #define TWL6030_CLASS_ID 		0x6030
+ unsigned int twl_rev(void);
++bool twl_is_ready(void);
+ #define GET_TWL_REV (twl_rev())
+ #define TWL_CLASS_IS(class, id)			\
+ static inline int twl_class_is_ ##class(void)	\

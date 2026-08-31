@@ -2,8 +2,8 @@
 # Kernel: mainline for Google Nexus Q (steelhead)
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
-pkgver=6.12.12
-pkgrel=52
+pkgver=6.18.48
+pkgrel=0
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -34,7 +34,6 @@ source="
 	0001-ASoC-tas571x-add-TAS5713-support.patch
 	0002-dt-bindings-add-ti-tas5713.patch
 	0003-ARM-dts-omap4-add-steelhead.patch
-	0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 	0005-leds-add-steelhead-avr.patch
 	0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp.patch
 	0007-clk-ti-composite-implement-divider-round-set-rate.patch
@@ -62,7 +61,6 @@ source="
 	0029-leds-steelhead-avr-readable-frame.patch
 	0030-twl-gate-pre-probe-access-twl-is-ready.patch
 	0031-mfd-twl-core-clocks-init-twl4030-only.patch
-	0032-mfd-omap-usb-host-depopulate-children-on-remove.patch
 	0033-brcmfmac-nowarn-optional-firmware-clm-blob.patch
 	0034-ARM-steelhead-no-hw-breakpoint-hs-debug-locked.patch
 	0035-ARM-l2c-downgrade-omap4-aux-modify-notice.patch
@@ -130,7 +128,6 @@ SKIP  $_config
 SKIP  0001-ASoC-tas571x-add-TAS5713-support.patch
 SKIP  0002-dt-bindings-add-ti-tas5713.patch
 SKIP  0003-ARM-dts-omap4-add-steelhead.patch
-SKIP  0004-mfd-twl-core-register-clk-cell-for-twl6030.patch
 SKIP  0005-leds-add-steelhead-avr.patch
 SKIP  0006-usb-ehci-omap-steelhead-keep-ethernet-port-alive-ulp.patch
 SKIP  0007-clk-ti-composite-implement-divider-round-set-rate.patch
@@ -158,7 +155,6 @@ SKIP  0028-mmc-pwrseq-simple-clk-settle-delay.patch
 SKIP  0029-leds-steelhead-avr-readable-frame.patch
 SKIP  0030-twl-gate-pre-probe-access-twl-is-ready.patch
 SKIP  0031-mfd-twl-core-clocks-init-twl4030-only.patch
-SKIP  0032-mfd-omap-usb-host-depopulate-children-on-remove.patch
 SKIP  0033-brcmfmac-nowarn-optional-firmware-clm-blob.patch
 SKIP  0034-ARM-steelhead-no-hw-breakpoint-hs-debug-locked.patch
 SKIP  0035-ARM-l2c-downgrade-omap4-aux-modify-notice.patch

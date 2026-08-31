@@ -15,12 +15,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 960 +
  2 files changed, 961 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-
+---
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
-index abcdef1..abcdef2 100644
+index 1aef60eef..e6af58f26 100644
 --- a/arch/arm/boot/dts/ti/omap/Makefile
 +++ b/arch/arm/boot/dts/ti/omap/Makefile
-@@ -78,6 +78,7 @@
+@@ -78,6 +78,7 @@ dtb-$(CONFIG_ARCH_OMAP4) += \
  	omap4-panda-es.dtb \
  	omap4-sdp.dtb \
  	omap4-sdp-es23plus.dtb \
@@ -28,10 +28,9 @@ index abcdef1..abcdef2 100644
  	omap4-var-dvk-om44.dtb \
  	omap4-var-stk-om44.dtb \
  	omap4-xyboard-mz609.dtb \
-
 diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 new file mode 100644
-index 0000000..1111111
+index 000000000..7164fe274
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 @@ -0,0 +1,960 @@

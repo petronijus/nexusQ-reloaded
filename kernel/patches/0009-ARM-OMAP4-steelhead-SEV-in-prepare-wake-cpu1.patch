@@ -22,9 +22,11 @@ cpuidle44xx.disallow_smp_idle) -- OMAP4 secondary deep-idle otherwise faults.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mach-omap2/omap-smp.c b/arch/arm/mach-omap2/omap-smp.c
+index 570a987e6..bf06c0201 100644
 --- a/arch/arm/mach-omap2/omap-smp.c
 +++ b/arch/arm/mach-omap2/omap-smp.c
-@@ -403,6 +403,16 @@
+@@ -403,6 +403,16 @@ static void __init omap4_smp_prepare_cpus(unsigned int max_cpus)
  	else
  		writel_relaxed(__pa_symbol(cfg.startup_addr),
  			       cfg.wakeupgen_base + OMAP_AUX_CORE_BOOT_1);

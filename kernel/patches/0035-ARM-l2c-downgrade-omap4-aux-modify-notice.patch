@@ -18,9 +18,11 @@ unchanged. (Exhaustively verified unfixable-otherwise 2026-07-06.)
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/arch/arm/mm/cache-l2x0.c b/arch/arm/mm/cache-l2x0.c
+index 470867160..493810a9b 100644
 --- a/arch/arm/mm/cache-l2x0.c
 +++ b/arch/arm/mm/cache-l2x0.c
-@@ -805,7 +805,18 @@
+@@ -806,7 +806,18 @@ static int __init __l2c_init(const struct l2c_init_data *data,
  	aux |= aux_val;
  
  	if (old_aux != aux)
@@ -40,7 +42,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  		        old_aux, aux);
  
  	/* Determine the number of ways */
-@@ -1788,7 +1799,10 @@
+@@ -1789,7 +1800,10 @@ int __init l2x0_of_init(u32 aux_val, u32 aux_mask)
  
  	old_aux = readl_relaxed(l2x0_base + L2X0_AUX_CTRL);
  	if (old_aux != ((old_aux & aux_mask) | aux_val)) {

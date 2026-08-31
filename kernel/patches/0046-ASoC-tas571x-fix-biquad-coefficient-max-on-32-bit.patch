@@ -1,3 +1,4 @@
+From 0000000000000000000000000000000000000046 Mon Sep 17 00:00:00 2001
 From: Petr Parkan Janda <petronijus@bastla.com>
 Date: Sun, 24 Aug 2026 14:30:00 +0200
 Subject: [PATCH] ASoC: tas571x: fix biquad coefficient control max on 32-bit
@@ -43,11 +44,12 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  sound/soc/codecs/tas571x.c | 9 ++++++++-
  1 file changed, 8 insertions(+), 1 deletion(-)
-
+---
 diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
+index 0c58ce42d..9c096bc19 100644
 --- a/sound/soc/codecs/tas571x.c
 +++ b/sound/soc/codecs/tas571x.c
-@@ -226,6 +226,14 @@
+@@ -226,6 +226,14 @@ static int tas571x_reg_read_multiword(struct i2c_client *client,
   * b0, b1, b2, a1, a2
   */
  
@@ -62,7 +64,7 @@ diff --git a/sound/soc/codecs/tas571x.c b/sound/soc/codecs/tas571x.c
  static int tas571x_coefficient_info(struct snd_kcontrol *kcontrol,
  				   struct snd_ctl_elem_info *uinfo)
  {
-@@ -234,7 +242,7 @@
+@@ -234,7 +242,7 @@ static int tas571x_coefficient_info(struct snd_kcontrol *kcontrol,
  	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
  	uinfo->count = numcoef;
  	uinfo->value.integer.min = 0;

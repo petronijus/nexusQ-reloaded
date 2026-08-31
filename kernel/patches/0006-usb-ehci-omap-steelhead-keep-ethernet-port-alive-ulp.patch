@@ -24,6 +24,8 @@ from a wrong timing/discharge theory and were removed.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
+diff --git a/drivers/usb/host/ehci-omap.c b/drivers/usb/host/ehci-omap.c
+index db4a1acb2..f262ac413 100644
 --- a/drivers/usb/host/ehci-omap.c
 +++ b/drivers/usb/host/ehci-omap.c
 @@ -23,18 +23,24 @@
@@ -51,7 +53,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  #define EHCI_INSNREG04					(0xA0)
  #define EHCI_INSNREG04_DISABLE_UNSUSPEND		(1 << 5)
  #define	EHCI_INSNREG05_ULPI				(0xA4)
-@@ -61,6 +67,215 @@
+@@ -61,6 +67,215 @@ static inline void ehci_write(void __iomem *base, u32 reg, u32 val)
  	__raw_writel(val, base + reg);
  }
  
@@ -267,7 +269,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  /* configure so an HC device and id are always provided */
  /* always called with process context; sleeping is OK */
  
-@@ -68,6 +283,7 @@
+@@ -68,6 +283,7 @@ static struct hc_driver __read_mostly ehci_omap_hc_driver;
  
  static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
  	.extra_priv_size = sizeof(struct omap_hcd),
@@ -275,7 +277,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  };
  
  /**
-@@ -144,6 +360,79 @@
+@@ -144,6 +360,79 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
  
  	platform_set_drvdata(pdev, hcd);
  
@@ -355,7 +357,7 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	/* get the PHY devices if needed */
  	for (i = 0 ; i < omap->nports ; i++) {
  		struct usb_phy *phy;
-@@ -187,6 +476,16 @@
+@@ -187,6 +476,16 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
  	ehci_write(regs, EHCI_INSNREG04,
  				EHCI_INSNREG04_DISABLE_UNSUSPEND);
  
@@ -372,10 +374,11 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
  	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
  	if (ret) {
  		dev_err(dev, "failed to add hcd with err %d\n", ret);
-@@ -195,6 +494,83 @@
+@@ -194,6 +493,83 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
+ 	}
  	device_wakeup_enable(hcd->self.controller);
  
- 	/*
++	/*
 +	 * Nexus Q (steelhead): log the ULPI identity and state once now that the
 +	 * controller is running (a healthy USB3320 answers VID 0x0424/PID 0x0007;
 +	 * -ETIMEDOUT means the PHY is unclocked or held in reset), then keep the
@@ -452,7 +455,6 @@ Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 +			 "steelhead: root-hub pinned runtime-active, keeping ehci port powered\n");
 +	}
 +
-+	/*
+ 	/*
  	 * Bring PHYs out of reset for non PHY modes.
  	 * Even though HSIC mode is a PHY-less mode, the reset
- 	 * line exists between the chips and can be modelled
