@@ -499,9 +499,18 @@ cmd_promote() {
     log "promoted and disarmed. Slot A md5 $_a"
 
     # Reconcile the package database LAST, now that the new kernel is the one
-    # running. Until this point the old package had to stay installed so its
-    # /lib/modules survived a rollback; from here it is safe to let apk replace
-    # it, which also refreshes /boot (vmlinuz, dtbs, config, kernel.release).
+    # running. This also refreshes /boot (vmlinuz, dtbs, config, kernel.release).
+    #
+    # ⚠️ It used to say here that once the new kernel is promoted it is "safe to
+    # let apk replace" the old package. That was WRONG and it was measured wrong
+    # on 2026-08-31: `apk add --upgrade` deletes the outgoing package's files,
+    # which took all 155 modules of 6.12.12-r52 with it. `restore` below puts
+    # slot-a-backup.img -- the OLD kernel -- back on the boot slot, and a kernel
+    # whose /lib/modules apk has just deleted comes up with no cfg80211, so no
+    # WiFi, on a box with no serial console. The rollback path was silently
+    # disarmed by the very step that tidied up after it. So the outgoing tree is
+    # stashed across the upgrade and put back, unowned by apk, for as long as the
+    # backup image it belongs to still exists.
     #
     # This step was documented from the start and NOT implemented — the code had
     # only a comment. The gap was silent and real: after the first promotion the
@@ -518,6 +527,14 @@ cmd_promote() {
         log "package database already agrees ($KERNEL_PKG-$(uname -r))"
     else
         log "reconciling the package database with the running kernel"
+        _old=$(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1 | sed "s/^$KERNEL_PKG-//")
+        _stash=""
+        if [ -n "$_old" ] && [ "$_old" != "$(uname -r)" ] &&
+           [ -d "/lib/modules/$_old" ] && [ -f "$BACKUP" ]; then
+            _stash="$STATE_DIR/modules-$_old.tar.gz"
+            log "stashing /lib/modules/$_old — it belongs to the backup image"
+            tar -czf "$_stash" -C / "lib/modules/$_old" 2>/dev/null || _stash=""
+        fi
         if apk add --upgrade "$KERNEL_PKG" >/dev/null 2>&1; then
             log "apk now agrees: $(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1)"
         else
@@ -525,6 +542,16 @@ cmd_promote() {
             log "         PREVIOUS kernel. Run 'apk add --upgrade $KERNEL_PKG' by hand;"
             log "         the running kernel is fine either way."
         fi
+        if [ -n "$_stash" ] && [ ! -d "/lib/modules/$_old" ]; then
+            if tar -xzf "$_stash" -C / 2>/dev/null; then
+                depmod "$_old" 2>/dev/null || true
+                log "put /lib/modules/$_old back — 'restore' stays usable"
+            else
+                log "WARNING: could not restore /lib/modules/$_old from $_stash."
+                log "         'restore' would boot the backup kernel WITHOUT modules."
+            fi
+        fi
+        [ -n "$_stash" ] && rm -f "$_stash"
     fi
 }
 

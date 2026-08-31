@@ -6,6 +6,63 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+Device **r91**, kernel **6.18.48-r0**. Full record:
+`docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
+
+### Changed — mainline moves to 6.18 LTS (2026-08-31)
+- **The kernel is now mainline 6.18.48**, up from 6.12.12 — 95 stable releases and
+  six minor versions. Target is the newest LTS, chosen over 7.1 (what
+  `linux-postmarketos-omap` runs) because rebasing 46 patches is not something to
+  repeat every nine weeks.
+- The patch stack was replayed as **git commits** (`~/nexusq-build/kstack`, two
+  pristine tarballs as base commits, so `rebase --onto` needs no 5 GB clone).
+  46 patches in, **44 out**, 3 trivial conflicts.
+- **Patches 0004 and 0032 are gone — upstream fixed both independently.** Verified
+  by reading the 6.18 source, then confirmed on the device (`clk32kaudio` and
+  `twl6030-clk` are present, so the BCM4330 sleep clock survives).
+- Booted in 48 s, health-gated promote, **zero dmesg errors**. `vdd_mismatch = 0`:
+  350 MHz → 1 025 000 µV and 1200 MHz → 1 380 000 µV, stock voltages exactly.
+  Staged image 6 709 248 B, under the ~6656 KB U-Boot caution.
+
+### Fixed — promote was disarming the rollback it exists to protect (2026-08-31)
+- `nq-kernel-ota promote` reconciles the package database with
+  `apk add --upgrade`, and apk **deletes the outgoing package's files** — taking
+  all 155 modules of the previous kernel with them. A comment claimed this was
+  safe post-promotion. It is not: `restore` puts the *old* kernel back, and a
+  kernel with no `/lib/modules` has no cfg80211, so no WiFi, on a device with no
+  serial console.
+- The outgoing module tree is now stashed across the upgrade and put back,
+  unowned by apk, while its backup image still exists (`nexusq-kernel-ota` r4).
+- ⚠️ The bug was **seen failing**; the fix has not yet been seen working. Proof
+  needs the next kernel OTA cycle.
+
+### Fixed — the kernel never needed qemu (2026-08-31)
+- Every pmbootstrap call passed `--no-cross`, overriding the aport's own
+  `pmb:cross-native`. `docker-build.sh` gains a Phase 7e that builds the kernel
+  cross-native: **108 s instead of 1983 s, 18.4x**. `NEXUSQ_KERNEL_NO_CROSS=1`
+  restores the old path for an A/B.
+- The two paths produce **equivalent, not identical** kernels — both payloads
+  decompress to exactly 19 999 328 bytes, and 99 % of the differences are
+  constant-delta `movw` address shifts from a 93-byte compiler-name string, plus
+  address-indexed kallsyms. The `posix_spawn` error the old comments blamed the
+  toolchain for is also what a concurrently-zapped buildroot looks like.
+
+### Known issues
+- **Ethernet unverified on 6.18** — no cable attached; patches 0006/0008/0012
+  only prove themselves after a cold power-cycle. HDMI, fastboot-over-ssh (0044),
+  USB-host re-probe and USB Audio latency are also not yet exercised.
+- **An accidental 106-package Alpine edge upgrade ran on the Prague Q** on
+  2026-08-31 (`apk upgrade` where `apk add --upgrade <pkg>` was meant). Harmless,
+  but the kernel is no longer the only changed variable — do not assume 6.18 is
+  the cause of a later misbehaviour without checking.
+- **Three patches applied with zero fuzz and did not compile** (0005, 0029, 0007).
+  A clean `patch` apply is not a build. Pre-flight with a local full kernel build
+  (arm-gnu-13.3, 102 s, no docker) before booking the shared build volume — but
+  it is an API-drift gate only, not proof the shipped kernel is good.
+- **`172.16.42.1` now answers as the Nokia Lumia**, not the Q. `nqctl` auto-mode
+  tries USB before WiFi and reports the Q unreachable when OPNsense is down.
+  Verify `hostname` before writing to any host.
+
 Device **r90**. Full record:
 `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
 
