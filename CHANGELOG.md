@@ -22,7 +22,9 @@ Device **r91**, kernel **6.18.48-r0**. Full record:
   `twl6030-clk` are present, so the BCM4330 sleep clock survives).
 - Booted in 48 s, health-gated promote, **zero dmesg errors**. `vdd_mismatch = 0`:
   350 MHz → 1 025 000 µV and 1200 MHz → 1 380 000 µV, stock voltages exactly.
-  Staged image 6 709 248 B, under the ~6656 KB U-Boot caution.
+  Staged image 6 709 248 B, under the ~6656 KB U-Boot caution — but it GREW:
+  like for like against 6.12's 6 506 496 B (same 958 080-byte initramfs) the boot
+  image is ~200 KB bigger, so headroom fell from 302 KB to 104 KB.
 
 ### Fixed — promote was disarming the rollback it exists to protect (2026-08-31)
 - `nq-kernel-ota promote` reconciles the package database with

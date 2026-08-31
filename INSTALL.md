@@ -1,8 +1,21 @@
-<!-- RELEASE: v1.14.2 -->
+<!-- RELEASE: v1.15.0 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.14.2`** (device r89, kernel `6.12.12-r52`,
-46 patches through `0046`).
+**This guide describes release `v1.15.0`** (device r91, kernel `6.18.48-r0`,
+44 patches through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
+
+> **v1.15.0 moves the kernel to mainline 6.18 LTS**, up from 6.12.12. Supported
+> by upstream until December 2028. The kernel is now built cross-native, which
+> took a full kernel build from 33 minutes to 108 s.
+>
+> ⚠️ **The boot image GREW by ~200 KB.** Like for like (same 958 080-byte
+> initramfs): 6.12 packed 6 506 496 B, 6.18 packs **6 709 248 B**. That is still
+> under the ~6656 KB U-Boot caution and well under the 8192 KB partition, but the
+> headroom fell from 302 KB to **104 KB**. Quote the *staged* size, never the
+> ramdisk-less boot.img, when judging this.
+> Not verified on 6.18: **ethernet after a cold power-cycle**, HDMI, fastboot-
+> over-ssh and USB Audio. See `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-
+> that-disarmed-itself.md`.
 
 > The version lives in the `<!-- RELEASE: ... -->` marker on the first line, and
 > `scripts/package-release.sh` **refuses to cut a release that this guide does not
@@ -25,8 +38,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.14.2.img` (~6.2 MiB), `nexusq-rootfs-v1.14.2-sparse.img.zst`
-  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.14.2.txt`
+- release artifacts: `nexusq-boot-v1.15.0.img` (~6.4 MiB), `nexusq-rootfs-v1.15.0-sparse.img.zst`
+  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.0.txt`
   - **The v1.11.0 kernel bumps to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
     the only kernel change from v1.10.1's r44 is **patch 0044**, which restores the stock
     reboot-reason write (`omap44xx_restart()` → SAR RAM `0x4A326A0C`) so the device can be
@@ -327,9 +340,13 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
 - **Size ceiling:** zImage + DTB must stay **<= 8 MB** (the boot partition; U-Boot
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
-- Kernel: mainline 6.12.12 + the patches in `kernel/patches/` (**44 as of kernel
-  r45 / `#46`, 2026-07-30** — through 0044, the fastboot reboot-reason patch),
-  config `kernel/configs/steelhead_defconfig`.
+- Kernel: mainline **6.18.48** + the patches in `kernel/patches/` (**44 as of
+  kernel `6.18.48-r0`, 2026-08-31** — numbered through 0046, with **0004 and 0032
+  absent because upstream carries them now**), config
+  `kernel/configs/steelhead_defconfig`.
+  ⚠️ A patch applying with zero fuzz does **not** mean it compiles: three of them
+  (0005, 0029, 0007) applied cleanly against 6.18 and did not build. Pre-flight a
+  full local kernel build before booking the shared build volume.
   ⚠️ The steelhead DTS enters the kernel tree **via those patches** (0003 +
   follow-ups) — `kernel/dts/omap4-steelhead.dts` is the reference copy; editing it
   alone does NOT change the built DTB.
