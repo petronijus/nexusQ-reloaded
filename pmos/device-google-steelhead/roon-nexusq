@@ -112,7 +112,15 @@ pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {
 	pactl load-module module-alsa-source device=hw:RoonLoop,1,0 \
 		source_name=roon_in source_properties=device.description=RoonBridge \
 		rate=48000 channels=2 format=s16le >/dev/null
-	pactl load-module module-loopback source=roon_in latency_msec=250 >/dev/null
+	# source_dont_move=true for the same reason it is on the USB loopback (see
+	# nexusq-uac2-in): PA's module-switch-on-connect moves existing
+	# source-outputs onto each newly appeared source, so whichever of the two
+	# inputs came up LAST silently stole the other one's loopback. Diagnosed
+	# 2026-09-01 — Roon starting left USB audio streaming into a source nobody
+	# read, with the module still loaded and nothing logged. Pin the capture
+	# side; the sink-input stays movable so Roon follows the chosen output.
+	pactl load-module module-loopback source=roon_in \
+		source_dont_move=true latency_msec=250 >/dev/null
 }
 
 exec bwrap \

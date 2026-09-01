@@ -1,9 +1,13 @@
-<!-- RELEASE: v1.15.0 -->
+<!-- RELEASE: v1.15.1 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.15.0`** (device r91, kernel `6.18.48-r0`,
+**This guide describes release `v1.15.1`** (device r92, kernel `6.18.48-r0`,
 44 patches through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
 
+> **v1.15.1 is a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): an input
+> whose PulseAudio loopback could be dragged onto another source, which made USB
+> audio or Roon silent while every check still passed. See the changelog.
+>
 > **v1.15.0 moves the kernel to mainline 6.18 LTS**, up from 6.12.12. Supported
 > by upstream until December 2028. The kernel is now built cross-native, which
 > took a full kernel build from 33 minutes to 108 s.
@@ -38,8 +42,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.15.0.img` (~6.4 MiB), `nexusq-rootfs-v1.15.0-sparse.img.zst`
-  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.0.txt`
+- release artifacts: `nexusq-boot-v1.15.1.img` (~6.4 MiB), `nexusq-rootfs-v1.15.1-sparse.img.zst`
+  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.1.txt`
   - **The v1.11.0 kernel bumps to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
     the only kernel change from v1.10.1's r44 is **patch 0044**, which restores the stock
     reboot-reason write (`omap44xx_restart()` → SAR RAM `0x4A326A0C`) so the device can be

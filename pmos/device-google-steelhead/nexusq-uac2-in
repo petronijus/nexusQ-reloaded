@@ -104,8 +104,29 @@ start_source() {
 		source_name="$SRC" source_properties=device.description=USBAudio \
 		rate=48000 channels=2 format=s16le)
 }
+# source_dont_move=true PINS the capture side to `$SRC`. Without it PulseAudio
+# silently re-points this loopback at a DIFFERENT source and USB audio goes
+# nowhere while every check above still passes. Diagnosed 2026-09-01 from a live
+# failure: `roon-nexusq` loads its own module-alsa-source (`roon_in`), and
+# `module-switch-on-connect` — loaded by PA's stock config — makes each newly
+# appeared source the default AND MOVES existing source-outputs onto it. So
+# starting Roon dragged this loopback off `usb_in` onto `roon_in`; the amp then
+# played Roon's (silent) loop while the USB host streamed into a source nobody
+# read. It is mirror-symmetric: without the same flag on Roon's loopback, USB
+# audio starting would steal Roon the same way.
+#
+# ensure_modules() below CANNOT catch this: the module stays loaded, only its
+# binding changes, so `mod_alive` is true and nothing is logged — which is why
+# this went unnoticed for a whole listening session. Pinning is also strictly
+# cheaper than detecting it, since noticing a move would cost a second `pactl`
+# fork per tick (~70 ms of CPU each on this SoC — see the power note below).
+#
+# Only the SOURCE is pinned. The sink-input stays movable on purpose: the whole
+# point of looping into the default sink is that USB audio follows the output
+# the app selects. Regression test: tests/test_loopback_source_pinned.sh
 start_loopback() {
-	MOD_LB=$(pa load-module module-loopback source="$SRC" latency_msec="$LOOPLAT")
+	MOD_LB=$(pa load-module module-loopback source="$SRC" \
+		source_dont_move=true latency_msec="$LOOPLAT")
 	fix_loopback_volume
 }
 # module-loopback's sink-input can come up MUTED / attenuated: module-stream-restore

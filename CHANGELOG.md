@@ -4,7 +4,41 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased]
+## [1.15.1] — 2026-09-01 — the input that was playing to nobody
+
+Device **r92**. One bug, found from the only symptom it ever produced: "audio
+doesn't work". Full record: `docs/2026-09-01-loopback-source-stolen.md`.
+
+### Fixed — PulseAudio moved an input's source, and nothing said so
+- **USB audio (and Roon) could go silent while every check passed.** The unit read
+  `active`, `alsaloop` was running, the gadget's `Capture Rate` said 48000, and the
+  service logged "USB audio live again" — with nothing coming out of the amp.
+- Cause: PA's stock **`module-switch-on-connect`** makes each newly appeared source
+  the default **and moves existing source-outputs onto it**. So `roon-nexusq`
+  loading its `roon_in` source dragged the USB `module-loopback` off `usb_in`. From
+  then on the amp played Roon's (silent) loop while the USB host streamed into a
+  source nobody read. It is **mirror-symmetric**: USB audio starting stole Roon the
+  same way — whichever input came up last won.
+- Fixed with **`source_dont_move=true`** on both loopbacks (`nexusq-uac2-in`,
+  `roon-nexusq`). Only the capture side is pinned; the sink-input stays movable, so
+  an input still follows the output the app selects.
+- **Why it hid for a whole listening session:** `ensure_modules` supervises module
+  *existence*, and the module stayed loaded — only its binding changed, and PA logs
+  no move. The 2026-08-27 supervisor was built for the neighbouring failure (a
+  loopback *vanishing* when another alsa-source is unloaded) and cannot see this one.
+- Seen failing and seen holding, on the device: a forced
+  `pactl move-source-output <id> roon_in` now returns `Failure: Invalid argument`,
+  and unload/reloading `roon_in` — exactly what turning Roon off and on does, the
+  original trigger — leaves the USB loopback on `usb_in`. Pinned by
+  `tests/test_loopback_source_pinned.sh`, which asserts the flag is on the
+  `load-module` command itself, not merely in a comment.
+
+### Known issues
+- **The Šumperák Q still cannot OTA at all** — it trusts `pmos@local-6a913e9e`
+  while the index is signed `6a42e957`. Unchanged from v1.15.0, and it means that
+  box does not get this fix over the air either.
+
+## [1.15.0] — 2026-08-31 — mainline 6.18 LTS, and builds that take six minutes
 
 Device **r91**, kernel **6.18.48-r0**. Full record:
 `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
