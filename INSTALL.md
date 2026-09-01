@@ -189,10 +189,17 @@ only way to brick the device.
 ## 3. First boot
 
 1. Unplug power, wait 5 s, plug back in **without** covering the sensor.
-2. Watch HDMI: Tux logo -> kernel log -> LightDM login screen (XFCE4).
+2. Watch HDMI: Tux logo -> kernel log -> a console. The **desktop is not started
+   on boot** — it is on demand since v1.10.0, toggled from the companion app's
+   Devices screen (it idles the GPU/display path and heats the sphere).
+   _(This step said "LightDM login screen (XFCE4)" until 2026-09-01; the desktop
+   has been LXQt/Wayland since v1.6.12 and on-demand since v1.10.0.)_
 
-**Known quirk:** roughly 1 in 3 boots hangs with a black screen (old U-Boot
-flakiness, cause not yet found). Just power-cycle again.
+_(A "known quirk" saying roughly 1 in 3 boots hangs with a black screen stood here
+until 2026-09-01. It described the v1.5-era U-Boot behaviour and **no longer
+applies** — confirmed by the person who power-cycles this device. Removed rather
+than softened: a first-boot instruction that tells you to expect failure teaches
+you to retry past a real one.)_
 
 Login: user `user`, password `147147` (root has the same password --
 **change both** after first login: `passwd`). SSH host keys are generated

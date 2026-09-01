@@ -166,9 +166,15 @@ is the pointer and the residue.
 
 **Still unverified on 6.18** (no cable, no cold power-cycle since the bump):
 ethernet from cold (patches 0006/0008/0012), HDMI, fastboot-over-ssh (0044),
-USB-host re-probe. The kernel-OTA rollback fix was **seen failing, not seen
-working** — it needs the next OTA cycle. Šumperák still trusts a different signing
-key and cannot OTA at all.
+USB-host re-probe. Šumperák still trusts a different signing key and cannot OTA at
+all.
+
+**Kernel OTA in the field: safe so far** (Petr, 2026-09-01). The trial-slot flow
+and its health gate are not the shaky part. What remains unproven is only the
+rollback's **module-restore path** (`nexusq-kernel-ota` r4) — it runs only when a
+trial kernel fails and is rolled back, so a streak of successful OTAs cannot
+exercise it. Unproven, not suspect; do not let this line read as a warning against
+using kernel OTA.
 
 ---
 

@@ -23,8 +23,13 @@ collector's own ssh polling. Full record:
   0006/0008/0012 exist for exactly that path and it only proves itself cold, with
   a cable. HDMI, fastboot-over-ssh (0044), USB-host re-probe and USB Audio are
   likewise unexercised.
-- **The kernel-OTA rollback fix was seen failing, not seen working.** It needs the
-  next kernel OTA cycle to prove itself.
+- **Kernel OTA itself has been running safely in the field** (Petr, 2026-09-01) —
+  the trial-slot flow with its health gate is not the shaky part, and nothing here
+  should be read as a warning against using it.
+  The narrower open item is the **rollback's module-restore path** (`nexusq-kernel-ota`
+  r4): it only executes when a trial kernel actually fails and gets rolled back, so
+  a run of good OTAs — however long — cannot exercise it. Still unproven rather
+  than suspect.
 - **The app cannot offer a kernel update.** `checkSystemUpdate` filters the kernel
   out — correctly, since apk must never apply one — so a kernel reaches a device
   only via `nq-kernel-ota` over ssh. A proper fix gives the kernel its own track.
