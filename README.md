@@ -56,7 +56,7 @@ notes in [`docs/`](docs/).
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, one movable PulseAudio input · v1.6.15 |
 | 🍏 **AirPlay** (shairport-sync) | ✅ | a PA input like librespot, avahi-advertised, ports pinned · v1.11.0 |
 | 🎼 **Roon Bridge** (Roon Ready) | ✅ | glibc/Mono in a bwrap sandbox over a baked Debian base; validated against a real Core; default-OFF · v1.11.0 |
-| 🎚 **USB Audio input** — the Q as a USB DAC | ✅ | the orb enumerates as a USB speaker (UAC2 gadget) and **mixes** into PA via a stable-clock snd-aloop hop, and costs nothing while the host is idle · v1.12.0 · device r90 |
+| 🎚 **USB Audio input** — the Q as a USB DAC | ✅ | the orb enumerates as a USB speaker (UAC2 gadget) and **mixes** into PA via a stable-clock snd-aloop hop, costs nothing while the host idles, and its capture source is pinned so another input cannot steal it · v1.15.1 · device r92 |
 | 🔊 **Audio output selection** | ✅ | speaker / optical / HDMI = the PA default sink, picked from the app · v1.7.0 |
 | 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
@@ -105,9 +105,11 @@ flowchart LR
 **PulseAudio is the hub**: every input (librespot, AirPlay, Roon, BT A2DP, USB) is
 a PA client, and the active **output** — TAS5713 speaker, optical SPDIF, or HDMI —
 is the PA default sink, chosen from the companion app. USB is the orb's only
-no-solder digital *input* — every built-in port is an output. The LED daemon reads the
-active sink's **monitor**, runs an FFT with an auto-gain stage, and animates the
-ring — so the orb glows in time with whatever you're playing, at any volume.
+no-solder digital *input* — every built-in port is an output, and since v1.15.1
+each input's **capture side is pinned to its own source**, so a newly appearing
+one cannot drag another off. The LED daemon reads the active sink's **monitor**,
+runs an FFT with an auto-gain stage, and animates the ring — so the orb glows in
+time with whatever you're playing, at any volume.
 
 The phone/desktop **companion app** auto-discovers the Q over mDNS and controls
 volume, output, LED themes and visualisations, streaming-service toggles, pairing,
@@ -166,15 +168,16 @@ One command, fully dockerized (pmbootstrap under the hood):
 ```
 
 It builds the kernel (mainline 6.18.48 + **44 patches** in `kernel/patches/`), the
-device daemons (`nexusqd` · `nexusq-control` ·
-`nexusq-btagent` · `nexusq-setupd` · `nexusq-mqtt`), and a full systemd rootfs, then repacks a
-ramdisk-less boot image and verifies the result by **mounting** it. Build notes and
-the hard-won gotchas live in `HANDOFF.md`. (⚠️ The daemon build **phase order is
+device daemons (`nexusqd` · `nexusq-control` · `nexusq-btagent` · `nexusq-setupd` ·
+`nexusq-mqtt`), and a full systemd rootfs, then repacks a ramdisk-less boot image
+and verifies the result by **mounting** it. Every package cross-compiles since
+v1.15.0 — a full image in **6 min 39 s**, where qemu emulation took 68 minutes.
+Build notes and the hard-won gotchas live in `HANDOFF.md`. (⚠️ The daemon build **phase order is
 load-bearing**: `nexusq-btagent` must build *before* `nexusq-setupd`, which depends
 on it — the reverse order fails every clean build on checksums.)
 
 ```
-kernel/      dts · defconfig · 46 mainline patches (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
+kernel/      dts · defconfig · 44 patches over mainline, numbered to 0046 (the DTS ships VIA the patches — edit a patch, not just kernel/dts/)
 pmos/        device-google-steelhead · linux-google-steelhead · firmware · nexusqd · nexusq-control · nexusq-btagent · nexusq-setupd · nexusq-mqtt · speexdsp · ota-packages.list + the fleet signing key
 userspace/   nexusqd (LED-ring daemon) · nexusq-control (LAN bridge) · nexusq-btagent (BT pairing agent) · nexusq-setupd (BT WiFi provisioning) · nexusq-mqtt (MQTT health telemetry)
 companion/   Flutter companion app + PROTOCOL.md (built on the phone, not in the image)
@@ -230,9 +233,11 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.13.0 ─ ✦ hardware EQ (7-band TAS5713 biquads) · Roon idle guard · idle power 20× down   2026-08-28
 1.14.0 ─ ✦ rename the Q from the app · per-unit Bluetooth/WiFi identity            2026-08-29
 1.14.1 ─ ✦ a wedged USB-audio bridge that cooked the box for 28 h — closed         2026-08-30
-1.14.2 ─ ✦ Spotify Connect survives a DHCP move · two release gates stop lying     2026-08-30   ← latest tag
+1.14.2 ─ ✦ Spotify Connect survives a DHCP move · two release gates stop lying     2026-08-30
 (dev) ── ✦ a release publishes BOTH tracks now — image + OTA repo, gated on parity   2026-08-30
 (dev) ── ✦ USB-audio park reads the gadget's own flag — 350 MHz 85.4 → 90.4 %      2026-08-30
+1.15.0 ─ ✦ mainline 6.18 LTS · everything cross-compiled — a full build in 6:39   2026-08-31
+1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01   ← latest tag
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

@@ -266,6 +266,15 @@ Findings are tagged by `kind`; interpret them like this:
   volume — healthy tell: steady `audio DETECTED vol=0.150`; low-volume
   flicker↔breathing = AGC regressed. See
   `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+- **Each input's CAPTURE side is pinned (v1.15.1, device r92)** — PA's stock
+  `module-switch-on-connect` moves existing source-outputs onto every newly appeared
+  source, so USB audio and Roon used to steal each other's loopback and one of them went
+  silent while the unit, `alsaloop` and the gadget's `Capture Rate` all looked healthy.
+  Both loopbacks now load with `source_dont_move=true`; a refused
+  `pactl move-source-output` (`Failure: Invalid argument`) is the healthy state. The
+  sink-input stays movable, so `setOutput` still works. Tell for a regression: a
+  `module-loopback` whose `Argument: source=...` disagrees with its source-output's
+  `Source:`. See `docs/2026-09-01-loopback-source-stolen.md`.
 - **LED tap GATED on playback (v1.7.1, nexusqd r8)** — the `arecord -D pulse` tap
   used to run continuously (uncorked PA source-output held the `tas5713` sink
   IDLE/clocked at silence → ~7 % idle CPU, top idle-heat source). nexusqd runs

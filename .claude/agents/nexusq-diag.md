@@ -265,6 +265,18 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
     through `select()` with a timeout (`NQ_UAC2_READ_TIMEOUT_S`, 5 s) so a quiet producer
     is *reported* instead of making it vanish. See
     `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
+  - ⚠️ **"Active, running, and still silent" — the loopback can read the WRONG source
+    (fixed in device r92, 2026-09-01).** PA's stock `module-switch-on-connect` makes each
+    newly appeared source the default **and moves existing source-outputs onto it**, so
+    `roon-nexusq` loading `roon_in` dragged the USB `module-loopback` off `usb_in` — and
+    USB starting stole Roon the same way; whichever input came up last won. Nothing
+    reports it: the module stays loaded, only its binding changes, and PA logs no move,
+    which is why `ensure_modules()` (module *existence*) cannot see it. Check the
+    source-output, never the module argument: `pactl list source-outputs` → `Owner Module`
+    vs `Source:`, compared with `pactl list modules | grep -A2 module-loopback`. Both
+    loopbacks now carry `source_dont_move=true`, so a forced
+    `pactl move-source-output <id> roon_in` answering `Failure: Invalid argument` is the
+    HEALTHY state. `docs/2026-09-01-loopback-source-stolen.md`.
   - ✅ **FIXED 2026-08-09 — do NOT re-flag the old PA-bridge bugs.** The pre-r65 PA
     bridge had TWO faults: (a) USB-Audio drifted **~3 min LATE over a long session**
     (`module-alsa-source` reported a bogus uptime-growing latency, ~5134 s, poisoning

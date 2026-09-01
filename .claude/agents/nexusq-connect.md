@@ -18,10 +18,13 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The device runs **v1.10.1** (kernel `#45`/**r44** —
-patch 0043 factory-WiFi-MAC over v1.10.0's r43 — device **r49**, **btagent r4**,
-nexusq-control r10, setupd r4, nexusqd r10, firmware r2; flashed 2026-07-16; eth
-profiles baked since r21).
+"connect like this: `<cmd>`". The Prague device runs **mainline 6.18.48-r0**
+(the v1.15.0 kernel, health-gate promoted 2026-08-31); the current device package
+in the repo is **r92** (v1.15.1, 2026-09-01). The box has been updated over the
+air since the v1.10.1 flash of 2026-07-16, so package revisions move without a
+reflash — read them off the box
+(`apk info -v device-google-steelhead`, `uname -r`) rather than trusting any list
+written down here. Eth profiles have been baked since device r21.
 ⚠️ **A ~1-minute ssh-auth stall right after an HDMI-desktop toggle is EXPECTED, not
 a dead device** — stopping `tinydm` churns logind and `pam_systemd` hangs before
 recovering on its own (v1.10.0). Wait it out; never assume frozen. ⚠️ **WiFi MAC —

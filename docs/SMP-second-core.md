@@ -1,8 +1,14 @@
 # Nexus Q — bringing up the second CPU core (OMAP4460 HS SMP)
 
-**Status: WORKING & validated (2026-06-22; re-confirmed 2026-06-28).** Both
-Cortex-A9 cores online and stable on mainline Linux 6.12. This document is the
-authoritative writeup of how it was solved and what the key components are.
+**Status: WORKING & validated (2026-06-22; re-confirmed 2026-06-28; still true on
+mainline 6.18.48, 2026-08-31).** Both Cortex-A9 cores online and stable. This
+document is the authoritative writeup of how it was solved and what the key
+components are.
+
+> **Carried across the 6.12 → 6.18 LTS bump (v1.15.0, 2026-08-31).** The whole
+> `arch/arm/mach-omap2` block — patch 0009 included — had zero upstream churn and
+> rebased untouched, and the 6.18.48 trial boot reported `nproc: 2`. See
+> `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
 
 > **Re-confirmed live 2026-06-28** on the current full-rootfs image (built with
 > Alpine GCC 15.2): `nproc=2`, `/sys/devices/system/cpu/online=0-1`, `cpu1/online=1`,
@@ -173,7 +179,8 @@ fastboot flash boot output/boot-smp-dualcore.img      # then unplug ~10s, replug
 ```
 Patches `0001-0009` apply in order (all GNU-`patch` verified — abuild uses GNU
 patch, not `git apply`; see `docs/.../patches-must-apply-with-gnu-patch`). The
-SMP modules must match the SMP kernel (same vermagic `6.12.12 SMP`); a #8 (non-SMP)
+SMP modules must match the SMP kernel (same vermagic as the running kernel —
+`6.12.12 SMP` then, `6.18.48-r0 SMP` today); a #8 (non-SMP)
 kernel with SMP modules — or vice versa — produces `module_layout disagrees` spam.
 
 ## 8. Validation (cold boot, `boot-smp-dualcore.img`)

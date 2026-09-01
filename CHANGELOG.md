@@ -77,6 +77,17 @@ Device **r91**, kernel **6.18.48-r0**. Full record:
   `pmb:cross-native`. `docker-build.sh` gains a Phase 7e that builds the kernel
   cross-native: **108 s instead of 1983 s, 18.4x**. `NEXUSQ_KERNEL_NO_CROSS=1`
   restores the old path for an A/B.
+- **And neither did anything else** (`ea0fcbb`, later the same day). The other
+  nine pmbootstrap calls still passed `--no-cross`, so every userspace armv7
+  package — systemd included — was compiled under emulation. Cross-compiling all
+  of them took a **full build from 4080 s (1 h 8 min) to 399 s (6 min 39 s),
+  10.2x** — both measured on a warm volume with Phase 9 install + Phase 10 export,
+  and all ship gates passing on the resulting image (libpython integrity clean,
+  speexdsp our NEON build, `PUBLIC_RELEASE=1` leaving no access files behind).
+  pmbootstrap reports `cross compiling: cross-native2` and pulls `gcc-armv7` into
+  the native chroot, so it is genuinely cross-compiling, not falling back.
+  `NEXUSQ_NO_CROSS=1` puts userspace back on qemu — deliberately a *second* flag,
+  because one switch over two different mechanisms cannot be bisected.
 - The two paths produce **equivalent, not identical** kernels — both payloads
   decompress to exactly 19 999 328 bytes, and 99 % of the differences are
   constant-delta `movw` address shifts from a 93-byte compiler-name string, plus

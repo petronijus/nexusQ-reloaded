@@ -12,8 +12,11 @@ description: >-
 
 # /nexusq-build
 
-Delegate the whole build to the **`nexusq-build` subagent** so the long (~35–50 min
-cold, ~8 min warm) build and its noisy output stay out of the main context. Invoke it with the
+Delegate the whole build to the **`nexusq-build` subagent** so the build and its
+noisy output stay out of the main context. Since 2026-08-31 everything
+cross-compiles (kernel via `pmb:cross-native`, userspace via `cross-native2`), so a
+**warm full build is 399 s (6 min 39 s)** where it used to be 68 min; a cold build
+has not been re-timed since. Invoke it with the
 Agent tool (`subagent_type: "nexusq-build"`), passing any specifics the user gave
 (target version, whether to do a cold rebuild / wipe the `nexusq-workdir` volume,
 whether to also extract+sparse-convert the artifacts).

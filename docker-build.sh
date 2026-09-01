@@ -874,10 +874,10 @@ fi
 # Same EACCES root cause, fourth spot: the shared distfiles cache. abuild-fetch
 # (run inside the buildroot chroot as uid 12345) creates a `<tarball>.lock` file
 # in /var/cache/distfiles (bind-mounted from $WORK/cache_distfiles) before it
-# fetches/checksums a source tarball (e.g. the 148 MB linux-6.12.12.tar.xz). The
+# fetches/checksums a source tarball (e.g. the kernel's linux-6.18.48.tar.xz). The
 # broad `sudo chown -R pmos:pmos /home/pmos` in Phase 5 (re)sets that dir to uid
 # 1000 (mode 0755), so uid 12345 cannot create the .lock -> "abuild-fetch:
-# .../linux-6.12.12.tar.xz.lock: Permission denied" -> "checksum failed" then
+# .../linux-6.18.48.tar.xz.lock: Permission denied" -> "checksum failed" then
 # "fetch failed" -> the kernel package fails to build (exit 3), even though the
 # tarball itself is already present in the cache. Hand the dir to uid 12345 too.
 sudo mkdir -p "$WORK/cache_distfiles"

@@ -44,7 +44,9 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - optional: micro-HDMI cable + display (to watch it boot)
 - release artifacts: `nexusq-boot-v1.15.1.img` (~6.4 MiB), `nexusq-rootfs-v1.15.1-sparse.img.zst`
   (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.1.txt`
-  - **The v1.11.0 kernel bumps to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
+  - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
+    `6.18.48-r0`; see the top of this guide.)_
+    **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
     the only kernel change from v1.10.1's r44 is **patch 0044**, which restores the stock
     reboot-reason write (`omap44xx_restart()` → SAR RAM `0x4A326A0C`) so the device can be
     put into **fastboot over ssh** (see §1a) -- on top of the 0043 factory-WiFi-MAC pin,

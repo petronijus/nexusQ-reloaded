@@ -6,6 +6,13 @@ other kernel work (e.g. SMP second-core) is in flight. First made to work in
 change, work the **Regression triage** at the bottom — it tells you *which layer*
 broke.
 
+> ⚠️ **Status 2026-09-01 — NOT yet re-verified on mainline 6.18.** The kernel moved
+> 6.12.12 → **6.18.48** in v1.15.0 (2026-08-31). Patches **0006 / 0008 / 0012**
+> rebased and the box boots, but this path only proves itself from a **cold
+> power-cycle with a cable attached**, and no such boot has happened since the
+> bump. Treat a missing `eth0` on 6.18 as unproven-not-broken and work the
+> Regression triage below before blaming anything else.
+
 > **Status 2026-07-06 — ✅ RESOLVED, task #17 FULLY CLOSED (enumerate + link +
 > NM), gold-validated from a true cold boot; ships as v1.6.8.**
 > The enumeration intermittency was **not a race** — it was a **pinmux miss**:

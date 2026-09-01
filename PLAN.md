@@ -3,6 +3,31 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## ✅ SHIPPED (2026-09-01, v1.15.1) — the input PulseAudio was moving behind our back
+>
+> USB audio (and Roon) could go silent while every check passed. Stock
+> `module-switch-on-connect` moves existing source-outputs onto each newly
+> appeared source, so whichever input came up last stole the other's loopback.
+> Fixed with `source_dont_move=true` on both loopbacks (device **r92**); the
+> sink-input stays movable, so an input still follows the output the app picks.
+> Regression test `tests/test_loopback_source_pinned.sh`.
+> → CHANGELOG [1.15.1] · `docs/2026-09-01-loopback-source-stolen.md`
+
+> ## ✅ SHIPPED (2026-08-31, v1.15.0) — mainline 6.18 LTS, and a build that cross-compiles
+>
+> Kernel **6.18.48-r0** (was 6.12.12): 46 patches rebased, **44 applied**, 0004
+> and 0032 dropped because upstream fixed both. Booted via the kernel-OTA trial
+> slot in 48 s with zero dmesg errors and stock VDD_MPU voltages. Everything is
+> now cross-compiled — a full build **4080 s → 399 s**.
+> ⚠️ Still open, and forward-looking: **the boot image grew ~200 KB** (staged
+> 6 709 248 B), leaving only **104 KB** of U-Boot headroom — the next LTS bump
+> (due ~Nov/Dec 2026) has to be measured against that ceiling before it is
+> planned. Ethernet from cold, HDMI, fastboot-over-ssh (0044) and USB-host
+> re-probe are **unverified on 6.18**, and the kernel-OTA rollback fix was seen
+> failing but not yet seen working.
+> → CHANGELOG [1.15.0] ·
+> `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`
+
 > ## ✅ SHIPPED (2026-08-24) — parametric 7-band EQ with a live curve
 >
 > Petr, after using the bass/treble card: *"chtěl bych nějakej lepší equalizer, aby
@@ -771,6 +796,12 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > re-targeting before Phase 10 can assemble the rootfs. Exact command, evidence
 > from the partial cold run, and the post-build verification list are in
 > **HANDOFF.md → WHERE TO CONTINUE (2026-08-13), item 7**.
+>
+> ⚠️ **2026-09-01: the 2–4 h budget predates cross-compilation.** Since v1.15.0
+> every package (kernel included) is cross-compiled and a full *warm* build takes
+> 399 s, so a cold one costs far less than budgeted here — re-time it instead of
+> trusting this estimate. The single-writer rule on `nexusq-workdir` still holds:
+> one build at a time, or the victim sees a fake toolchain error.
 
 > ## 🎯 STANDING GOAL — idle OPP residency
 >
@@ -1879,7 +1910,7 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 
 | Subsystem | Status | Detail |
 |-----------|--------|--------|
-| Kernel + boot | ✅ works | mainline 6.12.12, ≤8 MB image; flaky boot ~1 in 3 (retry helps). _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ _(2026-07-30, v1.11.0: **fastboot is enterable over ssh** — `systemctl reboot --reboot-argument=bootloader` (kernel patch **0044** writes the stock reboot-reason to SAR RAM `0x4A326A0C`); no more mains power-cycle. Must be `systemctl`, not busybox `reboot`.)_ |
+| Kernel + boot | ✅ works | mainline **6.18.48** (was 6.12.12 until v1.15.0, 2026-08-31), ≤8 MB image — but the staged boot image is 6 709 248 B, only 104 KB under the U-Boot caution; flaky boot ~1 in 3 (retry helps). _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ _(2026-07-30, v1.11.0: **fastboot is enterable over ssh** — `systemctl reboot --reboot-argument=bootloader` (kernel patch **0044** writes the stock reboot-reason to SAR RAM `0x4A326A0C`); no more mains power-cycle. Must be `systemctl`, not busybox `reboot`.)_ |
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | Kernel OTA (A/B slots) | ✅ works | _(2026-08-18, `nexusq-kernel-ota` r3)_ **a kernel can be applied without a cable.** `nq-kernel-ota stage-latest` fetches the kernel apk (`apk fetch`, never `apk add`) → writes the **trial slot** p8 with read-back verify → `try` arms the SAR reason → trial boot → `nexusq-kernel-ota-promote` health-gates it and copies trial→boot p9. **Slot A is never written with an image that has not already booted.** Proven end to end on hardware: `6.12.12` → `6.12.12-r48`, SSH back in 36 s, promoted unattended. ⚠️ The **failure** path still needs physical access — a kernel that boots is safe to deploy remotely, one that does not is a drive to the device (SAR-RAM-vs-power-cycle unresolved). CLI only, no app action yet. `docs/2026-08-18-kernel-ota-phase2.md` |
 | HDMI audio | 🟠 needs audio-EDID sink | _(Updated 2026-07-02)_ the ALSA card registers, but with no audio-capable EDID sink PulseAudio can't build a profile for `platform-omap-hdmi-audio.1.auto` (item U4). Speaker path (TAS5713) is the working audio output |
@@ -1891,7 +1922,7 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
 | TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
-| LED ring (32× RGB) | ✅ works | mainline 6.12 driver `leds-steelhead-avr` (Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
+| LED ring (32× RGB) | ✅ works | our in-tree driver `leds-steelhead-avr` (patch 0005, rebased onto every kernel — 6.18.48 today; Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | ✅ works from cold | _(✅ FULLY FIXED 2026-07-06, task #17 CLOSED — was "🟠 enumeration intermittent" 2026-07-05, briefly "CLOSED" 2026-07-04, "🟠 sw bug", and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), the "flap" was root-caused 2026-07-04 as **NM's serverless-DHCP retry loop** (fixed by baked eth0 NM profiles, device r21, v1.6.7: `no-auto-default=eth0` + `eth-lan` + `eth-direct` static + host `eth-direct-host`; `ssh root@10.42.0.2` works). The **enumeration** half was root-caused 2026-07-06 as a **pinmux miss**: `gpio_1` NENABLE = pad `kpd_col2` @ padconf `0x186`, which `ethernet_gpios` never muxed → gpiolib drove the DATAOUT latch (debugfs "asserted") but the pad stayed safe_mode → chip never powered → CCS=0 (the "0/3 vs 3/3" was stock priming, not a race). Fixed by the DTS pad mux (patch 0003, kernel `#33`, commit e33a1b4; 2500ms settle reverted as a false positive). **Gold-validated:** clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-06-eth-coldinit-resolved.md` (+ `docs/2026-07-04-ethernet-resolved-and-led-guard.md` for the NM half) |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
 

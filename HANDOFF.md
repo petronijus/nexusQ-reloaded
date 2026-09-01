@@ -2,7 +2,7 @@
 
 ## Project Goal
 
-Boot PostmarketOS (mainline Linux 6.12 LTS) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012.
+Boot PostmarketOS (mainline Linux **6.18 LTS**) on the Google Nexus Q ("steelhead"), an OMAP4460-based media streamer from 2012. _(6.12.12 until v1.15.0, 2026-08-31 — now 6.18.48.)_
 
 ## ⚠️ WHICH MACHINE BUILDS WHAT — read this before any release
 
@@ -132,6 +132,43 @@ publish; **nothing skips the gate.** Details:
 a debug keystore whose password is the well-known `android`. The signature
 authenticates nobody — anyone could sign a substitute update. A real keystore
 (kept in 1Password, referenced from `android/key.properties`) is the fix.
+
+---
+
+## Session 2026-08-31 / 09-01: **v1.15.0 = mainline 6.18 LTS + a build that cross-compiles · v1.15.1 = the input PulseAudio was moving behind our back**
+
+Kernel **6.18.48-r0**, device **r92**. Both stories are written up in full — this
+is the pointer and the residue.
+
+- **6.18 LTS shipped** (v1.15.0, released 2026-08-31). 46 patches rebased, **44
+  applied**, 0004 and 0032 dropped because upstream fixed both; booted in 48 s via
+  the kernel-OTA trial slot, zero dmesg errors, stock VDD_MPU voltages. The boot
+  image **GREW ~200 KB** like for like (6 506 496 → 6 709 248 B staged), so the
+  U-Boot headroom is down to 104 KB — judge that on the *staged* image, never on
+  the ramdisk-less build output.
+  `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
+- **The whole build is cross-compiled now** — kernel via the aport's own
+  `pmb:cross-native` (108 s, was 1983 s) and, later the same day, every userspace
+  package too: a full build went **4080 s → 399 s**. The comment that blamed
+  "crossdirect is broken in this image" for `cannot execute cc1: posix_spawn` was
+  **refuted** — that signature is what a build sees when a *concurrent*
+  pmbootstrap zaps its buildroot. One build at a time on `nexusq-workdir`.
+- **v1.15.1 — a PA loopback can be dragged onto another source.** USB audio (and
+  Roon) went silent while every check passed: unit `active`, `alsaloop` running,
+  the gadget's `Capture Rate` = 48000. Stock `module-switch-on-connect` makes each
+  newly appeared source the default **and moves existing source-outputs onto it**,
+  so whichever input came up last stole the other. Fixed with
+  `source_dont_move=true` on both loopbacks; the sink-input stays movable so an
+  input still follows the app's chosen output. `ensure_modules()` could never see
+  it — it supervises module *existence*, and the module stayed loaded.
+  `docs/2026-09-01-loopback-source-stolen.md`,
+  `tests/test_loopback_source_pinned.sh`.
+
+**Still unverified on 6.18** (no cable, no cold power-cycle since the bump):
+ethernet from cold (patches 0006/0008/0012), HDMI, fastboot-over-ssh (0044),
+USB-host re-probe. The kernel-OTA rollback fix was **seen failing, not seen
+working** — it needs the next OTA cycle. Šumperák still trusts a different signing
+key and cannot OTA at all.
 
 ---
 

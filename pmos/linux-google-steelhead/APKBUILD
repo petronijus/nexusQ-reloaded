@@ -85,7 +85,7 @@ prepare() {
 
 	# Give EVERY build its own kernel release string, so its modules land in
 	# their own /lib/modules/<release>. Without this both kernels call
-	# themselves 6.12.12, share /lib/modules/6.12.12, and installing a new
+	# themselves 6.18.48, share /lib/modules/6.18.48, and installing a new
 	# kernel's modules OVERWRITES the running kernel's -- which poisons the
 	# rollback path that kernel OTA (phase 2) depends on: fall back to the old
 	# kernel and its modules are gone, so no cfg80211, so no WiFi, so no way in.

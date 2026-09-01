@@ -7,8 +7,8 @@ description: >
   before declaring success. Use whenever a full or rootfs rebuild is needed
   ("rebuild the image", "build v1.x", "make a new rootfs"). Returns artifact
   paths + a pass/fail verification table; does NOT flash (flashing is a separate,
-  device-in-fastboot step). Runs the long (~70 min cold) build in its own context
-  so the main conversation stays clean.
+  device-in-fastboot step). Runs the build in its own context so the main
+  conversation stays clean.
 tools: Bash, Read, Edit, Grep, Glob
 ---
 
@@ -21,14 +21,16 @@ re-derive.
 
 ## MANDATORY: live progress reporting to the main conversation
 
-The build runs ~30–90 min and pegs a CPU core; the user must never have to ask
-"is it stuck?" (this happened 2026-07-13 — 1.5 h of silence, user rightly
-annoyed). While the build runs, report to the controller via the SendMessage
-tool with `to: "main"`:
+A warm full build is **~7 min since 2026-08-31** (measured 399 s, everything
+cross-compiled; it was 68 min when userspace ran under qemu) — a cold one still
+costs more, and a build that has stopped moving looks exactly like a slow one, so
+the user must never have to ask "is it stuck?" (this happened 2026-07-13 — 1.5 h
+of silence, user rightly annoyed). While the build runs, report to the controller
+via the SendMessage tool with `to: "main"`:
 
 1. **Every phase transition** — one line: phase name, what it does, rough ETA
-   (e.g. `Phase 8: build all packages — the kernel compile under qemu is the
-   slowest stretch, ~30 min on a cold volume`).
+   (e.g. `Phase 7e: kernel, cross-native — ~108 s`; `Phase 8: build all
+   packages`).
 2. **A heartbeat every ~10 min inside any long phase** — one line: elapsed
    time + the last build-log line as proof of life.
 3. **Immediately on any retry/failure** — what failed, which catalog entry it
@@ -113,9 +115,13 @@ Run it with `run_in_background: true` and pipe to a logfile; poll the host log w
 blow-by-blow (and to catch a *hang*, which the host log can't show) poll the
 **authoritative pmbootstrap log inside the volume**:
 `docker run --rm -v nexusq-workdir:/w alpine:3.21 sh -c 'tail -40 /w/log.txt'`.
-A cold build (fresh `nexusq-workdir`) recompiles the kernel ≈30 min (≈35–50 min
-total); a warm one reuses the cached kernel apk and is ≈8 min. The benign noise to
-IGNORE: Phase 1 `FATAL ERROR: Unable to parse input tree` (DTS needs kernel
+Timings, **all changed on 2026-08-31 when the build stopped using qemu**: the
+kernel builds cross-native (Phase 7e) in **108 s** (was 1983 s, ≈33 min) and every
+userspace package cross-compiles too, so a **warm full build is 399 s (6 min
+39 s)**, where it used to be 4080 s. A cold build (fresh `nexusq-workdir`) still
+pays for the chroots and the aports, and has not been re-timed since the change —
+report the measured elapsed time rather than quoting an estimate. The benign noise
+to IGNORE: Phase 1 `FATAL ERROR: Unable to parse input tree` (DTS needs kernel
 includes), Phase 2 `failed to source APKBUILD` for linux/nexusqd (they need abuild
 context), Phase 3 `MISSING: CONFIG_LEDS_LP5523` (the LED is the AVR driver, not
 LP5523). Everything else — including any `command not found` in Phase 7 or any
@@ -230,6 +236,12 @@ when root, sets `FAKEROOT=""` and skips fakeroot/faked entirely (abuild source
 ~line 2992) — and because it is really root, `package()` produces correct
 `root:root` files, so the `.apk` ownership is right (verify: the rootfs has **zero**
 uid-12345-owned files). No qemu fakeroot daemon ever runs.
+
+⚠️ **Since 2026-08-31 the armv7 packages are cross-compiled** (`cross-native2`) and
+the kernel takes the aport's own `pmb:cross-native`, so far less runs under emulation
+than when this was found — but the Phase 6b abuild-as-root patch stays, because the
+qemu path is still reachable (`NEXUSQ_NO_CROSS=1`) and it is also what gives the apks
+correct `root:root` ownership.
 
 So you should normally **never** see `Entering fakeroot...`. If you DO (and it
 hangs), the Phase 6b patch failed to apply — check the build log for
@@ -393,7 +405,7 @@ the same night).
 | `mkdir ... /home/pmos/...: Permission denied` during install | native-chroot pmos uid 12345 vs /home/pmos owned 1000 | `sudo chown 12345:12345 .../chroot_native/home/pmos` right before `pmbootstrap install` (already in Phase 9) |
 | hang forever at `>>> <pkg>: Entering fakeroot...` (faked at 100 % CPU) | qemu-arm can't run abuild's fakeroot `faked` daemon (busy-loops); NOT a sysv-vs-tcp thing | FIXED in Phase 6b — abuild patched to run **as root** (`-F`, `HOME=/home/pmos`) so it skips fakeroot. If it regresses, the backend.py patch's 3 patterns didn't match (see "PATTERN NOT FOUND"); re-target them. Do NOT reach for fakeroot-tcp — it does not work. |
 | `losetup: ...: failed to set up loop device: Permission denied` (Phase 10 post-process) | the rootfs post-process (strip /boot fstab, unlock root) ran without sudo as the `pmos` user | FIXED — Phase 10 runs losetup/mount/sed/python3/umount via `sudo` |
-| `cc: fatal error: cannot execute 'cc1': posix_spawnp` (Phase 7c nexusqd, exit 3) | crossdirect (cross-compile accelerator) is broken in this image | FIXED — Phase 7c builds nexusqd with `--no-cross` (qemu-only), matching Phase 8 |
+| `cc: fatal error: cannot execute 'cc1': posix_spawnp` | ⚠️ **NOT a broken toolchain — that verdict was REFUTED 2026-08-31.** This is what a build sees when a **concurrent** pmbootstrap zaps its buildroot mid-compile; the volume is single-writer | `docker ps` first and let the other build finish — never restart into it. Every phase now cross-compiles (`NEXUSQ_NO_CROSS=1` / `NEXUSQ_KERNEL_NO_CROSS=1` are the qemu escape hatches, for an A/B only). The old "Phase 7c builds nexusqd with `--no-cross`" workaround is gone |
 | `Writing 'boot' FAILED! error=-27` (at flash time) | boot.img > 8 MB (initramfs bundled) | Phase 10 ramdisk-less repack; verify boot.img ≤ 8 MB |
 | Phase 10 `SHIP GATE FAILED: the rootfs libpython is corrupted` — build exits | a corrupt/stale libpython slipped into the installed rootfs | re-run the build (the gate did its job — refused to ship a crashing python). There is no Phase 7d and no python3 override any more (retired 2026-08-17) — the rootfs installs Alpine's stock python3, so a persistent CORRUPT here points at the work volume or the extraction, not at our aport |
 | Phase 10 `SHIP GATE FAILED: no ... libpython ... python3 is` — build exits | the rootfs has no python3 at all | a hard failure by design: `nexusq-control`, `nexusq-mqtt`, `nexusq-btagent` and `nexusq-nfc` are stdlib-python daemons. Check the device aport's `depends=` and the apk db line the gate prints (`SHIP GATE: rootfs python3 = …`) |

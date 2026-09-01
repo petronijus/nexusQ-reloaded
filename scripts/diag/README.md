@@ -281,6 +281,23 @@ closing the stream leaves the gadget substream at `state: RUNNING` with `hw_ptr`
 `alsaloop` then spun at 19–25 % of a core, holding 1200 MHz and ~78 °C for a day and a
 half while `kill -0` supervision called it healthy. Tell: 350 MHz residency near 0 with
 nothing playing. `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
+⚠️ **"Everything is live and there is still no sound" — check what the loopback is
+actually READING (fixed in device r92, 2026-09-01).** PulseAudio's stock
+`module-switch-on-connect` makes each newly appeared source the default **and moves
+existing source-outputs onto it**, so `roon-nexusq` loading `roon_in` used to drag the
+USB `module-loopback` off `usb_in` (and USB starting stole Roon the same way — whichever
+came up last won). Nothing reports it: the module stays loaded, only its binding changes,
+and PA logs no move. Ground truth is the source-output, not the module argument:
+
+```sh
+pactl list modules        | grep -B1 -A2 module-loopback   # Argument: source=usb_in ...
+pactl list source-outputs | grep -E 'Owner Module|Source:' # the source it REALLY reads
+```
+
+A module loaded with `source=usb_in` whose source-output sits on another source is this
+bug. Both loopbacks now carry `source_dont_move=true`, so a forced
+`pactl move-source-output <id> roon_in` answers `Failure: Invalid argument` — that
+refusal is the healthy state, not a fault. `docs/2026-09-01-loopback-source-stolen.md`.
 ✅ **The old PA-bridge bugs are FIXED here** — the multi-minute playback drift (bogus
 `module-alsa-source` latency poisoning `module-loopback`) and the idle CPU/heat burn
 (never-corked loopback sink-input) are gone since the alsaloop bridge; do NOT re-flag
