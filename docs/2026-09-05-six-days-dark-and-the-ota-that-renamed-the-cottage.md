@@ -338,7 +338,7 @@ Petr asked for a full image and a tag rather than an OTA-only publish.
 
 ---
 
-## 5. OPEN — a service would not exec after systemd was upgraded in place
+## 5. A service would not exec after systemd was upgraded in place — cause measured, not explained; the restart path fixed (control r36)
 
 On the Prague Q, immediately after the OTA that took systemd 261.2 → 262_rc1:
 
@@ -358,10 +358,49 @@ running PID1 spawning against the freshly installed 262 userland) is broken unti
 PID1 re-execs. `status=127` with no stderr is consistent with an exec that never
 reached the script. Do not overstate it: one unit, one occurrence, no strace.
 
-**Follow-up:** `nexusq-control`'s system update has `_REBOOT_HINTS` covering
-systemd, but it *restarts services* after an upgrade. When systemd was among the
-upgraded packages it should run `systemctl daemon-reexec` first — or ask for the
-reboot the hint already implies — before touching any unit.
+**Why it mattered for the app path:** `nexusq-control`'s `_finish_system_update`
+restarts our daemons in exactly that window. `_REBOOT_HINTS` covers systemd, so
+the app path reboots afterwards and the failed restarts were hidden by it; the
+hand-run `apk upgrade` (no reboot) is what showed them in the open.
+
+### Fix — `nexusq-control` r36 (OTA-only, no image, no tag)
+
+`userspace/nexusq-control/nexusq-control`:
+
+- **`_systemd_changed(changed)`** — true when the transaction touched `systemd`
+  or `systemd-*`; false for look-alikes (`postmarketos-base-systemd`,
+  `nftables-systemd`, `linux-pam-systemd`).
+- **`_systemctl_plan(daemons, systemd_changed)`** — a pure function returning the
+  ordered argv list for the tail of a system update: `systemctl daemon-reexec`
+  **first** when systemd changed (even with nothing to restart), otherwise a plain
+  `daemon-reload` when there are daemons to restart (packages replace unit files;
+  systemd was already warning about it), then `restart` per daemon in the fixed
+  **`_RESTART_ORDER`**. `nexusq-control` itself is never in the plan — the caller
+  restarts it last, `--no-block`, as before.
+- `install_system_update()` now returns **`systemdChanged`** next to
+  `rebootRecommended`; `_finish_system_update(daemons, reboot, theme_cmds,
+  systemd_changed=False)` consumes the plan.
+- Six new cases in `tests/test_system_update_restart.py` (detection, re-exec
+  first, re-exec with nothing to restart, reload-not-reexec, nothing-to-do, fixed
+  order with control excluded); the whole control suite is **87 tests OK**.
+  `pmos/nexusq-control/APKBUILD` pkgrel 36.
+
+Built on the MacBook with `OTA_PACKAGES_ONLY=1 OTA_PACKAGES=nexusq-control`
+against the seeded and trust-reconciled volume — and passed first time, which is
+also the first clean proof of §3's trust fix. Published to gh-pages `998c1d3`
+(control r35 → r36, everything else unchanged). Installed on both units ~21:0x
+CEST via `apk upgrade nexusq-control` + `daemon-reload` + restart; both
+`nexusq-control` active.
+
+**Procedure note — GitHub Pages' CDN lags the push by seconds.** The first
+`apk update && apk upgrade nexusq-control` on the cottage, run right after the
+publish, saw no r36; the second `apk update` a moment later did. After a publish,
+either wait a little or confirm the new pkgrel with `apk policy nexusq-control`
+before concluding the publish failed.
+
+**What stays open is the cause, not the symptom:** one unit, reproduced twice on
+the same box, gone after re-exec, no strace. The fix removes the window in which
+it can bite; it does not say what was broken in it.
 
 ---
 
@@ -371,21 +410,21 @@ reboot the hint already implies — before touching any unit.
 |---|---|
 | hostname / address | `nexus-q-sumperak.local`, DHCP (`<dhcp-lease>`; static `<old-static-ip>` gone since 2026-08-30) |
 | trusts | `pmos@local-6a42e957` (fleet) — can OTA, and did |
-| userspace | **v1.15.2**: device **r93**, control r35, kernel-ota **r5** (OTA 19:16 CEST) |
+| userspace | **v1.15.2**: device **r93**, kernel-ota **r5** (OTA 19:16 CEST); control **r36** (OTA-only, ~21:0x CEST) |
 | kernel | **6.18.48-r0** in both slots, md5 `4ee9c080…` |
 | identity | `wifi=f8:8f:ca:05:1f:11 bt=f8:8f:ca:73:ac:9c` in both slots — its own |
 | watchdog | r93 script active, `start` marker `downs_to_reconnect:4`; 0 bad checks since the reboots |
 
-Prague is on the same versions (OTA 20:18 CEST), identity
+Prague is on the same versions (OTA 20:18 CEST; control r36 ~21:0x), identity
 `wifi=f8:8f:ca:20:48:e1 bt=f8:8f:ca:20:49:e5`, systemd 262_rc1, watchdog active
 after the `daemon-reexec` of §5.
 
 ## What is still open
 
 - The **live-MAC-change → TX wedge** correlation (§1). Unexplained.
-- **Service exec after an in-place systemd upgrade** (§5) — one occurrence, fixed
-  by `daemon-reexec`; `nexusq-control` should re-exec or ask for a reboot when
-  systemd was upgraded.
+- The **cause** of the post-systemd-upgrade `status=127` (§5) — the restart path
+  now re-execs PID 1 first (control r36), so the window is closed, but what was
+  broken inside it was never captured.
 - Kernel apk **gid 12345** files and the pipeline's fixed `--force` list (§4) —
   next kernel pkgrel / next pipeline touch.
 - The watchdog cannot help a unit that is *already* stranded on ≤ r92 — it needs

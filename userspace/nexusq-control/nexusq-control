@@ -1393,6 +1393,44 @@ def _services_for_changed(changed):
     return services
 
 
+def _systemd_changed(changed):
+    """True when the transaction touched systemd itself (systemd, systemd-libs,
+    systemd-journald, …) — the one case where the RUNNING PID 1 and the freshly
+    installed userland disagree until PID 1 re-executes."""
+    return any(c == "systemd" or c.startswith("systemd-") for c in changed)
+
+
+# Restart order after a system upgrade. nexusq-control is deliberately absent:
+# restarting it kills the bridge, so the caller does it last and --no-block.
+_RESTART_ORDER = ("nexusqd", "nexusq-btagent", "nexusq-setupd", "nexusq-mqtt",
+                  "nq-healthd")
+
+
+def _systemctl_plan(daemons, systemd_changed):
+    """The ordered systemctl calls that make a system upgrade take effect, as
+    argv lists (pure, so tests can pin the order without a systemd).
+
+    Measured 2026-09-05 on the Prague unit: an upgrade that took systemd
+    261 -> 262 in place left the running PID 1 unable to start ANY service until
+    `systemctl daemon-reexec` — every `restart` died with status 127 and no
+    message, and `systemd-run` reproduced it. The restarts this function orders
+    ran in exactly that window, so without the re-exec they all fail, the ring
+    never turns green, and (if no reboot follows) the box keeps the OLD daemons
+    running while the app reports the upgrade done. So: when systemd itself was
+    upgraded, re-exec PID 1 FIRST; otherwise a plain daemon-reload picks up unit
+    files the packages may have replaced (systemd warns about exactly that).
+    Then the restarts, in the fixed order."""
+    plan = []
+    if systemd_changed:
+        plan.append(["systemctl", "daemon-reexec"])
+    elif daemons:
+        plan.append(["systemctl", "daemon-reload"])
+    for svc in _RESTART_ORDER:
+        if svc in daemons:
+            plan.append(["systemctl", "restart", svc])
+    return plan
+
+
 def _uname_r():
     try:
         return subprocess.run(["uname", "-r"], capture_output=True, text=True,
@@ -1471,6 +1509,7 @@ def install_system_update():
         reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
         return {"ok": True, "changed": changed, "daemons": daemons,
                 "rebootRecommended": reboot,
+                "systemdChanged": _systemd_changed(changed),
                 "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:]}
     except (OSError, subprocess.SubprocessError):
         raise Err("timeout", "apk upgrade did not respond")
@@ -1866,7 +1905,8 @@ class Bridge:
                                                  ["auto"]))
                 self._finish_system_update(r.get("daemons", []),
                                            r.get("rebootRecommended", False),
-                                           theme_cmds)
+                                           theme_cmds,
+                                           r.get("systemdChanged", False))
                 return r, []
             finally:
                 _nexus_install_lock.release()
@@ -1909,27 +1949,29 @@ class Bridge:
                     pass
         threading.Thread(target=_do, daemon=True).start()
 
-    def _finish_system_update(self, daemons, reboot, theme_cmds):
-        """Off-thread tail of a full-system install: restart changed daemons, flash
-        the ring green, then either REBOOT (base libc/init churned — a reboot is
-        the clean way to apply it; also restarts the bridge, so the app reconnects
-        when the Q comes back) or restore the theme + restart the bridge if it was
-        among the upgraded ones."""
+    def _finish_system_update(self, daemons, reboot, theme_cmds,
+                              systemd_changed=False):
+        """Off-thread tail of a full-system install: make PID 1 able to act
+        (daemon-reexec when systemd itself changed, daemon-reload otherwise),
+        restart changed daemons, flash the ring green, then either REBOOT (base
+        libc/init churned — a reboot is the clean way to apply it; also restarts
+        the bridge, so the app reconnects when the Q comes back) or restore the
+        theme + restart the bridge if it was among the upgraded ones."""
         def _do():
             time.sleep(0.4)
             restarted_nexusqd = False
             # nexusq-control is NOT restarted here — it kills the bridge, so it
             # goes last (below). nq-healthd (device-google-steelhead) and
             # nexusq-mqtt are cheap, stateless daemons safe to bounce anytime.
-            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd",
-                        "nexusq-mqtt", "nq-healthd"):
-                if svc in daemons:
-                    try:
-                        subprocess.run(["systemctl", "restart", svc],
-                                       capture_output=True, timeout=30)
-                        restarted_nexusqd = restarted_nexusqd or svc == "nexusqd"
-                    except (OSError, subprocess.SubprocessError):
-                        pass
+            # The order, and the re-exec/reload that has to come first, is
+            # _systemctl_plan's job — see it for the 2026-09-05 measurement.
+            for argv in _systemctl_plan(daemons, systemd_changed):
+                try:
+                    subprocess.run(argv, capture_output=True, timeout=30)
+                    if argv[1] == "restart" and argv[2] == "nexusqd":
+                        restarted_nexusqd = True
+                except (OSError, subprocess.SubprocessError):
+                    pass
             if restarted_nexusqd:
                 time.sleep(1.5)
             nexusqd_send("set 0 255 0")   # green success (this also stops the spinner)

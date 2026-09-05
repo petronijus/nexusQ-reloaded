@@ -14,12 +14,16 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > Cut end to end on the MacBook (first time), which surfaced two more: the fleet
 > key had been installed for signing but not for **trust** (`config_apk_keys/`),
 > and the release scripts needed bash 4. Both units on r93 + r5 the same evening.
+> ✅ Same evening, OTA-only: **`nexusq-control` r36** — a system update that
+> upgraded systemd itself left PID 1 unable to start any service (`status=127`,
+> silent) until `daemon-reexec`; the restart tail now re-execs first when
+> systemd changed, `daemon-reload`s otherwise, then restarts in a fixed order;
+> `installSystemUpdate` reports `systemdChanged`. → CHANGELOG [Unreleased].
 > ⚠️ Open (forward-looking): **122 TX-wedge heals followed a runtime MAC change**
-> — mechanism unknown; **a service exec path broke after systemd was upgraded in
-> place until `daemon-reexec`** — `nexusq-control`'s system update should re-exec
-> (or ask for a reboot) when systemd was among the upgraded packages; kernel apk
-> files carry gid 12345 (harmless, fix at the next kernel pkgrel); the pipeline
-> should `--force` every OTA aport whose pkgrel changed.
+> — mechanism unknown; the **cause** of the post-systemd-upgrade exec failure is
+> measured, not explained (window closed, not understood); kernel apk files carry
+> gid 12345 (harmless, fix at the next kernel pkgrel); the pipeline should
+> `--force` every OTA aport whose pkgrel changed.
 > → CHANGELOG [1.15.2] ·
 > `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`
 

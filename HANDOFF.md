@@ -254,17 +254,25 @@ CHANGELOG `[1.15.2]`.
   cross-native without fallback, `verify-rootfs.sh` 29/29, rootfs clean (only
   eth-direct/eth-lan profiles, no `authorized_keys`), `/etc/apk/keys` = fleet key
   only, apk db r93 + kernel-ota r5 + 6.18.48-r0.
-- 🔶 **OPEN — Prague after the OTA that took systemd 261.2 → 262_rc1 in place:**
+- **Prague after the OTA that took systemd 261.2 → 262_rc1 in place** —
+  measured, not explained, and the restart path is fixed:
   `systemctl restart nexusq-wifi-watchdog` crash-looped `status=127`, **no output
   from the process**, 15 restarts; `systemd-run … /usr/bin/nexusq-wifi-watchdog`
   reproduced it, the same script from an ssh shell worked; `systemd-run --wait
   /bin/true` seemed fine. `systemctl daemon-reexec` → started first try,
   `NRestarts=0`, nothing else failed. The cottage (PID1 already 262_rc1 from its
   18:09 upgrade + two reboots) never showed it. Hypothesis only: old running PID1
-  vs freshly installed 262 userland until re-exec. **Follow-up:**
-  `nexusq-control`'s system update has `_REBOOT_HINTS` for systemd but restarts
-  services after an upgrade — it should `daemon-reexec` (or ask for a reboot)
-  when systemd was among the upgraded packages.
+  vs freshly installed 262 userland until re-exec — one box, twice, no strace.
+  ✅ **`nexusq-control` r36 (OTA-only, same evening):** `_systemctl_plan` puts
+  `daemon-reexec` first when `_systemd_changed` (systemd / systemd-*, not
+  `postmarketos-base-systemd` & co.), `daemon-reload` otherwise, then restarts in
+  `_RESTART_ORDER` (control never in it; caller restarts it last, `--no-block`);
+  `installSystemUpdate` returns `systemdChanged`. 6 new tests, suite 87 OK. Built
+  `OTA_PACKAGES_ONLY=1 OTA_PACKAGES=nexusq-control` on the MacBook — passed first
+  time on the reconciled volume, proving the trust fix — gh-pages `998c1d3`,
+  installed on both units ~21:0x CEST (first cottage `apk update` raced the Pages
+  CDN by seconds and saw no r36; the second did — check `apk policy` before
+  calling a publish failed). Both `nexusq-control` active. CHANGELOG `[Unreleased]`.
 - Build observations (not blockers): 250 files in the kernel apk have gid 12345 /
   uid 0 (`/boot/*`, `/usr/lib/modules/6.18.48-r0/**`, `lib/firmware/brcm`) —
   cross-native `package()` runs with pmos's group, modes 644/755, harmless; look
@@ -273,7 +281,7 @@ CHANGELOG `[1.15.2]`.
   `nq-kernel-ota` matched the tree so the image is right, but every OTA aport
   whose pkgrel changed should be `--force`d.
 - **Fleet now (2026-09-05 evening):** both units on **v1.15.2** (r93, kernel-ota
-  r5, 6.18.48-r0). Cottage: `nexus-q-sumperak.local`, **DHCP** since 2026-08-30
+  r5, 6.18.48-r0) plus **control r36** (OTA-only). Cottage: `nexus-q-sumperak.local`, **DHCP** since 2026-08-30
   (static `<old-static-ip>` gone; LAN `<cottage-lan>/22`, gw `<cottage-gateway>`,
   broker `<cottage-pi>`), identity `wifi f8:8f:ca:05:1f:11 bt f8:8f:ca:73:ac:9c`
   in both slots, watchdog `start` marker with `downs_to_reconnect:4`, 0 bad checks

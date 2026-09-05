@@ -4,6 +4,28 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased] — 2026-09-05 — the upgrade that could not restart what it had just installed
+
+`nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
+
+### Fixed — after a systemd upgrade, PID 1 has to re-exec before anything restarts
+- **A system update that pulled systemd itself (261 → 262 on the Prague unit)
+  left the running PID 1 unable to start any service** until `systemctl
+  daemon-reexec`: every `restart` exited 127 with no message, `systemd-run`
+  reproduced it, the same script ran fine from a shell. `_finish_system_update`
+  restarts our daemons in exactly that window, so they all failed silently; the
+  reboot that follows a systemd change hid it from the app path, and the
+  hand-run `apk upgrade` (no reboot) showed it in the open.
+- **`_systemctl_plan`** now orders the tail: `daemon-reexec` first when the
+  transaction touched `systemd`/`systemd-*` (detected by `_systemd_changed`;
+  `postmarketos-base-systemd` and friends are not systemd), a plain
+  `daemon-reload` otherwise (packages replace unit files, and systemd was already
+  warning about it), then the restarts in the fixed order. `install_system_update`
+  reports `systemdChanged` alongside `rebootRecommended`. Pure function, six new
+  cases in `tests/test_system_update_restart.py`.
+- The cause behind the 127 is recorded as measured, not explained: one
+  occurrence, reproduced twice on the same box, gone after re-exec.
+
 ## [1.15.2] — 2026-09-05 — six days dark on a healthy box, and the OTA that renamed it
 
 Device **r93**, `nexusq-kernel-ota` **r5**, kernel unchanged (6.18.48-r0). Both
@@ -151,7 +173,8 @@ fixes were found by fixing the cottage unit, which had been offline since
   against the freshly installed 262 userland. `nexusq-control`'s system update
   lists systemd in `_REBOOT_HINTS` but restarts services after an upgrade — it
   should `systemctl daemon-reexec` (or ask for a reboot) when systemd was among
-  the upgraded packages. Not fixed in this release.
+  the upgraded packages. Not fixed in this release — **fixed in `nexusq-control`
+  r36, OTA-only, the same evening (see `[Unreleased]` above).**
 - Two build observations, not blockers: **250 files in the kernel apk carry
   gid 12345 with uid 0** (`/boot/*`, `/usr/lib/modules/6.18.48-r0/**`, the
   `lib/firmware/brcm` dir) — cross-native `package()` runs with pmos's group;

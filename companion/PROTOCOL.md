@@ -804,7 +804,7 @@ from the Alpine·pmOS mirrors + our config + daemons from the OTA repo) — the
 | Method | Params | Result |
 |---|---|---|
 | `checkSystemUpdate` | — | `{ packages: [{ name, installed, available }], updateAvailable: bool, kernel, repo }` — `apk update` + `apk version -l '<'`, **minus the kernel**; `kernel` is the running `uname -r` (read-only). Installs nothing. Does **NOT** blink the mute LED (that stays the §12a "daemon available" indicator). |
-| `installSystemUpdate` | — | `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons off-thread, **reboots if base libc/init churned**. |
+| `installSystemUpdate` | — | `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, systemdChanged: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons off-thread, **reboots if base libc/init churned**. `systemdChanged` (r36, 2026-09-05) is true when `systemd` or a `systemd-*` package was in `changed` (not `postmarketos-base-systemd` / `linux-pam-systemd` / `nftables-systemd`); the daemon then runs `systemctl daemon-reexec` **before** any restart — a freshly installed systemd left the old PID 1 unable to exec services (`status=127`, no output) until re-exec. Otherwise a `daemon-reload` precedes the restarts. Older daemons omit the field; treat absent as `false`. |
 
 **This track never applies a kernel.** Applying one is a boot-partition write, which
 since 2026-08-18 has its own path — `nexusq-kernel-ota`'s health-gated trial slot
