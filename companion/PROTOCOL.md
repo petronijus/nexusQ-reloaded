@@ -157,6 +157,13 @@ says which mechanism applies, so a client never has to hardcode source names:
 The mapping above is the bridge's to change (a future Spotify backend would flip
 that row to `device` with no client change).
 
+**The companion app implements this from 1.18.0** (`lib/spotify/`): `device` →
+these methods; `spotify-web` → Spotify's Web API from the phone, aimed at the Q
+by the device name librespot advertises (the same `/etc/nexusq/device.json`
+name `getDeviceInfo` returns), after the user links a Spotify account (PKCE, no
+secret on the device or in the app); `none`, or a bridge that omits the field
+(pre-r33), → disabled controls. See `app/README.md` → "Spotify transport".
+
 ### Device info
 | Method | params | result |
 |---|---|---|

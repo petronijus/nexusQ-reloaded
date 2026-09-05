@@ -8,6 +8,32 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Added — the app's player controls finally control something (app 1.18.0, unreleased)
+- **Play/pause/next/previous now follow `nowPlaying.transport`** (PROTOCOL §5).
+  They had been enabled and dead since the row existed: the bridge has no
+  AirPlay/Roon backend (so `none`) and says `spotify-web` for Spotify, which the
+  app ignored — the model did not even carry the field.
+- **Spotify is driven from the phone through Spotify's Web API**, because
+  librespot has no local control interface by design. Settings → *Spotify
+  account* links one with OAuth 2.0 + PKCE (no secret anywhere), scopes limited
+  to playback state/control, tokens in the Keychain/Keystore; the redirect
+  `nexusq://spotify-callback` is registered on both platforms and accepted only
+  for the pending attempt's `state`. Commands find the Q among the account's
+  Connect devices **by the name librespot advertises** (exact match, else the
+  single matching Speaker, never a guess) and handle `NO_ACTIVE_DEVICE` by
+  transferring playback to the Q first. Premium-required, rate limits and "not
+  among your devices" are said in a SnackBar rather than swallowed.
+- The buttons are disabled for `none` and for `spotify-web` without a linked
+  account (with a one-tap "Connect Spotify" offer), and a bridge that omits
+  `transport` (pre-r33) reads as `none`. Pure rule table + 3 new test files
+  (PKCE vectors incl. RFC 7636 appendix B, device matching, the control table).
+- The Spotify client ID is injected at build time from 1Password by
+  `build-apk.sh` / `release-ios.sh`; a build without it says so in the UI.
+  Deployment target and Info.plist gained the URL scheme; dependencies:
+  `url_launcher`, `app_links`, `http`, `crypto`.
+- Not in any released build yet: needs the Spotify developer app (Petr) and an
+  app release (1.18.0+51) on both tracks.
+
 ### Fixed — after a systemd upgrade, PID 1 has to re-exec before anything restarts
 - **A system update that pulled systemd itself (261 → 262 on the Prague unit)
   left the running PID 1 unable to start any service** until `systemctl

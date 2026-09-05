@@ -4,6 +4,7 @@ import 'package:simple_icons/simple_icons.dart';
 import '../build_info.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
+import '../spotify/spotify_auth.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
 import 'debug_log_screen.dart';
@@ -554,6 +555,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(color: NexusQColors.dim, fontSize: 12),
                 ),
               ),
+            ),
+
+            // --- Spotify: the account that drives Spotify Connect on the Q ---
+            // librespot has no local transport API (PROTOCOL §5), so the
+            // play/pause/next buttons for Spotify go through Spotify's Web API
+            // from THIS phone, which needs a linked account (Premium, as Spotify
+            // requires for playback control). Read-only playback state + control
+            // scopes, nothing else.
+            const SizedBox(height: 20),
+            _sectionTitle('Spotify'),
+            ListenableBuilder(
+              listenable: SpotifyLink.instance,
+              builder: (context, _) {
+                final link = SpotifyLink.instance;
+                final String subtitle;
+                if (!link.isConfigured) {
+                  subtitle = 'Not configured in this build (no Spotify client ID). '
+                      'Spotify playback can still be controlled from the Spotify app.';
+                } else if (link.isLinked) {
+                  subtitle = 'Connected${link.userDisplayName.isEmpty ? '' : ' as ${link.userDisplayName}'} — '
+                      'the Now Playing buttons drive Spotify on this Nexus Q.';
+                } else {
+                  subtitle = 'Not connected. Needed for the Now Playing buttons while '
+                      'Spotify plays; the device itself cannot control Spotify.';
+                }
+                return Card(
+                  color: NexusQColors.surface,
+                  child: ListTile(
+                    leading: Icon(SimpleIcons.spotify,
+                        color: link.isLinked ? NexusQColors.accent : NexusQColors.dim),
+                    title: const Text('Spotify account',
+                        style: TextStyle(color: NexusQColors.white)),
+                    subtitle: Text(subtitle,
+                        style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+                    trailing: !link.isConfigured
+                        ? null
+                        : TextButton(
+                            onPressed: () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              try {
+                                if (link.isLinked) {
+                                  await link.unlink();
+                                } else {
+                                  await link.beginLogin();
+                                }
+                              } catch (e) {
+                                messenger.showSnackBar(SnackBar(
+                                    content: Text('$e'.replaceFirst('SpotifyAuthException: ', ''))));
+                              }
+                            },
+                            child: Text(link.isLinked ? 'Disconnect' : 'Connect'),
+                          ),
+                  ),
+                );
+              },
             ),
 
             // --- Health: the MQTT telemetry panel ----------------------------

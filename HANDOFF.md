@@ -184,6 +184,35 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
+## Session 2026-09-05 (late) — the app's player controls, Spotify via the Web API
+
+**Petr's ask:** "rozjet ten player v appce, ty controls." Chosen path: Spotify
+through Spotify's Web API in the app (AirPlay/DACP and Roon backends in the
+bridge stay open; see PROTOCOL §5). State of the code: `companion/app/lib/spotify/`
+(auth = PKCE link, player = Web API, transport_rules = the button table),
+`NowPlaying.transport` in the model, routing in `DeviceController`
+(`playPause`/`next`/`previous` by route, `notices` stream → SnackBar), the Now
+Playing row disables/enables per route and offers "Connect Spotify", Settings
+gains a *Spotify account* card, `nexusq://spotify-callback` registered in the
+Android manifest and iOS Info.plist, `app_links` wired in `main.dart`.
+`flutter analyze` clean, **111/111 tests** (3 new files). Details:
+`companion/app/README.md` → "Spotify transport", CHANGELOG `[Unreleased]`.
+
+**Blocked on Petr (browser):** a Spotify developer app at
+developer.spotify.com/dashboard — Web API, redirect URI **exactly**
+`nexusq://spotify-callback` — with its Client ID stored in 1Password as item
+**"Spotify Developer nexusQ companion"**, field `client_id` (the build scripts
+read that name). Development mode: add the Spotify account(s) that will use it to
+the app's user list; playback control needs Premium. Then: bump pubspec to
+`1.18.0+51`, `./build-apk.sh --release` + `app-v1.18.0` release +
+`app-release.json`, and `./release-ios.sh` (both tracks, per the 2026-09-05
+rule). First real test: play Spotify to the Q, link the account in Settings, tap
+pause on the phone.
+
+**Known gaps, on purpose:** AirPlay and Roon still report `transport = none`
+(no bridge backend); shairport-sync 5.1 on the Q is built with metadata + MPRIS,
+which is the intended AirPlay route (`docs/2026-09-05-…` open list).
+
 ## Session 2026-09-05: **v1.15.2 — the cottage Q was dark for six days on a healthy box · its first kernel OTA renamed it · the first release cut end to end on the MacBook, and the two things it found**
 
 Device **r93**, `nexusq-kernel-ota` **r5**, kernel unchanged (6.18.48-r0).

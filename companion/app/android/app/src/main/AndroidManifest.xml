@@ -44,6 +44,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Spotify OAuth (PKCE) redirect: nexusq://spotify-callback?code=…
+                 The same URI is registered on the Spotify developer app; the
+                 app_links plugin delivers it to SpotifyLink.handleRedirect,
+                 which acts only on its own pending login attempt. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="nexusq" android:host="spotify-callback"/>
+            </intent-filter>
         </activity>
         <!-- HCE service: emulates a card under AID F0010203040506 so the Nexus Q
              (acting as the NFC reader) can push a short UTF-8 text to the phone.

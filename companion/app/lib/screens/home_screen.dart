@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../debug/app_log.dart';
 import '../protocol/models.dart';
+import '../spotify/transport_rules.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
 import '../widgets/device_sphere.dart';
@@ -35,6 +37,26 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _noticeSub = widget.controller.notices.listen((msg) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    });
+  }
+
+  StreamSubscription<String>? _noticeSub;
+
+  Future<void> _connectSpotify(BuildContext context, DeviceController controller) async {
+    try {
+      await controller.spotify.beginLogin();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e'.replaceFirst('SpotifyAuthException: ', ''))));
+    }
+  }
+
   /// Which EQ band currently owns gestures, or null.
   ///
   /// While armed, the curve claims the gesture at pointer-down — but only
@@ -46,6 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _noticeSub?.cancel();
     _eqArmed.dispose();
     super.dispose();
   }
@@ -302,28 +325,61 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
 
                       // --- NOW PLAYING -----------------------------------------
+                      // The buttons follow nowPlaying.transport (PROTOCOL §5):
+                      // enabled only when someone can actually act on a tap —
+                      // the bridge (`device`) or this phone via Spotify's Web
+                      // API (`spotify-web` + a linked account). Dead-but-
+                      // enabled buttons were the state of this row until 1.18.
                       const _SectionHeader('NOW PLAYING'),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                              onPressed: controller.previous,
-                              icon: const Icon(Icons.skip_previous),
-                              color: NexusQColors.white),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            iconSize: 40,
-                            onPressed: controller.playPause,
-                            icon: Icon(np.playing ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                            color: NexusQColors.accent,
+                      Builder(builder: (context) {
+                        final route = controller.transportRoute;
+                        final enabled = controlsEnabled(route);
+                        final dimColor = enabled ? NexusQColors.white : NexusQColors.dim;
+                        return Column(children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                  onPressed: enabled ? controller.previous : null,
+                                  icon: const Icon(Icons.skip_previous),
+                                  color: dimColor,
+                                  disabledColor: NexusQColors.dim),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                iconSize: 40,
+                                onPressed: enabled ? controller.playPause : null,
+                                icon: Icon(np.playing
+                                    ? Icons.pause_circle_filled
+                                    : Icons.play_circle_filled),
+                                color: NexusQColors.accent,
+                                disabledColor: NexusQColors.dim,
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                  onPressed: enabled ? controller.next : null,
+                                  icon: const Icon(Icons.skip_next),
+                                  color: dimColor,
+                                  disabledColor: NexusQColors.dim),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                              onPressed: controller.next,
-                              icon: const Icon(Icons.skip_next),
-                              color: NexusQColors.white),
-                        ],
-                      ),
+                          if (route == TransportRoute.spotifyUnlinked)
+                            TextButton.icon(
+                              onPressed: () => _connectSpotify(context, controller),
+                              icon: const Icon(Icons.link, size: 16),
+                              label: Text(
+                                  controller.spotify.isConfigured
+                                      ? 'Connect Spotify to control playback'
+                                      : 'Spotify control is not configured in this build',
+                                  style: const TextStyle(fontSize: 12)),
+                            ),
+                          if (route == TransportRoute.none && !np.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 2),
+                              child: Text('This source can only be controlled from its own app',
+                                  style: TextStyle(fontSize: 11, color: NexusQColors.dim)),
+                            ),
+                        ]);
+                      }),
 
                       // --- EQ --------------------------------------------------
                       // Last, and the ONLY place it lives: it is the tallest

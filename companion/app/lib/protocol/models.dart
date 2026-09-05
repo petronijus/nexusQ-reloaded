@@ -10,10 +10,26 @@ class NowPlaying {
     this.album = '',
     this.artUrl = '',
     this.source = '',
+    this.transport = 'none',
   });
 
   final bool playing;
   final String artist, track, album, artUrl, source;
+
+  /// Who can drive the current source — `device`, `spotify-web` or `none`
+  /// (PROTOCOL.md §5). Decided by the bridge per source; the app routes
+  /// play/pause/next by THIS, never by [source].
+  final String transport;
+
+  NowPlaying copyWith({bool? playing}) => NowPlaying(
+        playing: playing ?? this.playing,
+        artist: artist,
+        track: track,
+        album: album,
+        artUrl: artUrl,
+        source: source,
+        transport: transport,
+      );
 
   bool get isEmpty => track.isEmpty && artist.isEmpty;
 
@@ -24,6 +40,10 @@ class NowPlaying {
         album: j['album'] as String? ?? '',
         artUrl: j['artUrl'] as String? ?? '',
         source: j['source'] as String? ?? '',
+        // Older bridges (pre-r33) did not send it; treat absent as `none`, which
+        // disables the buttons — the honest default, since such a bridge cannot
+        // drive anything either.
+        transport: j['transport'] as String? ?? 'none',
       );
 }
 

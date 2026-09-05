@@ -72,6 +72,50 @@ it shipped.
 > the Devices poll-error fix — alongside device **v1.10.1**.) Gradle reads
 > versionName/versionCode straight from `pubspec.yaml`.
 
+## Spotify transport — the Now Playing buttons drive Spotify from the phone (1.18.0)
+
+The bridge advertises `nowPlaying.transport` (PROTOCOL §5). For Spotify it says
+`spotify-web`, because librespot on the Q is a pure Connect endpoint with no
+local control API (upstream's design; issues #457/#1473). Until 1.18 the app
+ignored the field: play/pause/next were always enabled and always dead. Now:
+
+| `transport` | buttons | what a tap does |
+|---|---|---|
+| `device` | enabled | `playPause` / `next` / `previous` to the bridge (AirPlay/Roon backends, when they exist) |
+| `spotify-web`, account linked | enabled | Spotify **Web API** from this phone, aimed at the Q by its **device name** |
+| `spotify-web`, no account | disabled + "Connect Spotify to control playback" | opens the Spotify login |
+| `none` / missing | disabled | nothing — the source can only be controlled from its own app |
+
+The table is `lib/spotify/transport_rules.dart`, pinned by
+`test/transport_controls_test.dart`.
+
+**Account link** (`lib/spotify/spotify_auth.dart`): OAuth 2.0 Authorization Code
+with **PKCE**, no client secret, scopes `user-read-playback-state
+user-modify-playback-state` only. The browser returns to
+`nexusq://spotify-callback` (Android intent-filter + iOS `CFBundleURLTypes`,
+delivered by `app_links`); the redirect is accepted only for the pending
+attempt's `state`. Tokens live in `flutter_secure_storage` (Keychain/Keystore —
+the same store as the MQTT login, hence the iOS keychain entitlement). Settings
+→ **Spotify account** shows the state and connects/disconnects.
+
+**Commands** (`lib/spotify/spotify_player.dart`): `GET /me/player/devices`, match
+the Q by name (exact, case/whitespace-folded; else the single Speaker containing
+the name; never a guess — `matchQDevice`, pinned by
+`test/spotify_device_match_test.dart`), then `PUT play|pause`, `POST
+next|previous` with `device_id`. `404 NO_ACTIVE_DEVICE` → transfer playback to
+the Q and play, the way the Spotify app does. `403 PREMIUM_REQUIRED`, `429`, and
+"the Q is not among your devices" surface as a SnackBar. Optimistic play/pause
+like the device path; the librespot hook's `playing`/`paused` event corrects it.
+
+**Client ID**: a public identifier (PKCE), but it names Petr's Spotify developer
+app, so it is **not committed** — `build-apk.sh` and `release-ios.sh` inject
+`--dart-define=SPOTIFY_CLIENT_ID` from the 1Password item **"Spotify Developer
+nexusQ companion"** (field `client_id`). A build without it says "Spotify control
+is not configured in this build" instead of failing. Spotify-side setup: a
+developer app with redirect URI `nexusq://spotify-callback` and the Web API
+enabled; in development mode the account must be on the app's user allowlist,
+and playback control needs Spotify Premium (Spotify's rule).
+
 ## iOS (runs since 2026-08-03 — verified on the iPhone 17 simulator, iOS 26.5)
 
 The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios

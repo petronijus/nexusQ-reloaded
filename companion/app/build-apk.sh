@@ -39,9 +39,25 @@ case "$APP_VERSION" in
 esac
 
 echo "Building companion app v$APP_VERSION (build $BUILD_TAG) $MODE"
+# Spotify transport (lib/spotify/): the Web API client ID is a PUBLIC identifier
+# (PKCE, no secret) but it names Petr's developer app, so it lives in 1Password
+# ("Spotify Developer nexusQ companion", field client_id) and is injected here,
+# never committed. Without `op` the build still succeeds and the app reports
+# Spotify control as "not configured" -- honest, not broken.
+SPOTIFY_CLIENT_ID="${SPOTIFY_CLIENT_ID:-}"
+if [ -z "$SPOTIFY_CLIENT_ID" ] && command -v op >/dev/null 2>&1; then
+	SPOTIFY_CLIENT_ID=$(op item get "${NQ_SPOTIFY_ITEM:-Spotify Developer nexusQ companion}" --account my --fields label=client_id 2>/dev/null | tr -d '"' || true)
+fi
+if [ -n "$SPOTIFY_CLIENT_ID" ]; then
+	echo "Spotify client ID: injected (${#SPOTIFY_CLIENT_ID} chars)"
+else
+	echo "WARNING: no Spotify client ID (1Password item missing or op not signed in) -> Spotify control disabled in this build" >&2
+fi
+
 flutter build apk "$MODE" \
 	--dart-define=APP_VERSION="$APP_VERSION" \
-	--dart-define=BUILD_TAG="$BUILD_TAG"
+	--dart-define=BUILD_TAG="$BUILD_TAG" \
+	--dart-define=SPOTIFY_CLIENT_ID="$SPOTIFY_CLIENT_ID"
 
 case "$MODE" in
 	--release) APK=build/app/outputs/flutter-apk/app-release.apk ;;

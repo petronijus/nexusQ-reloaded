@@ -4,6 +4,10 @@ import 'package:flutter/widgets.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../protocol/models.dart';
+import '../spotify/spotify_auth.dart';
+import '../spotify/spotify_player.dart';
+import '../spotify/transport_rules.dart' as rules;
+import '../spotify/transport_rules.dart' show TransportRoute;
 
 /// Holds [DeviceState], applies device events to it, and exposes intent methods
 /// the UI calls. Optimistic: updates locally then sends, and reconciles on the
@@ -292,21 +296,81 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     _client.notify('setOutput', {'output': id});
   }
 
+  // --- transport (PROTOCOL §5) --------------------------------------------
+  // Routed by nowPlaying.transport: `device` goes to the bridge, `spotify-web`
+  // goes to Spotify's Web API from this phone (librespot has no local control
+  // interface, by design), anything else is a no-op with a notice. The buttons
+  // are already disabled for the last case; the notice covers a race where the
+  // source changed under a tap.
+
+  /// Spotify account link, shared with Settings.
+  final SpotifyLink spotify = SpotifyLink.instance;
+
+  /// One-line, user-facing outcomes of transport commands that could not be
+  /// carried out (not linked, no such Connect device, Premium required, …).
+  /// The home screen shows them as a SnackBar.
+  Stream<String> get notices => _notices.stream;
+  final _notices = StreamController<String>.broadcast();
+
+  TransportRoute get transportRoute =>
+      rules.transportRoute(state.nowPlaying.transport, spotifyLinked: spotify.isLinked);
+
   void playPause() {
-    state.nowPlaying = NowPlaying(
-      playing: !state.nowPlaying.playing,
-      artist: state.nowPlaying.artist,
-      track: state.nowPlaying.track,
-      album: state.nowPlaying.album,
-      artUrl: state.nowPlaying.artUrl,
-      source: state.nowPlaying.source,
-    );
-    notifyListeners();
-    _client.notify('playPause');
+    final np = state.nowPlaying;
+    switch (transportRoute) {
+      case TransportRoute.device:
+        state.nowPlaying = np.copyWith(playing: !np.playing);
+        notifyListeners();
+        _client.notify('playPause');
+      case TransportRoute.spotifyWeb:
+        // Optimistic, like the device path; the librespot hook's playing/paused
+        // event corrects it within a second either way.
+        state.nowPlaying = np.copyWith(playing: !np.playing);
+        notifyListeners();
+        _spotify((p) => p.setPlaying(state.deviceName, !np.playing), revert: () {
+          state.nowPlaying = np;
+          notifyListeners();
+        });
+      case TransportRoute.spotifyUnlinked:
+        _notices.add('Connect your Spotify account in Settings to control playback.');
+      case TransportRoute.none:
+        _notices.add('Nothing is playing that this app can control.');
+    }
   }
 
-  void next() => _client.notify('next');
-  void previous() => _client.notify('previous');
+  void next() => _transport('next', (p) => p.next(state.deviceName));
+  void previous() => _transport('previous', (p) => p.previous(state.deviceName));
+
+  void _transport(String method, Future<void> Function(SpotifyPlayer) viaSpotify) {
+    switch (transportRoute) {
+      case TransportRoute.device:
+        _client.notify(method);
+      case TransportRoute.spotifyWeb:
+        _spotify(viaSpotify);
+      case TransportRoute.spotifyUnlinked:
+        _notices.add('Connect your Spotify account in Settings to control playback.');
+      case TransportRoute.none:
+        _notices.add('Nothing is playing that this app can control.');
+    }
+  }
+
+  void _spotify(Future<void> Function(SpotifyPlayer) op, {void Function()? revert}) {
+    unawaited(() async {
+      try {
+        await op(SpotifyPlayer(spotify));
+      } on SpotifyPlayerException catch (e) {
+        revert?.call();
+        _notices.add(e.message);
+      } on SpotifyAuthException catch (e) {
+        revert?.call();
+        _notices.add(e.message);
+      } catch (e) {
+        revert?.call();
+        AppLog.add('spotify', 'transport failed: $e', warn: true);
+        _notices.add('Spotify command failed: $e');
+      }
+    }());
+  }
 
   @override
   void dispose() {

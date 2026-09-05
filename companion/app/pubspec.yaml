@@ -86,6 +86,10 @@ dependencies:
   # plaintext SharedPreferences.
   mqtt_client: ^10.6.0
   flutter_secure_storage: ^9.2.2
+  url_launcher: ^6.3.2
+  app_links: ^7.2.1
+  http: ^1.6.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

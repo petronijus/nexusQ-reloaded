@@ -78,6 +78,19 @@
 	     checks, TCP/WebSocket to the Q on the LAN, MQTT over the OS socket stack) and
 	     ships no encryption of its own, which is the exempt case. Without this key
 	     every TestFlight build sits at "Missing Compliance" until someone clicks. -->
+	<!-- Spotify OAuth (PKCE) redirect nexusq://spotify-callback — see the Android
+	     manifest's matching intent-filter and lib/spotify/spotify_auth.dart. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.nexusq.nexusqCompanion.spotify</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nexusq</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

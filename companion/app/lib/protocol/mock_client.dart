@@ -130,6 +130,7 @@ class MockClient implements NexusQClient {
         ..._tracks[_trackIdx],
         'artUrl': '',
         'source': 'spotify',
+        'transport': 'spotify-web',
       };
 
   Map<String, dynamic> get _state => {

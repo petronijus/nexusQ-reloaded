@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'nfc/device_tap.dart';
@@ -9,6 +11,7 @@ import 'screens/connect_gate.dart';
 import 'setup/setup_flow.dart';
 import 'setup/stock_assets.dart';
 import 'theme/nexusq_theme.dart';
+import 'spotify/spotify_auth.dart';
 
 /// Connection source, chosen at launch:
 ///   --dart-define=NEXUSQ_HOST=192.168.x.y  → connect to that bridge directly
@@ -65,6 +68,42 @@ class _NexusQAppState extends State<NexusQApp> {
   /// BT-permission dialog resumed the app). Track the setup we already routed
   /// and ignore duplicates until that flow is dismissed.
   String? _activeSetupMac;
+
+  /// Spotify's OAuth redirect (`nexusq://spotify-callback?code=…`) arrives as
+  /// an app link; hand every incoming URI to the link, which only acts on its
+  /// own pending attempt and ignores the rest.
+  final _appLinks = AppLinks();
+  StreamSubscription<Uri>? _linkSub;
+
+  @override
+  void initState() {
+    super.initState();
+    SpotifyLink.instance.load();
+    _linkSub = _appLinks.uriLinkStream.listen(_onAppLink);
+    _appLinks.getInitialLink().then((uri) {
+      if (uri != null) _onAppLink(uri);
+    });
+  }
+
+  @override
+  void dispose() {
+    _linkSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _onAppLink(Uri uri) async {
+    try {
+      final handled = await SpotifyLink.instance.handleRedirect(uri);
+      if (handled) {
+        _messengerKey.currentState?.showSnackBar(SnackBar(
+            content: Text(SpotifyLink.instance.isLinked
+                ? 'Spotify connected as ${SpotifyLink.instance.userDisplayName}'
+                : 'Spotify login did not complete')));
+      }
+    } on SpotifyAuthException catch (e) {
+      _messengerKey.currentState?.showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
 
   void _onDeviceTap(DeviceTap tap) {
     final nav = _navigatorKey.currentState;
