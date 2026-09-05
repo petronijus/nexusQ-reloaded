@@ -1,10 +1,15 @@
-<!-- RELEASE: v1.15.1 -->
+<!-- RELEASE: v1.15.2 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.15.1`** (device r92, kernel `6.18.48-r0`,
+**This guide describes release `v1.15.2`** (device r93, kernel-ota r5, kernel `6.18.48-r0`,
 44 patches through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
 
-> **v1.15.1 is a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): an input
+> **v1.15.2 is a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): the WiFi
+> watchdog reconnects a wlan0 its own heal left stranded (one unit sat dark for six
+> days on a healthy box), and a kernel OTA now carries the unit's own WiFi MAC / BT
+> address onto the new kernel instead of the first unit's. See the changelog.
+>
+> **v1.15.1 was a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): an input
 > whose PulseAudio loopback could be dragged onto another source, which made USB
 > audio or Roon silent while every check still passed. See the changelog.
 >
@@ -42,8 +47,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.15.1.img` (~6.4 MiB), `nexusq-rootfs-v1.15.1-sparse.img.zst`
-  (~628 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.1.txt`
+- release artifacts: `nexusq-boot-v1.15.2.img` (~6.4 MiB), `nexusq-rootfs-v1.15.2-sparse.img.zst`
+  (~630 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.15.2.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
