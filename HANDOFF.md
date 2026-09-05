@@ -198,15 +198,20 @@ Android manifest and iOS Info.plist, `app_links` wired in `main.dart`.
 `flutter analyze` clean, **111/111 tests** (3 new files). Details:
 `companion/app/README.md` → "Spotify transport", CHANGELOG `[Unreleased]`.
 
-**Blocked on Petr (browser):** a Spotify developer app at
-developer.spotify.com/dashboard — Web API, redirect URI **exactly**
-`nexusq://spotify-callback` — with its Client ID stored in 1Password in the existing item
-**"Spotify API key"**, field `client ID` (the build scripts read that name). Development mode: add the Spotify account(s) that will use it to
-the app's user list; playback control needs Premium. Then: bump pubspec to
-`1.18.0+51`, `./build-apk.sh --release` + `app-v1.18.0` release +
-`app-release.json`, and `./release-ios.sh` (both tracks, per the 2026-09-05
-rule). First real test: play Spotify to the Q, link the account in Settings, tap
-pause on the phone.
+**✅ RELEASED 2026-09-06 00:0x CEST as app 1.18.0+51, both tracks.** Petr had a
+Spotify developer app already and added the redirect URI; its Client ID is the
+existing 1Password item **"Spotify API key"** (field `client ID`), which the build
+scripts now read (no new item). Android: `./build-apk.sh --release` (client ID
+injected, 32 chars), signer `35546f7c…afebe8` as always, GitHub release
+`app-v1.18.0` with `nexusq-companion-1.18.0.apk`, `app-release.json` → 1.18.0/51
+(live on raw.githubusercontent). iOS: `./release-ios.sh` → 1.18.0 (51), Apple
+Distribution, Delivery UUID `3429e671-b74b-437a-b300-2d927d372b8b`, "No errors"
+and — with the deployment target at 15.0 — no MinimumOSVersion warning either;
+TestFlight "Internal" picks it up after processing. **Not yet tested end to end
+with a real Spotify account**: the first check is play Spotify to the Q, Settings
+→ Spotify account → Connect (browser → back to the app via
+`nexusq://spotify-callback`), then pause from the phone. Development-mode
+Spotify apps only admit allow-listed users, and control needs Premium.
 
 **Known gaps, on purpose:** AirPlay and Roon still report `transport = none`
 (no bridge backend); shairport-sync 5.1 on the Q is built with metadata + MPRIS,
