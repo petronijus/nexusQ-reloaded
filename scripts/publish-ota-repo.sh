@@ -90,6 +90,7 @@ MSG
         exit 1
     fi
 fi
+# (read loops, not mapfile: macOS ships bash 3.2 and a release is cut there too.)
 # The OTA package set lives in pmos/ota-packages.list — one place, because the
 # release gate (scripts/verify-ota-parity.sh) must judge the SAME set. It used to
 # be this array, and a second copy in the gate would let the gate agree with the
@@ -97,7 +98,7 @@ fi
 # anything ≥99 MB, so a mistaken big apk can never break the push.
 OTA_LIST="$REPO_ROOT/pmos/ota-packages.list"
 [ -f "$OTA_LIST" ] || { echo "ERROR: missing $OTA_LIST — refusing to publish an unknown package set" >&2; exit 1; }
-mapfile -t OTA_PACKAGES < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
+OTA_PACKAGES=(); while IFS= read -r _l; do OTA_PACKAGES+=("$_l"); done < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
 [ "${#OTA_PACKAGES[@]}" -gt 0 ] || { echo "ERROR: $OTA_LIST lists no packages" >&2; exit 1; }
 
 STAGE="$(mktemp -d)"

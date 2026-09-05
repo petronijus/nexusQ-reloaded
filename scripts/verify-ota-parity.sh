@@ -80,7 +80,7 @@ if ! command -v debugfs >/dev/null 2>&1; then
 fi
 
 [ -f "$OTA_LIST" ] || { say "FAIL: missing $OTA_LIST — nothing to compare"; exit 2; }
-mapfile -t PKGS < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
+PKGS=(); while IFS= read -r _l; do PKGS+=("$_l"); done < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')
 [ "${#PKGS[@]}" -gt 0 ] || { say "FAIL: $OTA_LIST lists no packages"; exit 2; }
 
 # --- sparse -> raw if needed (same magic test as verify-rootfs.sh) ------------
@@ -141,7 +141,7 @@ done
 
 say ""
 say "=== 2. signing key: what the image trusts vs what signed the repo ==="
-mapfile -t BAKED < <(debugfs -R "ls -p /etc/apk/keys" "$IMG" 2>/dev/null \
+BAKED=(); while IFS= read -r _l; do BAKED+=("$_l"); done < <(debugfs -R "ls -p /etc/apk/keys" "$IMG" 2>/dev/null \
     | awk -F/ '{print $6}' | sed -n 's/\.rsa\.pub$//p' | grep '^pmos@local-')
 if [ "${#BAKED[@]}" -eq 0 ]; then
     bad "image bakes a pmos signing key" "none in /etc/apk/keys — it can never OTA"
