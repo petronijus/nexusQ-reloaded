@@ -109,8 +109,8 @@ like the device path; the librespot hook's `playing`/`paused` event corrects it.
 
 **Client ID**: a public identifier (PKCE), but it names Petr's Spotify developer
 app, so it is **not committed** — `build-apk.sh` and `release-ios.sh` inject
-`--dart-define=SPOTIFY_CLIENT_ID` from the 1Password item **"Spotify Developer
-nexusQ companion"** (field `client_id`). A build without it says "Spotify control
+`--dart-define=SPOTIFY_CLIENT_ID` from the 1Password item **"Spotify API key"** (field `client ID`, the item the
+Spotify MCP already uses). A build without it says "Spotify control
 is not configured in this build" instead of failing. Spotify-side setup: a
 developer app with redirect URI `nexusq://spotify-callback` and the Web API
 enabled; in development mode the account must be on the app's user allowlist,

@@ -200,9 +200,8 @@ Android manifest and iOS Info.plist, `app_links` wired in `main.dart`.
 
 **Blocked on Petr (browser):** a Spotify developer app at
 developer.spotify.com/dashboard — Web API, redirect URI **exactly**
-`nexusq://spotify-callback` — with its Client ID stored in 1Password as item
-**"Spotify Developer nexusQ companion"**, field `client_id` (the build scripts
-read that name). Development mode: add the Spotify account(s) that will use it to
+`nexusq://spotify-callback` — with its Client ID stored in 1Password in the existing item
+**"Spotify API key"**, field `client ID` (the build scripts read that name). Development mode: add the Spotify account(s) that will use it to
 the app's user list; playback control needs Premium. Then: bump pubspec to
 `1.18.0+51`, `./build-apk.sh --release` + `app-v1.18.0` release +
 `app-release.json`, and `./release-ios.sh` (both tracks, per the 2026-09-05
