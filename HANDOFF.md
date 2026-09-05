@@ -584,10 +584,26 @@ build-verified. `pod install` regenerated `ios/Podfile.lock` (added
 `xcrun altool --validate-app` answers *"Cannot determine the Apple ID from Bundle
 ID 'org.nexusq.nexusqCompanion' and platform 'IOS' (19)"* — i.e. the ONLY thing
 left is the App Store Connect app record above. Once it exists:
-`xcrun altool --upload-app -f companion/app/build/ios/ipa/nexusQ-reloaded.ipa -t ios
--u <apple id> -p <app-specific password from 1P>` (the KP item works for the whole
-Apple ID), then add the build to a TestFlight group. The Proxmox macOS VM (108) is
+`xcrun altool --upload-app … --apiKey <key id> --apiIssuer <issuer>` with the
+team ASC API key staged as `~/.private_keys/AuthKey_<key id>.p8` for the duration
+(0600, removed afterwards). ⚠️ The Apple-ID + app-specific-password route from
+the KP skill FAILED here (`-20101 Your Apple Account or password was entered
+incorrectly`) — the API key is the working path. The Proxmox macOS VM (108) is
 no longer needed for this.
+
+**✅ UPLOADED 2026-09-05 23:11 CEST.** Petr created the ASC record in the browser
+("Nexus Q Reloaded", app id `6809042162`, SKU `NEXUSQ-COMPANION`, en-US).
+altool: Delivery UUID `ded99280-299b-4676-8f4d-6a7127fe98db`, 8 639 171 B, "No
+errors, 1 warnings" — the warning is **`MinimumOSVersion too low (13.0)`: from
+spring 2027 Apple requires 15.0**, so the deployment target is now 15.0 in
+`ios/Podfile`, the pbxproj and therefore `AppFrameworkInfo.plist` (verified with a
+`flutter build ios --release --no-codesign`: builds). Also added
+`ITSAppUsesNonExemptEncryption=false` to `Info.plist` so future builds do not stop
+at "Missing Compliance"; the build already uploaded predates it and gets the flag
+set over the API once processed. TestFlight: internal group **"Internal"**
+(`fc4b58eb-9866-40e8-ae1a-f66700aec189`, hasAccessToAllBuilds) with Petr as tester.
+Processing takes 5–15 min after upload; then TestFlight → Nexus Q Reloaded on the
+phone. First run on real hardware — expect a round of fixes.
 
 **How current is iOS vs Android?** The Dart is shared, so every feature from 1.11
 through 1.16.2 is there. Three things are Android-only *by design*, documented in

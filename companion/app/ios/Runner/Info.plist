@@ -73,5 +73,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Export compliance, answered once here instead of on every build in App Store
+	     Connect: the app uses only the platform's TLS (HTTPS to GitHub for update
+	     checks, TCP/WebSocket to the Q on the LAN, MQTT over the OS socket stack) and
+	     ships no encryption of its own, which is the exempt case. Without this key
+	     every TestFlight build sits at "Missing Compliance" until someone clicks. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
