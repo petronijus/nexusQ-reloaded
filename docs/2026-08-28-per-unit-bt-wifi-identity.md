@@ -133,3 +133,28 @@ whose baked profiles pin a literal MAC. Full account:
 Check a live unit with `ethtool -P wlan0` (permanent) against
 `cat /sys/class/net/wlan0/address` (in use), and grep **every** profile in
 `/etc/NetworkManager/system-connections/`, not just the active one.
+
+## ⚠️ Addendum (2026-09-05): a kernel OTA erased this — and now carries it
+
+The recipe above patches the DTB **inside one boot image**. A kernel OTA
+(`nq-kernel-ota stage-apk` / `stage-latest`) packs a *new* boot image from the
+kernel apk, whose DTB holds the DTS's first-unit values — so the cottage unit's
+first kernel OTA (6.12.12-r52 → 6.18.48-r0, 2026-09-05) brought it up as
+`f8:8f:ca:20:48:e1` / BT `F8:8F:CA:20:49:E5`: the Prague box, on both radios. The
+tool carried the booting slot's ramdisk over but had no notion of identity.
+
+Since **`nexusq-kernel-ota` r5**, `stage-apk` reads `local-mac-address` and
+`local-bd-address` out of the **booting slot** and byte-patches them into the new
+DTB before packing (same 6 + 6-byte patch as step 3, same "exactly once" refusal);
+it dies rather than stage a kernel that would rename the unit
+(`NQ_KOTA_NO_IDENTITY=1` overrides). `nq-kernel-ota identity [image|partition|dtb]`
+prints what a slot claims to be, `status` shows both slots, and
+`carry-identity <src> <dst.dtb>` is the manual form. The on-the-day repair of the
+cottage unit used the 6.12 `slot-a-backup.img` as the source of truth, exactly
+26 bytes differing as in step 6. Full record:
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
+
+This also means the "proper fix" section above is no longer the only way a third
+unit could get an OTA-proof identity: a flash-time patch now survives every kernel
+OTA. What it does not survive is a **reflash** from a stock image — that still
+needs the patch redone (or `CMDLINE_EXTEND`).

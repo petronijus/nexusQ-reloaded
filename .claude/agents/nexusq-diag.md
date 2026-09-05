@@ -154,6 +154,25 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   line now carries `"fails"` and triggers the same `wlan0` bounce once it reaches the
   heal threshold (pre-r61 it held `fails=0` and never healed the exact case it was built
   for). Repeated `nogw` heals in the log = a DHCP/AP problem worth chasing.
+  🆕 **`reconnect` path (device r93, 2026-09-05):** the heal itself could STRAND the box.
+  `nmcli device disconnect` blocks NM autoconnect until an explicit connect; when the
+  `connect` half failed (empty scan cache: *"A 'wireless' setting is required if no AP
+  path was given"*) the old `down` branch did nothing — the cottage Q logged 16 536
+  `"st":"down"` lines over six days on an otherwise healthy box. Now `down` lines carry
+  `"nm"` (NM state) + `"downs"`; state 30/120 for `NQ_WIFI_DOWNS` (4 ≈ 2 min) →
+  `"ev":"reconnect"` (rescan + `nmcli device connect`) → `"ev":"reconnect_result"` with
+  `"assoc"`. `heal_result` also carries `"assoc":"yes|no"`. **Reading it:** `down` with
+  `nm:"30"` and climbing `downs` but no `reconnect` = pre-r93 script (fix by hand:
+  `nmcli device connect wlan0`, or reboot); repeated `reconnect_result assoc:"no"` = the
+  AP is genuinely gone; `heal` every ~5–12 min at −42 dBm `loss:100` = the TX wedge
+  recurring (seen for 24 h after a **runtime** `cloned-mac-address` change — open
+  question; prefer a reboot after any MAC change).
+  `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
+  ℹ️ **Two units in the fleet:** Prague (`f8:8f:ca:20:48:e1`, `192.168.20.x`) and the
+  cottage `nexus-q-sumperak.local` (`f8:8f:ca:05:1f:11`, BT `F8:8F:CA:73:AC:9C`, DHCP on
+  `<cottage-lan>/22` since 2026-08-30). If a unit reports the OTHER unit's MAC/BD_ADDR
+  after a kernel OTA, that is the kernel-ota ≤ r4 identity loss — `nq-kernel-ota identity`
+  shows what each slot claims; r5 carries it.
 - **Ethernet** (SMSC LAN9500A over USB EHCI): `ip -br link`, `ethtool eth0`.
   ✅ **task #17 FULLY CLOSED 2026-07-06 — enumerates from a cold boot on `#33`+
   (v1.6.8).** The old "enumeration intermittency" was NOT a race — it was an

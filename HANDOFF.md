@@ -13,7 +13,7 @@ session on 2026-08-28, so it is written down here rather than re-derived.
 | artifact | build on | signed with | how to check |
 |---|---|---|---|
 | **Android APK** (companion app) | **MacBook or desktop** (same keystore) | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
-| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **desktop** (`petronijus-PC`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
+| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **any machine holding the fleet key** (desktop; MacBook since 2026-08-31) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
 
 **And a release is BOTH tracks.** The image (GitHub Releases) reaches whoever
 holds a USB cable; everything already in the field updates from the OTA apk repo.
@@ -34,9 +34,11 @@ read by both the publisher and the gate; adding a package anywhere else fails
   `apksigner verify --print-certs <apk>`.
 - Whichever it is, the app APK needs only Flutter + the Android SDK. It does
   **not** need the desktop's pmOS key, and has nothing to do with it.
-- Conversely a **device** package built on the Mac gets key `pmos@local-699f6bed`
-  and the Q refuses it over OTA, because `/etc/apk/keys` holds the desktop's.
-  That direction IS settled.
+- Conversely a **device** package built on a machine that invented its own key
+  is refused by the Q over OTA, because `/etc/apk/keys` holds the fleet key. The
+  MacBook was such a machine (`pmos@local-6a93112c`) until **2026-08-31**, when
+  `install-fleet-signing-key.sh` was run there. Any *other* machine still is,
+  until that script is run on it — that is what the guards below check.
 
 ### 🔴 The OTHER direction, found 2026-08-30 — and it is the one that ships
 
@@ -102,16 +104,46 @@ Two guards now make a wrong-key release impossible rather than merely unlikely:
 | `publish-ota-repo.sh`, before pushing | key ≠ fleet key → refuses to publish (and prefers the fleet key when several are present) |
 | `verify-ota-parity.sh`, at release | the key baked into the released rootfs must be the key that signed the published index |
 
-**On the MacBook, once:** `op signin`, then run the script, then **rebuild** —
-packages already in that volume were signed with the old key and are still
-sitting in `packages/edge/armv7`.
+**On any new machine, once:** `op signin`, then `install-fleet-signing-key.sh`,
+then **`scripts/seed-ota-volume.sh`** — packages already in that volume were
+signed with the old key and are still sitting in `packages/edge/armv7`, and
+`publish-ota-repo.sh` takes the newest apk of each package from there. The seed
+script replaces them with the published, fleet-signed bytes (foreign-signed
+same-name or newer files go to `.retired-<key>/`, nothing is deleted) and
+`publish-ota-repo.sh` now refuses any apk not signed by the fleet key, by name.
+Done on the MacBook 2026-09-05 (`seeded=11 retired=7`). *(This paragraph said
+"then rebuild" until 2026-09-05 — a full rebuild also works, the seed is faster
+and cannot forget a package.)*
 
-⚠️ Still open: **the Šumperák Q trusts `pmos@local-6a913e9e`** and therefore
-still cannot OTA. It needs `pmos/ota-signing-key.rsa.pub` copied into its
-`/etc/apk/keys`, or a reflash from a desktop-built image.
+✅ Resolved 2026-09-05: **the Šumperák Q now trusts the fleet key** (it trusted
+only `pmos@local-6a913e9e` from the v1.13.0 image) and went r87 → r92 +
+6.12.12-r52 → 6.18.48-r0 over the air. Every box in the field trusts
+`pmos@local-6a42e957`.
 
 ⚠️ Do **not** simply run `publish-ota-repo.sh` on whichever machine is in front
 of you. That is the whole failure mode — and now the guard says so out loud.
+
+#### macOS specifics (MacBook, verified 2026-08-30/31)
+
+- **The release gates work here.** `release-preflight-no-secrets.sh` and
+  `verify-ota-parity.sh` both read the ext4 rootfs with `debugfs` instead of
+  mounting it, and both re-run themselves inside a throwaway container when the
+  host has no `debugfs` — which macOS does not. No root, no loop devices.
+  Verified end to end by hiding `debugfs` from `PATH`.
+- **`scripts/verify-rootfs.sh` is the exception**: it still `sudo mount`s, so on
+  macOS run it inside the privileged builder image, **as root and from the repo
+  root** — two of its gates were found on 2026-08-30 passing silently when they
+  could not read root-owned files or resolve a relative path:
+
+  ```sh
+  docker run --privileged --user root -v /dev:/dev -v "$PWD:/src" -w /src \
+    nexusq-builder bash scripts/verify-rootfs.sh output/google-steelhead.img
+  ```
+
+- `scripts/tests/*` and the migration test use `mkfs.ext4 -d`, which macOS lacks.
+  They are development tests, not release steps; run them on Linux.
+- A **personal** build needs the `private/` overlay cloned and this MacBook's ssh
+  key in `private/access/authorized_keys`.
 
 ### 🔴 …and the release only ever published half of itself (2026-08-30)
 
@@ -132,6 +164,60 @@ publish; **nothing skips the gate.** Details:
 a debug keystore whose password is the well-known `android`. The signature
 authenticates nobody — anyone could sign a substitute update. A real keystore
 (kept in 1Password, referenced from `android/key.properties`) is the fix.
+
+---
+
+## Session 2026-09-05: **the cottage Q was dark for six days on a healthy box · its first kernel OTA renamed it · publishing from the MacBook would have broken every other box**
+
+Device **r93**, `nexusq-kernel-ota` **r5**, OTA-only (no new image). Full record:
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`; CHANGELOG
+`[Unreleased]`. The build/publish from the MacBook was **in progress** when this
+was written — verify the published index carries `device-google-steelhead-1.0-r93`
+and `nexusq-kernel-ota-0.1.0-r5` before assuming either reached a device.
+
+- **Six days dark (2026-08-30 23:30 → 09-05 17:43), nothing crashed.** Journal
+  boot `-1` ran 08-29 14:15 → 09-05 17:43 unbroken; `nexusq-mqtt` logged
+  `connection lost: Network unreachable` once a minute. The watchdog's heal
+  (`nmcli device disconnect wlan0; sleep 2; nmcli device connect wlan0`) failed
+  on the connect half — NM audit: `connection-add-activate … result="fail"
+  reason="A 'wireless' setting is required if no AP path was given."` with
+  `brcmf_escan_timeout` 6 s later (empty scan cache) — and **`device disconnect`
+  blocks NM autoconnect until an explicit connect or reboot**. The `down` branch
+  did nothing by design: 16 536 `st:down` lines, zero events. **r93** adds a
+  `reconnect` path (`down_action`, TESTABLE; NM state 30/120 for `NQ_WIFI_DOWNS`=4
+  checks → rescan + `nmcli device connect`; 10/20/40–110/blank → leave), `heal()`
+  rescans and retries, JSONL gains `reconnect`/`reconnect_result`, `assoc` on
+  `heal_result`, `nm`+`downs` on `down`. 16 tests pass.
+- **Open question, not answered:** 122 TX-wedge heals (`loss:100 sig:-42..-45`,
+  every ~5–12 min, each `loss_after:0`) started 14 s before the 2026-08-29 23:08:45
+  **runtime** MAC change (cloned `20:48:e1` → permanent `05:1f:11`); none in the
+  9 h before, none after today's reboots. Does changing the BCM4330 MAC on a live
+  interface cause it? Unknown. Prefer a reboot after any MAC change.
+- **The kernel OTA renamed the unit.** After installing the fleet key and
+  `apk upgrade --available --ignore linux-google-steelhead` (121 pkgs, r87 → r92,
+  access migration sha256-verified), `stage-latest` (6.18.48-r0, 6 711 296 B with
+  the 958 080 B initramfs) → `try` → autopromote "healthy after 10s" — and
+  `wlan0` = `f8:8f:ca:20:48:e1`, BT `F8:8F:CA:20:49:E5`: **Prague's identity**.
+  Identity is only a flash-time DTB byte patch (docs/2026-08-28); the apk's DTB
+  names the first unit. Repaired by byte-patching slot A's image from the 6.12
+  `slot-a-backup.img` (26 differing bytes), `NQ_KOTA_RELEASE=6.18.48-r0 stage` →
+  `try` → autopromote → `wifi=f8:8f:ca:05:1f:11 bt=f8:8f:ca:73:ac:9c`, both
+  slots md5 `4ee9c080…`. **kernel-ota r5**: `fdt_tool` (python FDT walker, skips
+  the decoy `d00dfeed` in the zImage), `stage-apk` calls `carry_identity` and dies
+  if it cannot (`NQ_KOTA_NO_IDENTITY=1` overrides), `status` shows both slots'
+  identity, new `identity` / `carry-identity` subcommands. 17 tests pass.
+- **Publishing from the MacBook.** Its volume held every OTA package signed by
+  the retired `pmos@local-6a93112c` and no kernel past 6.12.12-r52; the publisher
+  takes the newest apk of each package, so an OTA-only publish would have failed
+  `apk upgrade --available` on every box (it re-installs differing packages).
+  New `scripts/seed-ota-volume.sh` (ran: `seeded=11 retired=7`) + a per-apk
+  signature gate in `publish-ota-repo.sh`. Procedure for any machine:
+  `install-fleet-signing-key.sh` → `seed-ota-volume.sh` → `OTA_PACKAGES_ONLY=1`
+  build → `publish-ota-repo.sh`.
+- **Cottage Q now:** `nexus-q-sumperak.local`, **DHCP** since 2026-08-30 (static
+  `<old-static-ip>` gone; LAN `<cottage-lan>/22`, gw `<cottage-gateway>`, broker
+  `<cottage-pi>`), fleet key, r92 (r93 pending), 6.18.48 in both slots, its own
+  identity, 0 bad checks since the reboots. Not on Tailscale.
 
 ---
 
@@ -166,8 +252,8 @@ is the pointer and the residue.
 
 **Still unverified on 6.18** (no cable, no cold power-cycle since the bump):
 ethernet from cold (patches 0006/0008/0012), HDMI, fastboot-over-ssh (0044),
-USB-host re-probe. Šumperák still trusts a different signing key and cannot OTA at
-all.
+USB-host re-probe. ~~Šumperák still trusts a different signing key and cannot OTA at
+all.~~ *(Resolved 2026-09-05 — see the session above.)*
 
 **Kernel OTA in the field: safe so far** (Petr, 2026-09-01). The trial-slot flow
 and its health gate are not the shaky part. What remains unproven is only the

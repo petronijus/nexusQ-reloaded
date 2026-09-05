@@ -18,6 +18,23 @@
 # fleet key from 1Password into this machine's build volume, after proving the
 # private half actually matches the public half committed in the repo.
 #
+# The key lives in TWO places in a pmbootstrap volume, and both must agree:
+#
+#   config_abuild/    what abuild SIGNS with (private + public half, abuild.conf)
+#   config_apk_keys/  what every chroot TRUSTS -- pmbootstrap 3 bind-mounts this
+#                     directory as /etc/apk/keys into the native, buildroot AND
+#                     rootfs chroots, and populates it exactly once, at first
+#                     init, with whatever abuild key existed then.
+#
+# The first version of this script only did config_abuild. Found 2026-09-05 on
+# the MacBook: the volume signed with the fleet key and TRUSTED only the retired
+# one, so abuild's post-build `apk index` rejected every fleet-signed apk as
+# UNTRUSTED (the build failed), and an image built there would have baked the
+# retired key into /etc/apk/keys -- the v1.13.0 drift all over again, from the
+# machine that had supposedly been fixed. Hence the reconcile step below, which
+# runs on every invocation, --check included, because "already holds the key" was
+# true and insufficient.
+#
 # Usage:
 #   scripts/install-fleet-signing-key.sh [--check]
 #     --check   report what this machine would sign with, change nothing
@@ -64,16 +81,72 @@ else
     ALREADY=0
 fi
 
+# Reconcile the TRUST side and the package repo with the signing key. Idempotent;
+# prints what it changed. Runs in --check mode too (read-only there).
+reconcile() {  # reconcile <apply:0|1>
+    docker run --rm -v "$VOL":/w -v "$PWD/$FLEET_PUB":/fleet.pub:ro alpine sh -c '
+      set -e
+      APPLY='"$1"'; NAME='"$FLEET_NAME"'; rc=0
+      say() { echo "  $*"; }
+      # -- config_apk_keys: the fleet key must be trusted, retired abuild keys must not
+      if [ -d /w/config_apk_keys ]; then
+        if cmp -s /w/config_apk_keys/$NAME.rsa.pub /fleet.pub 2>/dev/null; then
+          say "trust: $NAME.rsa.pub present in config_apk_keys ✅"
+        else
+          say "trust: $NAME.rsa.pub MISSING from config_apk_keys -- chroots would reject every fleet-signed apk as UNTRUSTED"
+          if [ "$APPLY" = 1 ]; then
+            owner=$(stat -c %u:%g /w/config_apk_keys)
+            cp /fleet.pub /w/config_apk_keys/$NAME.rsa.pub && chown "$owner" /w/config_apk_keys/$NAME.rsa.pub && say "  -> installed"
+          else rc=1; fi
+        fi
+        for k in /w/config_apk_keys/pmos@local-*.rsa.pub; do
+          [ -e "$k" ] || continue; [ "$(basename "$k")" = "$NAME.rsa.pub" ] && continue
+          say "trust: $(basename "$k") is a retired build key still trusted by every chroot"
+          if [ "$APPLY" = 1 ]; then
+            mkdir -p /w/config_apk_keys/retired && mv "$k" /w/config_apk_keys/retired/ && say "  -> retired"
+          else rc=1; fi
+        done
+      else
+        say "trust: no config_apk_keys yet (fresh volume) -- pmbootstrap will create it from config_abuild on first init"
+      fi
+      # -- packages/: an apk the chroots no longer trust breaks abuild'"'"'s index update
+      #    for EVERY later build ("Failed to create index"), so park them. Nothing is
+      #    deleted; the publisher and pmbootstrap only glob the top level.
+      for repo in /w/packages/*/armv7; do
+        [ -d "$repo" ] || continue
+        for f in "$repo"/*.apk; do
+          [ -e "$f" ] || continue
+          sig=$(tar -tzf "$f" 2>/dev/null | sed -n "s/^\.SIGN\.RSA\.//p" | head -1)
+          [ "$sig" = "$NAME.rsa.pub" ] && continue
+          say "repo: $(basename "$f") is signed by ${sig:-nothing}, not $NAME"
+          if [ "$APPLY" = 1 ]; then
+            d="$repo/.retired-${sig%.rsa.pub}"; mkdir -p "$d" && mv "$f" "$d/" && say "  -> moved to $(basename "$d")/"
+          else rc=1; fi
+        done
+        # the index describes files that may just have moved; abuild rewrites it
+        [ "$APPLY" = 1 ] && rm -f "$repo"/APKINDEX.tar.gz
+      done
+      exit $rc'
+}
+
 if [ "$CHECK" = 1 ]; then
-    [ "$ALREADY" = 1 ] && exit 0
     echo
-    echo "⚠️  this machine does NOT hold the fleet key."
+    echo "=== trust + repo (read-only) ==="
+    if [ "$ALREADY" = 1 ] && reconcile 0; then exit 0; fi
+    echo
+    echo "⚠️  this machine is not (fully) on the fleet key."
     echo "    Releases cut here would bake a key no Q trusts, and packages built"
     echo "    here would be refused over OTA. Run without --check to fix it."
     exit 1
 fi
 
-[ "$ALREADY" = 1 ] && { echo "nothing to do."; exit 0; }
+if [ "$ALREADY" = 1 ]; then
+    echo
+    echo "=== signing key already installed; reconciling trust + repo ==="
+    reconcile 1
+    echo "done."
+    exit 0
+fi
 
 command -v op >/dev/null || { echo "ERROR: 1Password CLI (op) not found" >&2; exit 1; }
 
@@ -121,6 +194,10 @@ op document get "$ITEM" --account my \
 '
 
 echo
+echo "=== reconciling trust + repo ==="
+reconcile 1
+
+echo
 echo "=== verifying ==="
 docker run --rm -v "$VOL":/w -v "$PWD/$FLEET_PUB":/fleet.pub:ro alpine sh -c '
   cmp -s /w/config_abuild/'"$FLEET_NAME"'.rsa.pub /fleet.pub \
@@ -133,7 +210,8 @@ cat <<MSG
 This machine can now cut releases: packages it builds are signed with the fleet
 key, and images it builds bake that key into /etc/apk/keys.
 
-⚠️ Packages already built in this volume were signed with the OLD key and are
-   still sitting in packages/edge/armv7. Rebuild before publishing, or
-   publish-ota-repo.sh will happily re-sign an index over stale apks.
+Packages the old key signed were moved out of packages/*/armv7 into
+.retired-<key>/ (nothing deleted). Before publishing an OTA-only build from this
+machine, seed the volume with the fleet's published apks:
+scripts/seed-ota-volume.sh -- or run a full build here.
 MSG

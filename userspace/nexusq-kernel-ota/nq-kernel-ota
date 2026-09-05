@@ -121,6 +121,122 @@ print("packed %s: %d B (kernel+dtb %d B, ramdisk %d B)"
 PACKEOF
 }
 
+# --- per-unit identity lives in the appended DTB, and only there -------------
+# The WiFi MAC (`local-mac-address`) and the BT address (`local-bd-address`) are
+# hardcoded in kernel/dts/omap4-steelhead.dts for the FIRST unit; every other
+# unit gets its own values as a 6+6-byte patch of the DTB at flash time
+# (docs/2026-08-28-per-unit-bt-wifi-identity.md). A kernel apk therefore carries
+# the first unit's identity, and staging it as-is renames the device: measured
+# 2026-09-05 on the cottage unit, which came out of its first kernel OTA as the
+# Prague box on both radios (docs/2026-09-05-*). So `stage-apk` carries the
+# booting slot's values onto the new DTB -- reality against reality, exactly as
+# it already does for the initramfs. A byte patch, never a re-serialisation: the
+# blob's length and layout stay identical, only 12 payload bytes move.
+fdt_tool() {
+    python3 - "$@" <<'FDTEOF'
+import struct, sys
+
+# (property name, stored reversed?) -- the BD address is little-endian in the DT.
+PROPS = (("local-mac-address", False), ("local-bd-address", True))
+LABEL = {"local-mac-address": "wifi", "local-bd-address": "bt"}
+
+def load(path):
+    """Return (bytes, offset-of-FDT, totalsize) for a boot image, a boot
+    partition, or a bare .dtb."""
+    with open(path, "rb") as f:
+        data = f.read(8 * 1024 * 1024)
+    if data[:8] == b"ANDROID!":
+        ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", data, 8)
+        k = data[ps:ps + ks]
+        i = 0
+        while True:
+            i = k.find(b"\xd0\x0d\xfe\xed", i)
+            if i < 0:
+                sys.exit("%s: no appended DTB in the kernel" % path)
+            tot = struct.unpack_from(">I", k, i + 4)[0]
+            # The real one ends exactly at the end of the kernel; the magic also
+            # occurs by chance inside the compressed zImage with a nonsense size.
+            if i + tot == len(k):
+                return data, ps + i, tot
+            i += 4
+    if data[:4] == b"\xd0\x0d\xfe\xed":
+        return data, 0, struct.unpack_from(">I", data, 4)[0]
+    sys.exit("%s: neither an Android boot image nor a DTB" % path)
+
+def props(data, base):
+    """Walk the structure block; {name: [(node-path, abs-offset, length)]}."""
+    (magic, total, off_struct, off_strings, off_rsv, ver, lastcomp, cpu,
+     size_strings, size_struct) = struct.unpack_from(">10I", data, base)
+    p, end, path, out = base + off_struct, base + off_struct + size_struct, [], {}
+    while p < end:
+        tok = struct.unpack_from(">I", data, p)[0]; p += 4
+        if tok == 1:                                   # FDT_BEGIN_NODE
+            e = data.index(b"\0", p); path.append(data[p:e].decode(errors="replace"))
+            p = (e + 1 + 3) & ~3
+        elif tok == 2:                                 # FDT_END_NODE
+            path.pop()
+        elif tok == 3:                                 # FDT_PROP
+            ln, no = struct.unpack_from(">II", data, p); p += 8
+            ns = base + off_strings + no; name = data[ns:data.index(b"\0", ns)].decode()
+            out.setdefault(name, []).append(("/".join(path), p, ln))
+            p = (p + ln + 3) & ~3
+        elif tok == 4:                                 # FDT_NOP
+            pass
+        elif tok == 9:                                 # FDT_END
+            break
+        else:
+            sys.exit("corrupt FDT: token %d at %d" % (tok, p - 4))
+    return out
+
+def fmt(b, rev):
+    return ":".join("%02x" % x for x in (b[::-1] if rev else b))
+
+def one(pr, name, what):
+    hits = [h for h in pr.get(name, []) if h[2] == 6]
+    if len(hits) != 1:
+        sys.exit("%s: expected exactly one 6-byte %s, found %d" % (what, name, len(hits)))
+    return hits[0]
+
+mode = sys.argv[1]
+if mode == "identity":
+    d, b, t = load(sys.argv[2]); pr = props(d, b)
+    out = []
+    for name, rev in PROPS:
+        hits = [h for h in pr.get(name, []) if h[2] == 6]
+        out.append("%s=%s" % (LABEL[name], fmt(d[hits[0][1]:hits[0][1] + 6], rev) if len(hits) == 1 else "?"))
+    print(" ".join(out))
+elif mode == "carry":
+    src, dst = sys.argv[2], sys.argv[3]
+    sd, sb, st = load(src); sp = props(sd, sb)
+    dd, db, dt = load(dst); dp = props(dd, db)
+    if dd[:8] == b"ANDROID!":
+        sys.exit("carry: the destination must be a bare .dtb, not a boot image")
+    dd = bytearray(dd); changed = 0
+    for name, rev in PROPS:
+        _, so, _ = one(sp, name, src); _, do, _ = one(dp, name, dst)
+        sv, dv = sd[so:so + 6], bytes(dd[do:do + 6])
+        if sv == dv:
+            print("nq-kernel-ota: %s already %s" % (name, fmt(sv, rev))); continue
+        dd[do:do + 6] = sv; changed += 1
+        print("nq-kernel-ota: %s carried over: %s -> %s" % (name, fmt(dv, rev), fmt(sv, rev)))
+    if changed:
+        open(dst, "wb").write(dd)
+    print("nq-kernel-ota: identity carry-over: %d propert%s patched" % (changed, "y" if changed == 1 else "ies"))
+else:
+    sys.exit("fdt_tool: unknown mode %s" % mode)
+FDTEOF
+}
+
+# "wifi=aa:bb:.. bt=aa:bb:.." for a boot image, a boot partition, or a .dtb.
+identity_of() { fdt_tool identity "${1:?usage: nq-kernel-ota identity <image|partition|dtb>}"; }
+
+# Patch the identity found in $1 (image/partition/dtb) into the bare DTB $2.
+# Refuses when either side does not hold exactly one 6-byte property of each
+# kind -- a guess here would rename a unit just as surely as doing nothing.
+carry_identity() {
+    fdt_tool carry "${1:?usage: nq-kernel-ota carry-identity <src image|partition|dtb> <dst.dtb>}" "${2:?}"
+}
+
 # Pull the ramdisk section out of an Android boot image (or straight off a boot
 # partition). This is how a kernel OTA keeps the A/B initramfs: whatever is
 # booting today is carried over verbatim onto the new kernel, so an OTA can
@@ -229,6 +345,18 @@ cmd_stage_apk() {
     [ -f "$_dtb" ] || _dtb="$_tmp/boot/dtbs/omap4-steelhead.dtb"
     [ -f "$_tmp/boot/vmlinuz" ] || { rm -rf "$_tmp"; die "apk has no /boot/vmlinuz"; }
     [ -f "$_dtb" ] || { rm -rf "$_tmp"; die "apk has no omap4-steelhead.dtb"; }
+
+    # The apk's DTB names the FIRST unit. Carry this unit's own WiFi MAC and BT
+    # address over from the slot that is booting today, or refuse: a kernel that
+    # boots fine, looks healthy and has quietly renamed the device is the same
+    # class of failure as the lost ramdisk below. NQ_KOTA_NO_IDENTITY=1 skips
+    # it, for an image whose DTB deliberately has no such properties.
+    if [ "${NQ_KOTA_NO_IDENTITY:-0}" = "1" ]; then
+        log "NQ_KOTA_NO_IDENTITY=1 -- NOT carrying the boot slot's identity over"
+    else
+        carry_identity "$BOOT_SLOT" "$_dtb" \
+            || { rm -rf "$_tmp"; die "could not carry this unit's identity onto the new DTB -- refusing to stage a kernel that would rename it (NQ_KOTA_NO_IDENTITY=1 overrides)"; }
+    fi
 
     # Carry the booting image's ramdisk onto the new kernel. On a device with the
     # A/B rootfs that ramdisk is the initramfs that chooses the slot; packing
@@ -357,11 +485,21 @@ usage() {
 usage: nq-kernel-ota <command>
 
   stage <boot.img>   write the image to the TRIAL slot and verify it read-back
+  stage-apk <apk>    unpack a kernel apk, install its modules beside the running
+                     kernel's, pack a boot image carrying the boot slot's initramfs
+                     AND this unit's WiFi/BT identity, and stage it
+  stage-latest       fetch the kernel apk from the OTA repo and stage-apk it
   try                arm the trial boot and reboot into it  (INTERACTIVE ONLY)
   promote            copy the trial slot into the boot slot and clear the marker
   status             what is where, and whether a trial is pending
   reason [value]     read (or set) the u-boot reboot reason in SAR RAM
   restore            put the boot slot back from the pre-update backup
+
+  identity [what]    the WiFi MAC / BT address held in a boot image, partition or
+                     .dtb (default: the boot slot)
+  carry-identity <src> <dst.dtb>
+                     byte-patch the identity found in <src> into a bare DTB; this
+                     is what stage-apk does with the boot slot before packing
 
   rescue <img>       boot a maintenance image (rootfs left UNMOUNTED) out of the
                      trial slot; `reboot` from it returns to the normal system
@@ -372,6 +510,7 @@ cmd_status() {
     log "slot A (boot)  $BOOT_SLOT  $(part_bytes $BOOT_SLOT) B  md5 $(dd if=$BOOT_SLOT bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)"
     log "slot B (trial) $TRIAL_SLOT  $(part_bytes $TRIAL_SLOT) B  md5 $(dd if=$TRIAL_SLOT bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)"
     log "reboot reason  '$(sar read)'"
+    log "identity       slot A: $(identity_of "$BOOT_SLOT" 2>/dev/null || echo '?')   slot B: $(identity_of "$TRIAL_SLOT" 2>/dev/null || echo '?')"
     if [ -f "$PENDING" ]; then
         log "PENDING trial boot: $(cat "$PENDING")"
     else
@@ -575,6 +714,8 @@ case "${1:-}" in
     promote)     cmd_promote ;;
     autopromote) cmd_autopromote ;;
     status)  cmd_status ;;
+    identity)       identity_of "${2:-$BOOT_SLOT}" ;;
+    carry-identity) shift; carry_identity "$@" ;;
     restore) cmd_restore ;;
     rescue)  shift; cmd_rescue "$@" ;;
     reason)  if [ $# -ge 2 ]; then

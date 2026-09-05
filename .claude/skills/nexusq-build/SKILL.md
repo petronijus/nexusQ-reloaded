@@ -84,4 +84,8 @@ were separate, v1.14.2 shipped device r89 as an image while the fleet kept getti
 (recorded as `pmos/ota-signing-key.rsa.pub`, private half in 1Password) — an image or an
 index signed with any other key means `UNTRUSTED signature` and no OTA at all. See
 `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md` and HANDOFF
-"WHICH MACHINE BUILDS WHAT".
+"WHICH MACHINE BUILDS WHAT". ⚠️ And on a machine that got the fleet key after it had
+already built packages, run **`scripts/seed-ota-volume.sh`** once before the first OTA
+publish — the publisher takes the newest apk of each package from the volume, and
+foreign-signed leftovers would fail `apk upgrade` on every box (2026-09-05;
+`publish-ota-repo.sh` now refuses such apks by name).

@@ -285,6 +285,11 @@ The Šumperák box is still exposed to the 28-hour spin, and cannot receive the 
 over the air until its key is reconciled — a manual copy into `/etc/apk/keys`,
 or a reflash from an image built on this desktop.
 
+*(Reconciled 2026-09-05: the fleet key was copied in on site, and the box went
+r87 → r92 + kernel 6.18.48-r0 over the air. Its first kernel OTA then renamed it
+to the Prague unit's identity — a separate defect, fixed in `nexusq-kernel-ota` r5;
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.)*
+
 ---
 
 ## 4. Postscript: publishing that repo turned out to be handing out the WiFi PSK

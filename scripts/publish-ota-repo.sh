@@ -122,6 +122,22 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
     fi
     cp "$f" . && echo "  + $(basename "$f") ($((sz/1024/1024)) MB)"
   done
+  # THE SIGNATURE GATE. Every apk carries its own signature, named after the key
+  # that made it, and a device checks THAT -- not just the index. A build volume
+  # holds whatever was ever built on this machine: on 2026-09-05 the MacBook
+  # volume held every OTA package signed by its retired pre-fleet key, and
+  # publishing would have shipped an index the devices trust over apks they
+  # reject -- and `apk upgrade --available` (what the app runs) re-installs a
+  # package whose repo copy differs, so it would have failed the whole
+  # transaction on every box, not just skipped one. Refuse anything not signed
+  # by the key this index is about to be signed with.
+  for f in *.apk; do
+    sig=$(tar -tzf "$f" 2>/dev/null | sed -n "s/^\.SIGN\.RSA\.//p" | head -1)
+    if [ "$sig" != "'"$KEY"'.rsa.pub" ]; then
+      echo "  !! $f is signed by ${sig:-nothing}, not '"$KEY"' -- a device would reject it. Rebuild it on a host holding the fleet key (or seed the volume: scripts/seed-ota-volume.sh)." >&2
+      exit 1
+    fi
+  done
   apk index --rewrite-arch armv7 -o APKINDEX.tar.gz *.apk >/dev/null 2>&1
   abuild-sign -k $HOME/.abuild/'"$KEY"'.rsa APKINDEX.tar.gz
   chmod -R a+rw /out

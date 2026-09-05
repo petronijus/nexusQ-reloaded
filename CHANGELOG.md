@@ -4,6 +4,105 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [1.15.2] — 2026-09-05 — six days dark on a healthy box, and the OTA that renamed it
+
+Device **r93**, `nexusq-kernel-ota` **r5**, kernel unchanged (6.18.48-r0). Both
+fixes were found by fixing the cottage unit, which had been offline since
+2026-08-30 with nothing wrong except its network. Built and cut on the MacBook
+(`PUBLIC_RELEASE=1`, cross-native kernel, 29/29 rootfs checks). Full record:
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
+
+### Fixed — the WiFi watchdog could strand the device it was healing (r93)
+- **`heal()` bounced wlan0 with `nmcli device disconnect` + `device connect`, and
+  a failed `connect` left the box dark for good.** `device disconnect` blocks
+  NetworkManager's autoconnect until the next explicit connect or a reboot; on
+  2026-08-30 23:30 the connect half failed (empty scan cache right after a
+  `brcmf_escan_timeout`: *"A 'wireless' setting is required if no AP path was
+  given"*) and the loop's `down` branch — "NM owns re-association" — did nothing,
+  16 536 times, for six days. The box was healthy throughout (uptime, MQTT LWT,
+  the lot); it simply had no link and no one to give it one.
+- **Now there is a RECONNECT path:** a wlan0 that NM reports as plainly
+  `disconnected` (state 30, or the momentary 120/failed) for `NQ_WIFI_DOWNS`
+  consecutive checks (default 4 ≈ 2 min) gets a `wifi rescan` + `nmcli device
+  connect`, which also clears the autoconnect block. States that are not ours —
+  unmanaged/unavailable (radio off, driver gone) and anything NM is mid-activation
+  on — reset the count and are left alone. Same cooldown as the heal, so it cannot
+  storm. The decision is a pure function (`down_action`) pinned by
+  `tests/test_wifi_watchdog_down_action.sh` (16 cases).
+- `heal()` itself now rescans before connecting and retries once, and both
+  `heal_result` and the new `reconnect`/`reconnect_result` events record whether
+  wlan0 actually came back (`assoc`), so the log can never again show a "heal"
+  followed by silence.
+- Observed alongside, **not** fixed here: 122 heals in the 24 h after the unit's
+  WiFi MAC was changed at runtime (2026-08-29 profile fix) — gateway ping at 100 %
+  loss on −42 dBm signal, healed each time, recurring every ~10 min. After a
+  reboot with the MAC set from boot: zero. Recorded in the docs note as an open
+  question about changing the BCM4330's MAC on a live interface.
+
+### Fixed — a kernel OTA renamed the unit (kernel-ota r5)
+- **`stage-latest` turned the cottage Q into the Prague Q on both radios.** The
+  per-unit WiFi MAC and BT address exist only as a flash-time byte patch of the
+  DTB appended to the boot image (docs/2026-08-28); the kernel apk carries the
+  DTS's first-unit values, and nothing carried the unit's own over. After its
+  first kernel OTA (6.12 → 6.18.48) the cottage unit came up as
+  `f8:8f:ca:20:48:e1` / BT `F8:8F:CA:20:49:E5`.
+- **`stage-apk` now carries the booting slot's identity onto the new DTB** before
+  packing — the same "reality against reality" rule as the initramfs carry-over,
+  with the same refusal when it cannot: either side lacking exactly one 6-byte
+  `local-mac-address` / `local-bd-address` aborts the stage instead of guessing
+  (`NQ_KOTA_NO_IDENTITY=1` overrides, for a DTB that deliberately has none). A
+  byte patch of 6 + 6 payload bytes; the blob's length and layout are unchanged.
+- New `nq-kernel-ota identity [image|partition|dtb]` prints what a slot claims to
+  be, `status` shows it for both slots, and `carry-identity <src> <dst.dtb>` is
+  the manual form (it is what fixed the cottage unit on the day, applied to slot
+  A's image and staged/tried/promoted like any kernel).
+  `pmos/nexusq-kernel-ota/tests/test_identity_carry.sh` (17 cases) builds
+  synthetic DTBs and boot images and proves the tool skips the decoy `d00dfeed`
+  inside the zImage, moves exactly the identity bytes, and refuses ambiguity.
+
+### Added — publishing from a second machine without regressing the fleet
+- **`scripts/seed-ota-volume.sh`**: downloads every apk the published index
+  lists, proves each is signed by the fleet key, and places them in this
+  machine's build volume (foreign-signed same-name files are moved aside, never
+  deleted). Before this, an `OTA_PACKAGES_ONLY` build on the MacBook would have
+  been published over a volume holding every OTA package signed by the retired
+  `pmos@local-6a93112c` key and no kernel newer than 6.12 — the publisher takes
+  "the newest build of each package in the volume", and that was all of them.
+- **`publish-ota-repo.sh` gains a per-apk signature gate:** every apk it is about
+  to publish must carry `.SIGN.RSA.<fleet key>`, or the publish stops. The index
+  signature alone never protected against this — devices verify each apk, and
+  `apk upgrade --available` (what the app runs) re-installs a package whose repo
+  copy differs, so one foreign-signed apk fails the whole transaction on every
+  box.
+
+### Fixed — the fleet key was installed for signing, not for trust
+- **`scripts/install-fleet-signing-key.sh` put the key only into `config_abuild/`
+  (what abuild signs with).** pmbootstrap 3 keeps a second copy of the world in
+  `config_apk_keys/` — bind-mounted as `/etc/apk/keys` into the native, buildroot
+  AND rootfs chroots, and filled exactly once at first init with whatever abuild
+  key existed then. On the MacBook that was the retired `pmos@local-6a93112c`, so
+  after 2026-08-31 the volume signed with the fleet key and trusted only the old
+  one: the first build today died in abuild's post-build index update with
+  `UNTRUSTED signature` on every fleet-signed apk (`Failed to create index`), and
+  an image built there would have baked the retired key into `/etc/apk/keys` —
+  the v1.13.0 drift again, from the machine that had supposedly been fixed.
+- The script now has a **reconcile step that runs on every invocation, `--check`
+  included**: the fleet public key must be in `config_apk_keys/`, any other
+  `pmos@local-*` key there is moved to `retired/`, and every apk in
+  `packages/*/armv7` not signed by the fleet key is moved to `.retired-<key>/`
+  (an untrusted apk in the repo dir breaks the index update for *every* later
+  build). Nothing is deleted. Ran on the MacBook: trust installed, 1 key retired,
+  13 stale apks parked (among them the 6.12 kernel and `nexusq-glibc-rt`, which
+  the next full build rebuilds under the fleet key).
+
+### Fleet
+- Šumperák Q: fleet key installed in `/etc/apk/keys` (it trusted only the v1.13.0
+  image's `pmos@local-6a913e9e`), userspace r87 → r92 over OTA (access-file
+  migration verified: same sha256 before and after), kernel 6.12.12-r52 →
+  6.18.48-r0 via `stage-latest`/`try`/auto-promote, identity restored with a
+  hand-carried DTB and a second trial boot. It is on **DHCP** since 2026-08-30
+  (the old static address is gone), reachable as `nexus-q-sumperak.local`.
+
 ## [1.15.1] — 2026-09-01 — the input that was playing to nobody
 
 Device **r92**. One bug, found from the only symptom it ever produced: "audio
@@ -36,7 +135,8 @@ doesn't work". Full record: `docs/2026-09-01-loopback-source-stolen.md`.
 ### Known issues
 - **The Šumperák Q still cannot OTA at all** — it trusts `pmos@local-6a913e9e`
   while the index is signed `6a42e957`. Unchanged from v1.15.0, and it means that
-  box does not get this fix over the air either.
+  box does not get this fix over the air either. *(Resolved 2026-09-05 — fleet key
+  installed, r92 + 6.18.48 applied; see `[Unreleased]` → Fleet.)*
 
 ## [1.15.0] — 2026-08-31 — mainline 6.18 LTS, and builds that take six minutes
 

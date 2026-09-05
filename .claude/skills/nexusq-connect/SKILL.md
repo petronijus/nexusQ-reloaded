@@ -54,6 +54,10 @@ randomized per boot and the IP wanders, hostname-match only). It
 verifies the winner with a real `ssh` probe and returns the single best connect
 command + fallbacks. It does NOT change anything on the device (the one allowed
 exception: activating the baked `eth-direct` profile).
+There is a **second unit at the cottage** (`nexus-q-sumperak.local`, WiFi
+`f8:8f:ca:05:1f:11`, DHCP on `<cottage-lan>/22` since 2026-08-30 — the old static
+`<old-static-ip>` is gone; only reachable from the cottage LAN, not via Tailscale).
+Say which unit you mean when there is any doubt.
 
 When it reports back, relay the connect command to the user (and use it yourself
 for any follow-up shell work). See [[nexusq-device-access]], [[nexusq-usb-gadget-rename]],

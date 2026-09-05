@@ -60,10 +60,10 @@ notes in [`docs/`](docs/).
 | 🔊 **Audio output selection** | ✅ | speaker / optical / HDMI = the PA default sink, picked from the app · v1.7.0 |
 | 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
-| 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, the whole system, the **kernel** (health-gated trial slot) and an **A/B rootfs** — no cable, LED-narrated · v1.12.0+ |
+| 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, system, **kernel** (health-gated trial slot, keeps the unit's identity since r5 · 2026-09-05) and A/B rootfs — no cable · v1.12.0+ |
 | 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (19 entities); the app is the only credential provisioner (PROTOCOL §13) |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | on demand from the app — the `user` linger keeps music playing when it stops · v1.10.0 |
-| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | factory MAC pinned in DT; 5 GHz solid (`roamoff=1` + an auto-heal watchdog); ~34 Mbit/s is the 1×1 chip's ceiling — use ethernet for bulk |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | factory MAC pinned in DT; 5 GHz solid — `roamoff=1` + a watchdog that heals a dead link and reconnects a stranded one (r93 · 2026-09-05); ~34 Mbit/s ceiling |
 | 🔵 **Bluetooth** + **A2DP audio** | ✅ | reliable since v1.8.0 (BT UART `max-speed`, patch 0040); Just-Works pairing via the permanent `nexusq-btagent` |
 | 🖱 **BT pairing from the app** — both directions | ✅ | phone in (A2DP) *and* mouse/keyboard out; `bonded` (not `paired`) is the survives-a-reboot truth · v1.10.0 |
 | 📲 **App-driven onboarding** (NFC → BT → WiFi) | ✅ | tap the dome → bonded encrypted RFCOMM → WiFi join; the pairing window fails closed · v1.9.0 |
@@ -238,6 +238,7 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 (dev) ── ✦ USB-audio park reads the gadget's own flag — 350 MHz 85.4 → 90.4 %      2026-08-30
 1.15.0 ─ ✦ mainline 6.18 LTS · everything cross-compiled — a full build in 6:39   2026-08-31
 1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01   ← latest tag
+(dev) ── ✦ six days dark: the watchdog reconnects a stranded wlan0 · kernel OTA keeps the unit's identity   2026-09-05
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

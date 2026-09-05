@@ -84,6 +84,9 @@ HANDOFF.md "WHICH MACHINE BUILDS WHAT".
   **"nexusQ OTA signing key (fleet)"**. Until 2026-08-30 its only copy was inside
   the `nexusq-workdir` docker volume.
 - **Step 3 still open for the Šumperák Q**, which trusts `pmos@local-6a913e9e` and
-  therefore still cannot OTA at all.
+  therefore still cannot OTA at all. *(Done 2026-09-05: the fleet key was copied
+  into its `/etc/apk/keys` and it went r87 → r92, kernel 6.12.12-r52 → 6.18.48-r0,
+  over the air — `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
+  Every box in the field now trusts `pmos@local-6a42e957`.)*
 
 Full record: `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.

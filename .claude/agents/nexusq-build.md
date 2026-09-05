@@ -192,6 +192,22 @@ with the abuild key in the `nexusq-workdir` volume; the fleet key is
 key re-signs the index and takes OTA away from every box — `publish-ota-repo.sh` now
 fails closed on that. `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`,
 `docs/2026-08-29-ota-key-drift.md`, HANDOFF "WHICH MACHINE BUILDS WHAT".
+⚠️ **The index key is not enough — every apk in the volume must be fleet-signed too
+(2026-09-05).** `publish-ota-repo.sh` publishes *the newest build of each package in
+the volume*, so on a machine that got the fleet key AFTER building, an
+`OTA_PACKAGES_ONLY` publish of two packages would ship a fleet-signed index over the
+other ten apks signed by the retired key — devices verify each apk, and `apk upgrade
+--available` re-installs any package whose repo copy differs, so **the whole
+transaction fails on every box**. Two guards: `publish-ota-repo.sh` now refuses any apk
+whose `.SIGN.RSA.*` member is not the fleet key (names the file, points at the seed
+script), and **`scripts/seed-ota-volume.sh`** brings a volume up to date from the
+published index — downloads every listed apk, verifies its signature, places it chowned
+for pmbootstrap, and moves foreign-signed same-name **or newer** files into
+`.retired-<key>/` (never deletes). Run it **once on any machine before its first OTA
+publish** after `install-fleet-signing-key.sh`, and after any long gap. Done on the
+MacBook 2026-09-05 (`seeded=11 retired=7`). Procedure:
+`install-fleet-signing-key.sh` → `seed-ota-volume.sh` → `OTA_PACKAGES_ONLY=1` build →
+`publish-ota-repo.sh`. `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md` §3.
 
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran

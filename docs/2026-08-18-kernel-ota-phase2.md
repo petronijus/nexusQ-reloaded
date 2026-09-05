@@ -197,16 +197,32 @@ it, and `scripts/publish-ota-repo.sh` ships it.
 
 ```sh
 # on the device, with someone near it
+nq-kernel-ota stage-latest    # fetches the kernel apk from the OTA repo; or:
 nq-kernel-ota stage-apk /path/to/linux-google-steelhead-<ver>.apk
-nq-kernel-ota status          # slot A must still be the old image
+nq-kernel-ota status          # slot A must still be the old image; BOTH slots
+                              # must show this unit's own identity (r5+)
 nq-kernel-ota try             # asks for YES, then reboots into the trial slot
 # after it comes back:
 nq-kernel-ota status          # or let nexusq-kernel-ota-promote.service do it
+nq-kernel-ota identity        # wifi=… bt=… of the boot slot — compare with
+                              # `cat /sys/class/net/wlan0/address`, `bluetoothctl list`
 ```
 
 `restore` puts slot A back from the pre-stage backup. If the trial kernel never
 comes up, slot A is untouched — but getting there needs hands on the device
 (mute sensor at power-on → fastboot).
+
+**Identity carry-over (nexusq-kernel-ota r5, 2026-09-05).** `stage-apk` packs a
+new boot image from the apk's DTB, and that DTB names the **first** unit
+(`docs/2026-08-28-per-unit-bt-wifi-identity.md`). Until r5 a kernel OTA on any
+other unit silently renamed it on both radios — measured on the cottage Q's first
+kernel OTA. `stage-apk` now reads `local-mac-address`/`local-bd-address` out of
+the booting slot and byte-patches them into the new DTB before packing, exactly
+as it already carried the ramdisk; it **dies** if either side does not hold exactly
+one of each (`NQ_KOTA_NO_IDENTITY=1` overrides). `status` shows the identity of
+both slots; `identity [image|partition|dtb]` and `carry-identity <src> <dst.dtb>`
+are the standalone forms. Tested by `pmos/nexusq-kernel-ota/tests/test_identity_carry.sh`.
+Full record: `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
 
 ## The device could not reach the OTA repo at all — no RTC, so no DNS
 
@@ -305,6 +321,9 @@ still needs verifying on the next reboot.**
 - ✅ the promotion unit **has now run at boot** (`active / success / exit 0`,
   Starting+Finished in the journal) after its `After=` lines were removed — the
   last unproven part of the mechanism
+- ✅ *(2026-09-05, r5)* the per-unit WiFi/BT identity is carried from the booting
+  slot onto the new DTB — a kernel OTA no longer renames a non-first unit (it did,
+  once, on the cottage Q)
 - ⛔ no app-side action yet (the update is CLI-only, which given the
   attended-only requirement is arguably the right default for now)
 - ⛔ the SAR-RAM-vs-power-cycle question from the failed-trial test remains

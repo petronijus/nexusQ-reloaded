@@ -239,6 +239,24 @@ unreachable). A `"st":"nogw"` line now carries `"fails"` and, once it reaches
 `FAILS_TO_HEAL`, triggers the same `nmcli disconnect/connect` heal (the pre-r61 code
 held `fails=0` in that branch and never healed it). Repeated `nogw` heals in the log =
 a DHCP/AP problem worth chasing.
+Since **device r93** (2026-09-05) the watchdog also owns the **stranded** case: `nmcli
+device disconnect` (the first half of every heal) blocks NM's autoconnect until an
+explicit connect, so a heal whose `connect` fails (empty scan cache after a
+`brcmf_escan_timeout`: *"A 'wireless' setting is required if no AP path was given"*)
+left wlan0 in NM state 30 forever — the cottage Q logged **16 536 `"st":"down"`
+lines over six days** on a healthy box. Now every `down` line carries **`"nm"`** (NM
+device state) and **`"downs"`** (consecutive plainly-disconnected checks); at
+`NQ_WIFI_DOWNS` (default 4 ≈ 2 min) of state 30/120 a **`"ev":"reconnect"`** (`nm`,
+`downs`, `sig`) fires `wifi rescan` + `nmcli device connect`, followed by
+**`"ev":"reconnect_result"`** (`assoc`, `loss_after`, `gw`). States 10/20 (unmanaged /
+unavailable), 40–110 (NM mid-activation) or blank reset `downs` and are left alone.
+**`heal_result` now carries `"assoc":"yes|no"`** — a heal followed by silence used to be
+indistinguishable from one that worked. Reading the log: `down` lines with `nm:"30"`
+and a climbing `downs` but no `reconnect` within ~2 min = a pre-r93 script or a
+cooldown in effect; `reconnect_result assoc:"no"` repeating = the AP is really gone.
+`heal` events every ~5–12 min at good signal with `loss:100` = the TX wedge is back
+(seen for 24 h after a **runtime** MAC change on 2026-08-29/30 — open question).
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
 
 **Audio inputs** — Spotify (librespot) + AirPlay (shairport-sync) are vendor-default-ON
 and mix into the default PulseAudio sink (TAS5713); Roon (`roon.service`) + **USB Audio**

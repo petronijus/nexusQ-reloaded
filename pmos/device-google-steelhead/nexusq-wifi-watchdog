@@ -2,7 +2,7 @@
 # nexusq-wifi-watchdog — keep the BCM4330 5 GHz link alive on a marginal 2013
 # combo chip, and record its health over time.
 #
-# Two jobs (see brcmfmac-roamoff.conf and docs/2026-07-31-* WiFi investigation):
+# Three jobs (see brcmfmac-roamoff.conf and docs/2026-07-31-* WiFi investigation):
 #
 #   1. HEAL — the chip can WEDGE: it stays associated at good signal with RX
 #      still working, but TX silently collapses to ~0 (the gateway becomes
@@ -12,24 +12,46 @@
 #      default gateway every INTERVAL; after FAILS_TO_HEAL consecutive failures,
 #      bounce the connection (rate-limited by HEAL_COOLDOWN so it can't storm).
 #
-#   2. LOG — append one compact JSONL health line per check (loss %, signal)
-#      plus distinct heal / heal_result events, co-located with nq-healthd's
-#      logs so the diag suite (nq-collect) picks them up. This is how we tell
-#      IF and WHEN the link still degrades and whether roamoff=1 is enough.
+#   2. RECONNECT — the heal itself can strand the device. `nmcli device
+#      disconnect` BLOCKS NetworkManager's autoconnect on that device until the
+#      next explicit connect or a reboot; if the `connect` half then fails
+#      (measured 2026-08-30: the scan cache was empty right after a
+#      brcmf_escan_timeout, and nmcli answered "A 'wireless' setting is required
+#      if no AP path was given"), wlan0 sits in state 30/disconnected FOREVER.
+#      The old code treated any not-associated state as "NM owns re-association"
+#      and did nothing — and the cottage unit stayed dark for six days on a
+#      healthy box (docs/2026-09-05-*). So: a wlan0 that NM reports as plainly
+#      `disconnected` (not unmanaged, not unavailable, not mid-activation) for
+#      DOWN_TO_RECONNECT consecutive checks gets an explicit rescan + `nmcli
+#      device connect`, which is also what clears the autoconnect block. Same
+#      cooldown as the heal, so it cannot storm either.
 #
-# Scope: ONLY ever touches wlan0. If wlan0 is not associated (WiFi off, or
-# mid-(re)connect), it does nothing — NM owns (re)association; the watchdog only
-# heals the associated-but-dead wedge that NM cannot see.
+#   3. LOG — append one compact JSONL health line per check (loss %, signal)
+#      plus distinct heal / heal_result / reconnect / reconnect_result events,
+#      co-located with nq-healthd's logs so the diag suite (nq-collect) picks
+#      them up. This is how we tell IF and WHEN the link still degrades and
+#      whether roamoff=1 is enough.
+#
+# Scope: ONLY ever touches wlan0. States that are not ours to fix are left
+# alone: unmanaged (10) and unavailable (20) mean the radio is off or the driver
+# is gone, and anything between prepare (40) and activated (100) means NM is
+# already (re)connecting. The watchdog acts on exactly two shapes: the
+# associated-but-dead wedge NM cannot see, and the disconnected-and-blocked
+# state NM will not leave on its own.
 #
 # Env overrides: NQ_WIFI_INTERVAL, NQ_WIFI_FAILS, NQ_WIFI_COOLDOWN,
-# NQ_WIFI_BADLOSS, NQ_LOGDIR, NQ_WIFI_LOGCAP.
+# NQ_WIFI_BADLOSS, NQ_WIFI_DOWNS, NQ_LOGDIR, NQ_WIFI_LOGCAP.
 set -u
 
 IFACE=wlan0
 INTERVAL="${NQ_WIFI_INTERVAL:-30}"       # seconds between checks
 FAILS_TO_HEAL="${NQ_WIFI_FAILS:-3}"      # consecutive bad checks before a bounce
-HEAL_COOLDOWN="${NQ_WIFI_COOLDOWN:-180}" # min seconds between bounces (anti-storm)
+HEAL_COOLDOWN="${NQ_WIFI_COOLDOWN:-180}" # min seconds between bounces/reconnects (anti-storm)
 BAD_LOSS="${NQ_WIFI_BADLOSS:-75}"        # packet-loss % that counts as "bad"
+DOWN_TO_RECONNECT="${NQ_WIFI_DOWNS:-4}"  # consecutive `disconnected` checks before we
+                                         # reconnect ourselves (~2 min at 30 s): long
+                                         # enough for NM's own autoconnect to have had
+                                         # its say, short enough that nobody notices.
 HEARTBEAT_EVERY="${NQ_WIFI_HEARTBEAT:-10}" # thin the steady "ok" stream to one line
                                          # per Nth check (~5 min at 30 s). EVERY
                                          # non-ok check and EVERY state change is
@@ -47,6 +69,9 @@ emit()   { printf '%s\n' "$1" >> "$LOG"; }
 assoc()  { iw dev "$IFACE" link 2>/dev/null | grep -q "Connected to"; }
 signal() { iw dev "$IFACE" link 2>/dev/null | awk '/signal:/{print $2; exit}'; }
 gw()     { ip route show default dev "$IFACE" 2>/dev/null | awk '/default/{print $3; exit}'; }
+# NetworkManager's numeric device state for wlan0 ("30 (disconnected)" -> 30);
+# empty when NM is not answering, which is treated like "not ours".
+nm_state() { nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null | cut -d' ' -f1; }
 
 # integer packet-loss % pinging $1 over wlan0 (100 if unpingable)
 loss_to() {
@@ -62,22 +87,70 @@ cap_log() {
 	fi
 }
 
+# TESTABLE:down_action
+# down_action <nm-device-state> <consecutive-down-checks> [threshold]
+# What to do about a wlan0 that is not associated. Prints one word:
+#   leave      not ours: NM has no device (unmanaged 10 / unavailable 20 — radio
+#              off, driver gone), or is already between prepare (40) and
+#              activated (100), or is not answering at all
+#   wait       plainly disconnected (30) — or just failed (120), which NM turns
+#              into 30 by itself — but not for long enough yet
+#   reconnect  disconnected for the threshold: autoconnect is not going to do it
+down_action() {
+	_st=${1:-}; _n=${2:-0}; _thr=${3:-${DOWN_TO_RECONNECT:-4}}
+	case "$_st" in
+		30|120)
+			if [ "$_n" -ge "$_thr" ]; then echo reconnect; else echo wait; fi ;;
+		*)
+			echo leave ;;
+	esac
+}
+
+# Bring wlan0 back by hand. `nmcli device connect` re-enables autoconnect on the
+# device AND activates the best available profile; it needs the SSID in NM's scan
+# cache, so scan first — an empty cache is exactly how the 2026-08-30 heal died.
+# Prints "yes" when wlan0 is associated afterwards, "no" otherwise.
+connect_wlan() {
+	nmcli device wifi rescan ifname "$IFACE" >/dev/null 2>&1
+	sleep 5
+	nmcli device connect "$IFACE" >/dev/null 2>&1
+	_rc=$?
+	sleep 8
+	if assoc; then echo yes; else
+		# One retry: the first rescan may have been rejected ("scan trigger
+		# already pending") or the connect raced the scan results.
+		[ "$_rc" -ne 0 ] && nmcli device wifi rescan ifname "$IFACE" >/dev/null 2>&1
+		sleep 8
+		nmcli device connect "$IFACE" >/dev/null 2>&1
+		sleep 8
+		if assoc; then echo yes; else echo no; fi
+	fi
+}
+
 heal() {
 	loss="$1"; sig=$(signal)
 	emit "{\"t\":$(mono),\"ev\":\"heal\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"note\":\"bounce wlan0 after $FAILS_TO_HEAL bad checks\"}"
 	nmcli device disconnect "$IFACE" >/dev/null 2>&1
 	sleep 2
-	nmcli device connect "$IFACE" >/dev/null 2>&1
-	sleep 8
+	up=$(connect_wlan)
 	g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
-	emit "{\"t\":$(mono),\"ev\":\"heal_result\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+	emit "{\"t\":$(mono),\"ev\":\"heal_result\",\"assoc\":\"$up\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+}
+
+reconnect() {
+	st="$1"; n="$2"; sig=$(signal)
+	emit "{\"t\":$(mono),\"ev\":\"reconnect\",\"nm\":\"$st\",\"downs\":$n,\"sig\":\"${sig:-?}\",\"note\":\"wlan0 disconnected for $n checks; autoconnect is not coming\"}"
+	up=$(connect_wlan)
+	g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
+	emit "{\"t\":$(mono),\"ev\":\"reconnect_result\",\"assoc\":\"$up\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
 }
 
 fails=0
+downs=0
 last_heal=0
 prev_st=""
 tick=0
-emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"heartbeat_every\":$HEARTBEAT_EVERY}"
+emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"downs_to_reconnect\":$DOWN_TO_RECONNECT,\"heartbeat_every\":$HEARTBEAT_EVERY}"
 
 while :; do
 	tick=$((tick + 1))
@@ -85,8 +158,15 @@ while :; do
 	loss=-1
 	if ! assoc; then
 		st=down; fails=0
-		line="{\"t\":$(mono),\"st\":\"down\",\"sig\":\"${sig:-?}\"}"
+		nm=$(nm_state)
+		act=$(down_action "$nm" $((downs + 1)))
+		# Only a plainly-disconnected device accumulates towards a reconnect; an
+		# NM that is busy, or has no device, resets the count — those are not
+		# the stranded case, and reconnecting into them would fight NM.
+		if [ "$act" = leave ]; then downs=0; else downs=$((downs + 1)); fi
+		line="{\"t\":$(mono),\"st\":\"down\",\"sig\":\"${sig:-?}\",\"nm\":\"${nm:-?}\",\"downs\":$downs}"
 	else
+		downs=0
 		g=$(gw)
 		if [ -z "$g" ]; then
 			# Associated but NO default route/gateway: NetworkManager wedged in
@@ -114,12 +194,18 @@ while :; do
 	fi
 	prev_st="$st"
 
+	now=$(mono)
 	if { [ "$st" = bad ] || [ "$st" = nogw ]; } && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
-		now=$(mono)
 		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
 			heal "$loss"
 			last_heal=$(mono)
 			fails=0
+		fi
+	elif [ "$st" = down ] && [ "$act" = reconnect ]; then
+		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
+			reconnect "$nm" "$downs"
+			last_heal=$(mono)
+			downs=0
 		fi
 	fi
 	cap_log

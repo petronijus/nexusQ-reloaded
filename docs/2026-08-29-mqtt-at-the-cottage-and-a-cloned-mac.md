@@ -170,7 +170,22 @@ Two Home Assistant devices, two topic trees, no shared identity.
 
 - The cottage profile has `dns=<home-dns>;1.1.1.1;`. The first is a Prague
   resolver, unreachable at the cottage; resolution works only via the 1.1.1.1
-  fallback, after that one times out.
+  fallback, after that one times out. *(Moot since 2026-08-30: the profile was
+  switched from static `.51.240` to DHCP for the librespot zeroconf fix, `314fdd5`;
+  the unit is `nexus-q-sumperak.local` now.)*
+
+## ⚠️ Addendum (2026-09-05): what followed the in-place MAC change
+
+The runtime `permanent` fix above was applied at **23:08:45**. The watchdog log
+shows the first of **122 `bad`→heal cycles** (100 % loss to the gateway at
+−42..−45 dBm, every ~5–12 min, each healed by a bounce) starting **14 s before
+it**, after 9 clean hours; the 122nd heal's `nmcli device connect` failed on an
+empty scan cache and, because `nmcli device disconnect` blocks NM's autoconnect,
+the unit stayed dark from 2026-08-30 23:30 until a power-cycle on 2026-09-05.
+After a reboot with the MAC set from boot: 0 bad checks. Whether changing the
+BCM4330's MAC on a live interface causes the recurring TX wedge is an **open
+question**; the safer form of this fix is edit the profile, then **reboot**.
+Record and fixes (watchdog r93): `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
 - Provisioning still has no self-healing story after a reflash. The companion
   app is the intended provisioner (`setMqttConfig`, PROTOCOL.md §13) but it has
   to be opened by hand; nothing notices that a device that used to publish has

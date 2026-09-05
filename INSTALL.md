@@ -74,17 +74,22 @@ A full reflash (the steps below) is only needed for a first install *(and was
 needed for a kernel change until 2026-08-18 — since kernel-OTA Phase 2 a kernel
 can be applied over the air too, via `nexusq-kernel-ota`'s trial-slot flow:
 attended-only, because the stock u-boot has no fallback if a trial kernel fails
-to boot)*. Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
+to boot; since `nexusq-kernel-ota` **r5** (2026-09-05) the flow also carries the
+unit's own WiFi MAC / BT address onto the new kernel — on r3/r4 a kernel OTA on
+any unit but the first renamed it to the first unit's identity, see
+`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`)*.
+Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
 no fastboot, no cable — from a **signed apk repo on GitHub Pages**
 (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch); the device
 already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs
 our signed packages straight from it. Two Settings items in the companion app:
 
-⚠️ **A Q flashed from v1.14.0, v1.14.1 or v1.14.2 cannot OTA at all** (found
-2026-08-30). Those three images were cut on a machine whose build key is
-`pmos@local-6a93112c`, while the published repo is signed `pmos@local-6a42e957`, so
-every `apk update` answers `UNTRUSTED signature` and no update is ever offered — the
-app just keeps saying "up to date". Repair over ssh, no reflash needed:
+⚠️ **A Q flashed from v1.13.0, v1.14.0, v1.14.1 or v1.14.2 cannot OTA at all** (found
+2026-08-29/30). v1.13.0 baked `pmos@local-6a913e9e` and the three v1.14.x images
+were cut on a machine whose build key is `pmos@local-6a93112c`, while the published
+repo is signed `pmos@local-6a42e957`, so every `apk update` answers `UNTRUSTED
+signature` and no update is ever offered — the app just keeps saying "up to date".
+Repair over ssh, no reflash needed (done on the last affected box 2026-09-05):
 
 ```bash
 scp pmos/ota-signing-key.rsa.pub \
