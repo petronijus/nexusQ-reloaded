@@ -88,4 +88,8 @@ index signed with any other key means `UNTRUSTED signature` and no OTA at all. S
 already built packages, run **`scripts/seed-ota-volume.sh`** once before the first OTA
 publish — the publisher takes the newest apk of each package from the volume, and
 foreign-signed leftovers would fail `apk upgrade` on every box (2026-09-05;
-`publish-ota-repo.sh` now refuses such apks by name).
+`publish-ota-repo.sh` now refuses such apks by name). If a build dies at the index
+update with `UNTRUSTED signature … Failed to create index`, the volume signs with the
+fleet key but does not **trust** it (`config_apk_keys/`) — `install-fleet-signing-key.sh
+--check` reconciles that on every run. Both the desktop and the MacBook are proven
+release machines (v1.15.2 was cut on the MacBook end to end).

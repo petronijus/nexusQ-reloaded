@@ -3,9 +3,12 @@
 The cottage Q (`nexus-q-sumperak`, serial `AW1S12251417`) had been unreachable
 since 2026-08-30 23:30. Petr power-cycled it at 17:43 CEST today and the session
 that followed found two defects, shipped two fixes (device **r93**,
-`nexusq-kernel-ota` **r5**, OTA-only — no new image) and brought the unit onto the
-fleet key and the current release. A third finding, on the MacBook, stopped the
-publish from regressing every other package in the fleet.
+`nexusq-kernel-ota` **r5**) and brought the unit onto the fleet key and the current
+release. Shipping them from the MacBook found two more — one that would have
+broken every other package in the fleet, one that would have baked the retired key
+into the image — and ended as **v1.15.2**, the first release cut end to end on that
+machine, installed on both units the same evening (§4). One thing is left open:
+a service exec failure on Prague after systemd was upgraded in place (§5).
 
 Nothing here crashed. Every fault was a piece of software doing exactly what it
 was written to do.
@@ -227,7 +230,7 @@ Two changes:
   the publish stops and names the file. The index signature alone never protected
   against this; devices verify each apk.
 
-The build was then started on the MacBook (arm64 host, Docker 29.7.2):
+The OTA-only build was then started on the MacBook (arm64 host, Docker 29.7.2):
 
 ```sh
 docker run --privileged -e OTA_PACKAGES_ONLY=1 \
@@ -236,15 +239,129 @@ docker run --privileged -e OTA_PACKAGES_ONLY=1 \
   -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap nexusq-builder /src/docker-build.sh
 ```
 
-followed by `scripts/publish-ota-repo.sh`. This note describes the procedure; the
-publish result is not claimed here (the build was still running when this was
-written — check the published index for `device-google-steelhead-1.0-r93` and
-`nexusq-kernel-ota-0.1.0-r5`).
+### …and died at the index update: the fleet key was installed for signing, not for trust
+
+```
+UNTRUSTED signature ... Failed to create index
+```
+
+on every fleet-signed apk, in abuild's post-build index update. pmbootstrap 3
+keeps two directories in the volume: **`config_abuild/`** (what abuild signs
+with — where `install-fleet-signing-key.sh` had put the fleet key on 2026-08-31)
+and **`config_apk_keys/`** (what is *trusted* — bind-mounted as `/etc/apk/keys`
+into the native, buildroot **and rootfs** chroots, filled exactly once at first
+init with whatever abuild key existed then). The MacBook volume therefore signed
+with `pmos@local-6a42e957` and trusted only the retired `pmos@local-6a93112c`.
+Two consequences: every build fails the moment it indexes a fleet-signed apk,
+and — worse, and silent — a full image built there would have baked the retired
+key into `/etc/apk/keys`. That is the v1.13.0 drift
+(`docs/2026-08-29-ota-key-drift.md`) replayed from the machine that had
+supposedly been fixed.
+
+`scripts/install-fleet-signing-key.sh` now **reconciles on every run, `--check`
+included**: the fleet public key must be in `config_apk_keys/`; any other
+`pmos@local-*` key there goes to `config_apk_keys/retired/`; every apk under
+`packages/*/armv7` not signed by the fleet key goes to `.retired-<key>/` (an
+untrusted apk in the repo dir breaks the index update for *every* later build).
+Nothing is deleted. Run on the MacBook: trust installed, **1 key retired, 13
+apks parked** (among them the 6.12 kernel, `nexusq-glibc-rt` and the firmware
+package — all rebuilt under the fleet key by the full build below). The desktop
+should run `--check` once (expected no-op; Todoist AI-handover task created).
 
 **Procedure for any machine that publishes OTA from now on:**
-`install-fleet-signing-key.sh` (once) → `seed-ota-volume.sh` (once, and after any
-gap) → `OTA_PACKAGES_ONLY=1` build → `publish-ota-repo.sh` (now fails closed on a
-foreign signature).
+`install-fleet-signing-key.sh` (reconciles signing + trust; once, and `--check`
+after any gap) → `seed-ota-volume.sh` (once, and after any gap) →
+`OTA_PACKAGES_ONLY=1` build → `publish-ota-repo.sh` (fails closed on a foreign
+signature).
+
+---
+
+## 4. v1.15.2 — the first release cut end to end on the MacBook
+
+Petr asked for a full image and a tag rather than an OTA-only publish.
+
+- **Build:** `PUBLIC_RELEASE=1`, **13.5 min** wall-clock; kernel cross-native with
+  no qemu fallback. `scripts/verify-rootfs.sh` **29/29** — run inside the builder
+  image; the recipe HANDOFF carried since 2026-08-30 (`nexusq-builder bash
+  scripts/verify-rootfs.sh …`) **does not work**: the image's entrypoint treats
+  `$1` as a script to CR-strip into `/tmp` and run (`bash: No such file or
+  directory`), and from `/tmp` section 6 cannot find `verify-libpython-clean.py`.
+  Working form:
+
+  ```sh
+  docker run --rm --privileged --user root --entrypoint bash \
+    -v /dev:/dev -v "$PWD:/src" -w /src \
+    nexusq-builder scripts/verify-rootfs.sh output/google-steelhead.img output/boot.img
+  ```
+
+- **Rootfs checked by hand as well:** only the `eth-direct`/`eth-lan` profiles,
+  no `authorized_keys`; `/etc/apk/keys` holds `pmos@local-6a42e957` and **not**
+  `6a93112c`; apk db has `device-google-steelhead-1.0-r93`,
+  `nexusq-kernel-ota-0.1.0-r5`, `linux-google-steelhead-6.18.48-r0`.
+- **Commits:** `5359c10` fix(wifi,kernel-ota) (code + docs) → `9f96960`
+  chore(release): v1.15.2 (**tag `v1.15.2`**, pushed) → `8192f6a` docs(install)
+  → `544ef09` fix(release). The order is honest, not tidy: `package-release.sh`'s
+  INSTALL.md gate refused the tag because the guide's `<!-- RELEASE: -->` marker
+  still said v1.15.1, so the guide update landed **one commit after** the tag.
+- **macOS bash is 3.2.** `publish-ota-repo.sh` and `verify-ota-parity.sh` used
+  `mapfile`, so the release stopped between writing the assets and publishing the
+  OTA repo. `544ef09` replaces both with `read` loops; the publish then ran.
+- **Assets** (published as v1.15.2 at
+  `https://github.com/petronijus/nexusQ-reloaded/releases/tag/v1.15.2`):
+  `nexusq-boot-v1.15.2.img` **6 713 344 B**, sha256
+  `719889fb2d34069535e8aa9003aff69d4665f46a3cc3e3caa5c37e2954896861`;
+  `nexusq-rootfs-v1.15.2-sparse.img.zst` ~627 MiB, sha256
+  `b618f758e66c37e66136a2ea8b14fc5237a9ba3a71b1feeca0bfb04ae52ae5db`;
+  `sha256sums-v1.15.2.txt`.
+- **OTA repo:** gh-pages `62e418a`, 11 packages, `device-google-steelhead` r93 /
+  `nexusq-kernel-ota` r5 replacing r92 / r4; `verify-ota-parity.sh` **13/13 PASS**.
+- **Both units upgraded over the air**, with exactly what the app runs
+  (`apk upgrade --available --ignore linux-google-steelhead`):
+
+  | | cottage | Prague |
+  |---|---|---|
+  | when | 19:16 CEST | 20:18 CEST |
+  | result | r93 + kernel-ota r5; watchdog restarted, new `start` line with `downs_to_reconnect:4` | r93 + r5, 74 packages — including Alpine edge's **systemd 261.2 → 262_rc1** in place |
+  | `nq-kernel-ota status` identity, slot A / B | `wifi f8:8f:ca:05:1f:11 bt f8:8f:ca:73:ac:9c` | `wifi f8:8f:ca:20:48:e1 bt f8:8f:ca:20:49:e5` (first unit — correct) |
+
+### Two build observations, not blockers
+
+- **250 files in the kernel apk carry gid 12345 with uid 0** — `/boot/*`,
+  `/usr/lib/modules/6.18.48-r0/**`, the `lib/firmware/brcm` directory.
+  Cross-native `package()` runs with pmos's group. Modes are 644/755, so nothing
+  is writable by that group and it is harmless on the device; worth a look in the
+  next kernel pkgrel rather than a hotfix.
+- The full pipeline **reused `nexusq-kernel-ota-0.1.0-r5.apk` from the failed
+  17:11 attempt** — that aport is not in the `--force` list. Its `nq-kernel-ota`
+  md5 matched the working tree, so the image is correct; but the pipeline should
+  `--force` every OTA aport whose pkgrel changed, not a fixed list.
+
+---
+
+## 5. OPEN — a service would not exec after systemd was upgraded in place
+
+On the Prague Q, immediately after the OTA that took systemd 261.2 → 262_rc1:
+
+- `systemctl restart nexusq-wifi-watchdog` → crash loop, `status=127`, **no
+  message from the process at all**, 15 restarts.
+- `systemd-run … /usr/bin/nexusq-wifi-watchdog` reproduced it. The same script,
+  from an ssh shell, ran and emitted the new `start` line.
+- `systemd-run --wait /bin/true` seemed to succeed.
+- `systemctl daemon-reexec` → the watchdog started on the first try (`active`,
+  `NRestarts=0`), nothing else failed.
+
+The cottage unit never showed it — it took 262_rc1 at 18:09 and was rebooted
+twice afterwards, so its PID1 was already the new binary when r93 arrived.
+
+**Hypothesis, not established:** some part of the service exec path (the old
+running PID1 spawning against the freshly installed 262 userland) is broken until
+PID1 re-execs. `status=127` with no stderr is consistent with an exec that never
+reached the script. Do not overstate it: one unit, one occurrence, no strace.
+
+**Follow-up:** `nexusq-control`'s system update has `_REBOOT_HINTS` covering
+systemd, but it *restarts services* after an upgrade. When systemd was among the
+upgraded packages it should run `systemctl daemon-reexec` first — or ask for the
+reboot the hint already implies — before touching any unit.
 
 ---
 
@@ -253,18 +370,27 @@ foreign signature).
 | | |
 |---|---|
 | hostname / address | `nexus-q-sumperak.local`, DHCP (`<dhcp-lease>`; static `<old-static-ip>` gone since 2026-08-30) |
-| trusts | `pmos@local-6a42e957` (fleet) — can OTA |
-| userspace | device **r92** (r93 pending publish), control r35, kernel-ota r4 (r5 pending) |
+| trusts | `pmos@local-6a42e957` (fleet) — can OTA, and did |
+| userspace | **v1.15.2**: device **r93**, control r35, kernel-ota **r5** (OTA 19:16 CEST) |
 | kernel | **6.18.48-r0** in both slots, md5 `4ee9c080…` |
-| identity | `wifi=f8:8f:ca:05:1f:11 bt=f8:8f:ca:73:ac:9c` — its own |
-| watchdog | 0 bad checks since the reboots; still the r92 script until r93 lands |
+| identity | `wifi=f8:8f:ca:05:1f:11 bt=f8:8f:ca:73:ac:9c` in both slots — its own |
+| watchdog | r93 script active, `start` marker `downs_to_reconnect:4`; 0 bad checks since the reboots |
+
+Prague is on the same versions (OTA 20:18 CEST), identity
+`wifi=f8:8f:ca:20:48:e1 bt=f8:8f:ca:20:49:e5`, systemd 262_rc1, watchdog active
+after the `daemon-reexec` of §5.
 
 ## What is still open
 
 - The **live-MAC-change → TX wedge** correlation (§1). Unexplained.
-- The watchdog cannot help a unit that is *already* stranded on r92 — it needs a
-  reboot or a hand `nmcli device connect wlan0` once, then r93 keeps it from
-  happening again.
+- **Service exec after an in-place systemd upgrade** (§5) — one occurrence, fixed
+  by `daemon-reexec`; `nexusq-control` should re-exec or ask for a reboot when
+  systemd was upgraded.
+- Kernel apk **gid 12345** files and the pipeline's fixed `--force` list (§4) —
+  next kernel pkgrel / next pipeline touch.
+- The watchdog cannot help a unit that is *already* stranded on ≤ r92 — it needs
+  a reboot or a hand `nmcli device connect wlan0` once; from r93 on it does not
+  happen. Both units are on r93.
 - `checkSystemUpdate` still filters the kernel out (by design); a kernel reaches
   a device only via `nq-kernel-ota` over ssh, and that is the path that now
   carries identity.

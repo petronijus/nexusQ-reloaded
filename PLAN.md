@@ -3,7 +3,7 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> ## ✅ SHIPPED (2026-09-05, OTA-only: device r93 + nexusq-kernel-ota r5) — six days dark, and the OTA that renamed a unit
+> ## ✅ SHIPPED (2026-09-05, v1.15.2 — device r93 + nexusq-kernel-ota r5) — six days dark, and the OTA that renamed a unit
 >
 > The cottage Q sat healthy but linkless for six days: the watchdog's heal
 > (`nmcli device disconnect` + a `connect` that failed on an empty scan cache)
@@ -11,10 +11,16 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > a `reconnect` path (NM state 30/120 for `NQ_WIFI_DOWNS`=4 checks → rescan +
 > connect). Its first kernel OTA then renamed it to the Prague unit on both radios:
 > **kernel-ota r5** carries the booting slot's DTB identity onto the new kernel.
-> `seed-ota-volume.sh` + a per-apk signature gate let a second machine publish OTA
-> without regressing the fleet. Šumperák now on the fleet key, r92 + 6.18.48.
-> ⚠️ Open: 122 TX-wedge heals followed a **runtime** MAC change — mechanism unknown.
-> → CHANGELOG [Unreleased] ·
+> Cut end to end on the MacBook (first time), which surfaced two more: the fleet
+> key had been installed for signing but not for **trust** (`config_apk_keys/`),
+> and the release scripts needed bash 4. Both units on r93 + r5 the same evening.
+> ⚠️ Open (forward-looking): **122 TX-wedge heals followed a runtime MAC change**
+> — mechanism unknown; **a service exec path broke after systemd was upgraded in
+> place until `daemon-reexec`** — `nexusq-control`'s system update should re-exec
+> (or ask for a reboot) when systemd was among the upgraded packages; kernel apk
+> files carry gid 12345 (harmless, fix at the next kernel pkgrel); the pipeline
+> should `--force` every OTA aport whose pkgrel changed.
+> → CHANGELOG [1.15.2] ·
 > `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`
 
 > ## ✅ SHIPPED (2026-09-01, v1.15.1) — the input PulseAudio was moving behind our back

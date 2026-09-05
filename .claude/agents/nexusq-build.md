@@ -208,6 +208,21 @@ publish** after `install-fleet-signing-key.sh`, and after any long gap. Done on 
 MacBook 2026-09-05 (`seeded=11 retired=7`). Procedure:
 `install-fleet-signing-key.sh` → `seed-ota-volume.sh` → `OTA_PACKAGES_ONLY=1` build →
 `publish-ota-repo.sh`. `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md` §3.
+⚠️ **Signing and TRUST are two different directories in the volume (2026-09-05).**
+pmbootstrap 3 signs with `config_abuild/` but trusts `config_apk_keys/` — bind-mounted as
+`/etc/apk/keys` into the native, buildroot AND rootfs chroots, filled once at first
+init. A volume whose trust dir still holds only its retired key **fails every build at
+abuild's post-build index update** — `UNTRUSTED signature … Failed to create index` on
+each fleet-signed apk — and a full image built there bakes the retired key into
+`/etc/apk/keys` (the v1.13.0 drift replayed). `install-fleet-signing-key.sh` now
+reconciles on every run, `--check` included (fleet pub → `config_apk_keys/`, other
+`pmos@local-*` → `config_apk_keys/retired/`, foreign-signed apks → `.retired-<key>/`).
+If you see that error signature, run `scripts/install-fleet-signing-key.sh --check`
+before anything else. First release cut end to end on the MacBook: **v1.15.2**
+(13.5 min full build, `verify-rootfs.sh` 29/29, parity 13/13).
+⚠️ **macOS bash is 3.2:** the release scripts used `mapfile` and the first Mac release
+stopped between assets and OTA publish — fixed (`544ef09`, `read` loops). Do not
+reintroduce bash-4-only builtins into `scripts/*.sh`.
 
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
@@ -442,6 +457,13 @@ a failure — fix the source so the next build is clean.
 ## MANDATORY verification gate (before you report success)
 
 **Run `scripts/verify-rootfs.sh <rootfs.img> [boot.img]`** (added 2026-08-17).
+On macOS (no loop mounts) run it inside the builder image with the entrypoint
+overridden — the image's default entrypoint treats `$1` as a script to copy into
+`/tmp` and run, which breaks section 6's relative lookup of
+`verify-libpython-clean.py` (`bash: No such file or directory` is the tell):
+`docker run --rm --privileged --user root --entrypoint bash -v /dev:/dev -v "$PWD:/src"
+-w /src nexusq-builder scripts/verify-rootfs.sh output/google-steelhead.img output/boot.img`
+→ 29/29 on 2026-09-05.
 The gates below used to live here as prose only, which is exactly why they were
 skippable; the script mounts the image read-only and exit-codes the lot: init is
 systemd (not busybox) + no OpenRC packages + no `/etc/runlevels`, nexusqd/sshd

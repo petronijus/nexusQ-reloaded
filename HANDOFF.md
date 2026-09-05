@@ -13,7 +13,7 @@ session on 2026-08-28, so it is written down here rather than re-derived.
 | artifact | build on | signed with | how to check |
 |---|---|---|---|
 | **Android APK** (companion app) | **MacBook or desktop** (same keystore) | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
-| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **any machine holding the fleet key** (desktop; MacBook since 2026-08-31) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
+| **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **any machine holding the fleet key — for signing AND trust** (desktop proven; MacBook proven end to end with v1.15.2 on 2026-09-05, after `install-fleet-signing-key.sh` also reconciled `config_apk_keys/`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
 
 **And a release is BOTH tracks.** The image (GitHub Releases) reaches whoever
 holds a USB cable; everything already in the field updates from the OTA apk repo.
@@ -104,7 +104,12 @@ Two guards now make a wrong-key release impossible rather than merely unlikely:
 | `publish-ota-repo.sh`, before pushing | key ≠ fleet key → refuses to publish (and prefers the fleet key when several are present) |
 | `verify-ota-parity.sh`, at release | the key baked into the released rootfs must be the key that signed the published index |
 
-**On any new machine, once:** `op signin`, then `install-fleet-signing-key.sh`,
+**On any new machine, once:** `op signin`, then `install-fleet-signing-key.sh`
+(since 2026-09-05 it also reconciles **trust** — `config_apk_keys/`, which
+pmbootstrap bind-mounts as `/etc/apk/keys` into every chroot and fills once at
+first init; a volume that signs with the fleet key but trusts only its old one
+fails every build at the index update with `UNTRUSTED signature … Failed to create
+index`, and would bake the old key into an image — `--check` fixes it too),
 then **`scripts/seed-ota-volume.sh`** — packages already in that volume were
 signed with the old key and are still sitting in `packages/edge/armv7`, and
 `publish-ota-repo.sh` takes the newest apk of each package from there. The seed
@@ -123,22 +128,34 @@ only `pmos@local-6a913e9e` from the v1.13.0 image) and went r87 → r92 +
 ⚠️ Do **not** simply run `publish-ota-repo.sh` on whichever machine is in front
 of you. That is the whole failure mode — and now the guard says so out loud.
 
-#### macOS specifics (MacBook, verified 2026-08-30/31)
+#### macOS specifics (MacBook, verified 2026-08-30/31; a full release cut here 2026-09-05)
 
 - **The release gates work here.** `release-preflight-no-secrets.sh` and
   `verify-ota-parity.sh` both read the ext4 rootfs with `debugfs` instead of
   mounting it, and both re-run themselves inside a throwaway container when the
   host has no `debugfs` — which macOS does not. No root, no loop devices.
   Verified end to end by hiding `debugfs` from `PATH`.
+- **macOS bash is 3.2.** `publish-ota-repo.sh` and `verify-ota-parity.sh` used
+  `mapfile` (bash 4), so the first release cut here stopped between the assets and
+  the OTA publish. Fixed in `544ef09` with `read` loops; keep `scripts/*.sh` free of
+  bash-4-only builtins (`mapfile`, `readarray`, `${var,,}`, associative arrays).
 - **`scripts/verify-rootfs.sh` is the exception**: it still `sudo mount`s, so on
   macOS run it inside the privileged builder image, **as root and from the repo
   root** — two of its gates were found on 2026-08-30 passing silently when they
-  could not read root-owned files or resolve a relative path:
+  could not read root-owned files or resolve a relative path. ⚠️ **The recipe that
+  stood here until 2026-09-05 (`nexusq-builder bash scripts/verify-rootfs.sh …`)
+  does not work**: it answers `bash: No such file or directory`, because the
+  image's entrypoint takes `$1` as a script to CR-strip into `/tmp` and run, and
+  from `/tmp` section 6 cannot find `verify-libpython-clean.py`. Override the
+  entrypoint:
 
   ```sh
-  docker run --privileged --user root -v /dev:/dev -v "$PWD:/src" -w /src \
-    nexusq-builder bash scripts/verify-rootfs.sh output/google-steelhead.img
+  docker run --rm --privileged --user root --entrypoint bash \
+    -v /dev:/dev -v "$PWD:/src" -w /src \
+    nexusq-builder scripts/verify-rootfs.sh output/google-steelhead.img output/boot.img
   ```
+
+  → 29/29 on the v1.15.2 image.
 
 - `scripts/tests/*` and the migration test use `mkfs.ext4 -d`, which macOS lacks.
   They are development tests, not release steps; run them on Linux.
@@ -167,13 +184,17 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
-## Session 2026-09-05: **the cottage Q was dark for six days on a healthy box · its first kernel OTA renamed it · publishing from the MacBook would have broken every other box**
+## Session 2026-09-05: **v1.15.2 — the cottage Q was dark for six days on a healthy box · its first kernel OTA renamed it · the first release cut end to end on the MacBook, and the two things it found**
 
-Device **r93**, `nexusq-kernel-ota` **r5**, OTA-only (no new image). Full record:
-`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`; CHANGELOG
-`[Unreleased]`. The build/publish from the MacBook was **in progress** when this
-was written — verify the published index carries `device-google-steelhead-1.0-r93`
-and `nexusq-kernel-ota-0.1.0-r5` before assuming either reached a device.
+Device **r93**, `nexusq-kernel-ota` **r5**, kernel unchanged (6.18.48-r0).
+**Released as `v1.15.2`** (tag → `9f96960`; boot 6 713 344 B sha256 `719889fb…`,
+rootfs ~627 MiB sha256 `b618f758…`; OTA repo gh-pages `62e418a`, 11 packages,
+parity 13/13) and **installed on both units the same evening** (cottage 19:16,
+Prague 20:18 CEST, via the app's `apk upgrade --available --ignore
+linux-google-steelhead`). The INSTALL.md gate refused the tag because the guide
+still said v1.15.1 — the guide fix (`8192f6a`) landed one commit after the tag.
+Full record: `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`;
+CHANGELOG `[1.15.2]`.
 
 - **Six days dark (2026-08-30 23:30 → 09-05 17:43), nothing crashed.** Journal
   boot `-1` ran 08-29 14:15 → 09-05 17:43 unbroken; `nexusq-mqtt` logged
@@ -214,10 +235,51 @@ and `nexusq-kernel-ota-0.1.0-r5` before assuming either reached a device.
   signature gate in `publish-ota-repo.sh`. Procedure for any machine:
   `install-fleet-signing-key.sh` → `seed-ota-volume.sh` → `OTA_PACKAGES_ONLY=1`
   build → `publish-ota-repo.sh`.
-- **Cottage Q now:** `nexus-q-sumperak.local`, **DHCP** since 2026-08-30 (static
-  `<old-static-ip>` gone; LAN `<cottage-lan>/22`, gw `<cottage-gateway>`, broker
-  `<cottage-pi>`), fleet key, r92 (r93 pending), 6.18.48 in both slots, its own
-  identity, 0 bad checks since the reboots. Not on Tailscale.
+- **Signing ≠ trust.** The seeded build then died at abuild's index update:
+  `UNTRUSTED signature … Failed to create index` on every fleet-signed apk.
+  pmbootstrap 3 keeps trust in **`config_apk_keys/`** (bind-mounted as
+  `/etc/apk/keys` into native/buildroot/rootfs chroots, filled once at first
+  init) — the MacBook volume signed with the fleet key and trusted only the
+  retired `6a93112c`, and an image built there would have baked the retired key
+  (the v1.13.0 drift replayed from the "fixed" machine).
+  `install-fleet-signing-key.sh` now reconciles on every run, `--check` included
+  (trust installed, 1 key retired, 13 apks parked incl. the 6.12 kernel,
+  `nexusq-glibc-rt`, firmware — all rebuilt by the full build). Desktop should run
+  `--check` once (Todoist AI-handover task; expected no-op).
+- **macOS bash 3.2:** the release scripts used `mapfile`; the first Mac-cut
+  release stopped between assets and OTA publish. Fixed `544ef09`. And the
+  `verify-rootfs.sh` recipe in "macOS specifics" above was wrong until today —
+  needs `--entrypoint bash`; corrected there.
+- **Full release from the MacBook:** `PUBLIC_RELEASE=1`, 13.5 min, kernel
+  cross-native without fallback, `verify-rootfs.sh` 29/29, rootfs clean (only
+  eth-direct/eth-lan profiles, no `authorized_keys`), `/etc/apk/keys` = fleet key
+  only, apk db r93 + kernel-ota r5 + 6.18.48-r0.
+- 🔶 **OPEN — Prague after the OTA that took systemd 261.2 → 262_rc1 in place:**
+  `systemctl restart nexusq-wifi-watchdog` crash-looped `status=127`, **no output
+  from the process**, 15 restarts; `systemd-run … /usr/bin/nexusq-wifi-watchdog`
+  reproduced it, the same script from an ssh shell worked; `systemd-run --wait
+  /bin/true` seemed fine. `systemctl daemon-reexec` → started first try,
+  `NRestarts=0`, nothing else failed. The cottage (PID1 already 262_rc1 from its
+  18:09 upgrade + two reboots) never showed it. Hypothesis only: old running PID1
+  vs freshly installed 262 userland until re-exec. **Follow-up:**
+  `nexusq-control`'s system update has `_REBOOT_HINTS` for systemd but restarts
+  services after an upgrade — it should `daemon-reexec` (or ask for a reboot)
+  when systemd was among the upgraded packages.
+- Build observations (not blockers): 250 files in the kernel apk have gid 12345 /
+  uid 0 (`/boot/*`, `/usr/lib/modules/6.18.48-r0/**`, `lib/firmware/brcm`) —
+  cross-native `package()` runs with pmos's group, modes 644/755, harmless; look
+  at it next kernel pkgrel. The pipeline reused `nexusq-kernel-ota-0.1.0-r5.apk`
+  from the failed 17:11 attempt (no `--force` for that aport) — md5 of
+  `nq-kernel-ota` matched the tree so the image is right, but every OTA aport
+  whose pkgrel changed should be `--force`d.
+- **Fleet now (2026-09-05 evening):** both units on **v1.15.2** (r93, kernel-ota
+  r5, 6.18.48-r0). Cottage: `nexus-q-sumperak.local`, **DHCP** since 2026-08-30
+  (static `<old-static-ip>` gone; LAN `<cottage-lan>/22`, gw `<cottage-gateway>`,
+  broker `<cottage-pi>`), identity `wifi f8:8f:ca:05:1f:11 bt f8:8f:ca:73:ac:9c`
+  in both slots, watchdog `start` marker with `downs_to_reconnect:4`, 0 bad checks
+  since the reboots, not on Tailscale. Prague: identity `wifi f8:8f:ca:20:48:e1
+  bt f8:8f:ca:20:49:e5` (first unit, correct), systemd 262_rc1, watchdog active
+  after the re-exec.
 
 ---
 

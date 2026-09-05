@@ -237,8 +237,8 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 (dev) ── ✦ a release publishes BOTH tracks now — image + OTA repo, gated on parity   2026-08-30
 (dev) ── ✦ USB-audio park reads the gadget's own flag — 350 MHz 85.4 → 90.4 %      2026-08-30
 1.15.0 ─ ✦ mainline 6.18 LTS · everything cross-compiled — a full build in 6:39   2026-08-31
-1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01   ← latest tag
-(dev) ── ✦ six days dark: the watchdog reconnects a stranded wlan0 · kernel OTA keeps the unit's identity   2026-09-05
+1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01
+1.15.2 ─ ✦ six days dark: the watchdog reconnects a stranded wlan0 · kernel OTA keeps the unit's identity   2026-09-05   ← latest tag
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

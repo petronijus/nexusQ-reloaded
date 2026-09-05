@@ -95,6 +95,33 @@ fixes were found by fixing the cottage unit, which had been offline since
   13 stale apks parked (among them the 6.12 kernel and `nexusq-glibc-rt`, which
   the next full build rebuilds under the fleet key).
 
+### Fixed — the release scripts assumed bash 4 (`544ef09`)
+- `publish-ota-repo.sh` and `verify-ota-parity.sh` used `mapfile`, which macOS's
+  bash 3.2 does not have — so the first release ever cut on the MacBook stopped
+  between writing the assets and publishing the OTA repo. Both now use plain
+  `read` loops. Landed after the tag; the v1.15.2 OTA publish ran with the fix.
+
+### Release — the first one cut end to end on the MacBook
+- Full `PUBLIC_RELEASE=1` build on the MacBook (arm64 host, Docker 29.7.2):
+  **13.5 min** wall-clock, kernel cross-native with no fallback,
+  `scripts/verify-rootfs.sh` **29/29** (inside the builder image, see HANDOFF
+  "macOS specifics" for the working invocation), rootfs bakes only the
+  `eth-direct`/`eth-lan` profiles and no `authorized_keys`, `/etc/apk/keys` holds
+  `pmos@local-6a42e957` and **not** `6a93112c`, apk db has
+  `device-google-steelhead-1.0-r93` + `nexusq-kernel-ota-0.1.0-r5` +
+  `linux-google-steelhead-6.18.48-r0`.
+- Tag **`v1.15.2` → `9f96960`**. Assets: `nexusq-boot-v1.15.2.img` 6 713 344 B
+  (sha256 `719889fb2d34069535e8aa9003aff69d4665f46a3cc3e3caa5c37e2954896861`),
+  `nexusq-rootfs-v1.15.2-sparse.img.zst` ~627 MiB (sha256
+  `b618f758e66c37e66136a2ea8b14fc5237a9ba3a71b1feeca0bfb04ae52ae5db`),
+  `sha256sums-v1.15.2.txt`. OTA repo published as gh-pages `62e418a`: 11
+  packages, r93 / r93 / kernel-ota r5 replacing r92 / r92 / r4;
+  `verify-ota-parity.sh` **13/13 PASS**.
+- Honest footnote: `package-release.sh`'s INSTALL.md gate refused the tag because
+  the guide's `<!-- RELEASE: -->` marker still said v1.15.1, so the guide update
+  (`8192f6a`) landed **one commit after** the tag. The gate did its job; the fix
+  is in the release's docs, not in its tree.
+
 ### Fleet
 - Šumperák Q: fleet key installed in `/etc/apk/keys` (it trusted only the v1.13.0
   image's `pmos@local-6a913e9e`), userspace r87 → r92 over OTA (access-file
@@ -102,6 +129,37 @@ fixes were found by fixing the cottage unit, which had been offline since
   6.18.48-r0 via `stage-latest`/`try`/auto-promote, identity restored with a
   hand-carried DTB and a second trial boot. It is on **DHCP** since 2026-08-30
   (the old static address is gone), reachable as `nexus-q-sumperak.local`.
+- **Both units on v1.15.2 the same evening**, via the app's path
+  (`apk upgrade --available --ignore linux-google-steelhead`): cottage 19:16 CEST
+  → r93 + kernel-ota r5, watchdog restarted with a new `start` marker carrying
+  `downs_to_reconnect:4`, `nq-kernel-ota status` identity slot A/B =
+  `wifi f8:8f:ca:05:1f:11 bt f8:8f:ca:73:ac:9c`; Prague 20:18 CEST → r93 + r5
+  (74 packages, including Alpine edge's systemd 261.2 → 262_rc1 in place),
+  identity `wifi f8:8f:ca:20:48:e1 bt f8:8f:ca:20:49:e5` — the first unit's,
+  correct.
+
+### Known issues
+- **Open — a service exec path broke after systemd was upgraded in place, until
+  `daemon-reexec`.** On the Prague Q, right after the OTA that took systemd
+  261.2 → 262_rc1, `systemctl restart nexusq-wifi-watchdog` crash-looped with
+  `status=127` and **no output from the process** (15 restarts); `systemd-run …
+  /usr/bin/nexusq-wifi-watchdog` reproduced it while the same script from an ssh
+  shell ran fine. After `systemctl daemon-reexec` it started first try
+  (`NRestarts=0`) and nothing else was failed. The cottage unit, whose PID1 was
+  already the new binary (it took 262_rc1 at 18:09 and rebooted twice), never
+  showed it. Hypothesis, not proven: the old running PID1 spawning services
+  against the freshly installed 262 userland. `nexusq-control`'s system update
+  lists systemd in `_REBOOT_HINTS` but restarts services after an upgrade — it
+  should `systemctl daemon-reexec` (or ask for a reboot) when systemd was among
+  the upgraded packages. Not fixed in this release.
+- Two build observations, not blockers: **250 files in the kernel apk carry
+  gid 12345 with uid 0** (`/boot/*`, `/usr/lib/modules/6.18.48-r0/**`, the
+  `lib/firmware/brcm` dir) — cross-native `package()` runs with pmos's group;
+  modes are 644/755 so it is harmless, but look at it in the next kernel pkgrel.
+  And the full pipeline **reused `nexusq-kernel-ota-0.1.0-r5.apk` from the
+  failed 17:11 attempt** (no `--force` for that aport); its `nq-kernel-ota` md5
+  matched the working tree so the image is correct, but the pipeline should
+  `--force` every OTA aport whose pkgrel changed.
 
 ## [1.15.1] — 2026-09-01 — the input that was playing to nobody
 
@@ -136,7 +194,7 @@ doesn't work". Full record: `docs/2026-09-01-loopback-source-stolen.md`.
 - **The Šumperák Q still cannot OTA at all** — it trusts `pmos@local-6a913e9e`
   while the index is signed `6a42e957`. Unchanged from v1.15.0, and it means that
   box does not get this fix over the air either. *(Resolved 2026-09-05 — fleet key
-  installed, r92 + 6.18.48 applied; see `[Unreleased]` → Fleet.)*
+  installed, r92 + 6.18.48 applied, then r93 the same evening; see `[1.15.2]` → Fleet.)*
 
 ## [1.15.0] — 2026-08-31 — mainline 6.18 LTS, and builds that take six minutes
 

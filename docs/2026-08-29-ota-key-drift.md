@@ -87,6 +87,10 @@ HANDOFF.md "WHICH MACHINE BUILDS WHAT".
   therefore still cannot OTA at all. *(Done 2026-09-05: the fleet key was copied
   into its `/etc/apk/keys` and it went r87 → r92, kernel 6.12.12-r52 → 6.18.48-r0,
   over the air — `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`.
-  Every box in the field now trusts `pmos@local-6a42e957`.)*
+  Every box in the field now trusts `pmos@local-6a42e957`. The same day found the
+  drift's last hiding place on the build side: pmbootstrap keeps **trust** in
+  `config_apk_keys/`, separate from the signing key in `config_abuild/`, so a
+  volume can sign with the fleet key and still bake the old one into
+  `/etc/apk/keys` — `install-fleet-signing-key.sh` reconciles both since then.)*
 
 Full record: `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.

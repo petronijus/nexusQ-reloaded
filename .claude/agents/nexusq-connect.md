@@ -54,14 +54,15 @@ static profile, see Transport A).
 ℹ️ **There is a SECOND unit — the cottage Q (Šumperák, serial `AW1S12251417`).** It
 is on a different LAN (`<cottage-lan>/22`, gateway `<cottage-gateway>`), **DHCP since
 2026-08-30** (the static `<old-static-ip>` is gone — do not try it), reachable as
-**`nexus-q-sumperak.local`** (mDNS; last leases `.48.57`/`.48.58`), WiFi MAC
+**`nexus-q-sumperak.local`** (mDNS; lease `<dhcp-lease>`, moves), WiFi MAC
 **`f8:8f:ca:05:1f:11`**, BT `F8:8F:CA:73:AC:9C`. It is NOT on Tailscale and not
 reachable from Prague — only from the cottage LAN. Its lease hostname is
 `nexus-q-sumperak`, not `steelhead`. If `ethtool -P wlan0` there says
 `05:1f:11` but the on-air MAC is `20:48:e1`, that is the Prague identity leaking
 (a stale `cloned-mac-address` profile or a kernel OTA ≤ kernel-ota r4) — report it,
-do not fix it from here. As of 2026-09-05 it trusts the fleet key and runs r92 +
-6.18.48 (`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`).
+do not fix it from here. As of 2026-09-05 evening it trusts the fleet key and runs
+v1.15.2 (r93, kernel-ota r5, 6.18.48-r0), same as Prague
+(`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`).
 
 ## SPEED IS THE POINT — return on the FIRST verified connect
 The device gets rebooted constantly, so the caller wants a usable connect ASAP,

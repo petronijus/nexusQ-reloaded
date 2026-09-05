@@ -124,22 +124,42 @@ fleet-signed apks (`seeded=11 retired=7`; the old ones are in
 from here is safe now — and `publish-ota-repo.sh` refuses any foreign-signed apk
 by name, so it cannot silently stop being safe.
 
-## Any machine that will publish OTA — one extra step, once
+**Trust reconciled too (2026-09-05, later the same day).** The seed alone was not
+enough: the volume *signed* with the fleet key but still *trusted* only the
+retired one — pmbootstrap 3 keeps trust in `config_apk_keys/`, filled once at
+first init — so the first build died at abuild's index update with `UNTRUSTED
+signature`. `install-fleet-signing-key.sh` now reconciles that on every run and
+did here: trust installed, 1 key retired, 13 stale apks parked.
 
-After `install-fleet-signing-key.sh`, run **`scripts/seed-ota-volume.sh`** before
-the first `publish-ota-repo.sh` (and after any long gap in building). It reads the
-published index, downloads and signature-checks each apk, and places them in the
-volume so an OTA-only build does not publish stale or foreign-signed packages for
-everything it did not rebuild. Idempotent. The desktop has built everything itself
-since the key was installed there, so it does not strictly need it — running it
-anyway is a no-op that says so. Record:
-`docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md` §3.
+**This MacBook IS a release machine now.** `v1.15.2` was cut from here end to
+end: full `PUBLIC_RELEASE=1` build in 13.5 min, `verify-rootfs.sh` 29/29 (see
+HANDOFF "macOS specifics" for the `--entrypoint bash` form — the older recipe
+there was wrong), assets + OTA publish (gh-pages `62e418a`), parity 13/13, both
+units upgraded from it the same evening. The only macOS-specific fix it needed
+was `544ef09` (the release scripts used bash-4 `mapfile`; macOS ships bash 3.2).
+
+## Any machine that will publish OTA — two checks, once
+
+1. **`scripts/install-fleet-signing-key.sh --check`** — since 2026-09-05 this also
+   reconciles *trust* (`config_apk_keys/`), not just the signing key, and parks
+   foreign-signed apks. **Desktop: run it once** — expected to be a no-op, but the
+   trust dir there has never been checked against the fleet key explicitly.
+   (Todoist → AI-handover task exists for this.)
+2. **`scripts/seed-ota-volume.sh`** before the first `publish-ota-repo.sh` (and
+   after any long gap in building). It reads the published index, downloads and
+   signature-checks each apk, and places them in the volume so an OTA-only build
+   does not publish stale or foreign-signed packages for everything it did not
+   rebuild. Idempotent; on the desktop, which has built everything itself, a
+   no-op that says so.
+
+Record: `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md` §3.
 
 ---
 
 ## Šumperák Q — ✅ done 2026-09-05
 
 This section used to say *"cannot OTA at all, needs someone on site"*. Someone was
-on site: the fleet key is in its `/etc/apk/keys`, it is on device r92 (r93 once
-published) and kernel 6.18.48-r0 with its own identity restored, on DHCP as
-`nexus-q-sumperak.local`. Nothing left to do on the other machines for it.
+on site: the fleet key is in its `/etc/apk/keys`, it is on **v1.15.2** (device
+r93, kernel-ota r5, kernel 6.18.48-r0, upgraded over the air at 19:16 CEST) with
+its own identity restored, on DHCP as `nexus-q-sumperak.local`. Nothing left to do
+on the other machines for it.

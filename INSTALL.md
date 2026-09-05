@@ -104,7 +104,7 @@ scp pmos/ota-signing-key.rsa.pub \
 (or reflash from an image built on the machine holding that key). Since 2026-08-30
 a release can no longer ship the mismatch: `scripts/package-release.sh` publishes the
 OTA repo and then gates on the image's baked key being the key that signed the index
-(`scripts/verify-ota-parity.sh`). See CHANGELOG `[Unreleased]` and
+(`scripts/verify-ota-parity.sh`). See CHANGELOG `[1.14.2]` and
 `docs/2026-08-30-release-reaches-nobody-and-the-flag-the-gadget-had.md`.
 
 - **App update** — the phone app **and** the four device daemons (`nexusq-control` ·
