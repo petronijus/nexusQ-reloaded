@@ -568,10 +568,26 @@ App Store Connect → My Apps → **+** → New App: platform iOS, Bundle ID
 be unique across the whole App Store even for a TestFlight-only app** — "Nexus Q"
 will likely collide with Google; the name is changeable later.
 
-**Also still open:** which Mac builds it. The Proxmox macOS VM (108) is stopped
-and **shares RAM with the Windows VM (106), which was running** — the KP flow
-shuts Windows down gracefully first (its guest agent answers). Petr has not
-approved that yet. The MacBook is the alternative (`ios-release-macbook` skill).
+**Which Mac builds it — SETTLED 2026-09-05: the MacBook.** The distribution
+profile `NexusQ Companion Distribution` (`TY847W7VDT`, uuid
+`7927b645-f7f2-42d0-8fc3-1b7157a8b851`, ACTIVE until 2027-05-22) was fetched over
+the ASC API and installed into both profile directories; its certificate is the
+`Apple Distribution: Petr Parkan Janda` identity already in the login keychain
+(SHA1 `63D3A548…`). `flutter build ipa --release
+--export-options-plist=ios/ExportOptions.plist` then **built and signed
+first time**: `build/ios/ipa/nexusQ-reloaded.ipa` (8.7 MB), 1.17.3 (50), team
+`ASFPR2T2DQ`, entitlements carry `keychain-access-groups` =
+`ASFPR2T2DQ.org.nexusq.nexusqCompanion` — so the Keychain fix above is now
+build-verified. `pod install` regenerated `ios/Podfile.lock` (added
+`flutter_secure_storage`); committed. `flutter config
+--no-enable-swift-package-manager` is set on this Mac (CocoaPods-only project).
+`xcrun altool --validate-app` answers *"Cannot determine the Apple ID from Bundle
+ID 'org.nexusq.nexusqCompanion' and platform 'IOS' (19)"* — i.e. the ONLY thing
+left is the App Store Connect app record above. Once it exists:
+`xcrun altool --upload-app -f companion/app/build/ios/ipa/nexusQ-reloaded.ipa -t ios
+-u <apple id> -p <app-specific password from 1P>` (the KP item works for the whole
+Apple ID), then add the build to a TestFlight group. The Proxmox macOS VM (108) is
+no longer needed for this.
 
 **How current is iOS vs Android?** The Dart is shared, so every feature from 1.11
 through 1.16.2 is there. Three things are Android-only *by design*, documented in
