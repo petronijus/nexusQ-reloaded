@@ -23,6 +23,13 @@
 		<key>org.nexusq.nexusqCompanion</key>
 		<string>NexusQ Companion Distribution</string>
 	</dict>
+	<!-- Xcode would otherwise bump CFBundleVersion on export whenever App Store
+	     Connect already has that build number, silently detaching it from the
+	     pubspec.yaml +N the UI label and Android's versionCode carry (seen
+	     2026-09-05: pubspec 50, exported 51). The build number is pubspec's alone;
+	     a duplicate upload must fail loudly and be fixed by bumping pubspec. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
 	<key>stripSwiftSymbols</key>
 	<true/>
 	<key>uploadSymbols</key>

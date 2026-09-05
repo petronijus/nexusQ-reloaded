@@ -75,8 +75,15 @@ echo ""
 echo "Built: $IPA"
 echo "  version : $APP_VERSION"
 echo "  build   : $BUILD_TAG"
-# The .ipa is a zip; the signing identity is recorded next to it by xcodebuild.
-echo "  signed  : $(plutil -extract 'nexusQ-reloaded.ipa.0.certificate.type' raw build/ios/ipa/DistributionSummary.plist 2>/dev/null || echo '?') / $(plutil -extract 'nexusQ-reloaded.ipa.0.team.id' raw build/ios/ipa/DistributionSummary.plist 2>/dev/null || echo '?')"
+# The .ipa is a zip; xcodebuild records the signing identity next to it.
+echo "  signed  : $(python3 - build/ios/ipa/DistributionSummary.plist <<'PY'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+e = next(iter(d.values()))[0]
+c = e.get("certificate", {}); t = e.get("team", {})
+print("%s %s, team %s, CFBundleVersion %s" % (c.get("type", "?"), c.get("SHA1", "")[:8], t.get("id", "?"), e.get("buildNumber", "?")))
+PY
+)"
 
 # pod install may have refreshed the lock; a release commits what it built with.
 if git -C . status --porcelain ios/Podfile.lock 2>/dev/null | grep -q .; then
