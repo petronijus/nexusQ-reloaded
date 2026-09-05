@@ -37,6 +37,27 @@ v1.10.1); `flutter analyze` is clean.
 Use it rather than a bare `flutter build apk`, so the in-app version stamp
 (`kBuildLabel`, shown on the connect gate + welcome) cannot drift from `pubspec.yaml`.
 
+## Release = Android AND iOS, every time (rule since 2026-09-05)
+
+An app release is not done until **both** platforms carry the same
+`version: X.Y.Z+N`:
+
+1. bump `version:` in `pubspec.yaml`, commit;
+2. **Android**: `./build-apk.sh --release` → `gh release create app-vX.Y.Z` with the
+   apk as `nexusq-companion-X.Y.Z.apk` → bump `../app-release.json` (`version`,
+   `versionCode`, `notes`, `apkUrl`) so installed apps get offered it;
+3. **iOS**: `./release-ios.sh` on the MacBook — builds the IPA with the same
+   version stamp, signs with the distribution profile and uploads to App Store
+   Connect with the team API key; it lands in TestFlight ("Internal" group,
+   Petr) in 5–15 min with no clicking (export compliance is answered in
+   `Info.plist`). `./release-ios.sh --no-upload` to only prove a change builds
+   and signs. First run and prerequisites: `HANDOFF.md` → "iOS / TestFlight".
+
+Skipping step 3 is what left iOS untouched from 2026-08-03 to 2026-09-05 and
+hid a Keychain entitlement defect the simulator could not show. If the MacBook is
+not at hand, the release is not finished — say so in the handover, do not call
+it shipped.
+
 > ⚠️ **The app is versioned on its OWN INDEPENDENT TRACK — deliberately NOT aligned
 > to the Nexus Q image/firmware releases** (`v1.8.2`, `v1.9.0`, …). An app-only fix
 > must be shippable without implying a firmware release, and a firmware release must
