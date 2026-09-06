@@ -134,10 +134,35 @@ baseline, one isolated call each — `--machine` **7** noise lines, `setpriv`
 **0** — with identical answers from `is-active`, `show -p ActiveState`,
 `list-units` and `CanStart`.
 
-The baseline itself is worth recording: the box emits this noise ~5 lines per
-20 s while anything is opening sessions (during the measurement, a concurrent
-read-only diagnostic sshing in). Logins keep producing it; only the bridge's own
-polling is gone.
+### The measurement that corrected the story
+
+The "~5 lines per 20 s baseline" I first recorded here was **my own ssh polling**
+— and so, it turns out, was the "noise on every 5-minute `nexusq-control` poll"
+in the morning handover. Every login starts a unit, every unit start prints the
+noise, so a loop that polls the box to watch for the noise manufactures it. My
+first "quiet" window logged a new root session every 30 s: my own wait loop.
+
+Measured properly, seven minutes with nobody logged in and nothing attached:
+
+```
+window: 19:05:23 .. 19:12:23   new sessions: 0   coredumpd skips: 1
+```
+
+So the box at rest is quiet, and this helper is called on user actions, not on a
+timer. What r38 actually buys, three isolated calls each:
+
+| | per call | journal lines (3 calls) |
+|---|---|---|
+| `--machine=user@.host` | 868–1220 ms | 22 |
+| `setpriv` + `--user` | 41–59 ms | 0 |
+
+The ~20× latency is the real win — `setService` waits on this, and the app waits
+on `setService`. r38's commit message claiming "~288 sessions a day" was wrong;
+**r39** carries that correction in the source comment, with identical behaviour.
+
+Verified end to end through the bridge afterwards: `setService airplay off`
+stopped shairport-sync, `on` brought it back, `listServices` correct throughout,
+AirPlay left as found.
 
 ## 3. The build log that cried wolf
 
@@ -195,3 +220,76 @@ decision**, and nothing can express "built, but not approved". Two candidates,
 both cheap: have `publish-ota-repo.sh` skip a `.held-*` directory by name, or
 have it take an explicit package list and refuse to ship a version the caller
 did not name. It belongs to whoever owns the release scripts.
+
+
+## 5. What the post-change diagnostic found, including one wrong verdict
+
+A full read-only `nexusq-diag` sweep ran after all three changes were installed
+(capture `nq-captures/20260906-184317/`). The fix's effect, from `health.jsonl`
+split at the 17:05 guard restart:
+
+| | before (6.40 h) | after (1.62 h) |
+|---|---|---|
+| die temp, mean | 67.91 °C | **61.24 °C** |
+| die temp, min | 65.9 °C | **55.7 °C** |
+| `load1`, mean | 1.11 | **0.50** |
+
+Everything else came back healthy: 1.2 GHz reachable, `vdd_mismatch` **0 of
+5776** samples (12 this morning), no throttling ever, LED ring alive with 0
+restarts, WiFi −22 dBm on 5 GHz with the factory MAC intact, Bluetooth
+Phantasm blob loaded with 0 reassembly failures, pstore empty, `time_in_state`
+86.6 % at 350 MHz.
+
+### The wrong verdict, and why it was wrong
+
+The sweep flagged the guard's two `source resumed behind our back` lines as
+**probable false positives** — reasoning that they are start-adjacent, that
+`suspend()` returns True when the command was *delivered* rather than when the
+source actually changed, and that PulseAudio's asynchronous close could
+therefore keep the consumer reading open past the 1 s confirm window. It
+proposed arming the reconcile only after the consumer has been seen `closed`
+once.
+
+The reasoning is sound and the conclusion is wrong, which is worth recording
+because the evidence that settles it was not available to the sweep: **both
+lines are exactly the two moments an operator resumed the source on purpose**
+(`pactl suspend-source roon_in 0`, once to prove the fix on the deployed script
+at 17:11:52, once again on the apk-installed r94 at 17:24:09). `pactl` leaves no
+journal trace, so from the device alone the two look self-inflicted.
+
+The discriminator is in the same journal: the *same* fixed instance
+self-suspended twice more at **18:31:20 and 18:31:46**, after real producer
+open/close cycles, and emitted **no** warning either time. A false positive
+driven by PA's async close would have fired there too.
+
+So the message is accurate and no change is warranted. The property the sweep
+identified is real — `suspend()` reports delivery, not effect — and the
+theoretical false positive it enables has not been observed in any of the three
+fixed-instance self-suspends. Arming the reconcile only after seeing `closed`
+would also trade this away for a worse failure: if our own suspend never takes,
+the guard would never re-assert it, which is the original bug.
+
+### One thing the fix did not change, and should be looked at
+
+The amplifier **rails stay energized at idle** even with the sink suspended:
+`amp_pvdd 5 4` with all four `3-001b-PVDD_A..D` consumers, `gpio-12 (pdn) out hi
+ACTIVE LOW`, Speaker switch `[on]` at 0.00 dB (Master −33 dB). That is the same
+evidence line this morning's note used for "the amp is physically on". What r94
+removed is the *load* — the sink clocked and PulseAudio resampling silence — not
+the amp power. Whether the amp should power down when the sink suspends is a
+separate question, and not one to answer by experiment on a 25 W amplifier
+without thinking about pops first.
+
+### Smaller items from the same sweep
+
+- `dmesg -l err,warn` is no longer empty (7 lines) against the v1.6.10 "clean"
+  invariant: 3 `[nq-ab]` slot-marker lines from our own A/B initramfs emitted at
+  warn level, `twl_rtc: Power up reset detected`, `hrtimer: interrupt took
+  762966 ns`, a systemd `orphaned-….socket` config-changed notice, and
+  `perf_duration_warn`. Low severity, but the rule was "empty".
+- `nexusq-wifi-watchdog` failed 19× on Sep 5 20:21 with `status=127` (its binary
+  missing mid-upgrade), self-resolved a minute later. Current run is spotless:
+  1515 `ok`, 0 heals, 0 `nogw` over 139 h.
+- `nq-diag-snapshot` reports librespot `inactive` while it is active — the probe
+  asks the system manager for a user unit. Cosmetic, in
+  `pmos/device-google-steelhead/nq-diag-snapshot`.

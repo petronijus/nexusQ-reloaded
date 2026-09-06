@@ -587,16 +587,29 @@ def _systemctl_user(*args, timeout=15):
     to uid 10000 first makes the plain `--user` transport available, and
     `setpriv` does that with no PAM, no login session and no transient unit.
 
-    That is the whole reason for the change. `--machine` opens a session per
-    call, and on systemd 262 every unit start on this image emits five lines of
-    journal noise -- `systemd-coredumpd.service: Skipped due to
-    'exec-condition'`, `Dependency failed for Kernel Core Pattern Register` and
-    two `Failed to read pids.max` (the coredump manager's ExecCondition fails
-    because 6.18 reports PIDFD_INFO_COREDUMP without PIDFD_INFO_COREDUMP_SIGNAL,
-    and CONFIG_CGROUP_PIDS is off in our defconfig). This service polls, so that
-    was ~288 sessions a day of it. Measured on the device over three calls:
-    34 noise lines through `--machine`, 0 through `setpriv`, with identical
-    answers from is-active, show -p, list-units and CanStart.
+    Why it is worth doing, measured on the device, three isolated calls each:
+
+        --machine   868-1220 ms per call, 22 journal lines, a transient unit each
+        setpriv      41-59 ms per call,    0 journal lines, no unit
+
+    The ~20x latency is the substantial half; this helper is on the path of
+    every setService (mask/unmask/enable/disable --now), which the app waits on.
+    The journal lines are systemd 262's, emitted on ANY unit start on this image
+    -- `systemd-coredumpd.service: Skipped due to 'exec-condition'`, `Dependency
+    failed for Kernel Core Pattern Register`, `Failed to read pids.max` -- because
+    the coredump manager's ExecCondition fails (6.18 reports PIDFD_INFO_COREDUMP
+    without PIDFD_INFO_COREDUMP_SIGNAL) and CONFIG_CGROUP_PIDS is off in our
+    defconfig. A transient unit per call meant a helping of that per call.
+
+    NOT, as r38's own commit message claimed, ~288 sessions a day: this helper
+    is called on user actions, not on a timer. Measured afterwards over seven
+    minutes with nobody logged in, the box produced 0 new sessions and 1 such
+    line. The "noise on every 5-minute poll" in the 2026-09-06 handover was the
+    diagnostic's own ssh logins -- every login starts a unit and so prints it,
+    and a polling loop that watches for the noise manufactures it.
+
+    Answers are identical either way: is-active, show -p ActiveState,
+    list-units, CanStart.
 
     NOT `--clear-groups`: that drops `audio` as well, and the units started
     through here (librespot, roon, shairport-sync) need it. `--init-groups`

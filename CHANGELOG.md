@@ -8,13 +8,13 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
-### Fixed — the bridge opened a login session every time it asked about a user unit (nexusq-control r38, OTA, 2026-09-06)
-- **`_systemctl_user()` used `--machine=user@.host`, which opens a PAM session
-  and a transient unit per call.** On systemd 262 every unit start on this image
-  emits five lines of journal noise — `systemd-coredumpd.service: Skipped due to
-  'exec-condition'`, `Dependency failed for Kernel Core Pattern Register` and two
-  `Failed to read pids.max`. The bridge polls, so that was the reported "noise on
-  every 5-minute poll", ~288 sessions a day of it.
+### Fixed — the bridge spent a second, and a transient unit, on every question about a user unit (nexusq-control r38/r39, OTA, 2026-09-06)
+- **`_systemctl_user()` used `--machine=user@.host`, which spends about a second
+  and starts a transient unit per call.** Measured on the device, three isolated
+  calls each: `--machine` **868–1220 ms** and 22 journal lines, `setpriv`
+  **41–59 ms** and 0. The ~20× latency is the substantial half — this helper is
+  on the path of every `setService`, which the app waits on. The journal lines
+  are systemd 262's, emitted on *any* unit start on this image.
 - **The comment beside that call said `--machine` was the only transport allowed
   — true, and incomplete.** Root cannot connect to another user's bus
   (`systemctl --user` as root is refused outright: *Operation not permitted*),
@@ -23,12 +23,21 @@ All notable changes to Nexus Q Reloaded. Format follows
   transient unit, and the plain `--user` transport is then available.
   `--init-groups`, not `--clear-groups`: the units started through here
   (librespot, roon, shairport-sync) need the `audio` group.
-- **Measured on the device, one isolated call each**, against a 20 s idle
-  baseline: `--machine` **7** noise lines, `setpriv` **0**. Answers are
-  identical for `is-active`, `show -p ActiveState`, `list-units` and `CanStart`,
-  so start/stop keep working. Five new tests assert the transport, the absence
-  of `--machine`, the manager environment, that the systemctl command itself is
-  unchanged and that the timeout is still honoured; all were seen failing first.
+- Answers are identical either way — `is-active`, `show -p ActiveState`,
+  `list-units`, `CanStart` — and the whole path was exercised through the bridge:
+  `setService airplay off` stopped shairport-sync, `on` brought it back, and the
+  app-facing `listServices` was correct throughout. Five new tests assert the
+  transport, the absence of `--machine`, the manager environment, that the
+  systemctl command itself is unchanged and that the timeout is still honoured;
+  all were seen failing first. Suite 100/100.
+- **Correction to r38's own commit message (r39):** it claimed this was
+  "~288 sessions a day". It is not — the helper runs on user actions, not on a
+  timer. Measured afterwards over **seven minutes with nobody logged in: 0 new
+  sessions, 1 such journal line**. The "noise on every 5-minute poll" in the
+  morning's handover was the diagnostic's *own ssh logins*: every login starts a
+  unit and therefore prints the noise, so a loop that polls the box to watch for
+  it manufactures exactly what it is watching. r39 is that correction in the
+  source comment; the code is byte-for-byte the same behaviour as r38.
 - **What this does not fix:** the noise itself is upstream and stays for anything
   else that starts a unit (a login, for instance). `systemd-coredump
   --check-requirements` fails because 6.18.48 reports `PIDFD_INFO_COREDUMP`
