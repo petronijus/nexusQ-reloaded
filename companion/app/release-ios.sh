@@ -19,6 +19,12 @@
 #      echoed. ⚠️ The Apple-ID + app-specific-password route does NOT work for
 #      this account (altool -20101, measured 2026-09-05); the API key does.
 #
+# WHERE THIS RUNS. Either the MacBook, or the Proxmox macOS VM 108 -- but on the
+# VM it must be launched from the GUI (Aqua) session via osascript, because
+# `codesign` invoked over plain SSH there dies with errSecInternalComponent. The
+# `nexusq-ios-release` skill does that wrapping, the VM power dance and the
+# secret injection; do not call this script straight over ssh on the VM.
+#
 # Prerequisites on the Mac (one-time; HANDOFF.md "iOS / TestFlight"):
 #   * the "Apple Distribution: Petr Parkan Janda" identity in the login keychain
 #   * profile TY847W7VDT installed (fetched over the ASC API; see HANDOFF)
@@ -108,19 +114,36 @@ fi
 
 [ "$UPLOAD" = 1 ] || { echo ""; echo "--no-upload: stopping after the build."; exit 0; }
 
-command -v op >/dev/null || { echo "ERROR: 1Password CLI (op) not found" >&2; exit 1; }
-ITEM="${NQ_ASC_KEY_ITEM:-Kulturni prehled ASC API Key}"
-KEY_ID=$(op item get "$ITEM" --account my --fields label=key_id 2>/dev/null | tr -d '"')
-ISSUER=$(op item get "$ITEM" --account my --fields label=issuer_id 2>/dev/null | tr -d '"')
-[ -n "$KEY_ID" ] && [ -n "$ISSUER" ] || { echo "ERROR: could not read key_id/issuer_id from 1Password item '$ITEM'" >&2; exit 1; }
+# The ASC API key reaches us one of two ways. On a workstation with 1Password
+# (the MacBook) we read it from `op`. On the Proxmox macOS VM there is no `op`
+# and there should not be -- a build box does not get a vault -- so the
+# orchestrating machine reads the item and passes the three values in on the
+# environment instead. Same key either way; only the delivery differs.
+if [ -n "${NQ_ASC_KEY_ID:-}" ] && [ -n "${NQ_ASC_ISSUER_ID:-}" ] && [ -n "${NQ_ASC_PRIVATE_KEY:-}" ]; then
+	KEY_ID="$NQ_ASC_KEY_ID"
+	ISSUER="$NQ_ASC_ISSUER_ID"
+	ASC_SOURCE="environment"
+elif command -v op >/dev/null 2>&1; then
+	ITEM="${NQ_ASC_KEY_ITEM:-Kulturni prehled ASC API Key}"
+	KEY_ID=$(op item get "$ITEM" --account my --fields label=key_id 2>/dev/null | tr -d '"')
+	ISSUER=$(op item get "$ITEM" --account my --fields label=issuer_id 2>/dev/null | tr -d '"')
+	NQ_ASC_PRIVATE_KEY=$(op item get "$ITEM" --account my --fields label=private_key --reveal 2>/dev/null | sed 's/^"//;s/"$//')
+	ASC_SOURCE="1Password item '$ITEM'"
+else
+	echo "ERROR: no App Store Connect key. Either install/sign in to the 1Password CLI," >&2
+	echo "       or pass NQ_ASC_KEY_ID, NQ_ASC_ISSUER_ID and NQ_ASC_PRIVATE_KEY in the" >&2
+	echo "       environment (how the macOS VM is driven -- see the nexusq-ios-release skill)." >&2
+	exit 1
+fi
+[ -n "$KEY_ID" ] && [ -n "$ISSUER" ] || { echo "ERROR: could not read key_id/issuer_id from $ASC_SOURCE" >&2; exit 1; }
 
 KEYDIR="$HOME/.private_keys"
 KEYFILE="$KEYDIR/AuthKey_$KEY_ID.p8"
 mkdir -p "$KEYDIR" && chmod 700 "$KEYDIR"
 trap 'rm -f "$KEYFILE"' EXIT INT TERM
 umask 077
-op item get "$ITEM" --account my --fields label=private_key --reveal 2>/dev/null | sed 's/^"//;s/"$//' > "$KEYFILE"
-grep -q "BEGIN PRIVATE KEY" "$KEYFILE" || { echo "ERROR: the private_key field of '$ITEM' is not a PEM key" >&2; exit 1; }
+printf '%s\n' "$NQ_ASC_PRIVATE_KEY" > "$KEYFILE"
+grep -q "BEGIN PRIVATE KEY" "$KEYFILE" || { echo "ERROR: the private key from $ASC_SOURCE is not a PEM key" >&2; exit 1; }
 
 echo ""
 echo "Uploading to App Store Connect (API key $KEY_ID) ..."
