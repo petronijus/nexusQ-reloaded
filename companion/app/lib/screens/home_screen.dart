@@ -8,6 +8,7 @@ import '../theme/nexusq_theme.dart';
 import '../update/update_coordinator.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
+import 'connect_gate.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
 import 'settings_screen.dart';
@@ -128,6 +129,16 @@ class _HomeScreenState extends State<HomeScreen> {
                             MaterialPageRoute(builder: (_) => const DebugLogScreen())),
                       )
                     : const SizedBox.shrink(),
+              ),
+              // More than one Nexus Q: go back to the picker and choose another.
+              // pickerOnly, so a lone device is listed rather than auto-joined
+              // (that would just bounce straight back here).
+              IconButton(
+                icon: const Icon(Icons.swap_horiz),
+                tooltip: 'Switch Nexus Q',
+                onPressed: () => Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const ConnectGate(pickerOnly: true)),
+                    (route) => false),
               ),
               // Bluetooth pairing. The app is the Q's only input device, so this
               // is its Bluetooth settings panel — there is no other way to pair a

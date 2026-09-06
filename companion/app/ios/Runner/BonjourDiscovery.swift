@@ -41,6 +41,10 @@ final class BonjourDiscovery: NSObject {
         let args = call.arguments as? [String: Any]
         let timeoutMs = args?["timeoutMs"] as? Int ?? 4000
         instance.discover(timeoutMs: timeoutMs, result: result)
+      case "discoverAll":
+        let args = call.arguments as? [String: Any]
+        let timeoutMs = args?["timeoutMs"] as? Int ?? 4000
+        instance.discoverAll(timeoutMs: timeoutMs, result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -125,6 +129,91 @@ final class BonjourDiscovery: NSObject {
       return "\(v6)".components(separatedBy: "%").first
     case .name(let n, _): return n
     @unknown default: return nil
+    }
+  }
+
+  // MARK: - discoverAll — every bridge on the LAN, for the whole timeout
+  //
+  // Contract (mirrors `discoverNexusQAll` in lib/protocol/discovery.dart):
+  //   discoverAll {timeoutMs: int} -> [{name, host, port}] (possibly empty).
+  // Unlike `discover`, browsing is NOT stopped at the first hit: every service
+  // endpoint gets its own probe connection, resolved endpoints accumulate, and
+  // the list is delivered when the timeout fires. Dart shows them as a picker.
+
+  private var allPending: FlutterResult?
+  private var allBrowser: NWBrowser?
+  private var allProbes: [String: NWConnection] = [:]
+  private var allFound: [[String: Any]] = []
+  private var allSeen = Set<String>()
+  private var allTimeout: DispatchWorkItem?
+
+  private func discoverAll(timeoutMs: Int, result: @escaping FlutterResult) {
+    queue.async {
+      self.finishAll() // a newer call supersedes an in-flight one (it gets [])
+      self.allPending = result
+      self.allFound = []
+      self.allSeen = []
+
+      let timeout = DispatchWorkItem { [weak self] in self?.finishAll() }
+      self.allTimeout = timeout
+      self.queue.asyncAfter(deadline: .now() + .milliseconds(timeoutMs), execute: timeout)
+
+      let params = NWParameters()
+      params.includePeerToPeer = false
+      let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: params)
+      self.allBrowser = browser
+      browser.stateUpdateHandler = { [weak self] state in
+        if case .failed = state { self?.finishAll() }
+      }
+      browser.browseResultsChangedHandler = { [weak self] results, _ in
+        guard let self else { return }
+        for r in results {
+          guard case let .service(name, _, _, _) = r.endpoint else { continue }
+          if self.allProbes[name] != nil || self.allSeen.contains(name) { continue }
+          self.resolveAll(r.endpoint, name: name)
+        }
+      }
+      browser.start(queue: self.queue)
+    }
+  }
+
+  private func resolveAll(_ endpoint: NWEndpoint, name: String) {
+    let probe = NWConnection(to: endpoint, using: .tcp)
+    allProbes[name] = probe
+    probe.stateUpdateHandler = { [weak self] state in
+      guard let self else { return }
+      switch state {
+      case .ready:
+        if case let .hostPort(host, port) = probe.currentPath?.remoteEndpoint,
+           let address = Self.address(of: host) {
+          let key = "\(address):\(port.rawValue)"
+          if !self.allSeen.contains(key) {
+            self.allSeen.insert(key)
+            self.allFound.append(["name": name, "host": address, "port": Int(port.rawValue)])
+          }
+        }
+        probe.cancel()
+        self.allProbes[name] = nil
+      case .failed, .cancelled:
+        self.allProbes[name] = nil
+      default:
+        break
+      }
+    }
+    probe.start(queue: queue)
+  }
+
+  /// Completes the pending discoverAll call exactly once with what was found.
+  private func finishAll() {
+    allTimeout?.cancel()
+    allTimeout = nil
+    allBrowser?.cancel()
+    allBrowser = nil
+    for (_, p) in allProbes { p.cancel() }
+    allProbes = [:]
+    if let result = allPending {
+      allPending = nil
+      result(allFound)
     }
   }
 

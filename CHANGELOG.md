@@ -8,6 +8,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1, unreleased)
+- **The connect gate browses for EVERY `_nexusq._tcp` bridge for the whole
+  timeout** (`discoverNexusQAll`: multicast_dns on Android, a new `discoverAll`
+  in the iOS Bonjour bridge that keeps browsing and probes each endpoint) and
+  shows the devices under each other as they resolve — name and host:port. When
+  the browse ends: one device connects by itself as before, several wait for a
+  tap, none falls back to manual entry as before (Petr, 2026-09-06: "když máš
+  víc nexusů, tak chci na úvodní obrazovku je pod sebou, kde si vybíráš jeden").
+- **"Switch Nexus Q"** in the home app bar returns to the picker with
+  `pickerOnly`, which lists even a single device instead of bouncing straight
+  back. Injection seams for the browse and the client keep the five new widget
+  tests off the network (`test/connect_gate_picker_test.dart`).
+
 ### Fixed — an update no longer dies with the Settings screen (app 1.18.1, unreleased)
 - **Leaving Settings mid-update abandoned the phone's half of it.** The three
   tracks (app, device daemons, full system) lived in the screen's State behind

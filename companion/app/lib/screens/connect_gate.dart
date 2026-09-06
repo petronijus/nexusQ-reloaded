@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../nfc/tap_capture.dart';
 import '../protocol/client.dart';
@@ -12,25 +14,44 @@ import '../theme/nexusq_theme.dart';
 import '../widgets/glowing_ring.dart';
 import 'home_screen.dart';
 
-enum _Phase { discovering, ready, needInput }
+enum _Phase { discovering, choose, ready, needInput }
 
 /// Bootstraps the connection: an explicit [initialClient] (forced host / mock)
-/// goes straight through; otherwise it browses mDNS for the device and, on
-/// timeout, offers a manual host entry / demo-mock fallback. Renders [HomeScreen]
-/// once a controller is live.
+/// goes straight through; otherwise it browses mDNS for EVERY Nexus Q on the
+/// LAN, lists them as they appear, and — once the browse is over — connects to
+/// the only one, or lets the user pick when there are several (Petr,
+/// 2026-09-06: "když máš víc nexusů, tak chci na úvodní obrazovku je pod sebou,
+/// kde si vybíráš jeden a ten konfiguruješ"). Nothing found → manual host entry
+/// / demo-mock fallback. Renders [HomeScreen] once a controller is live.
 class ConnectGate extends StatefulWidget {
-  const ConnectGate({super.key, this.initialClient, this.discover});
+  const ConnectGate({
+    super.key,
+    this.initialClient,
+    this.discover,
+    this.discoverAll,
+    this.clientFactory,
+    this.pickerOnly = false,
+  });
+
   final NexusQClient? initialClient;
 
-  /// Injection seam for the mDNS browse, defaulting to the real one.
-  ///
-  /// Widget tests of the "nothing found" fallback cannot rely on the ambient
-  /// network: on a developer machine sitting on the same LAN as a powered-on
-  /// Q, `discoverNexusQ()` genuinely SUCCEEDS, the gate goes straight to
-  /// [HomeScreen], and the fallback under test never renders — so the test
-  /// passed or failed depending on whether the appliance happened to be
-  /// switched on. Passing a stub here makes that outcome deterministic.
+  /// Legacy single-shot injection seam (kept for the "nothing found" widget
+  /// test): when given, it replaces the browse entirely and its null result is
+  /// the fallback. Prefer [discoverAll].
   final Future<Discovered?> Function()? discover;
+
+  /// Injection seam for the multi-device browse, defaulting to the real one.
+  /// Widget tests of the picker cannot rely on the ambient network — see the
+  /// note on [discover] — so they hand in a stream of fake devices here.
+  final Stream<Discovered> Function()? discoverAll;
+
+  /// How a picked device becomes a client. Defaults to a [TcpClient]; tests
+  /// inject a fake so choosing a device does not dial a socket.
+  final NexusQClient Function(Discovered)? clientFactory;
+
+  /// Always show the list, even for a single device — the "Switch Nexus Q"
+  /// action from the home screen, where auto-connecting would be a loop.
+  final bool pickerOnly;
 
   @override
   State<ConnectGate> createState() => _ConnectGateState();
@@ -40,6 +61,10 @@ class _ConnectGateState extends State<ConnectGate> {
   _Phase _phase = _Phase.discovering;
   DeviceController? _controller;
   final _hostCtrl = TextEditingController();
+
+  /// What the browse has found so far, in the order it arrived.
+  final List<Discovered> _found = [];
+  StreamSubscription<Discovered>? _browse;
 
   @override
   void initState() {
@@ -59,6 +84,7 @@ class _ConnectGateState extends State<ConnectGate> {
   void dispose() {
     // Never leave the claim behind us.
     TapCapture.set(false);
+    _browse?.cancel();
     _hostCtrl.dispose();
     _controller?.dispose();
     super.dispose();
@@ -68,6 +94,7 @@ class _ConnectGateState extends State<ConnectGate> {
     // Connected: no tap expected any more. Hand NFC back before we even build
     // the home screen — the app has no business holding it while playing music.
     TapCapture.set(false);
+    _browse?.cancel();
     final c = DeviceController(client)..start();
     setState(() {
       _controller = c;
@@ -75,17 +102,51 @@ class _ConnectGateState extends State<ConnectGate> {
     });
   }
 
+  void _pick(Discovered d) =>
+      _use((widget.clientFactory ?? (d) => TcpClient(host: d.host, port: d.port))(d));
+
   Future<void> _discover() async {
     // Back to waiting for a Q — a tap is expected again.
     TapCapture.set(true);
-    setState(() => _phase = _Phase.discovering);
-    final found = await (widget.discover ?? discoverNexusQ)();
-    if (!mounted) return;
-    if (found != null) {
-      _use(TcpClient(host: found.host, port: found.port));
-    } else {
-      setState(() => _phase = _Phase.needInput);
+    _browse?.cancel();
+    setState(() {
+      _phase = _Phase.discovering;
+      _found.clear();
+    });
+
+    // Legacy seam: a single-shot browse decides everything.
+    if (widget.discover != null) {
+      final found = await widget.discover!();
+      if (!mounted) return;
+      if (found != null) {
+        _pick(found);
+      } else {
+        setState(() => _phase = _Phase.needInput);
+      }
+      return;
     }
+
+    final seen = <String>{};
+    _browse = (widget.discoverAll ?? discoverNexusQAll)().listen(
+      (d) {
+        if (!mounted || !seen.add(d.key)) return;
+        setState(() => _found.add(d));
+      },
+      onDone: () {
+        if (!mounted || _phase != _Phase.discovering) return;
+        if (_found.isEmpty) {
+          setState(() => _phase = _Phase.needInput);
+        } else if (_found.length == 1 && !widget.pickerOnly) {
+          _pick(_found.single); // the only Q: no question to ask
+        } else {
+          setState(() => _phase = _Phase.choose);
+        }
+      },
+      onError: (_) {
+        if (!mounted || _phase != _Phase.discovering) return;
+        setState(() => _phase = _found.isEmpty ? _Phase.needInput : _Phase.choose);
+      },
+    );
   }
 
   void _connectManual() {
@@ -97,12 +158,26 @@ class _ConnectGateState extends State<ConnectGate> {
     _use(TcpClient(host: host, port: port));
   }
 
+  String get _headline {
+    switch (_phase) {
+      case _Phase.discovering:
+        return _found.isEmpty ? 'Searching for Nexus Q…' : 'Searching for more…';
+      case _Phase.choose:
+        return _found.length == 1 ? 'Your Nexus Q' : 'Choose your Nexus Q';
+      case _Phase.needInput:
+        return 'No Nexus Q found';
+      case _Phase.ready:
+        return '';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ctrl = _controller;
     if (_phase == _Phase.ready && ctrl != null) {
       return HomeScreen(controller: ctrl);
     }
+    final searching = _phase == _Phase.discovering;
     return Scaffold(
       body: SafeArea(
         child: Stack(
@@ -123,39 +198,53 @@ class _ConnectGateState extends State<ConnectGate> {
             // and sat against the LEFT edge instead of centring. Filling the
             // Stack gives it the full width back, so the ring centres again.
             Positioned.fill(
-              child: Padding(
-          padding: const EdgeInsets.all(NexusQSpace.standardMargin * 2),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                height: 160,
-                width: 160,
-                child: GlowingRing(
-                  volume: _phase == _Phase.discovering ? 0.6 : 0.15,
-                  child: Icon(
-                    _phase == _Phase.discovering ? Icons.wifi_find : Icons.wifi_off,
-                    color: NexusQColors.accent,
-                  ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(NexusQSpace.standardMargin * 2),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      height: 160,
+                      width: 160,
+                      child: GlowingRing(
+                        volume: searching ? 0.6 : 0.15,
+                        child: Icon(
+                          searching
+                              ? Icons.wifi_find
+                              : (_phase == _Phase.choose ? Icons.speaker_group_outlined : Icons.wifi_off),
+                          color: NexusQColors.accent,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    Text(
+                      _headline,
+                      style: const TextStyle(
+                          color: NexusQColors.white, fontSize: 18, fontWeight: FontWeight.w300),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _phase == _Phase.choose
+                          ? 'Tap the one you want to control.'
+                          : 'Make sure the device is on the same network.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13),
+                    ),
+                    const SizedBox(height: 28),
+                    // The devices found so far, under each other. Shown while
+                    // still searching too, so a slow second Q does not hide a
+                    // fast first one — but the auto-connect waits for the
+                    // browse to end, so a tap is the only early exit.
+                    if (_found.isNotEmpty) ..._deviceList(),
+                    if (_phase == _Phase.choose) ...[
+                      const SizedBox(height: 12),
+                      TextButton(onPressed: _discover, child: const Text('Search again')),
+                    ],
+                    if (_phase == _Phase.needInput) ..._fallback(),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 32),
-              Text(
-                _phase == _Phase.discovering ? 'Searching for Nexus Q…' : 'No Nexus Q found',
-                style: const TextStyle(
-                    color: NexusQColors.white, fontSize: 18, fontWeight: FontWeight.w300),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Make sure the device is on the same network.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: NexusQColors.dim, fontSize: 13),
-              ),
-              const SizedBox(height: 28),
-              if (_phase == _Phase.needInput) ..._fallback(),
-            ],
-          ),
               ),
             ),
           ],
@@ -163,6 +252,23 @@ class _ConnectGateState extends State<ConnectGate> {
       ),
     );
   }
+
+  List<Widget> _deviceList() => [
+        for (final d in _found)
+          Card(
+            color: NexusQColors.surface,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            child: ListTile(
+              key: ValueKey('device-${d.key}'),
+              leading: const Icon(Icons.speaker_outlined, color: NexusQColors.accent),
+              title: Text(d.name, style: const TextStyle(color: NexusQColors.white)),
+              subtitle: Text('${d.host}:${d.port}',
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right, color: NexusQColors.dim),
+              onTap: () => _pick(d),
+            ),
+          ),
+      ];
 
   List<Widget> _fallback() => [
         TextField(
