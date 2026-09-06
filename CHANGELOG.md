@@ -101,7 +101,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
-### Fixed — the colour theme forgot itself on every reboot (nexusq-control r37, OTA, 2026-09-06)
+### Fixed — the colour theme forgot itself on every reboot (nexusq-control r37, built, NOT published)
 - **The LED colour theme was never persistent.** The bridge started with
   `theme = "blue"` in memory and `setTheme` wrote nothing anywhere; nexusqd's
   `breathe` override is in-memory too. So every reboot came back breathing the
@@ -122,7 +122,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   unknown files, the restore sending exactly the stored theme and nothing when
   there is none, the retry). PROTOCOL.md and the bridge README say so.
 
-### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1 — Android released 2026-09-06 as `app-v1.18.1`; iOS build 52 pending on the MacBook)
+### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1, unreleased)
 - **The connect gate browses for EVERY `_nexusq._tcp` bridge for the whole
   timeout** (`discoverNexusQAll`: multicast_dns on Android, a new `discoverAll`
   in the iOS Bonjour bridge that keeps browsing and probes each endpoint) and
