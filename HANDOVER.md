@@ -8,6 +8,109 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Desktop (petronijus-PC) — 2026-09-06 evening: the Prague Q is warm — Roon idle guard stuck awake
+
+Written on the MacBook from a **read-only** diagnostic (`nexusq-diag`, capture
+`nq-captures/20260906-160616/`). Nothing on the device was changed; Petr picks
+this up on the PC. The box is `steelhead.local` / **192.168.20.246**, device r93,
+kernel 6.18.48-r0, up since Aug 31 23:14.
+
+### What is wrong (verdict)
+
+The die is **not** hot — 67 °C average over the last 16 h, board sensor 49 °C,
+zero throttling this boot, exactly the idle floor documented for this hardware.
+The enclosure is warm because **the Roon path has been "awake" for 4.75 days
+with nothing playing**: the TAS5713 amplifier has been powered the whole time
+and PulseAudio has been resampling silence around the clock. Load average sits
+at ~1.0 all night instead of the healthy 0.1–0.2.
+
+| symptom | evidence |
+|---|---|
+| `roon_in` source **RUNNING** while the producer is closed | `pactl list sources` vs `/proc/asound/RoonLoop/pcm0p/sub0/status = closed` |
+| amp sink never idles | sink-input #4 "Loopback from RoonBridge" `Corked: no`; `alsa_output.platform-sound-tas5713` RUNNING, TAS5713 PCM open since uptime 80541 s = **Sep 1 21:37:01** |
+| amp physically on | `gpio-12 pdn out hi` (active-low → not powered down), Speaker Switch on, PVDD consumers active; sink at −33 dB so nothing audible |
+| CPU burned in silence | pulseaudio ~21 % of a core (10 % of it in libspeexdsp resampling a 48003 Hz silent loopback), nexusqd's `arecord` tap ~7 % (its gate counts uncorked sink-inputs) |
+| guard asleep on paper | `nexusq-roon-idle.service` (user unit, `NQ_WATCH_MODE=producer`) logged `producer idle -> source suspended` once at **Aug 31 23:15:45** and nothing since |
+
+**Trigger:** Sep 1 21:37 is the moment the Roon loopback module was reloaded
+live from a root ssh session on `192.168.20.150` (the r92 `source_dont_move` fix,
+see `docs/2026-09-01-loopback-source-stolen.md`). Reloading the module resumed
+`roon_in` from outside the guard. The guard never saw the producer open, so it
+never re-issued the suspend, and it has trusted its own `asleep` flag ever since.
+
+### The bug, precisely
+
+`pmos/device-google-steelhead/nq-uac2-silence`, `Watcher.run_producer()`
+(~line 338): while `self.asleep` is true the loop only reacts to the producer PCM
+*opening*. It never checks whether the PA source it believes suspended is
+actually suspended. Any external resume — a module reload, `pactl
+suspend-source roon_in 0`, `nexusq-control setOutput` re-routing, a PA restart
+that loses the suspend — leaves the source running forever. The USB path
+(`NQ_WATCH_MODE=silence`) does not have this hole, because there the reader
+itself notices audio; the producer mode reads nothing.
+
+### Steps on the PC
+
+1. **Immediate relief, on the device** (either line; the amp should idle within
+   ~a minute and the load drop to ~0.2 — check with `uptime` and
+   `cat /sys/class/thermal/thermal_zone0/temp` after ten minutes):
+   ```
+   ssh root@steelhead.local "systemctl --machine=user@.host --user restart nexusq-roon-idle.service"
+   # or: ssh root@steelhead.local "su - user -c 'pactl suspend-source roon_in 1'"
+   ```
+   Then confirm `pactl list sources short` shows `roon_in … SUSPENDED` and
+   `/proc/asound/card2/pcm0p/sub0/status` (tas5713) reads `closed`.
+2. **Fix the guard properly** (no workaround, no restart timer): in
+   `run_producer()`, while asleep, verify the real source state on every poll
+   (or every Nth poll) — the `_cli` PA socket it already holds can answer
+   `list-sources` (look for `state: RUNNING`/`IDLE` on `roon_in`), or subscribe to
+   PA source events — and re-assert `suspend(True)` whenever the source is found
+   running with the producer closed. Log it as its own event (`source resumed
+   behind our back -> re-suspended`) so the next occurrence is visible. Consider
+   the same self-check on the wake path (`suspend(False)` failing silently).
+3. Bump `device-google-steelhead` pkgrel (r94), build + OTA-publish from the PC
+   (`scripts/install-fleet-signing-key.sh --check` first — the standing Todoist
+   task), upgrade both units, CHANGELOG entry, and a dated `docs/2026-09-06-…`
+   note (the diag report text is in the capture dir).
+4. **Verify it holds:** reproduce the trigger on purpose — `pactl suspend-source
+   roon_in 0` while Roon is idle — and watch the guard put it back to sleep.
+
+### Also seen, lower priority
+
+- **USB host streams silence into the UAC2 gadget** — `musb_irq_work` ~1 kHz ≈
+  30 % of a core, `alsaloop` running, `Capture Rate = 48000` held by the host
+  since Sep 1 22:27. Known and documented cost
+  (`docs/2026-08-24-usb-audio-idle-cost.md`), not a fault; the USB guard itself
+  works (last `silent -> source suspended` Sep 4 23:32). Still the largest single
+  consumer once the Roon leak is fixed.
+- **Journal noise after systemd 262** (Sep 5 upgrade): every login and every
+  5-minute `nexusq-control` poll (`systemctl --machine=user@.host --user`,
+  `userspace/nexusq-control/nexusq-control` ~line 520) emits
+  `systemd-coredumpd.service: Skipped due to 'exec-condition'` / `Dependency
+  failed for Kernel Core Pattern Register` / `Failed to read pids.max`.
+  `coredumpctl` is empty — nothing crashes; `systemd-coredump
+  --check-requirements` fails on this image. Packaging-side; a PAM session and a
+  transient unit every 303 s is also worth trimming.
+- **HA telemetry shows the wrong unit.** `sensor.nexus_q_*` in Home Assistant
+  went unavailable Sep 3 12:29 and since **Sep 5 17:44** carries a box with
+  uptime <1 d and a 47–59 °C die — that is the cottage Q, not Prague (5.7 d,
+  67 °C). Prague's `nexusq-mqtt` is alive (`node nexusq_f88fca2048e1`, connected
+  since boot). Either the cottage OTA of Sep 5 publishes into the same HA device
+  (prefix / node_id collision — see memory "Two Nexus Q on MQTT" and
+  `userspace/nexusq-mqtt/nexusq-mqtt` discovery config) or Prague's discovery
+  broke in HA on Sep 3. Until sorted, `ha-opp-window.py` reads the cottage.
+- `vdd_mismatch` warns: 12 in 5.7 days, isolated singletons ~10 h apart — the
+  documented sampling race, not a power fault.
+
+### Untouched and healthy, for the record
+
+nexusqd + LED ring alive (watchdog fine, 0 restarts), WiFi −22 dBm on 5 GHz with
+no heals since Sep 1, BT up, VDD_MPU tracks the OPP exactly, `time_in_state`
+87 % at 350 MHz / 0.4 % at 1.2 GHz, dmesg clean, pstore empty, no cooling-device
+activity ever.
+
+---
+
 ## Desktop (petronijus-PC) — 2026-09-06: pick up the companion app (1.18.1 unreleased)
 
 Written on the MacBook at the end of the 2026-09-05/06 session; Petr continues on
