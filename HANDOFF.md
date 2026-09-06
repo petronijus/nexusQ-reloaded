@@ -192,6 +192,18 @@ Qs on the first screen (`fe6d56a`). Release steps, the iOS-needs-a-Mac trap, and
 what is still unverified by a human are in **HANDOVER.md → "Desktop
 (petronijus-PC) — 2026-09-06"**. Nothing local-only remains on the MacBook.
 
+**PC, the same evening — 1.18.1+52 SHIPPED on the Android track, plus bridge
+r37.** Petr reviewed the picker on his phone and approved it ("jo, to se mi moc
+líbí"), which grew one more change into 1.18.1 — each box drawn as its own
+sphere, lit in its colour theme — and uncovered that the theme had never been
+persistent: fixed in `nexusq-control` r37. Out: GitHub release `app-v1.18.1`
+with the apk (asset URL verified 200), `app-release.json` → 1.18.1 / 52 live on
+raw.githubusercontent, and r37 on gh-pages `0873a78`, installed on the Prague Q
+with persistence verified end to end. Open: **iOS build 52** (MacBook keychain)
+and the **cottage Q**, still on control r36 — it is on another network and was
+unreachable all evening. Record:
+`docs/2026-09-06-the-picker-shows-the-spheres-and-the-theme-that-forgot-itself.md`.
+
 ## Session 2026-09-05 (late) — the app's player controls, Spotify via the Web API
 
 **Petr's ask:** "rozjet ten player v appce, ty controls." Chosen path: Spotify

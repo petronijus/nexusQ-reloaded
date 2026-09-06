@@ -90,62 +90,54 @@ currently express "built, not approved" — fix candidates in the dated note.
 
 ---
 
-## Desktop (petronijus-PC) — 2026-09-06: pick up the companion app (1.18.1 unreleased)
+## MacBook — 2026-09-06: companion app 1.18.1 — Android shipped from the PC, the iOS half is yours
 
-Written on the MacBook at the end of the 2026-09-05/06 session; Petr continues on
-the PC. Everything is on `main` (`fe6d56a`), nothing is stashed or local-only.
+The 1.18.1 handover was picked up on the PC the same evening, and 1.18.1 grew
+one more piece on Petr's feedback: the picker draws each box as its sphere, lit
+in that box's own colour theme (`docs/2026-09-06-the-picker-shows-the-spheres-…`).
+**Android is RELEASED** (2026-09-06 evening): `app-v1.18.1` with
+`nexusq-companion-1.18.1.apk` (Spotify client ID injected and verified present
+in all three `libapp.so`, `flutter analyze` clean, 126/126 tests), pubspec
+`1.18.1+52`, and `companion/app-release.json` → **1.18.1 / 52**, confirmed live
+on raw.githubusercontent, so installed apps now offer the update. The bridge
+shipped with it: `nexusq-control` **r37** is on gh-pages (`0873a78`) and
+installed on the Prague Q, where the persistence was verified end to end — a
+theme set through the bridge is written to `/etc/nexusq/theme.json`, survives a
+`systemctl restart nexusq-control` (it used to come back saying blue), and is
+re-sent to nexusqd at start ("theme restored … -> warm" in the journal). The Q
+was left on blue, as it was found.
 
-### Where things stand
+Per the rule since 2026-09-05 an app release is both tracks, so **1.18.1 is not
+finished until TestFlight has build 52** — and `release-ios.sh` needs the
+distribution identity + profile that live only in the MacBook keychain
+(HANDOFF → "iOS / TestFlight").
 
-| track | state |
-|---|---|
-| device image | **v1.15.2** released (device r93, kernel-ota r5, kernel 6.18.48-r0); both Qs on it + `nexusq-control` **r36** (OTA-only, 2026-09-05 evening) |
-| companion app | **1.18.0+51 released on both tracks** (`app-v1.18.0` + `app-release.json`; TestFlight build 51). **1.18.1 is UNRELEASED**: two fixes committed after it, see below |
-| cottage Q | back online since 2026-09-05, DHCP + `nexus-q-sumperak.local`, identity restored, on the same software as Prague |
+### Steps on the MacBook
 
-### 1.18.1 — what is in `main` and not yet shipped
+1. `git pull` — pubspec already reads `1.18.1+52`, do not bump again (the build
+   number must match the Android versionCode).
+2. `cd companion/app && flutter pub get && ./release-ios.sh` — it reads the
+   Spotify client ID from 1Password "Spotify API key" / `client ID` (`op` signed
+   in; a build that says "not configured" must not be uploaded).
+3. Wait for App Store Connect processing (5–15 min), confirm TestFlight
+   "Internal" shows **1.18.1 (52)**.
+4. In CHANGELOG, the two app 1.18.1 headings say "iOS build 52 open on the
+   MacBook" — give them "released 2026-09-06 as `app-v1.18.1`, both tracks";
+   delete this section; complete the Todoist task.
 
-1. **Updates survive leaving Settings** (`lib/update/update_coordinator.dart`,
-   commit `bfe0bc6`): the flows are owned per client, Settings only renders them,
-   the home app bar spins while anything is in flight.
-2. **Several Nexus Qs → the first screen lists them and you pick** (commit
-   `fe6d56a`): `discoverNexusQAll` (Android multicast_dns / iOS Bonjour
-   `discoverAll`), the connect gate lists devices as they resolve, one auto-joins,
-   several wait for a tap, "Switch Nexus Q" in the home app bar.
+⚠️ Do NOT bump `pubspec.yaml` or `companion/app-release.json`: both already
+read 1.18.1 / 52 from the Android release, and the iOS build number has to
+match the Android versionCode.
 
-Both: `flutter analyze` clean, **122/122 tests**, Android + iOS build. CHANGELOG
-`[Unreleased]` already carries both entries under "app 1.18.1, unreleased".
-
-### To release 1.18.1 from the PC
-
-1. `git pull`; in `companion/app`: `flutter pub get` (four new packages since
-   1.17.3: `url_launcher`, `app_links`, `http`, `crypto`).
-2. Bump `pubspec.yaml` to `version: 1.18.1+52`, commit.
-3. **Android** (works on the PC): `./build-apk.sh --release` — it reads the Spotify
-   client ID from 1Password item **"Spotify API key"**, field `client ID`
-   (`op` signed in; otherwise the build says "not configured" and Spotify control
-   is off in that build — do not ship that). Then `gh release create app-v1.18.1`
-   with `nexusq-companion-1.18.1.apk`, bump `companion/app-release.json`
-   (`version`, `versionCode` 52, `notes`, `apkUrl`), commit + push.
-4. **iOS — NOT possible on the PC.** Rule since 2026-09-05: an app release is both
-   tracks. `companion/app/release-ios.sh` needs the MacBook (distribution
-   identity + profile are in its keychain; see HANDOFF "iOS / TestFlight") or the
-   Proxmox macOS VM 108 after a signing bootstrap there (KP's `ios-release-vm`
-   skill describes the VM dance; it shares RAM with the Windows VM). If you ship
-   Android from the PC, **write the iOS half into this file as an open MacBook
-   step** rather than calling 1.18.1 released.
-5. CHANGELOG: rename the two "app 1.18.1, unreleased" headings to released.
-
-### Not yet verified by a human — do these first when a phone is at hand
+### Not yet verified by a human — still open, needs a phone at hand
 
 - **Spotify control end to end** (1.18.0): play Spotify to a Q → Settings →
   *Spotify account* → Connect (browser → back into the app via
-  `nexusq://spotify-callback`) → pause from the phone. Petr's Spotify developer
-  app has the redirect URI; development mode admits only allow-listed users;
-  control needs Premium. Errors surface as SnackBars — report the exact text.
-- **The first real-iPhone run** (TestFlight build 51): Keychain access group,
-  Bonjour discovery, and now the Spotify redirect on iOS are simulator-verified
-  only.
+  `nexusq://spotify-callback`) → pause from the phone. Development-mode Spotify
+  apps admit only allow-listed users; control needs Premium. Errors surface as
+  SnackBars — report the exact text.
+- **The first real-iPhone run** (TestFlight 51 or 52): Keychain access group,
+  Bonjour discovery and the Spotify redirect on iOS are simulator-verified only.
 - The picker with two live Qs on one LAN has been exercised only by the widget
   tests; the cottage and Prague units are on different networks.
 
@@ -158,7 +150,7 @@ Both: `flutter analyze` clean, **122/122 tests**, Android + iOS build. CHANGELOG
   r36 (`daemon-reexec` first), cause not explained.
 - 122 WiFi heals/day after a runtime MAC change on the cottage unit: hypothesis,
   no controlled test yet; do not change a Q's MAC without a reboot.
-- Todoist task for this machine: `scripts/install-fleet-signing-key.sh --check`
+- Desktop Todoist task still open: `scripts/install-fleet-signing-key.sh --check`
   (expected no-op).
 
 ## Desktop (petronijus-PC) — 2026-08-31: v1.15.0 SHIPPED
