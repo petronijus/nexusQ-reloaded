@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../nfc/tap_capture.dart';
 import '../protocol/client.dart';
 import '../protocol/discovery.dart';
+import '../protocol/glance.dart';
 import '../protocol/mock_client.dart';
 import '../protocol/tcp_client.dart';
 import '../setup/bt_setup_client.dart';
@@ -11,6 +12,7 @@ import '../setup/setup_flow.dart';
 import '../state/device_controller.dart';
 import '../build_info.dart';
 import '../theme/nexusq_theme.dart';
+import '../widgets/device_sphere.dart';
 import '../widgets/glowing_ring.dart';
 import 'home_screen.dart';
 
@@ -30,6 +32,7 @@ class ConnectGate extends StatefulWidget {
     this.discover,
     this.discoverAll,
     this.clientFactory,
+    this.glance,
     this.pickerOnly = false,
   });
 
@@ -49,6 +52,12 @@ class ConnectGate extends StatefulWidget {
   /// inject a fake so choosing a device does not dial a socket.
   final NexusQClient Function(Discovered)? clientFactory;
 
+  /// How the gate learns a found device's colour theme for its sphere in the
+  /// list — one `getState` over a throw-away connection ([glanceAt]) by
+  /// default. Tests inject canned answers; a real glance would dial a socket
+  /// and, under the test clock, leave its timeout pending.
+  final Future<DeviceGlance?> Function(Discovered)? glance;
+
   /// Always show the list, even for a single device — the "Switch Nexus Q"
   /// action from the home screen, where auto-connecting would be a loop.
   final bool pickerOnly;
@@ -65,6 +74,14 @@ class _ConnectGateState extends State<ConnectGate> {
   /// What the browse has found so far, in the order it arrived.
   final List<Discovered> _found = [];
   StreamSubscription<Discovered>? _browse;
+
+  /// Each found device's answer to the glance, by [Discovered.key]: absent =
+  /// still asking, `null` = did not answer (drawn dark), else its theme.
+  final Map<String, DeviceGlance?> _glances = {};
+
+  /// Which discovery round a glance belongs to, so an answer from a device
+  /// found before "Search again" cannot light a row of the new list.
+  int _round = 0;
 
   @override
   void initState() {
@@ -109,9 +126,11 @@ class _ConnectGateState extends State<ConnectGate> {
     // Back to waiting for a Q — a tap is expected again.
     TapCapture.set(true);
     _browse?.cancel();
+    final round = ++_round;
     setState(() {
       _phase = _Phase.discovering;
       _found.clear();
+      _glances.clear();
     });
 
     // Legacy seam: a single-shot browse decides everything.
@@ -131,6 +150,7 @@ class _ConnectGateState extends State<ConnectGate> {
       (d) {
         if (!mounted || !seen.add(d.key)) return;
         setState(() => _found.add(d));
+        _glanceAt(d, round);
       },
       onDone: () {
         if (!mounted || _phase != _Phase.discovering) return;
@@ -147,6 +167,15 @@ class _ConnectGateState extends State<ConnectGate> {
         setState(() => _phase = _found.isEmpty ? _Phase.needInput : _Phase.choose);
       },
     );
+  }
+
+  /// Ask [d] for its theme and light its sphere when the answer lands. The
+  /// picker never waits for this: a row appears the moment mDNS resolves it,
+  /// dark, and colours in when the box replies.
+  Future<void> _glanceAt(Discovered d, int round) async {
+    final g = await (widget.glance ?? glanceAt)(d);
+    if (!mounted || round != _round) return;
+    setState(() => _glances[d.key] = g);
   }
 
   void _connectManual() {
@@ -205,20 +234,24 @@ class _ConnectGateState extends State<ConnectGate> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     const SizedBox(height: 24),
-                    SizedBox(
-                      height: 160,
-                      width: 160,
-                      child: GlowingRing(
-                        volume: searching ? 0.6 : 0.15,
-                        child: Icon(
-                          searching
-                              ? Icons.wifi_find
-                              : (_phase == _Phase.choose ? Icons.speaker_group_outlined : Icons.wifi_off),
-                          color: NexusQColors.accent,
+                    // While searching (and when nothing was found) the ring is
+                    // the picture. Once there is a list, the devices' own
+                    // spheres are — a generic icon above them would only
+                    // compete with them.
+                    if (_phase != _Phase.choose) ...[
+                      SizedBox(
+                        height: 160,
+                        width: 160,
+                        child: GlowingRing(
+                          volume: searching ? 0.6 : 0.15,
+                          child: Icon(
+                            searching ? Icons.wifi_find : Icons.wifi_off,
+                            color: NexusQColors.accent,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 32),
+                      const SizedBox(height: 32),
+                    ],
                     Text(
                       _headline,
                       style: const TextStyle(
@@ -253,20 +286,18 @@ class _ConnectGateState extends State<ConnectGate> {
     );
   }
 
+  /// The devices under each other, each drawn as the home screen draws it:
+  /// the sphere lit in that box's own theme, its name in the theme's colour,
+  /// the address underneath. Dark until the box answers the glance; a box
+  /// that never answers stays dark and says so.
   List<Widget> _deviceList() => [
         for (final d in _found)
-          Card(
-            color: NexusQColors.surface,
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            child: ListTile(
-              key: ValueKey('device-${d.key}'),
-              leading: const Icon(Icons.speaker_outlined, color: NexusQColors.accent),
-              title: Text(d.name, style: const TextStyle(color: NexusQColors.white)),
-              subtitle: Text('${d.host}:${d.port}',
-                  style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
-              trailing: const Icon(Icons.chevron_right, color: NexusQColors.dim),
-              onTap: () => _pick(d),
-            ),
+          _DeviceRow(
+            key: ValueKey('device-${d.key}'),
+            device: d,
+            glance: _glances[d.key],
+            answered: _glances.containsKey(d.key),
+            onTap: () => _pick(d),
           ),
       ];
 
@@ -315,4 +346,53 @@ class _ConnectGateState extends State<ConnectGate> {
             ),
           ),
       ];
+}
+
+class _DeviceRow extends StatelessWidget {
+  const _DeviceRow({
+    super.key,
+    required this.device,
+    required this.glance,
+    required this.answered,
+    required this.onTap,
+  });
+
+  final Discovered device;
+  final DeviceGlance? glance;
+  final bool answered;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = glance;
+    final theme = g?.ledTheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DeviceSphere(
+              on: g?.on ?? false,
+              colors: theme?.colors ?? const [],
+              size: 132,
+            ),
+            const SizedBox(height: 10),
+            Text(device.name,
+                style: TextStyle(
+                    color: theme == null ? NexusQColors.white : nameColorFor(theme),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w300)),
+            const SizedBox(height: 2),
+            Text(
+              answered && g == null ? '${device.host}:${device.port} · not answering' : '${device.host}:${device.port}',
+              style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

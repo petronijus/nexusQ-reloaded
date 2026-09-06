@@ -116,6 +116,30 @@ developer app with redirect URI `nexusq://spotify-callback` and the Web API
 enabled; in development mode the account must be on the app's user allowlist,
 and playback control needs Spotify Premium (Spotify's rule).
 
+## More than one Nexus Q — the picker (1.18.1)
+
+The connect gate browses for every `_nexusq._tcp` bridge for the whole timeout
+(`discoverNexusQAll`; on iOS the Bonjour bridge's `discoverAll`). One box still
+connects by itself; several are listed under each other and you tap one; none →
+the manual entry as before. "Switch Nexus Q" in the home app bar brings the
+list back even for a single box (`pickerOnly`).
+
+Each row is the box as the home screen shows it: the `DeviceSphere` lit in that
+box's colour theme, the name in the theme's colour, the address underneath. The
+theme is not advertised over mDNS, so the gate asks each box the moment it
+resolves — one `getState` over a throw-away `TcpClient` (`lib/protocol/glance.dart`,
+3 s). The row appears dark immediately and colours in on the answer; a box that
+does not answer stays dark, reads "not answering" and is still tappable (the
+glance is a picture, not a gate). Answers from an earlier "Search again" round
+are dropped. Widget tests inject the browse, the client *and* the glance
+(`test/connect_gate_picker_test.dart`) — an un-injected glance would dial a
+socket and leave its timeout pending under the test clock.
+
+The theme is only worth showing because it now survives a reboot: bridge r37
+persists it in `/etc/nexusq/theme.json` (PROTOCOL → LED ring). Against an older
+bridge the picker still works, it just shows blue after every boot — as the box
+itself does.
+
 ## iOS (runs since 2026-08-03 — verified on the iPhone 17 simulator, iOS 26.5)
 
 The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios

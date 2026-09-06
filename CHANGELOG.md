@@ -134,6 +134,22 @@ All notable changes to Nexus Q Reloaded. Format follows
   `pickerOnly`, which lists even a single device instead of bouncing straight
   back. Injection seams for the browse and the client keep the five new widget
   tests off the network (`test/connect_gate_picker_test.dart`).
+- **Each box is drawn as the home screen draws it** (Petr, on seeing the first
+  cut on his phone: "místo ikonky obrázky těch koulí, jako je na homescreen, a
+  pokud má některá jinou ambientní barvu, ať je vidět"): the sphere lit in that
+  box's own colour theme, its name in the theme's colour (the Off theme's black
+  falls back to white, as on the home screen), the address underneath. The
+  theme is not in mDNS — and a TXT record could only be as fresh as the last
+  re-announce — so the gate asks each box itself the moment it resolves: one
+  `getState` over a throw-away connection (`lib/protocol/glance.dart`,
+  `DeviceGlance`, 3 s). A row appears dark at once and colours in when the box
+  answers; a box that never answers stays dark, says "not answering" and can
+  still be tapped — the glance is a picture, not a gate. An answer from a
+  previous "Search again" round cannot light the new list (a round counter;
+  the test for it was watched failing without the guard). The generic icon
+  above the list is gone once there is a list — the spheres are the picture;
+  the search ring stays while searching. Four more widget tests (theme colours,
+  off/muted dark, not answering, the stale round): 126/126.
 
 ### Fixed — an update no longer dies with the Settings screen (app 1.18.1, unreleased)
 - **Leaving Settings mid-update abandoned the phone's half of it.** The three
