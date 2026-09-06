@@ -139,6 +139,31 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
+### Added — iOS releases no longer need the MacBook in the room (2026-09-06)
+
+- **The iOS half of a release can now be cut on the Proxmox macOS VM (108).**
+  Until tonight `release-ios.sh` ran only on the MacBook, because that is where
+  the distribution identity lives — so "an app release is both tracks" quietly
+  meant "an app release needs one specific laptop". It does not any more: the
+  VM already held the same `Apple Distribution: Petr Parkan Janda` certificate
+  (SHA1 `63D3A548…`, shared with Kulturní Přehled), so the bootstrap was only
+  the missing `NexusQ Companion Distribution` profile — fetched over the App
+  Store Connect API — plus a repo clone, Flutter switched to CocoaPods, and
+  pods. **1.18.1 (52) was built and uploaded from it on the first attempt** and
+  is `VALID` in App Store Connect.
+- **`release-ios.sh` takes the ASC API key from the environment** when there is
+  no `op` (`NQ_ASC_KEY_ID` / `NQ_ASC_ISSUER_ID` / `NQ_ASC_PRIVATE_KEY`), so the
+  VM never gets a vault: the orchestrating machine reads 1Password and injects
+  the values into a `0600` script that deletes itself. The `.p8` still lives in
+  `~/.private_keys` only for the upload and goes away with the EXIT trap.
+- **New agent + skill `nexusq-ios-release`** carries the whole path and the three
+  traps that make it non-obvious: `codesign` over plain ssh on that VM dies with
+  `errSecInternalComponent` (the build must be launched into the GUI session with
+  `osascript`), the Windows VM has NVIDIA passthrough so it must never be
+  `qm reset` (the vfio bug took the host down on 2026-06-05), and the macOS VM has
+  no guest agent so `qm shutdown` always times out. It verifies against the ASC
+  builds endpoint rather than trusting an exit code, and puts Windows back.
+
 ### Fixed — the colour theme forgot itself on every reboot (nexusq-control r37, OTA, 2026-09-06)
 - **The LED colour theme was never persistent.** The bridge started with
   `theme = "blue"` in memory and `setTheme` wrote nothing anywhere; nexusqd's
@@ -160,7 +185,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   unknown files, the restore sending exactly the stored theme and nothing when
   there is none, the retry). PROTOCOL.md and the bridge README say so.
 
-### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1 — Android released 2026-09-06 as `app-v1.18.1`; iOS build 52 open on the MacBook)
+### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1, released 2026-09-06 as `app-v1.18.1` — both tracks)
 - **The connect gate browses for EVERY `_nexusq._tcp` bridge for the whole
   timeout** (`discoverNexusQAll`: multicast_dns on Android, a new `discoverAll`
   in the iOS Bonjour bridge that keeps browsing and probes each endpoint) and
@@ -189,7 +214,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   the search ring stays while searching. Four more widget tests (theme colours,
   off/muted dark, not answering, the stale round): 126/126.
 
-### Fixed — an update no longer dies with the Settings screen (app 1.18.1 — Android released 2026-09-06 as `app-v1.18.1`; iOS build 52 open on the MacBook)
+### Fixed — an update no longer dies with the Settings screen (app 1.18.1, released 2026-09-06 as `app-v1.18.1` — both tracks)
 - **Leaving Settings mid-update abandoned the phone's half of it.** The three
   tracks (app, device daemons, full system) lived in the screen's State behind
   `if (!mounted) return;` — the device kept installing, but the verify loop

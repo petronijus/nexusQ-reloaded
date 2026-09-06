@@ -199,9 +199,13 @@ sphere, lit in its colour theme — and uncovered that the theme had never been
 persistent: fixed in `nexusq-control` r37. Out: GitHub release `app-v1.18.1`
 with the apk (asset URL verified 200), `app-release.json` → 1.18.1 / 52 live on
 raw.githubusercontent, and r37 on gh-pages `0873a78`, installed on the Prague Q
-with persistence verified end to end. Open: **iOS build 52** (MacBook keychain)
-and the **cottage Q**, still on control r36 — it is on another network and was
-unreachable all evening. Record:
+with persistence verified end to end. **iOS build 52 followed the same evening, from the Proxmox macOS VM** rather
+than the MacBook — the VM had the same distribution certificate all along, so
+the only bootstrap was the missing profile (fetched over the ASC API), a clone
+and pods. It is `VALID` in App Store Connect, so 1.18.1 is out on both tracks,
+and iOS releases are no longer tied to one laptop (agent/skill
+`nexusq-ios-release`). Open: the **cottage Q**, still on control r36 — another
+network, unreachable all evening. Record:
 `docs/2026-09-06-the-picker-shows-the-spheres-and-the-theme-that-forgot-itself.md`.
 
 ## Session 2026-09-05 (late) — the app's player controls, Spotify via the Web API

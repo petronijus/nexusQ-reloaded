@@ -156,11 +156,52 @@ found on. A full reboot was deliberately **not** run: two sink-inputs were
 active, so somebody was listening, and the restart exercises the same
 `theme_restore_thread` the boot does.
 
-**Open after this session:**
+## 7. And then the iOS half, from a VM instead of the laptop
 
-- **iOS build 52.** `release-ios.sh` needs the distribution identity in the
-  MacBook's keychain. Until it lands, 1.18.1 is half-released by the both-tracks
-  rule (HANDOVER has the steps; do not re-bump the version).
+The handover said the iOS build needed the MacBook. Petr pushed back: *"a build
+nejde udelat, jako delame treba wave build na VM macosu?"* — and he was right.
+The claim had been copied forward from an older note without being checked.
+
+The Proxmox **macOS VM 108** already builds Kulturní Přehled for TestFlight, and
+the certificate the Nexus Q app signs with — `Apple Distribution: Petr Parkan
+Janda`, SHA1 `63D3A548…` — is the *same one KP uses*, so it was sitting in that
+VM's keychain the whole time. The real gap was one provisioning profile. The
+bootstrap, once, took about ten minutes:
+
+- `NexusQ Companion Distribution` (`TY847W7VDT`, uuid `7927b645-…`, ACTIVE to
+  2027-05-22) fetched over the App Store Connect API with the team-scoped key and
+  installed into both profile directories;
+- the repo cloned (71 MB — the desktop's 19 GB working tree is untracked build
+  output), Flutter switched to CocoaPods, `pod install`.
+
+`release-ios.sh` gained one change: it accepts the ASC key from the environment
+(`NQ_ASC_KEY_ID` / `NQ_ASC_ISSUER_ID` / `NQ_ASC_PRIVATE_KEY`) when there is no
+`op`. **The VM deliberately has no 1Password and must not get one** — a build box
+does not need a vault. The orchestrating machine reads the item and writes the
+values into a `0600` script on the VM that deletes itself; the `.p8` lives in
+`~/.private_keys` only for the upload. Verified afterwards: script gone,
+`.private_keys` empty, no key material in the log.
+
+Three traps make this non-obvious, and all three are now in the agent brief:
+
+| trap | consequence |
+|---|---|
+| `codesign` over plain ssh on that VM → `errSecInternalComponent` | the build must be launched into the Aqua session with `osascript` |
+| Windows VM 106 has NVIDIA passthrough | **never** `qm reset`/`qm reboot` — the vfio bug took the whole host down on 2026-06-05 |
+| macOS VM has no guest agent | `qm shutdown 108` always times out; stop it with ssh `sudo shutdown -h now`, verify, and start Windows only once it reads `stopped` |
+
+Build **52** went green on the first attempt: IPA 9.0 MB, signed
+`Apple Distribution 63D3A548`, team `ASFPR2T2DQ`, CFBundleVersion 52,
+`UPLOAD SUCCEEDED`, Delivery UUID `ca293ef3-5e84-4d15-995a-bad1cee3c505`, and
+`VALID` in App Store Connect a few minutes later. 300 s end to end. Windows was
+put back up afterwards, which is its idle state.
+
+New agent + skill: **`nexusq-ios-release`**. It verifies against the ASC builds
+endpoint instead of trusting an exit code, deletes the `.done` file before
+launching (a stale one faked three finishes in a Waveterm release), and refuses
+to start Windows until 108 reads `stopped`.
+
+**Open after this session:**
 - **The cottage Q is still on control r37's predecessor** (r36). It is on
   another network and was unreachable all evening; it will pick r37 up from the
   app or `apk upgrade` next time it is reachable. Nothing about r37 is urgent
