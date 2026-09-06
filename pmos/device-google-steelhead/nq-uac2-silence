@@ -32,9 +32,19 @@ Watching is asymmetric, and so is this program:
 
 A `parec` watcher cannot do the asleep half: connecting a stream to a suspended
 source RESUMES it, which would undo the sleep on the spot.
+
+Producer mode reads no audio at all and so has no reader to notice anything; it
+watches two /proc files instead -- the producer's PCM (should the source be
+awake?) and the CAPTURE side of the same aloop cable, which PulseAudio holds open
+exactly while the source is not suspended (is it awake?). The two are compared
+on every poll. Trusting only its own `asleep` flag cost the Prague Q 4.75 days
+of a powered amplifier and a resampling PulseAudio in silence (2026-09-06): a
+live module reload had resumed `roon_in` behind the guard's back on Sep 1, the
+guard was asleep on paper, and nothing ever looked.
 """
 
 import os
+import re
 import select
 import signal
 import socket
@@ -58,6 +68,36 @@ import time
 MODE = os.environ.get("NQ_WATCH_MODE", "silence")
 PRODUCER_PCM = os.environ.get("NQ_PRODUCER_PCM", "")
 PRODUCER_POLL = float(os.environ.get("NQ_PRODUCER_POLL", "0.2"))
+
+
+def other_end(producer_pcm):
+    """The capture side of the aloop cable the producer writes into.
+
+    snd-aloop wires device 0 of a card to device 1 and back: what goes into
+    `pcmNp` comes out of `pcm(1-N)c`. Purely lexical: a path without a
+    `/pcm0p/` or `/pcm1p/` element (aloop has no other devices) derives
+    nothing -- an unknown consumer must never be guessed. The unit sets
+    NQ_CONSUMER_PCM explicitly anyway; this is the fallback for a hand-run."""
+    m = re.search(r"/pcm([01])p/", producer_pcm)
+    if not m:
+        return ""
+    other = "1" if m.group(1) == "0" else "0"
+    return producer_pcm[:m.start()] + f"/pcm{other}c/" + producer_pcm[m.end():]
+
+
+# What PulseAudio REALLY holds. module-alsa-source closes its ALSA handle when
+# the source is suspended and reopens it on resume, so the capture side of the
+# cable is a one-line /proc read that says whether the source is awake -- with
+# no PulseAudio round-trip and, more to the point, no trust in our own memory
+# of the last command we sent. Measured 2026-09-06 on the Q: `suspend-source
+# roon_in 1` -> `pcm1c/sub0/status` reads `closed` within a second, `... 0` ->
+# `state: RUNNING`. An external resume (a module reload, a hand-typed pactl, a
+# re-route by nexusq-control) shows up here and nowhere else.
+CONSUMER_PCM = os.environ.get("NQ_CONSUMER_PCM", "") or other_end(PRODUCER_PCM)
+# PulseAudio applies suspend/resume asynchronously, so the two files disagree
+# for a moment after every command we send. Only a disagreement that survives
+# this many consecutive polls (5 x 0.2 s = 1 s) is real and gets acted on.
+CONSUMER_CONFIRM = int(os.environ.get("NQ_CONSUMER_CONFIRM", "5"))
 
 SOURCE = os.environ.get("NQ_UAC2_SOURCE", "usb_in")
 RATE = int(os.environ.get("NQ_UAC2_RATE", "48000"))
@@ -149,10 +189,22 @@ class PaCli:
             self.sock = None
             return False
 
+    def _drain(self):
+        """Discard whatever PulseAudio wrote back (a `>>> ` prompt per command).
+        Nothing here reads the replies, and a socket that is never read fills
+        its buffer eventually -- slowly, but forever is a long time."""
+        try:
+            while select.select([self.sock], [], [], 0)[0]:
+                if not self.sock.recv(4096):
+                    break                          # EOF: send() will find out
+        except OSError:
+            pass
+
     def send(self, line):
         if self.sock is None:
             return False
         try:
+            self._drain()
             self.sock.sendall((line + "\n").encode())
             return True
         except OSError as e:
@@ -335,12 +387,36 @@ class Watcher:
             return False
         return first != "closed"
 
+    def consumer_open(self):
+        """True/False while PulseAudio holds/does not hold the capture side of
+        the cable; None when that cannot be known (no consumer path, card gone).
+        None is deliberately neither: the reconciliation below only acts on a
+        state it has actually read."""
+        if not CONSUMER_PCM:
+            return None
+        try:
+            with open(CONSUMER_PCM) as f:
+                first = f.readline().strip()
+        except OSError:
+            return None
+        return first != "closed"
+
     def run_producer(self):
         """Suspend while nothing feeds the source; resume the moment something
-        does. No audio is read at all."""
+        does. No audio is read at all.
+
+        Every poll also reconciles what we WANT (from the producer) with what
+        PulseAudio HAS (from the consumer). Asleep with the capture side open
+        means something resumed the source behind our back -- put it back to
+        sleep. Awake with the producer playing and the capture side closed means
+        our resume did not take -- say it again. Both only after the disagreement
+        has held for CONSUMER_CONFIRM polls, so PulseAudio's own asynchronous
+        transitions never trigger a fight."""
         idle_since = None
+        disagree = 0                             # consecutive polls PA != us
         while not self.stop:
             active = self.producer_active()
+            held = self.consumer_open()
             if self.asleep:
                 if active:
                     t0 = time.monotonic()
@@ -349,9 +425,29 @@ class Watcher:
                     log(f"producer opened {PRODUCER_PCM} -> source resumed "
                         f"({(time.monotonic() - t0) * 1000:.0f} ms)")
                     idle_since = None
+                    disagree = 0
+                elif held is True:
+                    disagree += 1
+                    if disagree >= CONSUMER_CONFIRM:
+                        disagree = 0
+                        if suspend(True):
+                            log("source resumed behind our back (producer still "
+                                "closed) -> re-suspended")
+                else:
+                    disagree = 0
             elif active:
                 idle_since = None
+                if held is False:
+                    disagree += 1
+                    if disagree >= CONSUMER_CONFIRM:
+                        disagree = 0
+                        if suspend(False):
+                            log("producer playing but the source is suspended "
+                                "-> resumed again")
+                else:
+                    disagree = 0
             else:
+                disagree = 0
                 now = time.monotonic()
                 if idle_since is None:
                     idle_since = now
@@ -368,7 +464,12 @@ class Watcher:
             if not PRODUCER_PCM:
                 log("NQ_WATCH_MODE=producer needs NQ_PRODUCER_PCM")
                 return 1
-            log(f"watching {PRODUCER_PCM} for {SOURCE}")
+            if CONSUMER_PCM:
+                log(f"watching {PRODUCER_PCM} for {SOURCE}, reconciling against "
+                    f"{CONSUMER_PCM} every {CONSUMER_CONFIRM * PRODUCER_POLL:.1f} s")
+            else:
+                log(f"watching {PRODUCER_PCM} for {SOURCE} (no consumer PCM: an "
+                    f"external resume will NOT be undone)")
             return self.run_producer()
         if not self.start_awake():
             return 1

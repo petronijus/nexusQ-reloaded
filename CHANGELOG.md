@@ -8,7 +8,86 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
-### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1, unreleased)
+### Fixed — the Roon idle guard believed itself asleep while the amplifier ran for 4.75 days (device r94, OTA, 2026-09-06)
+- **The Prague Q was warm with nothing playing.** Die 67 °C, board 49 °C, no
+  throttling — the documented idle floor — but load ~1.0 all night, the TAS5713
+  powered (`pdn` high, Speaker on) since **Sep 1 21:37**, PulseAudio at ~21 % of
+  a core resampling a silent 48003 Hz loopback and nexusqd's `arecord` tap at
+  ~7 % because its gate counts uncorked sink-inputs. Read-only diagnosis from the
+  MacBook (`nexusq-diag`, 2026-09-06 16:06); the repair on the PC.
+- **Cause:** `nq-uac2-silence` in producer mode (`nexusq-roon-idle.service`)
+  only ever compared the producer's PCM with its own `asleep` flag. Sep 1 21:37
+  is the live reload of the Roon loopback module for the r92 `source_dont_move`
+  fix (`docs/2026-09-01-loopback-source-stolen.md`); the reload resumed
+  `roon_in` from outside the guard, the guard's last log line stayed `producer
+  idle -> source suspended` from Aug 31, and nothing in the loop ever looked
+  at what PulseAudio actually held. Reproduced on purpose before the fix:
+  `pactl suspend-source roon_in 0` with Roon idle — 15 s later the source was
+  still RUNNING and the guard silent.
+- **Fix:** the guard now reads the **other end of the aloop cable** —
+  `/proc/asound/RoonLoop/pcm1c/sub0/status`, which PulseAudio holds open exactly
+  while the source is not suspended (measured: `suspend 1` → `closed` within a
+  second, `suspend 0` → `state: RUNNING`) — and reconciles it with the producer on
+  every poll. Asleep with the capture side open → `source resumed behind our
+  back (producer still closed) -> re-suspended`; awake with the producer playing
+  and the capture side closed → `producer playing but the source is suspended ->
+  resumed again`. Both only after `NQ_CONSUMER_CONFIRM` (5 × 0.2 s = 1 s) of
+  sustained disagreement, so PulseAudio's own asynchronous transitions never
+  start a fight. New `NQ_CONSUMER_PCM` (set explicitly in the unit; derived from
+  `NQ_PRODUCER_PCM` by `other_end()` for a hand-run — aloop pairs `pcm0p` with
+  `pcm1c`). Unknown state (no path, card gone) is *not* a state: reconciliation
+  stays off rather than guessing. The PA CLI socket is also drained before each
+  command now; its replies were never read.
+- **Proven both ways:** `tests/test_uac2_silence_producer.py` (11 tests, fake
+  clock + a fake PulseAudio that honours `suspend`) — seen failing on r93 (3
+  failures + 4 errors), green after. Live on the Prague Q with the r94 script:
+  the same `pactl suspend-source roon_in 0` was undone within 1 s and logged.
+  The USB path (`silence` mode) never had the hole: asleep, `arecord` owns the
+  aloop capture side, so PulseAudio cannot reopen it behind the guard.
+- **Immediate relief was a restart of the user unit**; the amp sink, the
+  tas5713 PCM and `roon_in` all went SUSPENDED/`closed` within 20 s.
+- **Shipped:** OTA repo gh-pages `c861ac9` (2026-09-06 17:21); Prague Q
+  upgraded r93 → r94 at 17:23 through the app's path and re-verified. The
+  cottage Q is still on r93 until someone is on its network.
+- **`scripts/seed-ota-volume.sh` was not a no-op on the desktop** as HANDOVER
+  expected (`seeded=10 kept=1 retired=6`): six apks in the volume were signed by
+  the fleet key but were *not the published bytes* (the MacBook cut v1.15.2, the
+  desktop had built its own). Retired to `.retired-pmos@local-6a42e957/`, not
+  deleted; the published ones seeded in their place. Run it before every
+  OTA-only publish on any machine that did not build the last release.
+- **Known issues, seen in the same diagnosis and not fixed here:** (1) every
+  login and every 5-minute `nexusq-control` poll emits systemd-262
+  `systemd-coredumpd.service: Skipped due to 'exec-condition'` /
+  `Dependency failed for Kernel Core Pattern Register` / `Failed to read
+  pids.max` — `coredumpctl` is empty, packaging-side; (2) Home Assistant's
+  `sensor.nexus_q_*` has shown the **cottage** unit since Sep 5 17:44 (prefix /
+  node_id collision or Prague's discovery lost on Sep 3) — until sorted,
+  `ha-opp-window.py` reads the wrong box; (3) the USB host still streams
+  silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
+  `docs/2026-08-24-usb-audio-idle-cost.md`).
+
+### Fixed — the colour theme forgot itself on every reboot (nexusq-control r37, OTA, 2026-09-06)
+- **The LED colour theme was never persistent.** The bridge started with
+  `theme = "blue"` in memory and `setTheme` wrote nothing anywhere; nexusqd's
+  `breathe` override is in-memory too. So every reboot came back breathing the
+  stock blue, and — worse — every restart of the bridge (each OTA of it) reset
+  the *reported* theme to `blue` while the ring kept the old hue, so the app and
+  the box disagreed until the next tap. Found while building the picker below
+  (Petr, 2026-09-06: "nevím, jestli je ta ambientní barva persistentní, to by
+  měla, tak to kdyžtak ověř"): it was not.
+- Now `setTheme` writes `/etc/nexusq/theme.json` atomically (tempfile +
+  rename, the EQ's discipline) **after** nexusqd accepted the command — the
+  ring is the truth, the file only has to agree with it — and answers
+  `unavailable` if the write fails, so the app hears that the choice would not
+  survive a reboot. The bridge reports the stored theme from the very first
+  `getState`, and `theme_restore_thread` re-sends it to nexusqd at boot,
+  retrying for a minute while nexusqd's socket comes up. A box that was never
+  themed has no file and keeps nexusqd's stock idle screensaver — nothing is
+  forced on it. Eight host tests (`tests/test_theme.py`: round trip, torn and
+  unknown files, the restore sending exactly the stored theme and nothing when
+  there is none, the retry). PROTOCOL.md and the bridge README say so.
+
+### Added — more than one Nexus Q: the first screen lists them and you pick (app 1.18.1 — Android released 2026-09-06 as `app-v1.18.1`; iOS build 52 pending on the MacBook)
 - **The connect gate browses for EVERY `_nexusq._tcp` bridge for the whole
   timeout** (`discoverNexusQAll`: multicast_dns on Android, a new `discoverAll`
   in the iOS Bonjour bridge that keeps browsing and probes each endpoint) and

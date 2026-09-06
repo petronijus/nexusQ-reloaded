@@ -22,6 +22,11 @@ ConditionUser=10000
 [Service]
 Environment=NQ_WATCH_MODE=producer
 Environment=NQ_PRODUCER_PCM=/proc/asound/RoonLoop/pcm0p/sub0/status
+# The other end of the same cable: PulseAudio holds hw:RoonLoop,1,0 open exactly
+# while roon_in is not suspended. The guard compares it with the producer on
+# every poll and undoes any resume that did not come from itself (a live module
+# reload did that on 2026-09-01 and the amp ran for 4.75 days in silence).
+Environment=NQ_CONSUMER_PCM=/proc/asound/RoonLoop/pcm1c/sub0/status
 Environment=NQ_UAC2_SOURCE=roon_in
 ExecStart=/usr/bin/nq-uac2-silence
 # On stop it resumes the source it may have suspended, so Roon is never left
