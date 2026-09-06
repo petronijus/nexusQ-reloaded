@@ -109,7 +109,7 @@ switched off for `spdif`/`hdmi`.
 ### LED ring  (→ nexusqd Unix socket `/run/nexusqd.sock`)
 | Method | params | result | Event |
 |---|---|---|---|
-| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring |
+| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring. **Persistent since control r37**: stored in `/etc/nexusq/theme.json` once nexusqd accepted it, reported by `getState.theme` from the file after a bridge restart, and re-applied to nexusqd at boot; `unavailable` if the file cannot be written (the ring changed, the choice would not survive a reboot) |
 | `listThemes` | — | `{ "themes": [ {name, label} ] }` | — |
 | `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — **new**: picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `auto`+`scene 0..4`; shown while audio plays |
 | `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
@@ -195,6 +195,11 @@ graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
   to `/run/nexusqd.sock`; nexusqd pulses the compositor manual layer (priority 8) in that hue with
   the idle-screensaver throb, **always visible** (over the music visualizer / a blanked screensaver);
   `off` blanks. _(An earlier idle-screensaver-retint design was reverted — invisible once blanked / while music played.)_
+  The choice **survives reboots** (control r37): nexusqd's override is in-memory, so the bridge
+  persists the theme name in `/etc/nexusq/theme.json` and re-sends the command at boot. A device
+  that was never themed has no file and is left on nexusqd's stock idle screensaver. Pre-r37
+  bridges forgot the theme on every boot and reported `blue` after their own restart while the
+  ring still breathed the old hue.
 - **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 7,
   shown while audio plays — below the breathing override).
 - **LED brightness** → a nexusqd `brightness` command + a software brightness scalar.

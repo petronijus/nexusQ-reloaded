@@ -134,6 +134,64 @@ THEME_CMDS = {
     "off":   ["off"],
 }
 
+# The user's colour theme is PERSISTENT (r37). Before this it lived only in
+# the bridge's memory and in nexusqd's manual layer: every reboot came back
+# breathing the default blue, and every restart of this bridge (each OTA of it)
+# reset the *reported* theme to "blue" while the ring kept the old hue — the
+# app and the box disagreed until the next tap. The file exists only once the
+# user has chosen; a box never themed keeps nexusqd's stock idle behaviour.
+THEME_CONF_PATH = os.environ.get("NEXUSQ_THEME_CONF", "/etc/nexusq/theme.json")
+THEME_DEFAULT = "blue"
+
+
+def _theme_load(path=None):
+    """The persisted theme name, or None when the user never chose one (or the
+    file is unreadable / names a theme this build does not know)."""
+    try:
+        with open(path or THEME_CONF_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    name = data.get("theme") if isinstance(data, dict) else None
+    return name if name in THEME_CMDS else None
+
+
+def _theme_save(name, path=None):
+    """Atomic write (tempfile + rename), the same discipline as the EQ file:
+    a crash mid-write must never leave a torn file that would then read as
+    'never themed'."""
+    path = path or THEME_CONF_PATH
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"theme": name}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Err("unavailable", f"cannot persist theme: {e}")
+
+
+def theme_restore_thread(path=None):
+    """Boot re-apply of the persisted theme. nexusqd's breathing override is
+    in-memory, so a stored theme must be re-sent after every boot (and after a
+    nexusqd restart the OTA paths already handle via _led_restore_theme).
+    Retries briefly: nexusqd's socket may not be up yet when the bridge starts.
+    Nothing stored → nothing sent, the ring keeps nexusqd's stock idle look."""
+    name = _theme_load(path)
+    if name is None:
+        return
+    for _ in range(12):  # up to ~60 s
+        if all(nexusqd_send(c) for c in THEME_CMDS[name]):
+            log("theme restored from", path or THEME_CONF_PATH, "->", name)
+            return
+        time.sleep(5)
+    log("theme restore failed: nexusqd never accepted", name)
+
 # The 5 audio-reactive music visualisations, in nexusqd's RenderEngine order
 # (userspace/nexusqd music.c: scene 0..4). setScene selects which effect the ring
 # shows while audio plays. It also sends `auto` first so any solid color-theme
@@ -1576,7 +1634,7 @@ class Bridge:
             "volume": vol if vol is not None else 50,
             "muted": bool(muted),
             "brightness": 255,
-            "theme": "blue",
+            "theme": _theme_load() or THEME_DEFAULT,
             "scene": "waveform",
             "output": output,
             "nowPlaying": {"playing": False, "artist": "", "track": "",
@@ -1692,6 +1750,10 @@ class Bridge:
             for c in cmds:
                 if not nexusqd_send(c):
                     raise Err("unavailable", "nexusqd rejected theme")
+            # Ring first, file second — like the EQ: the hardware is the truth
+            # and the file only has to agree with it. A failed write raises so
+            # the app hears that the choice will not survive a reboot.
+            _theme_save(name)
             with self.lock:
                 self.state["theme"] = name
             return {"theme": name}, [("themeChanged", {"theme": name})]
@@ -2460,6 +2522,7 @@ def main():
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
+    threading.Thread(target=theme_restore_thread, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

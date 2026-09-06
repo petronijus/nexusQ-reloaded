@@ -8,7 +8,7 @@ the work out to the subsystems that already run on the device:
 |---|---|
 | audio output | PulseAudio default sink via `pactl` — `set-default-sink` + `move-sink-input` for every stream (input-agnostic); class-D amp toggled for safety. PA runs in the uid-10000 `user` session, reached from root with `PULSE_SERVER`/`PULSE_COOKIE` |
 | volume / mute | `pactl set-sink-volume`/`set-sink-mute` on the **active output's** PA sink (input-agnostic, follows the output) |
-| LED theme / brightness | `nexusqd` control socket `/run/nexusqd.sock` (`theme <name>` / `brightness <0-255>`) |
+| LED theme / brightness | `nexusqd` control socket `/run/nexusqd.sock` (`breathe R G B` / `off` per theme, `brightness <0-255>`). **The theme is persistent** _(2026-09-06, r37)_: `setTheme` writes `/etc/nexusq/theme.json` atomically after nexusqd took the command, the bridge reports it from the file at start, and `theme_restore_thread` re-sends it to nexusqd at boot (retrying while nexusqd's socket comes up). A box never themed has no file and keeps nexusqd's stock idle look. Host tests `tests/test_theme.py` |
 | now-playing | `librespot --onevent /usr/bin/nexusq-onevent` pushes track/volume changes to the bridge's local socket `/run/nexusq-control.sock` (read-only metadata + transport state) |
 | discovery | mDNS `_nexusq._tcp` via `avahi-publish-service` (best-effort); TXT carries `name=` + `room=` from the identity file |
 | device identity _(2026-07-13, r9)_ | `/etc/nexusq/device.json` `{"name","room"}` — written by `nexusq-setupd`'s `setName`, read via `load_identity()` (fallback `NEXUSQ_NAME` env → "Nexus Q"); feeds `getDeviceInfo`, the mDNS TXT, and the librespot wrapper's Spotify name |
