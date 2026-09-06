@@ -90,6 +90,45 @@ currently express "built, not approved" — fix candidates in the dated note.
 
 ---
 
+## Open — the USB audio A/B that needs audio actually playing
+
+Device **r95** bounded the delay (the cushion that had grown to 243 ms) and the
+Prague Q is at 57 ms after the restart. What is *not* fixed is why the hop
+underruns in the first place: `alsaloop --sync=simple` corrects no clock
+difference between the async USB gadget and the timer-clocked snd-aloop.
+
+Two corrections exist on this hardware and **neither has been seen working**, so
+neither is the default:
+
+| candidate | control | idea |
+|---|---|---|
+| `captshift` | `UAC2Gadget` → `Capture Pitch 1000000` | the USB async feedback channel: ask the host to adjust |
+| `playshift` | `Loopback` → `PCM Rate Shift 100000` (80000..120000) | adjust the virtual card we own |
+
+Probing them without audio proves nothing: alsaloop prints the same "Opened PCM
+element Capture Pitch" line under every mode including `simple`, and an
+aloop→aloop rig leaves the rate shift at 100000 because both its ends share one
+timer.
+
+**To run it** (needs the Xiaomi box actually playing — adb to it is unauthorized
+from the desktop, the dialog has to be accepted on the TV):
+
+```sh
+systemctl --machine=user@.host --user set-environment NQ_UAC2_SYNC=captshift
+systemctl --machine=user@.host --user restart nexusq-uac2-in
+# watch the control move off centre while the host streams:
+watch -n2 'amixer -c UAC2Gadget cget numid=1 | grep ": values"'
+# and whether Buffer Latency stops climbing across a long session
+```
+
+Repeat with `playshift` (`amixer -c Loopback cget numid=1`). Whichever holds the
+loop steady without the cushion climbing becomes the default in r96; if neither
+does, the ceiling stays the answer and that is worth writing down too.
+
+Also still open: the **Roon hop keeps its old uncapped module** until
+`roon-nexusq` next starts (it was at 347 ms against 250). Harmless for music —
+there is no picture to sync to — so it was left rather than restarting Roon.
+
 ## ✅ done 2026-09-06 — app 1.18.1 is out on BOTH tracks, and iOS moved off the MacBook
 
 This section used to hand the iOS half to the MacBook. It is not needed: the

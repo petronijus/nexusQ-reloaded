@@ -139,6 +139,45 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
+### Fixed — the USB audio delay was five days of cushion nobody threw away (device r95, OTA, 2026-09-06)
+
+- **"je tam ted delay na usb audio."** Measured: the USB hop was carrying
+  **243 ms** against the 120 ms it is configured with, and the Roon hop 347
+  against 250. Sampled for two minutes while idle, both numbers did not move —
+  so it is not drift, it is an **accumulation**. PulseAudio's `module-loopback`
+  raises its own buffer whenever it underruns and never lowers it again, and
+  `nexusq-uac2-in` had been up since 2026-09-01 with **zero restarts**. Five
+  days of small, individually reasonable increases is a fifth of a second of
+  lip-sync error, and the journal only ever admitted to the first 25 ms of it
+  (120 → 145 in six logged steps).
+- **`max_latency_msec` now gives each hop a ceiling** (USB 200 ms, Roon 400), so
+  the one-way adjustment can no longer run for as long as the service does. And
+  **`reset_loopback` rebuilds the USB hop at its configured cushion on both
+  unpark paths**: a cushion earned by a finished listening session is of no use
+  to the next one, and unparking is the free moment to drop it, because the host
+  is not streaming yet. The Roon hop cannot have that half — RoonBridge writes
+  its loop directly, with no alsaloop to restart — so there the ceiling is the
+  whole fix, and it takes effect at its next start.
+- On the Prague Q after the upgrade + restart: **243 ms → 57 ms**, with
+  `max_latency_msec=200` verified on the loaded module.
+- **The root is deliberately not changed yet, and that is not an oversight.**
+  `alsaloop` runs `--sync=simple`, which corrects no clock difference; both
+  candidates for correcting it exist on this hardware (the gadget's `Capture
+  Pitch`, i.e. the USB async feedback channel, and snd-aloop's `PCM Rate Shift`,
+  the side we own). Neither is defaulted to because neither has been *seen*
+  working: alsaloop prints the same "Opened PCM element Capture Pitch" banner
+  under every mode including `simple`, and an aloop→aloop test rig left the rate
+  shift at 100000 throughout — correctly, since both its ends share one timer
+  and there was nothing to correct. Choosing between them needs the real
+  async-gadget-to-timer-clocked-loop pair with audio flowing. `NQ_UAC2_SYNC` is
+  the tunable, the A/B procedure is written into the script, and until it is run
+  the shipped default stays the value proven in the field.
+- `tests/test_loopback_latency_bounded.sh` guards both halves: the ceiling is one
+  argument on a `load-module` line, exactly what a refactor drops, and its loss
+  is invisible for days. Seen failing four ways — ceiling deleted, ceiling below
+  the cushion, reset on only one of the two unpark paths, and the ceiling
+  demoted to a comment.
+
 ### Added — iOS releases no longer need the MacBook in the room (2026-09-06)
 
 - **The iOS half of a release can now be cut on the Proxmox macOS VM (108).**
