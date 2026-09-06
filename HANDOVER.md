@@ -8,6 +8,77 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Desktop (petronijus-PC) — 2026-09-06: pick up the companion app (1.18.1 unreleased)
+
+Written on the MacBook at the end of the 2026-09-05/06 session; Petr continues on
+the PC. Everything is on `main` (`fe6d56a`), nothing is stashed or local-only.
+
+### Where things stand
+
+| track | state |
+|---|---|
+| device image | **v1.15.2** released (device r93, kernel-ota r5, kernel 6.18.48-r0); both Qs on it + `nexusq-control` **r36** (OTA-only, 2026-09-05 evening) |
+| companion app | **1.18.0+51 released on both tracks** (`app-v1.18.0` + `app-release.json`; TestFlight build 51). **1.18.1 is UNRELEASED**: two fixes committed after it, see below |
+| cottage Q | back online since 2026-09-05, DHCP + `nexus-q-sumperak.local`, identity restored, on the same software as Prague |
+
+### 1.18.1 — what is in `main` and not yet shipped
+
+1. **Updates survive leaving Settings** (`lib/update/update_coordinator.dart`,
+   commit `bfe0bc6`): the flows are owned per client, Settings only renders them,
+   the home app bar spins while anything is in flight.
+2. **Several Nexus Qs → the first screen lists them and you pick** (commit
+   `fe6d56a`): `discoverNexusQAll` (Android multicast_dns / iOS Bonjour
+   `discoverAll`), the connect gate lists devices as they resolve, one auto-joins,
+   several wait for a tap, "Switch Nexus Q" in the home app bar.
+
+Both: `flutter analyze` clean, **122/122 tests**, Android + iOS build. CHANGELOG
+`[Unreleased]` already carries both entries under "app 1.18.1, unreleased".
+
+### To release 1.18.1 from the PC
+
+1. `git pull`; in `companion/app`: `flutter pub get` (four new packages since
+   1.17.3: `url_launcher`, `app_links`, `http`, `crypto`).
+2. Bump `pubspec.yaml` to `version: 1.18.1+52`, commit.
+3. **Android** (works on the PC): `./build-apk.sh --release` — it reads the Spotify
+   client ID from 1Password item **"Spotify API key"**, field `client ID`
+   (`op` signed in; otherwise the build says "not configured" and Spotify control
+   is off in that build — do not ship that). Then `gh release create app-v1.18.1`
+   with `nexusq-companion-1.18.1.apk`, bump `companion/app-release.json`
+   (`version`, `versionCode` 52, `notes`, `apkUrl`), commit + push.
+4. **iOS — NOT possible on the PC.** Rule since 2026-09-05: an app release is both
+   tracks. `companion/app/release-ios.sh` needs the MacBook (distribution
+   identity + profile are in its keychain; see HANDOFF "iOS / TestFlight") or the
+   Proxmox macOS VM 108 after a signing bootstrap there (KP's `ios-release-vm`
+   skill describes the VM dance; it shares RAM with the Windows VM). If you ship
+   Android from the PC, **write the iOS half into this file as an open MacBook
+   step** rather than calling 1.18.1 released.
+5. CHANGELOG: rename the two "app 1.18.1, unreleased" headings to released.
+
+### Not yet verified by a human — do these first when a phone is at hand
+
+- **Spotify control end to end** (1.18.0): play Spotify to a Q → Settings →
+  *Spotify account* → Connect (browser → back into the app via
+  `nexusq://spotify-callback`) → pause from the phone. Petr's Spotify developer
+  app has the redirect URI; development mode admits only allow-listed users;
+  control needs Premium. Errors surface as SnackBars — report the exact text.
+- **The first real-iPhone run** (TestFlight build 51): Keychain access group,
+  Bonjour discovery, and now the Spotify redirect on iOS are simulator-verified
+  only.
+- The picker with two live Qs on one LAN has been exercised only by the widget
+  tests; the cottage and Prague units are on different networks.
+
+### Still open in the device software (unchanged, for the record)
+
+- AirPlay / Roon transport: the bridge has no backend, `transport = none`;
+  shairport-sync 5.1 on the Q is built with metadata + MPRIS (the intended
+  AirPlay route). See `docs/2026-09-05-six-days-dark-…` open list.
+- The `status=127` after an in-place systemd upgrade: worked around in control
+  r36 (`daemon-reexec` first), cause not explained.
+- 122 WiFi heals/day after a runtime MAC change on the cottage unit: hypothesis,
+  no controlled test yet; do not change a Q's MAC without a reboot.
+- Todoist task for this machine: `scripts/install-fleet-signing-key.sh --check`
+  (expected no-op).
+
 ## Desktop (petronijus-PC) — 2026-08-31: v1.15.0 SHIPPED
 
 Both steps this section used to list are done, so it is trimmed to what is still

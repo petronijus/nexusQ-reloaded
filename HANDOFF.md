@@ -184,6 +184,14 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
+## Handover 2026-09-06 — continuing on the PC
+
+Two more app fixes after 1.18.0, both unreleased (**1.18.1**): updates survive
+leaving Settings (`UpdateCoordinator`, `bfe0bc6`) and a picker for several Nexus
+Qs on the first screen (`fe6d56a`). Release steps, the iOS-needs-a-Mac trap, and
+what is still unverified by a human are in **HANDOVER.md → "Desktop
+(petronijus-PC) — 2026-09-06"**. Nothing local-only remains on the MacBook.
+
 ## Session 2026-09-05 (late) — the app's player controls, Spotify via the Web API
 
 **Petr's ask:** "rozjet ten player v appce, ty controls." Chosen path: Spotify
