@@ -27,7 +27,14 @@ Design notes (why it looks the way it does):
     owns the output, same detection as nq-vol), streaming-service states
     (instant cgroup read, the nexusq-control pattern — systemctl --machine
     costs ~2 s per call), and uptime.
-  * Availability is a retained Last Will: `<prefix>/status` = online/offline.
+  * Availability is a retained Last Will: `<prefix>/<node_id>/status` =
+    online/offline. `<node_id>` is `nexusq_<factory WiFi MAC>` — two Qs share
+    one broker and one `prefix`, so the un-qualified topics cannot say which
+    box they describe (2026-09-06: Home Assistant showed the cottage unit under
+    Prague's entities for two days, and either box going offline marked both
+    unavailable). The flat `<prefix>/status` and `<prefix>/health/state` are
+    still published, best-effort, for the companion app, which subscribes to
+    them and has no way to learn a node_id yet.
     A graceful stop (SIGTERM) publishes `offline` explicitly — the Will only
     fires on ungraceful death.
   * Home Assistant discovery configs are retained and (re)published on every
@@ -681,7 +688,26 @@ class MqttClient:
 # are OMITTED from the state JSON when unavailable, so templates guard with
 # `| default('unknown')` (Jinja's default() fires on undefined, not on null —
 # which is exactly why collect() omits instead of null-ing).
+def device_topics(prefix, node_id):
+    """(state_topic, status_topic) for THIS device.
+
+    The flat `<prefix>/health/state` and `<prefix>/status` name no device, so
+    nothing about them can say WHICH Q a reading came from -- the only defence
+    was giving each box a different `prefix` by hand, and the app re-provisions
+    that field from one stored setting, so the defence does not survive normal
+    use. It failed on 2026-09-06: Home Assistant's `sensor.nexus_q_*` (Prague's
+    device) carried the cottage unit's numbers for ~7 h and Prague's own
+    entities went stale, while on the wire each box was publishing to its own
+    prefix the whole time. Qualifying the topics with the node_id removes the
+    ambiguity at the source instead of relying on configuration: HA discovery
+    points here, and the entities went back to their own device the moment this
+    shipped. The flat topics are still published beside these (see main())
+    because the companion app subscribes to them and cannot learn a node_id."""
+    return (f"{prefix}/{node_id}/health/state", f"{prefix}/{node_id}/status")
+
+
 def discovery_configs(node_id, display_name, prefix):
+    state_topic, status_topic = device_topics(prefix, node_id)
     device = {
         "identifiers": [node_id],
         "name": display_name,
@@ -690,8 +716,8 @@ def discovery_configs(node_id, display_name, prefix):
         "sw_version": os.uname().release,
     }
     base = {
-        "state_topic": f"{prefix}/health/state",
-        "availability_topic": f"{prefix}/status",
+        "state_topic": state_topic,
+        "availability_topic": status_topic,
         "device": device,
     }
     sensors = [
@@ -793,8 +819,16 @@ def run():
         return 1
     node_id, display_name = device_identity()
     prefix = conf["prefix"]
-    status_topic = f"{prefix}/status"
-    state_topic = f"{prefix}/health/state"
+    state_topic, status_topic = device_topics(prefix, node_id)
+    # The flat topics are what the companion app subscribes to today
+    # (`mqtt_settings.prefix` + `/health/state`), so they are still published,
+    # beside the per-device ones, for exactly as long as that is true. They are
+    # NOT what Home Assistant is pointed at any more: with two Qs on one broker
+    # a shared topic cannot say which box it describes. The app's health screen
+    # has the same ambiguity and needs the same node_id qualification; until it
+    # ships, dropping these would take its readout away entirely.
+    legacy_state_topic = f"{prefix}/health/state"
+    legacy_status_topic = f"{prefix}/status"
     log(f"starting: broker {conf['host']}:{conf['port']}, node {node_id}, "
         f"interval {conf['interval_s']}s")
 
@@ -809,18 +843,28 @@ def run():
             client = MqttClient(
                 conf["host"], conf["port"], client_id=node_id,
                 username=conf["username"], password=conf["password"],
+                # The single Will goes to the PER-DEVICE status topic. MQTT
+                # allows one per connection, and the flat one cannot carry it
+                # honestly with two Qs on the broker: either box dying marked
+                # the shared topic offline, i.e. it already did not describe
+                # any particular device. The legacy topic below is therefore
+                # best-effort (online at connect, offline on a graceful stop)
+                # and says so in the README.
                 will_topic=status_topic, will_payload="offline")
             client.connect()
             log("connected")
             backoff = 5
             client.publish(status_topic, "online", retain=True)
+            client.publish(legacy_status_topic, "online", retain=True)
             for suffix, cfg in discovery_configs(
                     node_id, display_name, prefix):
                 client.publish(f"{conf['discovery_prefix']}/{suffix}",
                                json.dumps(cfg), retain=True)
             while not _shutdown:
                 state, tis_history = collect(tis_history)
-                client.publish(state_topic, json.dumps(state), retain=True)
+                payload = json.dumps(state)
+                client.publish(state_topic, payload, retain=True)
+                client.publish(legacy_state_topic, payload, retain=True)
                 deadline = time.monotonic() + conf["interval_s"]
                 while not _shutdown and time.monotonic() < deadline:
                     client.maintain()
@@ -842,6 +886,7 @@ def run():
     if client is not None:
         try:
             client.publish(status_topic, "offline", retain=True)
+            client.publish(legacy_status_topic, "offline", retain=True)
             client.disconnect()
         except MqttError:
             client.close()

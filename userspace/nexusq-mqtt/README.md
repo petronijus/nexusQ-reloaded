@@ -24,9 +24,15 @@ Every `interval_s` (default 30 s), one retained JSON document:
 
 | Topic                  | Payload                                        |
 |------------------------|------------------------------------------------|
-| `nexusq/health/state`  | the full state JSON (below), retained          |
-| `nexusq/status`        | `online` / `offline` (retained; LWT covers ungraceful death, SIGTERM publishes `offline` explicitly) |
+| `nexusq/<node_id>/health/state` | the full state JSON (below), retained — **this is what HA discovery points at** |
+| `nexusq/<node_id>/status` | `online` / `offline` (retained; the LWT lives here, SIGTERM publishes `offline` explicitly) |
+| `nexusq/health/state`  | the same JSON, retained — **legacy**, for the companion app |
+| `nexusq/status`        | `online` / `offline`, retained — **legacy and best-effort**: no Will (MQTT allows one per connection and it belongs on the per-device topic), so after an ungraceful death this can read `online` until the box comes back |
 | `homeassistant/…/config` | retained HA discovery configs, republished on every connect |
+
+`<node_id>` is `nexusq_<factory WiFi MAC>` (pinned by kernel patch 0043, so it
+survives reboots and reflashes) — the same string that keys the HA device
+registry entry and every `unique_id`.
 
 State JSON fields (a field whose source is unavailable is **omitted**, never
 null — HA templates guard with `| default('unknown')`, the app can distinguish
@@ -154,16 +160,38 @@ still needs both credential fields filled — mosquitto accepts and ignores a
 username on such a listener, and the validator has no way to tell the two cases
 apart.
 
-### 🚨 One `prefix` per device — the state topic has no device component
+### Two Qs on one broker — fixed in r5, and what the warning here used to say
 
-`<prefix>/health/state` and `<prefix>/status` are **flat**. Only the HA
-discovery configs are namespaced (by `node_id`, from the factory WiFi MAC), so
-two Qs left on the default `nexusq` prefix publish into the *same* topic and
-their payloads alternate — every consumer sees the two devices' values
-interleaved. Give each additional device its own prefix
-(`nexusq-sumperak`, …) and, if the telemetry crosses an MQTT bridge, add the
-matching `topic <prefix>/# out 1` rule — discovery rides `homeassistant/#`, the
-state does not, and the failure mode is entities that exist but never update.
+This section used to tell you to give each additional device its own `prefix`,
+because the state topic had no device component. The cottage Q *was* set up that
+way (`nexusq-sumperak`) and it still went wrong: on 2026-09-06 Home Assistant's
+`sensor.nexus_q_*` — Prague's device — carried the **cottage's** numbers for
+about seven hours (verified by the uptime counter continuing across both entity
+sets), while on the broker each box was publishing to its own prefix the whole
+time. So the mix-up was not on the wire; it was that a topic naming no device
+gives Home Assistant nothing to disambiguate with when discovery is republished.
+Advice you have to remember, and that one tap in the app can undo (the app
+provisions `prefix` from a single stored setting, whichever Q you open), is not
+a defence.
+
+Since **r5** the topics carry the `node_id`, so two Qs on one prefix no longer
+collide: `<prefix>/<node_id>/health/state` and `<prefix>/<node_id>/status`, and
+HA discovery points at those. Prague's entities returned to Prague within one
+publish of that shipping. Separate prefixes still work and are still fine; they
+are no longer required, and no longer load-bearing.
+
+The flat `<prefix>/health/state` and `<prefix>/status` are still published
+because the companion app subscribes to them and the bridge gives it no way to
+learn a `node_id` (`getStatus` returns no WiFi MAC). They keep the old, shared,
+ambiguous semantics for exactly as long as that is true — **do not point
+anything new at them**. Closing that out needs the bridge to report the device's
+node_id and the app to subscribe per device; until then the app's health screen
+with two Qs live shows whichever box published last.
+
+If the telemetry crosses an MQTT bridge, the forwarding rule needs the extra
+level (`topic <prefix>/# out 1` still covers it) — discovery rides
+`homeassistant/#`, the state does not, and the failure mode is entities that
+exist but never update.
 
 Two devices sharing a `node_id` is worse and less obvious: they share the HA
 device registry entry and every `unique_id`, and they overwrite each other's

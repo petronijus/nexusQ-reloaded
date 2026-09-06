@@ -480,14 +480,34 @@ class TestDiscovery(unittest.TestCase):
             self.assertEqual(node, "nexusq_f88fca2048e1")
             self.assertEqual(tail, "config")
 
-    def test_shared_topics_and_device_block(self):
+    def test_topics_are_per_device_and_device_block(self):
+        # Until 2026-09-06 every entity of every device pointed at the flat
+        # `<prefix>/health/state`, which names no device: Home Assistant showed
+        # the cottage unit's numbers under Prague's `sensor.nexus_q_*` for ~7 h
+        # even though each box was publishing to its own prefix on the broker.
+        # The node_id (the factory WiFi MAC) is what separates them.
         for _, cfg in self.configs:
-            self.assertEqual(cfg["state_topic"], "nexusq/health/state")
-            self.assertEqual(cfg["availability_topic"], "nexusq/status")
+            self.assertEqual(cfg["state_topic"],
+                             "nexusq/nexusq_f88fca2048e1/health/state")
+            self.assertEqual(cfg["availability_topic"],
+                             "nexusq/nexusq_f88fca2048e1/status")
             self.assertEqual(cfg["device"]["identifiers"],
                              ["nexusq_f88fca2048e1"])
             self.assertEqual(cfg["device"]["name"], "Obývák Q")
             json.dumps(cfg)  # must be JSON-serializable
+
+    def test_two_devices_never_share_a_state_topic(self):
+        other = MOD.discovery_configs("nexusq_f88fca204ab1", "Šumperák Q",
+                                      "nexusq")
+        mine = {cfg["state_topic"] for _, cfg in self.configs}
+        theirs = {cfg["state_topic"] for _, cfg in other}
+        self.assertTrue(mine.isdisjoint(theirs))
+        avail_mine = {cfg["availability_topic"] for _, cfg in self.configs}
+        avail_theirs = {cfg["availability_topic"] for _, cfg in other}
+        self.assertTrue(avail_mine.isdisjoint(avail_theirs))
+        # and the discovery config topics themselves stay distinct
+        self.assertTrue({t for t, _ in self.configs}
+                        .isdisjoint({t for t, _ in other}))
 
     def test_expected_entities_present(self):
         keys = {t.split("/")[2] for t, _ in self.configs}

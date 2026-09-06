@@ -8,6 +8,41 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Fixed — Home Assistant showed the cottage Q under Prague's entities (nexusq-mqtt r5, OTA, 2026-09-06)
+- **`sensor.nexus_q_*` carried the wrong box for about seven hours.** Prague's
+  entities read the cottage unit's numbers from 08:13 UTC until 16:08 UTC, and
+  Prague's own readings went nowhere. Confirmed from Home Assistant's history:
+  `sensor.nexus_q_uptime` ran 59 074 s and climbing (a box up ~16 h) while
+  Prague had been up 5.8 days, and the cottage's own
+  `sensor.nexus_q_sumperak_uptime` stopped updating at exactly the moment the
+  numbers appeared on Prague's, its counter continuing without a gap across the
+  two entity sets.
+- **Not a collision on the wire.** Each box was publishing to its own prefix
+  the whole time (`nexusq/…` and `nexusq-sumperak/…`, both verified live on the
+  broker), so the "give every device its own prefix" advice in the daemon's
+  README had actually been followed. The flaw is that the topics it recommends
+  name no device: `<prefix>/health/state` is a promise about a namespace, not
+  about a Q, and Home Assistant has nothing to disambiguate with when discovery
+  is republished. Advice that one tap in the app can undo — the app provisions
+  `prefix` from a single stored setting, whichever Q you open — is not a defence.
+- **Fix:** the daemon publishes, and HA discovery now points at,
+  `<prefix>/<node_id>/health/state` and `<prefix>/<node_id>/status`, where
+  `node_id` is `nexusq_<factory WiFi MAC>` — the same string that already keyed
+  the HA device entry and every `unique_id`. The single MQTT Will moves to the
+  per-device status topic, because with two boxes the flat one could not
+  honestly describe either. Two new tests assert the topics are per-device and
+  that two node_ids share no topic; both were seen failing first.
+- **The flat topics are still published**, unchanged, and marked legacy in the
+  README: the companion app subscribes to them and the bridge gives it no way
+  to learn a node_id (`getStatus` reports no WiFi MAC). Closing that out needs
+  a protocol field and an app change; until then the app's health screen with
+  two Qs live still shows whichever box published last.
+- **Verified after shipping:** Prague's entities returned to Prague within one
+  publish (`sensor.nexus_q_uptime` 500 024 s at 16:08 UTC), and the broker now
+  carries `nexusq/nexusq_f88fca2048e1/health/state` beside the legacy topic.
+  The cottage keeps its stale entities until it takes r5 — its discovery
+  configs are republished only on connect.
+
 ### Fixed — the Roon idle guard believed itself asleep while the amplifier ran for 4.75 days (device r94, OTA, 2026-09-06)
 - **The Prague Q was warm with nothing playing.** Die 67 °C, board 49 °C, no
   throttling — the documented idle floor — but load ~1.0 all night, the TAS5713

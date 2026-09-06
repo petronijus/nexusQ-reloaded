@@ -58,14 +58,29 @@ for apkbuild in \
         echo "  ERROR: $apkbuild not found!"
         continue
     fi
+    # `set -euo pipefail` is in force, and `set -u` is the one that matters: an
+    # APKBUILD legitimately expands abuild-supplied variables at top level
+    # (`$srcdir` in a build()/package() body is enough), which under nounset
+    # aborts the subshell on the spot -- before a single echo. Every aport that
+    # mentions one was reported as "ERROR: failed to source APKBUILD" while the
+    # build itself was fine: 9 false alarms in the r94 log, and the two that
+    # passed only passed because they happen not to name one. A listing must not
+    # invent failures, so nounset and errexit are off inside the subshell and
+    # only a `source` that really returns non-zero is reported.
     (
+        set +eu
         source "$apkbuild" 2>/dev/null
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "  ERROR: failed to source APKBUILD (exit $rc)"
+            exit 0
+        fi
         echo "  pkgname=$pkgname"
         echo "  pkgver=$pkgver"
         echo "  arch=$arch"
         echo "  depends=${depends:-none}"
         echo "  source=${source:-none}"
-    ) || echo "  ERROR: failed to source APKBUILD"
+    )
 done
 
 echo ""
