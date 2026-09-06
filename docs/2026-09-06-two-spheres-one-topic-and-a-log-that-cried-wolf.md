@@ -126,10 +126,18 @@ without a transient unit. It answers identically (`is-active`, `show -p`,
 `list-units`, and `CanStart` says start/stop work too), so it is a drop-in for
 `_systemctl_user()`.
 
-**Not shipped in this pass.** The change belongs to `nexusq-control`, whose
-source another session is mid-edit on with an r37 apk already built and waiting
-for approval; landing it there now would either strand that build or publish it.
-It is queued as **r38** behind that commit.
+**Shipped as r38** once r37 was approved and out. `--init-groups` rather than
+the `--clear-groups` used in the measurement above: clearing supplementary
+groups drops `audio`, which the units started through this helper (librespot,
+roon, shairport-sync) need. Re-measured in the shipped form against a 20 s idle
+baseline, one isolated call each — `--machine` **7** noise lines, `setpriv`
+**0** — with identical answers from `is-active`, `show -p ActiveState`,
+`list-units` and `CanStart`.
+
+The baseline itself is worth recording: the box emits this noise ~5 lines per
+20 s while anything is opening sessions (during the measurement, a concurrent
+read-only diagnostic sshing in). Logins keep producing it; only the bridge's own
+polling is gone.
 
 ## 3. The build log that cried wolf
 

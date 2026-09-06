@@ -8,6 +8,35 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Fixed — the bridge opened a login session every time it asked about a user unit (nexusq-control r38, OTA, 2026-09-06)
+- **`_systemctl_user()` used `--machine=user@.host`, which opens a PAM session
+  and a transient unit per call.** On systemd 262 every unit start on this image
+  emits five lines of journal noise — `systemd-coredumpd.service: Skipped due to
+  'exec-condition'`, `Dependency failed for Kernel Core Pattern Register` and two
+  `Failed to read pids.max`. The bridge polls, so that was the reported "noise on
+  every 5-minute poll", ~288 sessions a day of it.
+- **The comment beside that call said `--machine` was the only transport allowed
+  — true, and incomplete.** Root cannot connect to another user's bus
+  (`systemctl --user` as root is refused outright: *Operation not permitted*),
+  but root need not stay root. `setpriv --reuid=10000 --regid=10000
+  --init-groups` drops to the appliance user with no PAM, no session and no
+  transient unit, and the plain `--user` transport is then available.
+  `--init-groups`, not `--clear-groups`: the units started through here
+  (librespot, roon, shairport-sync) need the `audio` group.
+- **Measured on the device, one isolated call each**, against a 20 s idle
+  baseline: `--machine` **7** noise lines, `setpriv` **0**. Answers are
+  identical for `is-active`, `show -p ActiveState`, `list-units` and `CanStart`,
+  so start/stop keep working. Five new tests assert the transport, the absence
+  of `--machine`, the manager environment, that the systemctl command itself is
+  unchanged and that the timeout is still honoured; all were seen failing first.
+- **What this does not fix:** the noise itself is upstream and stays for anything
+  else that starts a unit (a login, for instance). `systemd-coredump
+  --check-requirements` fails because 6.18.48 reports `PIDFD_INFO_COREDUMP`
+  without `PIDFD_INFO_COREDUMP_SIGNAL` — probed directly on the device — and
+  Alpine ships systemd **262~rc1**, which requires both. The `pids.max` half is
+  `CONFIG_CGROUP_PIDS` missing from `steelhead_defconfig`, worth folding into the
+  next kernel bump rather than spending a kernel OTA on.
+
 ### Fixed — Home Assistant showed the cottage Q under Prague's entities (nexusq-mqtt r5, OTA, 2026-09-06)
 - **`sensor.nexus_q_*` carried the wrong box for about seven hours.** Prague's
   entities read the cottage unit's numbers from 08:13 UTC until 16:08 UTC, and

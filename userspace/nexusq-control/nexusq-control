@@ -569,24 +569,55 @@ SERVICES = [
 _SERVICE_BY_ID = {s["id"]: s for s in SERVICES}
 
 
+# The appliance user: uid 10000, its manager kept up by linger independently of
+# any graphical session (see set_desktop), its bus where systemd always puts it.
+_USER_UID = 10000
+_USER_RUNTIME_DIR = f"/run/user/{_USER_UID}"
+_USER_BUS = f"unix:path={_USER_RUNTIME_DIR}/bus"
+
+
 def _systemctl_user(*args, timeout=15):
     """systemctl against the uid-10000 `user` manager from this root system service.
 
-    `user@.host` is the local user named `user` (= uid 10000); linger keeps that
-    manager up independently of any graphical session (see set_desktop)."""
+    Root cannot connect to another user's bus -- `systemctl --user` as root is
+    refused outright ("Failed to connect to user scope bus via local transport:
+    Operation not permitted"), which is why this used `--machine=user@.host` and
+    why the comment below still says that transport is the only one allowed. It
+    is the only one available TO ROOT. Root does not have to stay root: dropping
+    to uid 10000 first makes the plain `--user` transport available, and
+    `setpriv` does that with no PAM, no login session and no transient unit.
+
+    That is the whole reason for the change. `--machine` opens a session per
+    call, and on systemd 262 every unit start on this image emits five lines of
+    journal noise -- `systemd-coredumpd.service: Skipped due to
+    'exec-condition'`, `Dependency failed for Kernel Core Pattern Register` and
+    two `Failed to read pids.max` (the coredump manager's ExecCondition fails
+    because 6.18 reports PIDFD_INFO_COREDUMP without PIDFD_INFO_COREDUMP_SIGNAL,
+    and CONFIG_CGROUP_PIDS is off in our defconfig). This service polls, so that
+    was ~288 sessions a day of it. Measured on the device over three calls:
+    34 noise lines through `--machine`, 0 through `setpriv`, with identical
+    answers from is-active, show -p, list-units and CanStart.
+
+    NOT `--clear-groups`: that drops `audio` as well, and the units started
+    through here (librespot, roon, shairport-sync) need it. `--init-groups`
+    gives the user exactly its own supplementary groups."""
     return subprocess.run(
-        ["systemctl", "--machine=user@.host", "--user", *args],
+        ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
+         "--init-groups", "env",
+         f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
+         f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
+         "systemctl", "--user", *args],
         capture_output=True, text=True, timeout=timeout,
     )
 
 
 # A user unit runs under this cgroup; it is ACTIVE iff its cgroup has processes.
-# We read that directly instead of `systemctl --machine=user@.host --user
-# is-active`: the --machine transport is the ONLY one allowed (the local user bus
-# refuses a root connection), and it costs ~2 s PER CALL — with the Settings
-# screen polling listServices every 3 s, that latency made the whole app<->bridge
-# connection look unhealthy and the app dropped it ("no Nexus Q found",
-# 2026-07-17). The cgroup read is instant. uid 10000 is fixed (the appliance user).
+# We read that directly instead of asking systemctl: even now that the call no
+# longer opens a session (see _systemctl_user), it is a process spawn, and it
+# cost ~2 s PER CALL through --machine — with the Settings screen polling
+# listServices every 3 s, that latency made the whole app<->bridge connection
+# look unhealthy and the app dropped it ("no Nexus Q found", 2026-07-17). The
+# cgroup read is instant. uid 10000 is fixed (the appliance user).
 _USER_CGROUP = ("/sys/fs/cgroup/user.slice/user-10000.slice/"
                 "user@10000.service/app.slice")
 
