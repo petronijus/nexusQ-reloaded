@@ -49,16 +49,44 @@ mode only ever trusted its own `asleep` flag.
   prints `ERROR: failed to source APKBUILD` for all 8 non-device aports
   (subshell `source` under `set -e`, cosmetic — the build itself is fine).
 
-**Still open from the same diagnosis (none urgent):**
+**The rest of that list was worked through the same evening** — record:
+`docs/2026-09-06-two-spheres-one-topic-and-a-log-that-cried-wolf.md`.
 
-- systemd-262 `systemd-coredumpd` / `Kernel Core Pattern Register` / `pids.max`
-  journal noise on every login and every 5-minute `nexusq-control` poll —
-  packaging-side, `coredumpctl` empty.
-- Home Assistant `sensor.nexus_q_*` shows the **cottage** unit since Sep 5 17:44
-  (prefix / node_id collision, or Prague's discovery lost Sep 3). `ha-opp-window.py`
-  reads the wrong box until sorted.
+- ✅ **Home Assistant showed the cottage under Prague's entities** — fixed and
+  verified (`nexusq-mqtt` **r5**, published, installed on Prague). It was NOT a
+  topic collision on the wire: each box was publishing to its own prefix. The
+  flat `<prefix>/health/state` simply names no device, so HA had nothing to
+  disambiguate with. Topics are now `<prefix>/<node_id>/…` and the Will lives
+  there too; the flat ones stay for the app, marked legacy. Prague's entities
+  came back within one publish.
+- ✅ **Build log cried wolf** — `docker-build.sh` reported `ERROR: failed to
+  source APKBUILD` for 9 of 11 aports on every build. Cause was `set -u`
+  (an APKBUILD expands `$srcdir` at top level), not a broken aport. Fixed, and
+  a genuinely broken APKBUILD is still reported.
+- ⚠️ **systemd-262 journal noise — upstream, not ours.** `systemd-coredump
+  --check-requirements` fails because 6.18.48 returns `PIDFD_INFO_COREDUMP` but
+  not `PIDFD_INFO_COREDUMP_SIGNAL` (probed directly on the device; the kernel
+  source only sets the signal flag when a dump really happened) and Alpine ships
+  systemd **262~rc1**, which wants both. The `pids.max` half is
+  `CONFIG_CGROUP_PIDS` missing from `steelhead_defconfig` — a one-line change
+  worth folding into the next kernel bump, not worth a kernel OTA alone.
+  **What IS ours:** `nexusq-control`'s `_systemctl_user()` uses
+  `--machine=user@.host`, which opens a PAM session per call and emits the noise
+  288×/day. Measured replacement: `setpriv --reuid=10000 --regid=10000
+  --clear-groups env XDG_RUNTIME_DIR=… DBUS_SESSION_BUS_ADDRESS=… systemctl
+  --user` — identical answers, **zero** noise lines. Queued as **r38**, behind
+  the other session's r37 commit; do not land it on top of r37 unpublished.
 - USB host streaming silence into the gadget (~30 % of a core, documented cost)
-  is now the largest idle consumer.
+  is now the largest idle consumer. Host-side, not a device fault.
+
+**🚨 Release-tooling gap, hit for real:** `publish-ota-repo.sh` ships the newest
+build of every listed package from the shared volume, so publishing
+`nexusq-mqtt` r5 also published another session's unapproved `nexusq-control`
+r37. Rolled back in minutes (apk parked in
+`packages/edge/armv7/.held-unapproved/`, gh-pages `43173cd` back to r36, no
+device took it), but a Q that ran `apk update` inside that window then failed
+its next upgrade with `HTTP 404` until `apk update` was re-run. Nothing can
+currently express "built, not approved" — fix candidates in the dated note.
 
 ---
 
