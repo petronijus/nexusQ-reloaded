@@ -8,7 +8,20 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
-### Added — the app's player controls finally control something (app 1.18.0, unreleased)
+### Fixed — an update no longer dies with the Settings screen (app 1.18.1, unreleased)
+- **Leaving Settings mid-update abandoned the phone's half of it.** The three
+  tracks (app, device daemons, full system) lived in the screen's State behind
+  `if (!mounted) return;` — the device kept installing, but the verify loop
+  stopped, progress vanished, and a reopened Settings started from scratch and
+  offered the same update again over an install still running (Petr,
+  2026-09-06). Now `UpdateCoordinator` (one per client, alive as long as the
+  client) owns the flows; Settings renders it and calls into it, and the home
+  screen's app bar shows a spinner leading back to Settings while anything is
+  in flight. Same behaviour and wording otherwise. Six coordinator tests drive
+  the flows with a bridge-like client (install drops the link, re-check answers
+  late, busy reply) and no widget at all.
+
+### Added — the app's player controls finally control something (app 1.18.0, released 2026-09-06 as `app-v1.18.0`)
 - **Play/pause/next/previous now follow `nowPlaying.transport`** (PROTOCOL §5).
   They had been enabled and dead since the row existed: the bridge has no
   AirPlay/Roon backend (so `none`) and says `spotify-web` for Spotify, which the

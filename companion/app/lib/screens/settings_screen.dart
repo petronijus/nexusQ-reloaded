@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:simple_icons/simple_icons.dart';
-import '../build_info.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import '../spotify/spotify_auth.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
+import '../update/update_coordinator.dart';
 import 'debug_log_screen.dart';
 import 'health_screen.dart';
 import 'service_log_screen.dart';
@@ -39,317 +39,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _deviceRoom = '';
   bool _renaming = false;
 
-  // --- app update state ---
-  bool _checkingUpdate = false;
-  AppRelease? _update; // non-null = a newer app version is available
-  bool _downloading = false; // true for the whole download (gates the UI)
-  double? _downloadProgress; // 0..1 when length known; null = indeterminate
-  int _downloadBytes = 0; // bytes received so far (shown when length unknown)
-  String? _updateError;
-
-  // --- Nexus Q (device) daemon-update state ---
-  Map<String, dynamic>? _nexusCheck; // result of checkNexusUpdate
-  bool _checkingNexus = false;
-  bool _installingNexus = false;
-  String? _nexusError;
-
-  bool get _nexusUpdateAvailable => _nexusCheck?['updateAvailable'] == true;
-
-  // --- full-system (apt-like) update state; checked on demand (heavier) ---
-  Map<String, dynamic>? _systemCheck; // result of checkSystemUpdate
-  bool _checkingSystem = false;
-  bool _installingSystem = false;
-  String? _systemError;
-  String? _systemProgress; // live phase message shown while installing
-
-  bool get _systemUpdateAvailable => _systemCheck?['updateAvailable'] == true;
-
-  // The "App update" card merges the phone app AND the device daemons: ONE
-  // indicator, one button. It's "available" when EITHER the app or a device
-  // daemon has a newer build; the install does whichever is needed (device
-  // daemons first, then the app — the app install restarts the phone, so it goes
-  // last, onto an already-updated device).
-  bool get _companionUpdateAvailable => _update != null || _nexusUpdateAvailable;
-  bool get _companionBusy => _downloading || _installingNexus;
+  // --- the update flows live in UpdateCoordinator (they survive this screen) ---
+  late final UpdateCoordinator _upd = UpdateCoordinator.forClient(widget.client);
+  void _onUpdate() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
-    _checkUpdate(); // silent auto-check on open (app track)
-    _checkNexusUpdate(); // and the device track — else the section reads empty
-    // every time Settings is reopened until you tap Check again.
-  }
-
-  Future<void> _checkUpdate() async {
-    // No app-track outside Android (see AppUpdate.selfUpdateSupported): _update
-    // stays null, so the merged card degrades to the device-daemon track alone.
-    if (!AppUpdate.selfUpdateSupported) return;
-    if (_checkingUpdate) return;
-    setState(() {
-      _checkingUpdate = true;
-      _updateError = null;
-    });
-    // fetchLatest (not checkForUpdate) so a network/parse failure is DISTINCT from
-    // "up to date": returning null from checkForUpdate meant both, so a failed
-    // check silently read as up-to-date. Here null == fetch failed -> show it.
-    final rel = await AppUpdate.fetchLatest();
-    if (!mounted) return;
-    setState(() {
-      _checkingUpdate = false;
-      if (rel == null) {
-        _update = null;
-        _updateError = 'Update check failed — check your connection.';
-      } else if (!AppUpdate.knowsOwnVersion) {
-        // A build with no APP_VERSION cannot compare itself to anything. Saying
-        // so beats offering an update it would install forever (see AppUpdate).
-        _update = null;
-        _updateError = 'This build has no version stamp — build with '
-            'build-apk.sh to enable update checks.';
-      } else if (rel.versionCode <= AppUpdate.currentVersionCode!) {
-        _update = null; // genuinely up to date
-      } else {
-        _update = rel;
-      }
-    });
-  }
-
-  Future<void> _installUpdate() async {
-    final rel = _update;
-    if (rel == null || _downloading) return;
-    setState(() {
-      _downloading = true;
-      _downloadProgress = 0;
-      _downloadBytes = 0;
-      _updateError = null;
-    });
-    try {
-      final path = await AppUpdate.downloadApk(rel, (frac, received) {
-        if (mounted) {
-          setState(() {
-            _downloadProgress = frac;
-            _downloadBytes = received;
-          });
-        }
-      });
-      await AppUpdate.install(path); // OS installer takes over
-      if (mounted) setState(() => _downloading = false);
-    } catch (e) {
-      AppLog.add('update', 'install failed: $e', warn: true);
-      if (mounted) {
-        setState(() {
-          _downloading = false;
-          _updateError = 'Update failed. Try again.';
-        });
-      }
+    _upd.addListener(_onUpdate);
+    // Silent auto-check on open (app track + device track — else the section
+    // reads empty until you tap Check). A flow already in flight from a previous
+    // visit simply keeps going; its state is what this screen now shows.
+    if (!_upd.busy) {
+      _upd.checkUpdate();
+      _upd.checkNexusUpdate();
     }
-  }
-
-  Future<void> _checkNexusUpdate() async {
-    if (_checkingNexus || _installingNexus) return;
-    setState(() {
-      _checkingNexus = true;
-      _nexusError = null;
-    });
-    final r = await _call('checkNexusUpdate', null, true);
-    if (!mounted) return;
-    setState(() {
-      _checkingNexus = false;
-      _nexusCheck = r;
-    });
-  }
-
-  Future<void> _installNexusUpdate() async {
-    if (_installingNexus) return;
-    setState(() {
-      _installingNexus = true; // UI shows "Installing…" until verified
-      _nexusError = null;
-      // keep _nexusCheck: its package list is what the UI shows as "what's
-      // installing"; clearing it hid the whole install block (it was gated on
-      // _nexusUpdateAvailable) so the app showed no feedback during an install.
-    });
-    // Installing upgrades the daemons and RESTARTS them — including the control
-    // bridge, which necessarily drops THIS connection. So a null/timeout from
-    // the call is EXPECTED, not a failure: the device may well have succeeded.
-    // We confirm the real outcome by reconnecting and re-checking the version,
-    // never by this call's return value (which used to be read as "failed").
-    await _call('installNexusUpdate', null, true);
-    if (!mounted) return;
-    await Future.delayed(const Duration(seconds: 8)); // daemons restart + relink
-    await _verifyNexusInstall();
-  }
-
-  /// Confirm an install by re-checking the device: no update pending == success;
-  /// still pending after a few retries == genuinely failed. Retries because the
-  /// device may still be settling and the link still reconnecting.
-  Future<void> _verifyNexusInstall() async {
-    for (var attempt = 0; attempt < 4; attempt++) {
-      if (!mounted) return;
-      final r = await _call('checkNexusUpdate', null, true);
-      if (!mounted) return;
-      if (r != null) {
-        final stillPending = r['updateAvailable'] == true;
-        setState(() {
-          _installingNexus = false;
-          _nexusCheck = r;
-          _nexusError =
-              stillPending ? 'Device update failed. Try again.' : null;
-        });
-        return;
-      }
-      await Future.delayed(const Duration(seconds: 3)); // link not back yet, retry
-    }
-    // Couldn't reach the device after retries — inconclusive, not a hard failure.
-    if (mounted) {
-      setState(() {
-        _installingNexus = false;
-        _nexusError = 'Update sent — reopen Settings to confirm.';
-      });
-    }
-  }
-
-  // --- full-system update (checked on demand — apk version -l is heavier) ---
-  Future<void> _checkSystemUpdate() async {
-    if (_checkingSystem || _installingSystem) return;
-    setState(() {
-      _checkingSystem = true;
-      _systemError = null;
-    });
-    final r = await _call('checkSystemUpdate', null, true);
-    if (!mounted) return;
-    setState(() {
-      _checkingSystem = false;
-      // busy=true means the device is mid-install (control r26 serializes apk):
-      // don't overwrite the last known result, just say so.
-      if (r != null && r['busy'] == true) {
-        _systemError = 'An update is already in progress — try again shortly.';
-      } else {
-        _systemCheck = r;
-      }
-    });
-  }
-
-  Future<void> _installSystemUpdate() async {
-    if (_installingSystem) return;
-    setState(() {
-      _installingSystem = true;
-      _systemError = null;
-      _systemProgress = 'Downloading & installing packages on the Q…';
-    });
-    // A full-system upgrade restarts the daemons — and may REBOOT the Q (base
-    // libc/init churn) — so the call's disconnect is EXPECTED, not a failure.
-    // apk exposes no percentage, so we narrate the phases we DO know instead:
-    // installing → applying/restarting → reconnecting → verifying.
-    await _call('installSystemUpdate', null, true);
-    if (!mounted) return;
-    setState(() =>
-        _systemProgress = 'Applying updates — the Q may restart to finish…');
-    await Future.delayed(const Duration(seconds: 12));
-    await _verifySystemInstall();
-  }
-
-  Future<void> _verifySystemInstall() async {
-    for (var attempt = 0; attempt < 8; attempt++) {
-      if (!mounted) return;
-      setState(() => _systemProgress = attempt == 0
-          ? 'Reconnecting to the Q…'
-          : 'Reconnecting to the Q… (${attempt + 1}/8)');
-      final r = await _call('checkSystemUpdate', null, true);
-      if (!mounted) return;
-      // Wait past a transient disconnect (reboot) OR a busy reply (control still
-      // finishing its install lock) before judging.
-      if (r != null && r['busy'] != true) {
-        final stillPending = r['updateAvailable'] == true;
-        setState(() {
-          _installingSystem = false;
-          _systemProgress = null;
-          _systemCheck = r;
-          // A leftover upgradable package is NOT a failure (the install ran and
-          // the device came back) — only nudge the user to run it again.
-          _systemError = stillPending
-              ? 'Installed — a few packages still pending; tap Update system '
-                  'again to finish them.'
-              : null;
-        });
-        return;
-      }
-      await Future.delayed(const Duration(seconds: 5)); // device still rebooting
-    }
-    if (mounted) {
-      setState(() {
-        _installingSystem = false;
-        _systemProgress = null;
-        _systemError = 'Update sent — reopen Settings to confirm it applied.';
-      });
-    }
-  }
-
-  String _systemStatusLine() {
-    final c = _systemCheck;
-    if (c == null) return 'Tap ⟳ to check the kernel + all system packages.';
-    final kernel = c['kernel'] ?? '?';
-    final pkgs = (c['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    if (_systemUpdateAvailable) {
-      return 'Kernel $kernel · ${pkgs.length} package'
-          '${pkgs.length == 1 ? '' : 's'} can be updated';
-    }
-    return 'Kernel $kernel · up to date';
-  }
-
-  // --- the merged "App update" (phone app + device daemons) ----------------
-  Future<void> _checkCompanion() async {
-    await Future.wait([_checkUpdate(), _checkNexusUpdate()]);
-  }
-
-  /// One "Update" action for the whole companion. Device daemons go FIRST (the
-  /// app drives that over the link, and installing the app restarts the phone),
-  /// then the phone app. Whichever side has no update is simply skipped.
-  Future<void> _installCompanion() async {
-    if (_companionBusy) return;
-    if (_nexusUpdateAvailable) {
-      await _installNexusUpdate(); // ring narration + verify-by-recheck
-    }
-    if (!mounted) return;
-    if (_update != null) {
-      await _installUpdate(); // download + hand to the OS installer (restarts app)
-    }
-  }
-
-  /// Merged release notes: the app's notes + which device daemons are upgrading.
-  String _companionStatusLine() {
-    final parts = <String>[];
-    if (_update != null) {
-      parts.add(_update!.notes.isNotEmpty
-          ? 'App v${_update!.version} — ${_update!.notes}'
-          : 'App v${_update!.version}');
-    }
-    if (_nexusUpdateAvailable) {
-      final pkgs =
-          (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      final up = pkgs
-          .where((p) => p['upgradable'] == true)
-          .map((p) => '${p['name']} → ${p['available']}');
-      parts.add('Device software: ${up.join(', ')}');
-    }
-    if (parts.isNotEmpty) return parts.join('\n');
-    // up to date — anchor on both installed versions
-    final ctrl = ((_nexusCheck?['packages'] as List?)
-                ?.cast<Map<String, dynamic>>() ??
-            [])
-        .firstWhere((p) => p['name'] == 'nexusq-control',
-            orElse: () => {'installed': '?'});
-    // On iOS the app binary is App Store/TestFlight-managed and never fetched
-    // for comparison here, so qualify it rather than implying a completed check.
-    final app = AppUpdate.selfUpdateSupported
-        ? 'App v$kAppVersion'
-        : 'App v$kAppVersion (App Store)';
-    return '$app · device nexusq-control ${ctrl['installed']}';
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _upd.removeListener(_onUpdate);
     super.dispose();
   }
 
@@ -644,18 +358,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _companionBusy
+                        _upd.companionBusy
                             ? Icons.downloading
-                            : (_companionUpdateAvailable
+                            : (_upd.companionUpdateAvailable
                                 ? Icons.system_update
                                 : Icons.check_circle_outline),
-                        color: (_companionUpdateAvailable || _companionBusy)
+                        color: (_upd.companionUpdateAvailable || _upd.companionBusy)
                             ? NexusQColors.accent
                             : NexusQColors.dim),
                     title: Text(
-                        _companionBusy
+                        _upd.companionBusy
                             ? 'Updating…'
-                            : (_companionUpdateAvailable
+                            : (_upd.companionUpdateAvailable
                                 // On iOS the phone-app track is never checked
                                 // (App Store-managed), so the card speaks only
                                 // for the device software it actually verified.
@@ -666,12 +380,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ? 'App is up to date'
                                     : 'Device software is up to date')),
                         style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(_companionStatusLine(),
+                    subtitle: Text(_upd.companionStatusLine(),
                         style: const TextStyle(
                             color: NexusQColors.dim, fontSize: 12)),
-                    trailing: (_checkingUpdate ||
-                            _checkingNexus ||
-                            _companionBusy)
+                    trailing: (_upd.checkingUpdate ||
+                            _upd.checkingNexus ||
+                            _upd.companionBusy)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -680,18 +394,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: const Icon(Icons.refresh,
                                 color: NexusQColors.dim),
                             tooltip: 'Check for updates',
-                            onPressed: _checkCompanion),
+                            onPressed: _upd.checkCompanion),
                   ),
-                  if (_updateError != null || _nexusError != null)
+                  if (_upd.updateError != null || _upd.nexusError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_updateError ?? _nexusError!,
+                      child: Text(_upd.updateError ?? _upd.nexusError!,
                           style: const TextStyle(
                               color: Colors.orangeAccent, fontSize: 12)),
                     ),
                   // Progress area — device daemons first (activity bar), then the
                   // phone app download (determinate bar), then the Update button.
-                  if (_installingNexus)
+                  if (_upd.installingNexus)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
@@ -715,7 +429,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     )
-                  else if (_downloading)
+                  else if (_upd.downloading)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
@@ -728,7 +442,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
-                              value: _downloadProgress,
+                              value: _upd.downloadProgress,
                               minHeight: 8,
                               color: NexusQColors.accent,
                               backgroundColor: NexusQColors.divider,
@@ -736,21 +450,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                              _downloadProgress != null
-                                  ? 'Downloading app… ${(_downloadProgress! * 100).round()}%'
-                                  : 'Downloading app… ${(_downloadBytes / 1048576).toStringAsFixed(1)} MB',
+                              _upd.downloadProgress != null
+                                  ? 'Downloading app… ${(_upd.downloadProgress! * 100).round()}%'
+                                  : 'Downloading app… ${(_upd.downloadBytes / 1048576).toStringAsFixed(1)} MB',
                               style: const TextStyle(
                                   color: NexusQColors.dim, fontSize: 11)),
                         ],
                       ),
                     )
-                  else if (_companionUpdateAvailable)
+                  else if (_upd.companionUpdateAvailable)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
-                          onPressed: _installCompanion,
+                          onPressed: _upd.installCompanion,
                           icon: const Icon(Icons.download, size: 18),
                           label: const Text('Update'),
                         ),
@@ -768,25 +482,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _installingSystem
+                        _upd.installingSystem
                             ? Icons.downloading
-                            : (_systemUpdateAvailable
+                            : (_upd.systemUpdateAvailable
                                 ? Icons.system_update_alt
                                 : Icons.dns),
-                        color: (_installingSystem || _systemUpdateAvailable)
+                        color: (_upd.installingSystem || _upd.systemUpdateAvailable)
                             ? NexusQColors.accent
                             : NexusQColors.dim),
                     title: Text(
-                        _installingSystem
+                        _upd.installingSystem
                             ? 'Installing system update…'
-                            : (_systemUpdateAvailable
+                            : (_upd.systemUpdateAvailable
                                 ? 'System update available'
                                 : 'System software'),
                         style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(_systemStatusLine(),
+                    subtitle: Text(_upd.systemStatusLine(),
                         style: const TextStyle(
                             color: NexusQColors.dim, fontSize: 12)),
-                    trailing: (_checkingSystem || _installingSystem)
+                    trailing: (_upd.checkingSystem || _upd.installingSystem)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -795,16 +509,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: const Icon(Icons.refresh,
                                 color: NexusQColors.dim),
                             tooltip: 'Check for system updates',
-                            onPressed: _checkSystemUpdate),
+                            onPressed: _upd.checkSystemUpdate),
                   ),
-                  if (_systemError != null)
+                  if (_upd.systemError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_systemError!,
+                      child: Text(_upd.systemError!,
                           style: const TextStyle(
                               color: Colors.orangeAccent, fontSize: 12)),
                     ),
-                  if (_installingSystem)
+                  if (_upd.installingSystem)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
@@ -823,7 +537,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           // → reconnecting → verifying); apk has no % so we narrate
                           // the stages we know.
                           Text(
-                            _systemProgress ??
+                            _upd.systemProgress ??
                                 'Upgrading all packages on the device.',
                             style: const TextStyle(
                                 color: NexusQColors.white, fontSize: 12),
@@ -838,13 +552,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     )
-                  else if (_systemUpdateAvailable)
+                  else if (_upd.systemUpdateAvailable)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
-                          onPressed: _installSystemUpdate,
+                          onPressed: _upd.installSystemUpdate,
                           icon: const Icon(Icons.download, size: 18),
                           label: const Text('Update system'),
                         ),

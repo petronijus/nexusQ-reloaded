@@ -5,6 +5,7 @@ import '../protocol/models.dart';
 import '../spotify/transport_rules.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
+import '../update/update_coordinator.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
 import 'debug_log_screen.dart';
@@ -99,6 +100,21 @@ class _HomeScreenState extends State<HomeScreen> {
             // reads as a label for the thing above it. It used to appear here as
             // well, which was the same word twice on one screen.
             actions: [
+              // An update running on any track keeps running when Settings is
+              // closed (UpdateCoordinator); say so here, and lead back to it.
+              ListenableBuilder(
+                listenable: UpdateCoordinator.forClient(controller.client),
+                builder: (context, _) => UpdateCoordinator.forClient(controller.client).busy
+                    ? IconButton(
+                        tooltip: 'Update in progress',
+                        icon: const SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: NexusQColors.accent)),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => SettingsScreen(client: controller.client))),
+                      )
+                    : const SizedBox.shrink(),
+              ),
               // Debug mode (Devices → Developer): quick access to the connection
               // log, right where the "Disconnected" banner appears — so the user
               // can open the evidence the moment they see the symptom.
