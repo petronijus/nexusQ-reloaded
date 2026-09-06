@@ -36,6 +36,38 @@ SUB="${NQ_UAC2_ALOOP_SUB:-0}"            # aloop substream pair to use
 SRC="${NQ_UAC2_SOURCE:-usb_in}"          # PA source name
 TLAT="${NQ_UAC2_TLATENCY:-80000}"        # alsaloop -t target loop latency (us)
 LOOPLAT="${NQ_UAC2_LOOPLAT:-120}"        # module-loopback latency_msec (lip-sync cushion)
+LOOPMAX="${NQ_UAC2_LOOPMAX:-200}"        # module-loopback max_latency_msec (the ceiling)
+# alsaloop sync mode, TUNABLE because the right answer is not yet measured.
+#
+# `simple` copies samples and corrects nothing, so the USB host's clock and the
+# aloop's timer drift apart until the loop runs dry -- an XRUN `simple` cannot
+# recover from (see the wedge handling below). Those underruns are what makes
+# module-loopback grow its cushion, so they are the ROOT of the delay the ceiling
+# above merely bounds.
+#
+# Two candidate corrections exist on this hardware, both without pulling in
+# libsamplerate (the objection to `samplerate`):
+#   captshift  - the UAC2 gadget exposes `Capture Pitch 1000000`, i.e. the USB
+#                async feedback channel: ask the HOST to adjust.
+#   playshift  - snd-aloop exposes `PCM Rate Shift 100000` (80000..120000) per
+#                subdevice: adjust the virtual card we own instead.
+#
+# Neither is the default yet, because neither has been SEEN working. Probed on
+# 2026-09-06: alsaloop prints "Opened PCM element Capture Pitch ..." under every
+# mode including `simple`, so the banner proves nothing, and an aloop->aloop rig
+# left `PCM Rate Shift` at 100000 throughout -- correctly, since both ends of
+# that rig share one timer and there was no drift to correct. Deciding between
+# them needs the real pair (async gadget -> timer-clocked loop) with audio
+# actually flowing, i.e. the USB host playing. Until that A/B is run, ship what
+# was already proven in the field.
+#
+# To run the A/B:  systemctl --user set-environment NQ_UAC2_SYNC=captshift
+#                  systemctl --user restart nexusq-uac2-in
+#                  then watch `amixer -c UAC2Gadget cget numid=1` (captshift) or
+#                  `amixer -c Loopback cget numid=1` (playshift) move off its
+#                  centre while the host streams, and whether the loopback's
+#                  Buffer Latency stops climbing across a long session.
+SYNC="${NQ_UAC2_SYNC:-simple}"
 
 pa() { pactl "$@" 2>/dev/null; }         # returns pactl stdout (module index on load)
 
@@ -90,7 +122,7 @@ done
 # Start the async->stable bridge: UAC2 gadget capture -> snd-aloop playback side.
 start_alsaloop() {
 	alsaloop -C "hw:$CARD" -P "hw:$ALOOP,0,$SUB" -r 48000 -c 2 -f S16_LE \
-		--sync=simple -t "$TLAT" &
+		--sync="$SYNC" -t "$TLAT" &
 	ALPID=$!
 }
 start_alsaloop
@@ -126,8 +158,23 @@ start_source() {
 # the app selects. Regression test: tests/test_loopback_source_pinned.sh
 start_loopback() {
 	MOD_LB=$(pa load-module module-loopback source="$SRC" \
-		source_dont_move=true latency_msec="$LOOPLAT")
+		source_dont_move=true latency_msec="$LOOPLAT" \
+		max_latency_msec="$LOOPMAX")
 	fix_loopback_volume
+}
+
+# module-loopback raises its own buffer whenever it underruns and NEVER lowers it
+# again. Over a service uptime measured in days that only accumulates: on
+# 2026-09-06 the Prague Q sat at 243 ms against a configured 120 (Roon: 347
+# against 250) after 5 days up with zero restarts, heard as a constant lip-sync
+# offset with nothing in the log for the last 200 ms of it. `max_latency_msec`
+# above is the ceiling; this is the other half -- a cushion earned by an old
+# listening session is of no use to a new one, so unparking rebuilds the hop at
+# $LOOPLAT. Free to do here: the host is not streaming yet.
+reset_loopback() {
+	[ -n "$MOD_LB" ] && pa unload-module "$MOD_LB" >/dev/null 2>&1
+	MOD_LB=""
+	start_loopback
 }
 # module-loopback's sink-input can come up MUTED / attenuated: module-stream-restore
 # restores a saved volume/mute for the "Loopback from USBAudio" stream, and a stale
@@ -382,6 +429,7 @@ while : ; do
 				echo "nexusq-uac2-in: host started streaming at ${_r} Hz" \
 				     "— USB audio live again" >&2
 				start_alsaloop
+				reset_loopback
 				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW=""
 				ensure_modules
 				continue ;;
@@ -407,6 +455,7 @@ while : ; do
 			if [ -n "$_a" ] && [ -n "$_b" ] && [ "$_a" != "$_b" ]; then
 				echo "nexusq-uac2-in: input resumed (hw_ptr $_a -> $_b)" \
 				     "— USB audio live again" >&2
+				reset_loopback
 				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW="$_b"
 			else
 				kill "$ALPID" 2>/dev/null

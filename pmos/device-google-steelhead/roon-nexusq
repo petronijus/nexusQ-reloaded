@@ -119,8 +119,14 @@ pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {
 	# 2026-09-01 — Roon starting left USB audio streaming into a source nobody
 	# read, with the module still loaded and nothing logged. Pin the capture
 	# side; the sink-input stays movable so Roon follows the chosen output.
+	# max_latency_msec: module-loopback only ever RAISES its buffer (on
+	# underruns) and never lowers it, so without a ceiling the cushion climbs
+	# for as long as the session lasts -- this one was found at 347 ms against
+	# the 250 configured, after 5 days up (2026-09-06). Unlike the USB hop
+	# there is no alsaloop here to re-clock (RoonBridge writes the loop
+	# directly), so the ceiling is the whole fix on this side.
 	pactl load-module module-loopback source=roon_in \
-		source_dont_move=true latency_msec=250 >/dev/null
+		source_dont_move=true latency_msec=250 max_latency_msec=400 >/dev/null
 }
 
 exec bwrap \
