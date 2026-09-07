@@ -1,8 +1,8 @@
 {
   "_comment": "Companion-app OTA manifest. The installed app fetches this from raw.githubusercontent.com (main) on demand, compares versionCode, and offers to download+install the apk when this is newer. Bump BOTH fields on every app release and upload the matching apk as the release asset named below. The app track is versioned INDEPENDENTLY of the Nexus Q image releases.",
-  "version": "1.18.1",
-  "versionCode": 52,
-  "notes": "With more than one Nexus Q on the network, the first screen shows them as they are: each sphere lit in its own colour theme, name and address underneath — tap the one you want; \"Switch Nexus Q\" in the home app bar brings the list back. And an update no longer dies when you leave Settings: the phone keeps verifying and the home screen shows a spinner while anything is installing.",
-  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.18.1/nexusq-companion-1.18.1.apk",
+  "version": "1.21.0",
+  "versionCode": 59,
+  "notes": "Now Playing is a card: cover, title, artist and album, a position bar, and UP NEXT with what follows. AirPlay is controlled like Spotify — the buttons act on it and the state follows. Fixes: logging in to Spotify twice, a title left on screen after the music ended, a play button with nothing to play, and the queue arriving a track late. Needs device nexusq-control r44 + nexusqd r18 for the AirPlay half.",
+  "apkUrl": "https://github.com/petronijus/nexusQ-reloaded/releases/download/app-v1.21.0/nexusq-companion-1.21.0.apk",
   "minAndroidSdk": 21
 }
