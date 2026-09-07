@@ -132,21 +132,28 @@ class SpotifyProgress {
   final bool playing;
   final DateTime sampledAt;
 
-  /// Where the track is NOW: the sample plus the wall clock since, while
-  /// playing. Clamped to the track — a stale sample must never draw a bar past
-  /// its end, and a paused track must not creep.
-  Duration positionAt(DateTime now) {
+  /// Where the track is at [now]: the sample plus the wall clock since.
+  /// Clamped to the track — a stale sample must never draw a bar past its end.
+  ///
+  /// [playing] overrides the sampled flag, and the caller should pass the LIVE
+  /// one. The sample's own flag is only ever as fresh as the fetch, and Spotify
+  /// can still answer `is_playing: false` for a moment after a resume; trusting
+  /// it there left the bar motionless while the music ran. What the sample is
+  /// authoritative about is the POSITION, not whether the track is moving now.
+  Duration positionAt(DateTime now, {bool? playing}) {
     final base = Duration(milliseconds: positionMs);
-    if (!playing) return base;
+    if (!(playing ?? this.playing)) return base;
     final p = base + now.difference(sampledAt);
     final d = Duration(milliseconds: durationMs);
+    if (p.isNegative) return Duration.zero;
     return durationMs > 0 && p > d ? d : p;
   }
 
   /// 0..1, or null when the length is unknown (a live stream, an oddity) —
   /// which the bar draws as nothing rather than as "at the start".
-  double? fractionAt(DateTime now) =>
-      durationMs <= 0 ? null : (positionAt(now).inMilliseconds / durationMs).clamp(0.0, 1.0);
+  double? fractionAt(DateTime now, {bool? playing}) => durationMs <= 0
+      ? null
+      : (positionAt(now, playing: playing).inMilliseconds / durationMs).clamp(0.0, 1.0);
 }
 
 /// What Spotify is playing and what follows it.

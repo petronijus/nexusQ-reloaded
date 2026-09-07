@@ -51,6 +51,32 @@ void main() {
     expect(p.positionAt(_t0), const Duration(seconds: 5));
   });
 
+  // 2026-09-07, the over-correction: the bar was made to move only when the
+  // LIVE flag and the sampled one agreed, and then it did not move at all —
+  // Spotify can still answer `is_playing: false` for a moment after a resume,
+  // and until the next fetch the bar stood still while the music ran. The
+  // sample is authoritative about the POSITION, never about whether the track
+  // is moving now.
+  test('the caller can override a stale sampled flag', () {
+    final stale = at(pos: 30000, playing: false); // Spotify had not caught up
+    expect(stale.positionAt(_t0.add(const Duration(seconds: 10))),
+        const Duration(seconds: 30),
+        reason: 'the sample on its own says frozen');
+    expect(stale.positionAt(_t0.add(const Duration(seconds: 10)), playing: true),
+        const Duration(seconds: 40),
+        reason: 'the live flag wins, which is what the bar passes');
+    expect(stale.fractionAt(_t0.add(const Duration(seconds: 10)), playing: true),
+        closeTo(40000 / 180000, 0.0001));
+  });
+
+  test('a clock that went backwards does not produce a negative position', () {
+    // Wall-clock time can step (NTP, a resume from sleep). A negative position
+    // would render as a bar drawn from the wrong end.
+    final p = at(pos: 1000);
+    expect(p.positionAt(_t0.subtract(const Duration(seconds: 30)), playing: true),
+        Duration.zero);
+  });
+
   test('sampledAt defaults to now, so a fresh sample starts where it says', () {
     final p = SpotifyProgress(positionMs: 1000, durationMs: 2000, playing: false);
     expect(p.positionAt(DateTime.now()).inMilliseconds, closeTo(1000, 50));

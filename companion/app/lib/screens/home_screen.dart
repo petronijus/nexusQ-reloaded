@@ -725,7 +725,10 @@ class _ProgressBarState extends State<_ProgressBar> {
     _arm();
   }
 
-  bool get _moving => widget.playing && widget.progress.playing;
+  /// The LIVE flag decides motion, on its own. Requiring the sampled one to
+  /// agree made the bar stand still whenever Spotify had not caught up with a
+  /// resume yet.
+  bool get _moving => widget.playing;
 
   void _arm() {
     _tick?.cancel();
@@ -753,9 +756,13 @@ class _ProgressBarState extends State<_ProgressBar> {
 
   @override
   Widget build(BuildContext context) {
+    // Up to the freeze instant the track WAS running, so the position is
+    // computed as playing either way; what changes is how far "now" is. A
+    // fresh sample taken while paused has sampledAt ≈ the freeze, so the two
+    // agree to within the round trip.
     final now = _frozenAt ?? DateTime.now();
-    final f = widget.progress.fractionAt(now);
-    final pos = widget.progress.positionAt(now);
+    final f = widget.progress.fractionAt(now, playing: true);
+    final pos = widget.progress.positionAt(now, playing: true);
     final total = Duration(milliseconds: widget.progress.durationMs);
     return Column(
       children: [
