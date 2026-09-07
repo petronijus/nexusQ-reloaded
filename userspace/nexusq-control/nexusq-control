@@ -627,6 +627,120 @@ def _systemctl_user(*args, timeout=15):
     )
 
 
+def _as_user(argv, timeout=10, **kw):
+    """Run `argv` as the uid-10000 user, on its session bus.
+
+    Same discipline as _systemctl_user and for the same reasons: setpriv rather
+    than a login, so there is no PAM session, no transient unit and none of
+    systemd 262's noise per call. `busctl --user` needs exactly this
+    environment, and root cannot reach another user's bus without it.
+    """
+    return subprocess.run(
+        ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
+         "--init-groups", "env",
+         f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
+         f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}", *argv],
+        capture_output=True, text=True, timeout=timeout, **kw)
+
+
+# --- AirPlay, over shairport-sync's MPRIS interface ---------------------------
+# shairport-sync is built with metadata + dbus + mpris, and once pointed at the
+# SESSION bus (the `--dbus-default-message-bus=session` flag on the launcher --
+# the `mpris_service_bus` config key is not read) it publishes
+# org.mpris.MediaPlayer2.ShairportSync with everything the app already knows how
+# to draw: title/artist/album, artwork, length and position, plus Play, Pause,
+# Next and Previous.
+#
+# COST. This must not add anything to an idle box, which is the whole condition
+# Petr set. So nothing here polls: `busctl monitor` blocks in the kernel until
+# shairport announces a change, and a change only happens when someone actually
+# plays, pauses or skips. A read costs one short-lived busctl, and only after
+# such an announcement; a command costs one, and only when a button is pressed.
+# An idle Q spends exactly zero CPU in this file.
+MPRIS_NAME = "org.mpris.MediaPlayer2.ShairportSync"
+MPRIS_PATH = "/org/mpris/MediaPlayer2"
+MPRIS_IFACE = "org.mpris.MediaPlayer2.Player"
+
+
+def _mpris_get(prop, timeout=6):
+    """One MPRIS property, decoded from busctl's JSON. None when shairport is
+    not on the bus at all (not built with mpris, not running, no AirPlay ever)."""
+    try:
+        r = _as_user(["busctl", "--user", "get-property", "--json=short",
+                      MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, prop], timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        return json.loads(r.stdout).get("data")
+    except ValueError:
+        return None
+
+
+def _mpris_metadata():
+    """xesam/mpris metadata as a flat dict. busctl's JSON wraps every value in
+    {"type":..,"data":..}, and an artist is a LIST even when there is one."""
+    raw = _mpris_get("Metadata")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        d = v.get("data") if isinstance(v, dict) else v
+        if isinstance(d, list):
+            d = ", ".join(str(x) for x in d if x)
+        out[k] = d
+    return out
+
+
+class AirPlayTransport:
+    """The `airplay` source's transport backend (see transport_for)."""
+
+    #: MPRIS says what it can do; we only ever send these three.
+    _METHODS = {"playPause": "PlayPause", "next": "Next", "previous": "Previous"}
+
+    #: How long a status the watcher just read stays good enough to answer with.
+    _FRESH_S = 2.0
+
+    def __init__(self):
+        self._status = None
+        self._status_at = 0.0
+
+    def note_status(self, status):
+        """Remember what the watcher just read.
+
+        Without this, one AirPlay change costs THREE busctl calls: the watcher
+        reads PlaybackStatus, then Metadata, and then `_apply_transport` asks
+        `can_control()` which reads PlaybackStatus all over again. Two of those
+        answer the same question a few milliseconds apart. The Q must not get
+        slower for having AirPlay, so the answer is reused instead.
+        """
+        self._status, self._status_at = status, time.monotonic()
+
+    def can_control(self):
+        # Only while a session exists. Stopped means the sender went away, and
+        # offering buttons then would repeat the "play with nothing to play"
+        # mistake the app just had fixed.
+        status = self._status
+        if status is None or time.monotonic() - self._status_at > self._FRESH_S:
+            status = _mpris_get("PlaybackStatus")
+        return status in ("Playing", "Paused")
+
+    def command(self, method):
+        call = self._METHODS.get(method)
+        if call is None:
+            raise Err("bad_request", f"unsupported transport method {method}")
+        try:
+            r = _as_user(["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH,
+                          MPRIS_IFACE, call])
+        except (OSError, subprocess.SubprocessError) as e:
+            raise Err("unavailable", f"AirPlay control failed: {e}")
+        if r.returncode != 0:
+            raise Err("unavailable",
+                      f"AirPlay refused {call}: {(r.stderr or '').strip()[:120]}")
+        return {"ok": True}
+
+
 # A user unit runs under this cgroup; it is ACTIVE iff its cgroup has processes.
 # We read that directly instead of asking systemctl: even now that the call no
 # longer opens a session (see _systemctl_user), it is a process spawn, and it
@@ -1294,6 +1408,62 @@ def _eq_is_flat(st):
                     for b in st["bands"]))
 
 
+def airplay_watch_thread(bridge):
+    """Follow AirPlay through shairport-sync's MPRIS signals.
+
+    `busctl monitor` blocks until something is announced, so this thread costs
+    an idle box nothing at all -- no timer, no poll, no wakeup. It reads the
+    properties only after shairport has said they changed, which is to say only
+    when somebody is actually using AirPlay.
+
+    Restarts itself if shairport (or the bus) goes away: it is normal for the
+    name to be absent until the first AirPlay session, and a watcher that gave
+    up then would never see one.
+    """
+    backoff = 5
+    while True:
+        try:
+            proc = subprocess.Popen(
+                ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
+                 "--init-groups", "env",
+                 f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
+                 f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
+                 "busctl", "--user", "monitor", MPRIS_NAME, "--json=short"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except (OSError, subprocess.SubprocessError) as e:
+            log("airplay: cannot start the MPRIS monitor:", e)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)
+            continue
+
+        log("airplay: watching", MPRIS_NAME)
+        backoff = 5
+        try:
+            for line in proc.stdout:
+                if not line.strip():
+                    continue
+                # Any announcement at all is the cue to re-read. Decoding the
+                # signal body would be a second, redundant parser for the same
+                # facts the property read gives us anyway.
+                try:
+                    bridge.airplay_refresh()
+                except Exception as e:                     # never kill the watcher
+                    log("airplay: refresh failed:", e)
+        except OSError:
+            pass
+        finally:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+        # shairport not on the bus yet is the NORMAL state until the first
+        # AirPlay session, so this is a retry loop, not an error path.
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 120)
+
+
 def eq_restore_thread():
     """Boot re-apply of the persisted EQ. The DAP powers up flat, so a stored
     non-flat EQ must be rewritten after every boot. Retries briefly in case the
@@ -1663,7 +1833,7 @@ class Bridge:
         # source id -> transport backend (see transport_for / dispatch_transport).
         # Empty until a backend registers itself, which is deliberate: an absent
         # backend must report `none`, not a promise it cannot keep.
-        self.transports = {}
+        self.transports = {"airplay": AirPlayTransport()}
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -2262,6 +2432,47 @@ class Bridge:
             events.append(("nowPlayingChanged", np))
         return (result if isinstance(result, dict) else {}), events
 
+    def airplay_refresh(self):
+        """Pull the current AirPlay state into nowPlaying.
+
+        Called only from the MPRIS watcher, i.e. only after shairport said
+        something changed. AirPlay carries no queue -- the protocol sends the
+        current item and nothing about what follows -- so the app simply draws
+        no UP NEXT for it, which is what it already does when there is none.
+        """
+        status = _mpris_get("PlaybackStatus")
+        if status is None:
+            return
+        # Hand it to the backend so `_apply_transport` below does not ask again.
+        backend = self.transports.get("airplay")
+        if backend is not None:
+            backend.note_status(status)
+        with self.lock:
+            cur = dict(self.state["nowPlaying"])
+        if status == "Stopped":
+            # The sender went away. Same rule as librespot's `stopped`: nothing
+            # is loaded, so the app must show nothing.
+            if cur.get("source") != "airplay":
+                return
+            np = dict(cur, track="", artist="", album="", artUrl="",
+                      source="", playing=False)
+        else:
+            m = _mpris_metadata()
+            np = dict(cur,
+                      track=str(m.get("xesam:title") or ""),
+                      artist=str(m.get("xesam:artist") or ""),
+                      album=str(m.get("xesam:album") or ""),
+                      # mpris:artUrl is a file:// path in shairport's cache,
+                      # which a phone cannot fetch. Left empty until the bridge
+                      # can serve it; the app already draws a placeholder.
+                      artUrl="",
+                      source="airplay",
+                      playing=(status == "Playing"))
+        self._apply_transport(np)
+        with self.lock:
+            self.state["nowPlaying"] = np
+        self.broadcast("nowPlayingChanged", np)
+
     # --- librespot hook (internal, over the unix socket) ----------------
     def on_hook(self, obj):
         kind = obj.get("kind", "")
@@ -2595,6 +2806,7 @@ def main():
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
+    threading.Thread(target=airplay_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
     publish_mdns()
 

@@ -26,4 +26,12 @@ EOF
 # -a overrides the (unset) config name. shairport-sync advertises via avahi, which
 # re-announces on interface changes, so no explicit wlan0-IP wait is needed here
 # (unlike librespot's libmdns, which had to be pinned to the wlan0 address).
-exec /usr/bin/shairport-sync -c /etc/nexusq/shairport-sync.conf -a "$NQ_NAME"
+# --dbus-default-message-bus=session: shairport-sync defaults its D-Bus and
+# MPRIS interfaces to the SYSTEM bus, where it has no policy and silently fails
+# with "could not acquire ... on the system bus". It runs as a user unit and the
+# bridge reaches it as that user, so the session bus is the right one. The
+# `mpris_service_bus` config key does NOT work -- measured 2026-09-07: set in the
+# config it is ignored and the interface still goes to the system bus; only this
+# flag moves it.
+exec /usr/bin/shairport-sync --dbus-default-message-bus=session \
+	-c /etc/nexusq/shairport-sync.conf -a "$NQ_NAME"
