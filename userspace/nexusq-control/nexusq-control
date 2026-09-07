@@ -662,40 +662,6 @@ MPRIS_PATH = "/org/mpris/MediaPlayer2"
 MPRIS_IFACE = "org.mpris.MediaPlayer2.Player"
 
 
-#: One refresh per burst. Long enough to swallow shairport's own multi-signal
-#: track change, far shorter than anyone notices.
-_AIRPLAY_DEBOUNCE_S = 0.4
-
-
-def _mpris_is_change(line):
-    """Is this monitor line shairport ANNOUNCING a change?
-
-    🚨 This filter is the difference between a watcher that costs nothing and a
-    runaway. Measured on the box 2026-09-07: with nobody using AirPlay the
-    monitor is silent (0 lines in 10 s) — but every property read we ourselves
-    make puts EIGHT messages on the bus (the method call, its return, and
-    NameOwnerChanged as our short-lived busctl client comes and goes). The first
-    cut refreshed on any line at all, so one read produced two more reads,
-    those sixteen lines, and so on: the Q went from 11 % busy to 68 %, pinned at
-    1.2 GHz, and the die from 59 °C to 85 °C in a minute.
-
-    Only a PropertiesChanged SIGNAL on the MPRIS player path counts. Our own
-    traffic is method_call / method_return / a NameOwnerChanged from the bus
-    itself, none of which can match, so the loop cannot re-form.
-    """
-    line = line.strip()
-    if not line or '"type":"signal"' not in line.replace(" ", ""):
-        return False
-    try:
-        m = json.loads(line)
-    except ValueError:
-        return False
-    return (m.get("type") == "signal"
-            and m.get("member") == "PropertiesChanged"
-            and m.get("interface") == "org.freedesktop.DBus.Properties"
-            and m.get("path") == MPRIS_PATH)
-
-
 def _mpris_get(prop, timeout=6):
     """One MPRIS property, decoded from busctl's JSON. None when shairport is
     not on the bus at all (not built with mpris, not running, no AirPlay ever)."""
@@ -1442,65 +1408,41 @@ def _eq_is_flat(st):
                     for b in st["bands"]))
 
 
-def airplay_watch_thread(bridge):
-    """Follow AirPlay through shairport-sync's MPRIS signals.
+def airplay_pa_state(bridge):
+    """Is AirPlay playing, paused, or gone — according to PulseAudio.
 
-    `busctl monitor` blocks until something is announced, so this thread costs
-    an idle box nothing at all -- no timer, no poll, no wakeup. It reads the
-    properties only after shairport has said they changed, which is to say only
-    when somebody is actually using AirPlay.
+    shairport-sync appears in PA as a sink-input named "ALSA plug-in
+    [shairport-sync]"; it is uncorked while audio flows and corked when the
+    sender pauses, and it disappears when the session ends. That is the whole
+    state machine, and PA already tells us about it through the `pactl
+    subscribe` this daemon has run for months.
 
-    Restarts itself if shairport (or the bus) goes away: it is normal for the
-    name to be absent until the first AirPlay session, and a watcher that gave
-    up then would never see one.
+    WHY NOT D-BUS. The first cut watched shairport's MPRIS signals with
+    `busctl monitor`, and it was wrong twice in one evening. It fed itself --
+    each property read we made put eight messages on the bus, which the watcher
+    treated as news, which caused more reads: 11 % busy to 68 %, 59 °C to 85 °C
+    in a minute. And once that was filtered, the signals we actually wanted
+    never arrived at all, so the app never learned that playback had started and
+    its play/pause icon sat inverted (Petr, 2026-09-07: "kdyz pustim audio na
+    macu, tak se mobilni tlacitko neprepne do ikony pauzy"). PA costs nothing
+    extra, cannot feed itself, and has been reliable here since the beginning.
+
+    MPRIS is still used for the BUTTONS -- one busctl per press, no monitor.
     """
-    backoff = 5
-    while True:
-        try:
-            proc = subprocess.Popen(
-                ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
-                 "--init-groups", "env",
-                 f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
-                 f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
-                 "busctl", "--user", "monitor", MPRIS_NAME, "--json=short"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        except (OSError, subprocess.SubprocessError) as e:
-            log("airplay: cannot start the MPRIS monitor:", e)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 120)
+    try:
+        r = subprocess.run(["pactl", "list", "sink-inputs"],
+                           capture_output=True, text=True, timeout=6,
+                           env={**os.environ, "PULSE_SERVER": PULSE_SERVER,
+                                "PULSE_COOKIE": PULSE_COOKIE})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    for blk in r.stdout.split("Sink Input #")[1:]:
+        if "shairport-sync" not in blk:
             continue
-
-        log("airplay: watching", MPRIS_NAME)
-        backoff = 5
-        try:
-            last = 0.0
-            for line in proc.stdout:
-                if not _mpris_is_change(line):
-                    continue
-                # Coalesce a burst: shairport emits several PropertiesChanged
-                # for one track change (status, then metadata, then position),
-                # and each refresh is two busctl spawns.
-                now = time.monotonic()
-                if now - last < _AIRPLAY_DEBOUNCE_S:
-                    continue
-                last = now
-                try:
-                    bridge.airplay_refresh()
-                except Exception as e:                     # never kill the watcher
-                    log("airplay: refresh failed:", e)
-        except OSError:
-            pass
-        finally:
-            try:
-                proc.kill()
-                proc.wait(timeout=5)
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-        # shairport not on the bus yet is the NORMAL state until the first
-        # AirPlay session, so this is a retry loop, not an error path.
-        time.sleep(backoff)
-        backoff = min(backoff * 2, 120)
+        return "paused" if "Corked: yes" in blk else "playing"
+    return None
 
 
 def eq_restore_thread():
@@ -2471,43 +2413,47 @@ class Bridge:
             events.append(("nowPlayingChanged", np))
         return (result if isinstance(result, dict) else {}), events
 
-    def airplay_refresh(self):
-        """Pull the current AirPlay state into nowPlaying.
+    def airplay_sync(self, state):
+        """Apply an AirPlay state from PulseAudio: "playing", "paused" or None.
 
-        Called only from the MPRIS watcher, i.e. only after shairport said
-        something changed. AirPlay carries no queue -- the protocol sends the
-        current item and nothing about what follows -- so the app simply draws
-        no UP NEXT for it, which is what it already does when there is none.
+        Metadata still comes from MPRIS, but only ONE read per actual change --
+        and it is normal for it to be empty: AirPlay from macOS system audio
+        sends no track information at all (measured 2026-09-07, `Metadata` came
+        back `{}` throughout a session). A blank card with live buttons is the
+        honest rendering of that, which is why the app trusts the transport
+        rather than the title.
         """
-        status = _mpris_get("PlaybackStatus")
-        if status is None:
-            return
-        # Hand it to the backend so `_apply_transport` below does not ask again.
-        backend = self.transports.get("airplay")
-        if backend is not None:
-            backend.note_status(status)
         with self.lock:
             cur = dict(self.state["nowPlaying"])
-        if status == "Stopped":
-            # The sender went away. Same rule as librespot's `stopped`: nothing
-            # is loaded, so the app must show nothing.
+        owns = cur.get("source") in ("", "airplay")
+
+        if state is None:
+            # Session gone. Only clear if AirPlay is what is on screen -- Spotify
+            # may well be playing, and shairport going away says nothing about it.
             if cur.get("source") != "airplay":
                 return
             np = dict(cur, track="", artist="", album="", artUrl="",
                       source="", playing=False)
         else:
+            if not owns:
+                return                      # something else owns the screen
             m = _mpris_metadata()
             np = dict(cur,
                       track=str(m.get("xesam:title") or ""),
                       artist=str(m.get("xesam:artist") or ""),
                       album=str(m.get("xesam:album") or ""),
-                      # mpris:artUrl is a file:// path in shairport's cache,
-                      # which a phone cannot fetch. Left empty until the bridge
-                      # can serve it; the app already draws a placeholder.
+                      # file:// in shairport's cache; a phone cannot fetch it.
                       artUrl="",
                       source="airplay",
-                      playing=(status == "Playing"))
+                      playing=(state == "playing"))
+
+        backend = self.transports.get("airplay")
+        if backend is not None:
+            backend.note_status("Playing" if state == "playing"
+                                else "Paused" if state == "paused" else "Stopped")
         self._apply_transport(np)
+        if np == cur:
+            return                          # nothing moved; do not wake clients
         with self.lock:
             self.state["nowPlaying"] = np
         self.broadcast("nowPlayingChanged", np)
@@ -2809,6 +2755,15 @@ def pa_watch_thread(bridge):
                 ["pactl", "subscribe"], stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
             for line in proc.stdout:
+                if "on sink-input #" in line:
+                    # AirPlay's play/pause lives here: shairport's sink-input
+                    # corks and uncorks with the sender. Free to watch -- this
+                    # loop is already running for the volume knob.
+                    try:
+                        bridge.airplay_sync(airplay_pa_state(bridge))
+                    except Exception as e:
+                        log("airplay: sync failed:", e)
+                    continue
                 if "on sink #" not in line:
                     continue
                 sink = bridge._active_sink()
@@ -2845,7 +2800,6 @@ def main():
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
-    threading.Thread(target=airplay_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
     publish_mdns()
 

@@ -19,6 +19,16 @@ artist arrives as a LIST even when there is one of them, so a naive read renders
 `['Miles Davis']` under the sphere. And `Stopped` has to clear the card, the
 same rule librespot's `stopped` got, or a finished AirPlay session stays on
 screen forever.
+
+⚠️ **The bus monitor is gone, and its removal is the lesson.** The first design
+watched shairport's MPRIS signals with `busctl monitor`. It failed twice in one
+evening: it fed itself (each property read we made put eight messages on the
+bus, which the watcher read as news — 11 % busy to 68 %, 59 °C to 85 °C in a
+minute), and once filtered, the signals we actually wanted never arrived, so the
+app never learned playback had started and its play/pause icon sat inverted.
+State now comes from PulseAudio, which this daemon has watched reliably for
+months and which cannot feed itself. MPRIS is kept for the BUTTONS only — one
+call per press, no monitor.
 """
 import importlib.machinery
 import importlib.util
@@ -59,7 +69,7 @@ class _Bridge:
                                      "album": "", "artUrl": "", "source": "",
                                      "transport": "none"}}
         self.sent = []
-        self.airplay_refresh = mod.Bridge.airplay_refresh.__get__(self)
+        self.airplay_sync = mod.Bridge.airplay_sync.__get__(self)
         self._apply_transport = mod.Bridge._apply_transport.__get__(self)
         self.transport_for = mod.Bridge.transport_for.__get__(self)
 
@@ -140,173 +150,114 @@ class TestAirPlayTransport(unittest.TestCase):
                 self.t.command("next")
 
 
-class TestAirPlayNowPlaying(unittest.TestCase):
+class TestAirPlayStateFromPulse(unittest.TestCase):
+    """Play/pause now comes from PA's view of shairport's sink-input."""
+
+    PLAYING_SI = "Sink Input #7\n\tCorked: no\n\tapplication.name = \"ALSA plug-in [shairport-sync]\"\n"
+    PAUSED_SI = "Sink Input #7\n\tCorked: yes\n\tapplication.name = \"ALSA plug-in [shairport-sync]\"\n"
+    OTHER_SI = "Sink Input #4\n\tCorked: no\n\tapplication.name = \"librespot\"\n"
+
     def setUp(self):
         self.mod = load_daemon()
         self.b = _Bridge(self.mod)
 
-    def _refresh(self, status_payload, meta_payload=META):
-        outs = [status_payload, meta_payload]
+    def _state(self, out):
+        with mock.patch.object(self.mod.subprocess, "run", _Run(out)):
+            return self.mod.airplay_pa_state(self.b)
 
-        def run(argv, **kw):
-            return mock.Mock(returncode=0, stdout=outs.pop(0) if outs else "", stderr="")
+    def test_uncorked_shairport_is_playing(self):
+        self.assertEqual(self._state(self.PLAYING_SI), "playing")
 
-        with mock.patch.object(self.mod.subprocess, "run", run):
-            self.b.airplay_refresh()
+    def test_corked_shairport_is_paused(self):
+        self.assertEqual(self._state(self.PAUSED_SI), "paused")
+
+    def test_no_shairport_at_all_is_none(self):
+        self.assertIsNone(self._state(self.OTHER_SI))
+        self.assertIsNone(self._state(""))
+
+    def test_another_app_playing_is_not_airplay(self):
+        self.assertIsNone(self._state(self.OTHER_SI + "\n"))
+
+
+class TestAirPlaySync(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_daemon()
+        self.b = _Bridge(self.mod)
+
+    def _sync(self, state, meta=META):
+        with mock.patch.object(self.mod.subprocess, "run", _Run(meta)):
+            self.b.airplay_sync(state)
         return self.b.state["nowPlaying"]
 
-    def test_playing_fills_the_card_and_marks_it_controllable(self):
-        np = self._refresh(PLAYING)
-        self.assertEqual(np["track"], "So What")
-        self.assertEqual(np["artist"], "Miles Davis")
-        self.assertEqual(np["album"], "Kind of Blue")
-        self.assertEqual(np["source"], "airplay")
+    def test_playing_marks_it_playing_and_controllable(self):
+        np = self._sync("playing")
         self.assertTrue(np["playing"])
-        # `device` is what tells the app its own buttons will work.
+        self.assertEqual(np["source"], "airplay")
         self.assertEqual(np["transport"], "device")
 
-    def test_art_is_not_forwarded_because_it_is_a_local_file(self):
-        """mpris:artUrl is file:// in shairport's cache. Passing it on would put
-        a path in the app that the phone cannot fetch, which renders as a broken
-        image rather than the placeholder."""
-        np = self._refresh(PLAYING)
-        self.assertEqual(np["artUrl"], "")
+    def test_paused_keeps_the_session_but_stops_playing(self):
+        """THE symptom: the app's icon must follow the real state, or pause
+        becomes a one-way door with the indicator inverted."""
+        self._sync("playing")
+        np = self._sync("paused")
+        self.assertFalse(np["playing"])
+        self.assertEqual(np["source"], "airplay")
+        self.assertEqual(np["transport"], "device",
+                         "paused is still controllable — that is how you resume")
 
-    def test_stopped_clears_the_card(self):
-        self._refresh(PLAYING)
-        np = self._refresh(STOPPED)
-        self.assertEqual(np["track"], "")
+    def test_session_gone_clears_the_card(self):
+        self._sync("playing")
+        np = self._sync(None)
         self.assertEqual(np["source"], "")
         self.assertFalse(np["playing"])
         self.assertEqual(np["transport"], "none")
 
-    def test_stopped_does_not_clobber_another_source(self):
-        """A stray AirPlay `Stopped` must not wipe a Spotify track: shairport
-        announces its own idleness whether or not it is what is playing."""
+    def test_it_does_not_steal_the_screen_from_spotify(self):
         with self.b.lock:
             self.b.state["nowPlaying"] = dict(self.b.state["nowPlaying"],
                                               track="Kinkajou", source="spotify",
                                               playing=True)
-        np = self._refresh(STOPPED)
-        self.assertEqual(np["track"], "Kinkajou")
-        self.assertEqual(np["source"], "spotify")
+        for state in ("playing", "paused", None):
+            np = self._sync(state)
+            self.assertEqual(np["source"], "spotify", state)
+            self.assertEqual(np["track"], "Kinkajou", state)
 
-    def test_one_change_does_not_read_the_status_twice(self):
-        """The watcher reads PlaybackStatus, then Metadata. `_apply_transport`
-        must NOT go and read PlaybackStatus a third time — that is the same
-        question answered milliseconds earlier, and the Q may not get slower for
-        having AirPlay."""
-        calls = []
+    def test_no_metadata_is_fine_and_still_controllable(self):
+        """AirPlay from macOS system audio sends none at all — measured. A blank
+        card with live buttons is the honest rendering."""
+        empty = json.dumps({"type": "a{sv}", "data": {}})
+        np = self._sync("playing", meta=empty)
+        self.assertEqual(np["track"], "")
+        self.assertEqual(np["transport"], "device")
 
-        outs = [PLAYING, META]
-
-        def run(argv, **kw):
-            calls.append(argv)
-            return mock.Mock(returncode=0, stdout=outs.pop(0) if outs else "", stderr="")
-
-        with mock.patch.object(self.mod.subprocess, "run", run):
-            self.b.airplay_refresh()
-
-        reads = [c for c in calls if "get-property" in c]
-        self.assertEqual(len(reads), 2,
-                         f"expected PlaybackStatus + Metadata, got {len(reads)} reads")
-        self.assertEqual(self.b.state["nowPlaying"]["transport"], "device")
-
-    def test_a_change_is_broadcast(self):
-        self._refresh(PLAYING)
-        self.assertIn("nowPlayingChanged", [e for e, _ in self.b.sent])
+    def test_an_unchanged_state_wakes_nobody(self):
+        """PA fires sink-input events for volume and more; re-broadcasting an
+        identical state would spam every connected app."""
+        self._sync("playing")
+        self.b.sent.clear()
+        self._sync("playing")
+        self.assertEqual(self.b.sent, [])
 
 
-class TestTheRunawayCannotComeBack(unittest.TestCase):
-    """The regression that mattered, 2026-09-07.
+class TestTheBusMonitorIsGone(unittest.TestCase):
+    """It ran away once; it must not come back by accident."""
 
-    The first cut refreshed on ANY line the bus monitor produced. Measured on
-    the box: idle, the monitor is silent — but each property read WE make puts
-    eight messages on the bus (the call, its return, and NameOwnerChanged as our
-    short-lived busctl client appears and goes). So one read caused two reads,
-    those sixteen lines, and so on. The Q went 11 % → 68 % busy, pinned at
-    1.2 GHz, and 59 °C → 85 °C within a minute.
-
-    The filter below is the whole defence, so these assertions are the shapes of
-    our OWN traffic, which must never be mistaken for news.
-    """
-
-    def setUp(self):
-        self.mod = load_daemon()
-
-    def test_a_properties_changed_signal_is_news(self):
-        line = json.dumps({"type": "signal", "member": "PropertiesChanged",
-                           "interface": "org.freedesktop.DBus.Properties",
-                           "path": "/org/mpris/MediaPlayer2"})
-        self.assertTrue(self.mod._mpris_is_change(line))
-
-    def test_our_own_property_read_is_not(self):
-        """A method_call and its return: what a busctl get-property looks like
-        on the wire. Reacting to these is what fed the loop."""
-        for kind in ("method_call", "method_return"):
-            line = json.dumps({"type": kind, "member": "Get",
-                               "interface": "org.freedesktop.DBus.Properties",
-                               "path": "/org/mpris/MediaPlayer2"})
-            self.assertFalse(self.mod._mpris_is_change(line), kind)
-
-    def test_the_bus_announcing_our_own_client_is_not(self):
-        """NameOwnerChanged fires as our short-lived busctl connects and goes —
-        twice per read, and it IS a signal, so only the member check stops it."""
-        line = json.dumps({"type": "signal", "member": "NameOwnerChanged",
-                           "interface": "org.freedesktop.DBus",
-                           "path": "/org/freedesktop/DBus"})
-        self.assertFalse(self.mod._mpris_is_change(line))
-
-    def test_a_signal_on_another_path_is_not(self):
-        line = json.dumps({"type": "signal", "member": "PropertiesChanged",
-                           "interface": "org.freedesktop.DBus.Properties",
-                           "path": "/org/pulseaudio/core1"})
-        self.assertFalse(self.mod._mpris_is_change(line))
-
-    def test_junk_and_blanks_are_not(self):
-        for line in ("", "   ", "not json", "{", '{"type":"signal"}'):
-            self.assertFalse(self.mod._mpris_is_change(line), repr(line))
-
-    def test_bursts_are_coalesced(self):
-        """One track change makes shairport emit several PropertiesChanged, and
-        each refresh is two busctl spawns — so there is a debounce, and it has
-        to be short enough that nobody sees it."""
-        self.assertGreater(self.mod._AIRPLAY_DEBOUNCE_S, 0)
-        self.assertLess(self.mod._AIRPLAY_DEBOUNCE_S, 1.0)
-
-    def test_the_watcher_filters_before_it_acts(self):
-        """Belt and braces: the loop body must consult the filter, not the raw
-        line. A refresh reached from an unfiltered line is the runaway."""
+    def test_no_bus_monitor_anywhere(self):
         src = open(DAEMON).read()
-        i = src.index("def airplay_watch_thread")
-        body = src[i:src.index("def eq_restore_thread")]
-        j = body.index("for line in proc.stdout")
-        k = body.index("airplay_refresh")
-        self.assertIn("_mpris_is_change", body[j:k],
-                      "the read loop must filter before refreshing")
+        self.assertNotIn("airplay_watch_thread", src,
+                         "the bus-monitor watcher must stay gone")
+        state_fn = src[src.index("def airplay_pa_state"):src.index("def eq_restore_thread")]
+        self.assertIn("pactl", state_fn, "state comes from PulseAudio")
+        # The docstring EXPLAINS the monitor that was removed, so match the
+        # CALL, not the word.
+        self.assertNotIn('"monitor"', src)
 
-
-class TestCostsNothingWhenIdle(unittest.TestCase):
-    """Petr's condition: none of this may make the Q slower."""
-
-    def test_the_watcher_has_no_timer(self):
-        src = open(DAEMON).read()
-        i = src.index("def airplay_watch_thread")
-        body = src[i:src.index("def eq_restore_thread")]
-        self.assertIn("busctl", body)
-        self.assertIn("monitor", body)
-        # A sleep exists only on the RETRY path; a periodic poll would show up
-        # as a timer or a sleep inside the read loop.
-        self.assertNotIn("Timer", body)
-        self.assertNotIn("threading.Event", body)
-
-    def test_nothing_reads_mpris_on_a_schedule(self):
-        """The only callers of the property reads are the watcher (after an
-        announcement) and the transport backend (on a button press)."""
+    def test_mpris_is_only_reads_and_calls(self):
+        """What is left of busctl must be short-lived: get-property and call."""
         src = open(DAEMON).read()
         for line in src.splitlines():
-            if "_mpris_get(" in line and "def " not in line:
-                self.assertNotIn("Timer", line)
+            if '"busctl"' in line or "'busctl'" in line:
+                self.assertNotIn("monitor", line)
 
 
 if __name__ == "__main__":
