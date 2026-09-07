@@ -200,8 +200,12 @@ graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
   that was never themed has no file and is left on nexusqd's stock idle screensaver. Pre-r37
   bridges forgot the theme on every boot and reported `blue` after their own restart while the
   ring still breathed the old hue.
-- **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 7,
-  shown while audio plays — below the breathing override).
+- **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 9,
+  shown while audio plays — **above** the breathing override since nexusqd r18. The theme is the
+  ring's idle mood; the scene is what it does while music plays, and the scene yields (alpha 0 →
+  the compositor falls through) the moment audio stops, so the theme comes back on its own.
+  Below the override, as it was until 2026-09-07, the visualiser could never be seen once a theme
+  was set — invisible only because the theme used to be forgotten on every boot).
 - **LED brightness** → a nexusqd `brightness` command + a software brightness scalar.
 - **now-playing** → each source publishes track/artist/album/art + play state to the bridge:
   `librespot --onevent <hook>` for Spotify, shairport-sync's metadata pipe for AirPlay, the Roon

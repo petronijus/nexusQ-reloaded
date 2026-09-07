@@ -130,7 +130,7 @@ static int manual_render(void *c, double t, struct frame *out) {
     return 0;
 }
 
-/* --- music layer (priority 7): the audio-reactive scene ------------------- */
+/* --- music layer (priority 9): the audio-reactive scene ------------------- */
 struct music_layer { struct music *m; float alpha; };
 static int music_layer_render(void *c, double t, struct frame *out) {
     (void)t; struct music_layer *ml = c;
@@ -213,7 +213,19 @@ int main(void) {
 
     struct compositor comp = {0};
     comp_add(&comp, (struct layer){ screensaver_layer_render, &ss, 5, 1 });
-    comp_add(&comp, (struct layer){ music_layer_render, &ml, 7, 1 });      /* renders only when alpha>0 */
+    /* 9, ABOVE the manual override at 8. A colour theme is the ring's IDLE
+     * mood; the music scene is what it does while something plays, and the app
+     * offers both as separate settings. With music below the override the
+     * visualiser could never be seen at all once a theme was set — which went
+     * unnoticed only because the theme used to be forgotten on every boot.
+     * Making it persistent (control r37) made the ring permanently blue and the
+     * visualiser permanently invisible; Petr, 2026-09-07: "prstenec ted neni
+     * videt nikdy, musis to prehodit, vizualizace musi bejt nad tematem".
+     *
+     * Safe because this layer already yields: alpha <= 0 returns -1 and the
+     * compositor falls through to the override, so the theme owns the ring
+     * whenever nothing is playing. The volume overlay stays above both at 10. */
+    comp_add(&comp, (struct layer){ music_layer_render, &ml, 9, 1 });      /* renders only when alpha>0 */
     int manual_idx = comp.n;
     comp_add(&comp, (struct layer){ manual_render, &manual, 8, 0 });       /* override, off by default */
     comp_add(&comp, (struct layer){ reaction_layer_render, &rx, 10, 1 });
