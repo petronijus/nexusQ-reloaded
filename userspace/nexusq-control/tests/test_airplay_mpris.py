@@ -217,6 +217,75 @@ class TestAirPlayNowPlaying(unittest.TestCase):
         self.assertIn("nowPlayingChanged", [e for e, _ in self.b.sent])
 
 
+class TestTheRunawayCannotComeBack(unittest.TestCase):
+    """The regression that mattered, 2026-09-07.
+
+    The first cut refreshed on ANY line the bus monitor produced. Measured on
+    the box: idle, the monitor is silent — but each property read WE make puts
+    eight messages on the bus (the call, its return, and NameOwnerChanged as our
+    short-lived busctl client appears and goes). So one read caused two reads,
+    those sixteen lines, and so on. The Q went 11 % → 68 % busy, pinned at
+    1.2 GHz, and 59 °C → 85 °C within a minute.
+
+    The filter below is the whole defence, so these assertions are the shapes of
+    our OWN traffic, which must never be mistaken for news.
+    """
+
+    def setUp(self):
+        self.mod = load_daemon()
+
+    def test_a_properties_changed_signal_is_news(self):
+        line = json.dumps({"type": "signal", "member": "PropertiesChanged",
+                           "interface": "org.freedesktop.DBus.Properties",
+                           "path": "/org/mpris/MediaPlayer2"})
+        self.assertTrue(self.mod._mpris_is_change(line))
+
+    def test_our_own_property_read_is_not(self):
+        """A method_call and its return: what a busctl get-property looks like
+        on the wire. Reacting to these is what fed the loop."""
+        for kind in ("method_call", "method_return"):
+            line = json.dumps({"type": kind, "member": "Get",
+                               "interface": "org.freedesktop.DBus.Properties",
+                               "path": "/org/mpris/MediaPlayer2"})
+            self.assertFalse(self.mod._mpris_is_change(line), kind)
+
+    def test_the_bus_announcing_our_own_client_is_not(self):
+        """NameOwnerChanged fires as our short-lived busctl connects and goes —
+        twice per read, and it IS a signal, so only the member check stops it."""
+        line = json.dumps({"type": "signal", "member": "NameOwnerChanged",
+                           "interface": "org.freedesktop.DBus",
+                           "path": "/org/freedesktop/DBus"})
+        self.assertFalse(self.mod._mpris_is_change(line))
+
+    def test_a_signal_on_another_path_is_not(self):
+        line = json.dumps({"type": "signal", "member": "PropertiesChanged",
+                           "interface": "org.freedesktop.DBus.Properties",
+                           "path": "/org/pulseaudio/core1"})
+        self.assertFalse(self.mod._mpris_is_change(line))
+
+    def test_junk_and_blanks_are_not(self):
+        for line in ("", "   ", "not json", "{", '{"type":"signal"}'):
+            self.assertFalse(self.mod._mpris_is_change(line), repr(line))
+
+    def test_bursts_are_coalesced(self):
+        """One track change makes shairport emit several PropertiesChanged, and
+        each refresh is two busctl spawns — so there is a debounce, and it has
+        to be short enough that nobody sees it."""
+        self.assertGreater(self.mod._AIRPLAY_DEBOUNCE_S, 0)
+        self.assertLess(self.mod._AIRPLAY_DEBOUNCE_S, 1.0)
+
+    def test_the_watcher_filters_before_it_acts(self):
+        """Belt and braces: the loop body must consult the filter, not the raw
+        line. A refresh reached from an unfiltered line is the runaway."""
+        src = open(DAEMON).read()
+        i = src.index("def airplay_watch_thread")
+        body = src[i:src.index("def eq_restore_thread")]
+        j = body.index("for line in proc.stdout")
+        k = body.index("airplay_refresh")
+        self.assertIn("_mpris_is_change", body[j:k],
+                      "the read loop must filter before refreshing")
+
+
 class TestCostsNothingWhenIdle(unittest.TestCase):
     """Petr's condition: none of this may make the Q slower."""
 

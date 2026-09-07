@@ -662,6 +662,40 @@ MPRIS_PATH = "/org/mpris/MediaPlayer2"
 MPRIS_IFACE = "org.mpris.MediaPlayer2.Player"
 
 
+#: One refresh per burst. Long enough to swallow shairport's own multi-signal
+#: track change, far shorter than anyone notices.
+_AIRPLAY_DEBOUNCE_S = 0.4
+
+
+def _mpris_is_change(line):
+    """Is this monitor line shairport ANNOUNCING a change?
+
+    🚨 This filter is the difference between a watcher that costs nothing and a
+    runaway. Measured on the box 2026-09-07: with nobody using AirPlay the
+    monitor is silent (0 lines in 10 s) — but every property read we ourselves
+    make puts EIGHT messages on the bus (the method call, its return, and
+    NameOwnerChanged as our short-lived busctl client comes and goes). The first
+    cut refreshed on any line at all, so one read produced two more reads,
+    those sixteen lines, and so on: the Q went from 11 % busy to 68 %, pinned at
+    1.2 GHz, and the die from 59 °C to 85 °C in a minute.
+
+    Only a PropertiesChanged SIGNAL on the MPRIS player path counts. Our own
+    traffic is method_call / method_return / a NameOwnerChanged from the bus
+    itself, none of which can match, so the loop cannot re-form.
+    """
+    line = line.strip()
+    if not line or '"type":"signal"' not in line.replace(" ", ""):
+        return False
+    try:
+        m = json.loads(line)
+    except ValueError:
+        return False
+    return (m.get("type") == "signal"
+            and m.get("member") == "PropertiesChanged"
+            and m.get("interface") == "org.freedesktop.DBus.Properties"
+            and m.get("path") == MPRIS_PATH)
+
+
 def _mpris_get(prop, timeout=6):
     """One MPRIS property, decoded from busctl's JSON. None when shairport is
     not on the bus at all (not built with mpris, not running, no AirPlay ever)."""
@@ -1439,12 +1473,17 @@ def airplay_watch_thread(bridge):
         log("airplay: watching", MPRIS_NAME)
         backoff = 5
         try:
+            last = 0.0
             for line in proc.stdout:
-                if not line.strip():
+                if not _mpris_is_change(line):
                     continue
-                # Any announcement at all is the cue to re-read. Decoding the
-                # signal body would be a second, redundant parser for the same
-                # facts the property read gives us anyway.
+                # Coalesce a burst: shairport emits several PropertiesChanged
+                # for one track change (status, then metadata, then position),
+                # and each refresh is two busctl spawns.
+                now = time.monotonic()
+                if now - last < _AIRPLAY_DEBOUNCE_S:
+                    continue
+                last = now
                 try:
                     bridge.airplay_refresh()
                 except Exception as e:                     # never kill the watcher
