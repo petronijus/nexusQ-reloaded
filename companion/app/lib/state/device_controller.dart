@@ -46,10 +46,15 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   bool _connectInFlight = false;
   bool _probeInFlight = false;
   int _attempt = 0; // consecutive failed reconnects, drives the backoff ladder
-  Timer? _retryTimer, _heartbeat;
+  Timer? _retryTimer, _heartbeat, _queueTimer;
 
   Future<void> start() async {
     _evSub = _client.events.listen(_onEvent);
+    // Queue edits made in the Spotify app itself raise no event here, so a slow
+    // tick catches them. 30 s is far below any rate limit and far above what a
+    // person notices.
+    _queueTimer = Timer.periodic(const Duration(seconds: 30), (_) => refreshQueue());
+    unawaited(refreshQueue());
     _connSub = _client.connection.listen(_onConnection);
     if (_client.needsSupervision) {
       // Only the real transport watches the lifecycle — the mock never drops
@@ -249,7 +254,15 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       case 'outputChanged':
         if (e.data['output'] is String) state.output = e.data['output'] as String;
       case 'nowPlayingChanged':
+        final before = state.nowPlaying;
         state.nowPlaying = NowPlaying.fromJson(e.data);
+        // The track moved on, so the queue did too. A play/pause on the same
+        // track does not move it, and refreshing on that would just spend
+        // requests.
+        if (state.nowPlaying.track != before.track ||
+            state.nowPlaying.artist != before.artist) {
+          unawaited(refreshQueue());
+        }
       case 'deviceInfoChanged':
         // Broadcast by the bridge on every rename, to every client — so the
         // home screen follows a rename done from this phone AND from another.
@@ -305,6 +318,49 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Spotify account link, shared with Settings.
   final SpotifyLink spotify = SpotifyLink.instance;
+
+  /// How a SpotifyPlayer is obtained. Real code builds one on the live link;
+  /// tests hand in a fake so nothing dials api.spotify.com.
+  @visibleForTesting
+  SpotifyPlayer Function(SpotifyLink)? playerFactory;
+  SpotifyPlayer get _player => (playerFactory ?? SpotifyPlayer.new)(spotify);
+
+  /// What Spotify says is playing and what follows. `null` until the first
+  /// answer, and left alone on a failed refresh — a queue that briefly cannot
+  /// be fetched should keep showing what it last knew rather than blinking to
+  /// "nothing playing", which reads as a bug.
+  SpotifyQueue? queue;
+  bool _queueInFlight = false;
+
+  /// Only Spotify can answer this. librespot tells us the CURRENT track (that
+  /// is the hook), but it has no idea what Spotify will play next, so the
+  /// queue exists only when the account is linked. Refreshed on track change
+  /// — the bridge's nowPlayingChanged is the perfect trigger, it fires exactly
+  /// when the queue has moved — and on a slow tick for queue edits made
+  /// elsewhere, rather than polling hard against Spotify's rate limits.
+  Future<void> refreshQueue() async {
+    if (_disposed || _queueInFlight) return;
+    if (transportRoute != TransportRoute.spotifyWeb) {
+      if (queue != null) {
+        queue = null;
+        notifyListeners();
+      }
+      return;
+    }
+    _queueInFlight = true;
+    try {
+      final q = await _player.queue();
+      if (_disposed) return;
+      queue = q;
+      notifyListeners();
+    } catch (e) {
+      // Never a SnackBar: the user did not ask for this, it refreshes itself,
+      // and a transient 429/timeout is not something to interrupt them with.
+      AppLog.add('spotify', 'queue refresh failed: $e', warn: true);
+    } finally {
+      _queueInFlight = false;
+    }
+  }
 
   /// One-line, user-facing outcomes of transport commands that could not be
   /// carried out (not linked, no such Connect device, Premium required, …).
@@ -379,6 +435,7 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       WidgetsBinding.instance.removeObserver(this);
     }
     _retryTimer?.cancel();
+    _queueTimer?.cancel();
     _stopHeartbeat();
     _evSub?.cancel();
     _connSub?.cancel();

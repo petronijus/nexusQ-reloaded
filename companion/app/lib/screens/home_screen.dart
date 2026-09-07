@@ -6,6 +6,7 @@ import '../spotify/transport_rules.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/update_coordinator.dart';
+import '../spotify/spotify_player.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
 import 'connect_gate.dart';
@@ -362,7 +363,20 @@ class _HomeScreenState extends State<HomeScreen> {
                         final route = controller.transportRoute;
                         final enabled = controlsEnabled(route);
                         final dimColor = enabled ? NexusQColors.white : NexusQColors.dim;
+                        final q = controller.queue;
                         return Column(children: [
+                          // What is playing, with its cover. The bridge knows
+                          // the track (librespot's hook) but never the artwork
+                          // in practice, and it cannot know the queue at all —
+                          // so when Spotify is linked its answer is the better
+                          // one and is preferred here (Petr, 2026-09-07: "nevidim
+                          // vubec tam nazev toho co hraje ani artwork").
+                          _NowPlayingCard(
+                            title: q?.current?.title.isNotEmpty == true ? q!.current!.title : np.track,
+                            subtitle: q?.current?.artist.isNotEmpty == true ? q!.current!.artist : np.artist,
+                            detail: q?.current?.album ?? np.album,
+                            artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
+                          ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -405,6 +419,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Text('This source can only be controlled from its own app',
                                   style: TextStyle(fontSize: 11, color: NexusQColors.dim)),
                             ),
+                          // Only Spotify can say what follows; there is nothing
+                          // to show for the other sources, so the header is not
+                          // drawn either rather than standing over a blank.
+                          if (q != null && q.upNext.isNotEmpty) ...[
+                            const SizedBox(height: 14),
+                            const _SectionHeader('UP NEXT'),
+                            for (final t in q.upNext) _UpNextRow(track: t),
+                          ],
                         ]);
                       }),
 
@@ -578,6 +600,128 @@ class _SectionHeader extends StatelessWidget {
           const SizedBox(height: 4),
           Container(height: 1, color: NexusQColors.divider),
         ],
+      ),
+    );
+  }
+}
+
+/// The current track: cover, title, artist, album. Falls back to a placeholder
+/// square when there is no artwork — a row that changes height as covers load
+/// and fail is worse than one that always reserves the same space.
+class _NowPlayingCard extends StatelessWidget {
+  const _NowPlayingCard({
+    required this.title,
+    required this.subtitle,
+    required this.detail,
+    required this.artUrl,
+  });
+
+  final String title, subtitle, detail, artUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    if (title.isEmpty && subtitle.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: Text('Nothing playing', style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          _Cover(url: artUrl, size: 64),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
+                if (subtitle.isNotEmpty)
+                  Text(subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
+                if (detail.isNotEmpty)
+                  Text(detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UpNextRow extends StatelessWidget {
+  const _UpNextRow({required this.track});
+  final SpotifyTrack track;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            _Cover(url: track.artUrl, size: 36),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(track.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: NexusQColors.white, fontSize: 13)),
+                  if (track.artist.isNotEmpty)
+                    Text(track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// A cover thumbnail. Network images fail routinely — no artwork on the
+/// release, a captive portal, no route while the Q is on USB-gadget net — so
+/// the failure case is a quiet placeholder, never a broken-image glyph.
+class _Cover extends StatelessWidget {
+  const _Cover({required this.url, required this.size});
+  final String url;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final placeholder = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: NexusQColors.surface,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Icon(Icons.music_note, size: size * 0.45, color: NexusQColors.dim),
+    );
+    if (url.isEmpty) return placeholder;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: Image.network(
+        url,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => placeholder,
+        loadingBuilder: (c, child, p) => p == null ? child : placeholder,
       ),
     );
   }

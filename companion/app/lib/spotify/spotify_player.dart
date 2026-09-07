@@ -16,6 +16,11 @@
 //   404 NO_ACTIVE_DEVICE when nothing is playing anywhere → transfer first
 //   403 PREMIUM_REQUIRED — playback control is a Premium feature, full stop
 //   401 — token expired/revoked → SpotifyLink refreshes, one retry
+//   GET  /v1/me/player/queue   what is playing AND what follows, in ONE call —
+//        which is why the app reads now-playing from here rather than adding a
+//        second request to /currently-playing. 204 + empty body when nothing is
+//        playing anywhere. Needs only `user-read-playback-state`, already among
+//        the scopes the link asks for, so nobody has to re-consent for this.
 import 'dart:async';
 import 'dart:convert';
 
@@ -55,6 +60,84 @@ SpotifyDevice? matchQDevice(List<SpotifyDevice> devices, String qName) {
       .where((d) => d.type.toLowerCase() == 'speaker' && _fold(d.name).contains(want))
       .toList();
   return speakers.length == 1 ? speakers.first : null;
+}
+
+/// A track as the player endpoints describe it. Episodes come back through the
+/// same fields (Spotify calls them `show`/`episode`), so a podcast still shows
+/// a title and something in place of the artist rather than a blank row.
+class SpotifyTrack {
+  const SpotifyTrack({
+    required this.title,
+    this.artist = '',
+    this.album = '',
+    this.artUrl = '',
+    this.durationMs = 0,
+  });
+
+  final String title, artist, album, artUrl;
+  final int durationMs;
+
+  /// Spotify orders `album.images` largest first (typically 640/300/64). The
+  /// app draws a thumbnail, so take the SMALLEST image that is still big
+  /// enough to look right on a phone — downloading 640 px to paint 56 is a
+  /// waste of the Q owner's data and of the widget's time.
+  static String _art(List images) {
+    Map? best;
+    for (final i in images) {
+      if (i is! Map) continue;
+      final h = (i['height'] as num?)?.toInt() ?? 0;
+      if (h >= 160 && (best == null || h < ((best['height'] as num?)?.toInt() ?? 1 << 30))) {
+        best = i;
+      }
+    }
+    best ??= images.isNotEmpty && images.first is Map ? images.first as Map : null;
+    return best?['url'] as String? ?? '';
+  }
+
+  factory SpotifyTrack.fromJson(Map<String, dynamic> j) {
+    final artists = [
+      for (final a in (j['artists'] as List? ?? const []))
+        if (a is Map && a['name'] is String) a['name'] as String,
+    ];
+    final album = j['album'];
+    final show = j['show'];
+    return SpotifyTrack(
+      title: j['name'] as String? ?? '',
+      // An episode has no artists; its show is the closest thing to one.
+      artist: artists.isNotEmpty
+          ? artists.join(', ')
+          : (show is Map ? show['name'] as String? ?? '' : ''),
+      album: album is Map ? album['name'] as String? ?? '' : '',
+      artUrl: album is Map
+          ? _art(album['images'] as List? ?? const [])
+          : (show is Map ? _art(show['images'] as List? ?? const []) : ''),
+      durationMs: (j['duration_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// What Spotify is playing and what follows it.
+class SpotifyQueue {
+  const SpotifyQueue({this.current, this.upNext = const []});
+  final SpotifyTrack? current;
+  final List<SpotifyTrack> upNext;
+
+  bool get isEmpty => current == null && upNext.isEmpty;
+
+  /// `queue` is unbounded in the docs and long in practice; the screen shows a
+  /// few. Parsing everything and trimming here keeps the widget dumb.
+  factory SpotifyQueue.fromJson(Map<String, dynamic> j, {int max = 8}) {
+    final cur = j['currently_playing'];
+    final list = <SpotifyTrack>[];
+    for (final t in (j['queue'] as List? ?? const [])) {
+      if (t is Map) list.add(SpotifyTrack.fromJson(Map<String, dynamic>.from(t)));
+      if (list.length >= max) break;
+    }
+    return SpotifyQueue(
+      current: cur is Map ? SpotifyTrack.fromJson(Map<String, dynamic>.from(cur)) : null,
+      upNext: list,
+    );
+  }
 }
 
 class SpotifyPlayerException implements Exception {
@@ -117,6 +200,19 @@ class SpotifyPlayer {
   Future<void> previous(String qName) async {
     final d = await qDevice(qName);
     await _call('POST', '/me/player/previous?device_id=${Uri.encodeQueryComponent(d.id)}');
+  }
+
+  /// What is playing and what comes next. Deliberately NOT aimed at a
+  /// device_id: the queue belongs to the account, and asking for the Q's id
+  /// would fail whenever playback sits on the phone — where the user can still
+  /// see, correctly, what their Q is about to play. Returns an empty queue
+  /// rather than throwing when Spotify says 204 (nothing playing anywhere).
+  Future<SpotifyQueue> queue() async {
+    final res = await _call('GET', '/me/player/queue');
+    if (res.statusCode == 204 || res.body.trim().isEmpty) return const SpotifyQueue();
+    final j = jsonDecode(res.body);
+    if (j is! Map) return const SpotifyQueue();
+    return SpotifyQueue.fromJson(Map<String, dynamic>.from(j));
   }
 
   Future<http.Response> _call(String method, String path, {Object? body, bool retried = false}) async {
