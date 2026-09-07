@@ -90,44 +90,51 @@ currently express "built, not approved" — fix candidates in the dated note.
 
 ---
 
-## Open — the USB audio A/B that needs audio actually playing
+## Open — the USB audio delay is NOT diagnosed, and two answers were wrong
 
-Device **r95** bounded the delay (the cushion that had grown to 243 ms) and the
-Prague Q is at 57 ms after the restart. What is *not* fixed is why the hop
-underruns in the first place: `alsaloop --sync=simple` corrects no clock
-difference between the async USB gadget and the timer-clocked snd-aloop.
+**Read this before touching the USB hop.** On 2026-09-06 Petr reported a delay
+on USB audio. Two explanations were given and shipped in the docs, and
+**measurement on 2026-09-07 disproved both**:
 
-Two corrections exist on this hardware and **neither has been seen working**, so
-neither is the default:
+1. *"module-loopback ratchets its cushion, five days of it."* No: sampled live,
+   the number does not move, and no ratchet event has been logged since the
+   r95 restart.
+2. *"it is the configured cushions."* No: cutting them by 120 ms on paper moved
+   the measured figure by 11 ms.
 
-| candidate | control | idea |
-|---|---|---|
-| `captshift` | `UAC2Gadget` → `Capture Pitch 1000000` | the USB async feedback channel: ask the host to adjust |
-| `playshift` | `Loopback` → `PCM Rate Shift 100000` (80000..120000) | adjust the virtual card we own |
+**The mistake underneath both** is that every reading was taken while `usb_in`
+was **SUSPENDED**. The TV keeps the USB stream open and sends digital silence,
+so `nq-uac2-silence` parks the source; a starved `module-loopback` then reports
+a large, static Buffer Latency that nobody hears. Rule for anyone measuring
+this: `pactl list short sources` must show **usb_in RUNNING** and
+`/proc/asound/card2/pcm0p/sub0/status` must read RUNNING, or the number is
+meaningless.
 
-Probing them without audio proves nothing: alsaloop prints the same "Opened PCM
-element Capture Pitch" line under every mode including `simple`, and an
-aloop→aloop rig leaves the rate shift at 100000 because both its ends share one
-timer.
+Measured properly — service stopped, chain rebuilt by hand without the silence
+watcher — the shipped configuration is **56 ms**, and it is already near the
+optimum:
 
-**To run it** (needs the Xiaomi box actually playing — adb to it is unauthorized
-from the desktop, the dialog has to be accepted on the TV):
+| configuration | measured |
+|---|---|
+| **as shipped** (alsaloop 80 ms + loopback 120 ms) | **56 ms** |
+| loopback cushion 30 ms | 44 ms |
+| small PA fragments + cushion 30 ms | 60 ms |
+| everything tight (20 + 20) | 128 ms — worse; too small to absorb jitter |
 
-```sh
-systemctl --machine=user@.host --user set-environment NQ_UAC2_SYNC=captshift
-systemctl --machine=user@.host --user restart nexusq-uac2-in
-# watch the control move off centre while the host streams:
-watch -n2 'amixer -c UAC2Gadget cget numid=1 | grep ": values"'
-# and whether Buffer Latency stops climbing across a long session
-```
+r95's ceiling and reset-on-unpark are harmless and the reset does fire (the
+module index moves between sessions), but they were aimed at a phantom.
 
-Repeat with `playshift` (`amixer -c Loopback cget numid=1`). Whichever holds the
-loop steady without the cushion climbing becomes the default in r96; if neither
-does, the ceiling stays the answer and that is worth writing down too.
+**What is actually open:** the delay Petr hears has never been reproduced under
+measurement. Start from him, not from these numbers — how large, on what
+content, and whether it is still there since the r95 restart. If it is, the
+suspects not yet examined are the *box* side (the Xiaomi's own output pipeline)
+and the true end-to-end figure, which nothing here has measured; the Q's own hop
+is 56 ms and that is not what a person calls a delay.
 
-Also still open: the **Roon hop keeps its old uncapped module** until
-`roon-nexusq` next starts (it was at 347 ms against 250). Harmless for music —
-there is no picture to sync to — so it was left rather than restarting Roon.
+To drive a test without waiting for him: `adb connect 192.168.20.169:5555` works
+(it needed the box awake — an earlier "unauthorized" was just that), and
+`tinyplay` exists on the box, though a `file://` VIEW intent is blocked by
+modern Android so pushing a WAV and opening it does not play.
 
 ## ✅ done 2026-09-06 — app 1.18.1 is out on BOTH tracks, and iOS moved off the MacBook
 

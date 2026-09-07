@@ -139,7 +139,7 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
-### Fixed — the USB audio delay was five days of cushion nobody threw away (device r95, OTA, 2026-09-06)
+### Fixed — a ceiling on the loopback cushion (device r95, OTA, 2026-09-06) — and a diagnosis that was WRONG
 
 - **"je tam ted delay na usb audio."** Measured: the USB hop was carrying
   **243 ms** against the 120 ms it is configured with, and the Roon hop 347
@@ -172,6 +172,29 @@ All notable changes to Nexus Q Reloaded. Format follows
   async-gadget-to-timer-clocked-loop pair with audio flowing. `NQ_UAC2_SYNC` is
   the tunable, the A/B procedure is written into the script, and until it is run
   the shipped default stays the value proven in the field.
+- 🚨 **CORRECTION, 2026-09-07 — the numbers above were an artifact and the story
+  around them is wrong.** Every 243/250 ms reading was taken while `usb_in` was
+  **SUSPENDED**: the TV holds the USB stream open and sends digital silence, so
+  `nq-uac2-silence` parks the source, and a starved `module-loopback` reports a
+  large static Buffer Latency that nobody is hearing. Measured properly the next
+  morning — service stopped, the chain rebuilt by hand without the silence
+  watcher, source **RUNNING** and the amp **RUNNING** — the shipped
+  configuration sits at **56 ms**, not 250.
+  | configuration | measured |
+  |---|---|
+  | as shipped (alsaloop 80 ms + loopback 120 ms) | **56 ms** |
+  | loopback cushion 30 ms | 44 ms |
+  | small PA fragments + cushion 30 ms | 60 ms |
+  | everything tight (20 ms + 20 ms) | 128 ms — *worse*: buffers too small to
+    absorb jitter underrun, and the loopback grows to compensate |
+  So the shipped cushions are already near the optimum, the two explanations
+  offered for the delay (five days of accumulation; then the configured
+  cushions) were **both wrong**, and each was built on the same artifact. What
+  r95 changed is harmless and the reset demonstrably fires — the module index
+  moves between listening sessions — but it was aimed at a phantom, and the
+  ceiling at 200 ms cannot clamp a hop that runs at 56. The delay Petr reported
+  has NOT been reproduced under measurement; chasing it further starts from
+  what he hears now, not from these numbers.
 - `tests/test_loopback_latency_bounded.sh` guards both halves: the ceiling is one
   argument on a `load-module` line, exactly what a refactor drops, and its loss
   is invisible for days. Seen failing four ways — ceiling deleted, ceiling below

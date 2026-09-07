@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Both PulseAudio loopbacks must have a CEILING on their latency.
 #
-# 2026-09-06, from a live complaint ("je tam delay na usb audio"): the USB hop
-# was carrying 243 ms against the 120 it is configured with, and the Roon hop
-# 347 against 250. Neither had drifted in the last two minutes — sampled while
-# idle, both were rock steady — because the number is not a drift, it is an
-# ACCUMULATION. PulseAudio's module-loopback raises its own buffer whenever it
-# underruns and never lowers it again, and `nexusq-uac2-in` had been up since
-# 2026-09-01 with zero restarts. Five days of small, individually reasonable
-# increases is a fifth of a second of lip-sync error, and the journal only ever
-# admitted to the first 25 ms of it (120 -> 145, six logged steps).
+# PulseAudio's module-loopback raises its own buffer whenever it underruns and
+# never lowers it again. Six such increases are in this box's journal (120 -> 145
+# on 2026-09-02/03), so the one-way climb is real and a ceiling is worth having.
+#
+# ⚠️ It is NOT, however, what made USB audio sound delayed on 2026-09-06. That
+# investigation read 243 ms off a loopback whose source was SUSPENDED — the TV
+# holds the stream open and sends silence, `nq-uac2-silence` parks the source,
+# and a starved loopback reports a large static figure nobody is hearing. With
+# the chain genuinely running the same configuration measures 56 ms. Do not
+# reintroduce that reading as evidence of anything: sample latency only with
+# `pactl list short sources` showing usb_in RUNNING.
 #
 # `max_latency_msec` is the ceiling; it is one argument on a load-module line,
 # exactly the kind of thing a refactor drops, and losing it is INVISIBLE — the
