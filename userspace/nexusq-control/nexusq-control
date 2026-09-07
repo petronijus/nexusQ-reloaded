@@ -2278,8 +2278,20 @@ class Bridge:
                 "playing": True,
             })
             np = cur
-        elif kind in ("playing", "paused", "stopped"):
+        elif kind in ("playing", "paused"):
+            # Paused still HAS a track loaded, so the metadata stays: the app is
+            # right to show what is sitting there ready to resume.
             cur["playing"] = (kind == "playing")
+            np = cur
+        elif kind == "stopped":
+            # Stopped is not paused. Nothing is loaded any more, and keeping the
+            # last track made the app show a title (and, once there was one, a
+            # cover) for something that had finished minutes ago — Petr,
+            # 2026-09-07: "pokud tam ted nic nehraje, nemelo by tam bejt now
+            # playing title a image, proste tam nic neni". Clear it, and let the
+            # app draw nothing.
+            cur.update({"track": "", "artist": "", "album": "", "artUrl": "",
+                        "source": "", "playing": False})
             np = cur
         elif kind == "volume":
             # librespot volume is 0..65535; convert to 0..100

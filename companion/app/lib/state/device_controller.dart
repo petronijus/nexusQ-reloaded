@@ -332,6 +332,24 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   SpotifyQueue? queue;
   bool _queueInFlight = false;
 
+  /// Nothing is loaded anywhere: no current item and nothing queued behind it.
+  ///
+  /// Pressing play in that state does nothing at all — Spotify has no context
+  /// to resume, and librespot answers every request with "context is not
+  /// available", which is what surfaced to Petr as an opaque "error 43"
+  /// (2026-09-07: "pokud jsem na konci fronty, nemel bych mit moznost dat
+  /// play"). So the buttons say it by being disabled rather than by failing.
+  ///
+  /// The queue is the authority when Spotify is linked, because it knows about
+  /// an exhausted context that the bridge cannot see. Otherwise fall back to
+  /// what the bridge reports, which since control r41 is honestly empty once
+  /// librespot says `stopped`.
+  bool get nothingToPlay {
+    final q = queue;
+    if (q != null) return q.current == null && q.upNext.isEmpty;
+    return state.nowPlaying.isEmpty && !state.nowPlaying.playing;
+  }
+
   /// Only Spotify can answer this. librespot tells us the CURRENT track (that
   /// is the hook), but it has no idea what Spotify will play next, so the
   /// queue exists only when the account is linked. Refreshed on track change

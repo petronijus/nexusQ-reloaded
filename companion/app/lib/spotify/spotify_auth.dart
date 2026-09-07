@@ -187,7 +187,38 @@ class SpotifyLink extends ChangeNotifier {
 
   /// Feed every incoming app link here. Returns true when the URI was a Spotify
   /// callback (handled, successfully or not); false when it was something else.
-  Future<bool> handleRedirect(Uri uri) async {
+  /// Serialises redirect handling and refuses a repeat of the same URI.
+  ///
+  /// The redirect arrives by TWO routes — `uriLinkStream` and
+  /// `getInitialLink()` — and app_links delivers it on both on some platforms.
+  /// Unserialised, the two calls interleave: both read `pendingState`, then one
+  /// deletes `pendingVerifier` before the other reads it, so that one throws
+  /// "no verifier" while its twin links successfully. The user sees a failure
+  /// SnackBar over a login that in fact worked, tries again, and logs in twice
+  /// (Petr, 2026-09-07: "prihlasit se musim dvakrat"). An authorization code is
+  /// single-use anyway, so a second exchange of the same one could only ever
+  /// fail. One at a time, and never the same URI twice.
+  Future<bool> _redirectChain = Future.value(false);
+  String? _lastRedirect;
+
+  Future<bool> handleRedirect(Uri uri) {
+    final Future<bool> next = _redirectChain.then((_) {
+      if (_lastRedirect == uri.toString()) {
+        // Already dealt with, by us, moments ago. Swallow it: it is our scheme
+        // and re-reporting it would show a second SnackBar for one login.
+        AppLog.add('spotify', 'redirect delivered twice, ignoring the repeat');
+        return false;
+      }
+      _lastRedirect = uri.toString();
+      return _handleRedirect(uri);
+    });
+    // Keep the chain alive even when this attempt throws, or one failure would
+    // wedge every later login behind a dead Future.
+    _redirectChain = next.then((_) => false, onError: (_) => false);
+    return next;
+  }
+
+  Future<bool> _handleRedirect(Uri uri) async {
     final expectedState = await store.read(key: _Keys.pendingState);
     if (expectedState == null) {
       // Not waiting for anything: still swallow our own scheme, never exchange.

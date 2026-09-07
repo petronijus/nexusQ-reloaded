@@ -361,7 +361,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       const _SectionHeader('NOW PLAYING'),
                       Builder(builder: (context) {
                         final route = controller.transportRoute;
-                        final enabled = controlsEnabled(route);
+                        // Enabled needs BOTH a route that can act and something
+                        // to act on: at the end of a queue every button is a
+                        // no-op that reports a Spotify error instead.
+                        final enabled =
+                            controlsEnabled(route) && !controller.nothingToPlay;
                         final dimColor = enabled ? NexusQColors.white : NexusQColors.dim;
                         final q = controller.queue;
                         return Column(children: [
@@ -371,12 +375,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           // so when Spotify is linked its answer is the better
                           // one and is preferred here (Petr, 2026-09-07: "nevidim
                           // vubec tam nazev toho co hraje ani artwork").
-                          _NowPlayingCard(
-                            title: q?.current?.title.isNotEmpty == true ? q!.current!.title : np.track,
-                            subtitle: q?.current?.artist.isNotEmpty == true ? q!.current!.artist : np.artist,
-                            detail: q?.current?.album ?? np.album,
-                            artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
-                          ),
+                          // Nothing loaded → nothing drawn. Not a title over a
+                          // placeholder square for a song that ended minutes
+                          // ago (Petr: "proste tam nic neni").
+                          if (!controller.nothingToPlay)
+                            _NowPlayingCard(
+                              title: q?.current?.title.isNotEmpty == true ? q!.current!.title : np.track,
+                              subtitle: q?.current?.artist.isNotEmpty == true ? q!.current!.artist : np.artist,
+                              detail: q?.current?.album ?? np.album,
+                              artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
+                            ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -620,12 +628,9 @@ class _NowPlayingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (title.isEmpty && subtitle.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.only(bottom: 8),
-        child: Text('Nothing playing', style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
-      );
-    }
+    // Reached only if something claimed to be playing but named nothing; the
+    // caller already skips the card when nothing is loaded.
+    if (title.isEmpty && subtitle.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
