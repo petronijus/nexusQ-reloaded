@@ -371,6 +371,16 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   /// what the bridge reports, which since control r41 is honestly empty once
   /// librespot says `stopped`.
   bool get nothingToPlay {
+    // A `device` transport means the BRIDGE said it can act — for AirPlay that
+    // is shairport's own CanControl, checked against a live session. Trust it.
+    //
+    // Not trusting it cost an evening: AirPlay from macOS system audio carries
+    // NO track metadata (only an app publishing Now Playing does), so the card
+    // is legitimately blank while music plays. The rule below then read "no
+    // title" as "nothing to play" and greyed the buttons out — Petr, 2026-09-07:
+    // "Pauza jde ale uz pak nejde play v appce, stejne tak se da jit nadalsi
+    // track ale pak uz nejde play ani pause."
+    if (transportRoute == TransportRoute.device) return false;
     final q = queue;
     if (q != null) return q.current == null && q.upNext.isEmpty;
     return state.nowPlaying.isEmpty && !state.nowPlaying.playing;

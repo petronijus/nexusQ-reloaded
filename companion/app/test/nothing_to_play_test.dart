@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexusq_companion/protocol/client.dart';
 import 'package:nexusq_companion/protocol/models.dart';
 import 'package:nexusq_companion/spotify/spotify_player.dart';
+import 'package:nexusq_companion/spotify/transport_rules.dart' show TransportRoute;
 import 'package:nexusq_companion/state/device_controller.dart';
 
 class _Quiet implements NexusQClient {
@@ -95,6 +96,20 @@ void main() {
       expect(c.nothingToPlay, isFalse);
       c.dispose();
     });
+  });
+
+  test('a device transport is never "nothing to play", even with no title', () {
+    // AirPlay from macOS system audio sends no metadata at all, so the card is
+    // blank while music plays. `device` means the bridge already checked it can
+    // act (shairport's CanControl against a live session), and greying the
+    // buttons out on a missing title is what made pause a one-way door.
+    final c = controller(
+      np: const NowPlaying(track: '', artist: '', source: 'airplay',
+          transport: 'device', playing: false),
+    );
+    expect(c.transportRoute, TransportRoute.device);
+    expect(c.nothingToPlay, isFalse);
+    c.dispose();
   });
 
   testWidgets('the Now Playing card is absent when nothing is loaded', (tester) async {
