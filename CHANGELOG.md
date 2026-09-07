@@ -187,14 +187,19 @@ All notable changes to Nexus Q Reloaded. Format follows
   | small PA fragments + cushion 30 ms | 60 ms |
   | everything tight (20 ms + 20 ms) | 128 ms — *worse*: buffers too small to
     absorb jitter underrun, and the loopback grows to compensate |
-  So the shipped cushions are already near the optimum, the two explanations
-  offered for the delay (five days of accumulation; then the configured
-  cushions) were **both wrong**, and each was built on the same artifact. What
-  r95 changed is harmless and the reset demonstrably fires — the module index
-  moves between listening sessions — but it was aimed at a phantom, and the
-  ceiling at 200 ms cannot clamp a hop that runs at 56. The delay Petr reported
-  has NOT been reproduced under measurement; chasing it further starts from
-  what he hears now, not from these numbers.
+  So the shipped cushions are already near the optimum, and the **magnitude**
+  claimed for the delay (243 ms) is not a number anyone should reuse: it came
+  from a suspended source.
+- **What survives the correction** (Petr, 2026-09-07: *"latence [je] v pořádku
+  a byla v pořádku už předtím, dokud se to nerozhodilo"*): the degradation was
+  real, it persisted until a restart cleared it, and the one-way climb is in the
+  journal (120 -> 145 on 09-02/03). That is exactly the shape r95 defends
+  against — a cushion that only grows, on a service that ran five days without
+  restarting. So the ceiling and the reset-on-unpark are the right guard for the
+  mechanism; what was never established is how large the degraded state actually
+  got, because by the time it was measured with a running source the restart had
+  already cleared it. Both things are true: the fix targets a real failure mode,
+  and the headline number that motivated it was an artifact.
 - `tests/test_loopback_latency_bounded.sh` guards both halves: the ceiling is one
   argument on a `load-module` line, exactly what a refactor drops, and its loss
   is invisible for days. Seen failing four ways — ceiling deleted, ceiling below

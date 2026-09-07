@@ -121,15 +121,20 @@ optimum:
 | small PA fragments + cushion 30 ms | 60 ms |
 | everything tight (20 + 20) | 128 ms — worse; too small to absorb jitter |
 
-r95's ceiling and reset-on-unpark are harmless and the reset does fire (the
-module index moves between sessions), but they were aimed at a phantom.
+**Where it landed** (Petr, 2026-09-07): *"latence [je] v pořádku a byla v
+pořádku už předtím, dokud se to nerozhodilo"* — so the path is good again and
+the degradation was real while it lasted. It persisted until the restart cleared
+it, which is the shape of the one-way climb the journal records (120 -> 145 on
+09-02/03) on a service that had run five days without restarting. r95's ceiling
+and reset-on-unpark are the right guard for that, and the reset does fire (the
+module index moves between sessions).
 
-**What is actually open:** the delay Petr hears has never been reproduced under
-measurement. Start from him, not from these numbers — how large, on what
-content, and whether it is still there since the r95 restart. If it is, the
-suspects not yet examined are the *box* side (the Xiaomi's own output pipeline)
-and the true end-to-end figure, which nothing here has measured; the Q's own hop
-is 56 ms and that is not what a person calls a delay.
+**What was never established** is how large the degraded state actually got: by
+the time anyone measured with a running source, the restart had cleared it. The
+243 ms figure is not evidence of magnitude — it was read off a suspended source.
+Nothing further is open unless it comes back; if it does, measure it WHILE
+degraded and with usb_in RUNNING, and the untouched suspects are the Xiaomi
+box'"'"'s own output pipeline and a true end-to-end figure.
 
 To drive a test without waiting for him: `adb connect 192.168.20.169:5555` works
 (it needed the box awake — an earlier "unauthorized" was just that), and
