@@ -54,7 +54,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     // tick catches them. 30 s is far below any rate limit and far above what a
     // person notices.
     _queueTimer = Timer.periodic(const Duration(seconds: 30), (_) => refreshQueue());
-    unawaited(refreshQueue());
+    // NOT refreshed here: `transportRoute` reads nowPlaying.transport, which is
+    // still the default `none` until the first getState lands, so a refresh at
+    // construction always takes the early return. _hydrate() does it instead,
+    // once there is a state to judge by.
     _connSub = _client.connection.listen(_onConnection);
     if (_client.needsSupervision) {
       // Only the real transport watches the lifecycle — the mock never drops
@@ -225,6 +228,13 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       final s = await _client.call('getState');
       state.applyJson(s);
       notifyListeners();
+      // Only NOW is the transport known, so this is the first moment a queue
+      // refresh can do anything. Without it the card came up with the bridge's
+      // half — cover and buttons — and stayed that way until the track changed
+      // or the 30 s tick came round, which is exactly what Petr saw
+      // (2026-09-07: "nejdriv tam je artwork a playpause a pak kdyz dam dalsi
+      // song, pribyde timeline a fronta").
+      unawaited(refreshQueue());
     } catch (_) {/* stays on defaults until first event */}
     try {
       final o = await _client.call('listOutputs');
@@ -258,9 +268,13 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
         state.nowPlaying = NowPlaying.fromJson(e.data);
         // The track moved on, so the queue did too. A play/pause on the same
         // track does not move it, and refreshing on that would just spend
-        // requests.
+        // requests. The TRANSPORT changing counts as well: `none` ->
+        // `spotify-web` is the moment a queue becomes fetchable at all, and
+        // waiting for a track change there is what made the timeline arrive
+        // one song late.
         if (state.nowPlaying.track != before.track ||
-            state.nowPlaying.artist != before.artist) {
+            state.nowPlaying.artist != before.artist ||
+            state.nowPlaying.transport != before.transport) {
           unawaited(refreshQueue());
         }
       case 'deviceInfoChanged':
