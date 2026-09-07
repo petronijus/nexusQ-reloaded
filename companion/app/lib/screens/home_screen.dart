@@ -385,6 +385,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               detail: q?.current?.album ?? np.album,
                               artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
                               progress: controller.progress,
+                              // The LIVE flag, straight off the bridge: the
+                              // sampled one inside `progress` is as old as the
+                              // last fetch.
+                              playing: np.playing,
                             ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -624,6 +628,7 @@ class _NowPlayingCard extends StatelessWidget {
     required this.detail,
     required this.artUrl,
     this.progress,
+    this.playing = false,
   });
 
   final String title, subtitle, detail, artUrl;
@@ -631,6 +636,10 @@ class _NowPlayingCard extends StatelessWidget {
   /// Only Spotify reports a position; without one the card simply has no bar
   /// rather than a bar stuck at zero.
   final SpotifyProgress? progress;
+
+  /// Whether it is playing RIGHT NOW, from the bridge's event stream rather
+  /// than from the position sample.
+  final bool playing;
 
   @override
   Widget build(BuildContext context) {
@@ -669,7 +678,11 @@ class _NowPlayingCard extends StatelessWidget {
     if (p == null) return Padding(padding: const EdgeInsets.only(bottom: 10), child: row);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Column(children: [row, const SizedBox(height: 8), _ProgressBar(progress: p)]),
+      child: Column(children: [
+        row,
+        const SizedBox(height: 8),
+        _ProgressBar(progress: p, playing: playing),
+      ]),
     );
   }
 }
@@ -678,8 +691,12 @@ class _NowPlayingCard extends StatelessWidget {
 /// every second would be rude to the rate limiter and no smoother — and stops
 /// ticking when paused or off-screen, so a backgrounded app costs nothing.
 class _ProgressBar extends StatefulWidget {
-  const _ProgressBar({required this.progress});
+  const _ProgressBar({required this.progress, required this.playing});
   final SpotifyProgress progress;
+
+  /// Live, from the bridge. The sample inside [progress] can be up to one
+  /// refresh old, so a pause would otherwise keep the bar moving.
+  final bool playing;
 
   @override
   State<_ProgressBar> createState() => _ProgressBarState();
@@ -687,6 +704,11 @@ class _ProgressBar extends StatefulWidget {
 
 class _ProgressBarState extends State<_ProgressBar> {
   Timer? _tick;
+
+  /// The instant playback stopped. While set, the bar reads the position AS OF
+  /// then, so it freezes the moment the button is pressed instead of waiting
+  /// for the re-sample to come back from Spotify.
+  DateTime? _frozenAt;
 
   @override
   void initState() {
@@ -697,12 +719,21 @@ class _ProgressBarState extends State<_ProgressBar> {
   @override
   void didUpdateWidget(_ProgressBar old) {
     super.didUpdateWidget(old);
+    // A fresh sample supersedes any freeze: it already knows where the track
+    // is and whether it moves.
+    if (!identical(old.progress, widget.progress)) _frozenAt = null;
     _arm();
   }
 
+  bool get _moving => widget.playing && widget.progress.playing;
+
   void _arm() {
     _tick?.cancel();
-    if (!widget.progress.playing) return; // a paused bar does not move
+    if (!_moving) {
+      _frozenAt ??= DateTime.now(); // hold the position it had at this moment
+      return;
+    }
+    _frozenAt = null;
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -722,7 +753,7 @@ class _ProgressBarState extends State<_ProgressBar> {
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
+    final now = _frozenAt ?? DateTime.now();
     final f = widget.progress.fractionAt(now);
     final pos = widget.progress.positionAt(now);
     final total = Duration(milliseconds: widget.progress.durationMs);

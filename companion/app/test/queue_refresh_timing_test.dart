@@ -175,6 +175,34 @@ void main() {
     c.dispose();
   });
 
+  // Pause does not change the track, so the old rule refreshed nothing and the
+  // position sample kept saying `playing: true` — the bar ran on while the
+  // music had stopped (Petr: "zapauzoval jsem prehravani a progress bar porad
+  // jede"). The bar also freezes locally, but the sample must be renewed or
+  // resuming would jump to wherever the stale one had drifted to.
+  test('pausing re-samples the position', () async {
+    final bridge = _SpotifyBridge();
+    final c = DeviceController(bridge);
+    final player = _CountingPlayer();
+    c.playerFactory = (_) => player;
+    c.start();
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    final before = player.queueCalls;
+
+    bridge.push(NexusQEvent('nowPlayingChanged', {
+      'playing': false, // the ONLY change
+      'track': 'Kinkajou',
+      'artist': 'Les Baxter',
+      'source': 'spotify',
+      'transport': 'spotify-web',
+    }));
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(player.queueCalls, greaterThan(before),
+        reason: 'play/pause must renew the position sample');
+    c.dispose();
+  });
+
   test('the transport becoming actionable triggers a refresh on its own',
       () async {
     // none -> spotify-web with the SAME track: the old rule looked only at the

@@ -272,9 +272,17 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
         // `spotify-web` is the moment a queue becomes fetchable at all, and
         // waiting for a track change there is what made the timeline arrive
         // one song late.
+        // Play/pause changes nothing about the QUEUE, but it changes the
+        // position sample: `progress.playing` came from Spotify at fetch time,
+        // so after a pause the bar would keep advancing on a stale `true`
+        // until the 30 s tick (Petr, 2026-09-07: "zapauzoval jsem prehravani a
+        // progress bar porad jede"). The bar also freezes locally and at once
+        // — see _ProgressBar — but the position still has to be re-sampled, or
+        // resuming would jump.
         if (state.nowPlaying.track != before.track ||
             state.nowPlaying.artist != before.artist ||
-            state.nowPlaying.transport != before.transport) {
+            state.nowPlaying.transport != before.transport ||
+            state.nowPlaying.playing != before.playing) {
           unawaited(refreshQueue());
         }
       case 'deviceInfoChanged':
