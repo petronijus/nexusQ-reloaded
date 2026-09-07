@@ -11,7 +11,6 @@
 // An authorization code is single-use, so a second exchange of the same one
 // could only ever fail. The fix is therefore both a lock and a memory: one
 // redirect at a time, and never the same URI twice.
-import 'dart:async';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';

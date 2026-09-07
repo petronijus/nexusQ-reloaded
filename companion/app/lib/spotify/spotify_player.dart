@@ -116,6 +116,39 @@ class SpotifyTrack {
   }
 }
 
+/// Where the current track has got to. Spotify's queue endpoint does not carry
+/// a position, so this is a second (cheap) call — and it is sampled, not
+/// streamed: the app interpolates from [sampledAt] rather than asking again
+/// every second, which no rate limit would survive.
+class SpotifyProgress {
+  SpotifyProgress({
+    required this.positionMs,
+    required this.durationMs,
+    required this.playing,
+    DateTime? sampledAt,
+  }) : sampledAt = sampledAt ?? DateTime.now();
+
+  final int positionMs, durationMs;
+  final bool playing;
+  final DateTime sampledAt;
+
+  /// Where the track is NOW: the sample plus the wall clock since, while
+  /// playing. Clamped to the track — a stale sample must never draw a bar past
+  /// its end, and a paused track must not creep.
+  Duration positionAt(DateTime now) {
+    final base = Duration(milliseconds: positionMs);
+    if (!playing) return base;
+    final p = base + now.difference(sampledAt);
+    final d = Duration(milliseconds: durationMs);
+    return durationMs > 0 && p > d ? d : p;
+  }
+
+  /// 0..1, or null when the length is unknown (a live stream, an oddity) —
+  /// which the bar draws as nothing rather than as "at the start".
+  double? fractionAt(DateTime now) =>
+      durationMs <= 0 ? null : (positionAt(now).inMilliseconds / durationMs).clamp(0.0, 1.0);
+}
+
 /// What Spotify is playing and what follows it.
 class SpotifyQueue {
   const SpotifyQueue({this.current, this.upNext = const []});
@@ -213,6 +246,22 @@ class SpotifyPlayer {
     final j = jsonDecode(res.body);
     if (j is! Map) return const SpotifyQueue();
     return SpotifyQueue.fromJson(Map<String, dynamic>.from(j));
+  }
+
+  /// Position within the current track. `/me/player` answers 204 with no body
+  /// when nothing is playing anywhere, which is not an error — it is the same
+  /// "nothing loaded" the queue reports, so it comes back as null.
+  Future<SpotifyProgress?> progress() async {
+    final res = await _call('GET', '/me/player');
+    if (res.statusCode == 204 || res.body.trim().isEmpty) return null;
+    final j = jsonDecode(res.body);
+    if (j is! Map) return null;
+    final item = j['item'];
+    return SpotifyProgress(
+      positionMs: (j['progress_ms'] as num?)?.toInt() ?? 0,
+      durationMs: item is Map ? (item['duration_ms'] as num?)?.toInt() ?? 0 : 0,
+      playing: j['is_playing'] == true,
+    );
   }
 
   Future<http.Response> _call(String method, String path, {Object? body, bool retried = false}) async {

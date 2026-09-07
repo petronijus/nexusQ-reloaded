@@ -384,6 +384,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               subtitle: q?.current?.artist.isNotEmpty == true ? q!.current!.artist : np.artist,
                               detail: q?.current?.album ?? np.album,
                               artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
+                              progress: controller.progress,
                             ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -622,18 +623,21 @@ class _NowPlayingCard extends StatelessWidget {
     required this.subtitle,
     required this.detail,
     required this.artUrl,
+    this.progress,
   });
 
   final String title, subtitle, detail, artUrl;
+
+  /// Only Spotify reports a position; without one the card simply has no bar
+  /// rather than a bar stuck at zero.
+  final SpotifyProgress? progress;
 
   @override
   Widget build(BuildContext context) {
     // Reached only if something claimed to be playing but named nothing; the
     // caller already skips the card when nothing is loaded.
     if (title.isEmpty && subtitle.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
+    final row = Row(
         children: [
           _Cover(url: artUrl, size: 64),
           const SizedBox(width: 12),
@@ -660,7 +664,89 @@ class _NowPlayingCard extends StatelessWidget {
             ),
           ),
         ],
-      ),
+    );
+    final p = progress;
+    if (p == null) return Padding(padding: const EdgeInsets.only(bottom: 10), child: row);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(children: [row, const SizedBox(height: 8), _ProgressBar(progress: p)]),
+    );
+  }
+}
+
+/// The position bar. Ticks LOCALLY off one sampled position — asking Spotify
+/// every second would be rude to the rate limiter and no smoother — and stops
+/// ticking when paused or off-screen, so a backgrounded app costs nothing.
+class _ProgressBar extends StatefulWidget {
+  const _ProgressBar({required this.progress});
+  final SpotifyProgress progress;
+
+  @override
+  State<_ProgressBar> createState() => _ProgressBarState();
+}
+
+class _ProgressBarState extends State<_ProgressBar> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _arm();
+  }
+
+  @override
+  void didUpdateWidget(_ProgressBar old) {
+    super.didUpdateWidget(old);
+    _arm();
+  }
+
+  void _arm() {
+    _tick?.cancel();
+    if (!widget.progress.playing) return; // a paused bar does not move
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  static String _mmss(Duration d) {
+    final m = d.inMinutes;
+    final sec = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$sec';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final f = widget.progress.fractionAt(now);
+    final pos = widget.progress.positionAt(now);
+    final total = Duration(milliseconds: widget.progress.durationMs);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: LinearProgressIndicator(
+            value: f,
+            minHeight: 3,
+            backgroundColor: NexusQColors.divider,
+            valueColor: const AlwaysStoppedAnimation(NexusQColors.accent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(_mmss(pos), style: const TextStyle(color: NexusQColors.dim, fontSize: 10)),
+            if (widget.progress.durationMs > 0)
+              Text(_mmss(total), style: const TextStyle(color: NexusQColors.dim, fontSize: 10)),
+          ],
+        ),
+      ],
     );
   }
 }

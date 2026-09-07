@@ -332,6 +332,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   SpotifyQueue? queue;
   bool _queueInFlight = false;
 
+  /// Where the current track has got to, sampled at the moment it was fetched.
+  /// The bar interpolates from it locally; nothing here ticks.
+  SpotifyProgress? progress;
+
   /// Nothing is loaded anywhere: no current item and nothing queued behind it.
   ///
   /// Pressing play in that state does nothing at all — Spotify has no context
@@ -359,17 +363,28 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> refreshQueue() async {
     if (_disposed || _queueInFlight) return;
     if (transportRoute != TransportRoute.spotifyWeb) {
-      if (queue != null) {
+      if (queue != null || progress != null) {
         queue = null;
+        progress = null;
         notifyListeners();
       }
       return;
     }
     _queueInFlight = true;
     try {
-      final q = await _player.queue();
+      final player = _player;
+      final q = await player.queue();
       if (_disposed) return;
       queue = q;
+      // Position is a second call — the queue endpoint has none. Its failure
+      // must not cost us the queue we just got, so it is caught separately.
+      try {
+        final p = await player.progress();
+        if (_disposed) return;
+        progress = p;
+      } catch (e) {
+        AppLog.add('spotify', 'progress refresh failed: $e', warn: true);
+      }
       notifyListeners();
     } catch (e) {
       // Never a SnackBar: the user did not ask for this, it refreshes itself,
