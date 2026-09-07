@@ -572,6 +572,9 @@ _SERVICE_BY_ID = {s["id"]: s for s in SERVICES}
 # The appliance user: uid 10000, its manager kept up by linger independently of
 # any graphical session (see set_desktop), its bus where systemd always puts it.
 _USER_UID = 10000
+# ...and its own group, which the hook socket below is handed so librespot can
+# reach us without the socket being world-writable.
+_USER_GID = 10000
 _USER_RUNTIME_DIR = f"/run/user/{_USER_UID}"
 _USER_BUS = f"unix:path={_USER_RUNTIME_DIR}/bus"
 
@@ -2412,6 +2415,20 @@ def serve_unix(bridge):
         pass
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(HOOK_SOCK)
+    # This bridge is a root system service; librespot and its `--onevent` hook
+    # live in the uid-10000 user session. A root:root 0660 socket is therefore
+    # one the hook can NEVER connect to, and it never did: now-playing from
+    # Spotify has been silently dead since this socket was first created,
+    # because the hook fails with EACCES and librespot neither logs nor cares
+    # (the hook is best-effort by design, which is what hid it). Found
+    # 2026-09-07 the first time anyone played Spotify and watched the app.
+    # Hand the GROUP to the appliance user and keep 0660 — the socket accepts
+    # commands, so it should not become world-writable to fix a hook.
+    try:
+        os.chown(HOOK_SOCK, -1, _USER_GID)
+    except OSError as e:
+        log("hook socket: cannot give it to gid", _USER_GID, "-", e,
+            "- librespot's now-playing hook will not be able to connect")
     os.chmod(HOOK_SOCK, 0o660)
     srv.listen(8)
     log("hook socket:", HOOK_SOCK)
