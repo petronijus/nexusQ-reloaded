@@ -139,6 +139,80 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
+### Added — the app shows what is playing, and AirPlay is controlled like Spotify (app 1.21.0, released 2026-09-07; nexusq-control r44, nexusqd r18, device r96)
+
+Petr drove all of this by using it and saying what was wrong, one thing at a
+time; every item below started as a sentence from him.
+
+- **Now Playing became a card**: cover, title, artist, album, a position bar,
+  and **UP NEXT**. One call to Spotify's `/me/player/queue` answers what is
+  playing, its artwork and what follows, so it needs no extra scope and nobody
+  re-consents. The position comes from a second call and is **sampled, not
+  polled** — the bar ticks locally against the wall clock, only while playing
+  and only while on screen.
+- **AirPlay got the same card and the same buttons.** shairport-sync was
+  already built with metadata + dbus + mpris and had never been asked to use
+  them; the launcher now points its interfaces at the **session** bus
+  (`--dbus-default-message-bus=session` — the `mpris_service_bus` config key is
+  ignored, measured both ways), MPRIS drives the buttons, and the state comes
+  from **PulseAudio**, where shairport's sink-input corks and uncorks with the
+  sender.
+- **The LED ring reacts to music again** (nexusqd r18). The music scene now
+  sits at priority 9, above the colour theme's override at 8 and below the
+  volume overlay at 10 — see the separate entry below; this is the half that
+  made both settings usable at once.
+
+Fixed along the way, all of them found by using it:
+
+- **One login is one login.** The OAuth redirect arrives by two routes and both
+  were acted on; they raced, one consumed the other's verifier, and a login
+  that had just succeeded reported a failure.
+- **Nothing playing shows nothing.** `stopped` was treated like `paused`, so a
+  finished track kept its title — and, once there were covers, its artwork.
+- **No play button with nothing to play.** At the end of a Spotify queue every
+  button was a no-op reporting an opaque "error 43" (librespot: "context is not
+  available"). A `device` transport stays controllable even with no title,
+  because AirPlay from macOS system audio sends none at all.
+- **The queue and timeline arrive with the first screen**, not one track later:
+  the first refresh ran before the transport was known and always returned
+  early.
+- **The position bar stops on pause** — it ticked on the sampled flag, which is
+  as old as the last fetch — **and moves again**, after the first attempt at
+  that made it require two flags to agree and it stood still instead.
+
+### Fixed — the LED ring could never show the visualiser once a theme was set (nexusqd r18, OTA, 2026-09-07)
+
+- The manual override that carries the colour theme sat at priority 8 and the
+  music scene at 7, and the compositor takes the highest — so **the visualiser
+  was unreachable whenever a theme was active**, although the app offers both
+  as separate settings. Latent since the layers were written, and hidden by an
+  accident: the theme was forgotten on every boot, so the override was usually
+  inactive. Making the theme persistent that same morning (r37) removed the
+  accident and left the ring permanently blue.
+- Music is now priority 9. Safe because that layer already **yields** — with no
+  audio its render returns -1 and the compositor falls through — so the theme
+  owns the ring the moment playback stops. Six compositor tests pin the order
+  *and* the fall-through; order alone would be a ring stuck on a dead scene.
+
+### Fixed — the AirPlay watcher fed itself into 68 % CPU and 85 °C (nexusq-control r42 → r44, 2026-09-07)
+
+- The first AirPlay design watched shairport's MPRIS signals with `busctl
+  monitor` and refreshed on **any** line. Measured on the box: idle, the
+  monitor is silent — but every property read *we* make puts eight messages on
+  the bus (the call, its return, and NameOwnerChanged twice as the short-lived
+  client comes and goes). One refresh caused two reads, those sixteen lines,
+  those thirty-two refreshes. **11.09 % busy → 68.40 %, 0 → 764 ticks a minute,
+  the governor pinned at 1.2 GHz, the die 59 °C → 85 °C, inside one minute.**
+- Caught only because the idle cost was measured *before* deploying as well as
+  after — Petr's condition for the whole feature was that the Q must not get
+  slower. Stopped on the device the moment it was seen.
+- r43 filtered the monitor to real PropertiesChanged signals; that killed the
+  loop but delivered nothing at all (twelve seconds of playback, zero signals),
+  so the app never learned playback had started and its play/pause icon sat
+  inverted. r44 abandons the bus for state entirely: **PulseAudio** already
+  reports it, through a `pactl subscribe` this daemon has run for months, and
+  cannot feed itself. Idle cost after: **11.88 %**, one tick a minute, 350 MHz.
+
 ### Fixed — Now Playing was never going to work: the hook could not reach the bridge (nexusq-control r40, OTA, 2026-09-07)
 
 - **Petr played Spotify to the Q and the app's Now Playing row stayed empty**
