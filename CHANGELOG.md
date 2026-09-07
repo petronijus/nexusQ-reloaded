@@ -139,6 +139,37 @@ All notable changes to Nexus Q Reloaded. Format follows
   silence into the gadget (`musb_irq_work` ~30 % of a core, documented cost,
   `docs/2026-08-24-usb-audio-idle-cost.md`).
 
+### Fixed — Now Playing was never going to work: the hook could not reach the bridge (nexusq-control r40, OTA, 2026-09-07)
+
+- **Petr played Spotify to the Q and the app's Now Playing row stayed empty**
+  while the audio was perfect. Everything looked right — `librespot` running
+  with `--onevent /usr/bin/nexusq-onevent`, the hook installed, the bridge up,
+  the socket present — and the hook had never fired once. Not that day: **ever**.
+- The bridge is a root system service and bound its hook socket **root:root
+  0660**; librespot, and therefore the hook, runs as **uid 10000**. Every
+  connect died with `EACCES`. Nothing logged it, because the hook is
+  best-effort by design so it can never break playback — which is exactly what
+  hid it. `git log -L` puts that `chmod` in the file's **first commit**, so
+  now-playing from Spotify had been dead since the day it was written and
+  simply never had a witness. It is the item the handover had been carrying as
+  "Spotify control — not yet verified by a human".
+- Proven at both ends rather than reasoned about: connecting as uid 10000 gave
+  `PermissionError`, as root succeeded; firing the hook by hand as root filled
+  `nowPlaying` correctly, so the rest of the chain was always fine.
+- The fix hands the socket's **group** to the appliance user and keeps 0660 —
+  not 0666: this socket accepts commands, and opening it to every process on
+  the box to let one hook in would trade a dead feature for an open door. A
+  failed `chown` is logged with what it costs instead of passing silently.
+- **Verified live on Petr's own playback**: after the upgrade the socket reads
+  `root:user`, uid 10000 connects, and at the next track change the bridge
+  reported `Jungle Flower — Les Baxter, source spotify, transport spotify-web`.
+- **Known, and inherent:** librespot reports only on *events*, so after any
+  bridge restart Now Playing stays blank until the track changes or playback is
+  paused/resumed. There is no way to ask librespot what is playing — that
+  absence is the whole reason the app drives Spotify through the Web API.
+- `tests/test_hook_socket_perms.py` guards it, seen failing with the `chown`
+  removed and again with the tempting 0666 "fix" in its place.
+
 ### Fixed — a ceiling on the loopback cushion (device r95, OTA, 2026-09-06) — and a diagnosis that was WRONG
 
 - **"je tam ted delay na usb audio."** Measured: the USB hop was carrying

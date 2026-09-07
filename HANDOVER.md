@@ -90,6 +90,31 @@ currently express "built, not approved" — fix candidates in the dated note.
 
 ---
 
+## ✅ Now Playing works — and the reason it never did (control r40, 2026-09-07)
+
+The standing "Spotify control — not yet verified by a human" item finally got
+its human, and the first look found the feature had been dead since day one.
+Audio played, the app's Now Playing row stayed empty, and `librespot`'s
+`--onevent` hook had never fired: the bridge runs as root and bound its hook
+socket **root:root 0660**, while librespot runs as **uid 10000**. Every connect
+was `EACCES`, and the hook is deliberately best-effort — it must never break
+playback — so nothing ever logged it.
+
+**r40 hands the socket's group to the appliance user** (still 0660; not 0666,
+because the socket takes commands). Verified on Petr's own playback: the socket
+now reads `root:user`, uid 10000 connects, and at the next track change the
+bridge reported *Jungle Flower — Les Baxter*, source `spotify`, transport
+`spotify-web`.
+
+⚠️ **After any bridge restart Now Playing is blank until the next event.**
+librespot reports only on track change / play / pause and cannot be asked what
+is playing — that absence is precisely why the app drives Spotify through the
+Web API. Do not chase this as a bug; change the track and it fills in.
+
+Still unverified by a human: the Spotify **control** half (Settings → Spotify
+account → Connect, then pause from the phone — needs Premium and an
+allow-listed account), and the first real-iPhone run of build 52.
+
 ## Open — the USB audio delay is NOT diagnosed, and two answers were wrong
 
 **Read this before touching the USB hop.** On 2026-09-06 Petr reported a delay
