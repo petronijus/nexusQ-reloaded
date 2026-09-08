@@ -70,6 +70,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 CONF_PATH = os.environ.get("NQMQTT_CONF", "/etc/nexusq/mqtt.json")
@@ -301,6 +302,136 @@ CONTROL_HOST = os.environ.get("NQMQTT_CONTROL_HOST", "127.0.0.1")
 CONTROL_PORT = int(os.environ.get("NQMQTT_CONTROL_PORT", "45015"))
 
 
+# --------------------------------------------------------------------------
+# Roon, via the roon-extension-mqtt on the Core
+# --------------------------------------------------------------------------
+# Roon is the one source the Q cannot see for itself: RAAT carries audio and
+# nothing else, so the endpoint never learns the track, and there is no local
+# transport to drive. The Core knows all of it, and Petr already runs
+# `fjgalesloot/roon-extension-mqtt`, which mirrors every zone onto this same
+# broker -- title/artist/album, an image key, length and position, and the
+# per-zone capability flags. Reading it is therefore free: this daemon already
+# holds a broker connection, so it subscribes and forwards to the bridge's hook
+# socket, exactly the way librespot's hook feeds now-playing.
+#
+# The bridge does the deciding, not this daemon: which zone is OURS is a
+# question only it can answer (it watches the Q's own `roon_in` PA source), and
+# putting that logic here would split it across two processes.
+ROON_ROOT = os.environ.get("NQMQTT_ROON_ROOT", "roon")
+ROON_ENABLED = os.environ.get("NQMQTT_ROON", "1") != "0"
+HOOK_SOCK = os.environ.get("NQMQTT_HOOK_SOCK", "/run/nexusq-control.sock")
+
+#: Bounded on purpose. `roon/#` would also carry every output's grouping
+#: candidates and source controls -- hundreds of retained messages per zone
+#: that nothing here reads.
+ROON_FILTERS = [
+    f"{ROON_ROOT}/+/state",
+    f"{ROON_ROOT}/+/display_name",
+    f"{ROON_ROOT}/+/is_play_allowed",
+    f"{ROON_ROOT}/+/is_pause_allowed",
+    f"{ROON_ROOT}/+/is_next_allowed",
+    f"{ROON_ROOT}/+/is_previous_allowed",
+    f"{ROON_ROOT}/+/now_playing/three_line/line1",
+    f"{ROON_ROOT}/+/now_playing/three_line/line2",
+    f"{ROON_ROOT}/+/now_playing/three_line/line3",
+    f"{ROON_ROOT}/+/now_playing/image_key",
+    f"{ROON_ROOT}/+/now_playing/length",
+    f"{ROON_ROOT}/+/now_playing/seek_position",
+    f"{ROON_ROOT}/+/outputs/+/display_name",
+]
+
+
+def roon_forward(topic, payload):
+    """Hand one Roon topic to the control bridge.
+
+    Best-effort and silent on failure, like librespot's hook: the bridge being
+    down must never disturb telemetry, and the next message will carry the same
+    fact anyway (the extension publishes retained).
+    """
+    if not topic.startswith(ROON_ROOT + "/"):
+        return
+    try:
+        value = payload.decode("utf-8", "replace")
+    except Exception:
+        return
+    line = json.dumps({"kind": "roon",
+                       "topic": topic[len(ROON_ROOT) + 1:],
+                       "value": value}) + "\n"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(HOOK_SOCK)
+            s.sendall(line.encode("utf-8"))
+    except OSError:
+        pass
+
+
+#: Where the bridge asks us to publish. It is stdlib-only by standing rule and
+#: holds no broker connection of its own; we already have one, so — exactly as
+#: nexusq-btagent owns D-Bus and the bridge forwards to it — we own MQTT and the
+#: bridge forwards to us. 0660 root:root: only the bridge (root) needs it.
+PUBLISH_SOCK = os.environ.get("NQMQTT_PUBLISH_SOCK", "/run/nexusq-mqtt.sock")
+
+#: Only these topics may be published on request. The broker is the household's
+#: and carries Home Assistant, zigbee2mqtt and the blinds; a bug in the bridge
+#: must not be able to reach any of it. Roon commands and nothing else.
+PUBLISH_ALLOW_PREFIX = ROON_ROOT + "/"
+PUBLISH_ALLOW_SUFFIX = "/command"
+
+
+def _publish_allowed(topic):
+    """A Roon zone command, and nothing else.
+
+    Deliberately a whitelist rather than a blacklist: this socket exists to send
+    play/pause to one zone, and everything else on this broker belongs to
+    somebody else's device.
+    """
+    return (topic.startswith(PUBLISH_ALLOW_PREFIX)
+            and topic.endswith(PUBLISH_ALLOW_SUFFIX)
+            and topic.count("/") == 2          # roon/<zone>/command
+            and "+" not in topic and "#" not in topic)
+
+
+def publish_server(get_client):
+    """Serve `{"topic":…,"payload":…}` publish requests from the bridge."""
+    try:
+        os.unlink(PUBLISH_SOCK)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(PUBLISH_SOCK)
+    os.chmod(PUBLISH_SOCK, 0o660)
+    srv.listen(4)
+    log("publish socket:", PUBLISH_SOCK)
+    while True:
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            continue
+        with conn:
+            conn.settimeout(3)
+            try:
+                data = conn.recv(4096).decode("utf-8", "replace").strip()
+                req = json.loads(data) if data else {}
+                topic = str(req.get("topic", ""))
+                payload = str(req.get("payload", ""))
+                if not _publish_allowed(topic):
+                    conn.sendall(b'{"ok":false,"error":"topic not allowed"}\n')
+                    log("publish REFUSED (not a Roon command):", topic)
+                    continue
+                client = get_client()
+                if client is None:
+                    conn.sendall(b'{"ok":false,"error":"broker not connected"}\n')
+                    continue
+                client.publish(topic, payload)
+                conn.sendall(b'{"ok":true}\n')
+            except (OSError, ValueError, MqttError) as e:
+                try:
+                    conn.sendall(json.dumps({"ok": False, "error": str(e)}).encode() + b"\n")
+                except OSError:
+                    pass
+
+
 def volume_from_control():
     """(volume_pct, muted) straight from the control bridge, or None if it is
     not answering — in which case read_volume() falls back to the mixer probes.
@@ -506,8 +637,10 @@ CONNACK_RC = {
 
 
 class MqttClient:
-    """Connect, publish QoS 0, keep alive, notice a dead broker. Nothing else —
-    this daemon never subscribes."""
+    """Connect, publish QoS 0, keep alive, notice a dead broker — and, since the
+    Roon bridge (2026-09-08), SUBSCRIBE and hand incoming PUBLISHes to a
+    callback. Still a deliberately small slice of MQTT 3.1.1: no QoS 1/2, no
+    session resumption, no retained-publish bookkeeping."""
 
     KEEPALIVE_S = 90
     PINGRESP_GRACE_S = 15
@@ -525,6 +658,9 @@ class MqttClient:
         self._last_send = 0.0
         self._ping_sent = None   # monotonic time of an unanswered PINGREQ
         self._rxbuf = b""
+        self._packet_id = 0
+        #: called with (topic, payload_bytes) for every incoming PUBLISH.
+        self.on_message = None
 
     def connect(self, timeout=10):
         self.sock = socket.create_connection((self.host, self.port), timeout)
@@ -556,6 +692,22 @@ class MqttClient:
         body = _mqtt_str(topic) + payload
         self._send(bytes([0x30 | (0x01 if retain else 0)])
                    + _remaining_len(len(body)) + body)
+
+    def subscribe(self, filters):
+        """SUBSCRIBE at QoS 0 to a list of topic filters.
+
+        Fire-and-forget: SUBACK is parsed like any other packet and ignored.
+        At QoS 0 there is nothing to recover — a subscription lost with the
+        connection is re-issued by the reconnect path, which is the same
+        recovery a missed SUBACK would need.
+        """
+        if not filters:
+            return
+        self._packet_id = (self._packet_id % 65535) + 1
+        body = struct.pack("!H", self._packet_id)
+        for f in filters:
+            body += _mqtt_str(f) + bytes([0])       # QoS 0
+        self._send(bytes([0x82]) + _remaining_len(len(body)) + body)
 
     def disconnect(self):
         """Graceful DISCONNECT — tells the broker NOT to publish the Will."""
@@ -653,6 +805,19 @@ class MqttClient:
             ptype, _body = parsed
             if ptype == 0xD0:  # PINGRESP
                 self._ping_sent = None
+            elif ptype == 0x30 and self.on_message is not None:
+                # PUBLISH from the broker. QoS 0 only, so the variable header
+                # is just the topic — no packet identifier follows it.
+                try:
+                    tlen = struct.unpack("!H", _body[:2])[0]
+                    topic = _body[2:2 + tlen].decode("utf-8", "replace")
+                    payload = _body[2 + tlen:]
+                except (struct.error, IndexError):
+                    continue                      # malformed; drop, keep going
+                try:
+                    self.on_message(topic, payload)
+                except Exception as e:            # a handler must never kill us
+                    log("mqtt: message handler failed:", e)
 
     def _parse_buffered(self):
         """One packet from _rxbuf, or None if incomplete."""
@@ -838,6 +1003,11 @@ def run():
     tis_history = []   # rolling time_in_state snapshots for the 1 h residency window
     backoff = 5
     client = None
+    if ROON_ENABLED:
+        # A closure, not the object: the client is replaced on every reconnect
+        # and a captured reference would publish into a dead socket forever.
+        threading.Thread(target=publish_server, args=(lambda: client,),
+                         daemon=True).start()
     while not _shutdown:
         try:
             client = MqttClient(
@@ -854,6 +1024,13 @@ def run():
             client.connect()
             log("connected")
             backoff = 5
+            if ROON_ENABLED:
+                # Re-subscribed on every reconnect: a clean session keeps no
+                # subscriptions, and the broker replays the retained values, so
+                # the bridge is re-seeded with the current zone picture for free.
+                client.on_message = roon_forward
+                client.subscribe(ROON_FILTERS)
+                log(f"subscribed to {ROON_ROOT}/… for Roon now-playing")
             client.publish(status_topic, "online", retain=True)
             client.publish(legacy_status_topic, "online", retain=True)
             for suffix, cfg in discovery_configs(

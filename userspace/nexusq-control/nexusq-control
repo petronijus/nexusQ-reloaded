@@ -304,6 +304,23 @@ class Pulse:
             log("pactl list sinks failed:", e)
             return []
 
+    def source_state(self, name):
+        """A PA source's run state ("RUNNING"/"IDLE"/"SUSPENDED"), or "" when it
+        does not exist or pactl fails.
+
+        `pactl list short sources` is name<TAB>module<TAB>spec<TAB>...<TAB>state;
+        the state is the LAST field, which is why this splits from the right
+        rather than counting columns that differ between PA versions.
+        """
+        out = _pactl("list", "short", "sources")
+        if out is None:
+            return ""
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[1] == name:
+                return parts[-1].strip()
+        return ""
+
     def default_sink(self):
         try:
             r = _pactl("get-default-sink")
@@ -691,6 +708,81 @@ def _mpris_metadata():
             d = ", ".join(str(x) for x in d if x)
         out[k] = d
     return out
+
+
+# --- Roon, via the Core's MQTT extension --------------------------------------
+# Roon is the one source the Q genuinely cannot see: RAAT carries audio and
+# nothing else, so the endpoint never learns the track and has no local
+# transport to drive. Writing a Roon API client would mean the MOO protocol over
+# a hand-rolled WebSocket, in a daemon that is stdlib-only by standing rule.
+#
+# It is not needed. Petr already runs `fjgalesloot/roon-extension-mqtt` on the
+# Core, which mirrors every zone onto the household broker — title/artist/album,
+# an image key, length and position, the capability flags — and subscribes to
+# `roon/<zone>/command` for control. nexusq-mqtt already holds a connection to
+# that broker, so it forwards those topics here and publishes our commands, the
+# same division of labour nexusq-btagent has for D-Bus.
+ROON_CONF_PATH = os.environ.get("NEXUSQ_ROON_CONF", "/etc/nexusq/roon.json")
+MQTT_PUBLISH_SOCK = os.environ.get("NEXUSQ_MQTT_PUBLISH_SOCK", "/run/nexusq-mqtt.sock")
+
+
+def _roon_conf():
+    """{"core_image_base": "http://host:9330"} — where album art can be fetched.
+
+    Not shipped with the package and deliberately not guessed: the Core's
+    address is this household's, and a wrong one would put a broken image in the
+    app. Absent means no artwork, which the app already draws as a placeholder.
+    """
+    try:
+        with open(ROON_CONF_PATH) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _mqtt_publish(topic, payload):
+    """Ask nexusq-mqtt to publish. It refuses anything but a Roon zone command."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(4)
+            s.connect(MQTT_PUBLISH_SOCK)
+            s.sendall(json.dumps({"topic": topic, "payload": payload}).encode() + b"\n")
+            reply = s.recv(512).decode("utf-8", "replace").strip()
+    except OSError as e:
+        raise Err("unavailable", f"MQTT publisher unreachable: {e}")
+    try:
+        ok = json.loads(reply).get("ok") is True
+    except ValueError:
+        ok = False
+    if not ok:
+        raise Err("unavailable", f"MQTT publish refused: {reply[:120]}")
+
+
+class RoonTransport:
+    """The `roon` source's transport backend (see transport_for)."""
+
+    #: Roon's own verbs, which the extension passes straight through.
+    _METHODS = {"playPause": "playpause", "next": "next", "previous": "previous"}
+
+    def __init__(self, bridge):
+        self._bridge = bridge
+
+    def can_control(self):
+        z = self._bridge.roon_zone_state()
+        if not z:
+            return False
+        return z.get("is_play_allowed") == "true" or z.get("is_pause_allowed") == "true"
+
+    def command(self, method):
+        verb = self._METHODS.get(method)
+        if verb is None:
+            raise Err("bad_request", f"unsupported transport method {method}")
+        zone = self._bridge.roon_zone_name()
+        if not zone:
+            raise Err("unavailable", "no Roon zone is playing to this device")
+        _mqtt_publish(f"roon/{zone}/command", verb)
+        return {"ok": True}
 
 
 class AirPlayTransport:
@@ -1814,7 +1906,12 @@ class Bridge:
         # source id -> transport backend (see transport_for / dispatch_transport).
         # Empty until a backend registers itself, which is deliberate: an absent
         # backend must report `none`, not a promise it cannot keep.
-        self.transports = {"airplay": AirPlayTransport()}
+        self.transports = {"airplay": AirPlayTransport(),
+                           "roon": RoonTransport(self)}
+        #: zone name -> {field: value}, fed by nexusq-mqtt from the Core's
+        #: extension. Only ever READ for the zone that is playing to us.
+        self.roon = {}
+        self._roon_zone = None
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -2458,9 +2555,86 @@ class Bridge:
             self.state["nowPlaying"] = np
         self.broadcast("nowPlayingChanged", np)
 
+    # --- Roon (fed by nexusq-mqtt from the Core's extension) -------------
+    def roon_zone_name(self):
+        with self.lock:
+            return self._roon_zone
+
+    def roon_zone_state(self):
+        z = self.roon_zone_name()
+        return dict(self.roon.get(z, {})) if z else {}
+
+    def _roon_our_zone(self):
+        """Which Roon zone is playing TO THIS BOX, or None.
+
+        The gate is the Q's own `roon_in` PulseAudio source: Roon only reaches
+        this device as RAAT audio, so if that source is not running then
+        whatever is playing in Roon is playing somewhere else in the house and
+        must never appear on this screen. That is also what makes the zone
+        self-identifying — no configured name to go stale when Petr groups the
+        Q with another output and Roon renames the zone underneath us.
+        """
+        if self.pulse.source_state("roon_in") != "RUNNING":
+            return None
+        playing = [z for z, f in self.roon.items() if f.get("state") == "playing"]
+        if len(playing) == 1:
+            return playing[0]
+        # Grouped zones and simultaneous playback elsewhere are both real; with
+        # no way to tell which is ours, keep the last known one if it is still
+        # playing rather than flapping between them.
+        if self._roon_zone in playing:
+            return self._roon_zone
+        return None
+
+    def on_roon(self, topic, value):
+        """One `<zone>/<field>` update from the Core, via nexusq-mqtt."""
+        zone, _, field = topic.partition("/")
+        if not zone or not field:
+            return
+        self.roon.setdefault(zone, {})[field] = value
+        self.roon_sync()
+
+    def roon_sync(self):
+        zone = self._roon_our_zone()
+        with self.lock:
+            cur = dict(self.state["nowPlaying"])
+            self._roon_zone = zone
+
+        if zone is None:
+            if cur.get("source") != "roon":
+                return
+            np = dict(cur, track="", artist="", album="", artUrl="",
+                      source="", playing=False)
+        else:
+            if cur.get("source") not in ("", "roon"):
+                return                      # something else owns the screen
+            f = self.roon.get(zone, {})
+            base = _roon_conf().get("core_image_base", "")
+            key = f.get("now_playing/image_key", "")
+            np = dict(cur,
+                      track=f.get("now_playing/three_line/line1", ""),
+                      artist=f.get("now_playing/three_line/line2", ""),
+                      album=f.get("now_playing/three_line/line3", ""),
+                      # Unlike AirPlay's file:// path, this one the phone can
+                      # actually fetch -- the Core serves it over HTTP.
+                      artUrl=(f"{base}/api/image/{key}?scale=fit&width=300&height=300"
+                              if base and key else ""),
+                      source="roon",
+                      playing=(f.get("state") == "playing"))
+
+        self._apply_transport(np)
+        if np == cur:
+            return                          # nothing moved; do not wake clients
+        with self.lock:
+            self.state["nowPlaying"] = np
+        self.broadcast("nowPlayingChanged", np)
+
     # --- librespot hook (internal, over the unix socket) ----------------
     def on_hook(self, obj):
         kind = obj.get("kind", "")
+        if kind == "roon":
+            self.on_roon(str(obj.get("topic", "")), str(obj.get("value", "")))
+            return
         np = None
         with self.lock:
             cur = dict(self.state["nowPlaying"])
