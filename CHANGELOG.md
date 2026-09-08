@@ -8,6 +8,41 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Measured — the Roon deploy did not cost the koule anything, and the metric that said it did is broken (2026-09-08)
+- **The Roon MQTT subscription is free.** A/B on the top consumer, the kernel
+  worker: **780 ticks/30 s with the subscription on, 825 with the daemon
+  stopped** — slightly higher without it, i.e. noise. Per-task over 60 s,
+  `nexusq-mqtt` **5 ticks** and `nexusq-control` **1 tick**: 0.08 % and 0.02 %
+  of a core. (The `NQMQTT_ROON=off` override used for arm B was cleared
+  afterwards with `systemctl unset-environment`; left behind it would have
+  quietly shipped Roon disabled.)
+- **The CPU is going to the USB gadget, as it was before any of this.**
+  `/proc/interrupts` puts `musb-hdrc` at **30 668 IRQ / 30 s ≈ 1022/s**, one per
+  USB frame, feeding `kworker/0:1-events` at **~27 % of a core**. `card4/pcm0c`
+  is `RUNNING`: the Xiaomi box never closes the UAC2 stream. `nq-uac2-silence`
+  is working correctly — `usb_in` is `SUSPENDED`, so PulseAudio's share is gone
+  — but a suspended PA source cannot stop the kernel's interrupt work while the
+  host keeps transmitting. Same finding as 2026-08-24's 1006 IRQ/s.
+- **Governor healthy:** 75.97 % @ 350 MHz, 15.60 % @ 920, 7.92 % @ 700,
+  **0.52 % @ 1200**, 87 transitions/min, die 57 °C.
+- 🚨 **`/proc/stat` percentages are not trustworthy on this box.** In one 60 s
+  wall-clock window (both cores online, `CLK_TCK`=100, so 12000 real ticks)
+  **cpu0 advanced 2704 ticks and cpu1 5606** — cpu0's counters run at about half
+  wall-clock while the core is demonstrably working, since `kworker/0:1` is
+  bound to cpu0 and booked **1659 ticks in that same window**, more than the
+  1194 busy ticks `/proc/stat` reported for *both* cores together. So the
+  reported per cent swings with accounting coverage rather than with load: the
+  "~10 % this morning vs 19–20 % tonight" that started this investigation was
+  never a real change, and the two numbers were never comparable. Divide by wall
+  clock (`seconds × 100 × nproc`), prefer per-task/per-cgroup accounting, and
+  read `/proc/interrupts`. Full write-up in
+  `docs/2026-09-08-the-idle-jump-that-was-a-broken-denominator.md`.
+- **Not a bug:** the two `nq-uac2-silence` processes are the USB watcher
+  (`nexusq-uac2-in.service`, silence mode) and the Roon watcher
+  (`nexusq-roon-idle.service`, `NQ_WATCH_MODE=producer`, `roon_in`). Mode comes
+  from the environment, not argv, so both show identical command lines; the one
+  parented by `systemd --user` is a user unit, not an orphan.
+
 ### Fixed — the bridge spent a second, and a transient unit, on every question about a user unit (nexusq-control r38/r39, OTA, 2026-09-06)
 - **`_systemctl_user()` used `--machine=user@.host`, which spends about a second
   and starts a transient unit per call.** Measured on the device, three isolated
