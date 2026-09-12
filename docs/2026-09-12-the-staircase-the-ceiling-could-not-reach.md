@@ -184,8 +184,12 @@ Host streaming throughout (48 624 frames/s on the gadget capture), `usb_in`
 RUNNING at its configured 10 ms, loopback buffer at the 120 ms target, alsaloop
 `SCHED_FIFO 10` under a 200 ms RTTIME, both `alsa-source-Loo` threads
 `SCHED_RR 5` set by `nq-pa-rt` from the service restart, not by hand. Cottage Q
-untouched (not reachable from Prague); the apk is in the build volume, not yet
-on gh-pages — publishing and the commit are Petr's call.
+untouched (not reachable from Prague) until it pulls the OTA.
+
+**Released 20:5x the same evening** after 56 minutes of the watch below: 0
+latency steps, 1 overrun, 10 late wake-ups, no restart, no fallback.
+`publish-ota-repo.sh` → gh-pages `1997b3a` (secrets gate PASS, per-apk
+signature `pmos@local-6a42e957`); the Pages repo serves r98.
 
 **Verification watch left running on the Prague Q** (7 days, `nice`):
 `/var/tmp/nq-usbaudio-watch.sh` → `/var/tmp/nq-usbaudio-watch.log`, one line a
@@ -194,5 +198,5 @@ underruns" counts since the r98 install, alsaloop pid + policy (a pid change is
 a restart, a policy other than `SCHED_FIFO` is the fallback path), both PA
 source-thread policies, `usb_in` state and latency, the loopback buffer, and the
 gadget `hw_ptr` (moving = host streaming). PA's log level is at *info* for the
-duration so the overrun lines exist; `pacmd set-log-level 2` puts it back. Release
-(commit is pushed; OTA publish + cottage) waits on reading that log.
+duration so the overrun lines exist; `pacmd set-log-level 2` puts it back. The
+first hour of it is what the release was decided on.

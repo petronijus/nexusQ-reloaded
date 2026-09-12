@@ -10,6 +10,11 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ### Fixed — the lip-sync delay that grew inside a session, and the two audio threads that never ran real-time (device **r98**, OTA, 2026-09-12)
 
+Published to the OTA repo (gh-pages `1997b3a`) the same evening after an hour
+of the verification watch on the Prague Q: 0 latency steps, 1 overrun, 10 late
+wake-ups. Cottage Q picks it up with `apk update && apk upgrade --available
+--ignore linux-google-steelhead` (the app's *System* button).
+
 - **"USB audio už zase nefunguje"** — Prague Q, box on the USB cable is the Xiaomi
   TV box. The chain itself was intact: gadget `configured`, `alsaloop` pumping,
   `usb_in` pinned, PA clean. What arrived from the host was **exact digital
