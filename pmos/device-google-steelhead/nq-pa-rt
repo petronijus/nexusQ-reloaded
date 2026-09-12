@@ -1,0 +1,81 @@
+#!/bin/sh
+# nq-pa-rt — give PulseAudio's loopback-source IO threads real-time scheduling
+# from OUTSIDE PulseAudio, the way rtkit would.
+#
+# Why this exists (2026-09-12): PulseAudio on this image cannot make its own IO
+# threads real-time. Alpine's pulseaudio 17.0 is built without the sched.h block
+# of pa_thread_make_realtime() -- not one "SCHED_RR ... worked" / "Successfully
+# enabled SCHED_RR" string survives in libpulsecommon -- so it never calls
+# pthread_setschedparam() at all, and its RealtimeKit client returns ENOTSUP
+# ("Failed to acquire real-time scheduling: Not supported" on every IO thread).
+# The kernel itself allows it: inside user@10000 (LimitRTPRIO=50) util-linux
+# chrt, which goes through sched_setattr(2), puts a thread of the same uid on
+# SCHED_RR just fine.
+#
+# What it buys: the alsa-source thread that reads snd-aloop for usb_in / roon_in
+# is timer-scheduled and, as an ordinary CFS task on a 2-core Cortex-A9, wakes
+# 5-18 ms late many times a minute (PA logs "Scheduling delay of N ms > 5.00
+# ms"). Each miss beyond the source's buffer was a +10 ms permanent latency step
+# before fixed_latency_range=yes, and a dropout ("Overrun!") after it. Measured
+# live: ~12 overruns and ~28 late wake-ups per minute at SCHED_OTHER; 0 and 1 in
+# the first minute at SCHED_RR 5.
+#
+# Thread identification: PA names the thread "alsa-source-<pcm name>", which the
+# kernel truncates to 15 chars, so BOTH loopback sources show up as
+# "alsa-source-Loo" (snd-aloop's PCM is "Loopback PCM" on either card). Every
+# thread matching the prefix is elevated -- both hops deserve it -- and the call
+# is idempotent, so nexusq-uac2-in and roon-nexusq can each run it after loading
+# their source without stepping on each other.
+#
+# Safety: PulseAudio sets RLIMIT_RTTIME=200000 on itself (rlimit-rttime in
+# daemon.conf), so a real-time thread that spins is SIGXCPU/SIGKILLed by the
+# kernel after 200 ms of unbroken CPU, exactly as under rtkit. SCHED_RR at PA's
+# own default realtime-priority (5), below alsaloop's SCHED_FIFO 10.
+#
+# usage: nq-pa-rt [comm-prefix] [rtprio]     (defaults: alsa-source-Loo, 5)
+# exit 0 when every matching thread is real-time afterwards, 1 otherwise.
+set -u
+
+PREFIX="${1:-alsa-source-Loo}"
+PRIO="${2:-${NQ_PA_RTPRIO:-5}}"
+ME="$(id -u)"
+
+log() { echo "nq-pa-rt: $*" >&2; }
+
+pa_pid() {
+	for p in $(pidof pulseaudio 2>/dev/null); do
+		[ "$(stat -c %u "/proc/$p" 2>/dev/null)" = "$ME" ] && { echo "$p"; return 0; }
+	done
+	return 1
+}
+
+PA="$(pa_pid)" || { log "no pulseaudio running as uid $ME"; exit 1; }
+
+# The thread names itself a few ms after the module load returns; give it that,
+# then look twice so a thread named between the two passes is not missed.
+sleep 0.2
+done_ok=0; failed=0; seen=0
+pass=0
+while [ "$pass" -lt 2 ]; do
+	for t in /proc/"$PA"/task/*; do
+		case "$(cat "$t/comm" 2>/dev/null)" in "$PREFIX"*) ;; *) continue ;; esac
+		tid="${t##*/}"
+		seen=$((seen + 1))
+		if chrt -p "$tid" 2>/dev/null | grep -q 'policy: SCHED_\(RR\|FIFO\)'; then
+			done_ok=$((done_ok + 1))
+			continue
+		fi
+		if chrt -r -p "$PRIO" "$tid" 2>/dev/null; then
+			done_ok=$((done_ok + 1))
+			log "thread $tid ($(cat "$t/comm")) -> SCHED_RR $PRIO"
+		else
+			failed=$((failed + 1))
+			log "WARNING cannot set SCHED_RR $PRIO on thread $tid -- check RLIMIT_RTPRIO of this session"
+		fi
+	done
+	pass=$((pass + 1))
+	[ "$pass" -lt 2 ] && sleep 1
+done
+
+[ "$seen" -gt 0 ] || { log "WARNING no PulseAudio thread matches '$PREFIX*' (pid $PA)"; exit 1; }
+[ "$failed" -eq 0 ]

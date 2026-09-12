@@ -27,6 +27,24 @@
 # It also asserts the ceiling is ABOVE the configured cushion. A ceiling at or
 # below the target is not a bound, it is a permanent underrun: the module would
 # be pinned at a latency it is simultaneously trying to grow past.
+#
+# 2026-09-12: the ceiling turned out to bound the WRONG path. The climb seen live
+# (usb_in 16 -> 26 -> ... -> 66 ms in one session, "Source minimum latency
+# increased to N ms") never touches module-loopback's underrun counter that
+# `max_latency_msec` caps; it comes from the alsa SOURCE. PulseAudio's
+# timer-scheduled alsa-source raises its own minimum latency by 10 ms every time
+# its thread wakes up later than the buffer allowed (increase_watermark), the
+# loopback follows via LOOPBACK_MESSAGE_SOURCE_LATENCY_RANGE_CHANGED, and PA's
+# own comment says the reverse "never happens". `fixed_latency_range=yes` on the
+# alsa-source load is the switch PA provides for exactly this ("disable latency
+# range changes on overrun"), so both sources must carry it -- on the command,
+# for the same reason as the ceiling.
+#
+# And the wake-ups are late because nothing on this image runs real-time: musl
+# implements sched_setscheduler() as an ENOSYS stub, so alsaloop's own request
+# fails ("Scheduler getparam failed" in every start). util-linux `chrt` goes
+# through sched_setattr(2) and works, so the alsaloop launch must be wrapped in
+# it -- with an RLIMIT_RTTIME so a wedged loop is killed instead of owning a core.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -37,6 +55,13 @@ PASS=0; FAIL=0
 loopback_cmd() {  # loopback_cmd <file>
     sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$1" \
         | grep -E 'load-module[[:space:]]+module-loopback'
+}
+
+# The load-module command for the alsa SOURCE feeding a loopback, joined the
+# same way.
+source_cmd() {  # source_cmd <file>
+    sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$1" \
+        | grep -E 'load-module[[:space:]]+module-alsa-source'
 }
 
 check() {  # check <description> <condition-result>
@@ -82,6 +107,11 @@ for f in nexusq-uac2-in roon-nexusq; do
     else
         check "$f: ceiling ($ceiling ms) is above the cushion ($target ms)" 1
     fi
+
+    scmd="$(source_cmd "$src")"
+    [ -n "$scmd" ]; check "$f: has a module-alsa-source load-module line" "$?"
+    printf '%s\n' "$scmd" | grep -qE '(^|[[:space:]])fixed_latency_range=(yes|true|1)([[:space:])]|$)'
+    check "$f: the source keeps a fixed latency range (fixed_latency_range=yes on the command)" "$?"
 done
 
 # The USB hop has a second half the Roon hop cannot have: it owns an alsaloop,
@@ -96,6 +126,31 @@ check "nexusq-uac2-in: has a reset_loopback" "$?"
 resets="$(grep -c '^[[:space:]]*reset_loopback$' "$src")"
 [ "$resets" -ge 2 ]
 check "nexusq-uac2-in: resets the cushion on BOTH unpark paths (found $resets)" "$?"
+
+# alsaloop must be launched real-time through util-linux chrt (its own
+# sched_setscheduler() is a musl stub), and bounded by RLIMIT_RTTIME so a loop
+# that wedges into a spin is killed by the kernel rather than starving a core.
+alsaloop_cmd="$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$src" \
+    | grep -E '^[[:space:]]*[^#]*[[:space:]]alsaloop[[:space:]]+-C' | head -1)"
+[ -n "$alsaloop_cmd" ]; check "nexusq-uac2-in: launches alsaloop" "$?"
+printf '%s\n' "$alsaloop_cmd" | grep -qE '(^|[[:space:]])"?\$\{?RT\}?"?[[:space:]]+alsaloop'
+check "nexusq-uac2-in: alsaloop is launched through the \$RT wrapper" "$?"
+grep -qE '^[[:space:]]*RT="prlimit --rttime=[^"]*chrt -f' "$src"
+check "nexusq-uac2-in: \$RT is prlimit --rttime + chrt -f (real-time, bounded)" "$?"
+
+# PulseAudio cannot make its own source threads real-time on this image (Alpine's
+# build lacks the sched.h path; rtkit client answers ENOTSUP), so each script
+# must hand its freshly loaded source thread to nq-pa-rt, which does what rtkit
+# would. Asserted on both files and on the helper's mechanism.
+for f in nexusq-uac2-in roon-nexusq; do
+    src="$HERE/../$f"
+    grep -qE '^[[:space:]]*nq-pa-rt([[:space:]]|$)' "$src"
+    check "$f: elevates the PA source thread with nq-pa-rt after loading the source" "$?"
+done
+helper="$HERE/../nq-pa-rt"
+[ -x "$helper" ]; check "nq-pa-rt: exists and is executable" "$?"
+grep -qE 'chrt -r -p "\$PRIO"' "$helper"
+check "nq-pa-rt: uses chrt -r -p (sched_setattr, not the musl sched_* stubs)" "$?"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

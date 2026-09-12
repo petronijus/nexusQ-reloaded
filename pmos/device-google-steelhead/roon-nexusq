@@ -109,9 +109,20 @@ NQ_HOST="$(printf '%s' "$NQ_NAME" | tr -c 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$
 # (2026-07-17). Together with RAAT's own RT scheduling (user@10000 LimitRTPRIO)
 # and the Core-side Device Setup "Buffer Size", this is the anti-choppiness set.
 pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {
+	# fixed_latency_range=yes: without it PA's alsa-source raises its own
+	# minimum latency by 10 ms every time its thread wakes up late, the
+	# loopback follows ("Source minimum latency increased"), and nothing ever
+	# lowers it -- the in-session climb the ceiling below cannot bound, found
+	# on the USB hop 2026-09-12 and identical here (same source module, same
+	# scheduler). See nexusq-uac2-in for the full mechanism.
 	pactl load-module module-alsa-source device=hw:RoonLoop,1,0 \
 		source_name=roon_in source_properties=device.description=RoonBridge \
-		rate=48000 channels=2 format=s16le >/dev/null
+		rate=48000 channels=2 format=s16le fixed_latency_range=yes >/dev/null
+	# PulseAudio cannot make that thread real-time itself on this image; with
+	# fixed_latency_range and an ordinary-priority reader every late wake-up
+	# is a dropout. nq-pa-rt does what rtkit would (SCHED_RR 5, idempotent,
+	# covers both loopback sources -- see the helper for the measurements).
+	nq-pa-rt alsa-source-Loo || true
 	# source_dont_move=true for the same reason it is on the USB loopback (see
 	# nexusq-uac2-in): PA's module-switch-on-connect moves existing
 	# source-outputs onto each newly appeared source, so whichever of the two

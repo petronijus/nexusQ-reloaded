@@ -8,6 +8,102 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
+### Fixed — the lip-sync delay that grew inside a session, and the two audio threads that never ran real-time (device **r98**, OTA, 2026-09-12)
+
+- **"USB audio už zase nefunguje"** — Prague Q, box on the USB cable is the Xiaomi
+  TV box. The chain itself was intact: gadget `configured`, `alsaloop` pumping,
+  `usb_in` pinned, PA clean. What arrived from the host was **exact digital
+  zeros at full 48 kHz rate** (two 16 384-frame samples of the aloop feed, peak 0),
+  and the journal shows the same shape every session today: a few seconds of
+  audio, then zeros with the stream still open (12:01 → 14 s, 12:25 → 17 s,
+  17:12 → 15 s of sound, then 37 min of silence until Petr started something at
+  17:49 and it played). Every host stream start since 09-06 sits 5–12 s after a
+  USB re-enumeration (`serial-getty@ttyGS0` restart), i.e. the box opens the
+  stream only after it (re)boots/wakes or the cable is re-seated, never on its
+  own. **Nothing on the Q produced the silence** — `u_audio` is a plain memcpy of
+  each USB packet and `hw_ptr` advanced by full packets. Which of the two
+  windows Petr's "it did not play" refers to is still his to say.
+- **Latency was climbing again, and the 09-06 ceiling could not touch it.**
+  Watched live: `usb_in` "Source minimum latency increased" 16 → 26 → 36 → 46 →
+  56 → 66 → 76 ms in the 17:49–18:37 session, loopback target 120 → ~190 ms,
+  ≈ 270 ms lip-sync with the alsaloop hop. Read against PA 17.0 source:
+  - `max_latency_msec` (r95) bounds **only** `module-loopback`'s own underrun
+    counter ("Too many underruns" — zero such lines in the journal, ever).
+  - The staircase is `alsa-source.c: increase_watermark()`: a timer-scheduled
+    source whose thread wakes later than its buffer allowed raises its **minimum
+    latency** by 10 ms; `module-loopback` gets
+    `LOOPBACK_MESSAGE_SOURCE_LATENCY_RANGE_CHANGED`, recomputes
+    `(min_sink + min_source) × 1.1 + 1.5 ms` and uses that instead of
+    `latency_msec`. PA's own comment: the reverse "never happens with the
+    current source implementations". The 09-02/03 climb (120 → 145) is the same
+    path — the r95 note attributed it to the wrong one.
+  - Not alsaloop: the aloop playback `trigger_time` was sampled at 0.5 s through
+    the session and did not change at any step. Not the 5-min transient units
+    either (17:46:04 / 17:51:05 / … vs steps at 17:50:38 / 17:53:29 / …).
+- **Why the wake-ups are late: nothing on this image runs real-time.**
+  `alsaloop`'s "Scheduler getparam failed." in every start is musl's
+  `sched_getparam()`/`sched_setscheduler()`, which are deliberate **ENOSYS
+  stubs** — the bridge has been an ordinary task since 08-02. PulseAudio's IO
+  threads are SCHED_OTHER too (a probe module logged `Failed to acquire real-time
+  scheduling: Not supported`; rtkit answers `No such file or directory`), and PA
+  could not even renice (`Max nice priority 0`). The kernel itself allows it:
+  util-linux `chrt -f` (sched_setattr(2)) inside `user@10000` gives SCHED_FIFO,
+  the cpu cgroup controller is off everywhere, `RT_GROUP_SCHED` is not in play.
+- **Why PulseAudio cannot do it for itself — it is the build, not the box.** Not
+  one `SCHED_RR … worked` / `Successfully enabled SCHED_RR` string exists in
+  Alpine's `libpulsecommon-17.0.so`: the `HAVE_SCHED_H` block of
+  `pa_thread_make_realtime()` was compiled out, so PA never calls
+  `pthread_setschedparam()` at all (the identical call from Python as uid 10000
+  with the same rlimit succeeds), and the RealtimeKit client it falls to
+  answers `ENOTSUP` — the "Not supported" in the probe. rtkit-daemon is running
+  and reachable; it is simply never asked correctly.
+- **Fix, three lines that are one fix, guarded by the test (19 checks, the new
+  ones seen red on r96/r97 first):**
+  - `fixed_latency_range=yes` on `module-alsa-source` for **usb_in and roon_in**
+    — PA's own switch for exactly this ("disable latency range changes on
+    overrun"). PA keeps adapting its wake-up watermark internally; the reported
+    minimum stays put, so `module-loopback` keeps `latency_msec`.
+  - **On its own that was a regression, caught on the Prague Q between r97 and
+    r98:** with the range fixed and the reader still an ordinary task, every
+    late wake-up became a dropout — `alsa-source.c: Overrun!` **23, 18, 7 per
+    minute** after the restart, settling at ~3/min, against 0 before (when each
+    miss had bought itself 10 ms instead). The source gets only
+    `(latency_msec − min_sink) / 2 = (120 − 100) / 2 = 10 ms` of buffer because
+    the amp sink is `tsched=0` with 4 × 25 ms fragments, and 10 ms is less than
+    the 5–18 ms the thread wakes late.
+  - So **`nq-pa-rt`** (new, `/usr/bin`): after each source load, both scripts
+    hand PA's `alsa-source-Loo*` threads to `chrt -r -p 5` — what rtkit would
+    have done, idempotent, both loopback hops, PA's own default priority, under
+    the `RLIMIT_RTTIME=200000` PA already sets on itself. Live A/B on the same
+    stream: SCHED_OTHER **35 overruns / 84 late wake-ups in 3 min** → SCHED_RR
+    **0 / 1 in the first minute**.
+  - `alsaloop` launched as `prlimit --rttime=200000:200000 chrt -f 10 alsaloop …`
+    (`NQ_UAC2_RTPRIO`, `NQ_UAC2_RTTIME_US`). The RTTIME limit is the safety
+    catch — a SCHED_FIFO alsaloop that wedges into a spin would own a core; the
+    kernel now SIGXCPU/SIGKILLs it after 200 ms of unbroken RT CPU (rtkit's
+    figure for PA) and the supervisor sees an ordinary exit. Probed once at
+    start; if RT is not permitted it logs and runs plain rather than failing
+    every launch.
+  - `tests/test_loopback_latency_bounded.sh` +4 checks: both sources carry the
+    flag on the command, alsaloop goes through `$RT`, and `$RT` is
+    `prlimit --rttime … chrt -f`. Seen red on r96 (4 failures) before the change.
+- **Build:** `OTA_PACKAGES_ONLY=1 OTA_PACKAGES=device-google-steelhead` dies
+  under crossdirect at `nq-healthd.c` (`cc: fatal error: cannot execute 'cc1':
+  posix_spawnp`) with **nothing else on the volume**, and the pmbootstrap log
+  shows r95 hitting the same wall twice on 09-06 before a later run passed. The
+  08-31 "it was a concurrent zap" verdict holds for the kernel, not for this
+  package's direct `${CC:-cc}` call. Built with `NEXUSQ_NO_CROSS=1`.
+- **Still open, recorded here so they are not lost:** PA's amp sink thread is
+  still SCHED_OTHER (out of scope tonight; its 100 ms of fragments hide it);
+  the rtkit `ENOTSUP` (which PA code path returns it is not pinned down);
+  `nexusq-control` r45 still spawns a `systemd-run … systemd-stdio-bridge --user`
+  transient every 5 min (the `--machine` transport r38/r39 was meant to retire),
+  each one dragging `systemd-coredumpd` "Dependency failed" noise into the
+  journal; the aloop playback re-triggers at exactly 480 s intervals while the
+  box streams (17:33:38, 17:41:38 — the clock drift `--sync=simple` does not
+  correct, ≈ 167 ppm, a glitch per 8 min); and the `NQ_UAC2_SYNC` A/B remains
+  unrun.
+
 ### Measured — the Roon deploy did not cost the koule anything, and the metric that said it did is broken (2026-09-08)
 - **The Roon MQTT subscription is free.** A/B on the top consumer, the kernel
   worker: **780 ticks/30 s with the subscription on, 825 with the daemon

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=96
+pkgrel=98
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -125,6 +125,7 @@ source="
 	nexusq-roon-idle.service
 	nexusq-uac2-in
 	nexusq-uac2-in.service
+	nq-pa-rt
 	nq-uac2-silence
 	snd-aloop-options.conf
 	user-rtprio.conf
@@ -537,6 +538,11 @@ package() {
 		"$pkgdir"/usr/bin/nq-uac2-silence
 	install -Dm644 "$srcdir"/nexusq-uac2-in.service \
 		"$pkgdir"/usr/lib/systemd/user/nexusq-uac2-in.service
+	# Real-time for PulseAudio's loopback-source threads, from outside PA (it
+	# cannot do it itself on this image -- see the script). Called by
+	# nexusq-uac2-in and roon-nexusq after each source load.
+	install -Dm755 "$srcdir"/nq-pa-rt \
+		"$pkgdir"/usr/bin/nq-pa-rt
 	# Second aloop card (RoonLoop, index 7) — Roon's private playback device;
 	# see the modprobe file header for the index pinning rationale.
 	install -Dm644 "$srcdir"/snd-aloop-options.conf \
@@ -649,6 +655,7 @@ SKIP  roon.service
 SKIP  nexusq-roon-idle.service
 SKIP  nexusq-uac2-in
 SKIP  nexusq-uac2-in.service
+SKIP  nq-pa-rt
 SKIP  nq-uac2-silence
 SKIP  snd-aloop-options.conf
 SKIP  user-rtprio.conf

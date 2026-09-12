@@ -41,9 +41,12 @@ LOOPMAX="${NQ_UAC2_LOOPMAX:-200}"        # module-loopback max_latency_msec (the
 #
 # `simple` copies samples and corrects nothing, so the USB host's clock and the
 # aloop's timer drift apart until the loop runs dry -- an XRUN `simple` cannot
-# recover from (see the wedge handling below). Those underruns are what makes
-# module-loopback grow its cushion, so they are the ROOT of the delay the ceiling
-# above merely bounds.
+# recover from (see the wedge handling below). They are NOT, as this comment used
+# to claim, what grows module-loopback's cushion: on 2026-09-12 every latency step
+# in a session was watched against the aloop playback trigger_time and none of
+# them coincided with an alsaloop restart. The climb is PulseAudio's own
+# alsa-source waking up late (see fixed_latency_range and $RT below). The drift
+# still costs a glitch every few minutes, which is what the A/B is for.
 #
 # Two candidate corrections exist on this hardware, both without pulling in
 # libsamplerate (the objection to `samplerate`):
@@ -68,6 +71,33 @@ LOOPMAX="${NQ_UAC2_LOOPMAX:-200}"        # module-loopback max_latency_msec (the
 #                  centre while the host streams, and whether the loopback's
 #                  Buffer Latency stops climbing across a long session.
 SYNC="${NQ_UAC2_SYNC:-simple}"
+
+# Real-time scheduling for alsaloop -- through util-linux `chrt`, not alsaloop's
+# own request. alsaloop asks for SCHED_RR itself at start-up, and on this image
+# that request has ALWAYS failed: "Scheduler getparam failed." in every start is
+# musl's sched_getparam()/sched_setscheduler(), which are deliberate ENOSYS
+# stubs, so the bridge has run as an ordinary task since day one. chrt goes
+# through sched_setattr(2) directly and works (verified 2026-09-12 inside
+# user@10000, whose LimitRTPRIO=50 drop-in already exists for Roon's RAAT).
+#
+# The RLIMIT_RTTIME in front of it is the safety catch: a SCHED_FIFO task that
+# spins owns its core until it blocks, and alsaloop is known to spin when its
+# input wedges (the park logic below exists for that). With the limit the kernel
+# sends SIGXCPU after RTTIME microseconds of unbroken real-time CPU and then
+# SIGKILL -- the same 200 ms rtkit imposes on PulseAudio -- and the supervisor
+# below sees an exit like any other. Never wrap without it.
+#
+# The probe runs the wrapper once against `true`: on a system where RT is not
+# permitted (no rlimit, no util-linux) it logs and falls back to a plain launch
+# rather than making every alsaloop start fail.
+RTPRIO="${NQ_UAC2_RTPRIO:-10}"           # SCHED_FIFO priority; RAAT's own threads sit higher
+RTTIME="${NQ_UAC2_RTTIME_US:-200000}"    # RLIMIT_RTTIME (us of unbroken RT CPU before SIGXCPU)
+RT="prlimit --rttime=$RTTIME:$RTTIME chrt -f $RTPRIO"
+if ! $RT true 2>/dev/null; then
+	echo "nexusq-uac2-in: WARNING real-time scheduling unavailable ($RT true failed)" \
+	     "-- alsaloop runs as an ordinary task; expect PA source latency steps" >&2
+	RT=""
+fi
 
 pa() { pactl "$@" 2>/dev/null; }         # returns pactl stdout (module index on load)
 
@@ -121,7 +151,7 @@ done
 
 # Start the async->stable bridge: UAC2 gadget capture -> snd-aloop playback side.
 start_alsaloop() {
-	alsaloop -C "hw:$CARD" -P "hw:$ALOOP,0,$SUB" -r 48000 -c 2 -f S16_LE \
+	$RT alsaloop -C "hw:$CARD" -P "hw:$ALOOP,0,$SUB" -r 48000 -c 2 -f S16_LE \
 		--sync="$SYNC" -t "$TLAT" &
 	ALPID=$!
 }
@@ -131,10 +161,35 @@ sleep 1   # let alsaloop open the playback side before PA opens the capture side
 # PA reads the stable capture side and loops it into the default sink (mixes with
 # everything, follows output switching). Load the source FIRST so it pins the pair
 # at s16le/48k, then the loopback.
+#
+# fixed_latency_range=yes is what stops the lip-sync delay from growing INSIDE a
+# session, and it is the half r95's ceiling could not reach. PulseAudio's
+# timer-scheduled alsa-source raises its own minimum latency by 10 ms every time
+# its thread wakes up later than the buffer allowed (increase_watermark ->
+# "Source minimum latency increased to N ms" from module-loopback), and PA's own
+# source says the reverse "never happens". module-loopback then recomputes its
+# target as (min_sink + min_source) * 1.1 + 1.5 ms, which walks straight past
+# `latency_msec` and is NOT what `max_latency_msec` bounds (that caps only the
+# loopback's own underrun counter -- read module-loopback.c, both paths). Seen
+# live 2026-09-12: 16 -> 26 -> 36 -> 46 -> 56 -> 66 ms in 30 minutes of one
+# session, target 120 -> ~184 ms, no alsaloop restart at any step; the same
+# staircase is in the journal from 09-02/03 (120 -> 145). With the range fixed,
+# PA still adapts its wake-up watermark internally (it wakes earlier after a
+# miss), it just no longer reports a bigger minimum -- a late wake-up costs a
+# dropout instead of a permanent 10 ms. Regression test:
+# tests/test_loopback_latency_bounded.sh
+#
+# And the thread that reads it must be REAL-TIME, which PulseAudio cannot arrange
+# for itself on this image (see nq-pa-rt). With the range fixed but the thread
+# still an ordinary task, every late wake-up became a dropout instead of a
+# latency step: ~12 "Overrun!" a minute, measured 2026-09-12 before nq-pa-rt was
+# applied, 0 the minute after. The two lines below are one fix, not two.
+PA_RTPRIO="${NQ_PA_RTPRIO:-5}"           # SCHED_RR for PA's alsa-source thread (PA's own default)
 start_source() {
 	MOD_SRC=$(pa load-module module-alsa-source device="hw:$ALOOP,1,$SUB" \
 		source_name="$SRC" source_properties=device.description=USBAudio \
-		rate=48000 channels=2 format=s16le)
+		rate=48000 channels=2 format=s16le fixed_latency_range=yes)
+	nq-pa-rt alsa-source-Loo "$PA_RTPRIO" || true
 }
 # source_dont_move=true PINS the capture side to `$SRC`. Without it PulseAudio
 # silently re-points this loopback at a DIFFERENT source and USB audio goes
