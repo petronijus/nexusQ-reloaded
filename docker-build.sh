@@ -1812,8 +1812,29 @@ PYEOF
             else
                 echo "  WARNING: private/access/wifi.nmconnection absent -> WiFi not preconfigured" >&2
             fi
+            # The MQTT broker config belongs in exactly this set and was missing
+            # from it until 2026-09-16. `nexusq-mqtt.service` is
+            # ConditionPathExists=/etc/nexusq/mqtt.json, so a flash wiped the file
+            # and the unit then "correctly" declined to start: Result=success, no
+            # error anywhere, and the box came back with Home Assistant telemetry
+            # and the retained health topics simply GONE. Nothing in the build, the
+            # gates or the post-flash sweep said a word about it -- a silent
+            # capability loss is the worst shape a regression can take, and this one
+            # had already been papered over by hand once (the 2026-08-17 pre-flash
+            # backup under nq-captures/). Same reasoning as the WiFi profile above:
+            # per-home secret, never in a package, never redistributed, restored by
+            # the flash that would otherwise destroy it.
+            if [ -s "$SRC/private/access/mqtt.json" ]; then
+                sudo install -dm755 "$RP_MNT/etc/nexusq"
+                sudo install -Dm600 "$SRC/private/access/mqtt.json" \
+                    "$RP_MNT/etc/nexusq/mqtt.json"
+                _baked=$((_baked + 1))
+            else
+                echo "  WARNING: private/access/mqtt.json absent -> MQTT telemetry will NOT start after a flash" >&2
+            fi
             sudo chown -R 0:0 "$RP_MNT/root/.ssh" "$RP_MNT/etc/skel/.ssh" \
                 "$RP_MNT/etc/NetworkManager/system-connections" 2>/dev/null || true
+            sudo chown -R 0:0 "$RP_MNT/etc/nexusq" 2>/dev/null || true
             echo "  Baked $_baked access file(s) into the rootfs (unowned by apk)"
         fi
 

@@ -84,6 +84,14 @@ check_connections || fail=1
 check_absent "/root/.ssh/authorized_keys" "root ssh authorized_keys" || fail=1
 check_absent "/etc/skel/.ssh/authorized_keys" "skel ssh authorized_keys" || fail=1
 check_absent "/home/user/.ssh/authorized_keys" "user ssh authorized_keys" || fail=1
+# The MQTT broker config is a per-home SECRET in the same class as the WiFi PSK:
+# host, username and a plaintext password for the household broker. It is baked
+# into personal images (docker-build.sh Phase 10) precisely because a flash wipes
+# it, which on 2026-09-16 left the Q with its telemetry dead and nothing saying
+# so. The moment it became bakeable it also became leakable, so it is gated here
+# in the SAME change that started baking it -- a credential path without a gate
+# in front of it is how a public rootfs ends up carrying someone's broker login.
+check_absent "/etc/nexusq/mqtt.json" "MQTT broker config (host/user/password)" || fail=1
 
 if [ "$fail" -ne 0 ]; then
     cat >&2 <<'MSG'

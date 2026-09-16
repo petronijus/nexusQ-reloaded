@@ -704,6 +704,41 @@ Return:
 2. The **runtime verdict** (`worst_severity`) + each finding with its evidence
    (quote the timeline/snapshot section), and—if a finding implies a code fix—name
    the file to change (e.g. `pmos/nexusqd/`), not a workaround.
+
+   **Three gates before you recommend anything. All three were failed on
+   2026-09-16, in one sweep, and every one of them cost the main session a
+   re-verification round.**
+
+   **(a) Is it already deliberate?** Before proposing to remove a package, revert
+   a setting or delete a file, `grep` the repo for it — APKBUILD comments, unit
+   comments, `docs/`. This project writes its reasons down, at length, next to
+   the code. That sweep recommended "remove blueman from the image package list";
+   `pmos/device-google-steelhead/APKBUILD` carries eight lines explaining that
+   blueman **stays** for `blueman-manager` while the *applet* is suppressed by an
+   XDG shadow (`Hidden=true` in `/etc/xdg/nexusq/autostart/`), root-caused live on
+   2026-07-15 when its DisplayYesNo agent forced Numeric Comparison and stole the
+   default agent from `nexusq-btagent`. The safety was already on, by design.
+   Finding a thing present is not evidence that nobody thought about it.
+
+   **(b) Is it ours, and does the fix you are naming exist?** Do not name a
+   `kernel/configs/steelhead_defconfig` fix without checking the symbol is in the
+   kernel source actually being built. That sweep attributed a `systemd-coredumpd`
+   retry loop to a missing defconfig option; the real cause is systemd **262~rc3**
+   (an Alpine-edge bump that came with the same build) asking for
+   `PIDFD_INFO_COREDUMP_SIGNAL`, which **does not appear anywhere in 6.18.48's
+   `include/uapi/linux/pidfd.h`**. There was no flag to flip: upstream is ahead of
+   the kernel. "Ours until shown otherwise" means go and show it, not assume it.
+
+   **(c) Measure the cost and the consequence — do not estimate them.** That sweep
+   reported the loop at 3.3/min (measured: **1.3/min**) and called crash capture
+   "a real loss" without testing it. A controlled `kill -ABRT` proved the legacy
+   `core_pattern` pipe still captures cores with a corefile present, so the
+   capability was intact and only the new socket registration was failing — the
+   difference between "blocks a release" and "journal noise".
+
+   A recommendation that would revert a documented decision, or that names a fix
+   nobody can apply, is worse than reporting the finding raw and saying you do not
+   know: it spends the reader's trust on re-deriving what the repo already knew.
 3. Where the capture was saved (`nq-captures/<ts>/`) for later good-vs-bad diffs.
 
 Keep it tight — the verdict and evidence, not the capture scroll.
