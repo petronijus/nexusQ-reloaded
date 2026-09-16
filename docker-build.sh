@@ -166,6 +166,52 @@ if [ ! -d "$PMAPORTS" ]; then
     echo "  pmaports at $(git -C "$PMAPORTS" rev-parse --short HEAD)"
 fi
 
+# --- crossdirect: fix the qemu fallback that loses argv[0] -------------------
+# Applied to the PINNED pmaports tree on every run (idempotent: `git apply
+# --check` first, skip if already in).
+#
+# crossdirect hands any linker-involved invocation back to the foreign-arch
+# compiler under qemu -- and execs it with argv[0] left as the bare name it was
+# called with, while its own wrapper dir is still first in PATH. GCC derives its
+# install prefix from argv[0], so a bare `cc` resolves to
+# /native/usr/lib/crossdirect/armv7/cc, and it then hunts for cc1 and
+# liblto_plugin.so only under that directory:
+#     cc: fatal error: cannot execute 'cc1': posix_spawnp: No such file or directory
+# Both files are perfectly present in /usr/libexec/gcc/<hostspec>/<ver>/.
+#
+# Anything that compiles AND links in one command hits this -- nexusqd (22
+# sources, one `cc`), device-google-steelhead's nq-healthd, speexdsp. Splitting
+# the compile out does not help: the remaining link-only step fails the same way
+# on liblto_plugin.so.
+#
+# Proven in the real buildroot on 2026-09-16 by isolating the single variable --
+# the SAME absolute binary was exec'd twice, differing only in argv[0]:
+#     argv[0]="cc"          -> cc1 fatal error
+#     argv[0]="/usr/bin/cc" -> builds, real ELF out
+# The fix is NOT to disable crossdirect (`!pmb:crossdirect` means QEMU_ONLY, pure
+# emulation): crossdirect demonstrably built these same aports through r98 on
+# 2026-09-12, and the fast compile-only path is untouched by this patch.
+_cd_patch="$SRC/pmaports-patches/0001-crossdirect-absolute-argv0.patch"
+if [ -f "$_cd_patch" ]; then
+    if git -C "$PMAPORTS" apply --check "$_cd_patch" 2>/dev/null; then
+        git -C "$PMAPORTS" apply "$_cd_patch"
+        # Supersede the binary repo's 5.3.1-r1 so apk picks ours.
+        sed -i 's/^pkgrel=1$/pkgrel=2/' "$PMAPORTS/cross/crossdirect/APKBUILD"
+        echo "  crossdirect: argv[0] patch applied, pkgrel -> 2"
+    elif grep -q "qemuargv" "$PMAPORTS/cross/crossdirect/crossdirect.c" 2>/dev/null; then
+        echo "  crossdirect: argv[0] patch already present"
+    else
+        echo "  ERROR: crossdirect patch does not apply to pmaports $PMAPORTS_REF."
+        echo "  Refusing to build: without it every compile-and-link aport dies on cc1,"
+        echo "  and the only alternatives are disabling crossdirect (emulation) or"
+        echo "  shipping stale apks. Re-cut the patch against the pinned tree."
+        exit 1
+    fi
+else
+    echo "  ERROR: $_cd_patch is missing."
+    exit 1
+fi
+
 # Fail EARLY and legibly on a toolchain mismatch. Without this the run dies in
 # Phase 7b -- after cloning, staging every aport and fixing ownership -- with
 # pmbootstrap's own "Please update your pmbootstrap version" and no hint that
@@ -1037,6 +1083,51 @@ fi
 # work around here.
 
 echo ""
+echo "=== Phase 7bc: Build the patched crossdirect (native) ==="
+# Build crossdirect from OUR pmaports tree so the argv[0] fix above is the one
+# actually used. Without this, apk installs the pmOS binary repo's 5.3.1-r1 and
+# the patch is dead code sitting in a git checkout. Ours is pkgrel 2, so apk
+# prefers it. Native arch -- crossdirect runs in the native chroot by definition.
+#
+# The checksum pass is LOAD-BEARING: patching crossdirect.c invalidates the
+# sha512sums= that upstream's APKBUILD carries for its own local sources, and
+# abuild refuses to build ("crossdirect.c: FAILED / Use 'abuild checksum'").
+# Phase 7b only checksums OUR pmos/* aports, so this one needs its own pass.
+pmbootstrap checksum crossdirect 2>&1 | tail -3
+pmbootstrap build crossdirect --arch "$(pmbootstrap config arch 2>/dev/null || uname -m)" --force 2>&1 \
+    || pmbootstrap build crossdirect --force 2>&1
+_cd_apk=$(find "$WORK/packages" -name "crossdirect-5.3.1-r2.apk" -print -quit 2>/dev/null)
+if [ -z "$_cd_apk" ]; then
+    echo "  FATAL: crossdirect-5.3.1-r2 was not produced."
+    echo "  Every compile-and-link aport would then build against the UNPATCHED"
+    echo "  crossdirect and die on cc1 -- or worse, if that guard is ever relaxed,"
+    echo "  quietly install a stale apk. Refusing to continue."
+    exit 1
+fi
+echo "  Built: $(basename "$_cd_apk")"
+# Make the native chroot actually pick it up (it may already hold r1).
+pmbootstrap -y chroot -- apk add --upgrade crossdirect 2>&1 | tail -3 || true
+# `apk info -v <pkg>` prints the DESCRIPTION on this busybox apk, not the
+# version -- it would read identically for r1 and r2 and quietly assert nothing.
+# Read the version out of the chroot's own package db instead.
+_cd_inst=$(pmbootstrap -y chroot -- sh -c \
+    'awk -F: "/^P:/{p=\$2} /^V:/{if(p==\"crossdirect\") print \$2}" /lib/apk/db/installed' 2>/dev/null | head -1)
+echo "  native crossdirect now: ${_cd_inst:-(could not read)}"
+# Hard-fail only on a version we definitely READ and that is definitely wrong.
+# An empty read means the probe could not answer -- the native chroot is
+# recreated and zapped repeatedly around this phase -- and a gate that blocks
+# every build on a question it cannot ask is worse than the bug it guards. The
+# real gate is the r2 apk check above: without that apk there is nothing for apk
+# to prefer over the binary repo's r1.
+if [ -n "$_cd_inst" ] && [ "$_cd_inst" != "5.3.1-r2" ]; then
+    echo "  FATAL: the native chroot is on crossdirect $_cd_inst, not the patched 5.3.1-r2."
+    echo "  Every compile-and-link aport would die on cc1. Refusing to continue."
+    exit 1
+elif [ -z "$_cd_inst" ]; then
+    echo "  WARNING: could not read the installed crossdirect version (not fatal)."
+    echo "  If an aport dies on \"cannot execute 'cc1'\", this is the first thing to check."
+fi
+
 echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output
 set +e
@@ -1049,7 +1140,13 @@ set +e
 # does not survive: the identical signature is what ANY build sees when a
 # concurrent pmbootstrap zaps its buildroot mid-compile, which was reproduced
 # live that day with two sessions on one volume. The toolchain was never broken;
-# the volume is single-writer. Cross-compiling everything took a full build from
+# the volume is single-writer.
+# ⚠️ AMENDED 2026-09-16. That signature has TWO causes, and this one was real:
+# crossdirect's qemu fallback loses argv[0], so GCC resolves its prefix to the
+# crossdirect wrapper dir and cannot find cc1. See the patch applied to pmaports
+# above. Concurrency is still a cause; "the toolchain was never broken" is no
+# longer the whole answer, so do not stop investigating at that sentence.
+# Cross-compiling everything took a full build from
 # 4080 s to 399 s. See docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-
 # disarmed-itself.md and the memory note `build-volume-is-single-writer`.
 # $_ucross is empty by default; NEXUSQ_NO_CROSS=1 restores the old qemu path.
@@ -1071,11 +1168,19 @@ if [ $NEXUSQD_RC -eq 0 ]; then
     if [ -n "$NEXUSQD_APK" ]; then
         cp "$NEXUSQD_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQD_APK")"
     else
-        echo "  WARNING: nexusqd apk built but not found under $WORK/packages"
+        echo "  FATAL: nexusqd built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE nexusqd from the warm repo."
+        exit 1
     fi
 else
-    echo "  WARNING: nexusqd build failed -- key log lines:"
+    echo "  FATAL: nexusqd build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue. A warn-and-continue here is how a green build"
+    echo "  ships OLD code: the rootfs would install the last successfully built"
+    echo "  nexusqd from the persistent work volume, at a STALE pkgrel, and every"
+    echo "  later phase and gate would still pass."
+    exit 1
 fi
 
 echo ""
@@ -1095,11 +1200,19 @@ if [ $NEXUSQCTL_RC -eq 0 ]; then
     if [ -n "$NEXUSQCTL_APK" ]; then
         cp "$NEXUSQCTL_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQCTL_APK")"
     else
-        echo "  WARNING: nexusq-control apk built but not found under $WORK/packages"
+        echo "  FATAL: nexusq-control built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE nexusq-control from the warm repo."
+        exit 1
     fi
 else
-    echo "  WARNING: nexusq-control build failed -- key log lines:"
+    echo "  FATAL: nexusq-control build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue. A warn-and-continue here is how a green build"
+    echo "  ships OLD code: the rootfs would install the last successfully built"
+    echo "  nexusq-control from the persistent work volume, at a STALE pkgrel, and every"
+    echo "  later phase and gate would still pass."
+    exit 1
 fi
 
 echo ""
@@ -1127,11 +1240,19 @@ if [ $NEXUSQBTA_RC -eq 0 ]; then
     if [ -n "$NEXUSQBTA_APK" ]; then
         cp "$NEXUSQBTA_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQBTA_APK")"
     else
-        echo "  WARNING: nexusq-btagent apk built but not found under $WORK/packages"
+        echo "  FATAL: nexusq-btagent built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE nexusq-btagent from the warm repo."
+        exit 1
     fi
 else
-    echo "  WARNING: nexusq-btagent build failed -- key log lines:"
+    echo "  FATAL: nexusq-btagent build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue. A warn-and-continue here is how a green build"
+    echo "  ships OLD code: the rootfs would install the last successfully built"
+    echo "  nexusq-btagent from the persistent work volume, at a STALE pkgrel, and every"
+    echo "  later phase and gate would still pass."
+    exit 1
 fi
 
 echo ""
@@ -1154,11 +1275,19 @@ if [ $NEXUSQSETUP_RC -eq 0 ]; then
     if [ -n "$NEXUSQSETUP_APK" ]; then
         cp "$NEXUSQSETUP_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQSETUP_APK")"
     else
-        echo "  WARNING: nexusq-setupd apk built but not found under $WORK/packages"
+        echo "  FATAL: nexusq-setupd built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE nexusq-setupd from the warm repo."
+        exit 1
     fi
 else
-    echo "  WARNING: nexusq-setupd build failed -- key log lines:"
+    echo "  FATAL: nexusq-setupd build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue. A warn-and-continue here is how a green build"
+    echo "  ships OLD code: the rootfs would install the last successfully built"
+    echo "  nexusq-setupd from the persistent work volume, at a STALE pkgrel, and every"
+    echo "  later phase and gate would still pass."
+    exit 1
 fi
 
 echo ""
@@ -1181,11 +1310,19 @@ if [ $NEXUSQMQTT_RC -eq 0 ]; then
     if [ -n "$NEXUSQMQTT_APK" ]; then
         cp "$NEXUSQMQTT_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQMQTT_APK")"
     else
-        echo "  WARNING: nexusq-mqtt apk built but not found under $WORK/packages"
+        echo "  FATAL: nexusq-mqtt built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE nexusq-mqtt from the warm repo."
+        exit 1
     fi
 else
-    echo "  WARNING: nexusq-mqtt build failed -- key log lines:"
+    echo "  FATAL: nexusq-mqtt build failed -- key log lines:"
     grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue. A warn-and-continue here is how a green build"
+    echo "  ships OLD code: the rootfs would install the last successfully built"
+    echo "  nexusq-mqtt from the persistent work volume, at a STALE pkgrel, and every"
+    echo "  later phase and gate would still pass."
+    exit 1
 fi
 
 echo ""
@@ -1211,7 +1348,9 @@ if [ $SPEEXDSP_RC -eq 0 ]; then
     if [ -n "$SPEEXDSP_APK" ]; then
         cp "$SPEEXDSP_APK" /tmp/output/ && echo "  Exported: $(basename "$SPEEXDSP_APK")"
     else
-        echo "  WARNING: speexdsp apk built but not found under $WORK/packages"
+        echo "  FATAL: speexdsp built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE speexdsp from the warm repo."
+        exit 1
     fi
 else
     echo "  ##############################################################"
@@ -1222,6 +1361,9 @@ else
     echo "  # without understanding why. See pmos/speexdsp/APKBUILD."
     echo "  ##############################################################"
     grep -n "ERROR\|error:\|FAILED\|USE_NEON\|Advanced_SIMD" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue: a scalar speexdsp is a real audio regression."
+    exit 1
 fi
 
 echo ""

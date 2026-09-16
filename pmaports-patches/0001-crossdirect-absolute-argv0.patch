@@ -1,0 +1,27 @@
+--- a/cross/crossdirect/crossdirect.c
++++ b/cross/crossdirect/crossdirect.c
+@@ -74,7 +74,23 @@
+ 	// linker is involved: just use qemu binary (to avoid broken cross-ld, pmaports#227)
+ 	if (!argv_has_arg(argc, argv, "-c")) {
+ 		snprintf(newExecutable, sizeof(newExecutable), "/usr/bin/%s", executableName);
+-		if (execv(newExecutable, argv) == -1) {
++		// argv[0] must be the absolute path we are about to exec, not the bare
++		// name we were called with. GCC derives its own install prefix from
++		// argv[0] (make_relative_prefix): with a bare "cc" it searches PATH,
++		// finds THIS wrapper first -- crossdirect's dir is prepended to PATH --
++		// and concludes it lives under /native/usr/lib/crossdirect/<arch>/, so it
++		// looks for cc1 and liblto_plugin.so only there and dies with
++		//     cc: fatal error: cannot execute 'cc1': posix_spawnp: ...
++		// even though both sit correctly in /usr/libexec/gcc/<hostspec>/<ver>/.
++		// Handing it the absolute path makes the prefix resolve to /usr as it
++		// should. Only the qemu fallback is affected; the fast path below already
++		// execs by absolute path.
++		char *qemuargv[argc + 1];
++		qemuargv[0] = newExecutable;
++		for (int i = 1; i < argc; i++)
++			qemuargv[i] = argv[i];
++		qemuargv[argc] = NULL;
++		if (execv(newExecutable, qemuargv) == -1) {
+ 			fprintf(stderr, "ERROR: crossdirect: failed to execute %s: %s\n", newExecutable, strerror(errno));
+ 			fprintf(stderr, "NOTE: this is a foreign arch binary that would run with qemu (linker is involved).\n");
+ 			exit_userfriendly();
