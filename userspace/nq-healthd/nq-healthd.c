@@ -22,8 +22,10 @@
  *   dmesg | grep    -> /dev/kmsg, read incrementally
  *   stat            -> fstat()
  *   ls | wc         -> opendir/readdir
- * The ONLY fork left is `systemctl show`, and only on a unit transition or once
- * per NQ_UNIT_REFRESH_S (300 s default) — the shell's own hard-won rule, kept.
+ * The last fork, `systemctl show`, is gone too since device r99: systemd's
+ * varlink Manager socket answers it directly. The rationing it needed — only on
+ * a unit transition or once per NQ_UNIT_REFRESH_S (300 s default), the shell's
+ * own hard-won rule — is kept anyway, because the manager side is not free.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -37,8 +39,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -451,54 +453,151 @@ static long pstore_count(void)
     return n;
 }
 
-/* ---------- systemd, the one remaining fork ------------------------------ */
+/* ---------- systemd over varlink: the last fork, removed ----------------- */
 /* Consulted ONLY on a transition (pid unknown/vanished) or once per
- * unit_refresh_s. Polling systemctl every sample used to hold pid 1 at ~3.3 %
- * of a core, and later, while librespot was masked, degenerated into ~600 PAM
- * logins an hour. Both regressions are why this is rationed. */
-static int systemd_show(const char *unit, int user_scope,
-                        char *active, size_t an, long *mainpid, long *nrestarts)
-{
-    int pipefd[2];
-    if (pipe2(pipefd, O_CLOEXEC) < 0)
-        return 0;
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return 0;
-    }
-    if (pid == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        int null = open("/dev/null", O_WRONLY);
-        if (null >= 0)
-            dup2(null, STDERR_FILENO);
-        if (user_scope)
-            execlp("systemctl", "systemctl", "-M", "user@", "--user", "show",
-                   "-p", "ActiveState", "-p", "MainPID", "-p", "NRestarts",
-                   unit, (char *)NULL);
-        else
-            execlp("systemctl", "systemctl", "show",
-                   "-p", "ActiveState", "-p", "MainPID", "-p", "NRestarts",
-                   unit, (char *)NULL);
-        _exit(127);
-    }
-    close(pipefd[1]);
-    char out[1024];
-    size_t o = 0;
-    ssize_t r;
-    while (o + 1 < sizeof out && (r = read(pipefd[0], out + o, sizeof out - o - 1)) > 0)
-        o += (size_t)r;
-    out[o] = '\0';
-    close(pipefd[0]);
-    int status = 0;
-    waitpid(pid, &status, 0);
+ * unit_refresh_s. Polling every sample used to hold pid 1 at ~3.3 % of a core,
+ * and later, while librespot was masked, degenerated into ~600 PAM logins an
+ * hour. Both regressions are why this stays rationed.
+ *
+ * WHY NOT systemctl. The user-scope probe used to run
+ * `systemctl -M user@ --user show`. That -M transport routes through
+ * systemd-run + systemd-stdio-bridge, which opens a full PAM *login session*
+ * for uid 10000 on every call — rationing made it 5-minutely instead of
+ * constant, but never stopped it. Measured 2026-09-16 after 2 d 21 h uptime:
+ * logind session counter at c827 (~830 sessions), ~1660 "Failed to read
+ * pids.max" warnings, every one of the 13 `Failed to acquire peer PID` errors
+ * on an otherwise error-free boot, and a 645 MB journal. Same class as the PAM
+ * regression re-fixed in r68, just slower. Dropping to uid 10000 before exec
+ * would also dodge PAM, but it keeps the fork.
+ *
+ * systemd's varlink Manager socket answers the same question with no session,
+ * no dbus-broker and no fork: a NUL-terminated JSON request in, a
+ * NUL-terminated JSON reply out. root may open the uid-10000 socket directly —
+ * the local-transport uid check that makes `systemctl --user` fail as root
+ * ("Operation not permitted", systemd 262) does not apply to it. With this,
+ * nq-healthd forks for nothing at all.
+ *
+ * VERSION FLOOR. Verified on the device, systemd 262~rc2: NRestarts over
+ * varlink tracks the D-Bus property exactly. systemd 259 does NOT populate it —
+ * the field stays absent however often the unit restarts — so on an older
+ * manager nq_restarts/ls_restarts would silently freeze at 0 in a schema
+ * nexusq-mqtt, Home Assistant and the app alarm on. Absent reads as 0, which is
+ * also the right answer for a unit that has genuinely never restarted.
+ */
+#define VL_SYS     "/run/systemd/io.systemd.Manager"
+#define VL_USER    "/run/user/10000/systemd/io.systemd.Manager"
+#define VL_TIMEO_S 3
+#define VL_OVERLAP 64   /* >= longest key+value scanned; see the window below */
 
-    int got = 0;
-    for (char *l = strtok(out, "\n"); l; l = strtok(NULL, "\n")) {
-        if (!strncmp(l, "ActiveState=", 12)) { snprintf(active, an, "%s", l + 12); got = 1; }
-        else if (!strncmp(l, "MainPID=", 8))   *mainpid   = strtol(l + 8, NULL, 10);
-        else if (!strncmp(l, "NRestarts=", 10)) *nrestarts = strtol(l + 10, NULL, 10);
+/* "<key>":<number> -> *out. key includes the colon. */
+static int json_ll(const char *buf, const char *key, long long *out)
+{
+    const char *p = strstr(buf, key);
+    if (!p)
+        return 0;
+    p += strlen(key);
+    if (*p != '-' && !isdigit((unsigned char)*p))
+        return 0;
+    *out = strtoll(p, NULL, 10);
+    return 1;
+}
+
+/* "<key>":"<string>" -> out. No unescaping: every field read here is enum-like. */
+static int json_str(const char *buf, const char *key, char *out, size_t n)
+{
+    const char *p = strstr(buf, key);
+    if (!p)
+        return 0;
+    p += strlen(key);
+    if (*p != '"')
+        return 0;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < n)
+        out[i++] = *p++;
+    out[i] = '\0';
+    return 1;
+}
+
+static int unit_probe(const char *unit, int user_scope,
+                      char *active, size_t an, long *mainpid, long *nrestarts)
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return 0;
+    /* a wedged manager must cost one sample, not the daemon */
+    struct timeval tv = { .tv_sec = VL_TIMEO_S, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    struct sockaddr_un sa = { .sun_family = AF_UNIX };
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", user_scope ? VL_USER : VL_SYS);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        close(fd);
+        return 0;
+    }
+
+    char req[256];
+    int rn = snprintf(req, sizeof req,
+                      "{\"method\":\"io.systemd.Unit.List\","
+                      "\"parameters\":{\"name\":\"%s\"}}", unit);
+    if (rn < 0 || (size_t)rn >= sizeof req) {
+        close(fd);
+        return 0;
+    }
+    for (size_t off = 0, len = (size_t)rn + 1; off < len; ) {  /* trailing NUL frames it */
+        ssize_t w = write(fd, req + off, len - off);
+        if (w <= 0) {
+            close(fd);
+            return 0;
+        }
+        off += (size_t)w;
+    }
+
+    /* The reply is ~8 KB, three quarters of it the static unit "context" we do
+     * not want. Scan it as it streams through a fixed window instead of
+     * buffering the lot: VL_OVERLAP bytes carry across reads so no key is lost
+     * to a chunk boundary, and a later hit overwrites an earlier truncated one.
+     * Gated on "runtime" so a future systemd putting one of these names in
+     * "context" cannot shadow the real value. */
+    char win[2048];
+    size_t have = 0;
+    int seen_runtime = 0, got = 0, done = 0;
+    /* Accumulate locally and publish only on success. varlink OMITS an optional
+     * int that is zero, so a unit that has never restarted carries no NRestarts
+     * at all — and callers hand us the PREVIOUS count as the seed. Writing
+     * through directly would therefore leave the count stuck at its old value
+     * after a `systemctl reset-failed`, where `systemctl show` printed a plain
+     * NRestarts=0. Absent means zero; on a good reply every field is defined. */
+    long long pid_acc = 0, nr_acc = 0;
+    while (!done) {
+        ssize_t r = read(fd, win + have, sizeof win - have - 1);
+        if (r <= 0)
+            break;
+        if (memchr(win + have, '\0', (size_t)r))
+            done = 1;                   /* end-of-message frame arrived */
+        have += (size_t)r;
+        win[have] = '\0';
+
+        if (!seen_runtime && strstr(win, "\"runtime\":"))
+            seen_runtime = 1;
+        if (seen_runtime) {
+            long long v;
+            if (json_str(win, "\"ActiveState\":", active, an))
+                got = 1;
+            if (json_ll(win, "\"MainPID\":{\"pid\":", &v))
+                pid_acc = v;
+            if (json_ll(win, "\"NRestarts\":", &v))
+                nr_acc = v;
+        }
+        if (!done && have > VL_OVERLAP) {
+            memmove(win, win + have - VL_OVERLAP, VL_OVERLAP);
+            have = VL_OVERLAP;
+        }
+    }
+    close(fd);
+    if (got) {
+        *mainpid   = (long)pid_acc;
+        *nrestarts = (long)nr_acc;
     }
     return got;
 }
@@ -561,7 +660,7 @@ int main(int argc, char **argv)
     else if (access("/sys/devices/platform/steelhead-avr/frame", R_OK) == 0)
         frame_attr = "/sys/devices/platform/steelhead-avr/frame";
 
-    /* cached unit state — see systemd_show() */
+    /* cached unit state — see unit_probe() */
     long nq_pid = 0, nq_restarts = 0, ls_pid = 0, ls_restarts = 0;
     char nq_active[32] = "unknown", ls_active[32] = "unknown";
     long long nq_last_show = -1, ls_last_show = -1;
@@ -643,7 +742,7 @@ int main(int argc, char **argv)
         if (nq_refresh || nq_last_show < 0 || mono - nq_last_show >= unit_refresh_s) {
             char a[32];
             long mp = 0, nr = nq_restarts;
-            if (systemd_show("nexusqd.service", 0, a, sizeof a, &mp, &nr)) {
+            if (unit_probe("nexusqd.service", 0, a, sizeof a, &mp, &nr)) {
                 snprintf(nq_active, sizeof nq_active, "%s", a);
                 nq_restarts = nr;
                 if (mp > 0 && proc_comm_is(mp, "nexusqd")) {
@@ -696,12 +795,14 @@ int main(int argc, char **argv)
             snprintf(ls_active, sizeof ls_active, "inactive");
         }
         if (ls_refresh || ls_last_show < 0 || mono - ls_last_show >= unit_refresh_s) {
-            /* Only worth asking once the user manager exists; otherwise pid 1
-             * builds and tears down a PAM session for nothing. */
-            if (access("/run/user/10000/systemd", F_OK) == 0) {
+            /* Only worth asking once the user manager is up. Probe the
+             * socket itself, not its directory: the directory outlives a
+             * stopped user@10000, and a connect() to a dead socket would
+             * cost a sample the full VL_TIMEO_S. */
+            if (access(VL_USER, F_OK) == 0) {
                 char a[32];
                 long mp = 0, nr = ls_restarts;
-                if (systemd_show("librespot.service", 1, a, sizeof a, &mp, &nr)) {
+                if (unit_probe("librespot.service", 1, a, sizeof a, &mp, &nr)) {
                     snprintf(ls_active, sizeof ls_active, "%s", a);
                     ls_restarts = nr;
                     if (mp > 0)
