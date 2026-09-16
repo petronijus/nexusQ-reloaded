@@ -249,10 +249,14 @@ was typed by hand at upload time. v1.16.0 was uploaded from the script's own
 printed command, so the hand-correction did not happen. Fixed at the source —
 the script now writes `sha256sums-$VER.txt`.
 
-> ⚠️ **The published v1.16.0 release still carries the unversioned
-> `sha256sums.txt`.** `output/sha256sums-v1.16.0.txt` is prepared locally; the
-> release asset needs one `gh release upload` (and the old one deleted) to match
-> the guide. Not done here — changing a published release is not a doc fix.
+**The published v1.16.0 release was corrected too**, because a guide that names
+a file the release does not have is still a broken first install no matter how
+right the repo is. `sha256sums-v1.16.0.txt` was uploaded to the v1.16.0 release,
+then downloaded back and diffed against the local copy to prove the published
+bytes are the right ones. The unversioned `sha256sums.txt` was **left in place**:
+its content is identical, some link somewhere may already point at it, and
+deleting an asset off a published release is not something to do in passing.
+The release therefore carries both, and the guide names the versioned one.
 
 `package-release.sh` now gates on the guide's **body**: the "This guide describes
 release `$VER`" sentence plus all three artifact filenames. Watched failing

@@ -84,6 +84,10 @@ marker: the "This guide describes release `$VER`" sentence and all three artifac
 filenames must be present. Watched failing against exactly the v1.16.0 shape
 (marker and filenames bumped, prose left behind) before being trusted.
 
+The **published v1.16.0 release** was corrected as well — `sha256sums-v1.16.0.txt`
+uploaded, then downloaded back and diffed to prove the published bytes are right.
+The unversioned `sha256sums.txt` was left alongside it rather than deleted.
+
 ### Known issue — the TWL6030 RTC never runs (new, root-caused, not yet fixed)
 
 Falling back to a build epoch at all is the real bug. After 7 h 47 min of uptime
