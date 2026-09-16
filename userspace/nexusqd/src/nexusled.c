@@ -17,11 +17,15 @@ static int send_sock(const char *line) {
     struct sockaddr_un sa = { .sun_family = AF_UNIX }; strcpy(sa.sun_path, SOCK);
     if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) != 0) { close(s); return -1; }
     if (write(s, line, strlen(line)) < 0) { close(s); return -1; }
-    char r[64]; int n = (int)read(s, r, sizeof(r)-1); if (n > 0) { r[n]=0; fputs(r, stdout); }
+    /* Drain to EOF rather than one short read: `debug` answers with a state
+     * line far longer than the "ok\n" every other verb returns, and a fixed
+     * 64-byte read would silently truncate it mid-field. */
+    char r[256]; int n;
+    while ((n = (int)read(s, r, sizeof(r)-1)) > 0) { r[n] = 0; fputs(r, stdout); }
     close(s); return 0;
 }
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: nexusled set R G B | theme NAME | off | mute R G B | all R G B\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: nexusled set R G B | theme NAME | off | mute R G B | all R G B | status | debug\n"); return 2; }
     char line[128] = {0};
     const char *verb = strcmp(argv[1], "all") == 0 ? "set" : argv[1];
     int p = snprintf(line, sizeof(line), "%s", verb);

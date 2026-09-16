@@ -1,5 +1,7 @@
 /* userspace/nexusqd/src/nexusqd.c */
-#define _POSIX_C_SOURCE 200809L   /* clock_gettime/CLOCK_MONOTONIC, AF_UNIX, poll under -std=c11 */
+#define _GNU_SOURCE               /* ppoll(2) — see the frame deadline below. Implies
+                                   * _POSIX_C_SOURCE: clock_gettime/CLOCK_MONOTONIC,
+                                   * AF_UNIX, poll under -std=c11. */
 #include "frame.h"
 #include "avr.h"
 #include "compositor.h"
@@ -257,6 +259,20 @@ int main(void) {
     char   sline[256]; int slen = 0;   /* line assembly for the subscribe feed */
     int    static_ticks = 0;       /* consecutive renders with a bit-identical frame */
 
+    /* --- cadence instrumentation (read out by `nexusled debug`) -------------
+     * Free-running counters, never reset. The interesting quantity is a RATE,
+     * so the reader samples twice and divides; that also means a wrapped or
+     * restarted daemon cannot lie about an interval it did not observe.
+     * `loops` vs `renders` is the diagnosis in one line: equal means the render
+     * deadline drives the loop, loops >> renders means something else keeps
+     * waking it. */
+    unsigned long n_loops = 0, n_renders = 0, n_ctl = 0, n_keys = 0, n_rearm = 0;
+    /* `spin` counts iterations that reached the wait with the deadline already
+     * gone. It is the regression canary for the truncation bug fixed below: a
+     * healthy daemon keeps loops ~= renders and spin ~= 0. */
+    unsigned long n_spin = 0, n_ready = 0;
+    int    last_animating = 0;     /* the intent gate, as of the last cadence choice */
+
     /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
      * ready, then ping WATCHDOG=1 from the render loop below. A *hang* in that
      * loop (a wedged AVR i2c write, a stuck poll, an effect that never returns)
@@ -266,6 +282,7 @@ int main(void) {
     double last_wd = 0.0;          /* last WATCHDOG=1 ping (rate-limited to 1/s) */
     double last_avr_push = 0.0;    /* last AVR frame commit — drives the keepalive re-push */
     for (;;) {
+        n_loops++;
         /* PA sink-input gate (idle-CPU fix — see PA_POLL_S / PA_SUB_* at the top).
          * Event-driven: `pactl subscribe` membership events set pa_check; the timed
          * re-count runs only as a slow safety net (subscriber proven) or at
@@ -337,16 +354,32 @@ int main(void) {
          * after RX_TIMEOUT_S had already expired — a 1 s black ring instead of
          * the volume flash. poll()'s timeout derives from `next_frame` alone,
          * so it needs nothing from here. */
-        int to = (int)((next_frame - now_s()) * 1000.0);
-        if (to < 0) to = 0;
-        poll(pfds, np, to);
+        /* Wait to the deadline in NANOSECONDS, via ppoll. poll(2) takes whole
+         * milliseconds and this conversion used to truncate, so the last
+         * sub-millisecond of every frame asked poll for 0 ms: it returned
+         * instantly, the deadline had not arrived, the loop continued, and the
+         * next iteration asked for 0 ms again — a busy-spin that ended only when
+         * the clock caught up. Measured on the device at 20 fps: 380 of every
+         * 400 iterations, 94.9 %, were that spin. It never looked like a bug
+         * from outside, because the ring kept rendering its exact 20.0 fps; it
+         * showed up only as CPU, which is how it survived the whole r13 idle
+         * diet. A timespec has the resolution the deadline is expressed in, so
+         * the remainder is simply waited out. */
+        double rem = next_frame - now_s();
+        if (rem <= 0.0) { rem = 0.0; n_spin++; }
+        time_t rem_s = (time_t)rem;
+        long rem_ns = (long)((rem - (double)rem_s) * 1e9);
+        if (rem_ns < 0) rem_ns = 0;
+        if (rem_ns > 999999999L) rem_ns = 999999999L;
+        struct timespec tmo = { .tv_sec = rem_s, .tv_nsec = rem_ns };
+        if (ppoll(pfds, np, &tmo, NULL) > 0) n_ready++;
 
         if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
             uint8_t b[INPUT_EVENT_SIZE*64]; int r = (int)read(kfd, b, sizeof(b));
             struct keyev ev[64]; int n = r > 0 ? keys_decode(b, r, ev, 64) : 0;
             /* physical interaction: leave idle cadence and render immediately
              * (the volume overlay must appear at its full 16 ms cadence) */
-            if (n > 0) { static_ticks = 0; next_frame = 0.0; }
+            if (n > 0) { n_keys += (unsigned long)n; static_ticks = 0; next_frame = 0.0; }
             for (int i = 0; i < n; i++) {
                 if (!ev[i].down) continue;
                 double now = now_s();
@@ -359,7 +392,7 @@ int main(void) {
                     volume += (ev[i].code == KEY_VOLUMEUP) ? VOL_STEP : -VOL_STEP;
                     if (volume > 100) volume = 100;
                     if (volume < 0) volume = 0;
-                    reaction_on_volume(&rx, volume, now);   /* LED overlay */
+                    reaction_on_volume(&rx, volume, now); n_rearm++;   /* LED overlay */
                     avr_set_mute(0, 0, 0);                  /* mute LED off during the volume overlay */
                     vol_dir = (ev[i].code == KEY_VOLUMEUP) ? 1 : -1;  /* apply (debounced) below */
                 }
@@ -391,7 +424,7 @@ int main(void) {
                         double now = now_s();
                         volume = cmd.value;
                         screensaver_on_activity(&ss, now);
-                        reaction_on_volume(&rx, volume, now);
+                        reaction_on_volume(&rx, volume, now); n_rearm++;
                         avr_set_mute(0, 0, 0);
                     }
                     else if (cmd.kind == CTL_BRIGHTNESS) {
@@ -423,12 +456,44 @@ int main(void) {
                         if (fp) { char js[1024]; int m=(int)fread(js,1,sizeof(js)-1,fp); js[m]=0; fclose(fp);
                                   struct theme t; if (theme_parse(&t,cmd.name,js)==0 && t.n_colors>0) { memcpy(manual.rgb,t.colors[0],3); manual.breathe = 0; manual.spin = 0; comp.layers[manual_idx].active = 1; } }
                     }
+                    n_ctl++;
                     /* any mutating command leaves idle cadence and renders on this
                      * very iteration (volume overlay wants its 16 ms immediately).
                      * CTL_STATUS is the exception: healthd's `nexusled status`
-                     * probe fires every 5 s and must not keep cadence fast. */
-                    if (cmd.kind != CTL_STATUS) { static_ticks = 0; next_frame = 0.0; }
-                    if (write(c, "ok\n", 3) < 0) { /* client gone */ }
+                     * probe fires every 5 s and must not keep cadence fast.
+                     * CTL_DEBUG is read-only and must be the same, or reading the
+                     * cadence would be what breaks it. */
+                    if (cmd.kind != CTL_STATUS && cmd.kind != CTL_DEBUG) { static_ticks = 0; next_frame = 0.0; }
+                    if (cmd.kind == CTL_DEBUG) {
+                        /* One key=value line: the whole render-cadence state
+                         * machine, plus the free-running counters. Every term of
+                         * `animating` is reported SEPARATELY and live, because the
+                         * gate is an OR — knowing it is true says nothing about
+                         * which input made it true, and that was exactly the
+                         * question that could not be answered from outside. */
+                        double dnow = now_s();
+                        double rx_age = rx.last_event > 0 ? dnow - rx.last_event : -1.0;
+                        char db[512];
+                        int dn = snprintf(db, sizeof db,
+                            "up=%.1f loops=%lu renders=%lu spin=%lu ready=%lu "
+                            "ctl=%lu keys=%lu rearm=%lu "
+                            "frame_int=%.3f static_ticks=%d animating=%d "
+                            "ovl=%d rx_age=%.3f child_alpha=%.3f "
+                            "manual_active=%d manual_breathe=%d manual_spin=%d "
+                            "ss_noaudio=%.1f ss_bright=%.4f "
+                            "tap_fd=%d tap_should=%d quiet_since=%.1f vol=%d muted=%d\n",
+                            dnow - start, n_loops, n_renders, n_spin, n_ready,
+                            n_ctl, n_keys, n_rearm,
+                            frame_int, static_ticks, last_animating,
+                            reaction_overlay_active(&rx, dnow), rx_age, (double)child_alpha,
+                            comp.layers[manual_idx].active, manual.breathe, manual.spin,
+                            ss.elapsed_no_audio, screensaver_brightness(&ss),
+                            afd, tap_should_run,
+                            quiet_since >= 0.0 ? dnow - quiet_since : -1.0,
+                            volume, muted);
+                        if (dn > 0 && write(c, db, (size_t)dn) < 0) { /* client gone */ }
+                    }
+                    else if (write(c, "ok\n", 3) < 0) { /* client gone */ }
                 } else { if (write(c, "err\n", 4) < 0) { /* client gone */ } }
                 close(c);
             }
@@ -552,6 +617,7 @@ int main(void) {
          * monotonic deadline is due. dt is measured render-to-render, not
          * wake-to-wake, so the fades advance at real time. */
         if (now < next_frame) continue;
+        n_renders++;
         double tick_base = next_frame;   /* the deadline is advanced at the END of
                                           * this tick, once the cadence the just-
                                           * rendered state implies is known */
@@ -661,6 +727,7 @@ int main(void) {
         int animating = ovl || child_alpha > 0.0f
                      || (comp.layers[manual_idx].active && (manual.breathe || manual.spin))
                      || !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0);
+        last_animating = animating;
         int tap_silent = quiet_since >= 0.0 && (now - quiet_since) >= TAP_QUIET_S;
         if (!animating && static_ticks >= IDLE_AFTER_TICKS && frame_int < IDLE_FRAME_S) {
             double cap = IDLE_FRAME_S;
