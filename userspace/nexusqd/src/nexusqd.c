@@ -156,6 +156,30 @@ static int reaction_layer_render(void *c, double t, struct frame *out) {
 
 static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec/1e9; }
 
+/* Name the process on the other end of a control connection: SO_PEERCRED is
+ * kernel-supplied, so a client cannot misreport itself. Best-effort — an empty
+ * answer costs nothing but a "-" in the debug line. */
+static void peer_name(int fd, int *pid_out, char *comm, size_t n)
+{
+    snprintf(comm, n, "-");
+    *pid_out = -1;
+    struct ucred uc;
+    socklen_t ul = sizeof uc;
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &uc, &ul) != 0 || uc.pid <= 0)
+        return;
+    *pid_out = (int)uc.pid;
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/comm", (int)uc.pid);
+    FILE *f = fopen(path, "re");
+    if (!f)
+        return;
+    if (fgets(comm, (int)n, f)) {
+        char *nl = strchr(comm, '\n');
+        if (nl) *nl = '\0';
+    }
+    fclose(f);
+}
+
 /* apply the dedicated mute LED for the current muted state (#001E28 / #006B8E) */
 static void apply_mute_led(int muted) {
     int r, g, b; reaction_mute_led(muted, &r, &g, &b); avr_set_mute(r, g, b);
@@ -271,6 +295,13 @@ int main(void) {
      * gone. It is the regression canary for the truncation bug fixed below: a
      * healthy daemon keeps loops ~= renders and spin ~= 0. */
     unsigned long n_spin = 0, n_ready = 0;
+    /* `vol_cmds` counts every CTL_VOL that ARRIVES, not every one that re-arms
+     * the overlay, and vol_from names the process that sent the last one. The
+     * two are separate on purpose: the guard below makes a repeated set
+     * harmless, and a harmless bug is one nobody ever finds again. A client
+     * pushing the same volume in a loop still shows up here. */
+    unsigned long n_vol = 0;
+    int vol_pid = -1; char vol_comm[24] = "-";
     int    last_animating = 0;     /* the intent gate, as of the last cadence choice */
 
     /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
@@ -421,11 +452,36 @@ int main(void) {
                         }
                     }
                     else if (cmd.kind == CTL_VOL) {
-                        double now = now_s();
+                        /* A set that does not MOVE the volume is a state sync,
+                         * not an interaction, and re-arms nothing.
+                         *
+                         * Why this matters: the overlay relinquishes the ring
+                         * RX_TIMEOUT_S (1 s) after the last change, so a client
+                         * re-sending the current volume even once a second pins
+                         * it on forever. That is not hypothetical — it is how
+                         * the Q was found on 2026-09-16 after 2 d 21 h of
+                         * uptime: the ring held a uniform #00516C, which is
+                         * RX_COLOR at reaction_end_brightness(48), the cadence
+                         * sat at the overlay's 16 ms, and `animating` stayed
+                         * true, so the r13 idle stretch could never engage. The
+                         * frame never changed, so nothing downstream saw a
+                         * fault — it looked exactly like a healthy static ring.
+                         *
+                         * The KEY path deliberately keeps re-arming on every
+                         * event, unchanged value or not: holding the detent at
+                         * 0 or 100 is a person still turning the ring, and the
+                         * overlay belongs on screen while they do. A command on
+                         * a socket carries no such intent. */
+                        int moved = (cmd.value != volume);
                         volume = cmd.value;
-                        screensaver_on_activity(&ss, now);
-                        reaction_on_volume(&rx, volume, now); n_rearm++;
-                        avr_set_mute(0, 0, 0);
+                        n_vol++;
+                        peer_name(c, &vol_pid, vol_comm, sizeof vol_comm);
+                        if (moved) {
+                            double now = now_s();
+                            screensaver_on_activity(&ss, now);
+                            reaction_on_volume(&rx, volume, now); n_rearm++;
+                            avr_set_mute(0, 0, 0);
+                        }
                     }
                     else if (cmd.kind == CTL_BRIGHTNESS) {
                         brightness = cmd.value;
@@ -476,14 +532,14 @@ int main(void) {
                         char db[512];
                         int dn = snprintf(db, sizeof db,
                             "up=%.1f loops=%lu renders=%lu spin=%lu ready=%lu "
-                            "ctl=%lu keys=%lu rearm=%lu "
+                            "ctl=%lu keys=%lu rearm=%lu vol_cmds=%lu vol_from=%d:%s "
                             "frame_int=%.3f static_ticks=%d animating=%d "
                             "ovl=%d rx_age=%.3f child_alpha=%.3f "
                             "manual_active=%d manual_breathe=%d manual_spin=%d "
                             "ss_noaudio=%.1f ss_bright=%.4f "
                             "tap_fd=%d tap_should=%d quiet_since=%.1f vol=%d muted=%d\n",
                             dnow - start, n_loops, n_renders, n_spin, n_ready,
-                            n_ctl, n_keys, n_rearm,
+                            n_ctl, n_keys, n_rearm, n_vol, vol_pid, vol_comm,
                             frame_int, static_ticks, last_animating,
                             reaction_overlay_active(&rx, dnow), rx_age, (double)child_alpha,
                             comp.layers[manual_idx].active, manual.breathe, manual.spin,
