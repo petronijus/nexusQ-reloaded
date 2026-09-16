@@ -4,7 +4,191 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — 2026-09-05 — the upgrade that could not restart what it had just installed
+## [1.16.0] — 2026-09-16 — the health monitor that logged in 830 times, and the ring that never idled
+
+Kernel **6.18.48-r1**, device **r99 → r101**, `nexusqd` **r18 → r20**. Cut after
+a routine health sweep of a Q that had been up 2 d 21 h turned into six fixes,
+three of which were daemons quietly lying about themselves. Idle CPU on the box
+went from **1.60 % of a core to roughly 0.05 %**.
+
+### Fixed — the health monitor that opened a login session every five minutes (device **r99**)
+
+`nq-healthd` asked after librespot with `systemctl -M user@ --user show`. That
+`-M` transport does not talk to the user manager directly: it routes through
+`systemd-run` + `systemd-stdio-bridge`, which opens a full PAM **login session**
+for uid 10000 on every call. Rationing it to once per 300 s made it 5-minutely
+rather than constant, which is how it survived the r68 PAM fix — it never
+stopped, it just got quieter.
+
+Measured after 2 d 21 h of uptime: logind session counter at **c827** (~830
+sessions), ~1660 `Failed to read pids.max` warnings, **every one of the 13**
+`Failed to acquire peer PID` errors on an otherwise error-free boot, and a
+**645 MB journal**. The daemon that exists to measure the box was the loudest
+thing on it.
+
+Replaced with a small client for systemd's **varlink** Manager socket — root may
+open the uid-10000 socket directly — so the same question is answered with no
+session, no dbus-broker and **no fork at all**, which is what the file's header
+has claimed as the goal since r77. Measured on the device, 20 probes each: old
+path **120** churn journal lines, new path **0**.
+
+Two things testing caught that guessing would not: systemd **259 does not
+populate `NRestarts` over varlink** (on the desktop D-Bus climbed 0→4 while
+varlink stayed silent; the device's 262 tracks it exactly), recorded as a version
+floor; and varlink omits an optional int that is zero while the callers seed
+`*nrestarts` with the previous count, which would have frozen the value after a
+`reset-failed`.
+
+### Fixed — the frame deadline that asked poll for zero (`nexusqd` **r19**)
+
+`nexusqd` idled at **1.60 % of a core** with a ring that had been bit-identical
+for 9.5 hours — ten times the r13 idle-diet figure. Nothing external explained
+it: the audio tap was closed, PulseAudio emitted 0.2 events/s, the AVR raised
+**0.00 interrupts/s** across 6830 samples, the music fade clamps to an exact
+zero, the screensaver had been locked for days.
+
+So this adds the missing instrument first: **`nexusled debug`** returns the whole
+render-cadence state machine as one key=value line — free-running
+loop/render/ctl/key counters plus **every term of the `animating` gate reported
+separately**, because that gate is an OR and knowing it is true says nothing
+about which input made it true.
+
+It answered in one read. The daemon ran **400 loop iterations per second to
+render 20 frames**: 94.9 % of iterations polled with a **zero-millisecond
+timeout**. `poll(2)` takes whole milliseconds and the deadline conversion
+truncated, so the last sub-millisecond of every frame asked for 0 ms, returned
+instantly onto a deadline that had not arrived, and asked again — a busy-spin
+that ended only when the clock caught up. It never looked like a bug from
+outside: the ring rendered its exact 20.0 fps the whole time. `ppoll` takes a
+timespec, so the remainder is simply waited out.
+
+Measured across the 300 s screensaver lock: loops/render **20 → 1.02**, idle
+renders **20.0/s → 1.0/s** (the r13 stretch finally reached), idle CPU
+**1.60 % → ~0.05 %** of a core.
+
+### Fixed — a volume that never moved held the ring for three days (`nexusqd` **r20**)
+
+With the instrument in place, the stuck term on the 2 d 21 h process was the
+**volume reaction overlay**. Reproduced in eight seconds instead of three days:
+sixteen **identical** `vol 50` commands at 2 Hz pinned `frame_int` to the
+overlay's 16 ms, held `animating` true and blocked the 1 Hz idle stretch for as
+long as they kept arriving. `RX_TIMEOUT_S` is 1 s, so a client re-sending the
+current volume once a second owns the ring forever — and because the volume
+never moves, the frame never changes, `led_stall` climbs and `nexusled status`
+says ok. It looked exactly like a healthy static ring while rendering 62 frames
+a second at it.
+
+A `CTL_VOL` that does not **move** the volume is a state sync, not an
+interaction, and now re-arms nothing. The **key path is deliberately untouched**:
+holding the detent at 0 or 100 re-sends an unchanged volume too, but that is a
+person still turning the ring. Also adds `SO_PEERCRED` attribution
+(`vol_cmds`, `vol_from=<pid>:<comm>`), because the guard makes a chatty client
+harmless and a harmless bug is one nobody ever finds again.
+
+**Still not identified:** which process did this on that boot. No shipped service
+and no script on the device sends a `vol` command — all 19 `nexusqd_send` call
+sites were read on the device with the grep sanity-checked, and a
+filesystem-wide scan found nothing. The key path is excluded because it would
+have moved the volume, which sat at 48.
+
+### Fixed — the two diagnostic tools that reported things that were not true (device **r100**)
+
+Both found by the tools contradicting reality during the same sweep.
+
+`nq-health-report`'s failed-unit check scanned the **whole** snapshot for a line
+containing `.service` and `failed`. The kernel log satisfies that without a
+single unit having failed (`modprobe@efi_pstore.service: Failed to read
+pids.max`), so on a kernel without `CONFIG_CGROUP_PIDS` **every healthy boot
+reported a failed unit** while `systemctl --failed` was empty on all three
+managers. Now anchored to the `SYSTEMD` section and its actual
+`systemctl --failed` block. That single false positive was the only warn in the
+capture: the sweep now reads `worst_severity=ok`.
+
+`nq-diag-snapshot` asked the **system** manager about librespot — a **user** unit
+under uid 10000 — and printed `active=inactive sub=dead pid=0` while librespot
+ran as pid 630. Now routed per-unit to the manager the unit lives in, with the
+scope in a table so the rest of the audio chain cannot inherit the same trap.
+Deliberately not via `systemctl -M user@`, which is the r99 churn; verified a
+full snapshot run adds **zero** PAM session lines.
+
+### Fixed — normal boot progress logged as a warning, and a gigabyte of journal (device **r101**)
+
+`/dev/kmsg` files a line without a syslog prefix at the kernel's default level,
+which is **WARNING**. So three lines of entirely normal boot progress — `slot
+marker selects`, `mounted`, `switch_root ->` — landed in `dmesg -l err,warn` on
+every healthy boot. They are `KERN_INFO` now. The failure paths were **not**
+quieted with them: 8 of the 12 call sites are failures (a slot that will not
+mount, no `/sbin/init`, neither slot bootable, `switch_root` failing) and they
+are now `warn`/`err` at `<4>`/`<3>`, i.e. **louder** than before.
+
+The journal was **not** running uncapped on systemd's 10 % default, as first
+assumed: postmarketOS ships its own drop-in with `SystemMaxUse=1G`, so the
+645.5 MB measured was 65 % of a gigabyte and still climbing. Capped to **128 M**
+with a `20-` prefix that has to sort after `10-postmarketos.conf` to win.
+
+**Not done, on purpose:** `After=network-online.target` on `nexusq-mqtt`, to close
+the one failed DNS attempt at boot. The unit already carries a comment forbidding
+exactly that, because an `After=` on an enabled peer once formed the boot
+ordering cycle that made systemd **delete the start job**. The reconnect loop
+absorbs the race and the capture agrees: one `Errno -3` at 01:00:13, connected at
+01:00:19, then 2.9 days without a reconnect.
+
+### Added — the two kernel options the userspace kept asking for (kernel **6.18.48-r1**)
+
+`CONFIG_CGROUP_PIDS=y` — without it the pids controller is not exposed, so
+systemd logged `Failed to read pids.max` **twice on every unit start**, and
+`TasksMax`/`TasksAccounting` had been silently doing nothing.
+
+`CONFIG_PSI=y` — without `/proc/pressure/memory`, `systemd-oomd` is enabled and
+skipped on every boot, so the Q has had **no userspace OOM protection at all**.
+Overhead taken from the kernel's own Kconfig rather than guessed: code in the
+task wakeup/sleep paths, "too low to affect common scheduling-intense workloads
+in practice". `PSI_DEFAULT_DISABLED` deliberately unset — with
+`CONFIG_CMDLINE_FORCE=y` a `psi=1` would have to be baked in anyway.
+
+Stock parity does not apply and that was checked rather than skipped: stock is
+Linux **3.0.8**, `CGROUP_PIDS` arrived in 4.3 and `PSI` in 4.20.
+
+### Fixed — crossdirect lost argv[0], and a failed cross-compile shipped anyway (build)
+
+crossdirect hands any linker-involved invocation back to the foreign-arch
+compiler under qemu and execs it with **`argv[0]` left as the bare name**, while
+its own wrapper directory is still first in `PATH`. GCC derives its install
+prefix from `argv[0]`, so a bare `cc` resolves to
+`/native/usr/lib/crossdirect/armv7/cc` and it hunts for `cc1` only there:
+
+    cc: fatal error: cannot execute 'cc1': posix_spawnp: No such file or directory
+
+Proven by isolating the single variable — the **same absolute binary**, exec'd
+twice, differing only in `argv[0]`: `"cc"` dies, `"/usr/bin/cc"` builds a real
+ELF. Fixed at the source in `pmaports-patches/0001-crossdirect-absolute-argv0.patch`,
+applied to the pinned tree at checkout with a new phase that builds it before any
+armv7 package. **Not** `!pmb:crossdirect` — that maps to `QEMU_ONLY`, pure
+emulation, and an earlier attempt down that road was reverted.
+
+The second bug matters more: `docker-build.sh` ran the six daemon builds under
+`set +e` and **carried on** after a failure, so the rootfs would install the last
+successfully built pkgrel from the warm volume — a green build, 29/29 gates,
+shipping old code. Six sites now `exit 1`. That net caught something on its first
+outing: the 2026-08-31 "68 min → 6:39" run **never compiled `nexusqd` or
+`speexdsp` at all**; the work volume's apk timestamps show that day produced only
+`device-google-steelhead r91` and its firmware subpackage.
+
+Full pipeline is now **8 min 4 s** with crossdirect on for every aport.
+
+### Known issues
+
+- The `init-ab` log-level change ships **only by flash**. `nq-kernel-ota`'s
+  `stage-apk` takes the ramdisk from the image already in the boot slot,
+  deliberately — a ramdisk-less kernel OTA would promote a slot where everything
+  boots, everything looks healthy, and slot switching is silently gone. A device
+  updated over the air gets the kernel but keeps the old initramfs.
+- PulseAudio's default **source** is `roon_in` rather than the active sink's
+  monitor, so the LED visualiser would follow the Roon input instead of what the
+  speaker plays. The two loopbacks are correctly protected; the default-source
+  pointer is not. Not confirmed live — it needs music playing.
+
+### Earlier in this cycle — 2026-09-05 — the upgrade that could not restart what it had just installed
 
 `nexusq-control` **r36**, OTA-only. Follow-up to the v1.15.2 "Known issues" item.
 
