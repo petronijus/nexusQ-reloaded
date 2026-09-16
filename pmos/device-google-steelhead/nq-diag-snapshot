@@ -23,9 +23,45 @@ run() { sub "$*"; t "$@" 2>&1 || echo "(failed: $*)"; }
 # cat a file/glob if present
 catf() { for f in "$@"; do [ -e "$f" ] && { printf '# %s\n' "$f"; t cat "$f" 2>&1; }; done; }
 
+# Ask the manager a unit actually LIVES in. librespot (and the rest of the audio
+# chain) are USER units under uid 10000; asking the system manager about them
+# returns a confident "inactive/dead" for a perfectly healthy player. This
+# snapshot printed exactly that on 2026-09-16 while librespot was running as
+# pid 630 — a diagnostic reporting a dead service that is alive is worse than
+# one reporting nothing, because it sends the next reader hunting a fault that
+# does not exist.
+#
+# Do NOT reach for `systemctl -M user@` here. That transport routes through
+# systemd-run + systemd-stdio-bridge and opens a full PAM LOGIN SESSION on every
+# call — the 5-minute churn removed from nq-healthd in device r99. Dropping to
+# the uid first opens nothing.
+NQ_USER_UID="${NQ_USER_UID:-10000}"
+sctl() {   # sctl <system|user> <systemctl args ...>
+	_scope="$1"; shift
+	if [ "$_scope" = user ]; then
+		if have setpriv; then
+			t setpriv --reuid="$NQ_USER_UID" --regid="$NQ_USER_UID" --clear-groups \
+				env XDG_RUNTIME_DIR="/run/user/$NQ_USER_UID" \
+				systemctl --user "$@" 2>/dev/null
+		else
+			# honest beats confident: "unknown" is what we know, "inactive"
+			# would be the same lie this helper exists to stop telling.
+			echo unknown
+		fi
+	else
+		t systemctl "$@" 2>/dev/null
+	fi
+}
+unit_scope() {
+	case "$1" in
+		librespot|pulseaudio|pipewire|wireplumber|shairport-sync|nexusq-uac2-in|nq-uac2-silence) echo user ;;
+		*) echo system ;;
+	esac
+}
+
 brief() {
 	C=/sys/devices/system/cpu/cpu0/cpufreq
-	echo "freq=$(cat $C/scaling_cur_freq 2>/dev/null)kHz/$(cat $C/scaling_governor 2>/dev/null) x$(nproc 2>/dev/null) temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(systemctl is-active librespot 2>/dev/null) load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
+	echo "freq=$(cat $C/scaling_cur_freq 2>/dev/null)kHz/$(cat $C/scaling_governor 2>/dev/null) x$(nproc 2>/dev/null) temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(sctl user is-active librespot) load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
 }
 
 snapshot() {
@@ -91,7 +127,8 @@ done
 sec LED_AVR_NEXUSQD
 sub "nexusqd / librespot units"
 for u in nexusqd librespot; do
-	echo "$u: active=$(systemctl is-active $u 2>/dev/null) sub=$(systemctl show -p SubState --value $u 2>/dev/null) pid=$(systemctl show -p MainPID --value $u 2>/dev/null) restarts=$(systemctl show -p NRestarts --value $u 2>/dev/null) watchdog=$(systemctl show -p WatchdogUSec --value $u 2>/dev/null)"
+	sc="$(unit_scope $u)"
+	echo "$u [$sc]: active=$(sctl $sc is-active $u) sub=$(sctl $sc show -p SubState --value $u) pid=$(sctl $sc show -p MainPID --value $u) restarts=$(sctl $sc show -p NRestarts --value $u) watchdog=$(sctl $sc show -p WatchdogUSec --value $u)"
 done
 run nexusled status
 sub "nexusqd recent journal"; t journalctl -u nexusqd --no-pager -n 40 2>/dev/null || echo "(no journal)"
