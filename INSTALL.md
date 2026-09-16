@@ -1,15 +1,21 @@
 <!-- RELEASE: v1.16.0 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.15.2`** (device r93, kernel-ota r5, kernel `6.18.48-r0`,
-44 patches through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
+**This guide describes release `v1.16.0`** (device r101, `nexusqd` r20,
+`nexusq-control` r45, kernel-ota r5, kernel `6.18.48-r1`, 44 patches through
+`0046`, with 0004 and 0032 dropped -- upstream fixed both).
 
-> **v1.15.2 is a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): the WiFi
+> **v1.16.0 is a fix release on kernel `6.18.48-r1`**: a health monitor that had
+> been opening a PAM login session every five minutes (~830 of them in 2 d 21 h,
+> and a 645 MB journal), plus five more fixes found in the same sweep. Idle CPU
+> dropped from **1.60 % of a core to roughly 0.05 %**. See the changelog.
+>
+> **v1.15.2 was a bug-fix on `6.18.48-r0`**: the WiFi
 > watchdog reconnects a wlan0 its own heal left stranded (one unit sat dark for six
 > days on a healthy box), and a kernel OTA now carries the unit's own WiFi MAC / BT
 > address onto the new kernel instead of the first unit's. See the changelog.
 >
-> **v1.15.1 was a bug-fix on the same kernel** (`6.18.48-r0`, unchanged): an input
+> **v1.15.1 was a bug-fix on `6.18.48-r0`**: an input
 > whose PulseAudio loopback could be dragged onto another source, which made USB
 > audio or Roon silent while every check still passed. See the changelog.
 >
@@ -47,8 +53,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.16.0.img` (~6.4 MiB), `nexusq-rootfs-v1.16.0-sparse.img.zst`
-  (~630 MiB compressed, ~2.6 GiB raw; install `zstd` to decompress it, see step 2), `sha256sums-v1.16.0.txt`
+- release artifacts: `nexusq-boot-v1.16.0.img` (6.41 MiB), `nexusq-rootfs-v1.16.0-sparse.img.zst`
+  (**675 MiB** compressed, **2.65 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v1.16.0.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
@@ -74,6 +80,10 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     Not part of this guide until tagged.)_
 
 ### 1c. Updating without a reflash (post-v1.11.0)
+
+> **First install? Skip this whole section** — it is about a Q that is already
+> running ours. Go straight to **§1 Enter fastboot mode**, then **§1d** (unlock,
+> once per factory unit) and **§2**.
 
 A full reflash (the steps below) is only needed for a first install *(and was
 needed for a kernel change until 2026-08-18 — since kernel-OTA Phase 2 a kernel
@@ -151,28 +161,110 @@ stresses the integrated ~35 W SMPS and its single slow-blow fuse.
 > where the stock u-boot reads it; pre-v1.11.0 images cannot do this and must use
 > the power-cycle below.)
 
-### 1b. Mute-LED power-cycle — fallback + first-time bootstrap
+### 1b. Mute-sensor power-cycle — fallback + first-time bootstrap
 
 The only route on a fresh/unbooted device, on any pre-v1.11.0 image, or when you
-have no shell:
+have no shell. **Power the Q up first, then touch it** — the ordering matters and
+this guide had it backwards until 2026-09-16 (reported in issue #4 by someone
+flashing a never-unlocked unit, who could not get a red ring at all the old way):
 
-1. Unplug power.
-2. Put your palm over the top dome so you **cover the mute LED sensor**.
-3. Plug power in while keeping the sensor covered.
-4. The LED ring turns **solid red** -> you are in fastboot.
-5. Connect micro-USB to your PC and check: `fastboot devices`
+1. Unplug power. Keep your hands **off** the dome.
+2. Plug power in with the dome still **untouched**.
+3. The moment the **centre mute LED lights**, put a flat palm on the centre of
+   the dome. The window is roughly a second, so be ready before you plug in.
+4. Hold until the ring goes **solid red** -> you are in fastboot.
+5. **Lift off promptly** once it is red. See the warning below.
+6. Connect micro-USB to your PC and check: `fastboot devices`
+
+> **Why palm-first does not work.** The sensor is capacitive and the ring's AVR
+> microcontroller calibrates its baseline when *it* powers up. A palm already
+> resting on the dome is calibrated **into** that baseline and is never seen as a
+> touch. The stock U-Boot then asks the AVR for a queued key event
+> (`board_fbt_key_pressed()` -> `avr_get_key()`), gets "nothing queued", and boots
+> normally. So the touch has to land *after* the AVR is alive — which is exactly
+> what the centre LED lighting tells you. (U-Boot even waits up to 2 s and
+> re-probes if the AVR is not answering yet: `avr not detected` / `delaying 2000
+> milliseconds until we try again`.)
+
+> ⚠️ **Do not keep holding once the ring is red.** While in fastboot the
+> bootloader keeps polling the mute key every 100 ms, and a press held for **more
+> than 10 seconds** takes you to **recovery** instead
+> (`board_fbt_key_command()`: `mute key down more than %u seconds, starting
+> recovery`). Red ring -> lift your hand off.
+
+_(Both behaviours are read out of the stock bootloader itself —
+`bootloader-phantasm-steelheadb4h0j.img` in `reverse-eng/factory/tungsten-ian67k/`
+— not inferred from the symptom. See
+`docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.)_
+
+### 1d. Unlock the bootloader — once, on a unit that has never been unlocked
+
+A Nexus Q as it left the factory is **locked**, and a locked bootloader refuses
+every `fastboot flash`:
+
+```
+Sending 'boot' (6554 KB)      OKAY [  0.733s]
+Writing 'boot'                (bootloader) fbt_handle_flash: failed, device is locked
+FAILED (remote: 'device is locked')
+```
+
+Check first — you are looking for the `unlocked:` line:
+
+```bash
+fastboot getvar all 2>&1 | grep -E 'unlocked|secure|version-bootloader'
+# (bootloader) version-bootloader: steelheadB4H0J
+# (bootloader) secure: yes
+# (bootloader) unlocked: no        <- this one. "yes" -> skip the rest of §1d.
+```
+
+If it says `no`, unlock. It is **two commands with a 5-second window between
+them** — the second one is the confirmation, and there is no prompt to answer:
+
+```bash
+fastboot oem unlock
+# (bootloader) oem unlock requested:
+# (bootloader)    Unlocking forces a factory reset and could
+# (bootloader)    open your device up to a world of hurt.  If you
+# (bootloader)    are sure you know what you're doing, then accept
+# (bootloader)    in 5 seconds via 'fastboot oem unlock_accept'.
+
+fastboot oem unlock_accept        # <- within 5 s, or start over
+# (bootloader) Erasing userdata partition
+# (bootloader) Setting device to unlocked
+# OKAY [  4.846s]
+```
+
+Have the second command typed and waiting before you run the first. Miss the
+window and the bootloader just says `unlock pending expired` / `FAILoem unlock
+not requested`; re-run `fastboot oem unlock` and try again. The 5 s is
+hard-coded in the stock bootloader, so no amount of retrying widens it.
+
+- It **erases userdata**, which costs you nothing here: §2 overwrites that
+  partition anyway.
+- The device **stays in fastboot** afterwards — no re-entry, no power-cycle,
+  go straight to §2.
+- This is a **one-time** step. The unlock is stored in the bootloader
+  environment and survives reflashes; it is only undone by `fastboot oem lock`.
+- `fastboot oem unlock` on an already-unlocked unit is a harmless no-op
+  (`already unlocked`).
 
 ## 2. Flash
+
+> **First time on a factory unit? Do §1d first.** A locked bootloader accepts
+> `fastboot devices` and `fastboot getvar` perfectly happily and then fails the
+> very first `flash` with `device is locked`. One `fastboot getvar all | grep
+> unlocked` tells you in a second.
 
 ```bash
 # Boot image (kernel + appended DTB; ramdisk-less through the v1.12.0 line —
 # dev builds since 2026-08-20 carry the small A/B-slot initramfs, still well
 # under the limit) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# The v1.11.0 kernel is r45 (~5.3 MiB; 44 patches through 0044 + the
-# conservative-governor defconfig). The only change from v1.10.1's r44 is patch 0044
-# (fastboot-over-ssh reboot-reason write), so flashing boot is REQUIRED from v1.10.1
-# too, and always safe.
+# v1.16.0's boot image is kernel 6.18.48-r1, 6 719 488 B (6.41 MiB) -- 44 patches
+# through 0046. Flashing boot is always safe, and is REQUIRED coming from any
+# release on a different kernel revision.
+# (This comment described the v1.11.0 kernel, r45 on 6.12.12 at ~5.3 MiB, until
+#  2026-09-16 -- four kernel revisions after it stopped being true.)
 fastboot flash boot nexusq-boot-v1.16.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
@@ -181,7 +273,7 @@ fastboot flash boot nexusq-boot-v1.16.0.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The rootfs ships zstd-compressed (~2.08 GiB raw) -- decompress it first:
+# The rootfs ships zstd-compressed (675 MiB -> 2.65 GiB sparse) -- decompress it first:
 zstd -d nexusq-rootfs-v1.16.0-sparse.img.zst   # -> nexusq-rootfs-v1.16.0-sparse.img
 fastboot -S 100M flash userdata nexusq-rootfs-v1.16.0-sparse.img
 ```
@@ -198,7 +290,7 @@ only way to brick the device.
 
 ## 3. First boot
 
-1. Unplug power, wait 5 s, plug back in **without** covering the sensor.
+1. Unplug power, wait 5 s, plug back in **without touching the dome**.
 2. Watch HDMI: Tux logo -> kernel log -> a console. The **desktop is not started
    on boot** — it is on demand since v1.10.0, toggled from the companion app's
    Devices screen (it idles the GPU/display path and heats the sphere).

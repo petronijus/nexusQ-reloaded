@@ -126,15 +126,21 @@ Grab the [latest release](https://github.com/petronijus/nexusQ-reloaded/releases
 ```bash
 # 1. Enter fastboot. On a booted v1.11.0+ device just:
 #      ssh root@<Q> systemctl reboot --reboot-argument=bootloader   # → fastboot in ~15 s
-#    First-time / unbooted / pre-v1.11.0: unplug power, cover the top mute-LED
-#    sensor with your palm, plug power back in. The ring turns solid red.
+#    First-time / unbooted / pre-v1.11.0: plug power in with the dome UNTOUCHED,
+#    then palm the centre the moment the mute LED lights, and lift off as soon as
+#    the ring goes solid red. (Palm-first does not work — the capacitive baseline
+#    calibrates around your hand. Holding past red ≥10 s goes to recovery.)
 
-# 2. Decompress the rootfs and flash
+# 2. A factory unit is LOCKED — unlock it once, or every flash fails:
+fastboot getvar all 2>&1 | grep unlocked      # "unlocked: no" → the two lines below
+fastboot oem unlock && fastboot oem unlock_accept   # accept within 5 s; erases userdata
+
+# 3. Decompress the rootfs and flash
 zstd -d nexusq-rootfs-v*-sparse.img.zst
 fastboot flash boot      nexusq-boot-v*.img
 fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img   # -S chunking is REQUIRED
 
-# 3. Power-cycle without covering the sensor. Tux → kernel → desktop.
+# 4. Power-cycle without touching the dome. Tux → kernel → desktop.
 ```
 
 Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthrough in

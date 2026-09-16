@@ -25,7 +25,7 @@
 # Produces in output/:
 #   nexusq-boot-<ver>.img
 #   nexusq-rootfs-<ver>-sparse.img.zst   (all-RAW sparse, see raw2simg.py)
-#   sha256sums.txt
+#   sha256sums-<ver>.txt
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -82,7 +82,28 @@ if [ "$GUIDE_VER" != "$VER" ]; then
     echo "       then re-run. A guide naming last-but-four's files is worse than none." >&2
     exit 1
 fi
-echo "  INSTALL.md documents $GUIDE_VER"
+echo "  INSTALL.md marker says $GUIDE_VER"
+
+# ...and the marker alone is not the guide. v1.16.0 shipped with the marker
+# correctly reading v1.16.0 while the sentence under the title still said "This
+# guide describes release v1.15.2", naming the wrong kernel and the wrong device
+# revision -- the marker gate passed and the prose was a release behind, which is
+# the exact failure mode the marker was introduced to stop. So check the prose and
+# every artifact name the guide tells a first-timer to download.
+guide_needs() {
+    grep -qF "$1" INSTALL.md && return 0
+    echo "ERROR: INSTALL.md never mentions '$1'." >&2
+    echo "       The marker says $VER, so the body has to as well: a guide whose" >&2
+    echo "       filenames do not exist in the release is a broken first install." >&2
+    return 1
+}
+guide_fail=0
+guide_needs "This guide describes release \`$VER\`" || guide_fail=1
+guide_needs "nexusq-boot-$VER.img"                   || guide_fail=1
+guide_needs "nexusq-rootfs-$VER-sparse.img.zst"      || guide_fail=1
+guide_needs "sha256sums-$VER.txt"                    || guide_fail=1
+[ "$guide_fail" -eq 0 ] || exit 1
+echo "  INSTALL.md body names $VER and all three artifacts"
 
 echo "==> Boot image"
 cp "$BOOT" "$OUT/nexusq-boot-$VER.img"
@@ -98,11 +119,15 @@ zstd -19 -T0 --rm -q "$SPARSE"
 echo "==> Checksums"
 SHA=sha256sum
 command -v sha256sum >/dev/null || SHA="shasum -a 256"
-( cd "$OUT" && $SHA "nexusq-boot-$VER.img" "nexusq-rootfs-$VER-sparse.img.zst" > sha256sums.txt )
+# VERSIONED, like every release up to v1.15.2 -- and like INSTALL.md says. This
+# line wrote a bare sha256sums.txt until 2026-09-16, so v1.16.0 published one
+# asset the guide does not name and six releases of muscle memory do not expect;
+# download two releases into one directory and they silently overwrite each other.
+( cd "$OUT" && $SHA "nexusq-boot-$VER.img" "nexusq-rootfs-$VER-sparse.img.zst" > "sha256sums-$VER.txt" )
 
 echo
-ls -lh "$OUT/nexusq-boot-$VER.img" "$OUT/nexusq-rootfs-$VER-sparse.img.zst" "$OUT/sha256sums.txt"
-cat "$OUT/sha256sums.txt"
+ls -lh "$OUT/nexusq-boot-$VER.img" "$OUT/nexusq-rootfs-$VER-sparse.img.zst" "$OUT/sha256sums-$VER.txt"
+cat "$OUT/sha256sums-$VER.txt"
 
 # --- the other half of the release -------------------------------------------
 if [ "$PUBLISH_OTA" = "1" ]; then
@@ -124,4 +149,4 @@ scripts/verify-ota-parity.sh "$RAW"
 echo
 echo "Both tracks carry $VER. Upload the assets above with:"
 echo "  gh release create $VER output/nexusq-boot-$VER.img \\"
-echo "      output/nexusq-rootfs-$VER-sparse.img.zst output/sha256sums.txt"
+echo "      output/nexusq-rootfs-$VER-sparse.img.zst output/sha256sums-$VER.txt"

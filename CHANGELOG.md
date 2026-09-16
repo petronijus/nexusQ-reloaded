@@ -4,6 +4,100 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased] — the first install nobody here could still perform
+
+Triage of [issue #4](https://github.com/petronijus/nexusQ-reloaded/issues/4) from
+`mattv-nmg`, who flashed a **stock, never-unlocked** Nexus Q — the one starting
+condition no one here has had since before this guide existed. Docs only; no
+image change, so nothing to reflash.
+
+### Fixed — a factory unit is locked, and no document in this repo said so
+
+`INSTALL.md` §2 went straight to `fastboot flash boot`, which on a factory unit
+fails with `fbt_handle_flash: failed, device is locked`. The unlock is a
+**two-command dance with a 5-second window** (`fastboot oem unlock`, then
+`fastboot oem unlock_accept`) and appeared nowhere in the repo. New **§1d**
+documents it, §2 opens with a pointer to it, and the README quick start carries
+it as its own step. Details verified against the stock bootloader binary, not
+taken on trust: the 5 s is a literal `mov r1, #5`, and `oem unlock` answers
+`OKAY`/`FAILalready unlocked`, which is what makes the chained one-liner safe.
+
+### Fixed — §1b told you to palm the dome *before* applying power, which cannot work
+
+The reporter never once got a red ring the documented way. Correct gesture:
+power on **untouched**, palm the centre when the mute LED lights (~1 s window),
+hold to solid red, **let go**. The stock bootloader says why: U-Boot probes the
+ring AVR and reads a *queued* key event, and a palm already resting on the dome
+is calibrated into the capacitive baseline at AVR start-up, so no event is ever
+queued. And `board_fbt_key_command()` polls that key every 100 ms while in
+fastboot — held **>10 s it enters recovery instead**, the undocumented
+"different mode" the reporter hit. Both now in §1b and the README.
+
+### Not a defect — the "baked machine-id" (issue #4 comment)
+
+Checked rather than argued: the published `v1.15.1` rootfs was downloaded,
+expanded and mounted — **no** `/etc/machine-id`, no `/var/lib/dbus/machine-id`,
+no `random-seed`, empty `/var/log/journal/`, no ssh host keys. v1.16.0 is
+identical, and the reference unit's id differs from the reporter's. Nothing is
+baked.
+
+The "Aug 22 boots that predate my ownership" are the reporter's **own** first two
+boots. systemd 261.2-r1's build timestamp is `1787443412` = 2026-08-23 00:03:32
+UTC, which is its compiled-in `TIME_EPOCH`; with no clock source PID 1 jumps
+there, and in UTC−4 that instant is Aug 22 20:03:32 — one second before their
+first log line. The journal directory always matches the current machine-id
+because journald creates it from that id, so it can never testify to the id's
+origin.
+
+### Added — the release gate now asserts first-boot identity
+
+Because the only way to answer the report was to go and look at the artifact by
+hand. `scripts/release-preflight-no-secrets.sh` now also refuses an image with a
+non-empty `/etc/machine-id` (absent **or zero-length** passes — both mean "first
+boot" to systemd), a D-Bus machine-id, a `random-seed`, a non-empty
+`/var/log/journal/`, or **ssh host keys** — that last had never been gated, and a
+leaked host private key lets anyone impersonate every Q flashed from the release.
+Each check was watched failing against a deliberately contaminated ext4 image;
+one of them was wrong when written (`Size: 0$` also matches debugfs's
+`Fragment: … Size: 0` line, present on every inode) and the dirty image caught it.
+
+### Fixed — the install guide was a release behind its own marker, and named a file the release does not have
+
+Found while acting on issue #4, by reading the guide the way someone who owns
+nothing would. `INSTALL.md` carried `<!-- RELEASE: v1.16.0 -->` on line 1 while
+the sentence under the title still read **"This guide describes release
+`v1.15.2`"**, naming device r93 and kernel `6.18.48-r0` — v1.16.0 is device r101
+on `6.18.48-r1`. The marker gate added in v1.14.2 passed, because it only ever
+read the marker. Also corrected: the flash block still described the **v1.11.0**
+kernel (r45, 6.12.12, ~5.3 MiB), four kernel revisions stale; the rootfs was
+quoted as both "~2.6 GiB raw" and "~2.08 GiB raw" 220 lines apart, and is 2.65
+GiB; the download is 675 MiB, not ~630.
+
+And the guide told you to verify against `sha256sums-v1.16.0.txt`, which **is not
+in the v1.16.0 release** — `package-release.sh` writes a bare `sha256sums.txt`,
+so the six releases up to v1.15.2 that do carry a versioned name were named by
+hand. The script now writes `sha256sums-$VER.txt`. Two releases downloaded into
+one directory no longer overwrite each other's checksums.
+
+`scripts/package-release.sh` now gates on the guide's **body**, not just its
+marker: the "This guide describes release `$VER`" sentence and all three artifact
+filenames must be present. Watched failing against exactly the v1.16.0 shape
+(marker and filenames bumped, prose left behind) before being trusted.
+
+### Known issue — the TWL6030 RTC never runs (new, root-caused, not yet fixed)
+
+Falling back to a build epoch at all is the real bug. After 7 h 47 min of uptime
+the reference unit still reports `RTC time: Sat 2000-01-01 00:00:00`,
+`/sys/class/rtc/rtc0/since_epoch` frozen at `946684800`, and
+`hwclock -r` → `select() to /dev/rtc to wait for clock tick timed out`. Read off
+the PMIC directly: `RTC_CTRL_REG` (0x48:0x10) = **0x00**, i.e. `STOP_RTC` clear —
+the counter is stopped — while `RTC_STATUS_REG` = `0x80` with `POWER_UP` never
+cleared. `rtc-twl.c` starts the RTC only when it sees that bit clear, and it did
+**not** print `Enabling TWL-RTC`, so its write appears to be silently dropped
+while reads work. Consequence: every boot starts at systemd's `TIME_EPOCH` and
+**all logs before NTP lands are misdated by weeks**. Needs a stock-parity audit
+first; see `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+
 ## [1.16.0] — 2026-09-16 — the health monitor that logged in 830 times, and the ring that never idled
 
 Kernel **6.18.48-r1**, device **r99 → r101**, `nexusqd` **r18 → r20**. Cut after
