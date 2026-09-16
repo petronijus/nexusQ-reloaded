@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=100
+pkgrel=101
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -107,6 +107,7 @@ source="
 	nexusq-usb-gadget.service
 	nq-healthd.c
 	nq-diag-snapshot
+	20-nexusq-journal-size.conf
 	nq-healthd.service
 	nexusq-wifi-watchdog
 	nexusq-wifi-watchdog.service
@@ -201,6 +202,12 @@ package() {
 	# documented ssh path broke (2026-07-02).
 	install -Dm644 "$srcdir"/wifi-stable-mac.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/wifi-stable-mac.conf
+
+	# Cap the journal. pmOS already caps it at 1G via its own drop-in; this
+	# tightens it to something an appliance should use. The 20- prefix must sort
+	# after 10-postmarketos.conf. See the file's own header.
+	install -Dm644 "$srcdir"/20-nexusq-journal-size.conf \
+		"$pkgdir"/etc/systemd/journald.conf.d/20-nexusq-journal-size.conf
 
 	# Boot-log cleanup (cosmetic, no functional change):
 	#  - pam-base-auth + pam-base-session shadow /usr/lib/pam.d/base-{auth,session}
@@ -644,6 +651,7 @@ SKIP  nexusq-usb-gadget.sh
 SKIP  nexusq-usb-gadget.service
 SKIP  nq-healthd.c
 SKIP  nq-diag-snapshot
+SKIP  20-nexusq-journal-size.conf
 SKIP  nq-healthd.service
 SKIP  nexusq-wifi-watchdog
 SKIP  nexusq-wifi-watchdog.service

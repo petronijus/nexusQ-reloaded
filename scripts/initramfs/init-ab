@@ -11,7 +11,23 @@ mount -t proc     none /proc  2>/dev/null || true
 mount -t sysfs    none /sys   2>/dev/null || true
 mount -t devtmpfs none /dev   2>/dev/null || true
 
-say() { echo "[nq-ab] $*"; echo "[nq-ab] $*" > /dev/kmsg 2>/dev/null || true; }
+# /dev/kmsg takes a syslog <level> prefix, and without one the kernel files the
+# line at its default level -- which is WARNING. So three lines of entirely
+# normal progress ("slot marker selects", "mounted", "switch_root ->") landed in
+# `dmesg -l err,warn` on every healthy boot, and every sweep since has had to
+# explain them away. They are now KERN_INFO.
+#
+# The failure paths deliberately stay loud. Blanket-quieting all of these would
+# have made the noise go away by also hiding a slot that will not mount, which
+# is the one thing in this script anybody ever needs to see.
+_kmsg() {
+    _lvl="$1"; shift
+    echo "[nq-ab] $*"
+    echo "<$_lvl>[nq-ab] $*" > /dev/kmsg 2>/dev/null || true
+}
+say()  { _kmsg 6 "$@"; }   # normal progress
+warn() { _kmsg 4 "$@"; }   # wrong, but there is still something left to try
+err()  { _kmsg 3 "$@"; }   # the boot is not going to happen
 
 . /lib/nq-gadget.sh
 
@@ -38,14 +54,14 @@ other_slot() {
 # hands PID 1 to a root with no init and panics with nothing useful on screen,
 # on a board with no serial console. So check for the thing that has to be there.
 try_mount() {
-    [ -b "$1" ] || { say "$1 is not a block device"; return 1; }
+    [ -b "$1" ] || { warn "$1 is not a block device"; return 1; }
     mkdir -p /newroot
     if ! mount -t ext4 -o rw "$1" /newroot 2>/dev/null; then
-        say "$1 will not mount as ext4"
+        warn "$1 will not mount as ext4"
         return 1
     fi
     if [ ! -x /newroot/sbin/init ] && [ ! -L /newroot/sbin/init ]; then
-        say "$1 mounted but has no /sbin/init -- not a rootfs"
+        warn "$1 mounted but has no /sbin/init -- not a rootfs"
         umount /newroot 2>/dev/null || true
         return 1
     fi
@@ -56,14 +72,14 @@ if try_mount "$ROOT"; then
     say "mounted $ROOT"
 else
     ALT=$(other_slot "$ROOT")
-    say "falling back to $ALT"
+    warn "falling back to $ALT"
     if try_mount "$ALT"; then
         say "mounted $ALT"
         ROOT=$ALT
     else
-        say "NEITHER slot is bootable -- staying here so you can look at it"
-        nq_gadget_up "Nexus Q NO ROOTFS" || say "no way in; power-cycle"
-        say "p13 and p14 are both unmounted. /init must never exit, so it will not."
+        err "NEITHER slot is bootable -- staying here so you can look at it"
+        nq_gadget_up "Nexus Q NO ROOTFS" || err "no way in; power-cycle"
+        err "p13 and p14 are both unmounted. /init must never exit, so it will not."
         while :; do sleep 3600; done
     fi
 fi
@@ -83,6 +99,6 @@ done
 exec switch_root /newroot /sbin/init
 
 # Only reached if switch_root failed. Exiting here panics the kernel, so do not.
-say "switch_root FAILED"
+err "switch_root FAILED"
 nq_gadget_up "Nexus Q SWITCHROOT FAILED" || true
 while :; do sleep 3600; done
