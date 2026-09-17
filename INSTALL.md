@@ -1,11 +1,20 @@
-<!-- RELEASE: v1.16.0 -->
+<!-- RELEASE: v1.17.0 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.16.0`** (device r101, `nexusqd` r20,
-`nexusq-control` r45, kernel-ota r5, kernel `6.18.48-r1`, 44 patches through
-`0046`, with 0004 and 0032 dropped -- upstream fixed both).
+**This guide describes release `v1.17.0`** (device r101, `nexusqd` r20,
+`nexusq-control` r45, kernel-ota **r6**, kernel **`6.18.48-r2`**, 44 patches
+through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
 
-> **v1.16.0 is a fix release on kernel `6.18.48-r1`**: a health monitor that had
+> **v1.17.0 starts the clock.** The TWL6030 RTC had never run on any boot of this
+> port: the PMIC write-protects its RTC block while MSECURE is low, and our DTS
+> muxed the wrong pad for it. Three lines of DTS, ported verbatim from stock's
+> board init, and the Q keeps time across a reboot — `dmesg -l err,warn` is now
+> **empty**. Also here: the two out-of-box steps this guide never documented
+> (§1b, §1d), and a kernel OTA that no longer reports agreement it has not
+> reached. **Coming from v1.16.0 flash BOTH `boot` and `userdata`** — the kernel
+> changed. See the changelog.
+>
+> **v1.16.0 was a fix release on kernel `6.18.48-r1`**: a health monitor that had
 > been opening a PAM login session every five minutes (~830 of them in 2 d 21 h,
 > and a 645 MB journal), plus five more fixes found in the same sweep. Idle CPU
 > dropped from **1.60 % of a core to roughly 0.05 %**. See the changelog.
@@ -26,7 +35,9 @@
 > ⚠️ **The boot image GREW by ~200 KB.** Like for like (same 958 080-byte
 > initramfs): 6.12 packed 6 506 496 B, 6.18 packs **6 709 248 B**. That is still
 > under the ~6656 KB U-Boot caution and well under the 8192 KB partition, but the
-> headroom fell from 302 KB to **104 KB**. Quote the *staged* size, never the
+> headroom fell from 302 KB to 104 KB — and has kept shrinking since: v1.16.0
+> packed 6 719 488 B (94 KB) and **v1.17.0 packs 6 721 536 B, leaving 92 KB**.
+> Quote the *staged* size, never the
 > ramdisk-less boot.img, when judging this.
 > Not verified on 6.18: **ethernet after a cold power-cycle**, HDMI, fastboot-
 > over-ssh and USB Audio. See `docs/2026-08-31-kernel-6.18-lts-and-the-rollback-
@@ -53,8 +64,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.16.0.img` (6.41 MiB), `nexusq-rootfs-v1.16.0-sparse.img.zst`
-  (**675 MiB** compressed, **2.65 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v1.16.0.txt`
+- release artifacts: `nexusq-boot-v1.17.0.img` (6.41 MiB), `nexusq-rootfs-v1.17.0-sparse.img.zst`
+  (**677 MiB** compressed, **2.81 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v1.17.0.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
@@ -70,7 +81,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     the kernel changed, **coming from v1.10.1 flash BOTH `boot` and `userdata`** (a
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
-    `sha256sums-v1.16.0.txt`.
+    `sha256sums-v1.17.0.txt`.
   - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9**, and
     **v1.12.0** (built 2026-08-10: MQTT health telemetry `nexusq-mqtt`, device
     r67; gates PASS, not yet flashed) — are **not
@@ -260,12 +271,12 @@ hard-coded in the stock bootloader, so no amount of retrying widens it.
 # dev builds since 2026-08-20 carry the small A/B-slot initramfs, still well
 # under the limit) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v1.16.0's boot image is kernel 6.18.48-r1, 6 719 488 B (6.41 MiB) -- 44 patches
+# v1.17.0's boot image is kernel 6.18.48-r2 -- 44 patches
 # through 0046. Flashing boot is always safe, and is REQUIRED coming from any
 # release on a different kernel revision.
 # (This comment described the v1.11.0 kernel, r45 on 6.12.12 at ~5.3 MiB, until
 #  2026-09-16 -- four kernel revisions after it stopped being true.)
-fastboot flash boot nexusq-boot-v1.16.0.img
+fastboot flash boot nexusq-boot-v1.17.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -273,9 +284,9 @@ fastboot flash boot nexusq-boot-v1.16.0.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The rootfs ships zstd-compressed (675 MiB -> 2.65 GiB sparse) -- decompress it first:
-zstd -d nexusq-rootfs-v1.16.0-sparse.img.zst   # -> nexusq-rootfs-v1.16.0-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.16.0-sparse.img
+# The rootfs ships zstd-compressed (677 MiB -> 2.81 GiB sparse) -- decompress it first:
+zstd -d nexusq-rootfs-v1.17.0-sparse.img.zst   # -> nexusq-rootfs-v1.17.0-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.17.0-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
@@ -310,9 +321,9 @@ on first boot.
 > ⏰ **The clock before the first network sync.** On images up to and including
 > **v1.16.0 (kernel `6.18.48-r1`)** the TWL6030 RTC never runs — the PMIC dropped
 > every write to it because the board's MSECURE line was never driven high
-> (found 2026-09-16, root-caused and **fixed in kernel `6.18.48-r2` on
-> 2026-09-17**, DTS-only; not yet in a release or the OTA repo). Until a unit
-> takes that kernel, every boot starts at systemd's compiled-in build date —
+> (found 2026-09-16, **fixed in kernel `6.18.48-r2`**, DTS-only, shipped in
+> **v1.17.0**). Until a unit takes that kernel, every boot starts at systemd's
+> compiled-in build date —
 > weeks in the past — and `journalctl` stamps the early lines there until
 > `systemd-timesyncd` syncs. Those dates are not evidence of anything shipped in
 > the image (the rootfs carries no machine-id, journal or ssh host keys — the
@@ -441,7 +452,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |
-| RTC (TWL6030) | ✅ **runs since kernel `6.18.48-r2`** (2026-09-17, DTS-only — MSECURE driven high via gpio_wk6, pad `0x054`; not yet in a release or the OTA repo). On **≤ v1.16.0 / r1** the counter never runs, so the clock is systemd's build epoch until NTP and pre-NTP journal timestamps are weeks off _(this row said "🔴 stopped — queued, not fixed" on 2026-09-16)_. No backup cell on any kernel: a mains unplug resets the RTC until the next NTP sync — see §3 and the 2026-09-16 note |
+| RTC (TWL6030) | ✅ **runs since kernel `6.18.48-r2`** (v1.17.0, DTS-only — MSECURE driven high via gpio_wk6, pad `0x054`; not yet in a release or the OTA repo). On **≤ v1.16.0 / r1** the counter never runs, so the clock is systemd's build epoch until NTP and pre-NTP journal timestamps are weeks off _(this row said "🔴 stopped — queued, not fixed" on 2026-09-16)_. No backup cell on any kernel: a mains unplug resets the RTC until the next NTP sync — see §3 and the 2026-09-16 note |
 | TAS5713 25 W speaker amp | ✅ working (48 kHz; PulseAudio resamples) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022); the residual playback crackle was CLOSED in v1.8.1 (kernel patches 0041 sDMA read-priority + 0042 DPLL_ABE sys_clkin relock, hardware-verified 2026-07-12) |
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
@@ -472,9 +483,9 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
 - Kernel: mainline **6.18.48** + the patches in `kernel/patches/` (**44 as of
-  kernel `6.18.48-r2`**, 2026-09-17 — the r2 bump is DTS-only, patch 0003
-  regenerated with the MSECURE fix for the RTC, and is **not yet in a release**;
-  v1.16.0 ships `6.18.48-r1`, a defconfig-only bump over `r0` of 2026-08-31 —
+  kernel `6.18.48-r2`**, shipped in v1.17.0 — the r2 bump is DTS-only, patch 0003
+  regenerated with the MSECURE fix for the RTC; v1.16.0 shipped `6.18.48-r1`, a
+  defconfig-only bump over `r0` of 2026-08-31 —
   `CONFIG_CGROUP_PIDS` + `CONFIG_PSI`; the set is unchanged since r0, numbered
   through 0046, with **0004 and 0032 absent because upstream carries them now**),
   config `kernel/configs/steelhead_defconfig`.

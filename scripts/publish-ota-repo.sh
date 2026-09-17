@@ -225,6 +225,38 @@ else
   # discard their work, which is exactly the failure to stop on.
   git -C "$WT" push origin "HEAD:refs/heads/gh-pages"
   echo "published: $VERS"
+  # A push is not a publish. GitHub Pages rebuilds AFTER the push returns, so for
+  # a few tens of seconds the site still serves the previous index -- and this
+  # script used to return the moment git was done. On 2026-09-18 that raced the
+  # release: package-release.sh ran verify-ota-parity.sh immediately afterwards,
+  # the live index still said nexusq-kernel-ota r5, and the release gate failed on
+  # a repo that was in fact correct (measured again a moment later: r6). A gate
+  # that cries wolf is a gate people learn to skip, and this project has already
+  # paid for one of those. So the publisher does not return until the site serves
+  # what it just pushed -- then the gate downstream is checking something true.
+  _idx=https://petronijus.github.io/nexusQ-reloaded/nexusq/armv7/APKINDEX.tar.gz
+  _want_n=$(printf '%s\n' "$VERS" | tr ' ' '\n' | grep -c . || true)
+  echo "=== waiting for GitHub Pages to serve the new index ==="
+  _ok=0
+  _i=0
+  while [ "$_i" -lt 40 ]; do                      # 40 x 6 s = up to 4 minutes
+    _live=$(curl -fsSL -H 'Cache-Control: no-cache' "$_idx?ts=$(date +%s)" 2>/dev/null \
+            | tar xzO APKINDEX 2>/dev/null \
+            | awk '/^P:/{p=$0} /^V:/{print p" "$0}' | sed 's/P://;s/V://' | tr '\n' ' ')
+    if [ "$_live" = "$VERS" ]; then _ok=1; break; fi
+    _i=$((_i + 1))
+    sleep 6
+  done
+  if [ "$_ok" = 1 ]; then
+    echo "  live after ~$((_i * 6)) s — the index serves all $_want_n package(s) just pushed"
+  else
+    echo "  WARNING: after 4 minutes the live index still does not match what was pushed." >&2
+    echo "           Pushed: $VERS" >&2
+    echo "           Live:   ${_live:-<unfetchable>}" >&2
+    echo "           The push succeeded, so this is either Pages being slow or a" >&2
+    echo "           build failure on GitHub's side. Check the repo's Pages status;" >&2
+    echo "           do not assume the field can see this release yet." >&2
+  fi
 fi
 git -C "$REPO_ROOT" worktree remove "$WT" --force
 echo "=== done — https://petronijus.github.io/nexusQ-reloaded/nexusq ==="

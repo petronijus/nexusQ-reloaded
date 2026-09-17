@@ -49,7 +49,7 @@ notes in [`docs/`](docs/).
 
 | Subsystem | Status | Notes |
 |---|:---:|---|
-| 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; 6.18.48-r1 since v1.16.0 (6.12.12 → 6.18 in v1.15.0, upstream-supported to Dec 2028); boot log kept clean since v1.6.10, and on r2 `dmesg -l err,warn` is **empty** — the last line standing was the stopped RTC |
+| 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; 6.18.48-r2 since v1.17.0 (6.12.12 → 6.18 in v1.15.0, upstream-supported to Dec 2028); boot log kept clean since v1.6.10, and since v1.17.0 `dmesg -l err,warn` is **empty** — the last line standing was the stopped RTC |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; an idle box sits at 350 MHz ~90 % of the time even with a USB host attached and not playing · device r90 (2026-08-30) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
@@ -71,7 +71,7 @@ notes in [`docs/`](docs/).
 | ⚡ **Fastboot over ssh** | ✅ | `systemctl reboot --reboot-argument=bootloader` → fastboot in ~15 s (patch 0044, stock SAR-RAM reboot reason) · v1.11.0 |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
-| ⏰ **RTC** (TWL6030) | ✅ | runs since kernel 6.18.48-r2 (2026-09-17, unreleased) — MSECURE was never driven high, so every RTC write was dropped. Time now survives a reboot (measured); no backup cell, so a mains unplug still resets it until NTP |
+| ⏰ **RTC** (TWL6030) | ✅ | runs since kernel 6.18.48-r2 (v1.17.0) — MSECURE was never driven high, so every RTC write was dropped. Time now survives a reboot (measured); no backup cell, so a mains unplug still resets it until NTP |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | reverse-HCE — the phone hosts the card, the Q is the ISO-DEP reader (patch 0037) · v1.7.0 |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID; untested against a real TV/AVR |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | cold-boot reliable since v1.6.8 (pinmux); the default deploy path (~80 Mbit/s); no MAC EEPROM → random MAC per boot |
@@ -246,9 +246,8 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.15.0 ─ ✦ mainline 6.18 LTS · everything cross-compiled — a full build in 6:39   2026-08-31
 1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01
 1.15.2 ─ ✦ six days dark: the watchdog reconnects a stranded wlan0 · kernel OTA keeps the unit's identity   2026-09-05
-1.16.0 ─ ✦ the health monitor logged in 830× · the ring never idled — idle CPU 1.60 → 0.05 %   2026-09-16   ← latest tag
-(dev) ── ✦ the first install nobody here could still perform — bootloader unlock · palm gesture · identity gates   2026-09-16
-(dev) ── ✦ the RTC never ran — MSECURE never driven high (pad 0x050→0x054) · kernel 6.18.48-r2   2026-09-17
+1.16.0 ─ ✦ the health monitor logged in 830× · the ring never idled — idle CPU 1.60 → 0.05 %   2026-09-16
+1.17.0 ─ ✦ the clock starts: the RTC never ran — MSECURE never driven high (pad 0x050→0x054)   2026-09-18   ← latest tag
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

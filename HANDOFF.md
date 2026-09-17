@@ -296,9 +296,14 @@ ran" and `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-
   against `nexusq-uac2-in`'s rule that PA must read the aloop and never the
   async gadget. Whether PA ever opens it while `alsaloop` holds it was **not**
   measured (that would need the toggle ON). Both need a disposition.
-- **NOT done:** the r2 apk is **not published** to the OTA repo and **no release
-  is cut** (maintainer's call); the **cottage Q** is still on v1.15.2 (last
-  recorded 2026-09-05) and keeps the build-epoch clock until it takes r2;
+- ✅ **Released as v1.17.0** (2026-09-18) together with `nexusq-kernel-ota` r6:
+  full `PUBLIC_RELEASE=1` build, both release gates green (including the
+  first-boot-identity checks added the day before), OTA repo published and the
+  image-vs-repo parity gate passed. The MSECURE fix was verified in the DTB
+  unpacked from the shipped `boot.img`, not just in the source DTS.
+- **Still open:** the **cottage Q** is on v1.15.2 (last recorded 2026-09-05) and
+  keeps the build-epoch clock until it takes r2 — the kernel is in the OTA repo
+  now, but a kernel OTA is attended, so it needs someone at the cottage;
   `/usr/lib/clock-epoch` still not shipped (optional — it would only help the
   post-mains-unplug window now).
 

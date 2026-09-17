@@ -1442,7 +1442,7 @@ fi
 
 echo ""
 echo "=== Phase 8: Build all packages ==="
-echo "Running: pmbootstrap ${_ucross:-<cross>} build firmware-google-steelhead device-google-steelhead"
+echo "Running: pmbootstrap ${_ucross:-<cross>} build --arch armv7 firmware-google-steelhead device-google-steelhead"
 # firmware-google-steelhead must be built EXPLICITLY. It is a SEPARATE aport that
 # nothing build-depends on: it is only a *runtime* depend of the
 # device-google-steelhead-nonfree-firmware SUBPACKAGE. So `build device-google-steelhead`
@@ -1455,8 +1455,23 @@ echo "Running: pmbootstrap ${_ucross:-<cross>} build firmware-google-steelhead d
 # with a previously-built apk in the work volume; without --force pmbootstrap can
 # skip the rebuild and reuse a stale kernel/DTB (this is exactly how build #1
 # shipped the pre-fix DTB). Force a rebuild so the current patches always apply.
+# --arch armv7 is LOAD-BEARING, and its absence only bites a NOARCH dependency
+# that actually needs building (2026-09-18, nexusq-kernel-ota r6). Without it,
+# pmbootstrap's two halves disagree about what arch a noarch dep is for:
+#   * pmb/build/_package.py queues the dep with
+#     cross = autodetect.crosscompile(apkbuild, <parent's arch>) -> armv7 needs
+#     emulation and apkbuild["arch"] == ["noarch"], so cross = CROSS_NATIVE2;
+#   * but pkg_arch = autodetect.arch(apkbuild), which for noarch returns the
+#     NATIVE arch (x86_64) unless build_default_device_arch is set.
+# Strict mode then calls init_compiler(cross, pkg_arch=x86_64), which tries to
+# `apk add gcc-x86_64 g++-x86_64` -- cross toolchains that do not exist, because
+# x86_64 IS the native arch. The build dies with "g++-x86_64 (no such package)".
+# Naming the arch makes pkg_arch = armv7, so init_compiler installs gcc-armv7,
+# and the noarch apk lands in packages/edge/armv7/ next to every other one we
+# build (all the Phase 7c* noarch aports already pass --arch armv7 for this
+# reason). It is a no-op for the two armv7 packages named here.
 set +e
-pmbootstrap $_ucross build --force firmware-google-steelhead device-google-steelhead 2>&1
+pmbootstrap $_ucross build --force --arch armv7 firmware-google-steelhead device-google-steelhead 2>&1
 BUILD_RC=$?
 set -e
 echo ""

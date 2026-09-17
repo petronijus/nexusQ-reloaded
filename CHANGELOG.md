@@ -4,14 +4,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
-## [Unreleased] — the first install nobody here could still perform
+## [1.17.0] — 2026-09-18 — the first install nobody here could still perform, and the clock that never started
 
-Triage of [issue #4](https://github.com/petronijus/nexusQ-reloaded/issues/4) from
-`mattv-nmg`, who flashed a **stock, never-unlocked** Nexus Q — the one starting
-condition no one here has had since before this guide existed. Docs and release
-tooling on 2026-09-16; on 2026-09-17 the defect it exposed became **kernel
-`6.18.48-r2`** (DTS-only), running on the Prague Q via kernel OTA and **not yet
-published** to the OTA repo or cut as a release.
+Kernel **6.18.48-r2**, `nexusq-kernel-ota` **r6**; everything else unchanged from
+v1.16.0 (device r101, `nexusqd` r20, `nexusq-control` r45).
+
+A stranger's bug report turned into the oldest defect in the port. `mattv-nmg`
+flashed a **stock, never-unlocked** Nexus Q — the one starting condition no one
+here has had since before this guide existed — and hit two undocumented steps
+plus a journal full of dates from three weeks earlier. The first two were doc
+bugs. The third was not a bug in the image at all: it was the **TWL6030 RTC,
+which had never run on a single boot of this port**, because MSECURE was never
+driven high. Three lines of DTS, ported verbatim from stock's board init, and
+the Q keeps time. `dmesg -l err,warn` is now **empty** — the stopped RTC was the
+last line standing on a boot log otherwise clean since v1.6.10.
+
+**Coming from v1.16.0, flash BOTH `boot` and `userdata`** — the kernel changed.
+Flashing both is always safe. Already-fielded units can take the kernel over the
+air instead (`nq-kernel-ota`, attended).
 
 ### Fixed — a kernel OTA said the package database agreed when it did not (`nexusq-kernel-ota` **r6**)
 
@@ -55,6 +65,49 @@ field path end to end: the OTA repo is not baked into `/etc/apk/repositories` (a
 flash wipes it and `nexusq-control` re-adds it lazily on the first check), and it
 was a real `checkSystemUpdate` over the control bridge that put it back — which
 also confirmed the bridge reports the running kernel correctly as `6.18.48-r2`.
+
+### Fixed — Phase 8 was the one build step that never named its architecture
+
+The v1.17.0 build died on the first attempt with `g++-x86_64 (no such package)`
+— a cross toolchain that cannot exist, because x86_64 *is* the native arch.
+
+pmbootstrap 3.11.0's two halves disagree about what architecture a **noarch**
+dependency is for. `pmb/build/_package.py` queues it with
+`cross = autodetect.crosscompile(apkbuild, <parent's arch>)`, and with an armv7
+parent needing emulation that comes out `CROSS_NATIVE2`; but `pkg_arch =
+autodetect.arch(apkbuild)`, which for noarch returns the **native** arch unless
+`build_default_device_arch` is set. Strict mode then asks `init_compiler` for the
+cross toolchain of the native arch, and apk has nothing to give it.
+
+Phase 8 was the only `pmbootstrap build` in this script that did not pass
+`--arch armv7`; every Phase 7c* noarch aport already did, which is exactly why
+none of them ever hit this. It stayed latent for months because
+`nexusq-kernel-ota` and `nexusq-rootfs-ab` have no build phase of their own and
+were always cached at the requested pkgrel — **r6 is the first time a noarch
+dependency actually had to be built there**. The work volume still holds the
+evidence: stray `nexusq-kernel-ota-0.1.0-r3.apk` and `nexusq-rootfs-ab` apks
+sitting in `packages/edge/x86_64/`, noarch packages filed under the wrong arch by
+earlier runs.
+
+One flag. It is a no-op for the two armv7 packages Phase 8 names, and it puts
+noarch dependencies in `packages/edge/armv7/` with everything else.
+
+### Fixed — the OTA publisher returned before GitHub Pages served what it pushed
+
+Cutting this release failed its own parity gate: `verify-ota-parity.sh` reported
+`nexusq-kernel-ota — image 0.1.0-r6 vs repo 0.1.0-r5` seconds after
+`publish-ota-repo.sh` had printed `published: … nexusq-kernel-ota 0.1.0-r6`. Both
+were telling the truth. A push is not a publish — GitHub Pages rebuilds *after*
+the push returns, and for a few tens of seconds the site still serves the old
+index. Measured again a moment later: r6, and the gate passed 13/13.
+
+A gate that cries wolf is a gate people learn to skip, and this repo has already
+paid for one of those. So the fix goes in the publisher, where the knowledge is:
+it now polls the live index until it serves exactly the package set it just
+pushed (6 s apart, up to 4 minutes) and says how long that took. If it never
+matches, it says so loudly and names both sides rather than letting the caller
+believe the field can see the release. The parity gate downstream is then
+checking something that is actually true.
 
 ### Known issue — `twl6030_irq: Unmapped PIH ISR 20` on every USB cable event
 

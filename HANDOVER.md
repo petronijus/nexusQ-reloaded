@@ -37,8 +37,8 @@ recorded in HANDOFF.md's 2026-09-17 session):
   section claimed: the TWL6030 RTC counter was **stopped** (`RTC_CTRL_REG` 0x00,
   `since_epoch` frozen at 946684800 across the whole boot) because MSECURE was
   never driven high. **Fixed 2026-09-17 in kernel `6.18.48-r2`**, on the Prague
-  Q via kernel OTA (autopromoted to slot A 23:23 CEST) — not yet published to the
-  OTA repo, no release cut. On r2 `dmesg -l err,warn` at 1 min uptime is the one
+  Q via kernel OTA (autopromoted to slot A 23:23 CEST) and **released as
+  v1.17.0** on 2026-09-18. On r2 `dmesg -l err,warn` at 1 min uptime is the one
   `twl_rtc … Power up reset detected.` line, expected after a mains unplug (no
   backup cell). CHANGELOG `[Unreleased]`,
   `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`
