@@ -228,9 +228,17 @@ Findings are tagged by `kind`; interpret them like this:
   (environmental), (2) kscreen `.service` D-Bus naming (upstream libkscreen),
   (3) avahi `No NSS support for mDNS` (`nss-mdns` unpackaged), (4) a **one-shot**
   NM `sd-event.c:4488 assertion failed` at the RTC→NTP clock step (NM's vendored
-  libsystemd asserting on the huge CLOCK_REALTIME jump — no RTC battery; NM
+  libsystemd asserting on the huge CLOCK_REALTIME jump — the TWL6030 RTC is
+  **stopped**, see below; this said "no RTC battery" until 2026-09-16; NM
   continues fine, WiFi associates the same second; more than one per boot = a
-  finding). **Anything else is
+  finding). ⏰ **RTC (2026-09-16, queued, NOT fixed):** `since_epoch` frozen at
+  `946684800` for the whole boot, `hwclock -r` times out, `RTC_CTRL_REG` `0x00`,
+  `twl_rtc … Power up reset detected.` every boot — that warn line is a known
+  issue of ours, not external. Until NTP syncs the clock is systemd's
+  compiled-in `TIME_EPOCH` = the systemd package's **build date** (261.2-r1 →
+  2026-08-23), so **pre-NTP journal timestamps are the build date** — reason
+  from monotonic uptime. Next step: stock-parity audit of the RTC block.
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`. **Anything else is
   a REGRESSION** — including the whole former B/U residual set (B4 brcmfmac
   fw-probe, B10 hw-breakpoint, B16 ramoops, B21 L2C/gpmc/pmu/journald, B22/B23
   twl, U5 bluetoothd, U7 nsresourced), all now fixed/downgraded/disabled in

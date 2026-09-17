@@ -129,6 +129,20 @@ of the rigor expected; verify it still holds and audit whatever the caller asks.
 > (kernel `#33`). Same pinmux-miss class as the NFC bug — a reminder to always
 > verify pinmux at the IOPAD-offset level, never at the logical-signal level.
 
+> **Queued audit (2026-09-16) — the TWL6030 RTC block.** Mainline's `rtc-twl`
+> leaves the RTC **stopped** on this board: `RTC_CTRL_REG` (TWL6030 slave `0x48`
+> on i2c-0, `TWL_MODULE_RTC` base `0x00`, reg `0x10`) reads `0x00`, `RTC_STATUS_REG`
+> `0x11` stays `0x80` (`POWER_UP` never cleared), `since_epoch` is frozen at
+> 946684800 across a whole boot, the driver never logs `Enabling TWL-RTC`, and
+> writes to the block appear to be dropped while reads work. **Do not build a fix
+> from that hypothesis** — establish first what stock 3.0.8 `rtc-twl` (and, per the
+> 2026-07-12 lesson, x-loader / U-Boot) did with this block: whether stock ever set
+> `STOP_RTC`, which i2c module/slave it addressed, whether a TWL6030 `PHOENIX`
+> register (e.g. a clock-source or `RTC` power-resource / `CLK32KG`-style enable)
+> gates the counter, and whether the stock RTC actually ran (the stock userspace
+> `init.steelhead*.rc` may say). Evidence and the live register dump:
+> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4.
+
 > **Worked win (2026-07-12) — the audio-clock audit must include the BOOTLOADERS,
 > not just the stock kernel.** The metronomic ~1/s playback click was mainline
 > undoing a *bootloader* clock setting: stock **x-loader** (`prcm_init` tail, file

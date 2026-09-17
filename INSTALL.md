@@ -307,6 +307,14 @@ Login: user `user`, password `147147` (root has the same password --
 **change both** after first login: `passwd`). SSH host keys are generated
 on first boot.
 
+> ⏰ **The clock is wrong until the Q has network.** The TWL6030 RTC counter is
+> **stopped** (known issue, found 2026-09-16, not yet fixed), so every boot starts
+> at systemd's compiled-in build date — weeks in the past — and `journalctl` stamps
+> the early lines there until `systemd-timesyncd` syncs. Those dates are not
+> evidence of anything shipped in the image (the rootfs carries no machine-id,
+> journal or ssh host keys — the release gate asserts it). See
+> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+
 ## 4. Getting a shell (no keyboard needed)
 
 The Q runs an RNDIS network gadget on its micro-USB port:
@@ -426,6 +434,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |
+| RTC (TWL6030) | 🔴 **stopped** (found 2026-09-16) — the counter never runs, so the clock is systemd's build epoch until NTP and pre-NTP journal timestamps are weeks off; **queued, not fixed** (stock-parity audit first) — see §3 and the 2026-09-16 note |
 | TAS5713 25 W speaker amp | ✅ working (48 kHz; PulseAudio resamples) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022); the residual playback crackle was CLOSED in v1.8.1 (kernel patches 0041 sDMA read-priority + 0042 DPLL_ABE sys_clkin relock, hardware-verified 2026-07-12) |
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
@@ -456,9 +465,10 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
 - Kernel: mainline **6.18.48** + the patches in `kernel/patches/` (**44 as of
-  kernel `6.18.48-r0`, 2026-08-31** — numbered through 0046, with **0004 and 0032
-  absent because upstream carries them now**), config
-  `kernel/configs/steelhead_defconfig`.
+  kernel `6.18.48-r1`, v1.16.0** — unchanged since `6.18.48-r0`, 2026-08-31; the
+  r1 bump is defconfig-only, `CONFIG_CGROUP_PIDS` + `CONFIG_PSI` — numbered
+  through 0046, with **0004 and 0032 absent because upstream carries them now**),
+  config `kernel/configs/steelhead_defconfig`.
   ⚠️ A patch applying with zero fuzz does **not** mean it compiles: three of them
   (0005, 0029, 0007) applied cleanly against 6.18 and did not build. Pre-flight a
   full local kernel build before booking the shared build volume.

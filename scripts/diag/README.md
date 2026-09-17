@@ -450,5 +450,18 @@ inline fallback).
   loop (rate-limited to 1/s, sent even when the frame is unchanged / the ring is
   idle — including under r13's stretched 1 Hz idle cadence). systemd SIGABRTs and
   restarts a wedged daemon. *(Stale entry corrected 2026-08-13.)*
-- **RTC is wrong** (year 2000 until NTP) — timestamps use monotonic uptime;
-  worth fixing RTC/NTP independently.
+- **The RTC is STOPPED, not merely wrong** _(this bullet said "RTC is wrong (year
+  2000 until NTP)" until 2026-09-16)_ — timestamps in the diag data use monotonic
+  uptime for exactly this reason. Ground truth, read on the reference unit
+  2026-09-16 and again 2026-09-17: `/sys/class/rtc/rtc0/since_epoch` frozen at
+  `946684800` across the whole boot; `timedatectl` `RTC time: Sat 2000-01-01
+  00:00:00`; `hwclock -r` → `select() to /dev/rtc to wait for clock tick timed
+  out`; TWL6030 (i2c-0 `0x48`) `RTC_CTRL_REG` `0x10` = `0x00`, `RTC_STATUS_REG`
+  `0x11` = `0x80` unchanged; dmesg `twl_rtc … Power up reset detected.` and never
+  `Enabling TWL-RTC`. **Reading rule:** with no RTC value, PID 1 jumps the clock to
+  systemd's compiled-in `TIME_EPOCH` = the systemd package's **build** timestamp
+  (261.2-r1 → 2026-08-23 00:03:32 UTC), so every journal line **before
+  `systemd-timesyncd` syncs carries that date, not the real one** — do not read
+  pre-NTP timestamps as evidence of when something happened (issue #4 did).
+  **Queued work, not fixed**: stock-parity audit of the RTC block first.
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.

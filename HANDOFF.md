@@ -184,6 +184,89 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
+## Session 2026-09-16: **v1.16.0 released — the health monitor that logged in 830× · issue #4: a factory Q is locked, the palm gesture was backwards, and the RTC never ticks**
+
+**Released as `v1.16.0`** (tag published 2026-09-16 14:57Z): kernel **6.18.48-r1**,
+device **r99 → r101**, `nexusqd` **r18 → r20**, `nexusq-control` r45,
+`nexusq-kernel-ota` r5 (commits `cf334b1` `efc92cc` `d650ecb` `f641567` `e70dfa4`).
+One health sweep of a Q up 2 d 21 h became six fixes: `nq-healthd` had opened a
+PAM login session every 5 min (~830 sessions, a 645 MB journal — now a varlink
+client, zero forks); `nexusqd`'s frame deadline busy-spun on a 0 ms `poll` (idle
+CPU **1.60 % → ~0.05 %** of a core, new `nexusled debug`); an unchanged `vol`
+command had held the ring for three days; two diag tools reported things that
+were not true; `init-ab` logged normal progress at WARNING and the journal ran
+to a gigabyte (now 128 M); `CONFIG_CGROUP_PIDS` + `CONFIG_PSI` finally in the
+kernel. Build: crossdirect `argv[0]` fixed at the source, and a failed daemon
+build now fails the pipeline — it had been shipping the previous pkgrel silently.
+Full story: CHANGELOG `[1.16.0]`. The tag went out without a doc sweep; the
+surface was reconciled on 2026-09-17.
+
+- **Prague Q — probed read-only 2026-09-17 22:32 CEST:** apk db
+  `device-google-steelhead-1.0-r101`, `linux-google-steelhead-6.18.48-r1`,
+  `nexusqd-0.1.0-r20`, `nexusq-control-0.1.0-r45`, `nexusq-kernel-ota-0.1.0-r5`,
+  `nexusq-mqtt-0.1.0-r6`; uptime 1 d 7 h (booted ≈ 2026-09-16 15:19 CEST); the
+  `/root/nexusqd-r18-backup/` left by the hand-install is gone — the rootfs was
+  **reflashed**, not upgraded, so the MacBook flash step in HANDOVER.md is done.
+  `dmesg -l err,warn` is **5 lines, not the predicted 1**: `twl_rtc … Power up
+  reset detected.` plus repeated `twl6030_irq: Unmapped PIH ISR 20 detected`
+  (first at 145 s). That second line appears in no document and was **not
+  investigated** here — it is a finding for the next `nexusq-diag` run, not a
+  residual to wave through. No record exists of the post-flash FULL diag sweep.
+- **Cottage Q:** last recorded state v1.15.2 (r93 + control r36, 2026-09-05), not
+  reached since. Everything but the `init-ab` change reaches it over the air
+  (CHANGELOG `[1.16.0]` Known issues — kernel OTA keeps the slot's ramdisk).
+
+**Issue #4 (`mattv-nmg`, flashing a stock never-unlocked unit) — docs-only,
+commits `1afa76e` `1132bba`.** Full record, with the bootloader disassembly:
+`docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+
+- **A factory Q is LOCKED.** Every `fastboot flash` fails with `device is locked`
+  until `fastboot oem unlock` + `fastboot oem unlock_accept` inside a **5 s**
+  window (`mov r1, #5` in the stock U-Boot; `oem unlock` answers `OKAY` when
+  newly requested, `FAILalready unlocked` otherwise, so the `&&` one-liner is
+  safe). Documented nowhere in the repo until 2026-09-16 — the reference unit was
+  unlocked before any of this was written. Now INSTALL.md **§1d** and README
+  quick start step 2.
+- **The palm gesture was BACKWARDS** in INSTALL §1b for as long as it existed.
+  Correct: power on with the dome **untouched**, palm the centre the moment the
+  mute LED lights (~1 s window), hold to solid red, **lift off** — held **>10 s**
+  the bootloader enters recovery (`board_fbt_key_command()` polls the key every
+  100 ms). Palm-first cannot work: the AVR calibrates its capacitive baseline at
+  its own start-up and U-Boot reads a *queued* key event.
+- **"The image ships a machine-id and someone else's journal" — FALSE, settled
+  by mounting the artifacts.** Published v1.15.1 and v1.16.0 rootfs: no
+  `/etc/machine-id`, no `/var/lib/dbus/machine-id`, no random-seed, empty
+  `/var/log/journal/`, no ssh host keys; the reporter's id and ours differ. Their
+  "Aug 22" boots were their own, stamped at systemd 261.2-r1's build epoch
+  (`TIME_EPOCH` 1787443412 = 2026-08-23 00:03:32 UTC = Aug 22 20:03 UTC−4).
+  Issue #4 is deliberately **left open with no comment posted** (Petr's call).
+- 🔴 **NEW KNOWN ISSUE — the TWL6030 RTC is STOPPED, not merely unbacked.**
+  `RTC_CTRL_REG` (i2c-0 `0x48`, reg `0x10`) reads `0x00` (`STOP_RTC` clear),
+  `RTC_STATUS_REG` stays `0x80`, `/sys/class/rtc/rtc0/since_epoch` is frozen at
+  946684800 (7 h 47 min into the 09-16 boot; still 946684800 on 2026-09-17 after
+  1 d 7 h), `hwclock -r` times out, and rtc-twl never printed `Enabling
+  TWL-RTC` — writes to the RTC block look silently dropped while reads work.
+  Consequence: **every boot starts at systemd's `TIME_EPOCH`, so every log line
+  before NTP lands is misdated by weeks** — precisely what sent issue #4 down the
+  wrong path. **Queued work, not fixed.** The next step is a **stock-parity
+  audit** of the RTC block (stock 3.0.8 `rtc-twl` and, per the 2026-07-12
+  lesson, the bootloaders), NOT a fix built from the hypothesis. The earlier
+  "the board has no RTC" lines in this file were wrong and are marked so where
+  they stand.
+- **Release tooling hardened:** `package-release.sh` writes
+  **`sha256sums-$VER.txt`** (it had always written a bare `sha256sums.txt`; the
+  versioned name on every earlier release was typed by hand at upload —
+  `sha256sums-v1.16.0.txt` was uploaded to the v1.16.0 release and the bare file
+  deliberately left beside it) and gates on the INSTALL.md **body** — the "This
+  guide describes release `$VER`" sentence plus all three artifact filenames —
+  not just the `<!-- RELEASE: -->` marker, which had let the prose sit a release
+  behind (v1.15.2 / r93 / 6.18.48-r0) while the marker said v1.16.0.
+  `release-preflight-no-secrets.sh` now also asserts **first-boot identity**:
+  `/etc/machine-id` absent or zero-length, no `/var/lib/dbus/machine-id`, no
+  `/var/lib/systemd/random-seed`, empty `/var/log/journal/`, **no ssh host keys**
+  (never gated before). Each check was watched failing against a contaminated
+  ext4 image first.
+
 ## Handover 2026-09-06 — continuing on the PC
 
 Two more app fixes after 1.18.0, both unreleased (**1.18.1**): updates survive
@@ -895,7 +978,8 @@ tree holds the r80 source (`nq-healthd.c` ×2, APKBUILD) + the
   recommended: Petr pinned the router's 5 GHz radio to **ch36**, the Q
   re-associated on its own (**−52 dBm, ch36/5180 MHz**), timesyncd fixed the
   clock (it had sat in **year 2000** — no RTC, no NTP off the USB link), MQTT
-  reconnected.
+  reconnected. _(2026-09-16: "no RTC" is wrong — the TWL6030 RTC exists and is
+  **stopped**; see the 2026-09-16 session above.)_
 - **NEW BUG, fixed — `nq-healthd` rotation leak (r77–r79, fixed r80):**
   `rotate_if_big()` renamed `health.jsonl`→`.1` but never closed the open
   `FILE *`, so the daemon wrote into the renamed inode forever (`.1` at
@@ -971,7 +1055,10 @@ leftovers cleaned up.
 - **schedutil is closed**: it beats conservative on 350 MHz residency (94.75 vs
   91.22 %) and is identical in power, because it spends 30× longer at 1200 MHz.
   Residency alone misleads — price the mix.
-- **The board has no RTC**, so every boot starts at 2000-01-01 and DNSSEC fails
+- **The board has no RTC** _(wrong — corrected 2026-09-16: it has the TWL6030 RTC
+  and the counter is **stopped**; the clock actually starts at systemd's
+  `TIME_EPOCH`, not 2000-01-01, see the 2026-09-16 session)_, so every boot starts
+  without a valid time and DNSSEC fails
   until timesyncd fixes the clock **~173 s in** (now from IP literals, device
   r76). Anything needing DNS earlier must tolerate that window.
 - **Stock u-boot has no fallback**: an unbootable trial kernel stops the device
@@ -4244,7 +4331,13 @@ userdata     13.17 GB   ext4    (rootfs target)
 ```
 
 ### Fastboot Mode
-- Enter: Cover mute LED sensor during power-on -> solid red LED
+- Enter: power on with the dome **untouched**, palm the centre the moment the
+  mute LED lights, hold to solid red, then **lift off** (held >10 s = recovery).
+  _(This line said "cover the sensor during power-on" until 2026-09-16 — that
+  ordering cannot work; INSTALL.md §1b has the mechanism.)_ On a booted
+  v1.11.0+ image: `systemctl reboot --reboot-argument=bootloader`.
+- A **factory unit is locked**: `fastboot oem unlock && fastboot oem unlock_accept`
+  (5 s window) once, or every `flash` fails `device is locked` (INSTALL.md §1d).
 - The device is **unbrickable** as long as bootloader is never overwritten
 - Serial: `AW1S12241020`
 - Bootloader: `steelheadB4H0J` (U-Boot 2011.09-rc1, Apr 2012)

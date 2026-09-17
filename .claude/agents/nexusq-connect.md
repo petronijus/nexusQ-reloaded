@@ -153,6 +153,14 @@ to get a shell" and stop. Otherwise probe the transports below.
 busybox/util-linux `reboot` does NOT forward the argument. This means you no
 longer need a hands-on mains power-cycle to flash — do it yourself over ssh (only
 a *fresh/unbooted* or pre-0044 device still needs the mute-LED power-cycle).
+**The mute-LED power-cycle, correctly (2026-09-16 — INSTALL.md §1b had it
+backwards):** power on with the dome **untouched**, palm the centre the moment the
+mute LED lights (~1 s window), hold to solid red, **lift off** — held >10 s the
+bootloader goes to **recovery** instead. Palm-first never works (the AVR calibrates
+its capacitive baseline around the hand). And a **factory unit is LOCKED**: it
+answers `fastboot devices`/`getvar` fine and fails the first `flash` with `device
+is locked` — `fastboot oem unlock && fastboot oem unlock_accept` (5 s window, once;
+INSTALL.md §1d) before handing back "in fastboot, ready to flash".
 
 ## Transport A — eth-direct cable (host `enp7s0` ↔ device eth0)
 - ✅ **Enumerates from a cold boot on `#33`+ (v1.6.8, task #17 CLOSED

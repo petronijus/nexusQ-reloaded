@@ -666,10 +666,23 @@ report it:
      avahi's publish path for librespot Spotify-Connect zeroconf works fine);
   4. **NM `sd-event.c:4488 assertion failed`** — a ONE-SHOT assert from
      NetworkManager's **vendored libsystemd**, fired exactly at the RTC→NTP
-     clock step (no RTC battery → CLOCK_REALTIME jumps years); NM continues
-     fine, WiFi associates the same second. External/upstream (added
-     2026-07-13, v1.8.2 acceptance). More than one occurrence per boot, or any
-     NM malfunction around it, IS a finding.
+     clock step (CLOCK_REALTIME jumps weeks — see the RTC fact below; this
+     said "no RTC battery" until 2026-09-16); NM continues fine, WiFi
+     associates the same second. External/upstream (added 2026-07-13, v1.8.2
+     acceptance). More than one occurrence per boot, or any NM malfunction
+     around it, IS a finding.
+  ⏰ **RTC fact (2026-09-16, queued — NOT fixed):** the TWL6030 RTC counter is
+  **stopped** — `/sys/class/rtc/rtc0/since_epoch` frozen at `946684800` across a
+  whole boot, `hwclock -r` times out, `RTC_CTRL_REG` (i2c-0 `0x48`:`0x10`) `0x00`,
+  dmesg `twl_rtc … Power up reset detected.` every boot and never `Enabling
+  TWL-RTC`. Consequences for a sweep: (a) that `twl_rtc` warn line is **ours**, a
+  known issue, not an external residual; (b) until `systemd-timesyncd` syncs,
+  the wall clock is systemd's compiled-in **`TIME_EPOCH` = the systemd package's
+  build date** (261.2-r1 → 2026-08-23 00:03:32 UTC), so **pre-NTP journal
+  timestamps are the build date, not when it happened** — reason from monotonic
+  uptime, never from those dates. Next step is a stock-parity audit of the RTC
+  block, not a DTS guess.
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
 The whole former B/U residual set (B4 brcmfmac fw-probe, B10 hw-breakpoint, B16
 ramoops, B21 L2C/gpmc/pmu/journald-BPF+ACL, B22/B23 twl, U5 bluetoothd
 system-config, U7 nsresourced, U4 HDMI-audio, U6 gkr-pam) is **FIXED / downgraded

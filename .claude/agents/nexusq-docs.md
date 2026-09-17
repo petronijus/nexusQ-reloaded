@@ -58,7 +58,16 @@ Our docs:
   ledger with the reason — README is never silently skipped.
 - **INSTALL.md** — the flash guide (fastboot steps, partition names, size limits,
   the "never touch xloader/bootloader" warning, boot quirks). Update if the image,
-  boot.img constraints, or flash procedure changed.
+  boot.img constraints, or flash procedure changed. **Its body is release-gated
+  (2026-09-16):** `package-release.sh` refuses to tag unless the "This guide
+  describes release `vX.Y.Z`" sentence AND all three artifact filenames
+  (`nexusq-boot-vX.Y.Z.img`, `nexusq-rootfs-vX.Y.Z-sparse.img.zst`,
+  `sha256sums-vX.Y.Z.txt`) name the release — bumping the `<!-- RELEASE: -->`
+  marker alone is exactly the failure that let the prose sit a release behind.
+  Bump the title block, the artifact list, the §2 flash block and the sizes
+  together. The gesture in §1b is "power on untouched, palm when the mute LED
+  lights, lift off" and §1d is the one-time bootloader unlock — do not let either
+  regress to the pre-2026-09-16 wording.
 - **HANDOFF.md** — the living cross-session handoff. Keep the "current state /
   what works / what's broken / next steps" honest.
 - **PLAN.md** — roadmap/milestones, FORWARD-LOOKING. Tick off what shipped; adjust

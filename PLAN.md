@@ -3,6 +3,45 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🔴 QUEUED (2026-09-16) — the TWL6030 RTC never runs · and the first install nobody here could still perform
+>
+> Issue #4 (a factory, never-unlocked unit) found two real doc bugs — a locked
+> bootloader needs `fastboot oem unlock` + `oem unlock_accept` within **5 s**, and
+> the palm gesture was **backwards** (power on untouched, palm when the mute LED
+> lights, lift off at red; held >10 s = recovery) — both fixed in INSTALL.md
+> §1b/§1d and the README quick start. Its third claim (a baked machine-id) was
+> **false**, settled by mounting the published rootfs, and chasing it exposed the
+> real defect: **the RTC counter is stopped** (`RTC_CTRL_REG` 0x00, `since_epoch`
+> frozen at 946684800, `hwclock -r` times out), so every boot starts at systemd's
+> `TIME_EPOCH` and every pre-NTP log line is misdated by weeks.
+> **Not fixed — queued.** Next step is a **stock-parity audit of the RTC block**
+> (stock 3.0.8 `rtc-twl` and the bootloaders, per the 2026-07-12 lesson) before
+> any DTS/kernel change; a cheap interim once that is settled is
+> `/usr/lib/clock-epoch` stamped with the image build date. Release tooling
+> hardened alongside: versioned `sha256sums-$VER.txt`, an INSTALL.md **body**
+> gate, and first-boot-identity gates (machine-id, dbus id, random-seed, journal,
+> **ssh host keys**) in the no-secrets preflight.
+> → CHANGELOG [Unreleased] ·
+> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`
+
+> ## ✅ SHIPPED (2026-09-16, v1.16.0 — kernel 6.18.48-r1 · device r101 · nexusqd r20) — the health monitor that logged in 830 times, and the ring that never idled
+>
+> One health sweep, six fixes: `nq-healthd` over systemd **varlink** (it had
+> opened a PAM login session every 5 min — ~830 of them, a 645 MB journal);
+> `nexusqd`'s 0 ms `poll` busy-spin (idle CPU **1.60 % → ~0.05 %**, new
+> `nexusled debug`) and the unchanged-`vol` overlay that held the ring for three
+> days; two diag tools that reported untruths; `init-ab` progress demoted from
+> WARNING + journal capped 1 G → 128 M; `CONFIG_CGROUP_PIDS` + `CONFIG_PSI`.
+> Build: crossdirect `argv[0]` fixed at the source, and a failed daemon build now
+> fails the pipeline (8 min 4 s full run). Boot image **6 719 488 B** — the
+> U-Boot headroom flagged under v1.15.0 is now **~94 KB**. On the Prague Q by
+> flash 2026-09-16 (verified in its apk db 2026-09-17).
+> ⚠️ Open (forward-looking): the `init-ab` change ships **only by flash** (kernel
+> OTA keeps the slot's ramdisk by design); PulseAudio's default *source* is
+> `roon_in`, not the active sink's monitor (unconfirmed live); the client that
+> spammed `vol` on that boot was never identified; the cottage Q is still on
+> v1.15.2 as last recorded. → CHANGELOG [1.16.0]
+
 > ## ✅ SHIPPED (2026-09-05, v1.15.2 — device r93 + nexusq-kernel-ota r5) — six days dark, and the OTA that renamed a unit
 >
 > The cottage Q sat healthy but linkless for six days: the watchdog's heal
@@ -44,7 +83,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > slot in 48 s with zero dmesg errors and stock VDD_MPU voltages. Everything is
 > now cross-compiled — a full build **4080 s → 399 s**.
 > ⚠️ Still open, and forward-looking: **the boot image grew ~200 KB** (staged
-> 6 709 248 B), leaving only **104 KB** of U-Boot headroom — the next LTS bump
+> 6 709 248 B; **6 719 488 B in v1.16.0 → ~94 KB**), leaving only **104 KB** of U-Boot headroom — the next LTS bump
 > (due ~Nov/Dec 2026) has to be measured against that ceiling before it is
 > planned. Ethernet from cold, HDMI, fastboot-over-ssh (0044) and USB-host
 > re-probe are **unverified on 6.18**, and the kernel-OTA rollback fix was seen
@@ -1934,7 +1973,7 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 
 | Subsystem | Status | Detail |
 |-----------|--------|--------|
-| Kernel + boot | ✅ works | mainline **6.18.48** (was 6.12.12 until v1.15.0, 2026-08-31), ≤8 MB image — but the staged boot image is 6 709 248 B, only 104 KB under the U-Boot caution. _(2026-09-01: the long-standing "flaky boot ~1 in 3 (retry helps)" claim is REMOVED — it dated from v1.5 and no longer holds in practice.)_ _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ _(2026-07-30, v1.11.0: **fastboot is enterable over ssh** — `systemctl reboot --reboot-argument=bootloader` (kernel patch **0044** writes the stock reboot-reason to SAR RAM `0x4A326A0C`); no more mains power-cycle. Must be `systemctl`, not busybox `reboot`.)_ |
+| Kernel + boot | ✅ works | mainline **6.18.48** (was 6.12.12 until v1.15.0, 2026-08-31), ≤8 MB image — but the staged boot image is 6 709 248 B, only 104 KB under the U-Boot caution _(v1.16.0: 6 719 488 B, ~94 KB under)_. _(2026-09-01: the long-standing "flaky boot ~1 in 3 (retry helps)" claim is REMOVED — it dated from v1.5 and no longer holds in practice.)_ _(Updated 2026-06-28: now built with Alpine GCC 15.2 and boots — the old "GCC 13.3 only" no longer holds for the pmbootstrap path.)_ _(2026-07-30, v1.11.0: **fastboot is enterable over ssh** — `systemctl reboot --reboot-argument=bootloader` (kernel patch **0044** writes the stock reboot-reason to SAR RAM `0x4A326A0C`); no more mains power-cycle. Must be `systemctl`, not busybox `reboot`.)_ |
 | HDMI video | ✅ works | omapdrm, framebuffer console |
 | Kernel OTA (A/B slots) | ✅ works | _(2026-08-18, `nexusq-kernel-ota` r3)_ **a kernel can be applied without a cable.** `nq-kernel-ota stage-latest` fetches the kernel apk (`apk fetch`, never `apk add`) → writes the **trial slot** p8 with read-back verify → `try` arms the SAR reason → trial boot → `nexusq-kernel-ota-promote` health-gates it and copies trial→boot p9. **Slot A is never written with an image that has not already booted.** Proven end to end on hardware: `6.12.12` → `6.12.12-r48`, SSH back in 36 s, promoted unattended. ⚠️ The **failure** path still needs physical access — a kernel that boots is safe to deploy remotely, one that does not is a drive to the device (SAR-RAM-vs-power-cycle unresolved). CLI only, no app action yet. `docs/2026-08-18-kernel-ota-phase2.md` _(2026-09-05, **r5**: `stage-apk` carries the booting slot's WiFi MAC / BT address onto the new DTB, or refuses — on r3/r4 a kernel OTA renamed any non-first unit to the DTS's first-unit identity, measured on the cottage Q. `status`/`identity` show what each slot claims to be.)_ |
 | HDMI audio | 🟠 needs audio-EDID sink | _(Updated 2026-07-02)_ the ALSA card registers, but with no audio-capable EDID sink PulseAudio can't build a profile for `platform-omap-hdmi-audio.1.auto` (item U4). Speaker path (TAS5713) is the working audio output |
@@ -1945,7 +1984,8 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 | Bluetooth (BCM4330) | ✅ works | _(firmware corrected 2026-07-14; BD_ADDR/config 2026-07-06, v1.6.10)_ `hci0` up, `BCM4330B1.hcd` patchram loads every boot. **The BT firmware was the WRONG board blob (`Proxima - BCM4330B1 NoExtLNA`, build 0482, md5 `16db686…`) through v1.8.2 — replaced 2026-07-14 with the stock steelhead `Google Phantasm BCM4330B1` (build 0749, md5 `7e5bb859…`, 51813 B; firmware-google-steelhead r2).** **BD_ADDR is the real per-device `F8:8F:CA:20:49:E5`** (DTS `local-bd-address` + kernel patch 0036 teaching btbcm the `43:30:A0` placeholder) — was the non-unique, group-bit-set placeholder `43:30:A0:00:00:00`. The U5 `bluetoothd: Failed to set default system config` line is FIXED (bluez `main.conf [LE]` populated so the MGMT TLV is non-empty) — not the earlier "benign" |
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
-| TMP101 temp sensor | ✅ works | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
+| TMP101 temp sensor | ✅ works |
+| RTC (TWL6030) | 🔴 **stopped** | _(2026-09-16)_ the counter never runs — `RTC_CTRL_REG` (0x48:0x10) `0x00`, `since_epoch` frozen at 946684800 across a whole boot, `hwclock -r` times out, `rtc-twl` never logged `Enabling TWL-RTC` (writes to the block look dropped while reads work). Every boot therefore starts at systemd's `TIME_EPOCH` and pre-NTP journal lines are weeks off. **Queued, not fixed** — stock-parity audit of the RTC block first (stock 3.0.8 `rtc-twl` + bootloaders). `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | our in-tree driver `leds-steelhead-avr` (patch 0005, rebased onto every kernel — 6.18.48 today; Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | ✅ works from cold | _(✅ FULLY FIXED 2026-07-06, task #17 CLOSED — was "🟠 enumeration intermittent" 2026-07-05, briefly "CLOSED" 2026-07-04, "🟠 sw bug", and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), the "flap" was root-caused 2026-07-04 as **NM's serverless-DHCP retry loop** (fixed by baked eth0 NM profiles, device r21, v1.6.7: `no-auto-default=eth0` + `eth-lan` + `eth-direct` static + host `eth-direct-host`; `ssh root@10.42.0.2` works). The **enumeration** half was root-caused 2026-07-06 as a **pinmux miss**: `gpio_1` NENABLE = pad `kpd_col2` @ padconf `0x186`, which `ethernet_gpios` never muxed → gpiolib drove the DATAOUT latch (debugfs "asserted") but the pad stayed safe_mode → chip never powered → CCS=0 (the "0/3 vs 3/3" was stock priming, not a race). Fixed by the DTS pad mux (patch 0003, kernel `#33`, commit e33a1b4; 2500ms settle reverted as a false positive). **Gold-validated:** clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-06-eth-coldinit-resolved.md` (+ `docs/2026-07-04-ethernet-resolved-and-led-guard.md` for the NM half) |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |

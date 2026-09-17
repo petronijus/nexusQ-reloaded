@@ -92,4 +92,10 @@ foreign-signed leftovers would fail `apk upgrade` on every box (2026-09-05;
 update with `UNTRUSTED signature … Failed to create index`, the volume signs with the
 fleet key but does not **trust** it (`config_apk_keys/`) — `install-fleet-signing-key.sh
 --check` reconciles that on every run. Both the desktop and the MacBook are proven
-release machines (v1.15.2 was cut on the MacBook end to end).
+release machines (v1.15.2 was cut on the MacBook end to end). ⚠️ **Since 2026-09-16** the
+release's checksum asset is the versioned **`sha256sums-<vX.Y.Z>.txt`** (the script wrote a
+bare `sha256sums.txt` until then — v1.16.0 carries both), `package-release.sh` gates on the
+INSTALL.md **body** (the "This guide describes release `vX.Y.Z`" sentence + all three artifact
+filenames, not just the `<!-- RELEASE: -->` marker), and `release-preflight-no-secrets.sh`
+also asserts **first-boot identity** — no machine-id (or zero-length), no dbus id, no
+random-seed, empty journal, **no ssh host keys** in the rootfs.

@@ -49,7 +49,7 @@ notes in [`docs/`](docs/).
 
 | Subsystem | Status | Notes |
 |---|:---:|---|
-| 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; boot log genuinely clean (`dmesg` err/warn empty). Moved 6.12.12 → 6.18.48 in v1.15.0; upstream-supported to Dec 2028 |
+| 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; 6.18.48-r1 since v1.16.0 (6.12.12 → 6.18 in v1.15.0, upstream-supported to Dec 2028); boot log kept clean since v1.6.10 bar the stopped-RTC line below |
 | ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; an idle box sits at 350 MHz ~90 % of the time even with a USB host attached and not playing · device r90 (2026-08-30) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
@@ -71,6 +71,7 @@ notes in [`docs/`](docs/).
 | ⚡ **Fastboot over ssh** | ✅ | `systemctl reboot --reboot-argument=bootloader` → fastboot in ~15 s (patch 0044, stock SAR-RAM reboot reason) · v1.11.0 |
 | 🐍 **python3** on-device | ✅ | flash-verified · v1.6.0 |
 | 🌡 **TMP101 temperature sensor** | ✅ | |
+| ⏰ **RTC** (TWL6030) | 🔴 | counter STOPPED — every boot starts at systemd's build epoch until NTP, so pre-NTP logs are weeks off; root-caused 2026-09-16, fix queued behind a stock-parity audit |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | reverse-HCE — the phone hosts the card, the Q is the ISO-DEP reader (patch 0037) · v1.7.0 |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID; untested against a real TV/AVR |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | cold-boot reliable since v1.6.8 (pinmux); the default deploy path (~80 Mbit/s); no MAC EEPROM → random MAC per boot |

@@ -223,6 +223,21 @@ before anything else. First release cut end to end on the MacBook: **v1.15.2**
 ⚠️ **macOS bash is 3.2:** the release scripts used `mapfile` and the first Mac release
 stopped between assets and OTA publish — fixed (`544ef09`, `read` loops). Do not
 reintroduce bash-4-only builtins into `scripts/*.sh`.
+⚠️ **What a release consists of, and what gates it (2026-09-16).** The GitHub release
+carries exactly three assets: `nexusq-boot-<vX.Y.Z>.img`,
+`nexusq-rootfs-<vX.Y.Z>-sparse.img.zst` and **`sha256sums-<vX.Y.Z>.txt`** — versioned.
+`package-release.sh` had always written a bare `sha256sums.txt` and the versioned name
+was retyped by hand at every upload until v1.16.0 went out from the script's own printed
+command with the wrong name (fixed at the source; v1.16.0 carries both files on purpose).
+The script also refuses to tag unless the **INSTALL.md body** names the release — the
+"This guide describes release `vX.Y.Z`" sentence **and** all three artifact filenames —
+not merely the `<!-- RELEASE: -->` marker, which had passed a guide that was a full
+release behind in its prose. And `release-preflight-no-secrets.sh` now asserts
+**first-boot identity** in the rootfs: `/etc/machine-id` absent or zero-length, no
+`/var/lib/dbus/machine-id`, no `/var/lib/systemd/random-seed`, empty `/var/log/journal/`,
+**no `/etc/ssh/ssh_host_*`** (never gated before). A failure there is a real
+contamination — do not "fix" it by loosening the check.
+`docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §5.
 
 ⚠️ **APKBUILD ordering trap that broke a clean r63 build:** the r63
 `device-google-steelhead` (`9a9bb16`, "desktop off by default") ran
@@ -667,5 +682,7 @@ weight. If unsure whether a file is a backup, do NOT delete it.
 A short report: build outcome, artifact paths + sizes (boot.img, sparse rootfs),
 the verification table (each check PASS/FAIL with the evidence line), and the exact
 next-step flash commands (`fastboot flash boot ...` + `fastboot -S 100M flash
-userdata ...`). Do NOT flash yourself. Keep it tight — the caller wants the
+userdata ...`; on a **factory / never-unlocked** unit prefix them with the one-time
+`fastboot oem unlock && fastboot oem unlock_accept` — INSTALL.md §1d). Do NOT flash
+yourself. Keep it tight — the caller wants the
 conclusion, not the build scroll.

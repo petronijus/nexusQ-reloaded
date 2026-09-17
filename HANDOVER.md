@@ -8,86 +8,31 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## MacBook — 2026-09-16: flash the build that carries today's seven commits
+## MacBook — 2026-09-16: flash v1.16.0 onto the Prague Q — ✅ done
 
-The image is built and verified **on the PC** (`petronijus-PC`); the flash has to
-happen from the **MacBook**, so the artifacts have to travel.
+This section used to carry the scp / fastboot steps for the build that became
+**v1.16.0** (device r101, `nexusqd` r20, kernel `6.18.48-r1` — the `init-ab`
+log-level change lives in the ramdisk, which `nq-kernel-ota` deliberately never
+replaces, so only a flash could deliver it). The flash happened: on 2026-09-17
+the Q's apk db reads `device-google-steelhead-1.0-r101`,
+`linux-google-steelhead-6.18.48-r1`, `nexusqd-0.1.0-r20`, `nexusq-control-0.1.0-r45`,
+uptime since ≈ 2026-09-16 15:19 CEST, and the `/root/nexusqd-r18-backup/` left
+by the hand-install is gone (fresh rootfs). Nothing left to do on the MacBook.
 
-**Why a flash and not an OTA.** OTA carries almost all of it — `device-google-
-steelhead r101`, `nexusqd r20` and the kernel `6.18.48-r1` as `nq-kernel-ota`'s
-payload. It cannot carry the **initramfs**: `nq-kernel-ota`'s `stage-apk` takes
-the ramdisk from the image already in the boot slot, deliberately, because a
-ramdisk-less kernel OTA would promote a slot where everything boots, everything
-looks healthy, and slot switching is silently gone. The `init-ab` log-level
-change (device r101) lives in that ramdisk, so only a real flash delivers it.
+**What the post-flash predictions actually came to** (read-only probe
+2026-09-17; the FULL `nexusq-diag` sweep after this flash is not recorded
+anywhere — run it):
 
-**What is in this image**
-
-| change | what it fixes |
-|---|---|
-| `nq-healthd` over systemd varlink (r99) | the 5-minute PAM login-session churn — ~830 sessions in under 3 days, every logind error on the boot, a 645 MB journal |
-| `nexusqd` ppoll frame deadline (r19) | 94.9 % of loop iterations were a busy-spin; idle CPU 1.60 % → ~0.05 % of a core |
-| `nexusqd` volume-overlay guard (r20) | an unchanged `vol` command could pin the LED overlay forever; it had held the ring for three days |
-| diag tooling (r100) | `nq-health-report` reported a failed unit that did not exist; `nq-diag-snapshot` reported librespot dead while it ran as pid 630 |
-| `init-ab` log levels + journal cap (r101) | three lines of normal boot progress were logged at KERN_WARNING; journal capped 1 G → 128 M |
-| kernel `CONFIG_PSI` + `CONFIG_CGROUP_PIDS` (6.18.48-r1) | `systemd-oomd` was enabled and skipped on every boot; `pids.max` warnings ×2 per unit start |
-
-### Steps (MacBook)
-
-1. **Get the artifacts from the PC.** On the Mac:
-
-   ```bash
-   cd ~/Downloads
-   scp petronijus@petronijus-PC:~/Documents/Dev/nexusQ-reloaded/output/nexusq-boot-2026-09-16.img .
-   scp petronijus@petronijus-PC:~/Documents/Dev/nexusQ-reloaded/output/nexusq-rootfs-2026-09-16-sparse.img.zst .
-   scp petronijus@petronijus-PC:~/Documents/Dev/nexusQ-reloaded/output/nexusq-2026-09-16.sha256 .
-   shasum -a 256 -c nexusq-2026-09-16.sha256      # must print OK twice
-   zstd -d nexusq-rootfs-2026-09-16-sparse.img.zst
-   ```
-
-2. **fastboot.** `brew install --cask android-platform-tools` if it is not there.
-
-3. **Put the Q into the bootloader over ssh** — no power-cycle, no buttons
-   (INSTALL.md §1a). Find it first; the WiFi lease moves:
-
-   ```bash
-   ssh root@192.168.20.246 hostname     # must answer `steelhead` before anything else
-   ssh root@192.168.20.246 systemctl reboot --reboot-argument=bootloader
-   ```
-
-4. **Flash both.** The kernel changed, so `boot` as well as `userdata`:
-
-   ```bash
-   fastboot flash boot nexusq-boot-2026-09-16.img
-   fastboot -S 100M flash userdata nexusq-rootfs-2026-09-16-sparse.img
-   fastboot reboot
-   ```
-
-   `-S 100M` is REQUIRED — the 2012 U-Boot has a ~150 MB download buffer and
-   fails silently without it. Expect ~3 minutes for both.
-
-5. **After boot**, from either machine:
-
-   ```bash
-   ssh-keygen -R 192.168.20.246          # the host key changes with the rootfs
-   ```
-
-   Then the FULL `nexusq-diag` sweep, not a spot check. Specific predictions
-   worth confirming, because they are what today's work claims:
-
-   - `dmesg -l err,warn` drops from 8 lines to 1 (only `twl_rtc Power up reset`
-     survives — no RTC battery, genuinely external)
-   - `/proc/pressure/` now exists and `systemd-oomd` runs instead of skipping
-   - no more `Failed to read pids.max` on unit starts
-   - `nexusled debug` shows `loops ≈ renders`, nexusqd idle ~0.05 % of a core
-   - zero PAM login-session churn in the journal
-
-### Note for the PC side
-
-Until this is flashed, the Q runs hand-installed `nexusqd`/`nexusled` r20
-binaries **outside the package manager** (its apk db still says r18). The flash
-replaces them properly. The r18 originals are backed up on the device at
-`/root/nexusqd-r18-backup/`.
+- `dmesg -l err,warn` did **not** drop to one line: it is **5** — `twl_rtc …
+  Power up reset detected.` plus repeated `twl6030_irq: Unmapped PIH ISR 20
+  detected` (first at 145 s). The PIH line is in no document; **uninvestigated**.
+- The `twl_rtc` line is **not** "no RTC battery, genuinely external" as this
+  section claimed: the TWL6030 RTC counter is **stopped** (`RTC_CTRL_REG` 0x00,
+  `since_epoch` frozen at 946684800 across the whole boot). Known issue, queued
+  behind a stock-parity audit — CHANGELOG `[Unreleased]`,
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+- Not re-checked here: `/proc/pressure/` + `systemd-oomd` running, no
+  `pids.max` warnings, `nexusled debug` `loops ≈ renders`, zero PAM session churn.
 
 ## Desktop (petronijus-PC) — 2026-09-06 evening: the Prague Q is warm — ✅ repaired the same evening
 
