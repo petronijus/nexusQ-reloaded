@@ -13,6 +13,39 @@ tooling on 2026-09-16; on 2026-09-17 the defect it exposed became **kernel
 `6.18.48-r2`** (DTS-only), running on the Prague Q via kernel OTA and **not yet
 published** to the OTA repo or cut as a release.
 
+### Fixed — a kernel OTA said the package database agreed when it did not (`nexusq-kernel-ota` **r6**)
+
+Found by verifying the r2 publish rather than trusting it. The Prague Q runs
+`6.18.48-r2`, `apk info` says `6.18.48-r1`, and `/boot` holds **r1's** vmlinuz
+and dtbs — while the promote log from 2026-09-17 23:23:41 reads
+`nq-kernel-ota: apk now agrees: linux-google-steelhead-6.18.48-r1`.
+
+`apk add --upgrade` exits 0 when there is nothing newer to fetch, so its exit
+code says "apk ran", not "apk agrees". The reconcile step trusted it and printed
+whatever version the database happened to hold. The kernel had been staged from a
+**local** apk (scp'd to the device, then `stage-apk`), and the OTA repo did not
+carry r2 until the next day — so the upgrade was a successful no-op and the only
+signal there was said the opposite of the truth. This is the exact failure the
+step's own WARNING branch is written about: anything that rebuilds an image from
+`/boot` (`verify-self`, the rescue builder) would quietly use the wrong kernel.
+The same comment block records that this step was documented from the start and
+not implemented; it is now documented, implemented and wrong in a third way.
+
+The verdict is now read back out of the database and compared to `uname -r`, never
+inferred from an exit code, and the warning names both versions and says what to
+do — publish the running kernel, then run the step again.
+
+Which was not possible either: the reconcile lived inside `promote`, and `promote`
+refuses without a pending trial, so a device that promoted before its kernel
+reached the repo had no way to catch up. It is extracted into `reconcile_pkgdb()`
+and exposed as **`nq-kernel-ota reconcile`**, which keeps the stash-and-restore of
+the outgoing kernel's modules — a bare `apk add --upgrade` by hand does not, and
+would disarm `restore` by deleting the backup kernel's `/lib/modules`.
+
+New test `pmos/nexusq-kernel-ota/tests/test_reconcile_verdict.sh` stubs `apk` and
+`uname` and needs no device. Watched failing against the previous code, where it
+reproduces the device's log line verbatim.
+
 ### Known issue — `twl6030_irq: Unmapped PIH ISR 20` on every USB cable event
 
 Characterised by the post-r2 diag sweep, not fixed. PIH bit 20 is the TWL6030's

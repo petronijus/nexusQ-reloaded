@@ -494,6 +494,9 @@ usage: nq-kernel-ota <command>
   stage-latest       fetch the kernel apk from the OTA repo and stage-apk it
   try                arm the trial boot and reboot into it  (INTERACTIVE ONLY)
   promote            copy the trial slot into the boot slot and clear the marker
+  reconcile          make the package database and /boot describe the kernel
+                     that is actually running (promote does this itself; run it
+                     again once the repo carries that kernel)
   status             what is where, and whether a trial is pending
   reason [value]     read (or set) the u-boot reboot reason in SAR RAM
   restore            put the boot slot back from the pre-update backup
@@ -630,18 +633,8 @@ EOF
     systemctl reboot --reboot-argument=recovery
 }
 
-cmd_promote() {
-    [ -f "$PENDING" ] || die "nothing pending — promote is for a kernel that just proved it boots"
-    log "promoting trial slot -> boot slot"
-    dd if="$TRIAL_SLOT" of="$BOOT_SLOT" bs=1M conv=fsync 2>/dev/null || die "promote failed"
-    sync
-    _a=$(dd if="$BOOT_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
-    _b=$(dd if="$TRIAL_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
-    [ "$_a" = "$_b" ] || die "post-promote mismatch ($_a != $_b)"
-    sar write ""              # never leave a recovery request armed
-    rm -f "$PENDING"
-    log "promoted and disarmed. Slot A md5 $_a"
 
+reconcile_pkgdb() {
     # Reconcile the package database LAST, now that the new kernel is the one
     # running. This also refreshes /boot (vmlinuz, dtbs, config, kernel.release).
     #
@@ -679,12 +672,26 @@ cmd_promote() {
             log "stashing /lib/modules/$_old — it belongs to the backup image"
             tar -czf "$_stash" -C / "lib/modules/$_old" 2>/dev/null || _stash=""
         fi
-        if apk add --upgrade "$KERNEL_PKG" >/dev/null 2>&1; then
-            log "apk now agrees: $(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1)"
+        # `apk add --upgrade` exits 0 when there is nothing newer to fetch, so its
+        # exit code says "apk ran", not "apk agrees". Measured 2026-09-17: a kernel
+        # staged from a LOCAL apk (scp'd to the device, then `stage-apk`) promoted
+        # correctly and this line logged "apk now agrees: …-6.18.48-r1" while
+        # `uname -r` was r2 — the OTA repo had not published r2 yet, so the upgrade
+        # was a successful no-op. /boot then described r1, which is precisely the
+        # failure the WARNING is written about, and the only signal said the
+        # opposite. So read the verdict back out of the database and compare it to
+        # the kernel that is actually running; never infer it from an exit code.
+        apk add --upgrade "$KERNEL_PKG" >/dev/null 2>&1 || true
+        _now=$(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1 | sed "s/^$KERNEL_PKG-//")
+        if [ "$_now" = "$(uname -r)" ]; then
+            log "apk now agrees: $KERNEL_PKG-$_now"
         else
-            log "WARNING: could not upgrade $KERNEL_PKG — /boot still describes the"
-            log "         PREVIOUS kernel. Run 'apk add --upgrade $KERNEL_PKG' by hand;"
-            log "         the running kernel is fine either way."
+            log "WARNING: the package database still says $KERNEL_PKG-${_now:-none}"
+            log "         while the running kernel is $(uname -r), so /boot describes"
+            log "         the WRONG kernel and anything that rebuilds an image from it"
+            log "         (verify-self, the rescue builder) would use it. Usually this"
+            log "         means the repo does not carry $(uname -r) yet: publish it, then"
+            log "         re-run this step. The running kernel is fine either way."
         fi
         if [ -n "$_stash" ] && [ ! -d "/lib/modules/$_old" ]; then
             if tar -xzf "$_stash" -C / 2>/dev/null; then
@@ -697,6 +704,26 @@ cmd_promote() {
         fi
         [ -n "$_stash" ] && rm -f "$_stash"
     fi
+}
+cmd_promote() {
+    [ -f "$PENDING" ] || die "nothing pending — promote is for a kernel that just proved it boots"
+    log "promoting trial slot -> boot slot"
+    dd if="$TRIAL_SLOT" of="$BOOT_SLOT" bs=1M conv=fsync 2>/dev/null || die "promote failed"
+    sync
+    _a=$(dd if="$BOOT_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
+    _b=$(dd if="$TRIAL_SLOT" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$_a" = "$_b" ] || die "post-promote mismatch ($_a != $_b)"
+    sar write ""              # never leave a recovery request armed
+    rm -f "$PENDING"
+    log "promoted and disarmed. Slot A md5 $_a"
+
+    # Reconcile the package database with the kernel that is now running.
+    # Extracted into reconcile_pkgdb() (and exposed as `reconcile`) on
+    # 2026-09-17: when the repo does not yet carry the running kernel there is
+    # nothing this step can do, and until then there was no way to run it again
+    # afterwards — the device sat with /boot describing the previous kernel and
+    # only a log line, which was wrong, to say so.
+    reconcile_pkgdb
 }
 
 cmd_restore() {
@@ -717,6 +744,7 @@ case "${1:-}" in
     verify-self) cmd_verify_self ;;
     try)     cmd_try ;;
     promote)     cmd_promote ;;
+    reconcile)   reconcile_pkgdb ;;
     autopromote) cmd_autopromote ;;
     status)  cmd_status ;;
     identity)       identity_of "${2:-$BOOT_SLOT}" ;;
