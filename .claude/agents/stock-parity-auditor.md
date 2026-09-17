@@ -129,19 +129,30 @@ of the rigor expected; verify it still holds and audit whatever the caller asks.
 > (kernel `#33`). Same pinmux-miss class as the NFC bug — a reminder to always
 > verify pinmux at the IOPAD-offset level, never at the logical-signal level.
 
-> **Queued audit (2026-09-16) — the TWL6030 RTC block.** Mainline's `rtc-twl`
-> leaves the RTC **stopped** on this board: `RTC_CTRL_REG` (TWL6030 slave `0x48`
-> on i2c-0, `TWL_MODULE_RTC` base `0x00`, reg `0x10`) reads `0x00`, `RTC_STATUS_REG`
-> `0x11` stays `0x80` (`POWER_UP` never cleared), `since_epoch` is frozen at
-> 946684800 across a whole boot, the driver never logs `Enabling TWL-RTC`, and
-> writes to the block appear to be dropped while reads work. **Do not build a fix
-> from that hypothesis** — establish first what stock 3.0.8 `rtc-twl` (and, per the
-> 2026-07-12 lesson, x-loader / U-Boot) did with this block: whether stock ever set
-> `STOP_RTC`, which i2c module/slave it addressed, whether a TWL6030 `PHOENIX`
-> register (e.g. a clock-source or `RTC` power-resource / `CLK32KG`-style enable)
-> gates the counter, and whether the stock RTC actually ran (the stock userspace
-> `init.steelhead*.rc` may say). Evidence and the live register dump:
-> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4.
+> **Worked win (2026-09-17) — the TWL6030 RTC block (queued 2026-09-16, done
+> the next day: 9 MATCH / 1 MISMATCH).** Symptom: `RTC_CTRL_REG` (TWL6030 slave
+> `0x48` on i2c-0, `TWL_MODULE_RTC` base `0x00`, reg `0x10`) stuck at `0x00`,
+> `RTC_STATUS_REG` `0x11` at `0x80`, `since_epoch` frozen at 946684800 — reads
+> fine, writes dropped. Every driver-level item matched stock (slave, module
+> base, register map, probe sequence, PIH unmask landing live, VUSB/CLK32KG
+> writes to the same PMIC landing). The one mismatch was **board-level**:
+> `steelhead_init` (`board-steelhead.c:999-1004`, `0xc0016aec–0xc0016b04` in
+> `vmlinux.bin`) muxes `fref_clk0_out.gpio_wk6` and drives gpio 6 high — *"Drive
+> MSECURE high for TWL6030 write access"*; mux dump pad `0x054 = 0x0003`. The
+> TWL6030 write-protects its RTC/secured block while MSECURE is low. Our DTS had
+> an `msecure_pins` group on pad **`0x050`** (`fref_slicer_in`), referenced by
+> nothing, no hog, while `twl6030_omap4.dtsi` put `0x054` on `sys_drm_msecure`
+> (mode 2), which the secure ROM holds low on this HS part. Fix = kernel
+> `6.18.48-r2`, DTS only; verified live (`gpio-6 (msecure) out hi`, `0x10 = 0x01`,
+> `since_epoch` advancing). **Reusable pattern — third time now (NFC 2026-07-03,
+> ethernet NENABLE 2026-07-06, MSECURE 2026-09-17): the signal is named right and
+> the pad is wrong. Check `reverse-eng/stock-omap-mux-full.txt` at the IOPAD
+> offset FIRST, before any driver theory.** Also a lesson in evidence: the
+> 09-16 note leaned on the driver "not printing `Enabling TWL-RTC`"; the 6.18
+> driver has no such branch (`strings rtc-twl.ko`), so that absence proved
+> nothing — check the running module's strings before reasoning from a missing
+> log line. Record:
+> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.
 
 > **Worked win (2026-07-12) — the audio-clock audit must include the BOOTLOADERS,
 > not just the stock kernel.** The metronomic ~1/s playback click was mainline

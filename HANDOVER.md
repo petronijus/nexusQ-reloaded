@@ -20,17 +20,29 @@ uptime since ≈ 2026-09-16 15:19 CEST, and the `/root/nexusqd-r18-backup/` left
 by the hand-install is gone (fresh rootfs). Nothing left to do on the MacBook.
 
 **What the post-flash predictions actually came to** (read-only probe
-2026-09-17; the FULL `nexusq-diag` sweep after this flash is not recorded
-anywhere — run it):
+2026-09-17; the FULL `nexusq-diag` sweep ran that evening on the r2 kernel-OTA
+boot that superseded this one — **PASS**, capture `nq-captures/20260917-232610/`,
+recorded in HANDOFF.md's 2026-09-17 session):
 
-- `dmesg -l err,warn` did **not** drop to one line: it is **5** — `twl_rtc …
-  Power up reset detected.` plus repeated `twl6030_irq: Unmapped PIH ISR 20
-  detected` (first at 145 s). The PIH line is in no document; **uninvestigated**.
-- The `twl_rtc` line is **not** "no RTC battery, genuinely external" as this
-  section claimed: the TWL6030 RTC counter is **stopped** (`RTC_CTRL_REG` 0x00,
-  `since_epoch` frozen at 946684800 across the whole boot). Known issue, queued
-  behind a stock-parity audit — CHANGELOG `[Unreleased]`,
-  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+- `dmesg -l err,warn` did **not** drop to one line on r1: it was **5** — `twl_rtc
+  … Power up reset detected.` plus `twl6030_irq: Unmapped PIH ISR 20 detected`
+  ×2 (145 s, 160 s) and one `musb-hdrc Babble` (160 s). The sweep characterised
+  them: PIH bit 20 is **CHRG_CTRL**, which `twl6030-irq.c` copies onto the VBUS
+  bit on every VBUS change; on this battery-less board nothing consumes bit 20,
+  so the driver prints. Both lines bracket a gadget ACM hangup — a **USB cable
+  event**, not a fault. On r2 `dmesg -l err,warn` is one line, but only because
+  no VBUS edge occurred; re-plugging USB would reproduce it. Open, ours to
+  silence.
+- The `twl_rtc` line was **not** "no RTC battery, genuinely external" as this
+  section claimed: the TWL6030 RTC counter was **stopped** (`RTC_CTRL_REG` 0x00,
+  `since_epoch` frozen at 946684800 across the whole boot) because MSECURE was
+  never driven high. **Fixed 2026-09-17 in kernel `6.18.48-r2`**, on the Prague
+  Q via kernel OTA (autopromoted to slot A 23:23 CEST) — not yet published to the
+  OTA repo, no release cut. On r2 `dmesg -l err,warn` at 1 min uptime is the one
+  `twl_rtc … Power up reset detected.` line, expected after a mains unplug (no
+  backup cell). CHANGELOG `[Unreleased]`,
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`
+  §4 + addendum.
 - Not re-checked here: `/proc/pressure/` + `systemd-oomd` running, no
   `pids.max` warnings, `nexusled debug` `loops ≈ renders`, zero PAM session churn.
 

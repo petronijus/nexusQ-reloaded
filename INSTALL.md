@@ -307,12 +307,19 @@ Login: user `user`, password `147147` (root has the same password --
 **change both** after first login: `passwd`). SSH host keys are generated
 on first boot.
 
-> ⏰ **The clock is wrong until the Q has network.** The TWL6030 RTC counter is
-> **stopped** (known issue, found 2026-09-16, not yet fixed), so every boot starts
-> at systemd's compiled-in build date — weeks in the past — and `journalctl` stamps
-> the early lines there until `systemd-timesyncd` syncs. Those dates are not
-> evidence of anything shipped in the image (the rootfs carries no machine-id,
-> journal or ssh host keys — the release gate asserts it). See
+> ⏰ **The clock before the first network sync.** On images up to and including
+> **v1.16.0 (kernel `6.18.48-r1`)** the TWL6030 RTC never runs — the PMIC dropped
+> every write to it because the board's MSECURE line was never driven high
+> (found 2026-09-16, root-caused and **fixed in kernel `6.18.48-r2` on
+> 2026-09-17**, DTS-only; not yet in a release or the OTA repo). Until a unit
+> takes that kernel, every boot starts at systemd's compiled-in build date —
+> weeks in the past — and `journalctl` stamps the early lines there until
+> `systemd-timesyncd` syncs. Those dates are not evidence of anything shipped in
+> the image (the rootfs carries no machine-id, journal or ssh host keys — the
+> release gate asserts it). On r2 the RTC keeps time across warm reboots after
+> one NTP sync; there is still no backup cell, so a **mains unplug** resets it to
+> 2000-01-01 (dmesg `twl_rtc … Power up reset detected.`, expected) and the same
+> build-epoch window applies until NTP lands again. See
 > `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
 
 ## 4. Getting a shell (no keyboard needed)
@@ -434,7 +441,7 @@ optional -- find the device on your LAN as hostname `steelhead`.
 | Bluetooth (BCM4330, A2DP sink) | ✅ **reliable A2DP since v1.8.0** — root-caused 2026-07-09: the DTS had no BT UART `max-speed`, so hci_bcm never synced the host UART to the BCM4330 firmware baud → HCI frame corruption (`Frame reassembly failed (-84)`), phantom "Connected", dropped links, garbled audio. Fixed by pinning `max-speed = 3000000` (stock value; kernel patch 0040). Pair the phone → the Q is an A2DP sink (phone → BT → PulseAudio → TAS5713) |
 | SSH (USB gadget + WiFi) | ✅ |
 | TMP101 temperature sensor | ✅ |
-| RTC (TWL6030) | 🔴 **stopped** (found 2026-09-16) — the counter never runs, so the clock is systemd's build epoch until NTP and pre-NTP journal timestamps are weeks off; **queued, not fixed** (stock-parity audit first) — see §3 and the 2026-09-16 note |
+| RTC (TWL6030) | ✅ **runs since kernel `6.18.48-r2`** (2026-09-17, DTS-only — MSECURE driven high via gpio_wk6, pad `0x054`; not yet in a release or the OTA repo). On **≤ v1.16.0 / r1** the counter never runs, so the clock is systemd's build epoch until NTP and pre-NTP journal timestamps are weeks off _(this row said "🔴 stopped — queued, not fixed" on 2026-09-16)_. No backup cell on any kernel: a mains unplug resets the RTC until the next NTP sync — see §3 and the 2026-09-16 note |
 | TAS5713 25 W speaker amp | ✅ working (48 kHz; PulseAudio resamples) — the v1.6.0 2× speed bug was fixed in v1.6.1 (kernel patch 0022); the residual playback crackle was CLOSED in v1.8.1 (kernel patches 0041 sDMA read-priority + 0042 DPLL_ABE sys_clkin relock, hardware-verified 2026-07-12) |
 | Spotify Connect (librespot) | ✅ working, **baked into the build** (v1.6.1) — advertises "Nexus Q", discovery + auth + streaming over WiFi |
 | LED music visualizer | ✅ working (v1.6.2) — reacts to Spotify playback via the `nexusq` audio tee → snd-aloop loopback → nexusqd FFT/beat; v1.6.5 adds a 1 Hz idle AVR keepalive (the ring no longer goes dark after long idle) |
@@ -465,8 +472,10 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
   rejects a larger write with `error=-27`). LZMA compression keeps the dual-core
   SMP image comfortably under it.
 - Kernel: mainline **6.18.48** + the patches in `kernel/patches/` (**44 as of
-  kernel `6.18.48-r1`, v1.16.0** — unchanged since `6.18.48-r0`, 2026-08-31; the
-  r1 bump is defconfig-only, `CONFIG_CGROUP_PIDS` + `CONFIG_PSI` — numbered
+  kernel `6.18.48-r2`**, 2026-09-17 — the r2 bump is DTS-only, patch 0003
+  regenerated with the MSECURE fix for the RTC, and is **not yet in a release**;
+  v1.16.0 ships `6.18.48-r1`, a defconfig-only bump over `r0` of 2026-08-31 —
+  `CONFIG_CGROUP_PIDS` + `CONFIG_PSI`; the set is unchanged since r0, numbered
   through 0046, with **0004 and 0032 absent because upstream carries them now**),
   config `kernel/configs/steelhead_defconfig`.
   ⚠️ A patch applying with zero fuzz does **not** mean it compiles: three of them
@@ -474,7 +483,9 @@ Hard requirements discovered the painful way (details in `HANDOFF.md`):
   full local kernel build before booking the shared build volume.
   ⚠️ The steelhead DTS enters the kernel tree **via those patches** (0003 +
   follow-ups) — `kernel/dts/omap4-steelhead.dts` is the reference copy; editing it
-  alone does NOT change the built DTB.
+  alone does NOT change the built DTB. Regenerate 0003 with
+  `scripts/regen-dts-patch.sh` (since 2026-09-17 it reverse-applies the later
+  DTS patches and verifies the series reproduces the source); never hand-edit it.
 
 ```bash
 # kernel + dtb

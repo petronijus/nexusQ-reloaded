@@ -25,7 +25,10 @@ whether to also extract+sparse-convert the artifacts).
 alone is a **silent no-op** — the DTS enters the kernel tree via
 `kernel/patches/` (0003 + follow-ups), which is what the build stages. Any DTS
 change must become a patch (+ pkgrel bump) and the built DTB must be verified to
-contain it. On a Windows host, launch docker via **PowerShell** (MSYS/Git-Bash
+contain it. Since 2026-09-17 the way to update 0003 is `scripts/regen-dts-patch.sh`
+after editing the source: it reverse-applies 0040/0042/0043 to produce the base
+patch and verifies the series reproduces the source byte for byte — never
+hand-edit 0003. On a Windows host, launch docker via **PowerShell** (MSYS/Git-Bash
 mangles `/src`) and keep files **LF** (CRLF breaks sed-parsed APKBUILD vars —
 since 2026-07-13 the repo enforces LF itself via `.gitattributes`, commit
 `cb03cf7`; a fresh checkout is safe without machine config).

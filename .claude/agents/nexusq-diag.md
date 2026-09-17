@@ -666,23 +666,35 @@ report it:
      avahi's publish path for librespot Spotify-Connect zeroconf works fine);
   4. **NM `sd-event.c:4488 assertion failed`** — a ONE-SHOT assert from
      NetworkManager's **vendored libsystemd**, fired exactly at the RTC→NTP
-     clock step (CLOCK_REALTIME jumps weeks — see the RTC fact below; this
-     said "no RTC battery" until 2026-09-16); NM continues fine, WiFi
+     clock step (CLOCK_REALTIME jumps weeks on ≤ r1 kernels and after a mains
+     unplug — see the RTC fact below; this said "no RTC battery" until
+     2026-09-16); NM continues fine, WiFi
      associates the same second. External/upstream (added 2026-07-13, v1.8.2
      acceptance). More than one occurrence per boot, or any NM malfunction
      around it, IS a finding.
-  ⏰ **RTC fact (2026-09-16, queued — NOT fixed):** the TWL6030 RTC counter is
-  **stopped** — `/sys/class/rtc/rtc0/since_epoch` frozen at `946684800` across a
-  whole boot, `hwclock -r` times out, `RTC_CTRL_REG` (i2c-0 `0x48`:`0x10`) `0x00`,
-  dmesg `twl_rtc … Power up reset detected.` every boot and never `Enabling
-  TWL-RTC`. Consequences for a sweep: (a) that `twl_rtc` warn line is **ours**, a
-  known issue, not an external residual; (b) until `systemd-timesyncd` syncs,
-  the wall clock is systemd's compiled-in **`TIME_EPOCH` = the systemd package's
-  build date** (261.2-r1 → 2026-08-23 00:03:32 UTC), so **pre-NTP journal
-  timestamps are the build date, not when it happened** — reason from monotonic
-  uptime, never from those dates. Next step is a stock-parity audit of the RTC
-  block, not a DTS guess.
-  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+  ⏰ **RTC fact (fixed in kernel `6.18.48-r2`, 2026-09-17 — said "queued, NOT
+  fixed" on 2026-09-16):** through r1 the TWL6030 RTC never ran — the PMIC drops
+  every write to its RTC block while **MSECURE** is low, and our DTS muxed the
+  msecure group to pad `0x050` instead of stock's `0x054`/gpio_wk6, with no hog
+  (`since_epoch` frozen at `946684800`, `hwclock -r` timing out, `RTC_CTRL_REG`
+  `0x48`:`0x10` = `0x00`). Check first which kernel you are on (`uname -r`):
+  - **r2:** expect `gpio-6 (msecure) out hi` in `/sys/kernel/debug/gpio`, pad
+    `0x4a31e054 = 0x0003`, `0x48:0x10 = 0x01`, `since_epoch` advancing over 3 s,
+    `hwclock -r` real time. Any of those false is a **REGRESSION**. On a clean
+    r2 boot `dmesg -l err,warn` is exactly **one** line, `twl_rtc … Power up
+    reset detected.` — **expected after a mains unplug** (no backup cell; the RTC
+    resets to 2000-01-01, warm reboots keep time), not a finding; a second
+    err/warn line IS one. The (Prague, r2, 2026-09-17) r1 boot before it had also
+    shown repeated `twl6030_irq: Unmapped PIH ISR 20 detected` from 145 s —
+    uninvestigated; report it if it recurs.
+  - **≤ r1** (every v1.16.0 image until it takes the kernel OTA — the cottage Q
+    as of its last record), and on any unit's **first boot after a mains
+    unplug**: until `systemd-timesyncd` syncs, the wall clock is systemd's
+    compiled-in **`TIME_EPOCH` = the systemd package's build date** (261.2-r1 →
+    2026-08-23 00:03:32 UTC), so **pre-NTP journal timestamps are the build
+    date, not when it happened** — reason from monotonic uptime, never from those
+    dates. The r2 apk is not yet published to the OTA repo.
+  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.
 The whole former B/U residual set (B4 brcmfmac fw-probe, B10 hw-breakpoint, B16
 ramoops, B21 L2C/gpmc/pmu/journald-BPF+ACL, B22/B23 twl, U5 bluetoothd
 system-config, U7 nsresourced, U4 HDMI-audio, U6 gkr-pam) is **FIXED / downgraded

@@ -8,8 +8,48 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 Triage of [issue #4](https://github.com/petronijus/nexusQ-reloaded/issues/4) from
 `mattv-nmg`, who flashed a **stock, never-unlocked** Nexus Q — the one starting
-condition no one here has had since before this guide existed. Docs only; no
-image change, so nothing to reflash.
+condition no one here has had since before this guide existed. Docs and release
+tooling on 2026-09-16; on 2026-09-17 the defect it exposed became **kernel
+`6.18.48-r2`** (DTS-only), running on the Prague Q via kernel OTA and **not yet
+published** to the OTA repo or cut as a release.
+
+### Known issue — `twl6030_irq: Unmapped PIH ISR 20` on every USB cable event
+
+Characterised by the post-r2 diag sweep, not fixed. PIH bit 20 is the TWL6030's
+**CHRG_CTRL**, and `drivers/mfd/twl6030-irq.c` deliberately copies it onto the
+VBUS bit on every VBUS change — *"Since VBUS status bit is not reliable for VBUS
+disconnect use CHARGER VBUS detection status bit instead."* Bit 19 is consumed by
+`twl6030_usb`; bit 20 has **no consumer on this battery-less board** (the DTS has
+no charger node), so `irq_find_mapping` returns 0 and the driver prints an error.
+
+On the r1 boot the two lines (145.690 s, 160.030 s) each sat 13 ms before a
+gadget ACM hangup, with `musb-hdrc Babble` 450 ms after the second: a USB cable
+being unplugged and replugged, logged as an error. The r2 boot shows none —
+**not** because r2 fixed it, but because no VBUS edge happened (a host has been
+attached throughout). Re-plugging USB reproduces it. Ours to silence
+(`all boot errors are ours`); the shape of the fix is a DTS/driver decision about
+bit 20 on a board that can never charge anything.
+
+### Known issue — `systemd-tmpfiles` cannot resolve user `systemd-network`
+
+Four lines at boot and four more on every `systemd-tmpfiles-clean` run (900 s,
+then daily). Alpine's `systemd-262_rc3-r0` ships
+`/usr/lib/tmpfiles.d/systemd-network.conf` without a matching `sysusers.d`
+snippet, and `systemd-networkd` is not installed here at all. Present on r1 too,
+so not a kernel delta, and not in the four-residual list of
+`docs/2026-07-02-boot-error-inventory.md`. The fix belongs in the Alpine aport;
+an empty local override would be masking, so it is recorded rather than papered
+over.
+
+### Observed — PulseAudio auto-grabs the UAC2 gadget capture card
+
+`module-udev-detect` discovers `alsa_card.platform-musb-hdrc.0.auto` and exposes
+it as a source. `91-pulseaudio-hdmi-ignore.rules` covers only the HDMI and aloop
+cards, while `nexusq-uac2-in`'s own rule is that PA must read `usb_in` on the
+aloop and **never** the async gadget directly — that pairing caused the r65
+latency runaway. Whether PA ever opens `hw:UAC2Gadget` while `alsaloop` holds it
+was **not** measured (it would need the USB-audio toggle on). Kernel-independent;
+recorded as an open question, not a bug.
 
 ### Fixed — a factory unit is locked, and no document in this repo said so
 
@@ -31,7 +71,9 @@ ring AVR and reads a *queued* key event, and a palm already resting on the dome
 is calibrated into the capacitive baseline at AVR start-up, so no event is ever
 queued. And `board_fbt_key_command()` polls that key every 100 ms while in
 fastboot — held **>10 s it enters recovery instead**, the undocumented
-"different mode" the reporter hit. Both now in §1b and the README.
+"different mode" the reporter hit. Both now in §1b and the README; on
+2026-09-17 `nq-kernel-ota`'s header comment and its `try` prompt stopped saying
+"cover the mute sensor at power-on" too.
 
 ### Not a defect — the "baked machine-id" (issue #4 comment)
 
@@ -88,19 +130,88 @@ The **published v1.16.0 release** was corrected as well — `sha256sums-v1.16.0.
 uploaded, then downloaded back and diffed to prove the published bytes are right.
 The unversioned `sha256sums.txt` was left alongside it rather than deleted.
 
-### Known issue — the TWL6030 RTC never runs (new, root-caused, not yet fixed)
+### Fixed — the TWL6030 RTC never ran: MSECURE was never driven high (kernel **6.18.48-r2**)
 
-Falling back to a build epoch at all is the real bug. After 7 h 47 min of uptime
-the reference unit still reports `RTC time: Sat 2000-01-01 00:00:00`,
-`/sys/class/rtc/rtc0/since_epoch` frozen at `946684800`, and
-`hwclock -r` → `select() to /dev/rtc to wait for clock tick timed out`. Read off
-the PMIC directly: `RTC_CTRL_REG` (0x48:0x10) = **0x00**, i.e. `STOP_RTC` clear —
-the counter is stopped — while `RTC_STATUS_REG` = `0x80` with `POWER_UP` never
-cleared. `rtc-twl.c` starts the RTC only when it sees that bit clear, and it did
-**not** print `Enabling TWL-RTC`, so its write appears to be silently dropped
-while reads work. Consequence: every boot starts at systemd's `TIME_EPOCH` and
-**all logs before NTP lands are misdated by weeks**. Needs a stock-parity audit
-first; see `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`.
+Falling back to a build epoch at all was the real bug. After 7 h 47 min of
+uptime the reference unit still reported `RTC time: Sat 2000-01-01 00:00:00`,
+`/sys/class/rtc/rtc0/since_epoch` frozen at `946684800`, `hwclock -r` →
+`select() to /dev/rtc to wait for clock tick timed out`; off the PMIC,
+`RTC_CTRL_REG` (0x48:0x10) = `0x00` (`STOP_RTC` clear — the counter stopped)
+and `RTC_STATUS_REG` = `0x80` (`POWER_UP` never cleared). Reads worked, writes
+did not land. _(This entry said on 2026-09-16 that the driver "did not print
+`Enabling TWL-RTC`, so its write appears dropped". That inference was invalid —
+the 6.18 driver has no such branch (`strings rtc-twl.ko` on the device) and
+writes `CTRL = STOP_RTC` unconditionally; the symptom was right, the reasoning
+was not.)_
+
+**Root cause (stock-parity audit 2026-09-17, 9 MATCH / 1 MISMATCH):** the
+TWL6030 write-protects its RTC block (and the secured/backup registers) while its
+**MSECURE** input is low — writes are ACKed and discarded. Stock
+`board-steelhead.c:999-1004` (`0xc0016aec–0xc0016b04` in `vmlinux.bin`) muxes
+`fref_clk0_out` to **gpio_wk6** (MUX_MODE3) and drives gpio 6 high — *"Drive
+MSECURE high for TWL6030 write access"*; stock mux dump pad `0x054 = 0x0003`.
+Our DTS had an `msecure_pins` group with the right comment and the **wrong pad**
+(`0x050` = `fref_slicer_in`), referenced by nothing, with no gpio hog — while the
+included `twl6030_omap4.dtsi` muxed `0x054` to `sys_drm_msecure` (MUX_MODE2),
+which the secure ROM holds low on this HS OMAP4460. Same defect class as the NFC
+pinmux (2026-07-03) and the ethernet NENABLE pad (2026-07-06): right signal
+named, wrong pad muxed.
+
+**Fix — DTS only** (`kernel/dts/omap4-steelhead.dts`, regenerated into patch
+0003; `pkgrel` 1 → 2): `msecure_pins` → `OMAP4_IOPAD(0x054, PIN_OUTPUT |
+MUX_MODE3)`; an `msecure_hog` in `&gpio1` (line 6, output-high, line-name
+`msecure`, beside the tps62361 hog); `&twl { pinctrl-0 = <&twl6030_pins
+&msecure_pins>; }` after the dtsi includes — overriding the consumer rather than
+adding the group to `&omap4_pmx_wkup`, so two groups never claim one pad
+(pinctrl-single `-EBUSY`).
+
+**Delivered by kernel OTA, no cable:** `scripts/build-kernel-boot.sh` →
+`linux-google-steelhead-6.18.48-r2.apk` (kernel+dtb 5 758 924 B; on-device
+boot.img with the carried ramdisk 6 719 488 B), `nq-kernel-ota stage-apk`
+(identity carry: 0 properties patched, the first unit to need none), `try`
+attended at 21:21:55Z, and the **health-gated autopromote copied slot B → A at
+23:23:41 CEST** (slot-A backup at `/var/lib/nexusq-kernel-ota/slot-a-backup.img`).
+
+**Verified on the Prague Q, ~1 min into the r2 boot:** `gpio-6 (msecure) out
+hi`; pad `0x4a31e054 = 0x0003`; pinctrl `pin 10 (4a31e054): 0-0048 … function
+msecure-pins`; `0x48:0x10 = 0x01` (running), `0x11 = 0x02` (`POWER_UP`
+cleared); `since_epoch` 1789680197 → 1789680200 over 3 s; `hwclock -r` →
+`2026-09-17 23:23:20.089871+02:00`; `timedatectl` RTC == Universal time;
+`dmesg -l err,warn` is **one line**, `twl_rtc … Power up reset detected.` —
+expected after a mains power-cycle. **What changes for a unit on r2:** warm
+reboots keep time, so the pre-NTP "systemd build epoch" clock is gone after one
+NTP sync (`RTC_SYSTOHC` writes the RTC back). **What does not:** there is no
+backup cell — a mains unplug resets the RTC to 2000-01-01 until the next NTP
+sync, and the power-up line will print then; images ≤ v1.16.0 (kernel r1)
+behave as before until they take the kernel OTA. `/usr/lib/clock-epoch` is
+still not shipped (optional). The r2 apk is **not yet published** to the OTA
+repo and no release is cut. Record:
+`docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.
+
+**Proven across a reboot** (warm reboot 2026-09-17 21:43:21Z, back in 92 s). The
+first r2 boot still logged `Power up reset detected` and `setting system clock to
+2000-01-01` — correct, since r1 could never write the RTC and r2 inherited a
+frozen counter, which timesyncd then corrected. The boot after it reads
+`twl_rtc … setting system clock to 2026-09-17T21:44:09 UTC (1789681449)`: real
+wall-clock time out of the RTC before any network. `Power up reset detected`
+count 0, the journal's first kernel line stamped `2026-09-17T23:43:45+02:00`, and
+**`dmesg -l err,warn` empty** — the stopped RTC had been the last line standing
+on an otherwise clean boot log since v1.6.10. A mains unplug still resets the RTC
+to 2000-01-01 until the next NTP sync; there is no backup cell, stock had the
+same, and Android re-set the clock on every time sync.
+
+### Fixed — `regen-dts-patch.sh` dumped the whole DTS into 0003
+
+Patch `0003` is the **base** steelhead DTS and `0040`/`0042`/`0043` modify it on
+top, but `scripts/regen-dts-patch.sh` wrote the entire source into 0003 — run
+after 0043 it would have left the later patches finding their hunks already
+present and stopped the series. It had simply not been run since 0043 landed
+(2026-07-16), so 0003 in git was 44 lines behind `kernel/dts/`, and the source
+copy of the 0040/0043 hunks had drifted from the patches (comment wording only).
+The script now reverse-applies the later patches' DTS sections to produce 0003
+and **refuses to write it unless 0003 + the series reproduces the source byte
+for byte**; the source was realigned to the series first. The r2 DTS above went
+through it.
 
 ## [1.16.0] — 2026-09-16 — the health monitor that logged in 830 times, and the ring that never idled
 

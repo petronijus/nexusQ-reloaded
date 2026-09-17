@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 960 +
- 2 files changed, 961 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 999 +
+ 2 files changed, 1000 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 ---
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -33,7 +33,7 @@ new file mode 100644
 index 000000000..7164fe274
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,960 @@
+@@ -0,0 +1,999 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -503,9 +503,24 @@ index 000000000..7164fe274
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&ethernet_wkup_pins &tps62361_vsel_pins>;
 +
++	/*
++	 * MSECURE: the TWL6030 write-protects its RTC block (and the secured /
++	 * backup registers) while its MSECURE input is low -- reads still work,
++	 * every write is silently dropped. twl6030_omap4.dtsi routes the pad to
++	 * sys_drm_msecure (MUX_MODE2), which the secure ROM owns and holds low on
++	 * this HS OMAP4460, so stock bypasses it: board-steelhead.c muxes
++	 * fref_clk0_out to gpio_wk6 and drives gpio 6 high ("Drive MSECURE high
++	 * for TWL6030 write access"); stock mux dump: 0x054 = 0x0003. The gpio1
++	 * hog below is the other half.
++	 *
++	 * This group named the right signal and the wrong pad (0x050 =
++	 * fref_slicer_in) from the initial import until 2026-09-17, and nothing
++	 * referenced it -- so the RTC counter never ran: STOP_RTC stayed clear,
++	 * every boot started at systemd's build epoch. Found via issue #4.
++	 */
 +	msecure_pins: msecure-pins {
 +		pinctrl-single,pins = <
-+			OMAP4_IOPAD(0x050, PIN_OUTPUT | MUX_MODE3)		/* fref_clk0_out.gpio_wk6 */
++			OMAP4_IOPAD(0x054, PIN_OUTPUT | MUX_MODE3)		/* fref_clk0_out.gpio_wk6 MSECURE */
 +		>;
 +	};
 +
@@ -543,6 +558,18 @@ index 000000000..7164fe274
 +		output-high;
 +		line-name = "tps62361-vsel0";
 +	};
++
++	/*
++	 * MSECURE high = TWL6030 RTC/secured registers writable. Stock:
++	 * gpio_request(6, "msecure") + gpio_direction_output(6, 1) in
++	 * steelhead_init. Pad mux is msecure_pins (see &omap4_pmx_wkup).
++	 */
++	msecure_hog {
++		gpio-hog;
++		gpios = <6 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "msecure";
++	};
 +};
 +
 +/* I2C1: TWL6030 PMIC + TWL6040 Audio Codec */
@@ -565,6 +592,18 @@ index 000000000..7164fe274
 +
 +#include "twl6030.dtsi"
 +#include "twl6030_omap4.dtsi"
++
++/*
++ * twl6030_omap4.dtsi hands the PMIC <&twl6030_pins &twl6030_wkup_pins>, and
++ * twl6030_wkup_pins is pad 0x054 as sys_drm_msecure (MUX_MODE2) -- the very
++ * setting that leaves MSECURE low here. Keep sys_nirq1, swap the msecure half
++ * for the stock gpio_wk6 route. Overriding the consumer (rather than adding
++ * msecure_pins to &omap4_pmx_wkup's own pinctrl-0) is what avoids two groups
++ * claiming the same pad, which pinctrl-single refuses with -EBUSY.
++ */
++&twl {
++	pinctrl-0 = <&twl6030_pins &msecure_pins>;
++};
 +
 +/* I2C2: AVR front panel controller + TMP101 temperature sensor */
 +&i2c2 {

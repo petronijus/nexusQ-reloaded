@@ -201,12 +201,17 @@ This is not the ordinary "mains appliance with no coin cell, so the RTC resets
 on unplug" story. The counter does not run **within a single boot either**, and
 `CONFIG_RTC_SYSTOHC=y` therefore has nothing it can write back to.
 
-`rtc-twl.c` only starts the RTC when it reads `RTC_CTRL_REG` and finds
-`STOP_RTC` clear. The register **is** clear and the driver did **not** print
-`Enabling TWL-RTC`, so either its read came back with the bit set (a bogus read)
-or its write did not land. Register `0x11` staying at `0x80` — the driver is
-supposed to clear the status bits by writing 1s — points at **writes to the RTC
-block being silently dropped while reads work**, which would explain both.
+Register `0x11` staying at `0x80` — the driver clears the status bits by writing
+1s back, at probe — and `0x10` staying at `0x00` — the 6.18 `twl_rtc_probe`
+writes `CTRL = STOP_RTC` **unconditionally** — together point at **writes to the
+RTC block being silently dropped while reads work**.
+
+_(This paragraph said until 2026-09-17 that the driver "did not print `Enabling
+TWL-RTC`, so its read or write went wrong". That inference was invalid: the
+6.18 driver no longer has that branch at all — `strings rtc-twl.ko` on the
+device shows `Power up reset detected.` and nothing about enabling — so the
+absence of the line proves nothing. The stock-parity audit of 2026-09-17 found
+the real mechanism; see the addendum below.)_
 
 Not fixed here: it needs a kernel/DTS change, a rebuild and a flash, and under
 [keep-stock-matching-fixes] the first step is to establish what the stock kernel
@@ -223,6 +228,94 @@ A cheap, honest interim once the RTC question is settled either way: ship
 `/usr/lib/clock-epoch` stamped with the **image build** date, so the pre-NTP
 fallback is at least the release's own date rather than whenever pmOS last built
 systemd. The image ships no such file today.
+
+### Addendum 2026-09-17 — root cause: MSECURE is never driven high
+
+The stock-parity audit (`stock-parity-auditor`, against `reverse-eng/vmlinux.bin`,
+the stock mux dump, upstream 6.18 `rtc-twl.c`/`twl-core.c` and live read-only
+register reads) settled it. Nine items MATCH — same i2c slave `0x48`, same
+module base, same register map, same probe sequence, same PIH unmask (live: the
+unmask write **landed**, `0x49:0xD3 = 0xE7`), VUSB and CLK32KG writes to the same
+PMIC land too. Exactly one MISMATCH, and it is board-level, not driver-level:
+
+**The TWL6030 write-protects its RTC block (and the secured/backup registers)
+while its MSECURE input is low.** Reads pass, writes are ACKed and discarded.
+Stock `steelhead_init` (`board-steelhead.c:999-1004`, `0xc0016aec–0xc0016b04`
+in `vmlinux.bin`) does `omap_mux_init_signal("fref_clk0_out.gpio_wk6",
+OMAP_PIN_OUTPUT)`, `gpio_request(6, "msecure")`, `gpio_direction_output(6, 1)`
+— the comment reads *"Drive MSECURE high for TWL6030 write access"*. Stock mux
+dump: pad `0x054 = 0x0003` (gpio_wk6, output).
+
+On our side, three things conspired:
+
+| | |
+|---|---|
+| `omap4-steelhead.dts` had an `msecure_pins` group | pointing at pad **`0x050`** (`fref_slicer_in`), not `0x054` (`fref_clk0_out`) |
+| nothing referenced the group | not in any `pinctrl-0` |
+| no gpio hog on gpio_wk6 | so even a correct mux would have driven nothing |
+| the included `twl6030_omap4.dtsi` claims pad `0x054` as **`MUX_MODE2 = sys_drm_msecure`** | the secure-ROM-owned signal, which this HS OMAP4460 leaves low — which is why Google bypassed it with a GPIO in the first place |
+
+Live: `0x4a31e054 = 0x0002` (mode 2), `gpiochip0` (`4a310000`) has no line 6
+requested, and the RTC block reads exactly its reset defaults. Same defect class
+as the NFC pinmux (2026-07-03) and the ethernet NENABLE pad (2026-07-06): the
+right signal named, the wrong pad muxed.
+
+**Fix (kernel 6.18.48-r2, DTS):** `msecure_pins` → `OMAP4_IOPAD(0x054,
+PIN_OUTPUT | MUX_MODE3)`; a `msecure_hog` in `&gpio1` (line 6, output-high,
+line-name `msecure`, beside the tps62361 one); and `&twl { pinctrl-0 =
+<&twl6030_pins &msecure_pins>; }` after the dtsi includes, so the PMIC's own
+pinctrl carries the gpio route instead of upstream's mode-2 group — overriding
+the consumer is what avoids two groups claiming one pad (pinctrl-single
+`-EBUSY`). Expected after boot: `0x48:0x10 = 0x01`, `0x11` bit 7 clear,
+`since_epoch` advancing, `hwclock -r` returning, `RTC_SYSTOHC` finally having
+something to write to. `Power up reset detected.` will still appear after a
+mains unplug — there is no backup cell; stock had that too and Android re-set
+the RTC on every time sync.
+
+Found along the way: `kernel/patches/0003` is the *base* DTS and 0040/0042/0043
+layer on top, but `scripts/regen-dts-patch.sh` dumped the whole source into
+0003 — it had not been run since 0043 was added (2026-07-16), and the source
+copy of the 0040/0043 hunks had drifted from the patches in comment wording.
+The script now reverse-applies the later patches to produce 0003 and refuses to
+write it unless 0003 + the series reproduces the source byte for byte; the
+source was realigned to the series first.
+
+#### Verified on the device 2026-09-17
+
+Delivered with no cable: kernel-only build (`scripts/build-kernel-boot.sh` →
+`linux-google-steelhead-6.18.48-r2.apk`, kernel+dtb 5 758 924 B; the on-device
+boot.img with the carried ramdisk 6 719 488 B), scp'd to the Prague Q,
+`nq-kernel-ota stage-apk` (identity carry: **0 properties patched** — this unit's
+DTB already holds its own MAC/BD_ADDR), `nq-kernel-ota try` attended at
+21:21:55Z, booted from the trial slot; the **health-gated autopromote copied
+slot B → A at 23:23:41 CEST**, slot-A backup kept at
+`/var/lib/nexusq-kernel-ota/slot-a-backup.img`. The Prague Q runs `6.18.48-r2`
+from slot A.
+
+Read-only, about a minute into that boot:
+
+| Check | Result |
+|---|---|
+| `uname -r` | `6.18.48-r2` |
+| `/sys/kernel/debug/gpio` | `gpio-6 (msecure) out hi` |
+| pad `0x4a31e054` | **`0x0003`** (was `0x0002`) |
+| pinctrl | `pin 10 (4a31e054): 0-0048 … function msecure-pins group msecure-pins` |
+| `i2cget 0x48 0x10` / `0x11` | `0x01` (`STOP_RTC` set = running) / `0x02` (`POWER_UP` cleared) |
+| `since_epoch`, 3 s apart | `1789680197` → `1789680200` |
+| `hwclock -r` | `2026-09-17 23:23:20.089871+02:00` |
+| `timedatectl` | RTC time == Universal time, `System clock synchronized: yes` |
+| `dmesg -l err,warn` | **one** line: `twl_rtc … Power up reset detected.` |
+
+That one line is expected after a mains power-cycle and will keep appearing:
+there is no backup cell, so the RTC survives **warm reboots** only — a mains
+unplug resets it to 2000-01-01, PID 1 then jumps to systemd's build epoch as
+before, and the RTC reads real time again once NTP lands and `RTC_SYSTOHC`
+writes it back. What is gone is the freeze *within* a boot and, with it, the
+build-epoch clock on every warm reboot of a unit that has synced once.
+Not shipped: `/usr/lib/clock-epoch` (still an optional follow-up). Not yet done:
+the r2 apk is **not published** to the OTA repo and no release is cut; the
+cottage Q is still on v1.15.2 (last recorded 2026-09-05). The full `nexusq-diag`
+sweep on r2 ran separately and is not reported here.
 
 ---
 
@@ -286,3 +379,25 @@ when first written and the dirty image caught it: `Size: 0$` matched debugfs's
 `Fragment: Address: 0 Number: 0 Size: 0` line, which every inode has, so a
 32-byte machine-id was waved through as "zero-length". It now reads only the
 `User: … Size: N` line.
+
+#### And across a reboot — 2026-09-17 23:43 CEST
+
+The verification above left one thing unproven: the first r2 boot inherited r1's
+frozen counter, so it still printed `Power up reset detected` and set the clock
+to 2000-01-01 before timesyncd corrected it. Only a boot that *reads* the RTC
+back settles it. Warm reboot at 21:43:21Z, ssh back in 92 s:
+
+```
+[   14.949584] twl_rtc 48070000.i2c:twl@48:rtc: setting system clock to 2026-09-17T21:44:09 UTC (1789681449)
+```
+
+`Power up reset detected` count **0**; the journal's first kernel line stamped
+`2026-09-17T23:43:45+02:00`; **`dmesg -l err,warn` empty**. The RTC had been the
+only err/warn line left on a boot log that has otherwise been clean since
+v1.6.10.
+
+What is still true: there is no backup cell, so a **mains unplug** resets the RTC
+to 2000-01-01 and the pre-NTP window comes back for that one boot. Stock behaved
+the same way (Android re-set the RTC on every time sync). `/usr/lib/clock-epoch`
+would make that window land on the image's build date rather than systemd's —
+still not shipped, still optional.

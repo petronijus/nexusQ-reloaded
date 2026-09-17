@@ -3,7 +3,7 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
-> ## 🔴 QUEUED (2026-09-16) — the TWL6030 RTC never runs · and the first install nobody here could still perform
+> ## ✅ DONE (2026-09-17, kernel 6.18.48-r2 — unreleased) — the TWL6030 RTC never ran: MSECURE was never driven high · (2026-09-16) the first install nobody here could still perform
 >
 > Issue #4 (a factory, never-unlocked unit) found two real doc bugs — a locked
 > bootloader needs `fastboot oem unlock` + `oem unlock_accept` within **5 s**, and
@@ -11,18 +11,23 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > lights, lift off at red; held >10 s = recovery) — both fixed in INSTALL.md
 > §1b/§1d and the README quick start. Its third claim (a baked machine-id) was
 > **false**, settled by mounting the published rootfs, and chasing it exposed the
-> real defect: **the RTC counter is stopped** (`RTC_CTRL_REG` 0x00, `since_epoch`
-> frozen at 946684800, `hwclock -r` times out), so every boot starts at systemd's
-> `TIME_EPOCH` and every pre-NTP log line is misdated by weeks.
-> **Not fixed — queued.** Next step is a **stock-parity audit of the RTC block**
-> (stock 3.0.8 `rtc-twl` and the bootloaders, per the 2026-07-12 lesson) before
-> any DTS/kernel change; a cheap interim once that is settled is
-> `/usr/lib/clock-epoch` stamped with the image build date. Release tooling
-> hardened alongside: versioned `sha256sums-$VER.txt`, an INSTALL.md **body**
-> gate, and first-boot-identity gates (machine-id, dbus id, random-seed, journal,
-> **ssh host keys**) in the no-secrets preflight.
+> real defect: the RTC counter never ran. _(This block said "🔴 QUEUED — not
+> fixed, stock-parity audit first" on 2026-09-16.)_ The audit (9 MATCH / 1
+> MISMATCH) found it on 2026-09-17: the TWL6030 drops every write to its RTC
+> block while **MSECURE** is low; stock drives gpio_wk6 high via pad `0x054`,
+> our DTS named the signal on pad `0x050`, referenced by nothing. **Fixed in
+> kernel 6.18.48-r2** (DTS only), delivered to the Prague Q by kernel OTA and
+> autopromoted to slot A the same evening; RTC verified running.
+> ⚠️ Open (forward-looking): the r2 apk is **not published** to the OTA repo and
+> no release is cut; the cottage Q is still on v1.15.2 (r1 units keep the
+> build-epoch clock until they take the kernel OTA); there is no backup cell, so
+> a mains unplug still resets the RTC until NTP — `/usr/lib/clock-epoch` stamped
+> with the image build date remains the cheap, optional interim for that window.
+> Release tooling hardened 2026-09-16: versioned `sha256sums-$VER.txt`, an
+> INSTALL.md **body** gate, first-boot-identity gates (machine-id, dbus id,
+> random-seed, journal, **ssh host keys**) in the no-secrets preflight.
 > → CHANGELOG [Unreleased] ·
-> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`
+> `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum
 
 > ## ✅ SHIPPED (2026-09-16, v1.16.0 — kernel 6.18.48-r1 · device r101 · nexusqd r20) — the health monitor that logged in 830 times, and the ring that never idled
 >
@@ -1985,7 +1990,7 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 | TWL6040 codec | ⚪ not populated/unused | _(Corrected 2026-07-03)_ **never a codec on this board**: stock 3.0.8 has ZERO twl6040/AUDPWRON code, the twldata codec pdata slot is NULL, stock i2c1 registers only `twl6030@0x48` — the 2026-06-10 "dead chip" verdict measured stock-correct behaviour (no chip to ACK at 0x4b). Node + ABE card + pins removed from the DTS, defconfig options off (shipped on `#29`, 2026-07-03). No headset path **by design**; audio = TAS5713 + HDMI. Was "🔴 dead hardware" |
 | NFC (PN544) | ✅ WORKS | _(FIXED 2026-07-03 — was "🔴 dead hardware" 2026-07-02, then "🟠 under investigation")_ the chip was always healthy: our `nfc_pins` muxed the **wrong pads** (dpm_emu3/4/5 debug pads `0x1b4/0x1b6/0x1b8` instead of `usbb2_ulpitll_dat1/2/3` @ `0x16a/0x16c/0x16e`), so VEN/FW/IRQ never reached it. Proven by the stock RAM-boot test (ACK at 0x28, core-reset frame rc=0) + the live stock `omap_mux` dump (`reverse-eng/stock-omap-mux-full.txt`). Fixed in patch 0003 (kernel pkgrel 28), node re-enabled; on `#29`: `nfc_en polarity : active high` **clean**, `/sys/class/nfc/nfc0` present. **Tap-to-send shipped v1.7.0 (2026-07-08)** — reverse-HCE (Q = ISO-DEP reader, phone runs HCE), kernel patch 0037 RATS-activates any ISO-DEP target. See `docs/2026-07-03-nfc-pinmux-fix-and-batch2b-acceptance.md` + `docs/2026-07-08-nfc-tap-to-send-reverse-hce.md` |
 | TMP101 temp sensor | ✅ works |
-| RTC (TWL6030) | 🔴 **stopped** | _(2026-09-16)_ the counter never runs — `RTC_CTRL_REG` (0x48:0x10) `0x00`, `since_epoch` frozen at 946684800 across a whole boot, `hwclock -r` times out, `rtc-twl` never logged `Enabling TWL-RTC` (writes to the block look dropped while reads work). Every boot therefore starts at systemd's `TIME_EPOCH` and pre-NTP journal lines are weeks off. **Queued, not fixed** — stock-parity audit of the RTC block first (stock 3.0.8 `rtc-twl` + bootloaders). `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
+| RTC (TWL6030) | ✅ **runs since kernel 6.18.48-r2** _(2026-09-17, unreleased)_ | The counter never ran from the initial import until r2 (`RTC_CTRL_REG` 0x48:0x10 stuck at `0x00`, `since_epoch` frozen at 946684800, `hwclock -r` timing out — found 2026-09-16, "queued" until 2026-09-17): the TWL6030 drops every RTC write while **MSECURE** is low, and our DTS muxed the msecure group to pad `0x050` instead of stock's `0x054` (gpio_wk6) with no hog. Fixed DTS-only (`msecure_pins` 0x054 + `msecure_hog` + `&twl pinctrl-0` override), verified on the Prague Q: `gpio-6 (msecure) out hi`, `0x10 = 0x01`, `since_epoch` advancing, `hwclock -r` real time. No backup cell: warm reboots keep time, a mains unplug resets it to 2000-01-01 until NTP (`twl_rtc … Power up reset detected.` is the expected notice then). `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | our in-tree driver `leds-steelhead-avr` (patch 0005, rebased onto every kernel — 6.18.48 today; Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | ✅ works from cold | _(✅ FULLY FIXED 2026-07-06, task #17 CLOSED — was "🟠 enumeration intermittent" 2026-07-05, briefly "CLOSED" 2026-07-04, "🟠 sw bug", and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), the "flap" was root-caused 2026-07-04 as **NM's serverless-DHCP retry loop** (fixed by baked eth0 NM profiles, device r21, v1.6.7: `no-auto-default=eth0` + `eth-lan` + `eth-direct` static + host `eth-direct-host`; `ssh root@10.42.0.2` works). The **enumeration** half was root-caused 2026-07-06 as a **pinmux miss**: `gpio_1` NENABLE = pad `kpd_col2` @ padconf `0x186`, which `ethernet_gpios` never muxed → gpiolib drove the DATAOUT latch (debugfs "asserted") but the pad stayed safe_mode → chip never powered → CCS=0 (the "0/3 vs 3/3" was stock priming, not a race). Fixed by the DTS pad mux (patch 0003, kernel `#33`, commit e33a1b4; 2500ms settle reverted as a false positive). **Gold-validated:** clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-06-eth-coldinit-resolved.md` (+ `docs/2026-07-04-ethernet-resolved-and-led-guard.md` for the NM half) |
 | SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |

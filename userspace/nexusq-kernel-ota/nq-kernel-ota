@@ -23,9 +23,12 @@
 # ⚠️ WHAT THIS CANNOT DO. Stock u-boot (2011.09-rc1) has no bootcount/altbootcmd
 # and does NOT fall back when the trial image is unbootable — it just stops
 # (measured 2026-08-18). Recovery from a failed trial boot is therefore PHYSICAL:
-# cover the mute sensor at power-on for fastboot, or power off long enough to
-# drain the always-on domain. That is why `try` refuses to run unattended and
-# says so out loud.
+# power off long enough to drain the always-on domain (the reason word is lost
+# and u-boot boots slot A again), or enter fastboot -- power on with the dome
+# UNTOUCHED, palm the centre when the mute LED lights, lift off at solid red
+# (INSTALL.md 1b; the older "cover the sensor before power" wording never
+# worked, issue #4). That is why `try` refuses to run unattended and says so
+# out loud.
 set -u
 
 KERNEL_PKG=linux-google-steelhead
@@ -607,8 +610,10 @@ cmd_try() {
 
   Stock u-boot has no bootcount and does not fall back: if the staged kernel
   does not boot, this device STOPS at the bootloader and needs hands on it —
-  cover the mute sensor at power-on to reach fastboot (USB), or leave it
-  unplugged long enough for the always-on domain to drain.
+  leave it unplugged long enough for the always-on domain to drain (the
+  reason word is lost and u-boot boots slot A again), or reach fastboot: power
+  on with the dome UNTOUCHED, palm the centre when the mute LED lights, lift
+  off at solid red (INSTALL.md 1b).
 
   Do this only with the device in reach. Slot A is untouched either way.
 

@@ -79,6 +79,17 @@ and only the DTB verification step caught it; the change had to become patch
 regenerated 0003) + a bumped kernel `pkgrel`, and you must **verify the built DTB
 actually contains the change** before calling the build good.
 
+**Regenerating 0003 (2026-09-17):** `0003` is the *base* DTS and `0040`/`0042`/
+`0043` modify it on top, so 0003's body must be the source **with those hunks
+taken back out**. Edit `kernel/dts/omap4-steelhead.dts`, then run
+`scripts/regen-dts-patch.sh` — it reverse-applies the later patches' DTS
+sections to produce 0003 and refuses to write unless 0003 + the series
+reproduces the source byte for byte. **Never hand-edit 0003.** If the script
+fails at the reverse-apply step, your edit overlaps a later patch's region:
+regenerate that patch too, then re-run. (Until 2026-09-17 the script dumped the
+whole DTS into 0003 and had not been run since 0043; the r2 MSECURE fix was the
+first change through the corrected script.)
+
 ## Windows host gotchas (this build machine)
 
 - **MSYS/Git-Bash path mangling breaks the `docker run`** (`-v "$PWD:/src"` becomes
