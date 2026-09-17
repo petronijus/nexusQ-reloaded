@@ -46,6 +46,16 @@ New test `pmos/nexusq-kernel-ota/tests/test_reconcile_verdict.sh` stubs `apk` an
 `uname` and needs no device. Watched failing against the previous code, where it
 reproduces the device's log line verbatim.
 
+**Run on the Prague Q** once the repo carried r2 (2026-09-18 00:07): the package
+database went r1 → **r2**, `/boot` with it, `/lib/modules/6.18.48-r1` was stashed
+and **put back** so `restore` stays armed, and the slot-A backup is untouched.
+The device is now internally consistent — `apk fix -s` clean, `dmesg -l err,warn`
+**empty**, no failed units, RTC tracking UTC. Getting there also exercised the
+field path end to end: the OTA repo is not baked into `/etc/apk/repositories` (a
+flash wipes it and `nexusq-control` re-adds it lazily on the first check), and it
+was a real `checkSystemUpdate` over the control bridge that put it back — which
+also confirmed the bridge reports the running kernel correctly as `6.18.48-r2`.
+
 ### Known issue — `twl6030_irq: Unmapped PIH ISR 20` on every USB cable event
 
 Characterised by the post-r2 diag sweep, not fixed. PIH bit 20 is the TWL6030's
