@@ -8,6 +8,46 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Prague Q — 2026-09-18: take `nexusq-kernel-ota` r7 + `device-google-steelhead` r102
+
+Both were built and published **from the MacBook at the cottage** (gh-pages
+`09bd713`, secrets gate 11/11 clean) and installed on the Šumperák Q. The Prague
+Q is not reachable from the cottage LAN, so it is the one thing left:
+
+```
+ssh -J root@100.110.110.100 root@192.168.20.246
+apk update && apk upgrade --available --ignore linux-google-steelhead
+```
+
+or just let the app's own "Nexus Q" update do it. Prague already runs
+`6.18.48-r2`, so this is a plain userspace upgrade — no kernel OTA.
+
+- **r7** stops `nq-kernel-ota` rebooting the device whenever it prints its usage.
+- **r102** takes Prague's own gateway `192.168.20.1` out of the fleet-wide NTP
+  list. **Prague loses its LAN NTP server by this change.** If that matters,
+  add it back as a per-site drop-in (`20-<site>-ntp.conf`, sorting after the
+  fleet file) in the private overlay — not in the fleet package, which is how it
+  broke the cottage in the first place.
+
+## Šumperák Q — 2026-09-18: brought to v1.17.0 — ✅ done
+
+Done at the cottage on the MacBook, on the cottage LAN (`nexus-q-sumperak.local`
+= `192.168.48.57`). r96 → **r101**, `nexusqd` r18 → **r20**, `nexusq-kernel-ota`
+r5 → **r6**, kernel `6.18.48-r0` → **r2** via `nq-kernel-ota` stage-latest → try
+→ (auto)promote → reconcile. Nothing left to do on this unit.
+
+Worth knowing for the next OTA on a non-first unit: **r6 carries the per-unit
+identity automatically** — `stage-latest` logged `local-mac-address carried
+over: f8:8f:ca:20:48:e1 -> f8:8f:ca:05:1f:11` and the same for the BT address,
+and the unit came up as itself. The hand DTB patch is no longer part of an OTA;
+it remains the rule for a full **flash**.
+
+Also expected and not a fault: `dmesg -l err,warn` is 5 lines here, not the
+empty log v1.17.0 reports for Prague. Four of them are the `[nq-ab]` progress
+lines and the GPT notice, which live in the **initramfs** — `nq-kernel-ota`
+carries the boot slot's ramdisk over by design, so the log-level change from
+device r101 only lands on this unit with a real flash.
+
 ## MacBook — 2026-09-16: flash v1.16.0 onto the Prague Q — ✅ done
 
 This section used to carry the scp / fastboot steps for the build that became
