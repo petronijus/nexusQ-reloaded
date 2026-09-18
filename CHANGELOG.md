@@ -6,6 +6,35 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the fleet's NTP list led with one site's gateway (`device-google-steelhead` **r102**)
+
+`10-nexusq-ntp-by-ip.conf` exists to break the no-time/no-DNS deadlock with IP
+literals, and it led with `192.168.20.1` — **Prague's** gateway — in a package
+that ships to every unit. At the cottage that address is on another site's
+subnet, so `systemd-timesyncd` spent its retry budget on a server that cannot
+answer before rotating to a reachable one. The same class of defect as the
+first unit's MAC in the shared DTS: a per-site value living in the fleet
+package.
+
+Measured on the Šumperák Q on 2026-09-18, minutes into the boot that followed
+the kernel OTA: `System clock synchronized: no`, `Packet count: 0`, clock at
+2000-01-01 — and `nq-kernel-ota reconcile`'s HTTPS fetch failed against it, so
+the package database was left describing the previous kernel. It reported that
+honestly (the r6 verdict fix doing its job) and blamed the likelier cause, an
+OTA repo without the kernel; the real cause was the clock. Restarting timesyncd
+by hand and re-running `reconcile` settled it.
+
+**6.18.48-r2 made this sharper, not milder.** Before it the RTC never ticked and
+a wrong time was obviously absent; now the RTC runs, so a freshly powered unit
+holds a confident, precise, 26-year-old clock until NTP lands, and everything
+that validates a certificate fails in that window.
+
+The list is now anycast-only (Cloudflare, Google), which is reachable from both
+sites without DNS. A site with its own NTP server prepends it from a drop-in
+that sorts later, in that site's overlay. Applied to the cottage Q the same
+evening: it now syncs against `162.159.200.1` within seconds of a restart, and
+the working RTC carries the time across a reboot.
+
 ### Fixed — asking `nq-kernel-ota` what it does rebooted the Q (`nexusq-kernel-ota` **r7**)
 
 Found on the cottage Q on 2026-09-18, by running `nq-kernel-ota` with no
