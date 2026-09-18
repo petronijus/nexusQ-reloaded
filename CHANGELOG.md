@@ -6,6 +6,62 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the fleet-key reconciliation only ever looked at the device's architecture
+
+`install-fleet-signing-key.sh` parks apks signed by a retired key and drops the
+stale index, because "an apk the chroots no longer trust breaks abuild's index
+update for EVERY later build" — its own comment. It walked
+`/w/packages/*/armv7`, so it never looked at the **native** repo, which is
+precisely the one abuild writes an index into while building a native helper
+like `crossdirect`.
+
+The desktop could not show this, having invented the fleet key: its native repo
+was fleet-signed from the start. The MacBook's `aarch64` repo still held two
+apks and an `APKINDEX.tar.gz` signed by its own pre-fleet key
+`pmos@local-6a93112c`, retired on 2026-08-31 and untrusted ever since — dormant
+until something had to build natively. It surfaced on 2026-09-18 as
+
+    ERROR: APKINDEX.tar.gz: UNTRUSTED signature
+    >>> ERROR: crossdirect: Failed to create index
+
+a signing-drift fault reported against an architecture the Q does not have, on
+a package the repo only patches. `--check` had reported the machine fully on the
+fleet key minutes earlier, because it was asking about armv7 only.
+
+The loop now walks every arch. `--check` on this MacBook immediately named both
+stale apks; the apply pass parked them (nothing is deleted) and the build went
+through. The same reasoning covers the whole volume, not one arch of it.
+
+### Fixed — `OTA_PACKAGES_ONLY=1` exited before the phase that makes its own toolchain buildable
+
+`docker-build.sh` patches `crossdirect` (the argv[0] fix from `d650ecb`) into the
+staged pmaports, and **Phase 7bc** re-checksums and builds it — because patching
+`crossdirect.c` invalidates the `sha512sums=` upstream's APKBUILD carries for its
+own sources. That phase sat *below* the `OTA_PACKAGES_ONLY=1` early exit, so an
+OTA-only build never reached it.
+
+It was invisible on the desktop, whose work volume already held a good
+`crossdirect-5.3.1-r2.apk` from a full build, and which therefore never had to
+build one on demand. On a volume older than the argv[0] patch — the MacBook's,
+last used for a full build on 2026-09-05 — pmbootstrap builds crossdirect as a
+dependency of cross-compiling armv7, hits the invalidated checksum and dies:
+
+    /home/pmos/build/crossdirect.c: FAILED
+    >>> ERROR: crossdirect: Use 'abuild checksum' to generate/update the checksum(s)
+    ERROR: Couldn't build aarch64/crossdirect-5.3.1-r2.apk!
+
+which names a file nothing in this repo appears to touch, on an architecture the
+Q does not have. Phase 7bc is hoisted above the early exit: an OTA build
+cross-compiles armv7 aports and needs the patched crossdirect exactly as much as
+a full build does.
+
+Worth noting for the next reader of a failed OTA build: the `=== OTA BUILD
+FAILED ===` summary greps the **whole accumulated** `log.txt` in the work volume,
+so most of the "key log lines" it prints are from earlier builds — here, hours
+and one case weeks old, including a stale `UNTRUSTED signature` run and a
+`nexusq-kernel-ota-0.1.0-r5` failure from 17:11. Only the lines carrying the
+current run's timestamps are the failure.
+
 ### Fixed — the fleet's NTP list led with one site's gateway (`device-google-steelhead` **r102**)
 
 `10-nexusq-ntp-by-ip.conf` exists to break the no-time/no-DNS deadlock with IP

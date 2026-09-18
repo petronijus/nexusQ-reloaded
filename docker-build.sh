@@ -988,6 +988,64 @@ for _ck_apkbuild in "$SRC"/pmos/*/APKBUILD; do
     pmbootstrap checksum "$_ck_pkg" 2>&1 || true
 done
 
+# Phase 7bc runs HERE, above the OTA_PACKAGES_ONLY early exit, because that
+# exit used to come first and the OTA path never reached it. An OTA build
+# cross-compiles armv7 aports and so needs the patched crossdirect exactly as
+# much as a full build does; it just did not need to BUILD it on a machine
+# whose work volume already held a good crossdirect-5.3.1-r2.apk from an
+# earlier full build. On a volume older than the argv[0] patch, pmbootstrap
+# builds crossdirect on demand, hits the sha512sum the patch invalidated and
+# dies with "crossdirect.c: FAILED / Use 'abuild checksum'" — which names a
+# file nothing in this repo appears to touch. Measured on the MacBook,
+# 2026-09-18: OTA_PACKAGES_ONLY=1 failed on aarch64/crossdirect-5.3.1-r2 while
+# the same command had been fine on the desktop for weeks.
+
+echo ""
+echo "=== Phase 7bc: Build the patched crossdirect (native) ==="
+# Build crossdirect from OUR pmaports tree so the argv[0] fix above is the one
+# actually used. Without this, apk installs the pmOS binary repo's 5.3.1-r1 and
+# the patch is dead code sitting in a git checkout. Ours is pkgrel 2, so apk
+# prefers it. Native arch -- crossdirect runs in the native chroot by definition.
+#
+# The checksum pass is LOAD-BEARING: patching crossdirect.c invalidates the
+# sha512sums= that upstream's APKBUILD carries for its own local sources, and
+# abuild refuses to build ("crossdirect.c: FAILED / Use 'abuild checksum'").
+# Phase 7b only checksums OUR pmos/* aports, so this one needs its own pass.
+pmbootstrap checksum crossdirect 2>&1 | tail -3
+pmbootstrap build crossdirect --arch "$(pmbootstrap config arch 2>/dev/null || uname -m)" --force 2>&1 \
+    || pmbootstrap build crossdirect --force 2>&1
+_cd_apk=$(find "$WORK/packages" -name "crossdirect-5.3.1-r2.apk" -print -quit 2>/dev/null)
+if [ -z "$_cd_apk" ]; then
+    echo "  FATAL: crossdirect-5.3.1-r2 was not produced."
+    echo "  Every compile-and-link aport would then build against the UNPATCHED"
+    echo "  crossdirect and die on cc1 -- or worse, if that guard is ever relaxed,"
+    echo "  quietly install a stale apk. Refusing to continue."
+    exit 1
+fi
+echo "  Built: $(basename "$_cd_apk")"
+# Make the native chroot actually pick it up (it may already hold r1).
+pmbootstrap -y chroot -- apk add --upgrade crossdirect 2>&1 | tail -3 || true
+# `apk info -v <pkg>` prints the DESCRIPTION on this busybox apk, not the
+# version -- it would read identically for r1 and r2 and quietly assert nothing.
+# Read the version out of the chroot's own package db instead.
+_cd_inst=$(pmbootstrap -y chroot -- sh -c \
+    'awk -F: "/^P:/{p=\$2} /^V:/{if(p==\"crossdirect\") print \$2}" /lib/apk/db/installed' 2>/dev/null | head -1)
+echo "  native crossdirect now: ${_cd_inst:-(could not read)}"
+# Hard-fail only on a version we definitely READ and that is definitely wrong.
+# An empty read means the probe could not answer -- the native chroot is
+# recreated and zapped repeatedly around this phase -- and a gate that blocks
+# every build on a question it cannot ask is worse than the bug it guards. The
+# real gate is the r2 apk check above: without that apk there is nothing for apk
+# to prefer over the binary repo's r1.
+if [ -n "$_cd_inst" ] && [ "$_cd_inst" != "5.3.1-r2" ]; then
+    echo "  FATAL: the native chroot is on crossdirect $_cd_inst, not the patched 5.3.1-r2."
+    echo "  Every compile-and-link aport would die on cc1. Refusing to continue."
+    exit 1
+elif [ -z "$_cd_inst" ]; then
+    echo "  WARNING: could not read the installed crossdirect version (not fatal)."
+    echo "  If an aport dies on \"cannot execute 'cc1'\", this is the first thing to check."
+fi
+
 # --- OTA_PACKAGES_ONLY: targeted two-package OTA build -------------------------
 # For an OTA that ships ONLY config/daemon apks (not a fresh rootfs/boot.img),
 # rebuilding the whole rootfs is wasteful. Set OTA_PACKAGES_ONLY=1 to build just
@@ -1082,51 +1140,6 @@ fi
 # entirely for every package. No qemu fakeroot daemon ever runs, so nothing to
 # work around here.
 
-echo ""
-echo "=== Phase 7bc: Build the patched crossdirect (native) ==="
-# Build crossdirect from OUR pmaports tree so the argv[0] fix above is the one
-# actually used. Without this, apk installs the pmOS binary repo's 5.3.1-r1 and
-# the patch is dead code sitting in a git checkout. Ours is pkgrel 2, so apk
-# prefers it. Native arch -- crossdirect runs in the native chroot by definition.
-#
-# The checksum pass is LOAD-BEARING: patching crossdirect.c invalidates the
-# sha512sums= that upstream's APKBUILD carries for its own local sources, and
-# abuild refuses to build ("crossdirect.c: FAILED / Use 'abuild checksum'").
-# Phase 7b only checksums OUR pmos/* aports, so this one needs its own pass.
-pmbootstrap checksum crossdirect 2>&1 | tail -3
-pmbootstrap build crossdirect --arch "$(pmbootstrap config arch 2>/dev/null || uname -m)" --force 2>&1 \
-    || pmbootstrap build crossdirect --force 2>&1
-_cd_apk=$(find "$WORK/packages" -name "crossdirect-5.3.1-r2.apk" -print -quit 2>/dev/null)
-if [ -z "$_cd_apk" ]; then
-    echo "  FATAL: crossdirect-5.3.1-r2 was not produced."
-    echo "  Every compile-and-link aport would then build against the UNPATCHED"
-    echo "  crossdirect and die on cc1 -- or worse, if that guard is ever relaxed,"
-    echo "  quietly install a stale apk. Refusing to continue."
-    exit 1
-fi
-echo "  Built: $(basename "$_cd_apk")"
-# Make the native chroot actually pick it up (it may already hold r1).
-pmbootstrap -y chroot -- apk add --upgrade crossdirect 2>&1 | tail -3 || true
-# `apk info -v <pkg>` prints the DESCRIPTION on this busybox apk, not the
-# version -- it would read identically for r1 and r2 and quietly assert nothing.
-# Read the version out of the chroot's own package db instead.
-_cd_inst=$(pmbootstrap -y chroot -- sh -c \
-    'awk -F: "/^P:/{p=\$2} /^V:/{if(p==\"crossdirect\") print \$2}" /lib/apk/db/installed' 2>/dev/null | head -1)
-echo "  native crossdirect now: ${_cd_inst:-(could not read)}"
-# Hard-fail only on a version we definitely READ and that is definitely wrong.
-# An empty read means the probe could not answer -- the native chroot is
-# recreated and zapped repeatedly around this phase -- and a gate that blocks
-# every build on a question it cannot ask is worse than the bug it guards. The
-# real gate is the r2 apk check above: without that apk there is nothing for apk
-# to prefer over the binary repo's r1.
-if [ -n "$_cd_inst" ] && [ "$_cd_inst" != "5.3.1-r2" ]; then
-    echo "  FATAL: the native chroot is on crossdirect $_cd_inst, not the patched 5.3.1-r2."
-    echo "  Every compile-and-link aport would die on cc1. Refusing to continue."
-    exit 1
-elif [ -z "$_cd_inst" ]; then
-    echo "  WARNING: could not read the installed crossdirect version (not fatal)."
-    echo "  If an aport dies on \"cannot execute 'cc1'\", this is the first thing to check."
-fi
 
 echo "=== Phase 7c: Build nexusqd app package (armv7/musl) ==="
 sudo mkdir -p /tmp/output && sudo chown pmos:pmos /tmp/output

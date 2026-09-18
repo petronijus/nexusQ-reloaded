@@ -112,7 +112,18 @@ reconcile() {  # reconcile <apply:0|1>
       # -- packages/: an apk the chroots no longer trust breaks abuild'"'"'s index update
       #    for EVERY later build ("Failed to create index"), so park them. Nothing is
       #    deleted; the publisher and pmbootstrap only glob the top level.
-      for repo in /w/packages/*/armv7; do
+      #
+      #    EVERY arch, not just armv7. This used to read .../armv7 and so never
+      #    looked at the NATIVE repo -- which is the one abuild actually writes an
+      #    index into while building a native helper like crossdirect. The desktop
+      #    never noticed, having invented the fleet key; the MacBook'"'"'s aarch64 repo
+      #    still held two apks and an APKINDEX signed by its own pre-fleet key
+      #    pmos@local-6a93112c, retired here on 2026-08-31 and untrusted ever since.
+      #    It surfaced on 2026-09-18 as "APKINDEX.tar.gz: UNTRUSTED signature /
+      #    crossdirect: Failed to create index" -- a device-arch fix reported
+      #    against an arch the device does not have. (.retired-* is dotted, so the
+      #    glob does not descend into what a previous run parked.)
+      for repo in /w/packages/*/*; do
         [ -d "$repo" ] || continue
         for f in "$repo"/*.apk; do
           [ -e "$f" ] || continue
