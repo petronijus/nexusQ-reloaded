@@ -4,6 +4,53 @@ All notable changes to Nexus Q Reloaded. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Versioning is tag-only
 (milestone-based) — there is no version string in the source.
 
+## [Unreleased]
+
+### Fixed — asking `nq-kernel-ota` what it does rebooted the Q (`nexusq-kernel-ota` **r7**)
+
+Found on the cottage Q on 2026-09-18, by running `nq-kernel-ota` with no
+arguments to read its usage. The box went down.
+
+`usage()` wrote its text with an **unquoted** heredoc, and the help text names
+the rescue shell's way out as `` `reboot` `` — in backticks. An unquoted heredoc
+performs command substitution, so the backticks were not punctuation, they were
+a command: the shell ran `reboot` before `cat` printed a line. `sh -x` says it
+in three lines, with the reboot shimmed onto PATH so it could be watched rather
+than suffered:
+
+    + usage
+    + reboot
+    + cat
+
+So **every** invalid invocation rebooted the device — a typo, a wrong
+subcommand, or just the bare command to see what it takes. The one thing a help
+text is supposed to guarantee is that reading it is free.
+
+The device confirmed it independently: `systemd-logind` logged `reboot requested
+from client PID 13620 ('reboot')` inside the ssh session scope that had run only
+`nq-kernel-ota | head -40`, and the process was the real `/usr/sbin/reboot`, not
+anything this script calls by name — which is why grepping the source for a
+`reboot` call found nothing and the cause stayed invisible until the run was
+traced.
+
+All three heredocs are quoted now. The other two — `rescue` and `try` — held no
+backticks and were inert by luck rather than by construction, which is a poor
+property for the two texts that print to someone about to reboot a device
+deliberately.
+
+New test `pmos/nexusq-kernel-ota/tests/test_usage_is_inert.sh` puts `reboot`,
+`shutdown`, `halt`, `poweroff`, `systemctl` and `dd` on PATH as recorders and
+asserts that no path to the usage text sets any of them off, that the backticked
+word still survives into the output as text, and — structurally, for the two
+heredocs no test can reach without a device — that no unquoted delimiter is left
+in the file. Watched failing against the previous code, where it reproduces the
+reboot on all four invocation paths and names all three heredocs.
+
+**Applied to the cottage Q by hand** the same evening (the same `sed`, backup at
+`/var/lib/nexusq-kernel-ota/nq-kernel-ota.pre-heredoc-fix.bak`), because the
+kernel OTA that followed was going to use this script and a spontaneous reboot
+during a trial boot is a car journey. It still needs to ship as r7.
+
 ## [1.17.0] — 2026-09-18 — the first install nobody here could still perform, and the clock that never started
 
 Kernel **6.18.48-r2**, `nexusq-kernel-ota` **r6**; everything else unchanged from

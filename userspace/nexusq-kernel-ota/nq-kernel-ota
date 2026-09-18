@@ -484,7 +484,7 @@ cmd_stage_latest() {
 }
 
 usage() {
-    cat <<EOF
+    cat <<'EOF'
 usage: nq-kernel-ota <command>
 
   stage <boot.img>   write the image to the TRIAL slot and verify it read-back
@@ -582,7 +582,7 @@ cmd_rescue() {
     _rimg=${1:?usage: nq-kernel-ota rescue <rescue-boot.img>}
     [ -f "$PENDING" ] && die "an OTA trial is pending — resolve it first (status / restore)"
     write_trial "$_rimg"
-    cat <<EOF
+    cat <<'EOF'
 
   The rescue image is in the trial slot. Booting it leaves the rootfs on p13
   UNMOUNTED, so it can be repaired, resized or replaced. Nothing has been
@@ -607,7 +607,7 @@ EOF
 
 cmd_try() {
     [ -f "$PENDING" ] || die "nothing staged"
-    cat <<EOF
+    cat <<'EOF'
 
   ⚠️  A TRIAL BOOT CANNOT BE UNDONE REMOTELY.
 
