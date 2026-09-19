@@ -1,0 +1,13 @@
+# /etc/hostname is systemd-hostnamed's file and it rewrites it atomically, so
+# it cannot be bind-mounted or symlinked into the store. Record every change
+# instead (a rename from the app, or `hostnamectl` by hand); nq-persist apply
+# puts it back after a flash.
+[Unit]
+Description=Nexus Q persist: watch /etc/hostname
+
+[Path]
+PathChanged=/etc/hostname
+Unit=nexusq-persist-hostname.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# Nexus Q persist store, step 3 of 3: with the store mounted, seed it from the
+# rootfs where it is still empty (the upgrade path: the unit's current state
+# becomes the store), merge writes parked by `prepare`, render the sshd host-
+# key list and the site NTP drop-in into /run, apply the stored hostname.
+# The bind mounts that follow require this unit.
+[Unit]
+Description=Nexus Q persist store: seed, merge and render
+DefaultDependencies=no
+RequiresMountsFor=/var/lib/nexusq/persist
+After=var-lib-nexusq-persist.mount
+Before=local-fs.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathIsMountPoint=/var/lib/nexusq/persist
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nq-persist apply
+
+[Install]
+WantedBy=local-fs.target

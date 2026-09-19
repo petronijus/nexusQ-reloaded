@@ -1,0 +1,21 @@
+# Nexus Q persist store, step 2 of 3: the `cache` partition on
+# /var/lib/nexusq/persist. Installed as var-lib-nexusq-persist.mount (systemd
+# names a mount unit after its path). Wanted, not required, by local-fs.target:
+# a unit whose store will not mount boots on its rootfs state, loudly, rather
+# than not at all.
+[Unit]
+Description=Nexus Q persist store (cache partition, survives a flash)
+DefaultDependencies=no
+Requires=nexusq-persist-prepare.service systemd-fsck@dev-disk-by\x2dpartlabel-cache.service
+After=nexusq-persist-prepare.service systemd-fsck@dev-disk-by\x2dpartlabel-cache.service
+Before=local-fs.target umount.target
+Conflicts=umount.target
+
+[Mount]
+What=/dev/disk/by-partlabel/cache
+Where=/var/lib/nexusq/persist
+Type=ext4
+Options=noatime,nodev,nosuid
+
+[Install]
+WantedBy=local-fs.target

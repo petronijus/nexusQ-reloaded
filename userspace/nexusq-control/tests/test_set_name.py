@@ -147,3 +147,51 @@ class TestSetName(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIdentityThroughSymlink(unittest.TestCase):
+    """Device r103 makes /etc/nexusq/device.json a symlink into the persist
+    store. A write that replaces the LINK with a regular file still "works" --
+    the name shows up -- and the next flash loses it again. Pin that the link
+    survives and the target carries the content, including when the link is
+    still dangling (a freshly seeded store has no identity yet)."""
+
+    def setUp(self):
+        self.mod = load_daemon()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = os.path.join(self.tmp.name, "persist", "identity")
+        self.target = os.path.join(self.store, "device.json")
+        self.link = os.path.join(self.tmp.name, "etc-nexusq", "device.json")
+        os.makedirs(os.path.dirname(self.link))
+        os.symlink(self.target, self.link)
+        self.mod.IDENTITY_PATH = self.link
+
+    def _rename(self):
+        with patch.object(self.mod.subprocess, "run", return_value=_Ok()), \
+             patch.object(self.mod, "_systemctl_user"), \
+             patch.object(self.mod, "publish_mdns"):
+            return self.mod.set_name({"name": "Obývák", "room": "living"})
+
+    def test_dangling_link_gets_a_target_and_stays_a_link(self):
+        self.assertFalse(os.path.exists(self.target))
+        self._rename()
+        self.assertTrue(os.path.islink(self.link), "the link was replaced")
+        with open(self.target) as f:
+            self.assertEqual(json.load(f), {"name": "Obývák", "room": "living"})
+        self.assertEqual(os.listdir(self.store), ["device.json"], "temp file left behind")
+
+    def test_existing_target_is_replaced_atomically(self):
+        os.makedirs(self.store)
+        with open(self.target, "w") as f:
+            json.dump({"name": "old", "room": ""}, f)
+        self._rename()
+        self.assertTrue(os.path.islink(self.link))
+        self.assertEqual(self.mod.load_identity(self.link), {"name": "Obývák", "room": "living"})
+
+    def test_plain_file_still_works(self):
+        plain = os.path.join(self.tmp.name, "plain.json")
+        self.mod.IDENTITY_PATH = plain
+        self._rename()
+        self.assertFalse(os.path.islink(plain))
+        self.assertEqual(self.mod.load_identity(plain), {"name": "Obývák", "room": "living"})

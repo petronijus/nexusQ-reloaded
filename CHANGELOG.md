@@ -6,6 +6,53 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — a per-unit persist store: what a flash must not take with it (device r103, nexusq-control r46, nexusq-setupd r5)
+
+Petr arrived in Prague on 2026-09-19 to find **"USB Audio" off**. The journal,
+persistent across every boot since the 09-16 v1.16.0 flash, had the answer:
+`/home/user/.config/systemd/` was created at 21:18:16 that evening — by the app,
+when he switched it back on — and `nexusq-uac2-in` had never started before.
+The flash had reset the source toggles to the image defaults (`usbaudio` and
+`roon` ship default-OFF) and nothing said so. The same flash resets the unit's
+name, its WiFi profile, its Bluetooth bonds and its ssh host keys (hence the
+standing "`ssh-keygen -R` after every reflash"), and since r102 a site's own
+NTP server had nowhere to live at all. The third instance of one defect — a
+per-unit value living where the fleet image lives — after the first unit's MAC
+in the shared DTS and Prague's gateway in the fleet NTP list.
+
+A flash writes `boot` and `userdata` and nothing else. The **`cache` partition
+(p12, 512 MB)**, stock Android's OTA scratch space that nothing in this OS
+reads, survives a flash and `fastboot oem unlock` alike. It now carries an ext4
+labelled `nq-persist`, mounted at `/var/lib/nexusq/persist`, and the per-unit
+directories are **bind-mounted from it over their rootfs paths** at boot — one
+copy, nothing to synchronise, nothing to redo:
+
+| in the store | rootfs path | mechanism |
+|---|---|---|
+| the source toggles (user-manager enablement) | `/home/user/.config/systemd` | bind mount |
+| this unit's WiFi profile(s) | `/etc/NetworkManager/system-connections` | bind mount — the package's `eth-lan` / `eth-direct` moved to NM's read-only `/usr/lib/…/system-connections` so the `/etc` dir is per-unit only |
+| Bluetooth adapter state and bonds | `/var/lib/bluetooth` | bind mount |
+| name + room (`device.json`) | `/etc/nexusq/device.json` | **symlink** into the store; both writers now write *through* it (`write_identity()`), pinned by tests seen failing against the old `os.replace(tmp, link)` |
+| hostname | `/etc/hostname` | applied at boot, recorded by a `.path` unit on every change (hostnamed rewrites the file atomically, so nothing else survives it) |
+| ssh host keys | `/etc/ssh/ssh_host_*` | kept in the store; `HostKey` list rendered per boot into `/run` and `Include`d by `sshd_config.d/10-nexusq-persist.conf` — only keys that exist, so a missing store means sshd's defaults, never no sshd. **`ssh-keygen -R` after a reflash is over.** |
+| the site's NTP server(s) | (new) | `nq-persist ntp set 192.168.20.1`; rendered per boot into `/run/systemd/timesyncd.conf.d/` as `NTP=` (reset) + site first + the current fleet list — timesyncd *merges* `NTP=` across drop-ins (measured), so a plain append would have landed last |
+
+`nq-persist` (`prepare` → mount → `apply` → bind mounts, all wanted by
+`local-fs.target`) formats the partition exactly once — only when its label is
+not ours, never when it is mounted — seeds the store from the running rootfs the
+first time (so the upgrade path makes the unit's *current* state the store),
+merges anything written under the unmounted mountpoint without clobbering, and
+renders the sshd and NTP files. Every failure is loud and non-fatal: no store →
+the bind mounts skip on `ConditionPathIsMountPoint` and the unit boots on its
+rootfs state exactly as before r103. Rootfs A/B copies with
+`--one-file-system`, so both slots share one store; `nq-kernel-ota` is
+untouched. Tests: `pmos/device-google-steelhead/tests/test_persist.sh` — 48
+checks in one `--privileged` Alpine container on a loop image, including the
+control that the same "flash" *without* the store loses the toggle.
+`docs/2026-09-19-the-flash-that-forgot-the-unit.md` has the evidence and the
+design. Phase 2, not here: the initramfs taking the unit's MAC from the store,
+which would retire the hand DTB patch at flash time.
+
 ### Fixed — the fleet-key reconciliation only ever looked at the device's architecture
 
 `install-fleet-signing-key.sh` parks apks signed by a retired key and drops the

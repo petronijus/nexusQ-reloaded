@@ -1,0 +1,397 @@
+#!/bin/sh
+# nq-persist -- the per-unit state store: what a flash must not take with it.
+#
+# A flash writes `boot` (p9) and `userdata` (p13) and nothing else. Everything
+# that makes THIS unit this unit -- which sources are switched on, its name,
+# its WiFi profile, its ssh host keys, its Bluetooth bonds, its site's NTP
+# server -- used to live on the rootfs, so every flash reset it to the image
+# defaults and somebody re-did it by hand (or did not: on 2026-09-19 the Prague
+# Q had been without USB Audio for three days because the 09-16 flash switched
+# it off and nothing said so). The same class of defect as the first unit's MAC
+# in the shared DTS and Prague's gateway in the fleet NTP list: a per-unit value
+# living where the fleet image lives.
+#
+# The `cache` partition (p12, 512 MB, stock Android's OTA scratch space, unused
+# by us) survives a flash and `fastboot oem unlock` alike. It carries an ext4
+# labelled `nq-persist`, mounted at /var/lib/nexusq/persist, and the per-unit
+# directories are BIND-MOUNTED from it over their rootfs paths -- one source of
+# truth, nothing to synchronise, nothing to forget. The systemd units that do
+# the mounting are in the device package; this script is the part that needs
+# judgement:
+#
+#   prepare        format the partition the first time (and only then)
+#   apply          seed the store from the rootfs the first time, then render
+#                  what cannot be bind-mounted (sshd host keys, site NTP,
+#                  hostname); runs before the bind mounts every boot
+#   save-hostname  copy /etc/hostname into the store (a .path unit calls it)
+#   ntp ...        the per-site NTP server list
+#   status         what is persisted, and whether it is actually mounted
+#
+# Paths honour NQ_ROOT / NQ_PERSIST_DEV / NQ_PERSIST_MNT / NQ_RUN so the whole
+# thing runs inside a throwaway container in tests/test_persist.sh.
+#
+# Every failure path is loud and NON-FATAL for the boot: if the partition is
+# missing or the store will not mount, the bind mounts are skipped (their
+# ConditionPathIsMountPoint) and the unit boots on its rootfs state exactly as
+# before r103. It does not boot without ssh: the sshd host-key list is rendered
+# into /run only for keys that exist, and an absent list means sshd's defaults.
+set -eu
+
+DEV=${NQ_PERSIST_DEV:-/dev/disk/by-partlabel/cache}
+MNT=${NQ_PERSIST_MNT:-/var/lib/nexusq/persist}
+ROOT=${NQ_ROOT:-}
+RUN=${NQ_RUN:-$ROOT/run/nexusq}
+LABEL=nq-persist
+MARKER=.nq-persist
+USER_OWNER=${NQ_USER_OWNER:-10000:10000}
+FLEET_NTP=${NQ_FLEET_NTP:-$ROOT/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip.conf}
+SITE_NTP_OUT=${NQ_SITE_NTP_OUT:-$ROOT/run/systemd/timesyncd.conf.d/20-nexusq-site-ntp.conf}
+SSHD_HOSTKEYS_OUT=$RUN/sshd-hostkeys.conf
+SHADOW=$RUN/persist-shadow
+
+# The bind-mount map. One line per directory: <store subdir> <rootfs path>
+# <owner> <mode>. The .mount units in the device package name the same pairs;
+# a new entry here needs a unit there (and a preset line), or nothing mounts it.
+#
+#   user-systemd    the uid-10000 user manager's enablement state: the app's
+#                   Spotify / AirPlay / Roon / USB Audio toggles
+#   nm-connections  NetworkManager's writable profiles: the WiFi network(s)
+#                   this unit was joined to. The package's eth-lan/eth-direct
+#                   moved to /usr/lib/NetworkManager/system-connections, so
+#                   this directory is per-unit and nothing else.
+#   bluetooth       BlueZ's adapter state and bonds
+MAP='
+user-systemd /home/user/.config/systemd USER 0755
+nm-connections /etc/NetworkManager/system-connections root:root 0755
+bluetooth /var/lib/bluetooth root:root 0700
+'
+
+log()  { echo "nq-persist: $*"; }
+warn() { echo "nq-persist: WARNING: $*" >&2; }
+die()  { echo "nq-persist: ERROR: $*" >&2; exit 1; }
+
+usage() {
+	# Quoted heredoc: nothing in here is a command (nexusq-kernel-ota r7).
+	cat <<'USAGE'
+usage: nq-persist <command>
+
+  prepare              make sure the persist partition carries our filesystem
+                       (formats it ONLY when it is not ours); park anything
+                       written under the unmounted mountpoint for `apply`
+  apply                with the store mounted: seed it from the rootfs where it
+                       is empty, merge parked writes, render the sshd host-key
+                       list and the site NTP drop-in, apply the hostname
+  save-hostname        record /etc/hostname in the store
+  ntp show             the site's own NTP server(s), if any
+  ntp set <ip> [...]   put this site's NTP server(s) FIRST, before the fleet's
+                       anycast list; restarts systemd-timesyncd
+  ntp clear            back to the fleet list alone
+  status               what is stored and what is actually mounted
+USAGE
+}
+
+is_mounted() {  # is_mounted <path>
+	awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' /proc/mounts
+}
+
+mount_source() {  # mount_source <path>  -> the source of the mount at <path>, or ""
+	awk -v m="$1" '$2 == m { s = $1 } END { print s }' /proc/mounts
+}
+
+owner_of() {  # owner_of <owner-spec> -> resolves the USER placeholder
+	[ "$1" = USER ] && echo "$USER_OWNER" || echo "$1"
+}
+
+each_map() {  # each_map <fn>  -- calls fn <sub> <path> <owner> <mode>
+	printf '%s\n' "$MAP" | while read -r sub path owner mode; do
+		[ -n "$sub" ] || continue
+		"$1" "$sub" "$ROOT$path" "$(owner_of "$owner")" "$mode"
+	done
+}
+
+# --- prepare --------------------------------------------------------------
+
+cmd_prepare() {
+	# Anything written under the mountpoint while the store was NOT mounted --
+	# the r102->r103 upgrade puts the unit's device.json there so the name is
+	# served until the reboot -- would be hidden by the mount. Park it in /run;
+	# `apply` merges it into the store (never over what the store already has).
+	if ! is_mounted "$MNT" && [ -d "$MNT" ] \
+	   && [ -n "$(find "$MNT" -mindepth 1 -maxdepth 1 ! -name lost+found 2>/dev/null | head -1)" ]; then
+		mkdir -p "$SHADOW"
+		cp -a "$MNT"/. "$SHADOW"/
+		find "$MNT" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
+		log "parked writes made under the unmounted $MNT in $SHADOW"
+	fi
+	mkdir -p "$MNT"
+
+	[ -e "$DEV" ] || die "$DEV does not exist -- no persist partition on this unit?"
+
+	label=$(blkid -s LABEL -o value "$DEV" 2>/dev/null || true)
+	if [ "$label" = "$LABEL" ]; then
+		log "$DEV is the persist store (label $LABEL)"
+		return 0
+	fi
+	# Not ours. Refuse to touch anything that is in use, then format: the only
+	# other thing ever found here is stock Android's ext4 `cache`, which nothing
+	# in this OS reads. The label is the proof of ownership from here on.
+	real=$(readlink -f "$DEV")
+	if awk -v d="$real" '$1 == d { f = 1 } END { exit !f }' /proc/mounts; then
+		die "$DEV ($real) is mounted and is not the persist store -- refusing to format"
+	fi
+	fstype=$(blkid -s TYPE -o value "$DEV" 2>/dev/null || true)
+	log "$DEV carries ${fstype:-no filesystem} labelled '${label:-}' -- formatting as $LABEL"
+	mkfs.ext4 -q -F -L "$LABEL" -m 0 "$DEV" || die "mkfs.ext4 $DEV failed"
+	log "formatted $DEV"
+}
+
+# --- apply ----------------------------------------------------------------
+
+seed_one() {  # seed_one <sub> <path> <owner> <mode>
+	sub=$1; path=$2; owner=$3; mode=$4
+	store="$MNT/$sub"
+	if [ ! -d "$store" ]; then
+		mkdir -p "$store"
+		n=0
+		if [ -d "$path" ] && ! is_mounted "$path"; then
+			cp -a "$path"/. "$store"/
+			n=$(find "$store" -mindepth 1 | wc -l)
+		fi
+		chown "$owner" "$store"
+		chmod "$mode" "$store"
+		log "seeded $sub from $path ($n entries)"
+	fi
+	# The bind mount needs its target; a virgin flash has no ~/.config/systemd.
+	if [ ! -d "$path" ]; then
+		mkdir -p "$path"
+		chown "$owner" "$path"
+		chmod "$mode" "$path"
+	fi
+}
+
+merge_shadow() {
+	[ -d "$SHADOW" ] || return 0
+	n=0
+	# Files only, never over an existing one: the store is the truth, the
+	# shadow is at best what the store did not have yet.
+	find "$SHADOW" -type f | while read -r f; do
+		rel=${f#"$SHADOW"/}
+		[ -e "$MNT/$rel" ] && continue
+		mkdir -p "$(dirname "$MNT/$rel")"
+		cp -p "$f" "$MNT/$rel"
+		echo "$rel"
+	done | { c=0; while read -r rel; do c=$((c + 1)); log "merged parked $rel"; done; }
+	rm -rf "$SHADOW"
+}
+
+apply_identity() {
+	mkdir -p "$MNT/identity"
+	chmod 0755 "$MNT/identity"
+	# device.json arrives through the symlink /etc/nexusq/device.json (set by
+	# the app); nothing to seed. The hostname is systemd's file, not ours to
+	# symlink -- hostnamed rewrites it atomically -- so it is applied here and
+	# recorded by nexusq-persist-hostname.path whenever it changes.
+	stored="$MNT/identity/hostname"
+	current="$ROOT/etc/hostname"
+	if [ -s "$stored" ]; then
+		want=$(head -n1 "$stored" | tr -d '[:space:]')
+		have=$(head -n1 "$current" 2>/dev/null | tr -d '[:space:]' || true)
+		if [ -n "$want" ] && [ "$want" != "$have" ]; then
+			printf '%s\n' "$want" > "$current"
+			[ -z "$ROOT" ] && hostname -F "$current" 2>/dev/null || true
+			log "hostname applied from the store: $want (rootfs had '${have:-}')"
+		fi
+	elif [ -s "$current" ]; then
+		cp -p "$current" "$stored"
+		log "hostname seeded into the store: $(head -n1 "$current")"
+	fi
+}
+
+apply_ssh() {
+	mkdir -p "$MNT/ssh"
+	chmod 0700 "$MNT/ssh"
+	if [ -z "$(find "$MNT/ssh" -name 'ssh_host_*_key' 2>/dev/null | head -1)" ]; then
+		if ls "$ROOT"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+			cp -p "$ROOT"/etc/ssh/ssh_host_*_key "$ROOT"/etc/ssh/ssh_host_*_key.pub "$MNT/ssh"/
+			log "ssh host keys seeded from /etc/ssh ($(ls "$MNT"/ssh/ssh_host_*_key | wc -l) keys)"
+		else
+			# A virgin flash: sshdgenkeys has not run yet (it is ordered after
+			# sysinit, we are before local-fs). Make this unit's keys now, so
+			# the very first `ssh` fingerprint is the one it keeps forever.
+			tmp=$(mktemp -d)
+			mkdir -p "$tmp/etc/ssh"
+			if ssh-keygen -A -f "$tmp" >/dev/null 2>&1; then
+				mv "$tmp"/etc/ssh/ssh_host_* "$MNT/ssh"/
+				log "ssh host keys generated ($(ls "$MNT"/ssh/ssh_host_*_key | wc -l) keys)"
+			else
+				warn "ssh-keygen -A failed; sshd will use its rootfs keys"
+			fi
+			rm -rf "$tmp"
+		fi
+	fi
+	chmod 0600 "$MNT"/ssh/ssh_host_*_key 2>/dev/null || true
+	chmod 0644 "$MNT"/ssh/ssh_host_*_key.pub 2>/dev/null || true
+	render_sshd
+}
+
+render_sshd() {
+	# sshd_config.d/10-nexusq-persist.conf says `Include /run/nexusq/sshd-
+	# hostkeys.conf`. HostKey lines from an include REPLACE sshd's defaults;
+	# a missing include is silently nothing (verified on OpenSSH 10.5 on the
+	# unit, 2026-09-19). So: list exactly the keys that exist, or no file --
+	# never a HostKey line sshd cannot open, which with no other key is a
+	# sshd that exits and a unit nobody can reach.
+	mkdir -p "$RUN"
+	keys=$(find "$MNT/ssh" -maxdepth 1 -name 'ssh_host_*_key' 2>/dev/null | sort)
+	if [ -z "$keys" ]; then
+		rm -f "$SSHD_HOSTKEYS_OUT"
+		return 0
+	fi
+	{
+		echo "# rendered by nq-persist apply -- this unit's host keys live in the persist store"
+		printf '%s\n' "$keys" | sed 's/^/HostKey /'
+	} > "$SSHD_HOSTKEYS_OUT.tmp"
+	mv "$SSHD_HOSTKEYS_OUT.tmp" "$SSHD_HOSTKEYS_OUT"
+}
+
+fleet_ntp_list() {
+	# The LAST NTP= line of the fleet drop-in (an earlier `NTP=` would be a reset).
+	[ -r "$FLEET_NTP" ] && sed -n 's/^NTP=//p' "$FLEET_NTP" | tail -n1 || true
+}
+
+render_ntp() {
+	site=""
+	[ -s "$MNT/site/ntp-servers" ] && site=$(tr -s '[:space:]' ' ' < "$MNT/site/ntp-servers" | sed 's/^ //; s/ $//')
+	if [ -z "$site" ]; then
+		rm -f "$SITE_NTP_OUT"
+		return 0
+	fi
+	fleet=$(fleet_ntp_list)
+	# timesyncd MERGES NTP= across drop-ins (measured 2026-09-19: a plain
+	# `NTP=192.168.20.1` in a later file landed LAST). An empty assignment
+	# resets the list, so: reset, then the site first, then the fleet's
+	# anycast servers, minus any the site already named. Rendered into /run
+	# on every boot, so a changed fleet list is picked up without touching
+	# the store.
+	merged=$site
+	for s in $fleet; do
+		case " $merged " in *" $s "*) ;; *) merged="$merged $s" ;; esac
+	done
+	mkdir -p "$(dirname "$SITE_NTP_OUT")"
+	{
+		echo "# rendered by nq-persist -- this site's NTP server(s) first, the fleet list after"
+		echo "# site: $site   (from $MNT/site/ntp-servers)"
+		echo "[Time]"
+		echo "NTP="
+		echo "NTP=$merged"
+	} > "$SITE_NTP_OUT.tmp"
+	mv "$SITE_NTP_OUT.tmp" "$SITE_NTP_OUT"
+}
+
+cmd_apply() {
+	is_mounted "$MNT" || die "$MNT is not a mountpoint -- run prepare and mount the store first"
+	if [ ! -f "$MNT/$MARKER" ]; then
+		printf 'nq-persist store v1\ncreated=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MNT/$MARKER"
+		log "new store at $MNT"
+	fi
+	merge_shadow
+	each_map seed_one
+	apply_identity
+	apply_ssh
+	mkdir -p "$MNT/site"
+	render_ntp
+	log "apply done"
+}
+
+# --- the rest -------------------------------------------------------------
+
+cmd_save_hostname() {
+	is_mounted "$MNT" || { warn "store not mounted; hostname not recorded"; return 0; }
+	[ -s "$ROOT/etc/hostname" ] || return 0
+	mkdir -p "$MNT/identity"
+	cp -p "$ROOT/etc/hostname" "$MNT/identity/hostname.tmp"
+	mv "$MNT/identity/hostname.tmp" "$MNT/identity/hostname"
+	log "hostname recorded: $(head -n1 "$MNT/identity/hostname")"
+}
+
+restart_timesyncd() {
+	[ -n "$ROOT" ] && return 0
+	command -v systemctl >/dev/null 2>&1 || return 0
+	systemctl try-restart systemd-timesyncd.service 2>/dev/null || true
+}
+
+cmd_ntp() {
+	sub=${1:-show}; [ $# -gt 0 ] && shift
+	case "$sub" in
+	show)
+		if [ -s "$MNT/site/ntp-servers" ]; then
+			echo "site NTP: $(cat "$MNT/site/ntp-servers")"
+		else
+			echo "site NTP: none (fleet list only: $(fleet_ntp_list))"
+		fi
+		[ -f "$SITE_NTP_OUT" ] && { echo "rendered:"; sed 's/^/  /' "$SITE_NTP_OUT"; }
+		;;
+	set)
+		[ $# -gt 0 ] || die "ntp set needs at least one server address"
+		is_mounted "$MNT" || die "$MNT is not mounted"
+		for s in "$@"; do
+			case "$s" in
+			*[!0-9a-fA-F.:]*|"") die "'$s' is not an IP literal -- the whole point of this list is to work before DNS does" ;;
+			esac
+		done
+		mkdir -p "$MNT/site"
+		printf '%s\n' "$*" > "$MNT/site/ntp-servers.tmp"
+		mv "$MNT/site/ntp-servers.tmp" "$MNT/site/ntp-servers"
+		render_ntp
+		restart_timesyncd
+		log "site NTP set: $*"
+		;;
+	clear)
+		rm -f "$MNT/site/ntp-servers"
+		render_ntp
+		restart_timesyncd
+		log "site NTP cleared"
+		;;
+	*) die "ntp: unknown subcommand '$sub'" ;;
+	esac
+}
+
+status_one() {  # status_one <sub> <path> <owner> <mode>
+	src=$(mount_source "$2")
+	if [ -n "$src" ]; then
+		state="MOUNTED ($src)"
+	else
+		state="not mounted -- rootfs copy in use"
+	fi
+	n=$( [ -d "$MNT/$1" ] && find "$MNT/$1" -mindepth 1 | wc -l || echo -)
+	printf '  %-15s %-42s %s  [%s entries in store]\n' "$1" "$2" "$state" "$n"
+}
+
+cmd_status() {
+	echo "persist device : $DEV -> $(readlink -f "$DEV" 2>/dev/null || echo '(missing)')"
+	echo "label          : $(blkid -s LABEL -o value "$DEV" 2>/dev/null || echo '(none)')"
+	if is_mounted "$MNT"; then
+		echo "store          : mounted at $MNT ($(df -h "$MNT" | awk 'NR==2{print $3" used of "$2}'))"
+		[ -f "$MNT/$MARKER" ] && sed 's/^/                 /' "$MNT/$MARKER"
+	else
+		echo "store          : NOT MOUNTED ($MNT)"
+	fi
+	echo "bind mounts    :"
+	each_map status_one
+	echo "identity       : hostname=$(cat "$MNT/identity/hostname" 2>/dev/null || echo -)" \
+	     "device.json=$( [ -s "$MNT/identity/device.json" ] && cat "$MNT/identity/device.json" || echo -)"
+	echo "ssh host keys  : $(find "$MNT/ssh" -maxdepth 1 -name 'ssh_host_*_key' 2>/dev/null | wc -l)" \
+	     "($( [ -f "$SSHD_HOSTKEYS_OUT" ] && echo "rendered for sshd" || echo "NOT rendered -- sshd on rootfs keys"))"
+	echo "site NTP       : $(cat "$MNT/site/ntp-servers" 2>/dev/null || echo 'none (fleet list only)')"
+}
+
+cmd=${1:-}; [ $# -gt 0 ] && shift
+case "$cmd" in
+prepare)        cmd_prepare ;;
+apply)          cmd_apply ;;
+save-hostname)  cmd_save_hostname ;;
+ntp)            cmd_ntp "$@" ;;
+status)         cmd_status ;;
+-h|--help|help|"") usage; [ "$cmd" = "" ] && exit 2 || exit 0 ;;
+*)              usage >&2; exit 2 ;;
+esac

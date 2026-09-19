@@ -34,3 +34,12 @@ enable nexusq-nfc.service
 enable nexusq-setupd.service
 enable nexusq-btagent.service
 enable nexusq-resize-rootfs.service
+# The per-unit persist store (r103): local units, listed so the whole thing
+# stays declarative. Mount units preset like any other.
+enable nexusq-persist-prepare.service
+enable var-lib-nexusq-persist.mount
+enable nexusq-persist-apply.service
+enable home-user-.config-systemd.mount
+enable etc-NetworkManager-system\x2dconnections.mount
+enable var-lib-bluetooth.mount
+enable nexusq-persist-hostname.path

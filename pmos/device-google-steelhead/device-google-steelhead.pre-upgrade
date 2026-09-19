@@ -43,4 +43,27 @@ if [ -d "$STASH" ]; then
 	echo "nexusq: stashed baked access for the r91 migration ($STASH)" >&2
 fi
 
+
+# --- r103: /etc/nexusq/device.json becomes a symlink into the persist store ---
+# The unit's identity (name + room) used to be a plain file here; from r103 the
+# package ships a symlink to /var/lib/nexusq/persist/identity/device.json. apk
+# would install that symlink onto an unowned file, so the file is moved out of
+# the way first -- and moved to the link's TARGET path, which is under the
+# store's mountpoint but on the rootfs (the store is not mounted before the
+# reboot). The symlink therefore serves the old name the moment it is
+# installed, and at the next boot `nq-persist prepare` parks what it finds under
+# the unmounted mountpoint and `apply` merges it into the freshly seeded store.
+# Tested in tests/test_persist.sh ("pre-upgrade moves a plain identity").
+f=/etc/nexusq/device.json
+if [ -f "$f" ] && [ ! -L "$f" ]; then
+	mkdir -p /var/lib/nexusq/persist/identity
+	if cp -p "$f" /var/lib/nexusq/persist/identity/device.json; then
+		rm -f "$f"
+		echo "nexusq: identity moved under the persist mountpoint for r103" \
+		     "(served through the new symlink; merged into the store at the next boot)" >&2
+	else
+		echo "nexusq: WARNING could not move $f for r103 -- apk may refuse the symlink" >&2
+	fi
+fi
+
 exit 0

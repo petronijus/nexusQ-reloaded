@@ -1,0 +1,7 @@
+[Unit]
+Description=Nexus Q persist: record the hostname in the store
+ConditionPathIsMountPoint=/var/lib/nexusq/persist
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nq-persist save-hostname

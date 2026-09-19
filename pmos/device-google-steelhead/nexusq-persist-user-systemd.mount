@@ -1,0 +1,22 @@
+# Nexus Q persist store: the user manager's enablement state (the app's source toggles).
+# Bind-mounted from the store over its rootfs path, so there is ONE copy and
+# nothing to synchronise; a flash rewrites the rootfs underneath and this mount
+# puts the unit's own state back on top. Skipped (ConditionPathIsMountPoint)
+# when the store did not mount -- the rootfs copy is then in use, as before r103.
+[Unit]
+Description=Nexus Q persist: the user manager's enablement state (the app's source toggles)
+DefaultDependencies=no
+Requires=nexusq-persist-apply.service
+After=nexusq-persist-apply.service
+Before=local-fs.target umount.target
+Conflicts=umount.target
+ConditionPathIsMountPoint=/var/lib/nexusq/persist
+
+[Mount]
+What=/var/lib/nexusq/persist/user-systemd
+Where=/home/user/.config/systemd
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

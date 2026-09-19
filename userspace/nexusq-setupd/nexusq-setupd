@@ -81,6 +81,30 @@ def pairing_color(mac):
     return tuple(int(v * 255 + 0.5) for v in rgbf)
 
 
+def write_identity(path, ident):
+    """Atomically write the identity file THROUGH a symlink, never over it.
+
+    Since device r103 /etc/nexusq/device.json is a symlink into the per-unit
+    persist store (`nq-persist`): tmp-then-os.replace(link) would swap the link
+    for a regular file, and the next flash would lose the name again. The temp
+    file goes beside the link's TARGET and is renamed over that. Byte-for-byte
+    the same rule as nexusq-control's write_identity, for the same reason the
+    hostname rule is shared: two daemons, one file. Raises OSError."""
+    real = os.path.realpath(path)
+    os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+    tmp = f"{real}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(ident, f)
+        os.replace(tmp, real)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def sanitize_hostname(name):
     """Display name -> RFC-952-ish hostname: ascii-fold, lowercase,
     non-alnum runs -> '-', trimmed, <=63 chars, fallback 'nexusq'."""
@@ -340,11 +364,7 @@ class SetupCore:
         r = self.run(["hostnamectl", "set-hostname", host], timeout=15)
         if r.returncode != 0:
             raise Err("internal", "hostname change failed")
-        os.makedirs(os.path.dirname(IDENTITY_PATH), exist_ok=True)
-        tmp = IDENTITY_PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"name": name, "room": room}, f)
-        os.replace(tmp, IDENTITY_PATH)
+        write_identity(IDENTITY_PATH, {"name": name, "room": room})
         # re-advertise: the bridge publishes its mDNS name at start; librespot
         # reads the name at start. Restart both, best-effort (setName may run
         # before either is relevant; failures must not fail the setup).

@@ -184,6 +184,66 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
+## Session 2026-09-19: **the Prague Q takes r7 + r102 — both units level, the fleet is on v1.17.0**
+
+Short session on the desktop PC, picking up the one open handover (Colony
+`hnd_7419e7e38b239535`, Todoist AI-handover `6hX7XcqjXP9vppx3`, HANDOVER.md
+"Prague Q — 2026-09-18"). The Prague Q is on the desktop's own LAN, so no jump
+host: `ssh root@192.168.20.246`, `hostname` = `steelhead` checked before
+anything else.
+
+- **`apk upgrade --available --ignore linux-google-steelhead`** — the same
+  command the cottage ran on 2026-09-18. `nexusq-kernel-ota` r5 → r7,
+  `device-google-steelhead(-nonfree-firmware)` r101 → r102, 27 Alpine edge
+  packages alongside; kernel untouched at `6.18.48-r2`; no reboot. The
+  postmarketos-mkinitfs trigger regenerated `/boot/boot.img` as it does on every
+  device-package upgrade — inert here, the A/B slots are only written by
+  `nq-kernel-ota`.
+- **Verified, not assumed:** r7 usage prints without a reboot (uptime
+  continuous across the call); timesyncd restarted onto the anycast-only list
+  and synchronized against `162.159.200.1` within seconds; the r102 access
+  migration (`pre-upgrade` stash → `post-upgrade` restore) left
+  `authorized_keys` ×2, the WiFi profile and `mqtt.json` intact; no failed
+  units; every warning in the post-upgrade journal predates it and is already
+  in the docs (systemd-262 core-pattern noise, libkscreen lint, one `hrtimer`
+  line from before the upgrade).
+- **Decision deferred — Prague's LAN NTP.** r102 removed `192.168.20.1` from
+  the fleet list and Prague now syncs to Cloudflare. The r102 commit says a
+  site with its own NTP server prepends it from a `20-<site>-ntp.conf` in the
+  overlay, but `private/` bakes into the fleet package for both units, so a
+  per-site file needs a mechanism (site detection at boot, or a per-unit
+  package) that does not exist yet. Not built unasked. Cost today: only a
+  WAN-down boot after a mains cut.
+
+- **Why "USB Audio" was OFF when Petr arrived in Prague (asked, diagnosed):**
+  the 2026-09-16 v1.16.0 **flash** gave Prague a fresh rootfs, and the source
+  toggles live in `/home/user/.config/systemd/user/` — `nexusq-control`'s own
+  comment says "a reflash resets to image defaults", and `usbaudio` (like
+  `roon`) ships default-OFF. Evidence on the device: that directory did not
+  exist until **2026-09-19 21:18:16**, when the app (client `192.168.20.169`,
+  connected 21:17) did unmask + `enable --now` (two user-manager reloads at
+  21:18:11 / 21:18:16, symlink mtime 21:18:16); the persistent journal, which
+  covers every boot since the flash, has **no** start of `nexusq-uac2-in`
+  before that; `/home/user/.config/{labwc,lxqt}` carry the 09-16 build time and
+  `pulse` the 09-16 first boot. So nothing switched it off: neither the 09-17
+  kernel OTA reboots (they never touch `/home`) nor today's upgrade — it was
+  never switched back on after the flash, and the 09-16 session even wrote
+  "that would need the toggle ON". Roon is default-OFF on this unit for the
+  same reason. The `runuser` burst at 21:17:27–32 in the same journal window is
+  `nexusqd`'s `nqvol_apply` — the touch ring being turned, one `nq-vol` per
+  step, not a fault. **Structural gap, not fixed here:** a flash silently
+  loses the per-unit source selection. Either the flash guide / HANDOVER gets a
+  "record enabled sources before, restore after" step, or the selection is
+  persisted somewhere a flash keeps (same per-unit-config question as Prague's
+  LAN NTP above). With the toggle now ON, the 09-16 open item — does PulseAudio
+  ever open the UAC2 gadget card while `alsaloop` holds it — is measurable on
+  Prague.
+
+Docs touched: HANDOVER.md (Prague section marked done with the verification
+record), this entry. Not a release; CHANGELOG unchanged.
+
+---
+
 ## Session 2026-09-17: **the RTC never ran because MSECURE was never driven high — kernel 6.18.48-r2, delivered by kernel OTA and autopromoted the same evening**
 
 Follow-through on the 2026-09-16 "queued" item. Uncommitted at the time of

@@ -75,6 +75,32 @@ def load_identity(path=None):
     return ident
 
 
+def write_identity(path, ident):
+    """Atomically write the identity file -- THROUGH a symlink, never over it.
+
+    Since device r103 /etc/nexusq/device.json is a symlink into the per-unit
+    persist store (`nq-persist`, the `cache` partition a flash never touches).
+    The old tmp-then-os.replace(link) would have swapped the LINK for a regular
+    file: the rename works, the name shows up, and the next flash loses it
+    again -- silently, which is the exact failure this store exists to end.
+    So the temp file is created beside the link's TARGET and renamed over
+    that. A plain file (tests, an image without the store) resolves to itself
+    and behaves exactly as before. Raises OSError; the caller decides."""
+    real = os.path.realpath(path)
+    os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+    tmp = f"{real}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(ident, f)
+        os.replace(tmp, real)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def sanitize_hostname(name):
     """Display name -> RFC-952-ish hostname: ascii-fold, lowercase,
     non-alnum runs -> '-', trimmed, <=63 chars, fallback 'nexusq'.
@@ -2887,18 +2913,9 @@ def set_name(p):
     if r.returncode != 0:
         raise Err("internal", "hostname change failed")
 
-    path = IDENTITY_PATH
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
     try:
-        with open(tmp, "w") as f:
-            json.dump({"name": name, "room": room}, f)
-        os.replace(tmp, path)
+        write_identity(IDENTITY_PATH, {"name": name, "room": room})
     except OSError as e:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         raise Err("internal", f"cannot write identity: {e}")
 
     DEVICE_NAME, DEVICE_ROOM = name, room

@@ -8,7 +8,7 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Prague Q — 2026-09-18: take `nexusq-kernel-ota` r7 + `device-google-steelhead` r102
+## Prague Q — 2026-09-18: take `nexusq-kernel-ota` r7 + `device-google-steelhead` r102 — ✅ done 2026-09-19
 
 Both were built and published **from the MacBook at the cottage** (gh-pages
 `09bd713`, secrets gate 11/11 clean) and installed on the Šumperák Q. The Prague
@@ -28,6 +28,34 @@ or just let the app's own "Nexus Q" update do it. Prague already runs
   add it back as a per-site drop-in (`20-<site>-ntp.conf`, sorting after the
   fleet file) in the private overlay — not in the fleet package, which is how it
   broke the cottage in the first place.
+
+**Done 2026-09-19 22:06 CEST from the desktop PC, directly on the Prague LAN**
+(`ssh root@192.168.20.246`, hostname `steelhead` verified first). Plain
+`apk upgrade --available --ignore linux-google-steelhead`: `nexusq-kernel-ota`
+r5 → **r7**, `device-google-steelhead` r101 → **r102**, kernel stays `6.18.48-r2`,
+plus 27 Alpine edge packages (glib, mesa, qt6-qtbase, ca-certificates, libinput…),
+no reboot. The r102 pre/post-upgrade access migration ran and lost nothing —
+both `authorized_keys` files, the WiFi profile and `/etc/nexusq/mqtt.json` are
+as before. Verified afterwards:
+
+- `nq-kernel-ota` with no arguments prints its usage and the uptime keeps
+  counting — the r7 fix holds on this unit too.
+- `systemd-timesyncd` restarted onto the new list: `ServerName=162.159.200.1`,
+  offset +8 ms, synchronized. **Prague no longer uses its gateway for NTP**; the
+  per-site drop-in was deliberately NOT added — the private overlay has no
+  per-site mechanism yet (everything in it bakes into the fleet package that
+  both units flash), so it would need runtime site detection first. Open
+  question for Petr; the cost today is only the WAN-down case, and with the
+  RTC ticking since `6.18.48-r2` a reboot no longer starts from 2000-01-01
+  unless mains was cut.
+- Journal after the upgrade: only the known systemd-262 `Kernel Core Pattern
+  Register` noise (109× this boot, predates the upgrade — CHANGELOG 1.16.0
+  known issues) and the libkscreen D-Bus naming lint
+  (`docs/2026-07-02-boot-error-inventory.md`). `dmesg -l err,warn` is the one
+  `hrtimer: interrupt took` line from 28 min *before* the upgrade. No failed
+  units.
+
+Nothing left to do on this unit. Both units now run device r102 / kernel-ota r7.
 
 ## Šumperák Q — 2026-09-18: brought to v1.17.0 — ✅ done
 

@@ -1,0 +1,20 @@
+# Nexus Q persist store, step 1 of 3: make sure the `cache` partition (p12)
+# carries our filesystem. Formats it ONLY when it is not ours (label
+# nq-persist); a stock unit arrives with Android's empty ext4 `cache` here.
+# Also parks anything written under the unmounted mountpoint for `apply`.
+# See /usr/bin/nq-persist for the whole design.
+[Unit]
+Description=Nexus Q persist store: prepare the cache partition
+DefaultDependencies=no
+Wants=dev-disk-by\x2dpartlabel-cache.device
+After=dev-disk-by\x2dpartlabel-cache.device local-fs-pre.target systemd-remount-fs.service
+Before=var-lib-nexusq-persist.mount local-fs.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nq-persist prepare
+
+[Install]
+WantedBy=local-fs.target

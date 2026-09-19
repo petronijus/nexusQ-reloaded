@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=102
+pkgrel=103
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -24,6 +24,12 @@ options="!check !archcheck !fhs !tracedeps"
 # slots, the switch is a 512-byte write to p7 "misc", and the choice is made by
 # an initramfs in the boot image; a boot image without it just mounts p13, which
 # is slot A (docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md).
+# r103 needs nexusq-control >= 0.1.0-r46 and nexusq-setupd >= 0.1.0-r5: the
+# identity file is a symlink into the persist store from r103 on, and only those
+# revisions write THROUGH it. Not expressed as `pkg>=ver` here because pmbootstrap
+# resolves build-time depends by aport name and fails on the operator
+# ("dependency not found: nexusq-control>=0.1.0-r46", 2026-09-19). All three are
+# in pmos/ota-packages.list and move together in one `apk upgrade`.
 depends="
 	linux-google-steelhead
 	mesa-dri-gallium
@@ -138,6 +144,17 @@ source="
 	nexusq-resize-rootfs
 	nexusq-resize-rootfs.service
 	nexusq.preset
+	nq-persist
+	nexusq-persist-prepare.service
+	nexusq-persist.mount
+	nexusq-persist-fsck-after-prepare.conf
+	nexusq-persist-apply.service
+	nexusq-persist-user-systemd.mount
+	nexusq-persist-nm-connections.mount
+	nexusq-persist-bluetooth.mount
+	nexusq-persist-hostname.path
+	nexusq-persist-hostname.service
+	10-nexusq-persist-sshd.conf
 	$pkgname.post-install
 	$pkgname.pre-upgrade
 	$pkgname.post-upgrade
@@ -275,10 +292,18 @@ package() {
 	# retry loop bounced the carrier every ~47 s and failed
 	# NetworkManager-wait-online (root-caused 2026-07-04; the LAN9500A
 	# itself is fully healthy again since batch 2b — task #17 closed).
+	#
+	# Since r103 they live in NM's read-only VENDOR profile directory
+	# (/usr/lib/NetworkManager/system-connections, keyfile plugin, verified on
+	# NM 1.58 on the unit), not in /etc: /etc/NetworkManager/system-connections
+	# is bind-mounted from the per-unit persist store and must hold nothing
+	# but this unit's own networks -- a package file in there would be shadowed
+	# by the store's stale copy after the next flash. Activation (`nmcli c up
+	# eth-direct`) is unchanged; an edit would land in /etc as a copy.
 	install -Dm600 "$srcdir"/eth-lan.nmconnection \
-		"$pkgdir"/etc/NetworkManager/system-connections/eth-lan.nmconnection
+		"$pkgdir"/usr/lib/NetworkManager/system-connections/eth-lan.nmconnection
 	install -Dm600 "$srcdir"/eth-direct.nmconnection \
-		"$pkgdir"/etc/NetworkManager/system-connections/eth-direct.nmconnection
+		"$pkgdir"/usr/lib/NetworkManager/system-connections/eth-direct.nmconnection
 	install -Dm644 "$srcdir"/eth-no-auto-default.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/eth-no-auto-default.conf
 
@@ -583,6 +608,56 @@ package() {
 	install -Dm644 "$srcdir"/snd-aloop.conf \
 		"$pkgdir"/etc/modules-load.d/snd-aloop.conf
 
+	# --- the per-unit persist store (r103) -----------------------------------
+	# What a flash must not take with it -- the source toggles, the WiFi
+	# profile, the ssh host keys, the Bluetooth bonds, the name, the site's NTP
+	# server -- lives on the `cache` partition and is bind-mounted over its
+	# rootfs path at boot. /usr/bin/nq-persist carries the design; the units
+	# are the plumbing: prepare (format once) -> mount -> apply (seed/render)
+	# -> three bind mounts, all wanted by local-fs.target so everything after
+	# sysinit (the user manager, NetworkManager, sshd, bluetoothd, timesyncd)
+	# sees the unit's own state without knowing the store exists.
+	install -Dm755 "$srcdir"/nq-persist "$pkgdir"/usr/bin/nq-persist
+	install -Dm644 "$srcdir"/nexusq-persist-prepare.service \
+		"$pkgdir"/etc/systemd/system/nexusq-persist-prepare.service
+	install -Dm644 "$srcdir"/nexusq-persist.mount \
+		"$pkgdir"/etc/systemd/system/var-lib-nexusq-persist.mount
+	install -Dm644 "$srcdir"/nexusq-persist-fsck-after-prepare.conf \
+		"$pkgdir"/etc/systemd/system/'systemd-fsck@dev-disk-by\x2dpartlabel-cache.service.d'/10-after-prepare.conf
+	install -Dm644 "$srcdir"/nexusq-persist-apply.service \
+		"$pkgdir"/etc/systemd/system/nexusq-persist-apply.service
+	# Mount units are named after their mountpoint (systemd-escape -p).
+	install -Dm644 "$srcdir"/nexusq-persist-user-systemd.mount \
+		"$pkgdir"/etc/systemd/system/home-user-.config-systemd.mount
+	install -Dm644 "$srcdir"/nexusq-persist-nm-connections.mount \
+		"$pkgdir"/etc/systemd/system/'etc-NetworkManager-system\x2dconnections.mount'
+	install -Dm644 "$srcdir"/nexusq-persist-bluetooth.mount \
+		"$pkgdir"/etc/systemd/system/var-lib-bluetooth.mount
+	install -dm755 "$pkgdir"/etc/systemd/system/local-fs.target.wants
+	for u in nexusq-persist-prepare.service var-lib-nexusq-persist.mount \
+		 nexusq-persist-apply.service home-user-.config-systemd.mount \
+		 'etc-NetworkManager-system\x2dconnections.mount' var-lib-bluetooth.mount; do
+		ln -sf "../$u" "$pkgdir/etc/systemd/system/local-fs.target.wants/$u"
+	done
+	# The hostname is hostnamed's file (rewritten atomically, so neither a
+	# symlink nor a bind mount survives it): record every change instead.
+	install -Dm644 "$srcdir"/nexusq-persist-hostname.path \
+		"$pkgdir"/etc/systemd/system/nexusq-persist-hostname.path
+	install -Dm644 "$srcdir"/nexusq-persist-hostname.service \
+		"$pkgdir"/etc/systemd/system/nexusq-persist-hostname.service
+	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
+	ln -sf ../nexusq-persist-hostname.path \
+		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-persist-hostname.path
+	# sshd takes its host keys from the store through a per-boot rendered list.
+	install -Dm600 "$srcdir"/10-nexusq-persist-sshd.conf \
+		"$pkgdir"/etc/ssh/sshd_config.d/10-nexusq-persist.conf
+	# The identity file the app writes (name + room) IS the store's copy: the
+	# rootfs path is a symlink into it. Dangling until the unit is named; every
+	# reader already treats a missing file as the default name. Both writers
+	# (nexusq-control >= r46, nexusq-setupd >= r5) write through the link.
+	install -dm755 "$pkgdir"/etc/nexusq
+	ln -s /var/lib/nexusq/persist/identity/device.json "$pkgdir"/etc/nexusq/device.json
+
 	# Force-enable the companion control bridge. nexusq-control.service is a
 	# VENDOR unit (the nexusq-control aport ships it in /usr/lib/systemd/system),
 	# so unlike the device's own /etc units above it is subject to systemd-preset
@@ -679,7 +754,19 @@ SKIP  snd-aloop.conf
 SKIP  nexusq-resize-rootfs
 SKIP  nexusq-resize-rootfs.service
 SKIP  nexusq.preset
+SKIP  nq-persist
+SKIP  nexusq-persist-prepare.service
+SKIP  nexusq-persist.mount
+SKIP  nexusq-persist-fsck-after-prepare.conf
+SKIP  nexusq-persist-apply.service
+SKIP  nexusq-persist-user-systemd.mount
+SKIP  nexusq-persist-nm-connections.mount
+SKIP  nexusq-persist-bluetooth.mount
+SKIP  nexusq-persist-hostname.path
+SKIP  nexusq-persist-hostname.service
+SKIP  10-nexusq-persist-sshd.conf
 SKIP  device-google-steelhead.post-install
 SKIP  device-google-steelhead.pre-upgrade
 SKIP  device-google-steelhead.post-upgrade
 "
+

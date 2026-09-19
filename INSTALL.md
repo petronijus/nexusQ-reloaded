@@ -292,9 +292,15 @@ fastboot -S 100M flash userdata nexusq-rootfs-v1.17.0-sparse.img
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
 is ~23 chunks, each reporting OKAY — measured 2026-07-03).
 
-**After any reflash:** the device regenerates its SSH host key on first boot,
-so your next `ssh` will warn about a changed key. Clear the stale entries
-first: `ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the device's WiFi IP).
+**What a flash keeps (device r103+, 2026-09-19):** `boot` and `userdata` are
+the only partitions written, and the unit's own state lives on the `cache`
+partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — and
+`fastboot oem unlock` — never touch. So a reflashed unit comes back with its
+**source toggles, name, WiFi profile, Bluetooth bonds, ssh host keys and site
+NTP server** intact, and the app's toggles do not need re-doing. Its ssh
+fingerprint does not change either: the old "**after any reflash** run
+`ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
+unit that has never run r103, whose keys still live on the rootfs.
 
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
 only way to brick the device.
@@ -315,8 +321,9 @@ than softened: a first-boot instruction that tells you to expect failure teaches
 you to retry past a real one.)_
 
 Login: user `user`, password `147147` (root has the same password --
-**change both** after first login: `passwd`). SSH host keys are generated
-on first boot.
+**change both** after first login: `passwd`). SSH host keys are generated on
+first boot — into the persist store on r103+, so they are the unit's from then
+on.
 
 > ⏰ **The clock before the first network sync.** On images up to and including
 > **v1.16.0 (kernel `6.18.48-r1`)** the TWL6030 RTC never runs — the PMIC dropped

@@ -1,0 +1,22 @@
+# Nexus Q persist store: BlueZ adapter state and bonds.
+# Bind-mounted from the store over its rootfs path, so there is ONE copy and
+# nothing to synchronise; a flash rewrites the rootfs underneath and this mount
+# puts the unit's own state back on top. Skipped (ConditionPathIsMountPoint)
+# when the store did not mount -- the rootfs copy is then in use, as before r103.
+[Unit]
+Description=Nexus Q persist: BlueZ adapter state and bonds
+DefaultDependencies=no
+Requires=nexusq-persist-apply.service
+After=nexusq-persist-apply.service
+Before=local-fs.target umount.target
+Conflicts=umount.target
+ConditionPathIsMountPoint=/var/lib/nexusq/persist
+
+[Mount]
+What=/var/lib/nexusq/persist/bluetooth
+Where=/var/lib/bluetooth
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

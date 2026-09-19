@@ -2,6 +2,7 @@ import importlib.util
 import importlib.machinery
 import json
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -272,3 +273,39 @@ class TestBtAdapterMac(unittest.TestCase):
         with mock.patch("builtins.open", side_effect=OSError), \
              mock.patch.dict("sys.modules", {"dbus": broken}):
             self.assertEqual(mod.bt_adapter_mac(), "")
+
+
+class TestSetNameThroughSymlink(unittest.TestCase):
+    """Device r103 makes /etc/nexusq/device.json a symlink into the persist
+    store. setName must write THROUGH it: replacing the link with a regular
+    file "works" until the next flash, which then loses the name again."""
+
+    def setUp(self):
+        self.mod = load_daemon()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = os.path.join(self.tmp.name, "persist", "identity", "device.json")
+        self.link = os.path.join(self.tmp.name, "etc-nexusq", "device.json")
+        os.makedirs(os.path.dirname(self.link))
+        os.symlink(self.target, self.link)
+        self.mod.IDENTITY_PATH = self.link
+
+    def _core(self):
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout="", stderr=""))
+        return self.mod.SetupCore(run=run, led=mock.Mock(), bt_mac="F8:8F:CA:20:49:E5")
+
+    def test_dangling_link_gets_target_and_survives(self):
+        core = self._core()
+        core.handle("setName", {"name": "Šumperák", "room": "cottage"})
+        self.assertTrue(os.path.islink(self.link), "the link was replaced")
+        with open(self.target) as f:
+            self.assertEqual(json.load(f), {"name": "Šumperák", "room": "cottage"})
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.target))), ["device.json"])
+
+    def test_plain_file_still_works(self):
+        plain = os.path.join(self.tmp.name, "plain.json")
+        self.mod.IDENTITY_PATH = plain
+        self._core().handle("setName", {"name": "Q"})
+        self.assertFalse(os.path.islink(plain))
+        with open(plain) as f:
+            self.assertEqual(json.load(f)["name"], "Q")
