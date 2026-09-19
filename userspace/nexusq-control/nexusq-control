@@ -338,10 +338,20 @@ class Pulse:
         the state is the LAST field, which is why this splits from the right
         rather than counting columns that differ between PA versions.
         """
-        out = _pactl("list", "short", "sources")
-        if out is None:
+        try:
+            r = _pactl("list", "short", "sources")
+        except Exception as e:  # noqa: BLE001 -- same contract as default_sink()
+            log("pactl list short sources failed:", e)
             return ""
-        for line in out.splitlines():
+        if r.returncode != 0:
+            return ""
+        # r45 shipped this as `out.splitlines()` on the CompletedProcess itself,
+        # so EVERY call raised AttributeError -- inside the MQTT hook thread,
+        # where nothing caught it: ~100 tracebacks per boot as nexusq-mqtt
+        # replayed the retained roon/ topics, and the Roon now-playing card,
+        # the very feature r45 added, could never sync. Found by the 2026-09-19
+        # diag sweep; pinned by tests/test_roon.py::TestSourceState.
+        for line in r.stdout.splitlines():
             parts = line.split("\t")
             if len(parts) >= 2 and parts[1] == name:
                 return parts[-1].strip()
@@ -602,7 +612,12 @@ def set_desktop(on):
 #                    external state (nexusq-uac2-in loads PulseAudio modules that
 #                    outlive its process) would leak the loopback on OFF. disable
 #                    leaves the unit intact so its SIGTERM trap unloads cleanly.
-# The state is PERSISTENT and survives reboots. A reflash resets to image defaults.
+# The state is PERSISTENT and survives reboots -- and, since device r103
+# (2026-09-19), a reflash: /home/user/.config/systemd is bind-mounted at boot from
+# the per-unit persist store on the `cache` partition (`nq-persist`), which a
+# flash never writes. Before r103 a reflash reset every toggle to the image
+# defaults -- which is how the Prague Q sat without USB Audio for three days
+# after the 2026-09-16 flash (docs/2026-09-19-the-flash-that-forgot-the-unit.md).
 SERVICES = [
     {"id": "spotify",  "unit": "librespot.service",       "name": "Spotify Connect", "vendor_on": True},
     {"id": "airplay",  "unit": "shairport-sync.service",  "name": "AirPlay",         "vendor_on": True},
@@ -2812,6 +2827,12 @@ def hook_thread(bridge, sock):
         read_json_lines(sock, bridge.on_hook)
     except OSError:
         pass
+    except Exception as e:  # noqa: BLE001
+        # A handler bug must not become a bare thread traceback per event: the
+        # r45 source_state() type error produced ~100 of them per boot, each
+        # 14 journal lines at info level, invisible to `-p warning`. One line,
+        # attributable, and the next event still gets handled.
+        log("hook handler failed:", repr(e))
     finally:
         sock.close()
 

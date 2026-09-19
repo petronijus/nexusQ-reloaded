@@ -93,6 +93,10 @@ check_dir_empty() {
 # for a single hardcoded name waves the rest through. But the device package
 # also ships eth-direct/eth-lan BY DESIGN, and those are wired profiles with no
 # secret in them — failing on those would just teach everyone to skip the gate.
+# (Since device r103, 2026-09-19, those two live in /usr/lib/NetworkManager/
+# system-connections and no longer show up here: /etc/... is bind-mounted from
+# the per-unit persist store at boot, so the image's copy of it must hold only
+# what the build staged. The "wired profile" branch stays for older images.)
 #
 # So: read every connection profile and refuse the ones that actually leak —
 # any stored secret, or any WiFi profile (its SSID is personal even when the

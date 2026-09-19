@@ -239,7 +239,11 @@ reboot or use the gadget/WiFi instead:
   **`cloned-mac-address=permanent`** — no MAC churn → no carrier bounce → the retry
   counter sticks; on a serverless wire the port goes quiet instead of looping),
   `eth-direct.nmconnection` (static **10.42.0.2/24 + 10.0.0.2/24**, never-default;
-  **since r29 `autoconnect=true` at `autoconnect-priority=5`**).
+  **since r29 `autoconnect=true` at `autoconnect-priority=5`**). Both profiles ship
+  in `/usr/lib/NetworkManager/system-connections` **since r103 (2026-09-19)** (was
+  `/etc/NetworkManager/system-connections`): `/etc/…` is bind-mounted from the
+  per-unit persist store and holds only this unit's own WiFi networks
+  (`docs/2026-09-19-the-flash-that-forgot-the-unit.md`). Activation is unchanged.
 - **Host (persistent NM profile `eth-direct-host` on `enp7s0`):** 10.42.0.1/24 +
   10.0.0.1/24, never-default, autoconnect — replaces the old
   `managed no` + manual `ip addr add` dance.

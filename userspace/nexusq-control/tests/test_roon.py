@@ -21,6 +21,8 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import subprocess
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -228,22 +230,51 @@ class TestQuiet(unittest.TestCase):
 
 
 class TestSourceState(unittest.TestCase):
-    """The gate reads one field out of `pactl list short sources`."""
+    """The gate reads one field out of `pactl list short sources`.
+
+    Until 2026-09-19 this test mocked `_pactl` as returning a plain STRING (and
+    None for failure), and passed against code that called `.splitlines()` on
+    the CompletedProcess `_pactl` really returns -- a mock calmer than reality,
+    testing a world that did not exist. On the device every call raised
+    AttributeError inside the MQTT hook thread: ~100 tracebacks per boot and a
+    Roon card that could never sync, from r45 until the diag sweep caught it.
+    The mocks below return what `subprocess.run` returns."""
 
     def setUp(self):
         self.mod = load_daemon()
+
+    @staticmethod
+    def _cp(stdout, rc=0):
+        return subprocess.CompletedProcess(["pactl"], rc, stdout=stdout, stderr="")
 
     def test_the_state_is_the_last_column(self):
         # Real layout, taken off the device: index, name, module, spec, state.
         out = ("0\talsa_input.x\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tSUSPENDED\n"
                "6\troon_in\tmodule-alsa-source.c\ts16le 2ch 48000Hz\tRUNNING\n")
-        with mock.patch.object(self.mod, "_pactl", lambda *a, **k: out):
+        with mock.patch.object(self.mod, "_pactl", lambda *a, **k: self._cp(out)):
             self.assertEqual(self.mod.Pulse().source_state("roon_in"), "RUNNING")
             self.assertEqual(self.mod.Pulse().source_state("nope"), "")
 
-    def test_pactl_failing_is_empty_not_an_exception(self):
-        with mock.patch.object(self.mod, "_pactl", lambda *a, **k: None):
+    def test_pactl_nonzero_exit_is_empty_not_an_exception(self):
+        with mock.patch.object(self.mod, "_pactl", lambda *a, **k: self._cp("", rc=1)):
             self.assertEqual(self.mod.Pulse().source_state("roon_in"), "")
+
+    def test_pactl_raising_is_empty_not_an_exception(self):
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired("pactl", 4)
+        with mock.patch.object(self.mod, "_pactl", boom):
+            self.assertEqual(self.mod.Pulse().source_state("roon_in"), "")
+
+    def test_real_subprocess_shape_end_to_end(self):
+        """No mock of _pactl at all: `pactl` is replaced by a shell stub, so the
+        object flowing into source_state is a genuine CompletedProcess."""
+        with tempfile.TemporaryDirectory() as d:
+            stub = os.path.join(d, "pactl")
+            with open(stub, "w") as f:
+                f.write("#!/bin/sh\nprintf '6\\troon_in\\tm\\tspec\\tRUNNING\\n'\n")
+            os.chmod(stub, 0o755)
+            with mock.patch.dict(os.environ, {"PATH": d + os.pathsep + os.environ.get("PATH", "")}):
+                self.assertEqual(self.mod.Pulse().source_state("roon_in"), "RUNNING")
 
 
 if __name__ == "__main__":

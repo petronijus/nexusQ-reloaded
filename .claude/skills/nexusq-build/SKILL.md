@@ -101,4 +101,9 @@ bare `sha256sums.txt` until then — v1.16.0 carries both), `package-release.sh`
 INSTALL.md **body** (the "This guide describes release `vX.Y.Z`" sentence + all three artifact
 filenames, not just the `<!-- RELEASE: -->` marker), and `release-preflight-no-secrets.sh`
 also asserts **first-boot identity** — no machine-id (or zero-length), no dbus id, no
-random-seed, empty journal, **no ssh host keys** in the rootfs.
+random-seed, empty journal, **no ssh host keys** in the rootfs (still true with device
+r103's persist store, 2026-09-19: a unit's keys are generated into the `cache`-partition
+store on its first boot, never into the image). Device **r103 + nexusq-control r46 +
+nexusq-setupd r5 move together** — `device.json` is a symlink into the store and only those
+write through it; the depends are unversioned (pmbootstrap resolves by aport name), so keep
+`pmos/ota-packages.list` in lockstep.

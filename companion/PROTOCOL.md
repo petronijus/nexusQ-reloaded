@@ -711,8 +711,11 @@ persistent choice after a reboot.
   `mask` (not `disable`) is required: `librespot`/`shairport` ship **default-ON**
   via a `/usr/lib/systemd/user/default.target.wants` **vendor** symlink that a
   plain `disable` cannot remove; a `mask` in the user's own config
-  (`/home/user/.config/systemd/user`) overrides it. A reflash resets all services
-  to the image defaults (Spotify + AirPlay on, Roon off).
+  (`/home/user/.config/systemd/user`) overrides it. Since device r103 (2026-09-19)
+  `/home/user/.config/systemd` is bind-mounted from the per-unit persist store on
+  the `cache` partition, so the choice also survives a **reflash**; before r103 a
+  reflash reset all services to the image defaults (Spotify + AirPlay on, Roon +
+  USB Audio off) — `docs/2026-09-19-the-flash-that-forgot-the-unit.md`.
 
 The control bridge runs as root and reaches the uid-10000 manager via
 `systemctl --machine=user@.host --user` (linger keeps that manager up — §10.1).
@@ -1057,7 +1060,9 @@ What it changes, all together:
   as setupd — ascii-fold, lowercase, non-alnum runs → `-`, ≤63 chars, fallback
   `nexusq`. The two implementations are deliberately identical and pinned by
   tests on both sides; **change one, change the other**;
-- `/etc/nexusq/device.json`, written atomically;
+- `/etc/nexusq/device.json`, written atomically — since device r103 (2026-09-19)
+  a symlink into the persist store, written *through* (`write_identity()` in
+  nexusq-control r46 / nexusq-setupd r5), so the name survives a reflash;
 - the **mDNS advertisement** (§2), re-published under the new name.
 
 ⚠️ **It does NOT restart nexusq-control**, which is the one thing it does

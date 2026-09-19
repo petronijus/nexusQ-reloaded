@@ -18,13 +18,14 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The Prague device runs **mainline 6.18.48-r0**
-(the v1.15.0 kernel, health-gate promoted 2026-08-31); the current device package
-in the repo is **r92** (v1.15.1, 2026-09-01). The box has been updated over the
-air since the v1.10.1 flash of 2026-07-16, so package revisions move without a
-reflash — read them off the box
+"connect like this: `<cmd>`". The Prague device runs **mainline 6.18.48-r2**
+(the v1.17.0 kernel, kernel OTA + autopromote 2026-09-17, per PLAN.md); the
+current device package in the repo is **r103** (2026-09-19, dev — the per-unit
+persist store; Prague ran **r102** by OTA that night). The box is updated over the
+air, so package revisions move without a reflash — read them off the box
 (`apk info -v device-google-steelhead`, `uname -r`) rather than trusting any list
-written down here. Eth profiles have been baked since device r21.
+written down here. Eth profiles have been baked since device r21 (in
+`/usr/lib/NetworkManager/system-connections` since r103).
 ⚠️ **A ~1-minute ssh-auth stall right after an HDMI-desktop toggle is EXPECTED, not
 a dead device** — stopping `tinydm` churns logind and `pam_systemd` hangs before
 recovering on its own (v1.10.0). Wait it out; never assume frozen. ⚠️ **WiFi MAC —
@@ -131,13 +132,25 @@ link-local, mDNS, OPNsense lease lookup).
 - _(Historical, v1.6.5 only:)_ the WiFi IP **wandered** every boot —
   NM randomized locally-administered MAC → fresh DHCP lease (was `.179`, then
   `.142`); on that image match OPNsense leases by hostname only.
-- A **fresh rootfs flash wipes** anything not baked; ssh keys + the WiFi
-  profile are baked since 2026-07-03, and the **eth0 profiles
-  (`eth-lan`/`eth-direct`/`no-auto-default`) are baked since device pkg r21 —
-  in the flashed image since v1.6.7 (2026-07-05)**. A
-  reflash also **regenerates the ssh host key** — `ssh-keygen -R 172.16.42.1;
-  ssh-keygen -R <current WiFi IP, e.g. 192.168.20.184>; ssh-keygen -R 10.42.0.2`
-  before the first post-flash ssh.
+- **Since device r103 (2026-09-19) a flash no longer forgets the unit.** The
+  `cache` partition (p12, ext4 labelled `nq-persist`, mounted at
+  `/var/lib/nexusq/persist`) carries the unit's **ssh host keys**, its WiFi
+  profiles (bind-mounted over `/etc/NetworkManager/system-connections`), BT bonds
+  (`/var/lib/bluetooth`), the app's source toggles, its name and its site NTP
+  server; `nq-persist` applies it at boot, `nq-persist status` shows what is
+  mounted (`docs/2026-09-19-the-flash-that-forgot-the-unit.md`). So the **ssh fingerprint survives a reflash**: `ssh-keygen -R`
+  after a flash is over on an r103+ unit, and a `REMOTE HOST IDENTIFICATION HAS
+  CHANGED` there is a finding to report, not a chore. One last mismatch is
+  expected on the **flash that first brings a unit to r103** (a fresh flash has
+  no `/etc/ssh` keys yet, so `apply` generates the store's keys); an in-place
+  apk upgrade to r103 seeds them from `/etc/ssh` and keeps the fingerprint.
+  _(Pre-r103: a fresh rootfs flash wiped anything not baked and regenerated the
+  host key — `ssh-keygen -R 172.16.42.1; ssh-keygen -R <WiFi IP>; ssh-keygen -R
+  10.42.0.2` before the first post-flash ssh.)_ Baked regardless of the store:
+  `authorized_keys` + the private WiFi profile (since 2026-07-03) and the **eth0
+  profiles (`eth-lan`/`eth-direct`/`no-auto-default`, device pkg r21, in the
+  image since v1.6.7)** — the baked WiFi profile only *seeds* the store on a
+  unit that has none yet.
 - sudo on this host: `SUDO_PASS=$(op-cache "sudo petronijus-PC" password); echo "$SUDO_PASS" | sudo -S <cmd>`.
 - Prefer **IPv4**: this host has had a dead IPv6 default route make ssh hang
   ("Connection failed"); if a name resolves to v6 and it stalls, use the v4 literal.
@@ -176,7 +189,10 @@ INSTALL.md §1d) before handing back "in fastboot, ready to flash".
   profiles in device pkg r21, **in the flashed image since v1.6.7**). Both
   ends carry persistent profiles: **host `eth-direct-host`** on `enp7s0`
   (10.42.0.1/24 + 10.0.0.1/24, autoconnect — no manual `ip addr add` needed)
-  and **device `eth-direct`** (static 10.42.0.2/24 + 10.0.0.2/24). Since device
+  and **device `eth-direct`** (static 10.42.0.2/24 + 10.0.0.2/24; shipped in
+  `/usr/lib/NetworkManager/system-connections` since r103 — `/etc/…` is now the
+  per-unit bind mount from the persist store, so `nmcli c show eth-direct` works
+  but you will not find the file under `/etc`). Since device
   pkg **r29** `eth-direct` is **`autoconnect=true`** at a lower priority than
   `eth-lan` (5 < 10): on a real LAN `eth-lan`'s DHCP wins; on the direct cable
   `eth-lan` fails its one DHCP attempt (dhcp-timeout 10 s) and NM falls through
@@ -224,13 +240,18 @@ INSTALL.md §1d) before handing back "in fastboot, ready to flash".
   vlan20 — if ping/ssh time out despite a valid lease, say so and prefer A/B.
 
 ### Joining WiFi after a fresh flash (wlan0 disconnected, no saved profile)
-Since 2026-07-03 the image **bakes the WiFi profile** (generated by
+Since device r103 (2026-09-19) the unit's WiFi profiles live in the **persist
+store** and survive a reflash — an r103+ unit that was on WiFi before the flash
+is on WiFi after it, whatever the image baked. Since 2026-07-03 the image also
+**bakes the WiFi profile** (generated by
 `scripts/gen-wifi-profile.sh` from the private overlay) — a freshly-flashed
 device auto-joins (verified: `.175` on `#27`, `.195` on `#29`,
-`.184` after the 2026-07-12 v1.8.1 flash — the lease moves, the MAC doesn't).
+`.184` after the 2026-07-12 v1.8.1 flash — the lease moves, the MAC doesn't);
+on r103+ the baked profile only seeds a store that has no profiles yet.
 Manual rejoin is only
 needed if the build was made WITHOUT the generated profile (public build /
-profile not generated). Then (reach the device over the USB gadget first):
+profile not generated) on a unit with no store. Then (reach the device over the
+USB gadget first):
 - **SSID:** `Svatovitske-Internety-5g` — **always the 5 GHz one** (2.4 GHz suffers the
   BCM4330 BT-coexist bulk stall; 5 GHz is clear of BT, ~26–30 Mbit/s reliable). Prefer the
   base SSID over the `_EXT` repeater variant.
@@ -238,7 +259,8 @@ profile not generated). Then (reach the device over the USB gadget first):
   (not the default `password` field). Never print it — pipe it straight in:
   `PSK=$(op-cache "Wifi-Router Svatovitska" "wireless network password")` then on the device
   `sudo nmcli dev wifi connect "Svatovitske-Internety-5g" password "$PSK"` (creates a saved,
-  autoconnect profile → persists until the next flash). DHCP yields `192.168.20.x`.
+  autoconnect profile → on r103+ it lands in the persist store and survives a reflash;
+  pre-r103 it lasted until the next flash). DHCP yields `192.168.20.x`.
 - If you set a USB-NAT default route to install packages, delete it afterwards so traffic
   uses WiFi: `sudo ip route del default via 172.16.42.2 dev usb0`.
 

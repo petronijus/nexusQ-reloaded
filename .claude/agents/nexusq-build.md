@@ -53,6 +53,22 @@ the host first). Missing files do NOT fail the build — Phase 6 logs a
 `WARNING: ... absent` and bakes an image without that access (it comes up
 unreachable over WiFi / without root ssh after a clean flash). Grep the build
 log for `Staged ssh-authorized-keys` + `Staged wifi.nmconnection`.
+⚠️ **Since device r103 (2026-09-19) the baked WiFi profile only SEEDS a unit's
+persist store.** `/etc/NetworkManager/system-connections` is bind-mounted at boot
+from the per-unit store on the `cache` partition (`nq-persist`), and `apply`
+copies the rootfs directory into the store only when the store has no
+`nm-connections/` yet (the unit's first r103 boot). A unit that already has a
+store keeps **its own** profiles: a changed/re-generated `wifi.nmconnection` in a
+later image is shadowed and never joins — change it on the unit (`nmcli`) or in
+`/var/lib/nexusq/persist/nm-connections/`. The same holds for
+`/home/user/.config/systemd` (source toggles) and `/var/lib/bluetooth`; the
+package's `eth-lan`/`eth-direct` moved to `/usr/lib/NetworkManager/system-connections`
+for exactly this reason. And **device r103 needs `nexusq-control` ≥ r46 and
+`nexusq-setupd` ≥ r5 in the same image / the same `apk upgrade`** —
+`/etc/nexusq/device.json` is a symlink into the store and only those revisions
+write *through* it; the depends could not be versioned (pmbootstrap resolves
+build-time depends by aport name), so nothing enforces it but the
+`pmos/ota-packages.list` lockstep. `docs/2026-09-19-the-flash-that-forgot-the-unit.md`.
 **Same trap for firmware:** the gitignored `./firmware/` overlay
 (`bcm4330.hcd` + `bcmdhd.cal` from `private/firmware/`) must be populated on
 the build machine, or Phase 6 silently packs the **empty**

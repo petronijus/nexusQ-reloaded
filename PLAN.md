@@ -3,6 +3,21 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## ✅ DONE (dev, 2026-09-19 — device r103 · nexusq-control r46 · nexusq-setupd r5) — the flash that forgot the unit
+>
+> A per-unit **persist store** on the `cache` partition (p12, ext4 `nq-persist`
+> at `/var/lib/nexusq/persist`, which a flash never writes): source toggles, WiFi
+> profiles, BT bonds, name, ssh host keys and the site's NTP server survive a
+> reflash; `eth-lan`/`eth-direct` moved to `/usr/lib/NetworkManager`;
+> `device.json` is a symlink written through by both daemons. 48-check container
+> test. Not yet released or OTA-published. → CHANGELOG [Unreleased] ·
+> `docs/2026-09-19-the-flash-that-forgot-the-unit.md`
+> ⚠️ Open (forward-looking): **Phase 2** — the A/B initramfs takes the unit's
+> WiFi/BT MAC from the store and patches the DTB at boot, so one generic
+> `boot.img` serves every unit and the flash-time DTB patch
+> (`docs/2026-08-28-per-unit-bt-wifi-identity.md`) goes away; the three packages
+> must ship together (unversioned depends — pmbootstrap resolves by aport name).
+
 > ## ✅ DONE (v1.17.0, kernel 6.18.48-r2) — the TWL6030 RTC never ran: MSECURE was never driven high · (2026-09-16) the first install nobody here could still perform
 >
 > Issue #4 (a factory, never-unlocked unit) found two real doc bugs — a locked

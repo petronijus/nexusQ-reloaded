@@ -44,7 +44,12 @@ ping -c1 -W2 172.16.42.1
   v1.6.5 image: **`user` / `147147`** (root denied there; escalate with
   `echo 147147 | sudo -S <cmd>`):
   `sshpass -p 147147 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@172.16.42.1`
-  A reflash regenerates the device host key — `ssh-keygen -R` stale entries.
+  Pre-r103 a reflash regenerated the device host key (`ssh-keygen -R` the stale
+  entries); **since device r103 (2026-09-19) the host keys live in the per-unit
+  persist store on the `cache` partition and survive a flash** — a changed
+  fingerprint on an r103+ unit is a finding to report, not a chore (the one
+  expected exception: the flash that first brings a unit to r103).
+  `docs/2026-09-19-the-flash-that-forgot-the-unit.md`.
 - Host-side sudo on THIS PC: try plain `sudo`; if it prompts,
   `op-cache "sudo petronijus-PC" password`.
 - Prefer the repo's own `scripts/diag/nqctl` if it already knows the link
@@ -67,8 +72,15 @@ ping -c1 -W2 172.16.42.1
 - If NOTHING answers on any transport after a few minutes, STOP and report that
   (likely the black-screen boot quirk → needs a re-reboot). Don't loop forever.
 
-Device facts: hostname `steelhead`; a fresh rootfs flash WIPES device-side static
-IPs + saved WiFi, so don't assume a fixed IP or that WiFi is configured.
+Device facts: hostname `steelhead` (the app can rename it; the name persists).
+Pre-r103 a fresh rootfs flash WIPED device-side static IPs + saved WiFi; since
+device r103 (2026-09-19) the WiFi profiles, BT bonds, source toggles, name, ssh
+host keys and site NTP ride the persist store — but never assume a fixed WiFi IP
+(DHCP). **On an r103+ unit run `nq-persist status` in every sweep**: `NOT MOUNTED`
+means the unit booted on its rootfs state (every setting back at image defaults,
+sshd on `/etc/ssh` keys) and is a fault to report, not a quirk; also check that
+`/etc/nexusq/device.json` is still a **symlink** (a plain file there means a
+writer older than nexusq-control r46 / nexusq-setupd r5 replaced the link).
 
 ## 2. Runtime health — run the deterministic tooling
 
@@ -124,7 +136,9 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   `brcm/brcmfmac4330-sdio.bin` load or fail "-2"? `iw dev` → does `wlan0` exist?
   `sudo iw dev wlan0 scan | grep -iE 'SSID|freq'` → does it SEE 5 GHz APs (freq
   >5000)? `iw dev wlan0 link` / `nmcli dev status` → connected? band + signal?
-  (A fresh flash has no saved creds, so "not connected" ≠ "broken" — distinguish
+  (A fresh flash of a pre-r103 image, or of a unit with no persist store yet, has
+  no saved creds — since device r103 the store keeps them — so "not connected" ≠
+  "broken" — distinguish
   radio/firmware working from network not configured.) brcmfmac wants
   `brcm/brcmfmac4330-sdio.bin` + nvram `brcm/brcmfmac4330-sdio.txt` (NOT the bcmdhd
   `fw_bcm4330*.bin` from firmware-aosp-broadcom-wlan — different driver).

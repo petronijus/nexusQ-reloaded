@@ -29,7 +29,8 @@ lift off at red, >10 s = recovery — and a **factory unit is locked** until
 2026-07-07 to beat both WiFi ~34 Mbit/s and the USB gadget. NM layer resolved
 2026-07-04 and baked since v1.6.7 — flashed 2026-07-05: host has the persistent
 `eth-direct-host` profile on `enp7s0`, the device bakes an `eth-direct` static
-profile 10.42.0.2/24 — since device pkg **r29 `autoconnect=true`** at lower
+profile 10.42.0.2/24 (in `/usr/lib/NetworkManager/system-connections` since device
+r103, 2026-09-19; `/etc/…` is the per-unit bind mount) — since device pkg **r29 `autoconnect=true`** at lower
 priority than `eth-lan` so it falls through automatically ~10 s after
 carrier-up; if ssh still fails over the cable but another path works, `nmcli c up
 eth-direct` on the device forces it, then `ssh root@10.42.0.2`. ✅ Enumerates from a cold
@@ -58,6 +59,11 @@ randomized per boot and the IP wanders, hostname-match only). It
 verifies the winner with a real `ssh` probe and returns the single best connect
 command + fallbacks. It does NOT change anything on the device (the one allowed
 exception: activating the baked `eth-direct` profile).
+**Since device r103 (2026-09-19) the unit's ssh host keys, WiFi profiles, BT bonds,
+source toggles and name live in the persist store on the `cache` partition and
+survive a reflash** — do not `ssh-keygen -R` after a flash by reflex; a changed
+fingerprint on an r103+ unit is a finding (one expected exception: the flash that
+first brings a unit to r103 generates the store's keys). `docs/2026-09-19-the-flash-that-forgot-the-unit.md`.
 There is a **second unit at the cottage** (`nexus-q-sumperak.local`, WiFi
 `f8:8f:ca:05:1f:11`, DHCP on `<cottage-lan>/22` since 2026-08-30 — the old static
 `<old-static-ip>` is gone; only reachable from the cottage LAN, not via Tailscale).

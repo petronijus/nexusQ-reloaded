@@ -8,6 +8,33 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Šumperák Q — 2026-09-19: take device r103 + `nexusq-control` r46 + `nexusq-setupd` r5 (the persist store)
+
+Published from the desktop (gh-pages `aacc4ae`, secrets gate 11/11 clean) and
+running on the Prague Q. The cottage Q was **not reachable from Prague**: the
+cottage's Tailscale node `dietpi-sumperak` (`100.122.96.6`) wants a password
+that is not in 1Password, and `192.168.48.57` is not routed from here. So it is
+the one thing left — either the app's own "Nexus Q" update, or on the cottage
+LAN:
+
+```
+ssh root@nexus-q-sumperak.local        # = 192.168.48.57
+apk update && apk upgrade --available --ignore linux-google-steelhead
+systemctl reboot                       # the store mounts on the next boot
+nq-persist status                      # expect: mounted, 3 bind mounts MOUNTED, N ssh keys rendered
+```
+
+What to expect, and what to check afterwards (Prague's record is in HANDOFF
+2026-09-19): `.pre-upgrade` moves the cottage's `/etc/nexusq/device.json`
+(it IS named — "Šumperák") under the store's mountpoint, the symlink serves the
+old name until the reboot, the first boot formats `cache` (stock's empty ext4)
+and seeds the store from the rootfs: the toggles, the WiFi profile, the BT
+bonds, the ssh host keys, the hostname `nexus-q-sumperak`. Afterwards
+`cat /etc/nexusq/device.json` must still say Šumperák, `hostname` must still be
+`nexus-q-sumperak`, and the ssh fingerprint must be unchanged. The cottage has
+no LAN NTP server, so **no `nq-persist ntp set` there** — that is Prague's
+(`192.168.20.1`).
+
 ## Prague Q — 2026-09-18: take `nexusq-kernel-ota` r7 + `device-google-steelhead` r102 — ✅ done 2026-09-19
 
 Both were built and published **from the MacBook at the cottage** (gh-pages

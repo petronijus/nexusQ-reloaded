@@ -6,6 +6,33 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the Roon now-playing gate crashed on every Roon event since r45 (nexusq-control r47, not yet published)
+
+`Pulse.source_state()` called `.splitlines()` on the `CompletedProcess` that
+`_pactl()` returns, so every call raised `AttributeError` — inside the MQTT
+hook thread, where only `OSError` was caught. Measured on the Prague Q by the
+2026-09-19 diag sweep after the r103 reboot: **96 thread tracebacks in 3.2 s**
+as `nexusq-mqtt` replayed the retained `roon/` topics on connect (108 on the
+previous 47.5 h boot), each 14 journal lines at info level, invisible to
+`-p warning`. Its only caller is `_roon_our_zone()`, so the Roon card — the
+feature r45 added — could never sync on a Roon-ON unit. The test that covered
+it mocked `_pactl` as returning a plain string and `None`, a mock calmer than
+reality; it now returns real `CompletedProcess` objects, plus one case with no
+mock at all (a stub `pactl` on `PATH`), and all four were seen failing against
+the r46 code. `hook_thread()` now logs one attributable line for a handler
+exception instead of letting it escape as a traceback per event.
+
+**Known issue, measured in the same sweep (not fixed):** PulseAudio auto-claims
+the UAC2 gadget card (`alsa_card.platform-musb-hdrc.0.auto`, source
+`alsa_input.platform-musb-hdrc.0.auto.stereo-fallback`) — the 09-16 open item,
+now seen doing harm once: on this boot `alsaloop`'s first open of
+`hw:UAC2Gadget` failed `EBUSY` and USB Audio came up 5.6 s late, self-healed
+when PA's suspend-on-idle released the device. Steady state has no conflict,
+but any client un-suspending that PA source would steal the gadget from
+`alsaloop`. Fix when taken: a `PULSE_IGNORE` udev rule matching the gadget's
+backing device (`gadget.0` under `musb-hdrc.0.auto`), by device not `cardN`,
+in `91-pulseaudio-hdmi-ignore.rules`.
+
 ### Added — a per-unit persist store: what a flash must not take with it (device r103, nexusq-control r46, nexusq-setupd r5)
 
 Petr arrived in Prague on 2026-09-19 to find **"USB Audio" off**. The journal,

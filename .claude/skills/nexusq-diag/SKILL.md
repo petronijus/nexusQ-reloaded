@@ -391,7 +391,9 @@ Findings are tagged by `kind`; interpret them like this:
   **Healthy tells:** `/run/nexusq-btagent.sock` present (0600); the bridge forwards
   all BT calls to it (**the bridge is stdlib-only — no D-Bus in it, by design**);
   a paired mouse yields **3 key sections** in
-  `/var/lib/bluetooth/<adapter>/<dev>/info` and a `/dev/input/event*` via **uhid**.
+  `/var/lib/bluetooth/<adapter>/<dev>/info` (bind-mounted from the per-unit persist
+  store since device r103, 2026-09-19 — bonds survive a reflash) and a
+  `/dev/input/event*` via **uhid**.
   **Non-faults:** BLE peers report **`class=none`** (they have **no CoD** — type
   comes from `Icon`→`Appearance` 0x03c1/0x03c2); `Alias` is **synthesised from the
   address** when unnamed, so it never proves identity; BLE addresses **rotate**

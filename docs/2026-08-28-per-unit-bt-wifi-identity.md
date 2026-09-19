@@ -158,3 +158,13 @@ This also means the "proper fix" section above is no longer the only way a third
 unit could get an OTA-proof identity: a flash-time patch now survives every kernel
 OTA. What it does not survive is a **reflash** from a stock image — that still
 needs the patch redone (or `CMDLINE_EXTEND`).
+
+## Addendum (2026-09-19): the per-unit store exists now — the MAC is not in it yet
+
+Device r103 gave every unit a **persist store** on the `cache` partition
+(`nq-persist`, `docs/2026-09-19-the-flash-that-forgot-the-unit.md`): toggles,
+WiFi profiles, BT bonds, name, ssh host keys and site NTP now survive a reflash.
+The radio identity does **not** — it still lives in the DTB, so a reflash from a
+stock image still needs step 3 redone. The open Phase 2 there is exactly the
+"proper fix" above: the A/B initramfs reads the MACs from the store and patches
+the DTB at boot, after which one generic `boot.img` serves every unit.

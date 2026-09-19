@@ -184,7 +184,7 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
-## Session 2026-09-19: **the Prague Q takes r7 + r102 — both units level, the fleet is on v1.17.0**
+## Session 2026-09-19: **the Prague Q takes r7 + r102 · why USB Audio was off · device r103: a per-unit persist store on the `cache` partition**
 
 Short session on the desktop PC, picking up the one open handover (Colony
 `hnd_7419e7e38b239535`, Todoist AI-handover `6hX7XcqjXP9vppx3`, HANDOVER.md
@@ -238,6 +238,75 @@ anything else.
   LAN NTP above). With the toggle now ON, the 09-16 open item — does PulseAudio
   ever open the UAC2 gadget card while `alsaloop` holds it — is measurable on
   Prague.
+
+- **Then the fix — device r103 + nexusq-control r46 + nexusq-setupd r5, the
+  per-unit persist store** (Petr: "no jak to vyresime?" → full scope). The
+  `cache` partition (p12) carries an ext4 `nq-persist` at
+  `/var/lib/nexusq/persist`, bind-mounted over `/home/user/.config/systemd`,
+  `/etc/NetworkManager/system-connections` (the package's eth profiles moved
+  to `/usr/lib/NetworkManager/system-connections`) and `/var/lib/bluetooth`;
+  `device.json` is a symlink into it and both writers write through the link;
+  hostname applied at boot + recorded by a `.path` unit; ssh host keys in the
+  store, rendered into `/run/nexusq/sshd-hostkeys.conf`; site NTP rendered into
+  `/run/systemd/timesyncd.conf.d/`. Design, measurements and failure modes:
+  `docs/2026-09-19-the-flash-that-forgot-the-unit.md`; CHANGELOG `[Unreleased]`.
+  Tests `pmos/device-google-steelhead/tests/test_persist.sh` (48, one
+  `--privileged` Alpine container, control case included) and the symlink
+  cases in both daemons' suites, all seen failing first. pmbootstrap refused
+  the versioned `depends` (`nexusq-control>=0.1.0-r46`: "dependency not
+  found"), so the requirement is a comment beside `depends=` and the three move
+  together in the OTA set. Commit `2f867ed`; OTA-only build on the desktop;
+  gh-pages **`aacc4ae`**, secrets gate 11/11.
+- **Prague verified after the reboot (23:15 CEST):** `prepare` formatted the
+  stock ext4 (label empty) in 5 s; `apply` seeded user-systemd (3), nm (1),
+  bluetooth (2), hostname, 4 ssh keys; all three bind mounts `active mounted`,
+  `systemd-fsck@…cache` ran; `nexusq-uac2-in` enabled + active from the store;
+  eth-lan/eth-direct listed from `/usr/lib`; `sshd -T` shows the four store
+  keys and the **ssh fingerprint did not change**; bluetooth powered; no
+  failed units; **`dmesg -l err,warn` empty this boot**; the `.path` unit
+  recorded the hostname on a touch. `nq-persist ntp set 192.168.20.1` put
+  Prague's gateway first (`ServerName=192.168.20.1`, +8 ms) — the r102 open
+  question closed the way the r102 commit asked for.
+- **Cottage Q still to take it** — unreachable from Prague (`dietpi-sumperak`
+  on Tailscale wants a password not in 1Password). HANDOVER.md section +
+  Todoist AI-handover `6hXJwXCMGP7m9xMV` + Colony handover.
+- **Full `nexusq-diag` sweep on the r103 boot — PASS** (capture
+  `nq-captures/20260919-232401/`): 1.2 GHz reached under a nice-0 load with
+  `vdd_mpu` 1 380 000 µV exactly at OPP, back to 350 MHz a second later; 0
+  VDD/OPP mismatches this boot and 0 in the previous 47.5 h; 350 MHz residency
+  90.8 % over that boot; BT patchram + agent fine; WiFi 5 GHz ch 36 at -26 dBm,
+  factory MAC, 0 escan timeouts; NFC listening; RTC ticking (msecure high);
+  no failed units; `dmesg -l err,warn` empty; 0 `PIH ISR 20`. The store, the
+  three bind mounts, the ssh fingerprint (identical to `/etc/ssh`) and the site
+  NTP all verified from the outside. Two NEW findings, neither caused by r103:
+  **(A) `Pulse.source_state()` crashed on every Roon MQTT event since r45** —
+  96 tracebacks in 3.2 s at boot; fixed in the tree as nexusq-control **r47**
+  (CHANGELOG "Fixed — the Roon now-playing gate…"), tests rewritten to real
+  `CompletedProcess` shapes and seen failing first; **not built, not
+  published** — a separate ship. **(B) PulseAudio auto-claims the UAC2 gadget
+  card**, cost this boot: `alsaloop` first-open `EBUSY`, USB Audio 5.6 s late,
+  self-healed — the 09-16 open item now measured; recorded as a known issue
+  with the udev-rule fix. Also noted: boot 57 s, `systemd-random-seed` 36 s
+  waiting for entropy — no baseline yet, worth a good-vs-bad diff some day.
+- **Follow-ups from the doc sweep (tooling, not done tonight):** (1)
+  `nq-diag-snapshot` (device package) should capture `nq-persist status` and
+  check that `/etc/nexusq/device.json` is still a symlink — a plain file there
+  means an old writer replaced the link; both are manual steps in the diag
+  brief until r104 ships them. (2) `scripts/verify-rootfs.sh`'s
+  `cloned-mac-address` gate reads only the image's
+  `/etc/NetworkManager/system-connections`; the eth profiles now live in
+  `/usr/lib/…` — harmless today (`eth-lan` uses `permanent`), a second
+  directory if the gate is to keep covering them. (3) By design, a re-baked
+  `wifi.nmconnection` in a later image never reaches a unit that already has a
+  store (the store is the truth and only seeds when empty); a new site PSK is
+  applied on the unit (`nmcli`, the app's setup) and lives in the store from
+  then on. Written into the build brief so nobody expects otherwise.
+- **Seen, not ours to fix tonight:** `avahi-daemon: WARNING: No NSS support
+  for mDNS detected, consider installing nss-mdns!` — present in the previous
+  boot too, Alpine's avahi without `nss-mdns`; the Q resolves nothing through
+  NSS-mDNS itself, so it is packaging noise until somebody wants `.local`
+  lookups *from* the Q. The systemd-262 core-pattern lines and the libkscreen
+  lint remain as documented.
 
 Docs touched: HANDOVER.md (Prague section marked done with the verification
 record), this entry. Not a release; CHANGELOG unchanged.
