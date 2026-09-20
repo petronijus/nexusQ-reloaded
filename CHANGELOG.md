@@ -78,6 +78,27 @@ other way round: the user switches the sink on, and the hold then makes sure the
 signal never stops, so it never sleeps again. The forced-connector idea was
 dropped from the design once measured.
 
+**The one untried escape was tried, and it fails.** With the soundbar asleep and
+HPD dark, `HDMI_WP_PWR_CTRL` was written through `/dev/mem` to force the PHY to
+`TXON`, bypassing the driver's HPD gate. The hardware accepted it —
+`0x5a` → `0xaa`, `phy_status=TXON`, genuinely transmitting into a line with no
+HPD — and the sink still never came back over a full 60 s, with no link event in
+`HDMI_WP_IRQSTATUS_RAW`. So driving TMDS blind is possible and useless: a sink in
+this standby is not watching the link. Register restored, connector handed back,
+nothing wedged. Note the limitation is this sink's standby behaviour, not a
+universal one: receivers that keep HPD asserted in standby (many do, precisely so
+CEC works) would be woken by the `<Image View On>` / `<System Audio Mode Request>`
+`nq-cec` already sends.
+
+**A standing warning turned out to be benign.** `[drm] User-defined mode not
+supported: "1280x720"` fires once per connect→disconnect transition: a probe that
+finds the connector gone marks every mode `MODE_STALE` and
+`drm_mode_prune_invalid()` drops them all, printing for whichever still carried
+`USERDEF` — the EDID's 74.25 MHz mode when a sink was present, or a CVT-created
+74.44 MHz one when it was not. It is silent on further disconnected probes
+because the tagged mode is already gone, which is exactly the "intermittency"
+that had looked like a DDC race. Nothing to fix.
+
 **Design note — the hold takes no DRM master.** The in-kernel DRM fbdev client
 already modesets, already recovers on hotplug (verified: forcing the connector
 off and back on re-enabled the output unaided) and already hands the device to a

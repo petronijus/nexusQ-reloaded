@@ -246,6 +246,40 @@ made its own `BOOT_OUTPUT=speaker` logic switch away from HDMI, and the timer
 appeared armed with 29 min left while `nq-hdmi-hold` kept running. Picking HDMI
 again cancelled it.
 
+## 9. Can we wake a dark sink by driving TMDS anyway? Measured: no.
+
+Petr asked for the one experiment I had flagged as untried, so it was run. With
+the soundbar asleep and HPD dark, the connector forced on and the DSS clocked,
+`HDMI_WP_PWR_CTRL` was written directly through `/dev/mem` to put the PHY in
+`TXON`, bypassing the driver's HPD gate entirely:
+
+```
+before:      PWR_CTRL=0x5a  phy_cmd=LDOON phy_status=LDOON
+after 0.2s:  PWR_CTRL=0xaa  phy_cmd=TXON  phy_status=TXON
+```
+
+**The hardware accepted it** — the PHY really did reach TXON and transmit into a
+line with no HPD, which the driver will never do on its own. It was held there
+for a full 60 s:
+
+```
+t+  5s  edid=0  phy=TXON
+ ...
+t+ 60s  edid=0  phy=TXON
+```
+
+The sink never came back. `HDMI_WP_IRQSTATUS_RAW` never showed a link event
+either. So driving TMDS blind is *possible* and *useless*: this soundbar in
+standby is not watching the link at all. The register was restored to `0x5a`
+and the connector handed back to the driver; nothing was wedged.
+
+That closes the question for good, and it also means the design is right to stop
+trying. Worth keeping in mind for other hardware, though: the limitation is this
+sink's standby behaviour, not a universal one — plenty of AV receivers keep HPD
+asserted in standby precisely so CEC can reach them, and on those the
+`<Image View On>` / `<System Audio Mode Request>` that `nq-cec` already sends
+would wake them.
+
 ## Open, not fixed here
 
 - **The selected output does not survive a reboot.** `BOOT_OUTPUT` is `speaker`,
@@ -253,11 +287,24 @@ again cancelled it.
   user has to both re-select HDMI and switch the sink on by hand. This is
   pre-existing behaviour for all three outputs; making it persistent is a
   product decision, not a bug fix.
-- **`[drm] User-defined mode not supported: "1280x720"`** fires on hotplug
-  probes (the `video=HDMI-A-1:1280x720@60` cmdline mode being pruned by
-  `drm_mode_prune_invalid`). Intermittent — three clean probe cycles in a row
-  did not reproduce it — which points at a DDC/EDID read race rather than the
-  mode itself. Harmless today (the EDID's own 720p mode is used) but it blocks
-  using the cmdline to force a cheaper mode.
+- ~~**`[drm] User-defined mode not supported: "1280x720"`**~~ — **explained,
+  and benign.** It is not a race and not a fault. Two variants appear:
+
+  ```
+  "1280x720": 60 74250 1280 1390 1430 1650 ... 0x60 0x5   EDID mode, DRIVER|USERDEF
+  "1280x720": 60 74440 1280 1336 1472 1664 ... 0x20 0x6   CVT mode,  USERDEF only
+  ```
+
+  With a sink present, `drm_helper_probe_add_cmdline_mode()` tags the matching
+  EDID mode `USERDEF` (74.25 MHz). With no sink there is nothing to tag, so it
+  *creates* one from the cmdline via CVT (74.44 MHz). Either way, a probe that
+  finds the connector **disconnected** marks every mode `MODE_STALE` and
+  `drm_mode_prune_invalid()` drops them all — printing the warning for whichever
+  one still carried `USERDEF`. So it fires **once per connect→disconnect
+  transition**, and is silent on every further disconnected probe because the
+  tagged mode is already gone. That is exactly the "intermittency" that looked
+  like a DDC race: three repeat cycles on an already-absent sink produced
+  nothing. Nothing to fix; forcing a cheaper mode from the cmdline is not
+  blocked by it after all.
 - **`nq-hdmi` is not yet wired into `nq-diag-snapshot`.** An HDMI audio row
   there would make the state visible in a routine sweep.
