@@ -242,11 +242,24 @@ needs to see the kernel talking while it happens.
 
 The safety net was "two network paths" — the USB gadget and WiFi. That is not
 redundancy: **both depend on drivers resuming**, so both fail together, which is
-exactly what happened. The one path that survives a wedged network is the
-**serial console on `ttyS2`**, and it was not attached.
+exactly what happened.
 
-**Rule for anything below: no further suspend attempt without `ttyS2` connected
-and watched.** That applies doubly to `mem`.
+There is **no serial console on this board and there will not be one**, so the
+answer is not "attach a UART" — it is to stop flying blind by other means:
+
+* **`/sys/power/pm_test`** (CONFIG_PM_DEBUG is on) runs the suspend machinery up
+  to a chosen phase — `freezer`, `devices`, `platform`, `processors`, `core` —
+  and returns by itself after ~5 s. A level that comes back is a level that
+  works; the level that does not come back is the answer. This is how a suspend
+  hang should be bisected, and it should have been the first move rather than a
+  full `freeze`.
+* **Write progress to a file with a `sync` behind every line.** `/tmp` is on the
+  ext4 root here, not tmpfs, so a probe's own log survives the reboot it causes —
+  which is the only reason anything is known about the attempt above.
+* **The journal is persistent**: `journalctl -b -1` reaches the boot that died.
+* **Reboots are an acceptable price.** They are not something to avoid at the
+  cost of learning nothing; they are the cost of each experiment, so make each
+  experiment worth one.
 
 ## 5. The design: a ladder, not a switch
 
