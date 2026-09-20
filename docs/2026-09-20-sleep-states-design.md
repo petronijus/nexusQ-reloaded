@@ -502,6 +502,74 @@ false sense of security. The forensics that *do* work here are the persistent
 journal (`journalctl -b -1`) and a probe writing to `/tmp` on the ext4 root with
 `fsync` behind each line.
 
+## 4g. ramoops: the data survives, the header does not
+
+§4f said ramoops "captures nothing" and blamed the region's placement. Both the
+long-standing repo explanation and mine were wrong, and the measurements say
+something more useful.
+
+**DRAM is not scrubbed.** Distinct markers written through `/dev/mem` every 2 MB
+across `0xBF000000`-`0xBFE00000`, then a watchdog reset (confirmed by a `boot_id`
+change, not by guessing from uptime):
+
+```
+0xbf000000  gone (DBGC…)      0xbf800000  SURVIVED
+0xbf200000  SURVIVED          0xbfa00000  SURVIVED
+0xbf400000  SURVIVED          0xbfc00000  SURVIVED
+0xbf600000  SURVIVED          0xbfe00000  SURVIVED
+```
+
+Seven of eight came back with the right timestamp. The eighth is not clobbered by
+anything foreign: `DBGC` is `PERSISTENT_RAM_SIG` (`0x43474244`) — ramoops' own
+signature, written by the kernel.
+
+**And the console text survives too.** Writing a unique marker to `/dev/kmsg` and
+resetting:
+
+```
+marker visible in the region BEFORE the reset: True
+marker present in raw DRAM AFTER the reset:    True   at phys 0xbf07e01b
+/sys/fs/pstore:                                EMPTY
+context: …DBGC \x00×8 [   84.946685] NQ-RAMOOPS-MARKER-… seq=0
+```
+
+So the text persists and pstore refuses to expose it. The context says why:
+behind the `DBGC` signature sit **eight zero bytes** — `start = 0`, `size = 0` —
+followed by perfectly intact log text. The buffer's *header* did not survive, so
+the zone looks empty and its contents are discarded.
+
+**Suspected cause:** the region is mapped **write-combine** (`mem_type = 0`, the
+default; `MEM_TYPE_WCOMBINE` in `fs/pstore/ram_core.c`). The data is written
+sequentially and drains; the header is the one location rewritten on *every*
+message, and is still in the write buffer when the reset lands.
+
+**Candidate fix:** `ramoops.mem_type=1` (`MEM_TYPE_NONCACHED`) on the cmdline —
+no kernel code change, just `scripts/extract-and-repack.sh`'s `CMDLINE` and a
+boot.img flash. Testable with the same probe: if pstore comes back non-empty
+afterwards, it is fixed.
+
+### Five tooling errors, all of which looked like data
+
+Worth recording because the pattern cost more than the experiments did. Each of
+these produced a confident wrong answer:
+
+1. `pm_test` driven by writing **`freeze`** — takes the s2idle branch first, so
+   `processors`/`core` are rejected; I read that as a hardware fact.
+2. `m.flush()` on a `/dev/mem` mapping — `msync` is unsupported there, the
+   exception swallowed a **successful** write and logged "WRITE FAILED".
+3. Reboot detected as **`uptime < 150`** — true without any reset, so a write and
+   its read ran on the same boot and the "verdict" was fiction. Now: compare
+   `/proc/sys/kernel/random/boot_id`.
+4. `open("/dev/kmsg", "w")` — Python's `"w"` is `O_TRUNC`, which is `EINVAL` on
+   that device; the probe died one line in.
+5. Default kmsg priority against **`loglevel=4`** — `KERN_INFO` never reaches the
+   console, so it never reaches ramoops; `dmesg` showed it and made it look fine.
+   Needs `<1>`.
+
+The countermeasure that actually worked: **make every probe verify itself** — log
+`boot_id` on both sides, assert the marker is visible *before* the event, and
+`fsync` each line to the ext4 root so the record outlives the board.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
