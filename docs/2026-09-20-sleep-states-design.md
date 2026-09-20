@@ -192,6 +192,62 @@ of predicted idle, and we currently wake every **2.7 ms**. Even with the states
 registered and working, the menu governor would pick them only sometimes. The
 wakeup rate has to come down first or the C-states buy far less than they look.
 
+## 4b. MEASURED: `freeze` hangs the device. R3 is blocked.
+
+Tried on 2026-09-20 with Petr's explicit go-ahead, and it cost a reboot. Writing
+this down in full because the negative result is worth more than the attempt.
+
+The probe armed an RTC alarm first and logged to a file (`/tmp` survives a reboot
+on this rootfs, which is the only reason any of this is known):
+
+```
+-- power domains BEFORE --   mpu/core/cpu0/cpu1/l4per all (ON), all counters 0
+   uptime=11072.16s  temp=52437
+   wakeup sources armed: twl@48:rtc, 4809c000.mmc, 480d5000.mmc,
+                         alarmtimer.2.auto, musb-hdrc.0.auto
+   rtc since_epoch=1789913934  alarm=1789913964  (+30s)
+-- writing 'freeze' to /sys/power/state --
+```
+
+…and nothing after it. **The write never returned.** The box went off USB
+(no enumeration, no `/dev/ttyACM*`), off WiFi (no ARP anywhere on the /24), sat
+dead for about 14 minutes and then reset itself. `pstore` is empty afterwards, so
+there was no kernel panic to capture, and mainline prints no reset reason, so the
+~14 minutes remain unattributed.
+
+Note this was **`freeze`, the gentler of the two** — suspend-to-idle touches
+neither the power domains nor the secure monitor. `mem` is strictly more
+dangerous and must not be tried next.
+
+### What it was *not*
+
+Two hypotheses formed and killed, both safely, while the box was awake:
+
+* *"The TWL6030 interrupt path is dead"* — `/proc/interrupts` showed
+  `TWL6030-PIH 0` and `rtc0 0` since boot, which looked damning. But arming an
+  alarm for +15 s with the system awake moved both to 1 and cleared the
+  `wakealarm` file. **The RTC alarm and its interrupt work.**
+* *"The RTC is not registered as a wakeup source"* — it is:
+  `/sys/kernel/debug/wakeup_sources` lists `48070000.i2c:twl@48:rtc` with events
+  recorded, and its `device/power/wakeup` reads `enabled`.
+
+So the alarm fires, the interrupt arrives, and the source is registered — and the
+system still did not come back. The remaining suspects are a device
+suspend/resume callback that deadlocks, or the s2idle loop being unexitable
+because the TWL's *threaded* handler cannot do its i2c reads once the i2c adapter
+is suspended (a classic for PMIC-behind-i2c wake sources). Distinguishing them
+needs to see the kernel talking while it happens.
+
+### The process failure, which is the real lesson
+
+The safety net was "two network paths" — the USB gadget and WiFi. That is not
+redundancy: **both depend on drivers resuming**, so both fail together, which is
+exactly what happened. The one path that survives a wedged network is the
+**serial console on `ttyS2`**, and it was not attached.
+
+**Rule for anything below: no further suspend attempt without `ttyS2` connected
+and watched.** That applies doubly to `mem`.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
@@ -218,13 +274,12 @@ fail — but the prior is much better than it looked.
 This is the user's *"sleep mode with network and Bluetooth support"*: the network
 stack stays fully up and only the silicon idles deeper.
 
-### R3 — suspend-to-idle (`freeze`)
+### R3 — suspend-to-idle (`freeze`) — **BLOCKED, measured**
 
-Already offered by the kernel (`/sys/power/state: freeze mem`), involves no
-secure monitor, and freezes userspace — all 368 wakeups/s stop at once. Cheap to
-try and it is the only rung that helps even if R2 turns out to be impossible.
-Wake sources already enabled: TWL6030 RTC (which only started ticking in
-v1.17.0), alarmtimer, both MMCs, USB.
+It hangs the device (§4b). Not "might": tried, hung, cost a reboot. It stays on
+the ladder because the idea is still right — freezing userspace stops every one
+of those wakeups at once — but it cannot be retried until `ttyS2` is attached and
+the hang can be watched rather than inferred.
 
 ### R4 — suspend-to-RAM (`deep`)
 
