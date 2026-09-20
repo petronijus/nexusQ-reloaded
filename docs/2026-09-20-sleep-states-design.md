@@ -443,6 +443,11 @@ open rather than assuming R2 is the safe one.
 
 ## 4f. Resolved: it sleeps and does not wake — and ramoops has never worked
 
+> **The ramoops half of this heading is WRONG — see §4i.** ramoops captures
+> crashes correctly; the records are archived to `/var/lib/systemd/pstore/`
+> and unlinked from `/sys/fs/pstore` by `systemd-pstore.service` at boot. The
+> sleep findings in this section are unaffected.
+
 Two things measured in isolation, which is what should have happened before any
 suspend was attempted.
 
@@ -503,6 +508,12 @@ journal (`journalctl -b -1`) and a probe writing to `/tmp` on the ext4 root with
 `fsync` behind each line.
 
 ## 4g. ramoops: the data survives, the header does not
+
+> **Superseded by §4i — this section describes a bug that does not exist.**
+> Every "pstore is EMPTY" reading below came from `/sys/fs/pstore`, which
+> `systemd-pstore.service` drains and unlinks at boot. ramoops recovers the
+> buffer correctly; the zeroed counters are it zapping a zone it had already
+> read out, not a failure. The archive is `/var/lib/systemd/pstore/`.
 
 §4f said ramoops "captures nothing" and blamed the region's placement. Both the
 long-standing repo explanation and mine were wrong, and the measurements say
@@ -627,6 +638,80 @@ Fixing it therefore means patching or bumping `shairport-sync` itself — a pack
 change, not a config one. Worth doing on correctness grounds (a daemon has no
 business waking a box 86 times a second through silence) rather than for the
 degrees it saves, which are within noise.
+
+## 4i. RESOLVED: ramoops works. `/sys/fs/pstore` was the wrong place to look
+
+§4f said "ramoops has never captured anything" and §4g built a cause on top of it.
+Both were measuring the wrong thing. **ramoops captures crashes correctly**, and on
+this device it very likely always did.
+
+`systemd-pstore.service` runs at boot, copies every pstore record into
+`/var/lib/systemd/pstore/` and then **unlinks it from pstorefs** (`Unlink=yes`, the
+default). So `/sys/fs/pstore` is empty a second after boot *by design*. Every
+"pstore is EMPTY" reading in this document — and every conclusion drawn from one —
+was taken from a directory systemd had already drained.
+
+The records were there the whole time:
+
+```
+/var/lib/systemd/pstore/console-ramoops-0   19357 B
+/var/lib/systemd/pstore/dmesg-ramoops-0     76075 B
+```
+
+and they contain exactly what they should. The console record holds all 300
+deliberately-injected probe lines and the shutdown that followed:
+
+```
+[  135.057922] NQ_PANIC_COUNTER_PROBE line 0 padding-padding
+...
+[  138.855529] Rebooting in 120 seconds..
+```
+
+and the dump record holds the crash itself:
+
+```
+<6>[  138.807647] sysrq: Trigger a crash
+<0>[  138.811279] Kernel panic - not syncing: sysrq triggered crash
+<4>[  138.831604]  unwind_backtrace from show_stack+0x10/0x14
+```
+
+**So the whole chain reads differently.** The zone counters coming back as 0 after a
+reset is not a failure — it is ramoops having *successfully* recovered the old
+buffer, handed it to pstore and zapped the zone for reuse, which is what
+`persistent_ram_zap()` is for. The payload left visible in raw DRAM is the orphaned
+remains of a buffer that had already been read out. Nothing was ever broken.
+
+**What this means for `ramoops.mem_type=1`.** It is flashed (kernel `6.18.48-r3`) and
+the device captures crashes with it. Whether `mem_type=0` would capture them just as
+well was never actually tested, because the test used to be "is `/sys/fs/pstore`
+non-empty". Treat the parameter as unproven rather than as a fix: it is harmless and
+in place, and there is no longer a symptom motivating a change either way.
+
+**How to read a crash on this device, correctly:**
+
+```sh
+ls -la /var/lib/systemd/pstore/          # records archived at boot
+grep -i "Kernel panic" /var/lib/systemd/pstore/dmesg-ramoops-*
+```
+
+Do **not** use `/sys/fs/pstore` as evidence of anything after boot, and do not read
+an empty one as "the reset was clean".
+
+**Worth doing (not done):** `/var/lib/systemd/pstore/` lives on the rootfs, so a
+flash wipes the entire crash history. It belongs in the persist store next to the
+ssh host keys and Bluetooth bonds, so a unit's crash record survives a reflash.
+
+### Three traps, all of which produced confident wrong answers
+
+1. **`/sys/fs/pstore` is drained by `systemd-pstore.service` at boot.** The archive
+   is `/var/lib/systemd/pstore/`. This one invalidated two sessions' conclusions.
+2. **`loglevel=4` filters the probe away.** A `<4>` message never reaches any
+   console, ramoops included, so injected probe lines produced zero hits in the
+   region and looked exactly like "the console backend writes nothing". Only `<1>`
+   and friends pass.
+3. **"It answered `ssh`, so it rebooted" is false.** With `(sleep 1; systemctl
+   reboot) &`, an `until ssh true` loop connects to the still-running system before
+   the reboot lands. Confirm a reset by `boot_id` or uptime, never reachability.
 
 ## 5. The design: a ladder, not a switch
 
