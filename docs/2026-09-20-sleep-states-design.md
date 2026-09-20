@@ -570,6 +570,64 @@ The countermeasure that actually worked: **make every probe verify itself** — 
 `boot_id` on both sides, assert the marker is visible *before* the event, and
 `fsync` each line to the ext4 root so the record outlives the board.
 
+## 4h. R0 measured properly: what actually pulls the CPU out of idle
+
+Two earlier attempts at this were wrong and are worth recording as much as the
+answer.
+
+**Wrong #1 — ftrace `sched_wakeup` counts.** They count wakeups of a *task*,
+which is not the same as the CPU leaving idle: a wakeup on an already-busy CPU
+costs nothing. shairport's 87 thread-wakeups/s turned out to be ~29 idle exits.
+
+**Wrong #2 — an A/B sweep that stopped each service in turn.** Invalid by
+construction: stopping and restarting a service makes churn that spills into the
+next 25 s window, so every window read higher than the one before and the
+"restored" baseline came back **68 % above** the original (226 → 380 wakeups/s),
+producing nonsense like "nq-healthd costs -530 wakeups/s". Back-to-back
+stop/measure/start cycles never settle. Deleted, not kept.
+
+**Right — trace the thing itself, passively.** `power:cpu_idle` fires on entry
+and exit (`state=4294967295`); for each exit, the next `sched_switch` on that CPU
+names what got the processor. Nothing is stopped, so there is no churn and no
+drift. 60 s, everything enabled:
+
+```
+466 idle exits/s
+
+what ran right after the exit        interrupts taken coming out of idle
+   34.5/s  alsa_buf_mon                 125.2/s  twd  (the local timer)
+   11.2/s  python3                       65.8/s  IPI
+   10.7/s  kworker/u9:0                   7.8/s  mmc4
+    8.6/s  arecord                        6.0/s  omap-dma-engine
+    6.7/s  rcu_sched                      4.3/s  48072000.i2c
+    4.3/s  irq/116-4807200                2.1/s  48055000.gpio
+    2.8/s  dbus-broker                    2.1/s  brcmf_oob_intr
+    2.3/s  brcmf_wdog/mmc4
+```
+
+The tasks sum to ~95/s against 466 exits, so **most idle exits are an interrupt
+serviced with no task switch at all** — the CPU wakes, handles it, and goes
+straight back. The dominant single source is the local timer at 125/s, and the
+timers being armed are overwhelmingly userspace ones.
+
+`alsa_buf_mon` — shairport-sync's ALSA buffer monitor — is the largest single
+task cause and the largest single timer armer, at 86 nanosleeps/s whether or not
+anything is playing.
+
+### The shairport knob does not work
+
+`disable_standby_mode_silence_scan_interval = 0.5` changes nothing: still 86/s.
+It only applies when `disable_standby_mode` is not `"never"`, and `"never"` is
+the default (the binary says so: *"It should be `always`, `auto` or `never`. It
+remains set to `never`"*). The monitor thread runs **unconditionally** on a fixed
+~11.6 ms interval. There is no configuration that stops it, so the device config
+was reverted rather than left carrying a setting that looks effective and is not.
+
+Fixing it therefore means patching or bumping `shairport-sync` itself — a package
+change, not a config one. Worth doing on correctness grounds (a daemon has no
+business waking a box 86 times a second through silence) rather than for the
+degrees it saves, which are within noise.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
