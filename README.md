@@ -62,7 +62,7 @@ notes in [`docs/`](docs/).
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
 | 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, system, **kernel** (health-gated trial slot, keeps the unit's identity since r5 · 2026-09-05) and A/B rootfs — no cable · v1.12.0+ |
 | 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (19 entities); the app is the only credential provisioner (PROTOCOL §13) |
-| 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | on demand from the app — the `user` linger keeps music playing when it stops · v1.10.0 |
+| 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | on demand from the app — the `user` linger keeps music playing when it stops · v1.10.0; **software-rendered** (`WLR_RENDERER=pixman`), see the GPU row |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | factory MAC pinned in DT; 5 GHz solid — `roamoff=1` + a watchdog that heals a dead link and reconnects a stranded one (r93 · 2026-09-05); ~34 Mbit/s ceiling |
 | 🔵 **Bluetooth** + **A2DP audio** | ✅ | reliable since v1.8.0 (BT UART `max-speed`, patch 0040); Just-Works pairing via the permanent `nexusq-btagent` |
 | 🖱 **BT pairing from the app** — both directions | ✅ | phone in (A2DP) *and* mouse/keyboard out; `bonded` (not `paired`) is the survives-a-reboot truth · v1.10.0 |
@@ -73,6 +73,7 @@ notes in [`docs/`](docs/).
 | 🌡 **TMP101 temperature sensor** | ✅ | |
 | ⏰ **RTC** (TWL6030) | ✅ | runs since kernel 6.18.48-r2 (v1.17.0) — MSECURE was never driven high, so every RTC write was dropped. Time now survives a reboot (measured); no backup cell, so a mains unplug still resets it until NTP |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | reverse-HCE — the phone hosts the card, the Q is the ISO-DEP reader (patch 0037) · v1.7.0 |
+| 🎮 **GPU / 3D acceleration** (PowerVR SGX540) | ❌ | no mainline GLES driver exists for Imagination Series5 — Mesa's open `powervr` covers Rogue (Series6+) only. Everything renders on the CPU; KMS/display via `omapdrm` is unaffected. A port is feasible (GPL `pvrsrvkm` module + version-matched TI DDK blobs, as on the Motorola Droid 4) but unbuilt — [research note](docs/2026-06-19-gpu-sgx540-acceleration-research.md) |
 | 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID; untested against a real TV/AVR |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | cold-boot reliable since v1.6.8 (pinmux); the default deploy path (~80 Mbit/s); no MAC EEPROM → random MAC per boot |
 | 💿 **TOSLINK / SPDIF** | ✅ | mainline McASP DIT, selectable output; PA pinned to 48 kHz so the DIT locks · v1.6.15 |
@@ -156,6 +157,7 @@ Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthro
 | Component | Chip | Driver | Bus |
 |---|---|---|---|
 | SoC | TI **OMAP4460** (Cortex-A9 ×2) | `omap4` | — |
+| GPU | Imagination **PowerVR SGX540** (Series5) | none — no mainline GLES driver | L3 / GFX power domain |
 | Audio amp | TI **TAS5713** 25 W Class-D | `snd-soc-tas571x` | McBSP2 / I²C4 |
 | Audio codec | — (TWL6040 pad unpopulated/unused; stock never drove it) | none — removed from DTS/defconfig | — |
 | WiFi | Broadcom **BCM4330** | `brcmfmac` | SDIO / MMC5 |
