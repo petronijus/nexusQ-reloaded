@@ -320,6 +320,76 @@ always-powered WKUP domain. Arming it and then letting userspace freeze (so
 nothing can ping it) gives a hard reset in N seconds — a net that does **not**
 depend on any driver resuming, which is exactly what the previous attempt lacked.
 
+## 4d. MEASURED: suspend-to-RAM is a one-way trip. R4 is blocked too.
+
+`mem` was tried with a watchdog as the net. The probe's own log, recovered from
+ext4 afterwards:
+
+```
+   watchdog armed, timeout=60s (asked 60)
+   rtc since_epoch=1789916276  alarm=1789916306
+>>> writing 'mem' to /sys/power/state
+```
+
+Nothing after it. The box hung, and **the watchdog did not reset it** despite
+arming correctly and reporting the timeout back. Nor did anything else:
+
+| way back | result |
+|---|---|
+| RTC alarm at +30 s | did not wake it |
+| OMAP watchdog at +60 s | did not reset it |
+| touching the dome / mute key (AVR on gpio_49) | did not wake it |
+| unplugging and replugging USB (`musb-hdrc` **is** an armed wake source) | did not wake it |
+| pulling the mains | the only thing that worked |
+
+So on this board **suspend-to-RAM has no working way back at all.** That is a
+much harder result than §4c's "s2idle cannot be woken because the PIH is
+disabled": here even the hardware paths that are supposed to work below Linux —
+the PRCM/WUGEN wake and the watchdog — do not bring it back.
+
+Two corrections to reasoning that looked sound and was not:
+
+* *"`omap_wdt` has no suspend/resume handlers and sits in the always-powered WKUP
+  domain, so it keeps counting."* It does not. The driver indeed has no PM ops,
+  but the **hardware** stops, because the PRCM gates its functional clock during
+  the suspend. A watchdog is not a net for a suspend on this SoC.
+* *"`mem` is the mode whose wake path is actually wired."* Also wrong — see the
+  table. §4c's reasoning about `disable_irq()` on the PIH was correct as far as
+  it went, but fixing s2idle's wake would not have helped, because `mem` cannot
+  wake either.
+
+**The method lesson, twice over:** both attempts were protected by a safety net
+that had been *derived* rather than *measured* — first "two network paths"
+(which both need drivers to resume), then the watchdog (which stops with its
+clock). The repo already has the rule for this in another form —
+a test must be seen failing — and it applies to the net as much as to the test.
+**Arm a net and watch it fire, in isolation, before trusting it.**
+
+One thing in the BEFORE counters is worth keeping, because it is the first
+positive evidence of any kind:
+
+```
+l4per_pwrdm (ON), OFF:0, RET:1, INA:0, ON:2
+```
+
+`l4per_pwrdm` reached **retention once** — during the `pm_test platform` run.
+So the accounting does work, and retention on this board is not impossible in
+principle. MPU and CORE stay at zero only because `pm_test platform` stops before
+reaching them.
+
+### What this does to the ladder
+
+**R3 and R4 are blocked on the wake path, not on power.** Neither can be
+finished, and neither can be safely retried, until something can bring the board
+back — and nothing currently can.
+
+That leaves **R2 (register C2/C3)** as the only remaining route to MPU/CORE
+retention, and it is also the one that needs no wake source at all: a C-state is
+left by any ordinary interrupt, with no suspend, no frozen userspace and no
+wakeup plumbing. It needs a kernel rebuild and a flash, not an experiment on a
+running box. **R0 stays worth doing in parallel**, because the deep states need
+1.1-1.5 ms of predicted idle and the box currently wakes every 2.7 ms.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
