@@ -280,6 +280,29 @@ asserted in standby precisely so CEC can reach them, and on those the
 `<Image View On>` / `<System Audio Mode Request>` that `nq-cec` already sends
 would wake them.
 
+## 10. One path ships untested, deliberately and knowingly
+
+`_keep_black()` — putting the console back on the black VT after the HDMI
+desktop has been toggled on and off — has **never run against a real `tinydm`**.
+The hold only runs with an awake sink attached, and there was no way to keep the
+receiver awake for the test (2026-09-20, Petr: "nemam jak vyzkouset na
+soundbaru"). So it is shipped untested on hardware, on purpose, with the risk
+bounded rather than hidden:
+
+* Its decision logic *is* pinned (`tests/test_hdmi_hold_guard.py`): a compositor
+  holding DRM master is left alone, a drifted console is re-parked, and "cannot
+  tell" does nothing — because acting on a guess means a `chvt` underneath a
+  running compositor, the one outcome worse than a console on screen. Both
+  mutations (treating "cannot tell" as "no master"; finding the master column by
+  position instead of by name) were seen failing.
+* The worst case if the live path is wrong is **cosmetic**: the console ends up
+  on the wrong VT. Audio does not depend on any of it — that needs only `fb0`
+  unblanked, which `_keep_lit()` handles on its own.
+
+Whoever next has a receiver they can keep awake: start the hold, toggle the
+desktop on and off from the app, and check the console comes back to `tty8` with
+the output still lit.
+
 ## Open, not fixed here
 
 - **The selected output does not survive a reboot.** `BOOT_OUTPUT` is `speaker`,

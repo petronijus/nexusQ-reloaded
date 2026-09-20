@@ -125,6 +125,13 @@ a suspicion that the app's volume slider was a no-op on HDMI: PulseAudio reports
 monitor peak tracks the sink volume (70 % → 69, 100 % → 129), so the software
 fallback is real and the slider works.
 
+**Shipping one path untested, knowingly.** `_keep_black()` (re-parking the
+console after the HDMI desktop is toggled) has never run against a real `tinydm`
+— the hold needs an awake sink and there was no way to keep the receiver awake
+for it. Its decision logic is pinned instead, and the risk is bounded: a
+compositor holding DRM master is left alone, "cannot tell" does nothing, and the
+worst case is cosmetic because audio needs only `fb0` unblanked.
+
 **A bug this found in its own tests.** The first live run died with
 `'Pulse' object has no attribute 'load_module'` — the three module helpers had
 landed in `Mixer`, because both classes have a `set_muted` and the edit anchored
