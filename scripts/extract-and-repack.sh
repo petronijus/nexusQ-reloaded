@@ -34,7 +34,7 @@ OUT_IMG=/out/boot-ethernet-b7.img
 
 # Authoritative cmdline, read live from the running #2 kernel's /proc/cmdline
 # (the repacked image must boot identically minus the ramdisk).
-CMDLINE="console=ttyS2,115200 console=tty0 root=/dev/mmcblk0p13 rootwait rw mem=1008M ramoops.mem_address=0xbf000000 ramoops.mem_size=0x100000 ramoops.console_size=0x80000 ramoops.record_size=0x20000 ramoops.dump_oops=1 earlyprintk loglevel=7 ignore_loglevel panic=30"
+CMDLINE="console=ttyS2,115200 console=tty0 root=/dev/mmcblk0p13 rootwait rw mem=1008M ramoops.mem_address=0xbf000000 ramoops.mem_size=0x100000 ramoops.console_size=0x80000 ramoops.record_size=0x20000 ramoops.dump_oops=1 ramoops.mem_type=1 earlyprintk loglevel=7 ignore_loglevel panic=30"
 
 [ -f "$VM" ]  || { echo "missing vmlinuz at $VM"; exit 1; }
 [ -f "$DTB" ] || { echo "missing dtb at $DTB"; exit 1; }
