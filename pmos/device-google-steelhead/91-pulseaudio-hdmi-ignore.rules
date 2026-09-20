@@ -1,21 +1,29 @@
-# Tell PulseAudio to ignore the omap-hdmi-audio ALSA card.
+# Tell PulseAudio to ignore the omap-hdmi-audio ALSA card — and keep ignoring it
+# now that HDMI audio actually works. The reason changed; the rule did not.
 #
-# The HDMI card IS the real mainline omap-hdmi-audio (SND_SOC_OMAP_HDMI, platform
-# device omap-hdmi-audio.1.auto) — NOT a driver stub. Its PCM open returns
-# -EINVAL and PA's auto-profile probe fails ("Failed to find a working profile")
-# because it needs an AUDIO-CAPABLE HDMI sink, and the display currently attached
-# (a Philips 190C monitor) is DVI-class: its EDID is a 128-byte base block with
-# NO CEA-861 extension, so no audio data block, so the HDMI link runs DVI mode
-# with no audio path. That is CORRECT behaviour for that sink, not a bug.
+# The card IS the real mainline omap-hdmi-audio (SND_SOC_OMAP_HDMI, platform
+# device omap-hdmi-audio.1.auto). HDMI audio was CONFIRMED WORKING on it
+# 2026-09-20 against an audio-capable sink: a tone played to hw:HDMI,0 was
+# audible and HDMI_WP_AUDIO_CTRL went 0x00000020 -> 0xc05e0020 (AUDIO_EN |
+# CORE_REQ). The original note here — that the card looked broken — was an
+# artefact of the DVI-class Philips 190C monitor it was written against (a
+# 128-byte EDID with no CEA-861 extension, so no audio path at all), plus the
+# blanked framebuffer. It was never a driver stub.
 #
-# => HDMI audio out very likely WORKS on a real audio-capable sink (TV / AV
-# receiver) with no code change, but this is UNTESTED — we have no audio-capable
-# HDMI display to confirm it (verified 2026-07-07 via EDID; see the audio-outputs
-# bring-up note). Keep this PULSE_IGNORE regardless: on a DVI monitor the card is
-# unusable, and even on a TV routing desktop audio out HDMI is not what this
-# speaker appliance wants by default (the TAS5713 speaker is the sink). If HDMI
-# audio is ever wanted as a selectable output, drop this rule after confirming
-# the card opens on the target sink.
+# So why still PULSE_IGNORE? Because module-udev-detect would load
+# module-alsa-card on it at UDEV time, which on this appliance is boot — and at
+# boot the HDMI output is dark. HDMI carries audio only inside a running video
+# stream, so with the DSS unclocked every profile PA probes fails and the card
+# is written off for the rest of the uptime ("Failed to find a working
+# profile"). Worse, the verdict would depend on whether the TV happened to be
+# switched on at boot.
+#
+# The card is therefore driven explicitly instead: nexusq-control loads a plain
+# module-alsa-sink on hw:HDMI,0 when the user selects the HDMI output, AFTER
+# nq-hdmi-hold has lit the output, and unloads it when they leave. Availability
+# comes from the EDID (`nq-hdmi status`), not from PA's probe. Do NOT drop this
+# rule to "enable HDMI audio" — that re-introduces the boot-time race this
+# avoids.
 #
 # Match by the backing PLATFORM device (omap-hdmi-audio.1.auto), NOT the ALSA
 # card index: the card number is probe-order dependent (HDMI was card1 on one

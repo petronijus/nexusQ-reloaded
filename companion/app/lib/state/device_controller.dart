@@ -263,6 +263,15 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
         if (e.data['brightness'] is num) state.brightness = (e.data['brightness'] as num).round();
       case 'outputChanged':
         if (e.data['output'] is String) state.output = e.data['output'] as String;
+      case 'outputsChanged':
+        // The SET of outputs changed, not just which one is active. Only HDMI
+        // can do this: a receiver switched off (or one that dozed off once the
+        // Q stopped feeding it a signal) drops HPD and the output really is
+        // gone, and switching it back on brings it back. `listOutputs` is
+        // otherwise fetched once at connect, so without this the pill stayed
+        // greyed out until the app was restarted — which is what Petr saw on
+        // 2026-09-20 after switching his soundbar back on.
+        state.applyOutputs(e.data);
       case 'nowPlayingChanged':
         final before = state.nowPlaying;
         state.nowPlaying = NowPlaying.fromJson(e.data);

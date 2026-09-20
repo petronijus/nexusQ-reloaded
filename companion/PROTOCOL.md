@@ -94,14 +94,33 @@ follows the selected output, and applies to any input feeding it).
 ### Audio output  (→ PulseAudio default sink + move-sink-input, see §6)
 | Method | params | result | Event emitted |
 |---|---|---|---|
-| `listOutputs` | — | `{ "outputs": [ {id, label, sink, available} ], "active": "<id>" }` | — |
+| `listOutputs` | — | `{ "outputs": [ {id, label, sink, available} ], "active": "<id>" }` | `outputsChanged` — unsolicited, see below |
 | `setOutput` | `{ "output": "<id>" }` | `{ output }` | `outputChanged` — also re-emits `volumeChanged` (new sink's level/mute) |
 
 Output ids: `speaker` ("Reproduktor", TAS5713 banana terminals) · `spdif`
-("Optický výstup", optical S/PDIF) · `hdmi` ("HDMI", listed only when a real HDMI
-sink is present — it is usually `PULSE_IGNORE`'d). `setOutput` errors `bad_request`
-for an unknown/unavailable id. Switching the output is **input-agnostic**: the
-bridge sets the PA default sink (for new streams) **and** moves every existing
+("Optický výstup", optical S/PDIF) · `hdmi` ("HDMI").
+
+`hdmi` is decided by the CABLE, not by the sink list, because its PulseAudio sink
+exists only while HDMI is the selected output (the bridge loads it on demand —
+see `91-pulseaudio-hdmi-ignore.rules` for why the card is not auto-probed). So:
+nothing plugged into the HDMI port omits the row entirely; a sink whose EDID
+declares no audio (a DVI-class monitor) is listed with `available: false`, which
+the app renders dimmed; an audio-capable sink is selectable. Selecting it also
+starts `nq-hdmi-hold.service`, because HDMI carries audio only inside a running
+video stream — so the Q's HDMI video output stays on, black, for as long as HDMI
+is the output, which is also what stops a receiver dozing off. `setOutput` errors
+`bad_request` for an unknown/unavailable id, and `unavailable` when the HDMI
+output cannot be brought up (nothing connected, a display that takes no audio, or
+PulseAudio failing to open the card).
+
+**`outputsChanged`** carries the whole `listOutputs` payload (`{outputs, active}`)
+and is broadcast when the SET of outputs changes — which in practice only HDMI
+can do. A client fetches `listOutputs` once when it connects, so without this it
+would keep a stale list: switch a receiver off and HDMI is genuinely gone, switch
+it back on and it returns. Apply it with the same code as the initial fetch.
+`outputChanged` remains the narrower event and still carries only the active id.
+
+Switching the output is **input-agnostic**: the bridge sets the PA default sink (for new streams) **and** moves every existing
 sink-input onto it (so a currently-playing stream follows). As a hardware-amp
 safety, the class-D TAS5713 amp is powered on only when `speaker` is active and
 switched off for `spdif`/`hdmi`.

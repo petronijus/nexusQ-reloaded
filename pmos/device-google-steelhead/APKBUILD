@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=103
+pkgrel=104
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -24,6 +24,9 @@ options="!check !archcheck !fhs !tracedeps"
 # slots, the switch is a 512-byte write to p7 "misc", and the choice is made by
 # an initramfs in the boot image; a boot image without it just mounts p13, which
 # is slot A (docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md).
+# r104 adds nq-hdmi / nq-cec / nq-hdmi-hold.service and needs nexusq-control
+# >= 0.1.0-r48, which is the revision that drives them (GitHub issue #5 — HDMI
+# as a selectable audio output). An older bridge simply never offers HDMI.
 # r103 needs nexusq-control >= 0.1.0-r46 and nexusq-setupd >= 0.1.0-r5: the
 # identity file is a symlink into the persist store from r103 on, and only those
 # revisions write THROUGH it. Not expressed as `pkg>=ver` here because pmbootstrap
@@ -97,6 +100,9 @@ source="
 	pam-base-auth
 	pam-base-session
 	91-pulseaudio-hdmi-ignore.rules
+	nq-hdmi
+	nq-cec
+	nq-hdmi-hold.service
 	92-steelhead-avr-keyboard.rules
 	labwc-rc.xml
 	nq-vol
@@ -234,14 +240,28 @@ package() {
 	#    nm-applet/gvfs/webkit); nothing here uses the user keyring. base-session
 	#    preserves pam_systemd (XDG_RUNTIME_DIR); all its lines are -session
 	#    optional so a stale copy can never block login.
-	#  - PULSE_IGNORE the omap-hdmi-audio card (dummy-DAI, not a usable sink)
-	#    so PulseAudio stops failing module-alsa-card on it every boot.
+	#  - PULSE_IGNORE the omap-hdmi-audio card so PulseAudio does not probe it at
+	#    boot, when the HDMI output is dark and every profile fails. The card
+	#    WORKS (confirmed 2026-09-20); nexusq-control loads a sink on it on
+	#    demand instead. Full reasoning in the rules file.
 	install -Dm644 "$srcdir"/pam-base-auth \
 		"$pkgdir"/etc/pam.d/base-auth
 	install -Dm644 "$srcdir"/pam-base-session \
 		"$pkgdir"/etc/pam.d/base-session
 	install -Dm644 "$srcdir"/91-pulseaudio-hdmi-ignore.rules \
 		"$pkgdir"/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules
+	# HDMI as a real audio output (GitHub issue #5). `nq-hdmi` owns the EDID
+	# verdict and the hold that keeps the output lit — HDMI carries audio only
+	# inside a running video stream, and a receiver that loses the signal sleeps
+	# and cannot be woken again by this board. `nq-cec` is how we ask a sink that
+	# IS awake to select us. The hold unit is deliberately NOT enabled: the
+	# companion app's output switch starts and stops it.
+	install -Dm755 "$srcdir"/nq-hdmi \
+		"$pkgdir"/usr/bin/nq-hdmi
+	install -Dm755 "$srcdir"/nq-cec \
+		"$pkgdir"/usr/bin/nq-cec
+	install -Dm644 "$srcdir"/nq-hdmi-hold.service \
+		"$pkgdir"/etc/systemd/system/nq-hdmi-hold.service
 	# Front-panel volume ring -> real (PulseAudio) volume. nexusqd reads the AVR
 	# evdev node directly and applies the volume via the nq-vol pactl helper
 	# (capped at 100%) — so the ring works with the desktop OFF (nexusqd r12+).
@@ -707,6 +727,9 @@ SKIP  pulseaudio.service
 SKIP  pam-base-auth
 SKIP  pam-base-session
 SKIP  91-pulseaudio-hdmi-ignore.rules
+SKIP  nq-hdmi
+SKIP  nq-cec
+SKIP  nq-hdmi-hold.service
 SKIP  92-steelhead-avr-keyboard.rules
 SKIP  labwc-rc.xml
 SKIP  nq-vol

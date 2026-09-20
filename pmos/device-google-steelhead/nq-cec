@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""nq-cec — the Q's HDMI-CEC side, used to wake the sink it plays into.
+
+WHY THIS EXISTS
+---------------
+HDMI has no audio-only mode: the audio samples ride in the data islands inside
+the blanking intervals of a *video* stream, so a sink only ever hears us while
+the DSS HDMI output is running (see nq-hdmi-hold). That is fine while the sink
+is awake — but an AV receiver or soundbar that has gone to standby is not
+listening to TMDS at all, and on the one measured here (a Samsung soundbar,
+2026-09-20) standby also drops HPD, so the connector reads `disconnected` and
+the output tears itself down. CEC is the bus that exists precisely to say
+"wake up and switch to me".
+
+The adapter has always been there and nobody ever used it:
+
+    driver      : omapdss_hdmi     capabilities: TRANSMIT | LOG_ADDRS | PASSTHROUGH
+    phys addr   : 2.1.0.0          <- the driver reads this out of the sink's EDID
+    log addrs   : num=0 mask=0x0   <- nothing in userspace ever claimed one
+
+Without a claimed logical address the Q cannot transmit, which is why selecting
+HDMI could never wake anything.
+
+THE HPD CHICKEN-AND-EGG
+-----------------------
+`CEC_CAP_PHYS_ADDR` is NOT among the adapter's capabilities, so the *driver*
+owns the physical address and userspace may not set it. The driver derives it
+from the EDID. A sink in standby that drops HPD therefore takes the EDID, and
+with it the physical address, and with it our ability to transmit at all.
+
+So CEC alone cannot rescue a sink that is both asleep and HPD-dark. The order
+that does work, and the one nq-hdmi-hold drives, is:
+
+    1. force the connector on and start pushing TMDS   (nq-hdmi-hold)
+    2. some sinks wake on seeing a clock; if this one does, HPD returns,
+       the EDID is read back and the physical address becomes valid
+    3. *then* CEC is available — and we use it to make the sink select us,
+       which TMDS alone can never do
+
+`wake` is therefore best-effort by construction and says so in its exit code.
+
+WHAT IT SENDS
+-------------
+    <Image View On>               to the TV (LA 0)  - "come out of standby"
+    <System Audio Mode Request>   to the audio system (LA 5), carrying our
+                                  physical address - "turn on and take my audio"
+    <Active Source>               broadcast, carrying our physical address -
+                                  "switch the path to me"
+
+<Active Source> is a BROADCAST and it is the one with a blast radius: the Q's
+physical address here is 2.1.0.0, meaning it hangs off port 1 of a device that
+itself sits on port 2 of the root, so there is a TV upstream of the soundbar
+that will switch its input too. That is deliberate and was agreed; `wake
+--quiet` leaves it out for anyone who wants only the audio system nudged.
+"""
+
+import array
+import errno
+import fcntl
+import os
+import struct
+import sys
+import time
+
+CEC_DEV = os.environ.get("NEXUSQ_CEC_DEV", "/dev/cec0")
+
+# --- uAPI (include/uapi/linux/cec.h) --------------------------------------
+# Sizes are computed the way the C structs pack on armv7/arm64 alike: every
+# member is naturally aligned and the struct is padded to its own alignment.
+CEC_MAX_LOG_ADDRS = 4
+CEC_MAX_MSG_SIZE = 16
+CAPS_SZ = 32 + 32 + 4 + 4 + 4                      # driver[32] name[32] +3x u32
+LOG_ADDRS_SZ = 92                                  # see struct cec_log_addrs
+MSG_SZ = 56                                        # see struct cec_msg
+
+_IOC_READ, _IOC_WRITE = 2, 1
+
+
+def _ioc(direction, nr, size):
+    return (direction << 30) | (size << 16) | (ord("a") << 8) | nr
+
+
+CEC_ADAP_G_CAPS = _ioc(_IOC_READ | _IOC_WRITE, 0, CAPS_SZ)
+CEC_ADAP_G_PHYS_ADDR = _ioc(_IOC_READ, 1, 2)
+CEC_ADAP_G_LOG_ADDRS = _ioc(_IOC_READ, 3, LOG_ADDRS_SZ)
+CEC_ADAP_S_LOG_ADDRS = _ioc(_IOC_READ | _IOC_WRITE, 4, LOG_ADDRS_SZ)
+CEC_TRANSMIT = _ioc(_IOC_READ | _IOC_WRITE, 5, MSG_SZ)
+
+CEC_CAP_LOG_ADDRS = 1 << 1
+CEC_CAP_TRANSMIT = 1 << 2
+
+CEC_PHYS_ADDR_INVALID = 0xFFFF
+
+CEC_LOG_ADDR_TV = 0
+CEC_LOG_ADDR_AUDIOSYSTEM = 5
+CEC_LOG_ADDR_BROADCAST = 15
+
+CEC_LOG_ADDR_TYPE_PLAYBACK = 3
+CEC_OP_PRIM_DEVTYPE_PLAYBACK = 4
+CEC_OP_ALL_DEVTYPE_PLAYBACK = 0x10
+CEC_OP_CEC_VERSION_1_4 = 5
+CEC_VENDOR_ID_NONE = 0xFFFFFFFF
+
+CEC_MSG_IMAGE_VIEW_ON = 0x04
+CEC_MSG_ACTIVE_SOURCE = 0x82
+CEC_MSG_SYSTEM_AUDIO_MODE_REQUEST = 0x70
+
+CEC_TX_STATUS_OK = 1 << 0
+
+# The OSD name a CEC bus shows for us. 14 chars max on the wire (the struct
+# holds 15 including the NUL), and it is what a TV's input list will say.
+OSD_NAME = os.environ.get("NEXUSQ_CEC_OSD_NAME", "Nexus Q")
+
+
+class CecError(Exception):
+    pass
+
+
+class Cec:
+    """One open handle on the adapter. Every ioctl is wrapped so a caller can
+    tell 'the adapter said no' (CecError) from 'the sink is not there'
+    (phys_addr() == CEC_PHYS_ADDR_INVALID), which are very different answers."""
+
+    def __init__(self, path=CEC_DEV):
+        self.path = path
+        try:
+            self.fd = os.open(path, os.O_RDWR)
+        except OSError as e:
+            raise CecError(f"{path}: {e.strerror}") from e
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def _ioctl(self, req, buf):
+        try:
+            fcntl.ioctl(self.fd, req, buf, True)
+        except OSError as e:
+            raise CecError(f"ioctl 0x{req:08x}: {e.strerror}") from e
+        return buf
+
+    # --- reads ------------------------------------------------------------
+    def caps(self):
+        b = self._ioctl(CEC_ADAP_G_CAPS, array.array("b", bytes(CAPS_SZ))).tobytes()
+        driver, name, avail, capabilities, version = struct.unpack("<32s32sIII", b)
+        return {
+            "driver": driver.rstrip(b"\0").decode(errors="replace"),
+            "name": name.rstrip(b"\0").decode(errors="replace"),
+            "available_log_addrs": avail,
+            "capabilities": capabilities,
+            "version": version,
+        }
+
+    def phys_addr(self):
+        b = self._ioctl(CEC_ADAP_G_PHYS_ADDR, array.array("b", bytes(2))).tobytes()
+        return struct.unpack("<H", b)[0]
+
+    def log_addrs(self):
+        b = self._ioctl(
+            CEC_ADAP_G_LOG_ADDRS, array.array("b", bytes(LOG_ADDRS_SZ))
+        ).tobytes()
+        mask, cec_version, num = struct.unpack("<HBB", b[4:8])
+        return {
+            "log_addr": list(b[0:CEC_MAX_LOG_ADDRS]),
+            "log_addr_mask": mask,
+            "cec_version": cec_version,
+            "num_log_addrs": num,
+            "osd_name": b[16:31].rstrip(b"\0").decode(errors="replace"),
+        }
+
+    # --- configuration ----------------------------------------------------
+    def claim_playback(self, osd_name=OSD_NAME):
+        """Claim a Playback-device logical address, and return it.
+
+        The kernel does the actual claim (polling 4, 8 then 11 on the bus), so
+        this returns only once `log_addr_mask` is non-zero. It needs a valid
+        physical address first: without one the core will not even start, which
+        is the HPD chicken-and-egg described at the top of this file."""
+        pa = self.phys_addr()
+        if pa == CEC_PHYS_ADDR_INVALID:
+            raise CecError(
+                "no physical address — the sink is not asserting HPD, so its "
+                "EDID could not be read and CEC cannot be configured"
+            )
+
+        cur = self.log_addrs()
+        if cur["num_log_addrs"] and cur["log_addr_mask"]:
+            return cur["log_addr"][0]
+
+        buf = bytearray(LOG_ADDRS_SZ)
+        buf[0:CEC_MAX_LOG_ADDRS] = bytes([0xFF] * CEC_MAX_LOG_ADDRS)
+        struct.pack_into("<HBB", buf, 4, 0, CEC_OP_CEC_VERSION_1_4, 1)
+        struct.pack_into("<II", buf, 8, CEC_VENDOR_ID_NONE, 0)
+        name = osd_name.encode()[:14]
+        buf[16 : 16 + len(name)] = name
+        buf[31] = CEC_OP_PRIM_DEVTYPE_PLAYBACK
+        buf[35] = CEC_LOG_ADDR_TYPE_PLAYBACK
+        buf[39] = CEC_OP_ALL_DEVTYPE_PLAYBACK
+
+        self._ioctl(CEC_ADAP_S_LOG_ADDRS, array.array("b", bytes(buf)))
+
+        # The claim is asynchronous: S_LOG_ADDRS returns as soon as the request
+        # is accepted and the core then polls the bus for a free address.
+        for _ in range(50):
+            cur = self.log_addrs()
+            if cur["log_addr_mask"]:
+                return cur["log_addr"][0]
+            time.sleep(0.1)
+        raise CecError("logical address was never claimed (bus busy or no sink)")
+
+    def release(self):
+        """Give the logical address back (num_log_addrs = 0)."""
+        self._ioctl(CEC_ADAP_S_LOG_ADDRS, array.array("b", bytes(LOG_ADDRS_SZ)))
+
+    # --- transmit ---------------------------------------------------------
+    def transmit(self, initiator, destination, payload, timeout_ms=1000):
+        """Send one message. Returns the tx_status byte.
+
+        A NACK is NOT an error here: polling a bus where the addressed device
+        is in standby legitimately NACKs, and the caller (a wake attempt) wants
+        to keep going rather than abort."""
+        msg = bytearray(MSG_SZ)
+        body = bytes([(initiator << 4) | destination]) + bytes(payload)
+        if len(body) > CEC_MAX_MSG_SIZE:
+            raise CecError(f"message too long ({len(body)} > {CEC_MAX_MSG_SIZE})")
+        struct.pack_into("<II", msg, 16, len(body), timeout_ms)
+        msg[32 : 32 + len(body)] = body
+        out = self._ioctl(CEC_TRANSMIT, array.array("b", bytes(msg))).tobytes()
+        return out[50]  # tx_status
+
+
+def _op_name(payload):
+    return {
+        CEC_MSG_IMAGE_VIEW_ON: "Image View On",
+        CEC_MSG_ACTIVE_SOURCE: "Active Source",
+        CEC_MSG_SYSTEM_AUDIO_MODE_REQUEST: "System Audio Mode Request",
+    }.get(payload[0], f"opcode 0x{payload[0]:02x}")
+
+
+def cmd_status(_args):
+    with Cec() as c:
+        caps = c.caps()
+        pa = c.phys_addr()
+        la = c.log_addrs()
+    print(f"device      : {CEC_DEV}")
+    print(f"driver      : {caps['driver']} ({caps['name']})")
+    print(f"capabilities: 0x{caps['capabilities']:08x}"
+          f"{'  TRANSMIT' if caps['capabilities'] & CEC_CAP_TRANSMIT else ''}"
+          f"{'  LOG_ADDRS' if caps['capabilities'] & CEC_CAP_LOG_ADDRS else ''}")
+    if pa == CEC_PHYS_ADDR_INVALID:
+        print("phys addr   : INVALID — no EDID, sink is not asserting HPD")
+    else:
+        print("phys addr   : %x.%x.%x.%x" %
+              ((pa >> 12) & 0xF, (pa >> 8) & 0xF, (pa >> 4) & 0xF, pa & 0xF))
+    if la["log_addr_mask"]:
+        print(f"log addr    : {la['log_addr'][0]} "
+              f"(mask 0x{la['log_addr_mask']:04x}, osd {la['osd_name']!r})")
+    else:
+        print("log addr    : none claimed")
+    return 0 if pa != CEC_PHYS_ADDR_INVALID else 1
+
+
+def cmd_wake(args):
+    """Best-effort: wake the sink and ask it to select us.
+
+    Exit 0 = at least one message was acknowledged, 1 = CEC is not usable
+    (almost always: the sink is not asserting HPD, so there is no physical
+    address). The caller treats 1 as 'try TMDS and come back', not as fatal."""
+    try:
+        with Cec() as c:
+            caps = c.caps()
+            if not caps["capabilities"] & CEC_CAP_TRANSMIT:
+                print("nq-cec: adapter cannot transmit", file=sys.stderr)
+                return 1
+            la = c.claim_playback()
+            pa = c.phys_addr()
+            print(f"nq-cec: claimed logical address {la}, phys addr "
+                  "%x.%x.%x.%x" % ((pa >> 12) & 0xF, (pa >> 8) & 0xF,
+                                   (pa >> 4) & 0xF, pa & 0xF))
+
+            sends = [
+                (CEC_LOG_ADDR_TV, [CEC_MSG_IMAGE_VIEW_ON]),
+                (CEC_LOG_ADDR_AUDIOSYSTEM,
+                 [CEC_MSG_SYSTEM_AUDIO_MODE_REQUEST, pa >> 8, pa & 0xFF]),
+            ]
+            if not args.quiet:
+                sends.append((CEC_LOG_ADDR_BROADCAST,
+                              [CEC_MSG_ACTIVE_SOURCE, pa >> 8, pa & 0xFF]))
+
+            any_ok = False
+            for dest, payload in sends:
+                status = c.transmit(la, dest, payload)
+                ok = bool(status & CEC_TX_STATUS_OK)
+                any_ok = any_ok or ok
+                print(f"nq-cec: -> LA{dest:<2} {_op_name(payload):<26} "
+                      f"{'ok' if ok else f'no ack (status 0x{status:02x})'}")
+            return 0 if any_ok else 1
+    except CecError as e:
+        print(f"nq-cec: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_release(_args):
+    try:
+        with Cec() as c:
+            c.release()
+    except CecError as e:
+        print(f"nq-cec: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv=None):
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="nq-cec", description="HDMI-CEC control for the Nexus Q")
+    sub = p.add_subparsers(dest="cmd")
+
+    s = sub.add_parser("status", help="print adapter state")
+    s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("wake", help="wake the sink and ask it to select us")
+    s.add_argument("--quiet", action="store_true",
+                   help="skip the <Active Source> broadcast, which also "
+                        "switches the input of any TV upstream")
+    s.set_defaults(func=cmd_wake)
+
+    s = sub.add_parser("release", help="give the logical address back")
+    s.set_defaults(func=cmd_release)
+
+    args = p.parse_args(argv)
+    if not getattr(args, "func", None):
+        p.print_help()
+        return 2
+    try:
+        return args.func(args)
+    except CecError as e:
+        print(f"nq-cec: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        if e.errno == errno.ENOENT:
+            print(f"nq-cec: {CEC_DEV} does not exist — no CEC adapter",
+                  file=sys.stderr)
+            return 1
+        raise
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -137,6 +137,36 @@ OUTPUTS = [
 ]
 OUTPUT_BY_ID = {o["id"]: o for o in OUTPUTS}
 
+# --- HDMI is not like the other two outputs --------------------------------
+# The speaker and the optical output are soldered to the board and are always
+# there. HDMI exists only while a sink is plugged in, only if that sink's EDID
+# says it takes audio (a DVI-class monitor never will), and — the part that is
+# easy to miss — only while the HDMI VIDEO output is actually running, because
+# HDMI carries audio inside the blanking intervals of a video stream. With the
+# framebuffer blanked the DSS is unclocked and nothing comes out.
+#
+# `nq-hdmi` owns all of that: the EDID verdict and the hold that keeps the
+# output lit (and therefore keeps a receiver from dozing off). This bridge asks
+# it rather than parsing EDID a second time.
+#
+# The HDMI card stays PULSE_IGNORE'd in 91-pulseaudio-hdmi-ignore.rules. That is
+# deliberate and is NOT the old "the card is useless" reasoning: PA's card probe
+# runs once at udev time, which on this appliance is boot, when the display is
+# dark and therefore every profile it tries fails. So we load a plain sink on the
+# card by hand, after the output is up, and unload it when HDMI is deselected.
+NQ_HDMI = os.environ.get("NEXUSQ_NQ_HDMI", "/usr/bin/nq-hdmi")
+HDMI_HOLD_UNIT = "nq-hdmi-hold.service"
+HDMI_SINK_NAME = "nexusq_hdmi"
+HDMI_ALSA_DEVICE = os.environ.get("NEXUSQ_HDMI_ALSA_DEVICE", "hw:HDMI,0")
+# Watched so the app learns when a receiver is switched on or off. Kept in step
+# with nq-hdmi's own defaults.
+HDMI_DRM_DIR = os.environ.get("NEXUSQ_DRM_DIR", "/sys/class/drm")
+HDMI_CONNECTOR = os.environ.get("NEXUSQ_HDMI_CONNECTOR", "card0-HDMI-A-1")
+HDMI_WATCH_S = float(os.environ.get("NEXUSQ_HDMI_WATCH_S", "3"))
+# The sink EDID measured on the issue #5 soundbar tops out at 2ch LPCM 48 kHz,
+# which is also what every other output on this box runs at (50-nexusq-48k.conf).
+HDMI_SINK_RATE = 48000
+
 THEMES = [
     {"name": "blue", "label": "Blue"},
     {"name": "warm", "label": "Warm"},
@@ -410,6 +440,50 @@ class Pulse:
             except Exception as e:  # noqa: BLE001
                 log("pactl move-sink-input failed:", sid, e)
 
+    # --- module plumbing (used for the on-demand HDMI sink) ---------------
+    def module_index(self, module, needle):
+        """The index of a loaded `module` whose argument string contains
+        `needle`, or None. Matching on the ARGUMENTS and not just the module
+        name matters: module-alsa-sink may legitimately be loaded more than
+        once, and unloading the wrong one would silence a different output."""
+        try:
+            r = _pactl("list", "short", "modules")
+            if r.returncode != 0:
+                return None
+            for ln in r.stdout.splitlines():
+                cols = ln.split("\t")
+                if len(cols) >= 3 and cols[1].strip() == module and needle in cols[2]:
+                    return cols[0].strip()
+        except Exception as e:  # noqa: BLE001
+            log("pactl list modules failed:", e)
+        return None
+
+    def load_module(self, module, *args, timeout=10):
+        """Load a PA module; return its index as a string, or None on failure.
+
+        Given a longer default timeout than the rest of pactl use here: loading
+        a sink opens the ALSA device for real, and on the HDMI card that means
+        the DSS and the HDMI wrapper, which is slower than a query."""
+        try:
+            r = _pactl("load-module", module, *args, timeout=timeout)
+            if r.returncode != 0:
+                log(f"pactl load-module {module} failed:",
+                    (r.stderr or "").strip()[:160])
+                return None
+            idx = (r.stdout or "").strip()
+            return idx or None
+        except Exception as e:  # noqa: BLE001
+            log(f"pactl load-module {module} failed:", e)
+            return None
+
+    def unload_module(self, index):
+        if not index:
+            return
+        try:
+            _pactl("unload-module", str(index))
+        except Exception as e:  # noqa: BLE001
+            log("pactl unload-module failed:", e)
+
 
 class Mixer:
     """Volume/mute on a *given PA sink* via pactl (0..100 + mute). The active
@@ -591,6 +665,99 @@ def set_desktop(on):
                                  f"{(e.stderr or '').strip()[:120]}")
     except (OSError, subprocess.SubprocessError):
         raise Err("timeout", "desktop did not respond")
+
+
+# --- HDMI output: probe + the hold that keeps a receiver awake --------------
+# Note there is deliberately NO coordination between the hold and the desktop.
+# The hold steers the in-kernel DRM fbdev client rather than taking DRM master
+# itself, so when `tinydm` starts, the compositor takes the device, the hold's
+# sysfs writes become harmless no-ops, and the display stays lit by the desktop;
+# when the desktop stops, the kernel client comes back and the hold resumes
+# looking after it. A second DRM master would have had to negotiate all of that.
+
+def hdmi_probe():
+    """What `nq-hdmi status --json` reports: is a sink attached, and can it
+    hear us?
+
+    Never raises. listOutputs is asked constantly by the app, so a missing
+    helper, a slow sysfs read or a mangled line must degrade to "HDMI is not
+    available" rather than fail the whole call. Exit 1 is a normal answer here
+    (no sink / no audio), not an error."""
+    try:
+        r = subprocess.run([NQ_HDMI, "status", "--json"],
+                           capture_output=True, text=True, timeout=8)
+        if r.returncode not in (0, 1):
+            log("nq-hdmi status exited", r.returncode,
+                (r.stderr or "").strip()[:120])
+            return {}
+        return json.loads(r.stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log("nq-hdmi status failed:", e)
+        return {}
+
+
+def hdmi_hold_active():
+    try:
+        r = subprocess.run(["systemctl", "is-active", HDMI_HOLD_UNIT],
+                           capture_output=True, text=True, timeout=8)
+        return (r.stdout or "").strip() in ("active", "activating")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def hdmi_hold(on):
+    """Start or stop the HDMI output hold, and tell the truth about the result.
+
+    `systemctl start` on a Type=simple unit returns as soon as the process is
+    forked, so a hold that immediately gives up (no sink attached = exit 2, a
+    DVI-class monitor = exit 3) would otherwise look like success. So we wait
+    for it to settle and, if it died, turn its exit status into the error the
+    app shows the user."""
+    if not on:
+        try:
+            subprocess.run(["systemctl", "stop", HDMI_HOLD_UNIT],
+                           capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            log("HDMI hold stop failed:", e)
+        return
+
+    try:
+        subprocess.run(["systemctl", "start", HDMI_HOLD_UNIT],
+                       capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        raise Err("timeout", "the HDMI output hold did not respond")
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if hdmi_hold_active():
+            return
+        status = _hdmi_hold_exit_status()
+        if status is not None:
+            raise Err("unavailable", {
+                2: "nothing is connected to the HDMI port",
+                3: "the attached display accepts no audio over HDMI",
+            }.get(status, f"the HDMI output hold failed (exit {status})"))
+        time.sleep(0.3)
+    if not hdmi_hold_active():
+        raise Err("unavailable", "the HDMI output hold never came up")
+
+
+def _hdmi_hold_exit_status():
+    """The hold's exit code once it has stopped, or None while it is running."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "ExecMainStatus", "-p", "ActiveState",
+             HDMI_HOLD_UNIT], capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    fields = dict(
+        ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+    if fields.get("ActiveState") in ("active", "activating", "deactivating"):
+        return None
+    try:
+        return int(fields.get("ExecMainStatus", ""))
+    except ValueError:
+        return None
 
 
 # --- streaming service toggles (PROTOCOL §11) ------------------------------
@@ -2000,6 +2167,59 @@ class Bridge:
                 time.sleep(2)
             log("boot output: PA never became ready, leaving PA's default")
         threading.Thread(target=_boot_output, daemon=True).start()
+        threading.Thread(target=self._hdmi_watch, daemon=True).start()
+
+    # --- HDMI availability is dynamic, so it has to be pushed -------------
+    def _hdmi_watch(self):
+        """Broadcast `outputsChanged` when the HDMI port's story changes.
+
+        The speaker and the optical output are soldered on: once the app has the
+        output list it is right forever. HDMI is not — a receiver switched off,
+        or one that dozed off after we stopped feeding it a signal, drops HPD and
+        the output genuinely goes away, and switching it back on brings it back.
+        Without this the app keeps whatever `listOutputs` said when it connected.
+        Petr hit exactly that on 2026-09-20: he switched to the speaker, the
+        soundbar slept, he switched the soundbar back on, and the app still
+        showed HDMI greyed out because nothing had told it otherwise.
+
+        This polls ONE small sysfs file rather than subscribing to uevents over
+        netlink. A netlink listener would be event-driven and cost nothing at
+        idle, but it also has to cope with buffer overruns and missed events; a
+        poll of a single file is self-healing by construction and, at this
+        interval, unmeasurable. The expensive part — `nq-hdmi status`, which
+        forks a Python — runs ONLY when the string actually changed."""
+        last = None
+        while True:
+            last = self._hdmi_watch_step(last)
+            time.sleep(HDMI_WATCH_S)
+
+    @staticmethod
+    def _hdmi_connector_status():
+        """The raw DRM connector status, or "absent" when the file is not there
+        (a kernel without the connector, or a path that moved)."""
+        try:
+            with open(os.path.join(HDMI_DRM_DIR, HDMI_CONNECTOR, "status")) as f:
+                return f.read().strip()
+        except OSError:
+            return "absent"
+
+    def _hdmi_watch_step(self, last):
+        """One observation; returns the value to compare against next time.
+
+        Broadcasts only on a real change, and NEVER on the first look: at
+        startup there is nothing to report, because a client fetches the list
+        itself when it connects. A broadcast there would just be noise on every
+        bridge restart."""
+        now = self._hdmi_connector_status()
+        if now == last:
+            return last
+        if last is not None:
+            log("HDMI connector:", last, "->", now)
+            try:
+                self.broadcast("outputsChanged", self._list_outputs())
+            except Exception as e:  # noqa: BLE001 - never kill the watcher
+                log("outputsChanged broadcast failed:", e)
+        return now
 
     # --- output/sink resolution -----------------------------------------
     def _sink_for_output(self, oid):
@@ -2014,6 +2234,33 @@ class Bridge:
         if not sink:
             return None
         return next((o["id"] for o in OUTPUTS if o["match"] in sink), None)
+
+    # --- the on-demand HDMI sink -----------------------------------------
+    def _hdmi_sink_up(self):
+        """Put a PA sink on the HDMI card, or return None.
+
+        Idempotent: selecting HDMI while it is already selected must not stack a
+        second module on the same ALSA device (the second open would get EBUSY
+        and PA would log an error for a no-op)."""
+        if HDMI_SINK_NAME in self.pulse.sinks():
+            return HDMI_SINK_NAME
+        idx = self.pulse.load_module(
+            "module-alsa-sink",
+            f"device={HDMI_ALSA_DEVICE}",
+            f"sink_name={HDMI_SINK_NAME}",
+            "sink_properties=device.description=HDMI",
+            f"rate={HDMI_SINK_RATE}", "channels=2", "format=s16le")
+        if idx is None:
+            return None
+        # load-module reporting an index is not proof the sink exists: a module
+        # whose device failed to open still loads and then sits there empty.
+        return HDMI_SINK_NAME if HDMI_SINK_NAME in self.pulse.sinks() else None
+
+    def _hdmi_sink_down(self):
+        idx = self.pulse.module_index("module-alsa-sink",
+                                      f"sink_name={HDMI_SINK_NAME}")
+        if idx is not None:
+            self.pulse.unload_module(idx)
 
     def _active_sink(self):
         """The PA sink of the currently-selected output (fall back to PA's default)."""
@@ -2424,16 +2671,38 @@ class Bridge:
         return {"volume": vol, "muted": muted}, [("volumeChanged", {"volume": vol, "muted": muted})]
 
     def _list_outputs(self):
-        """Enumerate the known outputs, marking which have a present PA sink and which
-        is active (the current default sink). HDMI is omitted when its sink is absent
-        (usually PULSE_IGNORE'd); speaker/spdif are always listed."""
+        """Enumerate the known outputs, marking which are usable and which is
+        active (the current default sink). Speaker/spdif are soldered on and are
+        always listed.
+
+        HDMI is decided by the CABLE, not by the sink list: its PA sink exists
+        only while HDMI is the selected output, because it is loaded on demand
+        (see the HDMI notes at the top). So:
+
+          nothing plugged in          -> the row is omitted entirely
+          a sink that takes no audio  -> listed but `available: false`, which the
+                                         app renders dimmed and non-tappable, so
+                                         the user learns HDMI is there and why it
+                                         cannot be picked instead of wondering
+                                         where it went
+          an audio-capable sink       -> available
+        """
         sinks = self.pulse.sinks()
         active = self._output_for_sink(self.pulse.default_sink())
+        hdmi = hdmi_probe()
         outs = []
         for o in OUTPUTS:
             sink = next((n for n in sinks if o["match"] in n), None)
-            if sink is None and o["id"] == "hdmi":
-                continue  # no real HDMI sink present → don't advertise it
+            if o["id"] == "hdmi":
+                if not hdmi.get("connected") and sink is None:
+                    continue
+                outs.append({
+                    "id": o["id"],
+                    "label": o["label"],
+                    "sink": sink or "",
+                    "available": bool(hdmi.get("connected") and hdmi.get("audio")),
+                })
+                continue
             outs.append({
                 "id": o["id"],
                 "label": o["label"],
@@ -2449,12 +2718,40 @@ class Bridge:
         oid = str(p.get("output", ""))
         if oid not in OUTPUT_BY_ID:
             raise Err("bad_request", f"unknown output {oid}")
-        sink = self._sink_for_output(oid)
-        if sink is None:
-            raise Err("bad_request", f"output {oid} unavailable")
+        if oid == "hdmi":
+            # The ORDER here is the whole feature. The HDMI output has to be lit
+            # before the ALSA device is opened: with the framebuffer blanked the
+            # DSS is unclocked, and the card then accepts a stream and plays it
+            # into nothing — it does not even return an error. Light first, open
+            # second.
+            hdmi_hold(True)
+            try:
+                sink = self._hdmi_sink_up()
+            except BaseException:
+                # Anything at all from here on must put the display back down.
+                # Leaving the hold running after a failed switch would keep the
+                # DSS and the TMDS PHY powered for an output the user was just
+                # told they cannot have.
+                hdmi_hold(False)
+                raise
+            if sink is None:
+                hdmi_hold(False)
+                raise Err("unavailable",
+                          "the HDMI output is up but PulseAudio could not open "
+                          "its audio device")
+        else:
+            sink = self._sink_for_output(oid)
+            if sink is None:
+                raise Err("bad_request", f"output {oid} unavailable")
         # 1) new streams go here, 2) move every current stream so a live one follows.
         self.pulse.set_default_sink(sink)
         self.pulse.move_all_inputs(sink)
+        # Now that nothing is playing into it any more, take the HDMI side down.
+        # Strictly after the move: unloading a sink that still owns a stream
+        # kills the stream instead of relocating it.
+        if oid != "hdmi":
+            self._hdmi_sink_down()
+            hdmi_hold(False)
         # 3) point PA's default SOURCE at this output's monitor so the nexusqd LED
         # visualizer (`arecord -D pulse`, captures the default source) taps the mix
         # actually going to the selected output. Resilient (see set_default_source).

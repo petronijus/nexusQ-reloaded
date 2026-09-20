@@ -74,7 +74,7 @@ notes in [`docs/`](docs/).
 | ⏰ **RTC** (TWL6030) | ✅ | runs since kernel 6.18.48-r2 (v1.17.0) — MSECURE was never driven high, so every RTC write was dropped. Time now survives a reboot (measured); no backup cell, so a mains unplug still resets it until NTP |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | reverse-HCE — the phone hosts the card, the Q is the ISO-DEP reader (patch 0037) · v1.7.0 |
 | 🎮 **GPU / 3D acceleration** (PowerVR SGX540) | ❌ | no mainline GLES driver exists for Imagination Series5 — Mesa's open `powervr` covers Rogue (Series6+) only. Everything renders on the CPU; KMS/display via `omapdrm` is unaffected. A port is feasible (GPL `pvrsrvkm` module + version-matched TI DDK blobs, as on the Motorola Droid 4) but unbuilt — [research note](docs/2026-06-19-gpu-sgx540-acceleration-research.md) |
-| 🔈 **HDMI audio** | 🟠 | needs a sink with audio EDID; untested against a real TV/AVR |
+| 🔈 **HDMI audio** | ✅ | selectable output since device r104 — `nq-hdmi` holds the video output up (HDMI carries audio only inside a video stream) and CEC asks the sink to select us. Offered only when the EDID says the sink takes audio. A sink already asleep must be switched on by hand: the PHY needs an HPD-driven LINK_CONNECT and CEC needs an EDID |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | cold-boot reliable since v1.6.8 (pinmux); the default deploy path (~80 Mbit/s); no MAC EEPROM → random MAC per boot |
 | 💿 **TOSLINK / SPDIF** | ✅ | mainline McASP DIT, selectable output; PA pinned to 48 kHz so the DIT locks · v1.6.15 |
 | 🎧 **TWL6040 headset codec** | ⚪ | unpopulated/unused on steelhead by design — the stock kernel never drove it |

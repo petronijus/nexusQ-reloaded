@@ -1,0 +1,38 @@
+# Holds the HDMI output up while HDMI is the selected audio output.
+#
+# HDMI carries audio only inside a running video stream, so "HDMI as an audio
+# output" means "the HDMI video output stays on for as long as it is selected".
+# On top of that, an AV receiver or soundbar that loses the signal goes to
+# standby — and once it drops HPD this board can no longer wake it (the OMAP4
+# PHY only reaches TXON from a LINK_CONNECT interrupt, and CEC has no physical
+# address without an EDID). So the signal must never be interrupted, which is
+# what this unit exists to guarantee. See nq-hdmi for the measurements.
+#
+# DELIBERATELY NOT AUTO-ENABLED (no preset entry, no *.wants symlink): it is
+# started and stopped by nexusq-control when the user picks or leaves the HDMI
+# output, exactly like the Roon and USB-audio units are driven by their toggles.
+# Running it unconditionally would keep the DISPC scanout and the TMDS PHY
+# powered on every unit, including the ones with nothing in the HDMI port.
+#
+# It is a SYSTEM unit, not a user one: it writes /sys/class/graphics/*,
+# switches VTs and opens /dev/cec0, none of which the uid-10000 session may do.
+[Unit]
+Description=Nexus Q HDMI output hold (keeps the sink awake for HDMI audio)
+# The PulseAudio sink on the HDMI card is loaded by nexusq-control AFTER this
+# unit reports the output is up; there is deliberately no ordering on
+# pulseaudio.service here, so a stopped/restarting PA can never block the hold.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nq-hdmi hold
+# Exit 2 = nothing connected to the HDMI port, exit 3 = a sink that takes no
+# audio (a DVI-class monitor). Both are the user's situation, not a fault, so
+# they must NOT be retried in a loop — nexusq-control reads the exit status and
+# tells the app. Only a genuine crash is worth restarting.
+Restart=on-failure
+RestartPreventExitStatus=2 3
+RestartSec=5
+# The hold restores the console VT and the cursor on the way out, so it must be
+# given the chance to run its teardown rather than be killed outright.
+KillSignal=SIGTERM
+TimeoutStopSec=15

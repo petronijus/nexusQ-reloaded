@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""nq-hdmi — keep the HDMI output alive so the sink can hear us, and report
+whether it can hear us at all.
+
+    nq-hdmi status [--json]   is there a sink, and does it take audio?
+    nq-hdmi hold              hold the output up (what nq-hdmi-hold.service runs)
+
+WHY AN HDMI AUDIO OUTPUT NEEDS A DAEMON AT ALL
+----------------------------------------------
+HDMI has no audio-only mode. The samples ride in data islands inside the
+blanking intervals of a *video* stream, so the DSS HDMI output has to be
+running or nothing comes out. Measured on the device 2026-09-20:
+
+    fb0 blanked   -> DSS unclocked; a read of HDMI_WP at 0x58006000 takes an
+                     external abort ("L3 Standard Error: MASTER MPU TARGET DSS")
+    fb0 unblanked -> HDMI_WP_AUDIO_CTRL goes 0x00000020 -> 0xc05e0020 during
+                     playback (AUDIO_EN | CORE_REQ) and the sink is audible
+
+Out of the box the Q settles with `fb0` blanked (at boot omapdrm logs "Cannot
+find any crtc or sizes" because nothing was connected yet), so even with a
+PulseAudio sink wired up, HDMI audio would be silent. This holds it open.
+
+WHY IT DOES NOT TAKE DRM MASTER
+-------------------------------
+The obvious design is a small KMS client that modesets a black framebuffer and
+holds it. It was rejected on evidence: the in-kernel DRM fbdev client already
+does the modeset, already recovers on hotplug (verified — forcing the connector
+off and back on re-enabled the output with no help from userspace), and already
+yields the device to a real compositor and takes it back afterwards. A second
+DRM master would have to re-implement all of that and fight `tinydm` for
+mastership every time the desktop is toggled. So this daemon steers the client
+the kernel already has: unblank `fb0`, park the console on an empty VT, and
+keep it that way.
+
+The screen is black because the VT it parks on has no getty and no output, with
+the fbcon cursor switched off. Petr picked black over the login console; note
+that the two are equally cheap. Measured over three 30 s windows: console with
+a blinking cursor 15566 interrupts / 4157 idle jiffies, empty VT 14939 / 4245,
+display fully off 15154 / 4182 — i.e. noise, and holding the display up does
+not show up in CPU wakeups at all. What costs is the DISPC scanout and the TMDS
+PHY, which is SoC-internal power this board has no way to measure (there is no
+current sense, only `twl6030_gpadc` rail voltages).
+
+WHY IT CANNOT WAKE A SLEEPING SINK
+----------------------------------
+A sink in standby that drops HPD is unreachable, and this is a hardware fact,
+not a missing feature:
+
+  * the PHY only goes to TXON from the LINK_CONNECT interrupt
+    (`hdmi4.c`: `else if (irqstatus & HDMI_IRQ_LINK_CONNECT)`), which is driven
+    by HPD. Forcing the DRM connector to "on" does NOT fake it — measured:
+    HDMI_WP_PWR_CTRL stayed 0x5a (PHY = LDOON, silent) instead of 0xaa
+    (PHY = TXON), and `tv_clk` stayed disabled. So the Q cannot transmit into a
+    dark HPD line, and the force was dropped from this design as useless.
+  * CEC cannot help either: the driver owns the physical address and derives it
+    from the EDID (`CEC_CAP_PHYS_ADDR` is not offered), so no HPD means no EDID
+    means no physical address means no transmit. See nq-cec.
+
+So the honest contract is: the user switches the sink on, and from then on this
+daemon makes sure it never loses the signal and therefore never sleeps again.
+CEC is still fired once the sink is there, to make it select us as the source.
+"""
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+
+CONNECTOR = os.environ.get("NEXUSQ_HDMI_CONNECTOR", "card0-HDMI-A-1")
+DRM_DIR = os.environ.get("NEXUSQ_DRM_DIR", "/sys/class/drm")
+FB_BLANK = os.environ.get("NEXUSQ_FB_BLANK", "/sys/class/graphics/fb0/blank")
+FBCON_CURSOR = os.environ.get("NEXUSQ_FBCON_CURSOR",
+                              "/sys/class/graphics/fbcon/cursor_blink")
+ACTIVE_VT = os.environ.get("NEXUSQ_ACTIVE_VT", "/sys/class/tty/tty0/active")
+# A VT with no getty on it: switching here is what makes the screen black.
+# tty1..tty6 may carry gettys; 8 is clear on this image.
+HOLD_VT = int(os.environ.get("NEXUSQ_HDMI_VT", "8"))
+POLL_S = float(os.environ.get("NEXUSQ_HDMI_POLL_S", "5"))
+
+FB_BLANK_UNBLANK = 0
+
+
+def log(*a):
+    print("nq-hdmi:", *a, flush=True)
+
+
+def _conn(path):
+    return os.path.join(DRM_DIR, CONNECTOR, path)
+
+
+def _read(path, default=None):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def _write(path, value):
+    """Best-effort sysfs write. Returns True on success.
+
+    Failures are normal and must not be fatal: while a compositor holds DRM
+    master the fbdev client is inactive and these writes are refused, which is
+    correct behaviour and not something to crash or spam about."""
+    try:
+        with open(path, "w") as f:
+            f.write(str(value))
+        return True
+    except OSError:
+        return False
+
+
+# --- EDID ------------------------------------------------------------------
+def parse_edid_audio(edid):
+    """Does this sink accept audio? Returns (audio_ok, detail).
+
+    Two independent signals in the CTA-861 extension block, either of which
+    means the link will run in HDMI (not DVI) mode with an audio path:
+
+      * the "basic audio" bit in the CTA byte-3 flags, and
+      * a Short Audio Descriptor block (data block tag 1).
+
+    A sink with no CTA extension at all is DVI-class: no audio, ever. That was
+    the case for the Philips monitor this project was developed against, which
+    is why HDMI audio sat untested for so long."""
+    if not edid or len(edid) < 128:
+        return False, "no EDID"
+    if len(edid) < 256 or edid[126] == 0:
+        return False, "no CTA-861 extension (DVI-class sink, no audio path)"
+
+    for off in range(128, len(edid) - 127, 128):
+        block = edid[off:off + 128]
+        if len(block) < 128 or block[0] != 0x02:
+            continue
+        basic_audio = bool(block[3] & 0x40)
+        sads = []
+        dtd_off = block[2]
+        # dtd_off == 0 means no data blocks and no DTDs; < 4 means no collection
+        if dtd_off >= 4:
+            i = 4
+            while i < dtd_off and i < 128:
+                tag = block[i] >> 5
+                length = block[i] & 0x1F
+                if length == 0:
+                    break
+                if tag == 1:  # Audio Data Block: 3 bytes per descriptor
+                    for j in range(i + 1, i + 1 + length, 3):
+                        fmt = (block[j] >> 3) & 0x0F
+                        channels = (block[j] & 0x07) + 1
+                        sads.append((fmt, channels))
+                i += 1 + length
+        if basic_audio or sads:
+            bits = []
+            if basic_audio:
+                bits.append("basic audio")
+            if sads:
+                lpcm = [c for f, c in sads if f == 1]
+                bits.append(f"{len(sads)} audio descriptor(s)")
+                if lpcm:
+                    bits.append(f"LPCM up to {max(lpcm)}ch")
+            return True, ", ".join(bits)
+        return False, "CTA-861 extension present but it declares no audio"
+    return False, "no CTA-861 extension (DVI-class sink, no audio path)"
+
+
+def parse_edid_name(edid):
+    """The sink's product name from the base block's descriptors, or None."""
+    if not edid or len(edid) < 128:
+        return None
+    for off in (54, 72, 90, 108):
+        d = edid[off:off + 18]
+        if len(d) == 18 and d[0:3] == b"\x00\x00\x00" and d[3] == 0xFC:
+            return d[5:18].split(b"\n")[0].strip().decode(errors="replace") or None
+    return None
+
+
+def read_edid():
+    try:
+        with open(_conn("edid"), "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
+DRI_CLIENTS = os.environ.get("NEXUSQ_DRI_CLIENTS",
+                             "/sys/kernel/debug/dri/0/clients")
+
+
+def _drm_master_present():
+    """True/False if we can tell whether a real DRM master (a compositor) holds
+    the device, None if we cannot.
+
+    The distinction matters: None means "do not act", because acting on a guess
+    would mean switching VTs underneath a running compositor."""
+    try:
+        with open(DRI_CLIENTS) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    # The header names the columns; the master flag is a 'y'/'n' column whose
+    # position has moved between kernel versions, so find it by name.
+    if not lines:
+        return None
+    header = lines[0].split()
+    try:
+        col = header.index("master")
+    except ValueError:
+        return None
+    for ln in lines[1:]:
+        fields = ln.split()
+        if len(fields) > col and fields[col] == "y":
+            return True
+    return False
+
+
+# --- state -----------------------------------------------------------------
+def hdmi_status():
+    """Everything the bridge needs to decide whether to offer HDMI."""
+    connected = _read(_conn("status")) == "connected"
+    edid = read_edid() if connected else b""
+    audio, detail = parse_edid_audio(edid)
+    return {
+        "connected": connected,
+        "enabled": _read(_conn("enabled")) == "enabled",
+        "audio": audio,
+        "detail": detail if connected else "nothing connected to the HDMI port",
+        "sink": parse_edid_name(edid),
+        "blank": _read(FB_BLANK),
+    }
+
+
+# --- the hold ---------------------------------------------------------------
+class Hold:
+    def __init__(self, use_cec=True, cec_quiet=False):
+        self.use_cec = use_cec
+        self.cec_quiet = cec_quiet
+        self.prev_vt = None
+        self.prev_cursor = None
+        self.running = True
+        self.had_sink = False
+        self._wake = threading.Event()
+
+    # -- screen ------------------------------------------------------------
+    def _park_console(self):
+        """Move the console to an empty VT and stop the cursor blinking, so the
+        picture we are obliged to send is black rather than a login prompt."""
+        active = _read(ACTIVE_VT, "")
+        if self.prev_vt is None and active.startswith("tty"):
+            self.prev_vt = active[3:]
+        if self.prev_cursor is None:
+            self.prev_cursor = _read(FBCON_CURSOR)
+
+        _write(FBCON_CURSOR, 0)
+        try:
+            subprocess.run(["chvt", str(HOLD_VT)], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log(f"chvt {HOLD_VT} failed: {e}")
+        # Clear whatever was on it and hide the cursor on that VT specifically.
+        try:
+            with open(f"/dev/tty{HOLD_VT}", "w") as t:
+                t.write("\033[2J\033[H\033[?25l")
+        except OSError:
+            pass
+
+    def _restore_console(self):
+        if self.prev_cursor is not None:
+            _write(FBCON_CURSOR, self.prev_cursor)
+        if self.prev_vt:
+            subprocess.run(["chvt", self.prev_vt], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _keep_lit(self):
+        """The single thing that matters: the output must never go dark, because
+        the sink treats a lost signal as "go to standby" and this board cannot
+        wake it again."""
+        if _read(FB_BLANK) != str(FB_BLANK_UNBLANK):
+            if _write(FB_BLANK, FB_BLANK_UNBLANK):
+                log("output had gone dark — relit it")
+
+    def _keep_black(self):
+        """Put the console back on the empty VT if something moved it.
+
+        The case this is for is the desktop: toggling it on and off leaves the
+        console wherever the session left it, which may be a VT with a login
+        prompt on it. Only ever acts when NO DRM master holds the device — while
+        a compositor is up the screen is its business, and a chvt underneath it
+        would be a fight we should not pick. If we cannot tell (no debugfs), we
+        leave well alone rather than guess."""
+        if _drm_master_present() is not False:
+            return
+        active = _read(ACTIVE_VT, "")
+        if active and active != f"tty{HOLD_VT}":
+            log(f"console drifted to {active} — parking it back on tty{HOLD_VT}")
+            self._park_console()
+
+    # -- CEC ---------------------------------------------------------------
+    def _cec_wake(self):
+        if not self.use_cec:
+            return
+        cmd = ["nq-cec", "wake"]
+        if self.cec_quiet:
+            cmd.append("--quiet")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"CEC wake skipped: {e}")
+            return
+        for line in (r.stdout or "").splitlines():
+            log(line)
+        if r.returncode != 0 and (r.stderr or "").strip():
+            log((r.stderr or "").strip())
+
+    # -- lifecycle ---------------------------------------------------------
+    def stop(self, *_):
+        self.running = False
+        # Wake the poll immediately. A bare flag is not enough: since PEP 475
+        # time.sleep() resumes after a signal instead of returning, so a plain
+        # sleep would hold systemd's stop for the rest of the interval and the
+        # console/cursor teardown would look hung.
+        self._wake.set()
+
+    def run(self):
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+
+        st = hdmi_status()
+        if not st["connected"]:
+            log("no sink on the HDMI port — nothing to hold. "
+                "Switch the TV/receiver on and select HDMI again.")
+            return 2
+        if not st["audio"]:
+            log(f"sink present but it takes no audio: {st['detail']}")
+            return 3
+
+        log(f"holding the output for {st['sink'] or 'an unnamed sink'} "
+            f"({st['detail']})")
+        self.had_sink = True
+        self._park_console()
+        self._keep_lit()
+        self._cec_wake()
+
+        try:
+            while self.running:
+                self._wake.wait(POLL_S)
+                if not self.running:
+                    break
+                now_connected = _read(_conn("status")) == "connected"
+                if now_connected:
+                    if not self.had_sink:
+                        log("sink is back — relighting and re-announcing over CEC")
+                        self.had_sink = True
+                        self._park_console()
+                        self._keep_lit()
+                        self._cec_wake()
+                    else:
+                        self._keep_lit()
+                        self._keep_black()
+                elif self.had_sink:
+                    self.had_sink = False
+                    log("sink dropped HPD (switched off, or it slept). This board "
+                        "cannot wake it: the PHY needs a LINK_CONNECT interrupt "
+                        "and CEC needs an EDID. Waiting for it to come back.")
+        finally:
+            self._restore_console()
+            log("released the output")
+        return 0
+
+
+def cmd_status(args):
+    st = hdmi_status()
+    if args.json:
+        print(json.dumps(st))
+    else:
+        print(f"connected : {st['connected']}")
+        print(f"sink      : {st['sink'] or '-'}")
+        print(f"audio     : {st['audio']}  ({st['detail']})")
+        print(f"output    : {'enabled' if st['enabled'] else 'disabled'}"
+              f"  fb0 blank={st['blank']}")
+    return 0 if (st["connected"] and st["audio"]) else 1
+
+
+def cmd_hold(args):
+    return Hold(use_cec=not args.no_cec, cec_quiet=args.cec_quiet).run()
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        prog="nq-hdmi",
+        description="Hold the Nexus Q's HDMI output up so the sink can hear it")
+    sub = p.add_subparsers(dest="cmd")
+
+    s = sub.add_parser("status", help="is a sink attached, and does it take audio?")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("hold", help="hold the output up until terminated")
+    s.add_argument("--no-cec", action="store_true",
+                   help="do not talk CEC to the sink at all")
+    s.add_argument("--cec-quiet", action="store_true",
+                   help="CEC, but without the <Active Source> broadcast that "
+                        "also switches the input of a TV upstream")
+    s.set_defaults(func=cmd_hold)
+
+    args = p.parse_args(argv)
+    if not getattr(args, "func", None):
+        p.print_help()
+        return 2
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

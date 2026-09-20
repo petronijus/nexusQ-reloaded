@@ -6,6 +6,105 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — HDMI is an audio output you can actually pick (device r104, nexusq-control r48)
+
+Closes the substance of GitHub issue #5, where a user with a Yamaha RX-V473 and
+an LG TV got no sound out of the HDMI port no matter which source he played.
+Nothing was broken in the kernel or the driver: **the hardware path had worked
+all along.** With an audio-capable sink attached (a Samsung soundbar, EDID
+`SAM`/`0x5448`, CTA-861 block with basic-audio + LPCM 2ch/AC-3/DTS + the HDMI
+VSDB), a tone played to `hw:HDMI,0` was audible on the first try, and
+`HDMI_WP_AUDIO_CTRL` at `0x58006088` went `0x00000020` → `0xc05e0020` —
+`AUDIO_EN` and `CORE_REQ` both set. Two userspace facts kept it from ever
+reaching a user:
+
+1. **PulseAudio never had a sink.** `91-pulseaudio-hdmi-ignore.rules` tags the
+   card `PULSE_IGNORE`, and `_list_outputs()` dropped HDMI whenever no PA sink
+   matched. The HDMI row has been in `OUTPUTS` since 2026-07-07 (4a1a871) and
+   had **never once been shown in the app** — it was dead code from the day it
+   was written.
+2. **The output has to be lit.** HDMI carries audio in the data islands inside
+   the blanking intervals of a *video* stream. With `fb0` blanked the DSS is
+   unclocked — reading the HDMI wrapper then takes an external abort
+   (`44000000.l3-noc: L3 Standard Error: MASTER MPU TARGET DSS`) — and the card
+   still accepts a stream and plays it into nothing, returning no error at all.
+   Out of the box the Q settles with `fb0` blanked, because at boot omapdrm logs
+   `Cannot find any crtc or sizes` when nothing is connected yet.
+
+The output list also became something that changes by itself, so it is now
+pushed: a new **`outputsChanged`** event carries the whole `listOutputs` payload
+and fires when the HDMI connector's state changes (bridge-side watcher on one
+sysfs file; the expensive probe runs only when the string actually moved). The
+app fetches `listOutputs` once at connect, so without this a receiver switched
+on afterwards stayed greyed out until a restart — which Petr hit live. Companion
+app **1.22.0+60** applies it.
+
+**New:** `nq-hdmi` (EDID verdict + the hold), `nq-cec` (the CEC side, unused
+until now), `nq-hdmi-hold.service` (not auto-enabled; the app's output switch
+starts and stops it). Picking HDMI lights the output *before* the ALSA device is
+opened, then loads a `module-alsa-sink` on `hw:HDMI,0`; leaving it moves the
+streams first, then unloads the sink and releases the display. Availability now
+follows the cable, not the sink list: nothing plugged in hides the row, a
+DVI-class monitor shows it dimmed, an audio-capable sink makes it selectable.
+The card stays `PULSE_IGNORE`'d on purpose — PA's card probe runs at udev time,
+which on this appliance is boot, when the display is dark and every profile
+fails; the old comment claiming the card was a dummy has been corrected.
+
+**CEC works and had never been used.** The adapter (`omapdss_hdmi`, caps
+`TRANSMIT | LOG_ADDRS`) reads its physical address out of the EDID — `2.1.0.0`
+here — but had `num_log_addrs=0`, so the Q could not transmit at all. It now
+claims a Playback logical address (`4`, OSD name `Nexus Q`) and sends
+`<Image View On>`, `<System Audio Mode Request>` and `<Active Source>`. Measured
+against the soundbar: SAMR **ok**, Active Source **ok**, Image View On NACKed
+(no TV powered at LA 0).
+
+**What it deliberately does not promise: the Q cannot wake a sleeping sink.**
+This is hardware, not a gap. The OMAP4 PHY reaches `TXON` only from the
+`LINK_CONNECT` interrupt (`hdmi4.c`), which is driven by HPD — forcing the DRM
+connector to `on` does *not* fake it: measured, `HDMI_WP_PWR_CTRL` stayed `0x5a`
+(PHY = `LDOON`, silent) with `tv_clk` disabled, instead of `0xaa` (`TXON`). And
+CEC cannot help, because the driver owns the physical address and derives it
+from the EDID, which a dark HPD line does not deliver. So the contract is the
+other way round: the user switches the sink on, and the hold then makes sure the
+signal never stops, so it never sleeps again. The forced-connector idea was
+dropped from the design once measured.
+
+**Design note — the hold takes no DRM master.** The in-kernel DRM fbdev client
+already modesets, already recovers on hotplug (verified: forcing the connector
+off and back on re-enabled the output unaided) and already hands the device to a
+compositor and takes it back. A second master would have to re-implement all of
+it and fight `tinydm` on every desktop toggle. So the daemon steers the client
+the kernel already has: unblank `fb0`, park the console on an empty VT (`tty8`)
+with the fbcon cursor off. The screen is black because Petr picked black — not
+because it is cheaper. Measured over three 30 s windows: console with a blinking
+cursor 15566 interrupts / 4157 idle jiffies, empty VT 14939 / 4245, display off
+entirely 15154 / 4182. That is noise; holding the display up does not show up in
+CPU wakeups at all. The hold's own steady-state cost is **0.067 % of one core**
+(4 ticks in 60 s); the `1.19 s` a short run reports is two Python starts.
+
+**Verified by listening, which found one more thing.** The first real listen was
+silent even though every register said the Q was transmitting. Measuring the
+sink's monitor settled it: `peak=36` of 32767 with 92 % of samples non-zero —
+music flowing about **48 dB below full scale**, from librespot, i.e. the Spotify
+volume set for the device. Raising it moved the peak to 9309 (`-48 dBFS` →
+`-10.9 dBFS`) and it was audible. This never showed on the speaker because the
+TAS5713's gain on this board is steep enough to make a 48 dB-low source loud
+anyway; **HDMI has no such gain to hide behind.** The same measurement disproved
+a suspicion that the app's volume slider was a no-op on HDMI: PulseAudio reports
+`HARDWARE DECIBEL_VOLUME` on a card with no ALSA mixer controls at all, but the
+monitor peak tracks the sink volume (70 % → 69, 100 % → 129), so the software
+fallback is real and the slider works.
+
+**A bug this found in its own tests.** The first live run died with
+`'Pulse' object has no attribute 'load_module'` — the three module helpers had
+landed in `Mixer`, because both classes have a `set_muted` and the edit anchored
+on the wrong one. Every unit test still passed, because the fake PulseAudio
+supplied the methods itself: a mock describing a world that did not exist. The
+suite now asserts the real `Pulse` carries what the HDMI path calls, that the
+helpers are *not* on `Mixer`, and that a failure anywhere in the switch puts the
+display back down (the live failure left the hold running). All new tests were
+seen failing against deliberately mutated code before being kept.
+
 ### Fixed — the Roon now-playing gate crashed on every Roon event since r45 (nexusq-control r47, not yet published)
 
 `Pulse.source_state()` called `.splitlines()` on the `CompletedProcess` that
