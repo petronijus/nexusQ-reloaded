@@ -441,6 +441,67 @@ a C-state is left by an ordinary interrupt with no `syscore_suspend()` behind it
 and C2/C3 target MPU CSWR/OSWR rather than device OFF. Worth going in with eyes
 open rather than assuming R2 is the safe one.
 
+## 4f. Resolved: it sleeps and does not wake — and ramoops has never worked
+
+Two things measured in isolation, which is what should have happened before any
+suspend was attempted.
+
+### The watchdog works, and it answers §4e
+
+Armed for 30 s at uptime 314.6 s and deliberately not petted, with no suspend
+involved:
+
+```
+   armed, timeout=30s — NOT petting it, NOT suspending
+   a working watchdog resets this board at about uptime=345s
+   +25s still alive (uptime=339.8s)        <- last line written
+```
+
+…and the board came back at uptime 33 s. **It fired on schedule.** So
+`omap_wdt` does reset this board when the SoC is awake.
+
+That settles the question §4e left open. The watchdog did **not** fire during
+the suspend attempt, and gating its clock is part of the low-power transition
+itself — so had the CPU wedged *before* that transition, the watchdog would still
+have been clocked and would have fired. It did not. **The board genuinely goes to
+sleep and does not come back: the failure is on resume, not on the way down.**
+
+That puts `omap4_cpu_resume` in `sleep44xx.S` squarely in the frame, including
+its infinite `ppa_actrl_retry` loop around a secure PPA call.
+
+### ramoops captures nothing, and never has
+
+`pstore` is empty after a watchdog reset **and** after a deliberate
+`echo c > /proc/sysrq-trigger` panic. Not "lost because the mains was pulled" —
+it captures nothing at all, from anything.
+
+It is configured and the kernel accepts it:
+
+```
+ramoops.mem_address=0xbf000000 ramoops.mem_size=0x100000
+ramoops.console_size=0x80000 ramoops.record_size=0x20000 ramoops.dump_oops=1
+[    0.175903] pstore: Registered ramoops as persistent store backend
+[    0.175903] ramoops: using 0x100000@0xbf000000, ecc: 0
+```
+
+**Likely cause:** `mem=1008M` ends the kernel's map at exactly `0xBF000000`, and
+ramoops is placed in the first megabyte above it — which is the **top of DRAM**,
+where U-Boot 2011.09 relocates itself, its stack and its heap on every boot. The
+region is outside the kernel, as it must be, but it is not private: the
+bootloader owns it by the time Linux looks.
+
+**Likely fix:** reserve the region properly through the device tree
+(`reserved-memory` with `compatible = "ramoops"`) so it sits inside
+kernel-managed DRAM and well away from the top, rather than being carved out by
+`mem=` and hoped over. That is a DTS + defconfig change, so it rides a kernel
+rebuild.
+
+This matters beyond this investigation: the cmdline carries these parameters, the
+repo's docs refer to ramoops as the post-mortem channel, and it has been giving a
+false sense of security. The forensics that *do* work here are the persistent
+journal (`journalctl -b -1`) and a probe writing to `/tmp` on the ext4 root with
+`fsync` behind each line.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
