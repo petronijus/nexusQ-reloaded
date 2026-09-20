@@ -320,7 +320,7 @@ always-powered WKUP domain. Arming it and then letting userspace freeze (so
 nothing can ping it) gives a hard reset in N seconds — a net that does **not**
 depend on any driver resuming, which is exactly what the previous attempt lacked.
 
-## 4d. MEASURED: suspend-to-RAM is a one-way trip. R4 is blocked too.
+## 4d. Suspend-to-RAM did not come back — and the conclusion I drew was too big
 
 `mem` was tried with a watchdog as the net. The probe's own log, recovered from
 ext4 afterwards:
@@ -342,10 +342,11 @@ arming correctly and reporting the timeout back. Nor did anything else:
 | unplugging and replugging USB (`musb-hdrc` **is** an armed wake source) | did not wake it |
 | pulling the mains | the only thing that worked |
 
-So on this board **suspend-to-RAM has no working way back at all.** That is a
-much harder result than §4c's "s2idle cannot be woken because the PIH is
-disabled": here even the hardware paths that are supposed to work below Linux —
-the PRCM/WUGEN wake and the watchdog — do not bring it back.
+⚠️ **I first wrote this up as "suspend-to-RAM has no working way back at all".
+That was an overreach and Petr called it:** what was measured is that *this
+attempt* did not come back, which is a weaker claim. Worse, it silently merged
+two completely different failures — *suspended and could not be woken* versus
+*hung while suspending* — and nothing above distinguishes them. §4e does.
 
 Two corrections to reasoning that looked sound and was not:
 
@@ -379,9 +380,7 @@ reaching them.
 
 ### What this does to the ladder
 
-**R3 and R4 are blocked on the wake path, not on power.** Neither can be
-finished, and neither can be safely retried, until something can bring the board
-back — and nothing currently can.
+R3 and R4 cannot be finished until §4e's remaining unknown is resolved.
 
 That leaves **R2 (register C2/C3)** as the only remaining route to MPU/CORE
 retention, and it is also the one that needs no wake source at all: a C-state is
@@ -389,6 +388,58 @@ left by any ordinary interrupt, with no suspend, no frozen userspace and no
 wakeup plumbing. It needs a kernel rebuild and a flash, not an experiment on a
 running box. **R0 stays worth doing in parallel**, because the deep states need
 1.1-1.5 ms of predicted idle and the box currently wakes every 2.7 ms.
+
+## 4e. Localised: everything up to `syscore_suspend()` works
+
+The bisect in §4c was run by writing **`freeze`**, which takes the `s2idle_loop()`
+branch in `suspend_enter()` *before* the deeper levels are reached — so the kernel
+rejected `processors` and `core` as "unsupported for suspend to idle". I read that
+as a fact about the hardware. It was a fact about my choice of mode. Re-run with
+**`mem`**, both levels are valid:
+
+```
+freezer     rc=0
+devices     rc=0
+platform    rc=0
+processors  rc=0     suspend_disable_secondary_cpus() and back
+core        rc=0     + arch_suspend_disable_irqs() + syscore_suspend()
+```
+
+**All five returned.** `core` runs everything and then skips exactly one call:
+
+```c
+        error = syscore_suspend();
+        if (!error) {
+                if (!(suspend_test(TEST_CORE) || *wakeup)) {
+                        error = suspend_ops->enter(state);   /* <- only this is untested */
+                }
+                syscore_resume();
+        }
+```
+
+So the whole preparation — freezing, device suspend, the platform and noirq
+phases, disabling the secondary CPU, disabling IRQs, `syscore_suspend()` — is
+sound. The failure is confined to `suspend_ops->enter()`, i.e. OMAP4's
+`omap4_pm_suspend()` → `cpu_suspend(0, omap4_finish_suspend)`: the MPUSS
+power-down itself, or the return from it. **Which of those two it is remains
+unknown**, and that is the honest state of it.
+
+One suspect worth naming, from §4c's reading of `sleep44xx.S`: `omap4_cpu_resume`
+enters `ppa_actrl_retry`, an **infinite** retry loop around a secure PPA call, on
+HS devices. A CPU that comes out of MPUSS OFF and cannot get that call answered
+spins there forever — which looks exactly like "suspended, never returned", with
+no watchdog (its clock is gated) and no way out but the mains. That is a
+hypothesis, not a finding: the loop is guarded by an MPIDR test that skips CPU0,
+and CPU0 is the one that resumes first.
+
+### Consequence for R2, which is not obvious
+
+R2 registers C2/C3, and those go through **the same `omap4_enter_lowpower()`**
+that the untested `suspend_ops->enter()` reaches. So R2 may well meet the same
+wall — on every idle, not once per experiment. Two things differ and may matter:
+a C-state is left by an ordinary interrupt with no `syscore_suspend()` behind it,
+and C2/C3 target MPU CSWR/OSWR rather than device OFF. Worth going in with eyes
+open rather than assuming R2 is the safe one.
 
 ## 5. The design: a ladder, not a switch
 
