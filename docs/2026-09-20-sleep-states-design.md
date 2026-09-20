@@ -13,47 +13,78 @@ A user asked for a sleep mode ([Discussion #3](https://github.com/petronijus/nex
 He is right, and the measurements below say the reason is worse — and more
 fixable — than "we never got round to the deep C-states".
 
-## 1. The headline: no SoC power domain has ever transitioned
+## 1. The headline: MPU and CORE retention is never *asked for*
 
-`/sys/kernel/debug/pm_debug/count`, after 2.4 h of uptime:
+⚠️ **This section was wrong in its first version and is corrected here.** The
+first reading of the evidence claimed the power domains "never transition" and
+that the one transition we attempt "fails silently". Both were misreadings. What
+follows is what the measurements actually support.
+
+`/sys/kernel/debug/pm_debug/count` after 2.4 h of uptime shows zeros:
 
 ```
 mpu_pwrdm   (ON), OFF:0, RET:0, INA:0, ON:1
 cpu0_pwrdm  (ON), OFF:0, RET:0, INA:0, ON:1
 cpu1_pwrdm  (ON), OFF:0, RET:0, INA:0, ON:1
 core_pwrdm  (ON), OFF:0, RET:0, INA:0, ON:1
-l4per_pwrdm (ON), OFF:0, RET:0, INA:0, ON:1
-l3init_pwrdm(ON), OFF:0, RET:0, INA:0, ON:1
 ```
 
-**The MPU, both CPUs and CORE have been ON since boot and have never once
-changed state.** The only domains that ever go down are the peripheral ones that
-driver runtime-PM switches off by themselves — `cam` (OFF:3), `abe` (OFF:4),
-`gfx` (OFF:2), `ivahd`, `tesla`, `dss`, `cefuse`.
+**Those counters are not evidence of anything.** `state_counter[]` and
+`state_timer[]` are only updated by `_pwrdm_state_switch()`, which on OMAP4 is
+driven from the idle path — the one patch 0024 disabled. They read zero because
+the accounting never runs, not because the hardware never moves. Reading them as
+"nothing ever transitions" was the first mistake.
 
-That is the whole answer to "the orb gets hot for nothing". Everything this port
-has done for idle power so far — the `conservative` governor, the 350 MHz OPP
-work, the `Nice=19` sweep, the pid-1 churn fix — has been shaving the *load* on
-a chip whose power domains are pinned ON.
+What *is* true, and rests on the code rather than the counters: with only C1
+registered, nothing ever programs `mpu_pwrdm` or `core_pwrdm` to RET or OFF.
+`omap4_enter_lowpower()` is the only caller that would, and it is reached only
+from the deep C-states and from suspend, neither of which ever runs here. So MPU
+and CORE retention genuinely never happens — because it is never requested, not
+because it is refused.
 
-## 2. And the one transition we do attempt, fails
+That is still the answer to "the orb gets hot for nothing", and it still means
+every idle-power fix this port has shipped — the conservative governor, the
+350 MHz OPP work, the `Nice=19` sweep, the pid-1 churn — has been shaving *load*
+on a chip whose big power domains are pinned ON. But the fix is "ask for it",
+not "find out why the hardware refuses".
 
-CPU hotplug uses the same `omap4_enter_lowpower()` machinery as the deep idle
-states, so it is a free test of that path. Offlining CPU1:
+## 2. The hard part already works: CPU1 really does power off
+
+CPU hotplug goes through the same `omap4_enter_lowpower()` machinery as the deep
+idle states, so it is a free test of that path — including the HS secure calls.
+
+The test that settles it. `pwrdm_dbg_show_counter()` compares the *software's*
+cached state against a live hardware read every time `pm_debug/count` is read:
+
+```c
+if (pwrdm->state != pwrdm_read_pwrst(pwrdm))
+        printk(KERN_ERR "pwrdm state mismatch(%s) %d != %d\n",
+               pwrdm->name, pwrdm->state, pwrdm_read_pwrst(pwrdm));
+```
+
+With `OFF=0, RET=1, INACTIVE=2, ON=3`, reading that file at three moments:
 
 ```
-online before: 0-1   ->  online now: 0   ->  online after: 0-1     (works)
-cpu1_pwrdm (ON), OFF:0, RET:0, INA:0, ON:1                         (never went off)
-pwrdm state mismatch(cpu1_pwrdm) 3 != 0
-pwrdm state mismatch(cam_pwrdm) 3 != 0      ivahd, tesla, abe, gfx likewise
+CPU1 online   -> no cpu1 line                          (hardware reads ON)
+CPU1 offline  -> pwrdm state mismatch(cpu1_pwrdm) 3 != 0   (hardware reads OFF)
+CPU1 online   -> no cpu1 line
 ```
 
-`3 != 0` is "programmed next state OFF, read back ON". So CPU1 is *logically*
-unplugged while its power domain stays powered. The hotplug succeeds and the
-power saving silently does not happen.
+**`cpu1_pwrdm` genuinely reaches OFF.** The second mistake was reading `3 != 0`
+as "programmed OFF, read back ON" — the argument order is (cached, live), so it
+says the opposite. The same lines for `cam`, `ivahd`, `tesla`, `abe` and `gfx`
+mean those domains were powered off by runtime PM at that instant, which is also
+good news rather than bad.
 
-This is the first thing to root-cause. Until a power domain can be made to
-transition at all, every rung below is theatre.
+So the MPUSS low-power path works on this HS OMAP4460: the CPU powers off, the
+secure resume path runs, and the CPU comes back. Supporting evidence for the
+secure side: the PPA shipped in `xloader-phantasm-ian67k.img` reports
+`-- PROD PPA RC5.0 --` and version **1.7.5**, comfortably over the **1.4.0+**
+that `sleep44xx.S` requires for the CPU1 `NS_SMP` API. (Worth knowing anyway:
+that path, `ppa_actrl_retry`, is an *infinite* retry loop on a failed secure
+call, so a PPA that did not answer would hang CPU1 on resume rather than return
+an error — a plausible shape for the historical CPU1 cpuidle panic, though that
+is now a hypothesis about the past, not a present fault.)
 
 ## 3. Idle profile, measured with nobody logged in
 
@@ -175,12 +206,14 @@ temperature, and it is the **precondition** for anything below it paying off.
 
 ### R1 — the LED ring — *excluded from this design.* Petr is doing it differently.
 
-### R2 — make a power domain actually transition, then register C2/C3
+### R2 — register C2/C3, because the path underneath them already works
 
-Root-cause §2 first: why does `cpu1_pwrdm` read back ON after being programmed
-OFF? Only once a domain demonstrably transitions is it worth reverting patch 0024
-(or narrowing it). Test on serial with ramoops armed — the historical failure was
-a CPU1 cpuidle panic, so it must be recoverable.
+§2 removes the blocker this rung was assumed to have: CPU OFF through the HS
+secure path is demonstrably working, and the PPA is new enough. So this is now
+"revert or narrow patch 0024 and see what MPU/CORE do", not "find out why the
+hardware refuses". Still test on serial with ramoops armed — the historical
+failure was a CPU1 cpuidle panic and `ppa_actrl_retry` can hang rather than
+fail — but the prior is much better than it looked.
 
 This is the user's *"sleep mode with network and Bluetooth support"*: the network
 stack stays fully up and only the silicon idles deeper.
@@ -215,16 +248,20 @@ standby, measured separately today — see
 
 ## 7. Order of work, and why
 
-1. **R0**, because it is free, measurable, and makes R2 worth having.
-2. **§2 root cause** — a power domain that will not transition is the actual bug,
-   and it blocks R2 and R4 both.
-3. **R3**, cheap and independent; it may be most of what the user wants.
-4. **R2**, then **R4**, in that order of risk.
+1. **R0**, because it is free, measurable, and is what makes R2 worth having at
+   all: the deep states need 1.1-1.5 ms of predicted idle and we wake every
+   2.7 ms.
+2. **R2**, which is now the cheap one — the machinery under it is proven, so this
+   is largely "stop refusing to register the states and measure what happens".
+3. **R3**, independent of both, and possibly most of what the user actually wants.
+4. **R4**, last, because its cost is the resume path of every driver.
 
 ## Open questions
 
-- Why does a power domain programmed to OFF read back ON? PRCM? A clock domain
-  dependency? The HS secure side? This is the load-bearing unknown.
+- With C2/C3 registered, do `mpu_pwrdm` and `core_pwrdm` actually reach CSWR/OSWR,
+  or does something else hold them? Unknown until asked — and the counters will
+  only start meaning anything once the idle path runs, since that is what updates
+  them.
 - Does `cpuidle44xx`'s coupled path work on this board once domains transition —
   and is `ARCH_NEEDS_CPU_IDLE_COUPLED` actually enabled in our build? The
   defconfig does not list it (it would be selected, and `savedefconfig` omits
