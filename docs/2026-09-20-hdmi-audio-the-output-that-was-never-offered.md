@@ -329,5 +329,13 @@ the output still lit.
   like a DDC race: three repeat cycles on an already-absent sink produced
   nothing. Nothing to fix; forcing a cheaper mode from the cmdline is not
   blocked by it after all.
+- **245 directories in the image carry group `12345`** — pmbootstrap's build uid
+  leaking through its install step, not anything our packages do (the device
+  apk's own entries are `root:root`). Modes are 755, nothing is group-writable,
+  and on the device that gid maps to no group, so it is cosmetic. Noticed in the
+  v1.18.0 public build and **not diffed against an older release**, so nobody has
+  established whether it is new; `output/nexusq-rootfs-v1.17.0-sparse.img.zst` is
+  still there to check against before anyone quotes it as historical.
+
 - **`nq-hdmi` is not yet wired into `nq-diag-snapshot`.** An HDMI audio row
   there would make the state visible in a routine sweep.
