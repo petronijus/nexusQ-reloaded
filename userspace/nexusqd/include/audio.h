@@ -89,10 +89,11 @@ int   pa_subscribe_open(pid_t *pid);
  * subscriber only matches sink-input 'new'/'remove', and a stream ENDING on a
  * module-loopback input corks it instead, which is a 'change'. Meanwhile a tap on
  * a SUSPENDED sink's monitor delivers no samples at all, so quiet_since never
- * arms and the "raw-silent" branch never fires either. Both exits closed, the
- * tap ran forever: observed 2026-09-20 with 0 uncorked inputs, both sinks
- * SUSPENDED and arecord still alive, costing ~8.6 wakeups/s for nothing.
- * So: an event OR the deadline re-counts, whatever the tap is doing. */
+ * arms and the "raw-silent" branch never fires either -- so nothing could free
+ * it. That combination is UNPROVEN in practice (a running tap holds the sink out
+ * of suspend, so its monitor should keep producing zeros), but a safety net that
+ * cannot fire is not a safety net, and this one also covers an arecord that dies
+ * quietly. So: an event OR the deadline re-counts, whatever the tap is doing. */
 #define PA_POLL_S       1.5   /* min seconds between re-counts (subscriber down/unproven) */
 #define PA_SAFETY_ON_S  30.0  /* safety re-count while tapping (subscriber PROVEN) */
 #define PA_SAFETY_OFF_S 60.0  /* safety re-count while the tap is off (subscriber PROVEN) */

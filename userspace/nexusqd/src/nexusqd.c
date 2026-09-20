@@ -59,9 +59,9 @@
  * every silence. To keep idle overhead near zero the re-count is event-driven,
  * with a TIMED safety net on top (PA_SAFETY_ON_S/OFF_S in audio.h). That net used
  * to be skipped while music flowed — "while music actually flows we never poll" —
- * which wedged the tap on whenever the ending stream corked instead of
- * disappearing AND the suspended sink's monitor fed us nothing to call silence.
- * It is now unconditional; see pa_gate_poll_due. */
+ * leaving nothing to catch a stream that ends by CORKING (not a membership event)
+ * if the capture also never reads raw-silent. It is now unconditional; see
+ * pa_gate_poll_due. */
 #define TAP_QUIET_S  4.0   /* raw-silent this long while tapping -> re-check if the stream ended */
 
 /* r13: the gate is EVENT-DRIVEN. A persistent `pactl subscribe` child (see

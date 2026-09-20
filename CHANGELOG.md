@@ -6,12 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Fixed — the LED tap ran forever with nothing playing (nexusqd r21)
+### Changed — the sink-input gate's safety net is no longer unreachable (nexusqd r21)
 
-Measured on the device 2026-09-20: **0 uncorked sink-inputs, both sinks
-`SUSPENDED`, and `arecord` still alive** — stable across a 105 s watch, burning
-~8.6 CPU wakeups/s to capture a sink nothing was feeding. The documented healthy
-idle tell (no `arecord`, sink `SUSPENDED`) had quietly stopped holding.
+⚠️ **This is hardening, not a measured bug fix — the motivating observation was a
+misattribution.** An `arecord` seen running on an idle device with 0 uncorked
+sink-inputs was read as a wedged LED tap. It was not nexusqd's: it was
+`arecord -D hw:Loopback,1,0`, a child of `nq-uac2-silence` under
+`nexusq-uac2-in.service`, which owns the aloop directly while ASLEEP **by design**
+so it can wake on the first non-zero frame. There was no `arecord -D pulse` at
+all — nexusqd's gate was working correctly the whole time. Recorded because the
+wrong reading is the useful part: **always check an `arecord`'s `-D` argument and
+its ppid before attributing it.**
+
+What the code change is actually worth, on its own merits:
 
 The gate that stops the tap was event-driven with a timed safety net, but the net
 was **conditional**: it only ran while the tap was off, or while the tap was on
@@ -27,8 +34,12 @@ once, which is why it survived review:
 - A tap on a **suspended** sink's monitor delivers no samples at all, so
   `quiet_since` never arms and the "raw-silent" branch cannot fire either.
 
-Neither exit could be taken, so the tap ran until something else restarted the
-daemon. The timed net is now unconditional — an event *or* the deadline
+Whether that combination is reachable in practice is **unproven**: while the tap
+runs it holds the sink out of suspend, so its monitor keeps producing zeros and
+the raw-silent branch should normally fire. The net still should not be
+conditional — a safety net that cannot fire is not one, and this one also covers
+an `arecord` that dies quietly or a PA that misbehaves. The timed net is now
+unconditional — an event *or* the deadline
 re-counts, whatever the tap is doing — which is what `PA_SAFETY_ON_S` (30 s) was
 always meant to be; it had been unreachable code. Idle cost is unchanged
 (`PA_SAFETY_OFF_S`, 60 s), and playback now costs one `pactl` per half-minute.
@@ -38,8 +49,8 @@ The decision moved out of the main loop into two pure functions,
 at all: `tests/test_audio_gate.c` covers it, including the wedged state and a
 10-minute idle simulation asserting the re-count rate stays ~1/min rather than
 reintroducing the 0.67 forks/s that made the gate event-driven in the first
-place. The regression test was confirmed to fail against the old behaviour before
-the fix went in.
+place. The test was confirmed to fail against the old behaviour before the change went
+in. Cost: one extra `pactl` per 30 s of playback; idle is unaffected.
 
 This is rung **R0** of the sleep-state ladder
 (`docs/2026-09-20-sleep-states-design.md` §5): cutting the idle wakeup rate is
