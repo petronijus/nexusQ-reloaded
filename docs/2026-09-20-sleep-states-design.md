@@ -776,6 +776,39 @@ standby, measured separately today — see
 3. **R3**, independent of both, and possibly most of what the user actually wants.
 4. **R4**, last, because its cost is the resume path of every driver.
 
+## Where this stands (end of 2026-09-20)
+
+**R0 — in progress, and it is not the bug hunt it looked like.** The two largest
+idle wakeup sources are both *deliberate*, not defects:
+
+| source | rate | why it is there |
+|---|---|---|
+| `alsa_buf_mon` (shairport-sync) | ~29-35/s | unconditional ~11.6 ms poll; no config knob, 5.1-r0 is the newest Alpine has, so it needs a package patch |
+| `arecord -D hw:Loopback,1,0` (`nq-uac2-silence`) | ~6-9/s | owns the aloop while ASLEEP **by design** so it can wake on the first non-zero frame — wakeups traded for wake latency |
+
+So R0 is now a **design decision** — how much wake latency are we willing to give
+up for depth — rather than a list of things to fix. That call is Petr's and is not
+made yet.
+
+Shipped on this rung: `nexusqd` r21 makes the sink-input gate's timed safety net
+unconditional (it was unreachable). Installed and verified on the device — idle:
+no tap; a stream: tap on; stream ends: tap off within 3 s, sinks back to
+`SUSPENDED`.
+
+**R2 — unblocked, and it is the next rung.** It was gated on having a post-mortem
+for a hang. §4i settles that: ramoops works and always did, so a hang after
+registering C2/C3 is readable from `/var/lib/systemd/pstore/` on the next boot.
+Serial is still unavailable and always will be, so R2 must be attempted on the
+strength of ramoops alone.
+
+**Not yet measured:** a clean idle-exit baseline with the ring settled. The
+2026-09-20 reading of 308 exits/s is **contaminated** — `nexusqd` had been
+restarted ~2 min earlier, so the screensaver was still animating and pushing
+frames to the AVR (`48072000.i2c` at 55/s, `nexusqd` at 10.5/s, neither of which
+belongs in an idle figure). Re-run `idle-exits.sh` only after the daemon has been
+up **>300 s** ([[nexusqd-needs-300s-before-measuring]]). The last trustworthy
+figure remains **466 exits/s** from §4h.
+
 ## Open questions
 
 - With C2/C3 registered, do `mpu_pwrdm` and `core_pwrdm` actually reach CSWR/OSWR,
