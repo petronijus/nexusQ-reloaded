@@ -173,3 +173,16 @@ int pa_subscribe_open(pid_t *pid) {
     if (pid) *pid = p;
     return pf[0];
 }
+
+double pa_gate_next_deadline(double now, int sub_proven, int tap_running) {
+    /* An unproven subscriber buys no horizon at all: fork+exec succeed even with
+     * PulseAudio down, so trusting a merely-live fd would arm the 30/60 s net
+     * while the gate was actually blind. */
+    if (!sub_proven) return now + PA_POLL_S;
+    return now + (tap_running ? PA_SAFETY_ON_S : PA_SAFETY_OFF_S);
+}
+
+int pa_gate_poll_due(int event_pending, double now, double poll_deadline) {
+    if (event_pending) return 1;
+    return now >= poll_deadline;
+}

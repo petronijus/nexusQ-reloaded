@@ -56,11 +56,12 @@
  * through it, while a corked one (paused stream, or module-loopback whose source
  * nq-uac2-silence has suspended) does not — that last case is why corked inputs
  * stopped counting, since otherwise this tap kept the amplifier powered through
- * every silence. To keep idle overhead near zero we run `pactl` only at a possible
- * transition — while the tap is OFF (watch for a stream starting) and while it is
- * ON but raw-silent for TAP_QUIET_S (watch for the stream ending); while music
- * actually flows we never poll. */
-#define PA_POLL_S    1.5   /* min seconds between sink-input re-counts (at a transition) */
+ * every silence. To keep idle overhead near zero the re-count is event-driven,
+ * with a TIMED safety net on top (PA_SAFETY_ON_S/OFF_S in audio.h). That net used
+ * to be skipped while music flowed — "while music actually flows we never poll" —
+ * which wedged the tap on whenever the ending stream corked instead of
+ * disappearing AND the suspended sink's monitor fed us nothing to call silence.
+ * It is now unconditional; see pa_gate_poll_due. */
 #define TAP_QUIET_S  4.0   /* raw-silent this long while tapping -> re-check if the stream ended */
 
 /* r13: the gate is EVENT-DRIVEN. A persistent `pactl subscribe` child (see
@@ -74,8 +75,6 @@
  * every one of those short-lived clients also woke every OTHER PA subscriber
  * on the box (nexusq-control's bridge) with client-connect events. */
 #define PA_SUB_RESPAWN_S 10.0  /* retry a dead `pactl subscribe` this often */
-#define PA_SAFETY_ON_S   30.0  /* safety re-count while tapping + raw-silent (subscriber PROVEN) */
-#define PA_SAFETY_OFF_S  60.0  /* safety re-count while the tap is off (subscriber PROVEN) */
 /* A just-forked subscriber is NOT yet evidence that PA is reachable: fork+exec
  * succeed even when PulseAudio is down (the child only EOFs afterwards). Trusting
  * a live fd alone let a doomed child arm the 30/60 s safety deadline, and the
@@ -224,7 +223,7 @@ int main(void) {
     /* Plan 3b audio: spawn `arecord -D pulse` to tap PA's default source, feed PCM
      * segments to the AudioCapture port (volume/FFT/beat); the music scene reacts
      * and the screensaver fades when getVolume >= 0.01. The tap is NOT opened here:
-     * it is gated on a live PA sink-input (see PA_POLL_S above) so it stays off at
+     * it is gated on a live PA sink-input (see the gate in audio.h) so it stays off at
      * idle and PA can suspend the sink. */
     signal(SIGCHLD, SIG_IGN);   /* reap arecord/pactl automatically when they exit */
     int afd = -1; pid_t apid = -1;
@@ -318,12 +317,12 @@ int main(void) {
          * Event-driven: `pactl subscribe` membership events set pa_check; the timed
          * re-count runs only as a slow safety net (subscriber proven) or at
          * PA_POLL_S (subscriber down/unproven — PA restarting / early boot). The
-         * TIMED path still fires only at a possible transition: while the tap is
-         * OFF (a stream may have started) or while it is ON but raw-silent (the
-         * stream may have ended) — so r12's "while music flows we never poll"
-         * still holds for it. An EVENT re-counts whenever it arrives, including
-         * mid-playback: a membership change is exactly what the count tracks, and
-         * it is bounded by real PA activity rather than by a clock. */
+         * TIMED path fires whatever the tap is doing: it is the backstop for an
+         * end-of-stream the subscriber cannot see (a cork is a 'change', not a
+         * membership event), and at 30 s while tapping it costs one pactl per
+         * half-minute of playback. An EVENT re-counts whenever it arrives,
+         * including mid-playback: a membership change is exactly what the count
+         * tracks, and it is bounded by real PA activity rather than by a clock. */
         {
             double nowg = now_s();
             if (sfd < 0 && nowg >= sfd_retry) {
@@ -333,20 +332,14 @@ int main(void) {
                 if (sfd >= 0) { pa_check = 1; slen = 0; }   /* (re)spawned: resync the count */
             }
             int sub_proven = (sfd >= 0) && (nowg - sfd_since >= PA_SUB_PROVEN_S);
-            int poll_due = pa_check;
-            if (!poll_due) {
-                if (!tap_should_run)
-                    poll_due = nowg >= pa_poll;                   /* watch for a stream starting */
-                else if (quiet_since >= 0.0 && nowg - quiet_since >= TAP_QUIET_S)
-                    poll_due = nowg >= pa_poll;                   /* raw-silent a while: ended? */
-            }
-            if (poll_due) {
+            /* An event, or the deadline — and NOT conditional on what the tap is
+             * doing. Gating the timed net on "tap off, or tap on and raw-silent"
+             * wedged the tap permanently on: see pa_gate_poll_due in audio.h. */
+            if (pa_gate_poll_due(pa_check, nowg, pa_poll)) {
                 int was = tap_should_run;
                 tap_should_run = pa_sink_inputs_active() > 0;
                 pa_check = 0;
-                pa_poll = nowg + (sub_proven
-                                  ? (tap_should_run ? PA_SAFETY_ON_S : PA_SAFETY_OFF_S)
-                                  : PA_POLL_S);
+                pa_poll = pa_gate_next_deadline(nowg, sub_proven, tap_should_run);
                 if (tap_should_run && !was) {
                     /* a stream appeared: leave idle cadence NOW so the
                      * visualizer fade-in starts on the next iteration */

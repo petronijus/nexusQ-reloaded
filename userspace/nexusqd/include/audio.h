@@ -80,4 +80,28 @@ void pa_cork_scan_feed(struct pa_cork_scan *s, const char *buf, size_t n);
  * Tear down with audio_close() (it is child-agnostic: SIGTERM + close). */
 int   pa_subscribe_open(pid_t *pid);
 
+
+/* --- the gate's timing policy ------------------------------------------------
+ * The re-count is event-driven (pa_subscribe_open) with a TIMED SAFETY NET, and
+ * the net has to be unconditional. It used to be skipped while the tap ran and
+ * was not raw-silent, on the reasoning that "while music actually flows we never
+ * poll" — the subscriber would tell us when it stopped. It does not always: the
+ * subscriber only matches sink-input 'new'/'remove', and a stream ENDING on a
+ * module-loopback input corks it instead, which is a 'change'. Meanwhile a tap on
+ * a SUSPENDED sink's monitor delivers no samples at all, so quiet_since never
+ * arms and the "raw-silent" branch never fires either. Both exits closed, the
+ * tap ran forever: observed 2026-09-20 with 0 uncorked inputs, both sinks
+ * SUSPENDED and arecord still alive, costing ~8.6 wakeups/s for nothing.
+ * So: an event OR the deadline re-counts, whatever the tap is doing. */
+#define PA_POLL_S       1.5   /* min seconds between re-counts (subscriber down/unproven) */
+#define PA_SAFETY_ON_S  30.0  /* safety re-count while tapping (subscriber PROVEN) */
+#define PA_SAFETY_OFF_S 60.0  /* safety re-count while the tap is off (subscriber PROVEN) */
+
+/* When the next timed re-count is due, given the state just observed. (pure) */
+double pa_gate_next_deadline(double now, int sub_proven, int tap_running);
+/* Whether to re-count the sink-inputs now: a pending subscriber event, or the
+ * deadline having passed. Deliberately blind to whether the tap is running or
+ * silent — that is the conditionality which wedged the tap on. (pure) */
+int    pa_gate_poll_due(int event_pending, double now, double poll_deadline);
+
 #endif

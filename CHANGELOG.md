@@ -6,6 +6,45 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the LED tap ran forever with nothing playing (nexusqd r21)
+
+Measured on the device 2026-09-20: **0 uncorked sink-inputs, both sinks
+`SUSPENDED`, and `arecord` still alive** — stable across a 105 s watch, burning
+~8.6 CPU wakeups/s to capture a sink nothing was feeding. The documented healthy
+idle tell (no `arecord`, sink `SUSPENDED`) had quietly stopped holding.
+
+The gate that stops the tap was event-driven with a timed safety net, but the net
+was **conditional**: it only ran while the tap was off, or while the tap was on
+*and* the capture had read raw-silent for `TAP_QUIET_S`. On the r12 reasoning
+that "while music actually flows we never poll", the subscriber was trusted to
+announce the end of a stream. Two independent exits turned out to be closed at
+once, which is why it survived review:
+
+- `pactl subscribe` is matched for sink-input **`'new'`/`'remove'`**, but a
+  `module-loopback` stream ending **corks** its input — a `'change'`. With Roon
+  and USB audio both enabled, their two loopbacks cork in place and no
+  membership event is ever emitted.
+- A tap on a **suspended** sink's monitor delivers no samples at all, so
+  `quiet_since` never arms and the "raw-silent" branch cannot fire either.
+
+Neither exit could be taken, so the tap ran until something else restarted the
+daemon. The timed net is now unconditional — an event *or* the deadline
+re-counts, whatever the tap is doing — which is what `PA_SAFETY_ON_S` (30 s) was
+always meant to be; it had been unreachable code. Idle cost is unchanged
+(`PA_SAFETY_OFF_S`, 60 s), and playback now costs one `pactl` per half-minute.
+
+The decision moved out of the main loop into two pure functions,
+`pa_gate_poll_due()` and `pa_gate_next_deadline()` (`audio.h`), so it is testable
+at all: `tests/test_audio_gate.c` covers it, including the wedged state and a
+10-minute idle simulation asserting the re-count rate stays ~1/min rather than
+reintroducing the 0.67 forks/s that made the gate event-driven in the first
+place. The regression test was confirmed to fail against the old behaviour before
+the fix went in.
+
+This is rung **R0** of the sleep-state ladder
+(`docs/2026-09-20-sleep-states-design.md` §5): cutting the idle wakeup rate is
+the precondition for deep C-states being worth registering at all.
+
 ### Added — HDMI is an audio output you can actually pick (device r104, nexusq-control r48)
 
 Closes the substance of GitHub issue #5, where a user with a Yamaha RX-V473 and
