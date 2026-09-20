@@ -1,9 +1,19 @@
-<!-- RELEASE: v1.17.0 -->
+<!-- RELEASE: v1.18.0 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v1.17.0`** (device r101, `nexusqd` r20,
-`nexusq-control` r45, kernel-ota **r6**, kernel **`6.18.48-r2`**, 44 patches
+**This guide describes release `v1.18.0`** (device r104, `nexusqd` r20,
+`nexusq-control` r48, kernel-ota **r7**, kernel **`6.18.48-r2`**, 44 patches
 through `0046`, with 0004 and 0032 dropped -- upstream fixed both).
+
+> **v1.18.0 gives the HDMI port a voice.** HDMI audio had never actually been
+> selectable: the output row existed in the control bridge but was dropped
+> whenever PulseAudio had no sink for the card -- and the card is deliberately
+> ignored by PulseAudio, so there never was one. The hardware had worked all
+> along. HDMI is now a real output, offered when the attached sink's EDID says it
+> accepts audio, and selecting it lights the HDMI video output (black, no
+> desktop) because HDMI carries audio only inside a running video stream. The Q
+> also finally speaks CEC. See GitHub issue #5 and
+> `docs/2026-09-20-hdmi-audio-the-output-that-was-never-offered.md`.
 
 > **v1.17.0 starts the clock.** The TWL6030 RTC had never run on any boot of this
 > port: the PMIC write-protects its RTC block while MSECURE is low, and our DTS
@@ -64,8 +74,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v1.17.0.img` (6.41 MiB), `nexusq-rootfs-v1.17.0-sparse.img.zst`
-  (**677 MiB** compressed, **2.81 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v1.17.0.txt`
+- release artifacts: `nexusq-boot-v1.18.0.img` (6.41 MiB), `nexusq-rootfs-v1.18.0-sparse.img.zst`
+  (**675 MiB** compressed, **2.82 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v1.18.0.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
@@ -81,7 +91,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     the kernel changed, **coming from v1.10.1 flash BOTH `boot` and `userdata`** (a
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
-    `sha256sums-v1.17.0.txt`.
+    `sha256sums-v1.18.0.txt`.
   - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9**, and
     **v1.12.0** (built 2026-08-10: MQTT health telemetry `nexusq-mqtt`, device
     r67; gates PASS, not yet flashed) — are **not
@@ -271,12 +281,12 @@ hard-coded in the stock bootloader, so no amount of retrying widens it.
 # dev builds since 2026-08-20 carry the small A/B-slot initramfs, still well
 # under the limit) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v1.17.0's boot image is kernel 6.18.48-r2 -- 44 patches
+# v1.18.0's boot image is kernel 6.18.48-r2 -- 44 patches, unchanged from v1.17.0
 # through 0046. Flashing boot is always safe, and is REQUIRED coming from any
 # release on a different kernel revision.
 # (This comment described the v1.11.0 kernel, r45 on 6.12.12 at ~5.3 MiB, until
 #  2026-09-16 -- four kernel revisions after it stopped being true.)
-fastboot flash boot nexusq-boot-v1.17.0.img
+fastboot flash boot nexusq-boot-v1.18.0.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -285,8 +295,8 @@ fastboot flash boot nexusq-boot-v1.17.0.img
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
 # The rootfs ships zstd-compressed (677 MiB -> 2.81 GiB sparse) -- decompress it first:
-zstd -d nexusq-rootfs-v1.17.0-sparse.img.zst   # -> nexusq-rootfs-v1.17.0-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v1.17.0-sparse.img
+zstd -d nexusq-rootfs-v1.18.0-sparse.img.zst   # -> nexusq-rootfs-v1.18.0-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v1.18.0-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
