@@ -261,6 +261,65 @@ answer is not "attach a UART" — it is to stop flying blind by other means:
   cost of learning nothing; they are the cost of each experiment, so make each
   experiment worth one.
 
+## 4c. ROOT CAUSE: the TWL6030 cannot wake s2idle, by construction
+
+`pm_test` walked the whole suspend machinery and **every applicable phase
+passed** — so nothing in the port is broken:
+
+```
+freezer     rc=0   froze and thawed userspace
+devices     rc=0   suspended and resumed everything, incl. smsc95xx eth0 and
+                   brcmfmac (which reloads its firmware on resume)
+platform    rc=0   incl. the late/noirq phases
+processors  rejected: "Unsupported test mode for suspend to idle"
+core        rejected: likewise
+```
+
+(The last two only apply to suspend-to-RAM, not s2idle.) The hang therefore lies
+in the one part `pm_test` skips: the s2idle loop itself. The system suspends
+correctly and then **never receives a wakeup**.
+
+`drivers/mfd/twl6030-irq.c` says why:
+
+```c
+case PM_SUSPEND_PREPARE:
+        chained_wakeups = atomic_read(&pdata->wakeirqs);
+        if (chained_wakeups && !pdata->irq_wake_enabled) {
+                enable_irq_wake(pdata->twl_irq);      /* wake IS propagated */
+                ...
+        }
+        disable_irq(pdata->twl_irq);                  /* ...and then disabled */
+        break;
+case PM_POST_SUSPEND:
+        enable_irq(pdata->twl_irq);
+```
+
+The parent PIH interrupt is **disabled for the duration of the suspend**. For
+suspend-to-RAM that is harmless: the wake happens in hardware at the PRCM/WUGEN
+level, below the disabled Linux IRQ, and `PM_POST_SUSPEND` re-enables it on the
+way out. **s2idle has no such hardware path** — it relies on the interrupt
+actually firing and breaking the loop. With the PIH disabled, the RTC alarm can
+never do that, no matter that the alarm fires and the wake flag is set.
+
+So nothing here is our bug, and nothing needs fixing to move on. It also flips
+the earlier advice in §4b: `mem` is not "more dangerous because `freeze` failed"
+— `mem` is the mode whose wake path is actually wired, and it is the one to try.
+
+Two smaller things the bisect turned up, neither fatal:
+
+* `l4-per-clkctrl:0060:0 / :0048:0 / :0040:0: failed to disable` during the noirq
+  phase — three L4-PER clocks refusing to gate. Worth chasing once suspend works,
+  because a clock that will not gate is a domain that will not retain.
+* Resume costs ~1.4 s, most of it `brcmfmac` reloading BCM4330 firmware.
+
+### The safety net that actually works
+
+`drivers/watchdog/omap_wdt.c` has **no system suspend/resume handlers**, so the
+watchdog keeps its hardware state across a suspend, and its WDT sits in the
+always-powered WKUP domain. Arming it and then letting userspace freeze (so
+nothing can ping it) gives a hard reset in N seconds — a net that does **not**
+depend on any driver resuming, which is exactly what the previous attempt lacked.
+
 ## 5. The design: a ladder, not a switch
 
 Each rung is independently useful, independently testable, and does not depend on
