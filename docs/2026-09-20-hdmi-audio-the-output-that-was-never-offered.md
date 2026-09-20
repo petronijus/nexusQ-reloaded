@@ -225,6 +225,27 @@ low is still perfectly loud through it. **HDMI has no such gain to hide behind**
 check when an HDMI sink is silent but every register says we are transmitting is
 the level arriving at the sink, not the HDMI path.
 
+## 8. Leaving HDMI lingers
+
+Petr's call, out of three options put to him. Releasing the output the moment
+another output is picked is cheapest, but because this board cannot wake a sink
+that has dropped HPD, every "speaker for a minute, then back" would cost a walk
+to the receiver. Holding whenever an awake sink is attached is the other
+extreme and would keep the DSS scanout and the TMDS PHY powered on every unit
+with a TV in the port. So the hold lingers for 30 min
+(`NEXUSQ_HDMI_HOLD_GRACE_S`) and is cancelled the instant HDMI is picked again.
+
+It is a transient systemd timer (`nq-hdmi-hold-release`), not a thread in the
+bridge: an OTA of the bridge mid-grace would otherwise strand the output lit
+with nothing left to take it down. A failed switch releases immediately, and a
+timer that cannot be armed falls back to stopping now — held-forever is the
+worse failure.
+
+Verified live, and by accident, which is the best kind: restarting the bridge
+made its own `BOOT_OUTPUT=speaker` logic switch away from HDMI, and the timer
+appeared armed with 29 min left while `nq-hdmi-hold` kept running. Picking HDMI
+again cancelled it.
+
 ## Open, not fixed here
 
 - **The selected output does not survive a reboot.** `BOOT_OUTPUT` is `speaker`,

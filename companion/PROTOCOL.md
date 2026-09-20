@@ -108,7 +108,10 @@ declares no audio (a DVI-class monitor) is listed with `available: false`, which
 the app renders dimmed; an audio-capable sink is selectable. Selecting it also
 starts `nq-hdmi-hold.service`, because HDMI carries audio only inside a running
 video stream — so the Q's HDMI video output stays on, black, for as long as HDMI
-is the output, which is also what stops a receiver dozing off. `setOutput` errors
+is the output, which is also what stops a receiver dozing off. Leaving HDMI
+releases the output after a grace period (30 min) rather than at once, and
+picking HDMI again cancels that, so a short detour to another output does not
+send the receiver to a standby the Q cannot wake it from. `setOutput` errors
 `bad_request` for an unknown/unavailable id, and `unavailable` when the HDMI
 output cannot be brought up (nothing connected, a display that takes no audio, or
 PulseAudio failing to open the card).

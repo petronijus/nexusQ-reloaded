@@ -58,6 +58,15 @@ claims a Playback logical address (`4`, OSD name `Nexus Q`) and sends
 against the soundbar: SAMR **ok**, Active Source **ok**, Image View On NACKed
 (no TV powered at LA 0).
 
+**Leaving HDMI does not put the output down at once.** It lingers for 30 min
+(`NEXUSQ_HDMI_HOLD_GRACE_S`) and is cancelled the moment HDMI is picked again,
+so "switch to the speaker for a bit and come back" does not cost a walk to the
+receiver — while a unit with a TV in the port does not keep its DSS and TMDS PHY
+powered forever either. Implemented as a transient systemd timer rather than a
+thread in the bridge, so it survives an OTA of the bridge mid-grace; a FAILED
+switch still releases immediately, since there is nothing to come back to, and
+an unarmable timer falls back to stopping now rather than holding forever.
+
 **What it deliberately does not promise: the Q cannot wake a sleeping sink.**
 This is hardware, not a gap. The OMAP4 PHY reaches `TXON` only from the
 `LINK_CONNECT` interrupt (`hdmi4.c`), which is driven by HPD — forcing the DRM

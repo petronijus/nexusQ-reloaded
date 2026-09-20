@@ -156,6 +156,19 @@ OUTPUT_BY_ID = {o["id"]: o for o in OUTPUTS}
 # card by hand, after the output is up, and unload it when HDMI is deselected.
 NQ_HDMI = os.environ.get("NEXUSQ_NQ_HDMI", "/usr/bin/nq-hdmi")
 HDMI_HOLD_UNIT = "nq-hdmi-hold.service"
+# Leaving HDMI does not put the output down at once. A receiver that loses the
+# signal goes to standby, and once it drops HPD this board cannot wake it (the
+# PHY needs an HPD-driven LINK_CONNECT, CEC needs an EDID) — so releasing
+# immediately means every "switch to the speaker for a bit and come back" costs
+# a walk to the receiver. Holding forever is the other extreme and would keep
+# the DSS scanout and the TMDS PHY powered on every unit with a TV in the port.
+# So the hold lingers, and is cancelled the moment HDMI is picked again.
+# A FAILED switch releases immediately — there is nothing to come back to.
+HDMI_HOLD_GRACE_S = float(os.environ.get("NEXUSQ_HDMI_HOLD_GRACE_S", "1800"))
+# A transient systemd timer, not a thread in here: it has to outlive a restart
+# of this bridge (an OTA of the bridge mid-grace would otherwise strand the
+# output lit forever), and systemd already owns the hold unit it stops.
+HDMI_RELEASE_UNIT = "nq-hdmi-hold-release"
 HDMI_SINK_NAME = "nexusq_hdmi"
 HDMI_ALSA_DEVICE = os.environ.get("NEXUSQ_HDMI_ALSA_DEVICE", "hw:HDMI,0")
 # Watched so the app learns when a receiver is switched on or off. Kept in step
@@ -705,8 +718,50 @@ def hdmi_hold_active():
         return False
 
 
-def hdmi_hold(on):
+def _hdmi_cancel_release():
+    """Drop any pending grace-period release. Idempotent and quiet."""
+    for unit in (f"{HDMI_RELEASE_UNIT}.timer", f"{HDMI_RELEASE_UNIT}.service"):
+        for verb in ("stop", "reset-failed"):
+            try:
+                subprocess.run(["systemctl", verb, unit],
+                               capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def _hdmi_schedule_release():
+    """Let the hold linger, then stop it. Returns True if the timer was armed.
+
+    If arming fails we fall back to stopping now rather than leaving the output
+    lit with nothing to take it down — an output held forever is a worse failure
+    than one released early."""
+    _hdmi_cancel_release()
+    try:
+        r = subprocess.run(
+            ["systemd-run", f"--unit={HDMI_RELEASE_UNIT}",
+             f"--on-active={int(HDMI_HOLD_GRACE_S)}",
+             "--description=Release the Nexus Q HDMI output hold after its "
+             "grace period",
+             "systemctl", "stop", HDMI_HOLD_UNIT],
+            capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        log("HDMI hold: could not arm the release timer:", e)
+        return False
+    if r.returncode != 0:
+        log("HDMI hold: could not arm the release timer:",
+            (r.stderr or "").strip()[:160])
+        return False
+    log(f"HDMI hold: lingering for {int(HDMI_HOLD_GRACE_S)}s before release")
+    return True
+
+
+def hdmi_hold(on, grace=False):
     """Start or stop the HDMI output hold, and tell the truth about the result.
+
+    `grace=True` means "the user switched away" — the hold lingers for
+    HDMI_HOLD_GRACE_S so coming back does not need a walk to the receiver. Every
+    other stop (a failed switch, a shutdown) is immediate: the default is the
+    safe one, so a new caller cannot accidentally leave the display lit.
 
     `systemctl start` on a Type=simple unit returns as soon as the process is
     forked, so a hold that immediately gives up (no sink attached = exit 2, a
@@ -714,6 +769,14 @@ def hdmi_hold(on):
     for it to settle and, if it died, turn its exit status into the error the
     app shows the user."""
     if not on:
+        if grace and not hdmi_hold_active():
+            # Nothing is holding anything — arming a timer to stop a unit that
+            # is not running would put a stray transient unit on the box every
+            # time somebody taps speaker/optical on a unit with no HDMI at all.
+            return
+        if grace and HDMI_HOLD_GRACE_S > 0 and _hdmi_schedule_release():
+            return
+        _hdmi_cancel_release()
         try:
             subprocess.run(["systemctl", "stop", HDMI_HOLD_UNIT],
                            capture_output=True, text=True, timeout=30)
@@ -721,6 +784,9 @@ def hdmi_hold(on):
             log("HDMI hold stop failed:", e)
         return
 
+    # Coming back inside the grace window: the output is still lit, so this is
+    # just cancelling the execution and re-confirming the unit is up.
+    _hdmi_cancel_release()
     try:
         subprocess.run(["systemctl", "start", HDMI_HOLD_UNIT],
                        capture_output=True, text=True, timeout=30)
@@ -2751,7 +2817,10 @@ class Bridge:
         # kills the stream instead of relocating it.
         if oid != "hdmi":
             self._hdmi_sink_down()
-            hdmi_hold(False)
+            # grace: the user chose another output, they may well be back in a
+            # minute, and a receiver that has gone to standby in the meantime
+            # cannot be woken from here.
+            hdmi_hold(False, grace=True)
         # 3) point PA's default SOURCE at this output's monitor so the nexusqd LED
         # visualizer (`arecord -D pulse`, captures the default source) taps the mix
         # actually going to the selected output. Resilient (see set_default_source).

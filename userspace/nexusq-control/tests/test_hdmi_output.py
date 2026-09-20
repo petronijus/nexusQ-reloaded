@@ -177,7 +177,7 @@ class TestSelectHdmi(unittest.TestCase):
         b = Bridge(log=log)
         b.pulse = FakePulse(log=log)
 
-        def hold(on):
+        def hold(on, grace=False):
             log.append(("hold", on))
 
         self._select(b, "hdmi", hold=hold)
@@ -330,7 +330,7 @@ class TestLeavingHdmi(unittest.TestCase):
         b = Bridge(log=log)
         b.pulse = FakePulse(log=log)
 
-        def hold(on):
+        def hold(on, grace=False):
             log.append(("hold", on))
 
         with mock.patch.object(MOD, "hdmi_hold", hold), \
@@ -360,6 +360,37 @@ class TestLeavingHdmi(unittest.TestCase):
             b._set_output({"output": "spdif"})
         self.assertNotIn(MOD.HDMI_SINK_NAME, b.pulse.sinks())
 
+    def test_leaving_hdmi_lets_the_hold_linger_rather_than_dropping_it(self):
+        # Releasing at once would mean every "switch to the speaker for a bit"
+        # puts the receiver into a standby this board cannot wake it from.
+        b = Bridge()
+        hold = mock.Mock()
+        with mock.patch.object(MOD, "hdmi_hold", hold), \
+             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
+             mock.patch.object(MOD, "_sync_panel_applet"), \
+             mock.patch.object(MOD, "_amixer"), \
+             mock.patch.object(MOD, "nexusqd_send"):
+            b._set_output({"output": "hdmi"})
+            hold.reset_mock()
+            b._set_output({"output": "speaker"})
+        hold.assert_called_once_with(False, grace=True)
+
+    def test_a_failed_switch_releases_at_once_with_no_grace(self):
+        # Nothing to come back to, so the display must not linger.
+        b = Bridge()
+        b.pulse = FakePulse(log=b.log, open_ok=False)
+        hold = mock.Mock()
+        with mock.patch.object(MOD, "hdmi_hold", hold), \
+             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
+             mock.patch.object(MOD, "_sync_panel_applet"), \
+             mock.patch.object(MOD, "_amixer"), \
+             mock.patch.object(MOD, "nexusqd_send"), \
+             self.assertRaises(MOD.Err):
+            b._set_output({"output": "hdmi"})
+        self.assertIn(mock.call(False), hold.mock_calls)
+        for c in hold.mock_calls:
+            self.assertNotEqual(c, mock.call(False, grace=True))
+
     def test_picking_the_speaker_never_touches_the_hold_when_hdmi_was_never_up(self):
         # A plain speaker/spdif switch on a unit with nothing in the HDMI port
         # must not start systemctl churn on every tap.
@@ -372,8 +403,57 @@ class TestLeavingHdmi(unittest.TestCase):
              mock.patch.object(MOD, "_amixer"), \
              mock.patch.object(MOD, "nexusqd_send"):
             b._set_output({"output": "spdif"})
-        hold.assert_called_once_with(False)
+        # It still asks, but with grace — and hdmi_hold() itself no-ops when
+        # nothing is holding, rather than arming a timer for an idle unit.
+        hold.assert_called_once_with(False, grace=True)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHoldGracePeriod(unittest.TestCase):
+    """The real `hdmi_hold`, with systemd faked, so the grace policy is pinned
+    where it is actually implemented rather than at the call site."""
+
+    def _run(self, on, grace=False, active=True, systemd_ok=True):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(list(argv))
+            rc = 0 if systemd_ok or argv[0] != "systemd-run" else 1
+            return mock.Mock(returncode=rc, stdout="", stderr="")
+
+        with mock.patch.object(MOD.subprocess, "run", fake_run), \
+             mock.patch.object(MOD, "hdmi_hold_active", return_value=active):
+            MOD.hdmi_hold(on, grace=grace)
+        return calls
+
+    def test_a_graceful_leave_arms_a_timer_instead_of_stopping(self):
+        calls = self._run(False, grace=True)
+        armed = [c for c in calls if c[0] == "systemd-run"]
+        self.assertEqual(len(armed), 1)
+        self.assertIn(f"--unit={MOD.HDMI_RELEASE_UNIT}", armed[0])
+        self.assertIn("--on-active=%d" % int(MOD.HDMI_HOLD_GRACE_S), armed[0])
+        # …and it must NOT also stop the hold there and then.
+        self.assertNotIn(["systemctl", "stop", MOD.HDMI_HOLD_UNIT], calls)
+
+    def test_an_immediate_leave_really_stops_it(self):
+        calls = self._run(False, grace=False)
+        self.assertIn(["systemctl", "stop", MOD.HDMI_HOLD_UNIT], calls)
+        self.assertEqual([c for c in calls if c[0] == "systemd-run"], [])
+
+    def test_nothing_to_linger_for_arms_nothing(self):
+        calls = self._run(False, grace=True, active=False)
+        self.assertEqual(calls, [])
+
+    def test_an_unarmable_timer_falls_back_to_stopping_now(self):
+        # Better released early than held forever with nothing to take it down.
+        calls = self._run(False, grace=True, systemd_ok=False)
+        self.assertIn(["systemctl", "stop", MOD.HDMI_HOLD_UNIT], calls)
+
+    def test_coming_back_cancels_a_pending_release(self):
+        calls = self._run(True)
+        self.assertIn(["systemctl", "stop", f"{MOD.HDMI_RELEASE_UNIT}.timer"],
+                      calls)
+        self.assertIn(["systemctl", "start", MOD.HDMI_HOLD_UNIT], calls)
