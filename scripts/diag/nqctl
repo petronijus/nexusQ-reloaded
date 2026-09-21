@@ -30,6 +30,10 @@
 #
 # Host-side config (override via env):
 NQ_ETH_HOST="${NQ_ETH_HOST:-10.42.0.2}"   # direct PC<->Nexus cable (default, fastest+stablest)
+# Left empty on purpose: the WiFi lease moves (see the kea lookup in the device
+# notes), so there is no honest default. `nqctl` still works without it via eth
+# or USB; export NQ_WIFI_HOST=<ip> when only WiFi is up. An empty value is
+# skipped rather than passed to ssh as an empty hostname.
 NQ_WIFI_HOST="${NQ_WIFI_HOST:-}"
 NQ_USB_HOST="${NQ_USB_HOST:-172.16.42.1}"
 NQ_USB_HOST_IP="${NQ_USB_HOST_IP:-172.16.42.2}"
@@ -51,21 +55,33 @@ say() { printf '%s\n' "$*" >&2; }
 die() { say "nqctl: $*"; exit 1; }
 
 # --- reachability ------------------------------------------------------------
-reachable() { # reachable <host>
-	ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" true 2>/dev/null
+# The host must not merely ANSWER — it must be the Q. Petr's Lumia runs a USB
+# gadget on the same 172.16.42.1 and accepts the same key, so whichever device
+# enumerated last owns that address: a bare `ssh ... true` succeeded against the
+# PHONE on 2026-09-21. Everything below routes through here, so one identity
+# check covers snapshot, logs, push and pull. `hostname` is cheap and is the
+# same gate the operator is told to use by hand.
+NQ_EXPECT_HOST="${NQ_EXPECT_HOST:-steelhead}"
+
+reachable() { # reachable <host> -- true only if it answers AND is the device
+	local got
+	got=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" hostname 2>/dev/null) || return 1
+	[ "$got" = "$NQ_EXPECT_HOST" ] && return 0
+	[ -n "$got" ] && say "nqctl: $1 answered as '$got', not '$NQ_EXPECT_HOST' -- skipping (wrong device)"
+	return 1
 }
 
 pick_host() { # echoes the best reachable host IP, or empty; prefers direct ethernet
 	case "${1:-auto}" in
 		eth)  reachable "$NQ_ETH_HOST"  && { echo "$NQ_ETH_HOST";  return 0; } ;;
 		usb)  reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST";  return 0; } ;;
-		wifi) reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; } ;;
+		wifi) [ -n "$NQ_WIFI_HOST" ] && reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; } ;;
 		auto)
 			# Ethernet first: ~80 Mbit/s, 0.6 ms, stable, and (unlike the USB
 			# gadget) a fixed name/IP. USB gadget and WiFi are fallbacks.
 			reachable "$NQ_ETH_HOST"  && { echo "$NQ_ETH_HOST";  return 0; }
 			reachable "$NQ_USB_HOST"  && { echo "$NQ_USB_HOST";  return 0; }
-			reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; }
+			[ -n "$NQ_WIFI_HOST" ] && reachable "$NQ_WIFI_HOST" && { echo "$NQ_WIFI_HOST"; return 0; }
 			;;
 	esac
 	return 1

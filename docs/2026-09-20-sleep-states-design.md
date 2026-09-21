@@ -776,7 +776,12 @@ standby, measured separately today — see
 3. **R3**, independent of both, and possibly most of what the user actually wants.
 4. **R4**, last, because its cost is the resume path of every driver.
 
-## 4j. R2 ATTEMPTED: the deep states do not fault — they are simply never reached
+## 4j. R2 ATTEMPTED: the states are registered, and CANNOT be armed
+
+> **Read §4k before trusting anything below.** The measurements in this section
+> are real but the conclusion drawn from them is wrong: the box *does* idle long
+> enough, and the reason C2 was never entered is that `CPUIDLE_FLAG_OFF` cannot
+> be undone from sysfs. Both C2 experiments proved nothing about the hardware.
 
 Kernel `6.18.48-r4` registers C2/C3 with `CPUIDLE_FLAG_OFF`, so they exist with
 counters and the governor cannot pick them until one is armed by hand. That made
@@ -828,6 +833,66 @@ completes or trips the secure monitor. The experiment to run then is the same
 one, with the arm held long enough for the governor to pick the state once idle
 has grown — `usage` moving off 0 is the signal, and `mpu_pwrdm` RET leaving 0 is
 the payoff.
+
+## 4k. Why C2 was never entered: `CPUIDLE_FLAG_OFF` is not a runtime switch
+
+§4j blamed the wakeup rate. That was wrong twice over, and both errors are worth
+keeping because each looked like a result.
+
+**Error 1 — the idle figure was taken from an unsettled box.** §4j quoted mean idle
+of 778 us (cpu0) / 822 us (cpu1) against C2's 960 us threshold and concluded the box
+never idles long enough. Those are **cumulative-since-boot** counters read ~2-4 min
+after boot, so the boot storm dominates them. Measured as a **delta over a 120 s
+window** on a settled box instead:
+
+```
+cpu0   33996 idle periods / 83419281 us  ->  mean 2453 us   (283 exits/s)
+cpu1   32335 idle periods / 60625640 us  ->  mean 1874 us   (269 exits/s)
+C2 needs 960 us      C3 needs 1100 us
+```
+
+The box idles **2.5x longer than C2 requires**. Idle depth was never the blocker.
+(Same trap as the contaminated 308 exits/s reading — a cumulative counter is not a
+steady-state measurement.)
+
+**Error 2 — the state was never actually armed.** Re-run on the settled box, C2
+"armed" on both cpus for 120 s: `usage=0`, and crucially **`above=0 below=0`** —
+those increment when a state is *chosen* and the idle turned out shorter/longer, so
+all-zero means it was never even considered. Switching the governor to `teo` changed
+nothing. No `/dev/cpu_dma_latency` holder existed. The cause is in the kernel, from
+6.18.48's own source:
+
+```c
+/* drivers/cpuidle/sysfs.c */
+show_state_disable   ->  state_usage->disable & CPUIDLE_STATE_DISABLED_BY_USER
+store_state_disable  ->  sets/clears ONLY  CPUIDLE_STATE_DISABLED_BY_USER
+/* drivers/cpuidle/cpuidle.c:653 */
+if (drv->states[i].flags & CPUIDLE_FLAG_OFF)
+        dev->states_usage[i].disable |= CPUIDLE_STATE_DISABLED_BY_DRIVER;
+```
+
+`CPUIDLE_FLAG_OFF` sets the **DRIVER** bit. The sysfs `disable` file reads and
+writes only the **USER** bit. So `echo 0 > .../state1/disable` clears a bit that was
+never set, the DRIVER bit stays, the state remains disabled — **and `disable` reads
+back `0`**, which is why it looked armed. Patch 0024's premise, that the state could
+be armed by hand for a measured run, is simply false.
+
+**So the original question is still open.** Nothing has entered C2 on this board, so
+"do the MPUSS transitions trap into the HS secure monitor with SMP online" remains
+exactly as unanswered as before. What *is* now established: registering the states
+is harmless (the box runs normally with them present), and idle depth is not the
+obstacle.
+
+**To actually answer it**, the driver must not mark them `CPUIDLE_FLAG_OFF` —
+register C2/C3 enabled and let the governor pick them. That carries a real risk of a
+kernel that hangs on the first deep idle, which is why it needs a deliberate
+decision rather than a quiet default. Recovery is a `fastboot flash boot` of the
+previous image, which has been exercised repeatedly, and ramoops now archives the
+console to `/var/lib/systemd/pstore` so a hang leaves evidence (§4i).
+
+⚠️ **Do not read `disable` as proof a state is armed.** On this kernel it can only
+ever tell you what *userspace* asked for. The honest check that a state is live is
+`usage` moving, or `above`/`below` becoming non-zero.
 
 ## Where this stands (end of 2026-09-20)
 
