@@ -171,10 +171,16 @@ run systemctl --failed --no-legend
 sub "running units"; t systemctl list-units --type=service --state=running --no-legend 2>/dev/null
 
 sec PSTORE
-if [ -n "$(ls /sys/fs/pstore 2>/dev/null)" ]; then
+# NOT /sys/fs/pstore: systemd-pstore.service copies every record into the archive
+# below at boot and unlinks it from pstorefs, so pstorefs is empty within a second
+# of boot whatever happened. The archive is cumulative across boots.
+if [ -n "$(ls /var/lib/systemd/pstore 2>/dev/null)" ]; then
+	find /var/lib/systemd/pstore -type f | while read -r f; do sub "$f"; t cat "$f" 2>&1; done
+elif [ -n "$(ls /sys/fs/pstore 2>/dev/null)" ]; then
+	# systemd-pstore disabled or not yet run: still where the kernel left them
 	for f in /sys/fs/pstore/*; do sub "$f"; t cat "$f" 2>&1; done
 else
-	echo "(empty — no crash dumps from a previous boot)"
+	echo "(empty — no crash dumps archived on this unit)"
 fi
 
 sec PROCESSES

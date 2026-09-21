@@ -204,8 +204,14 @@ def analyze(rows, events, snap_text):
     if any(r.get("dmesg_err_new", 0) for r in rows):
         n = sum(r.get("dmesg_err_new", 0) for r in rows)
         add("warn", "kernel_errors", f"{n} new kernel error line(s) during capture (see snapshot dmesg)")
-    if any(r.get("pstore", 0) for r in rows):
-        add("crit", "pstore", "pstore crash dump(s) present — a previous boot panicked/oopsed")
+    # The count is of /var/lib/systemd/pstore, which PERSISTS across reboots, so a
+    # non-zero value means "this unit has crashed at some point", not "it crashed
+    # just now" — as a crit it would fire on every capture forever after one
+    # panic. A crash during THIS capture arrives as healthd's pstore_new event.
+    pst = max((r.get("pstore", 0) or 0) for r in rows) if rows else 0
+    if pst:
+        add("info", "pstore", f"{pst} crash dump(s) archived in /var/lib/systemd/pstore "
+                              "(cumulative across boots; a new one raises pstore_new)")
 
     # ---- snapshot cross-checks (failed units, pstore in one-shot) ----
     if snap_text:

@@ -103,14 +103,35 @@ included (only `<1>` and friends land); and an `until ssh true` loop connects to
 Full record: `docs/2026-09-20-sleep-states-design.md` §4i (§4f and §4g are marked
 superseded in place); B16 in `docs/2026-07-02-boot-error-inventory.md` is resolved.
 
+### Fixed — the diag tooling could never see a crash (device r105)
+
+Every consumer counted `/sys/fs/pstore`, which `systemd-pstore.service` drains and
+unlinks at boot, so `nq-healthd`'s `pstore` field was pinned at **0 forever**, its
+`pstore_new` **crit** event was unreachable, and the 0 was republished to MQTT and
+Home Assistant as though it meant "no crash". Verified on the device: the archive
+holds 2 records from tonight's deliberate panic, the old path holds 0.
+
+- `nq-healthd.c` (**both copies**, kept in sync) now counts
+  `/var/lib/systemd/pstore`, **recursively** — systemd nests records under a
+  per-boot directory in some versions and writes them flat in others — and falls
+  back to `/sys/fs/pstore` only when the archive does not exist, which is the one
+  case where reading pstorefs is correct (`systemd-pstore` disabled or not yet run).
+  Both paths are now overridable at compile time so the logic is testable.
+- `tests/test_pstore_count.c` (new) covers the flat and nested layouts, the
+  fallback, an empty archive *not* falling through to pstorefs, and dotfiles. It
+  `#include`s the source to reach the statics. Confirmed failing on the nested case
+  before the recursion went in. Run with `make test` in `userspace/nq-healthd`.
+- `nq-diag-snapshot` and `scripts/device-nexus-diag.sh` read the archive, with the
+  same fallback.
+- `scripts/diag/nq-health-report`: presence is now **info**, not crit. The archive
+  persists across reboots, so a non-zero count means "this unit has crashed at some
+  point"; as a crit it would have fired on every capture forever after one panic.
+  A crash during the capture still arrives as healthd's `pstore_new` event.
+
 #### Known issues opened by this
 
-- **The diag tooling all reads `/sys/fs/pstore`, so it can never see a crash.**
-  `nq-healthd` (`PSTORE "/sys/fs/pstore"`, `pstore_count()`, the `pstore_new` crit
-  event and the `pstore` telemetry field), `nq-diag-snapshot`'s `PSTORE` section and
-  `scripts/device-nexus-diag.sh` all count an empty directory and report 0 forever —
-  including through the MQTT/Home-Assistant health panel. Not fixed here (a code
-  change, not a doc one): they need to read `/var/lib/systemd/pstore/`.
+- ~~**The diag tooling all reads `/sys/fs/pstore`, so it can never see a crash.**~~
+  **FIXED below** (device r105) — see "the diag tooling could never see a crash".
 - **A flash wipes the crash history.** `/var/lib/systemd/pstore/` is on the rootfs.
   It belongs in the per-unit persist store next to the ssh host keys and BT bonds.
 

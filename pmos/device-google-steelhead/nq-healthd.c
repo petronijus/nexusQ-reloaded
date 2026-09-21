@@ -52,7 +52,19 @@
 #define NQ_CGROUP "/sys/fs/cgroup/system.slice/nexusqd.service"
 #define LS_CGROUP "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice/librespot.service"
 #define NQ_SOCK   "/run/nexusqd.sock"
-#define PSTORE    "/sys/fs/pstore"
+/* Crash dumps. `/sys/fs/pstore` is NOT where to look: systemd-pstore.service
+ * copies every record into the archive below at boot and then UNLINKS it from
+ * pstorefs (Unlink=yes, the default), so pstorefs is empty within a second of
+ * boot whatever happened. Reading it pinned this field at 0 forever and made the
+ * pstore_new event unreachable — which propagated to MQTT and Home Assistant,
+ * and cost two sessions that read an empty directory as "ramoops never captures
+ * anything" (2026-09-20; a deliberate sysrq panic was archived in full). */
+#ifndef PSTORE
+#define PSTORE    "/var/lib/systemd/pstore"
+#endif
+#ifndef PSTORE_FS
+#define PSTORE_FS "/sys/fs/pstore"   /* only meaningful if systemd-pstore is off */
+#endif
 
 static const char *logdir  = "/var/log/nq-health";
 static char logpath[512], eventpath[512];
@@ -439,18 +451,53 @@ static long long kmsg_error_count(void)
     return n;
 }
 
-static long pstore_count(void)
+/* Count records under a directory, recursing: systemd nests them under per-boot
+ * directories in some versions and writes them flat in others (this device is
+ * flat). Returns -1 if the directory does not exist, so the caller can tell
+ * "no archive" from "an empty archive". */
+static long pstore_count_dir(const char *path, int depth)
 {
-    DIR *d = opendir(PSTORE);
+    if (depth > 4)
+        return 0;                    /* archives are 2 levels at most; stay bounded */
+    DIR *d = opendir(path);
     if (!d)
-        return 0;
+        return -1;
     long n = 0;
     struct dirent *e;
-    while ((e = readdir(d)))
-        if (e->d_name[0] != '.')
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        char sub[512];
+        if (snprintf(sub, sizeof sub, "%s/%s", path, e->d_name) >= (int)sizeof sub)
+            continue;
+        struct stat st;
+        if (stat(sub, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode)) {
+            long k = pstore_count_dir(sub, depth + 1);
+            if (k > 0)
+                n += k;
+        } else {
             n++;
+        }
+    }
     closedir(d);
     return n;
+}
+
+/* The archive is persistent, so this is a running total across reboots rather
+ * than "dumps from the last crash". pstore_new still means "it grew since the
+ * previous sample", and prev_pstore starts at -1 so the first sample after a
+ * boot cannot fabricate one. */
+static long pstore_count(void)
+{
+    long n = pstore_count_dir(PSTORE, 0);
+    if (n >= 0)
+        return n;
+    /* No archive: either systemd-pstore is disabled or it has not run yet, in
+     * which case anything the kernel recovered is still sitting in pstorefs. */
+    n = pstore_count_dir(PSTORE_FS, 0);
+    return n < 0 ? 0 : n;
 }
 
 /* ---------- systemd over varlink: the last fork, removed ----------------- */

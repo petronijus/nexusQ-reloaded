@@ -23,7 +23,8 @@ echo "--- LED / nexusqd / AVR ---"
 echo "nexusqd=$(systemctl is-active nexusqd 2>/dev/null) librespot=$(systemctl is-active librespot 2>/dev/null) avr_irq=[$(grep -i steelhead-avr /proc/interrupts)]"
 echo "--- USB devices ---"
 ls /sys/bus/usb/devices/
-echo "--- pstore ---"; ls /sys/fs/pstore/ 2>/dev/null || echo "(empty)"
+# the archive, not pstorefs — systemd-pstore drains and unlinks the latter at boot
+echo "--- pstore (archive) ---"; ls /var/lib/systemd/pstore/ 2>/dev/null || echo "(empty)"
 } > $LOG 2>&1
 fi
 
