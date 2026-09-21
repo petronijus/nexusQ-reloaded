@@ -894,6 +894,57 @@ console to `/var/lib/systemd/pstore` so a hang leaves evidence (§4i).
 ever tell you what *userspace* asked for. The honest check that a state is live is
 `usage` moving, or `above`/`below` becoming non-zero.
 
+## 4l. ANSWERED: the deep C-states hang the board. Patch 0024's premise was right
+
+The experiment §4k called for was built, flashed and run. Kernel **6.18.48-r5** =
+the tree with patch 0024 **removed entirely**, so `cpuidle44xx.c` is pristine
+upstream and C2/C3 register enabled and governor-selectable from the first idle.
+Verified from the built image before flashing (disassembled `omap4_idle_init`: no
+`of_machine_*` guard, tail-call to `cpuidle_register`; state table read out of the
+binary showing `flags=0x42` = `COUPLED|TIMER_STOP` and `CPUIDLE_FLAG_OFF` set on
+nothing).
+
+**The board does not boot.** Both partitions flashed, five minutes of watching:
+
+```
+no ssh, no fastboot, no USB enumeration at all  (lsusb: nothing; /dev/ttyACM*: none)
+```
+
+Not a slow boot and not a WiFi problem — the USB gadget never appeared, so it hung
+before userspace. Recovery needed the manual palm-on-dome gesture from INSTALL.md §1
+(mains off, mains on, palm the moment the centre LED lights) and a reflash of the
+r4 acceptance pair, after which the unit came back clean: `running`, 0 failed units,
+modules matching, WiFi up, persist store intact.
+
+**So the long-standing claim is CONFIRMED, not retired.** Patch 0024 said the C2/C3
+MPUSS transitions fault on this HS part with SMP online. §4j had softened that to
+"not confirmed"; it is now confirmed by experiment. The patch stays, and the
+`CPUIDLE_FLAG_OFF` form is the right one to keep: identical safety to the old
+C1-only truncation, but the states exist with residency counters, which is what made
+this measurable at all.
+
+**The suspect, from the built binary:** both deep states carry
+`CPUIDLE_FLAG_COUPLED` and enter through `omap_enter_idle_coupled()` — the two cores
+must rendezvous. That is exactly the path stock 3.0.8 fenced off with
+`cpuidle44xx.disallow_smp_idle`, and exactly what patch 0009 (SEV in
+`prepare_wake_cpu1`) was written against. A single-core entry path was never the
+thing being tested.
+
+⚠️ **ramoops cannot help with this class of failure.** The archive was **empty**
+after recovery. Not a regression in §4i's fix: escaping the hang required pulling
+mains, and a cold start scrubs DRAM, so the ramoops region went with it. **Any hang
+that can only be escaped by a mains cycle is structurally un-post-mortem-able here.**
+A hang that a *warm* reset can escape still leaves a record; this one could not.
+
+**What would move it forward**, none of it cheap: make the deep states single-core
+(drop `CPUIDLE_FLAG_COUPLED`, offline CPU1 or gate entry on `cpu1` being down), or
+reproduce stock's `disallow_smp_idle` fence and find what it actually gated, or get
+a serial console so the hang can be watched instead of inferred. The first is the
+only one available without hardware Petr does not have.
+
+**R2 is therefore closed as attempted-and-blocked, and it no longer depends on R0.**
+The wakeup rate was never what stood in the way.
+
 ## Where this stands (end of 2026-09-20)
 
 **R0 — in progress, and it is not the bug hunt it looked like.** The two largest
@@ -913,11 +964,11 @@ unconditional (it was unreachable). Installed and verified on the device — idl
 no tap; a stream: tap on; stream ends: tap off within 3 s, sinks back to
 `SUSPENDED`.
 
-**R2 — unblocked, and it is the next rung.** It was gated on having a post-mortem
-for a hang. §4i settles that: ramoops works and always did, so a hang after
-registering C2/C3 is readable from `/var/lib/systemd/pstore/` on the next boot.
-Serial is still unavailable and always will be, so R2 must be attempted on the
-strength of ramoops alone.
+**R2 — ATTEMPTED AND BLOCKED (§4l).** Registering C2/C3 enabled hangs the board
+before userspace; recovery needed the manual palm gesture and a reflash. Patch
+0024's premise is confirmed, the patch stays in its `CPUIDLE_FLAG_OFF` form, and
+ramoops could not capture the hang because escaping it required a mains cycle,
+which scrubs DRAM. R2 no longer depends on R0.
 
 **Measured properly, 2026-09-21 19:36** — box up 20.5 h, `nexusqd` settled 19 h,
 tap correctly off, nothing playing:
