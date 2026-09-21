@@ -221,7 +221,23 @@ blind to nexusqd's writes — see the bug note below).
 
 **Crashes / kernel** — new error lines in `dmesg`
 (oops/WARN/stall/i2c-timeout/omap_voltage/brownout/thermal-shutdown) and
-`/sys/fs/pstore` (survives a *warm* reboot only).
+`/sys/fs/pstore`.
+
+> 🚨 **The pstore path is WRONG, and the tooling has not been fixed (2026-09-20).**
+> ~~`/sys/fs/pstore` (survives a *warm* reboot only)~~ — both halves are false.
+> ramoops captures crashes correctly and always did; `systemd-pstore.service`
+> copies every record to **`/var/lib/systemd/pstore/`** at boot and then
+> **unlinks it from pstorefs** (`Unlink=yes`, the default), so `/sys/fs/pstore`
+> is empty a second after boot **by design**. Consequently
+> `nq-healthd`'s `pstore_count()` (`#define PSTORE "/sys/fs/pstore"`), the
+> `pstore` telemetry field, the `pstore_new` crit event, `nq-diag-snapshot`'s
+> `PSTORE` section and `scripts/device-nexus-diag.sh` **all count an empty
+> directory and will report "no crash" forever** — including in the MQTT/Home
+> Assistant health panel. Until they are changed to read
+> `/var/lib/systemd/pstore/`, check by hand:
+> `ls -la /var/lib/systemd/pstore/` and
+> `grep -i "Kernel panic" /var/lib/systemd/pstore/dmesg-ramoops-*`.
+> Evidence and the full chain: `docs/2026-09-20-sleep-states-design.md` §4i.
 
 **WiFi (BCM4330)** — `iw dev wlan0 link` + gateway reachability. Ground truth as of
 **2026-08-02**: the long-uptime **5 GHz TX-dead wedge** (associated but 0 traffic,

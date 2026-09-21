@@ -18,10 +18,11 @@ tools: Bash, Read, Grep, Glob
 # Nexus Q Connect — find a working link, hand back the command
 
 Your one job: discover a working path to the **booted** Nexus Q and return
-"connect like this: `<cmd>`". The Prague device runs **mainline 6.18.48-r2**
-(the v1.17.0 kernel, kernel OTA + autopromote 2026-09-17, per PLAN.md); the
-current device package in the repo is **r103** (2026-09-19, dev — the per-unit
-persist store; Prague ran **r102** by OTA that night). The box is updated over the
+"connect like this: `<cmd>`". As of **2026-09-20** the Prague device runs
+**mainline 6.18.48-r3** (a dev kernel flashed that evening — `ramoops.mem_type=1`;
+the *released* kernel is `-r2`, the v1.17.0/v1.18.0 one), device **r104**,
+`nexusq-control` **r48** and `nexusqd` **r21** (r21 went on **by apk, no
+reflash** — it is not in the OTA repo, which carries `nexusqd` r20). The box is updated over the
 air, so package revisions move without a reflash — read them off the box
 (`apk info -v device-google-steelhead`, `uname -r`) rather than trusting any list
 written down here. Eth profiles have been baked since device r21 (in

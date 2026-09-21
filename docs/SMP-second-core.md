@@ -66,6 +66,12 @@ gap was purely in the *sequence* around those calls.
 3. **Network-independent observation.** The hang is silent and pre-console, and
    the device's network (eth/usb-gadget/wifi) was too flaky to drive a live test
    (`pstore` is useless here — the hang needs a power-cycle, which scrubs DRAM).
+   _(That parenthesis is **wrong, disproven 2026-09-20**: ramoops captures
+   crashes on this board and always did — the records are archived to
+   `/var/lib/systemd/pstore/` and unlinked from `/sys/fs/pstore` at boot, which
+   is why pstorefs always looked empty. The photographed-console method below is
+   still what was actually used; a post-mortem is available for any future
+   attempt. See `docs/2026-09-20-sleep-states-design.md` §4i.)_
    The trick that worked:
    - boot `maxcpus=1` (boots clean, single core),
    - `systemd.unit=multi-user.target` on the cmdline → **no desktop**, so the
@@ -205,7 +211,13 @@ Open items (tracked as tasks; see `docs/2026-06-22-smp-session-findings.md`):
 - **cpuidle:** ~~currently disabled (`cpuidle.off=1`, stock parity)~~ — as of
   2026-07-02 (in tree): **C1 (WFI) registered via patch 0024**, `cpuidle.off=1`
   dropped. Remaining: deep C2+ needs the HS secure dispatcher (0x1c/0x1d/0x21).
-  Low priority — the device meets its purpose without deep CPU idle.
+  ~~Low priority — the device meets its purpose without deep CPU idle.~~
+  **Re-prioritised 2026-09-20:** this is rung **R2** of the sleep-state ladder
+  (`docs/2026-09-20-sleep-states-design.md` §5) — C1 is the only state we ever
+  register, which is why the orb idles warm. It was additionally deferred on "a
+  hang cannot be debugged without serial"; that premise is gone (ramoops works,
+  §4i), so R2 is **unblocked**. R3 (`freeze`) and R4 (suspend-to-RAM) remain
+  blocked and measured: the TWL6030 cannot wake s2idle by construction.
 - **Ethernet** LAN9500A enumerates only intermittently; an in-driver reset
   (unbind/bind ehci-omap) is NOT enough (PORTSC CCS stays 0) — only a full cold
   power-off re-enumerates. Independent of SMP.

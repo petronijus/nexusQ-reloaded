@@ -56,6 +56,71 @@ This is rung **R0** of the sleep-state ladder
 (`docs/2026-09-20-sleep-states-design.md` §5): cutting the idle wakeup rate is
 the precondition for deep C-states being worth registering at all.
 
+### Changed — ramoops was never broken: the crash archive is `/var/lib/systemd/pstore` (kernel **6.18.48-r3**)
+
+Two sessions of analysis, one kernel cmdline change and the long-standing repo
+line "pstore does not survive a reset on this board" all rest on readings taken
+from **the wrong directory**. `systemd-pstore.service` runs at boot, copies every
+pstore record into `/var/lib/systemd/pstore/` and then **unlinks it from pstorefs**
+(`Unlink=yes`, the default) — so `/sys/fs/pstore` is empty a second after boot *by
+design*, and an empty one proves nothing at all.
+
+The records were there the whole time. A deliberate `sysrq` panic on 2026-09-20 was
+captured in full:
+
+```
+/var/lib/systemd/pstore/dmesg-ramoops-0     76075 B   <0>[  138.811279] Kernel panic - not syncing: sysrq triggered crash
+                                                      <4>[  138.831604]  unwind_backtrace from show_stack+0x10/0x14
+/var/lib/systemd/pstore/console-ramoops-0   19357 B   all 300 injected probe lines + "Rebooting in 120 seconds.."
+```
+
+So the chain of reasoning behind it inverts: the zone counters reading 0 in raw
+DRAM after a reset is **ramoops having already recovered the buffer**, handed it to
+pstore and zapped the zone for reuse (`persistent_ram_zap()` rewrites the signature
+and zeroes the counters *without* clearing the payload) — not a write that never
+landed. Nothing was ever lost.
+
+- **Kernel `6.18.48-r3`** adds `ramoops.mem_type=1` (noncached) to `CONFIG_CMDLINE`
+  — built and flashed as the candidate fix for a bug that did not exist. It is
+  harmless and stays, but it is **unproven, not a fix**: whether `mem_type=0` works
+  equally well was never tested, because the test was "is `/sys/fs/pstore`
+  non-empty". `CONFIG_CMDLINE_FORCE=y`, so the string had to go in the defconfig,
+  and both dev repack scripts carry the same one.
+- **How to read a crash on this device:** `ls -la /var/lib/systemd/pstore/` and
+  `grep -i "Kernel panic" /var/lib/systemd/pstore/dmesg-ramoops-*`. Never
+  `/sys/fs/pstore`, and never read an empty pstorefs as "the reset was clean".
+- **What it unblocks:** rung **R2** of the sleep ladder (register C2/C3). It was
+  deferred on "no serial console, so a hang cannot be debugged blind"; a hang is now
+  readable from the archive on the next boot. Serial remains unavailable and always
+  will be, so R2 rests on ramoops alone.
+
+Two probe traps that manufactured the wrong answer, both repeated before being
+spotted: `loglevel=4` filters a `<4>` message away from every console, ramoops
+included (only `<1>` and friends land); and an `until ssh true` loop connects to the
+*still-running* system before a backgrounded reboot lands — confirm a reset by
+`boot_id` or uptime, never by reachability.
+
+Full record: `docs/2026-09-20-sleep-states-design.md` §4i (§4f and §4g are marked
+superseded in place); B16 in `docs/2026-07-02-boot-error-inventory.md` is resolved.
+
+#### Known issues opened by this
+
+- **The diag tooling all reads `/sys/fs/pstore`, so it can never see a crash.**
+  `nq-healthd` (`PSTORE "/sys/fs/pstore"`, `pstore_count()`, the `pstore_new` crit
+  event and the `pstore` telemetry field), `nq-diag-snapshot`'s `PSTORE` section and
+  `scripts/device-nexus-diag.sh` all count an empty directory and report 0 forever —
+  including through the MQTT/Home-Assistant health panel. Not fixed here (a code
+  change, not a doc one): they need to read `/var/lib/systemd/pstore/`.
+- **A flash wipes the crash history.** `/var/lib/systemd/pstore/` is on the rootfs.
+  It belongs in the per-unit persist store next to the ssh host keys and BT bonds.
+
+## [1.18.0] — 2026-09-20 — the output that was never offered
+
+Device **r104**, `nexusq-control` **r48**, companion app **1.22.0+60**; kernel
+**6.18.48-r2** unchanged from v1.17.0, as is everything else. Released 2026-09-20
+with `nexusq-boot-v1.18.0.img` (6.41 MiB) + `nexusq-rootfs-v1.18.0-sparse.img.zst`
+(675 MiB). Closes the substance of GitHub issue #5.
+
 ### Added — HDMI is an audio output you can actually pick (device r104, nexusq-control r48)
 
 Closes the substance of GitHub issue #5, where a user with a Yamaha RX-V473 and
@@ -192,7 +257,9 @@ helpers are *not* on `Mixer`, and that a failure anywhere in the switch puts the
 display back down (the live failure left the hold running). All new tests were
 seen failing against deliberately mutated code before being kept.
 
-### Fixed — the Roon now-playing gate crashed on every Roon event since r45 (nexusq-control r47, not yet published)
+### Fixed — the Roon now-playing gate crashed on every Roon event since r45 (nexusq-control r47, rolled into r48)
+
+_(Heading said "not yet published" when written on 2026-09-19; the fix shipped inside `nexusq-control` **r48** with v1.18.0 on 2026-09-20.)_
 
 `Pulse.source_state()` called `.splitlines()` on the `CompletedProcess` that
 `_pactl()` returns, so every call raised `AttributeError` — inside the MQTT

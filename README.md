@@ -74,7 +74,7 @@ notes in [`docs/`](docs/).
 | ⏰ **RTC** (TWL6030) | ✅ | runs since kernel 6.18.48-r2 (v1.17.0) — MSECURE was never driven high, so every RTC write was dropped. Time now survives a reboot (measured); no backup cell, so a mains unplug still resets it until NTP |
 | 📡 **NFC tap-to-send** (PN544) | ✅ | reverse-HCE — the phone hosts the card, the Q is the ISO-DEP reader (patch 0037) · v1.7.0 |
 | 🎮 **GPU / 3D acceleration** (PowerVR SGX540) | ❌ | no mainline GLES driver exists for Imagination Series5 — Mesa's open `powervr` covers Rogue (Series6+) only. Everything renders on the CPU; KMS/display via `omapdrm` is unaffected. A port is feasible (GPL `pvrsrvkm` module + version-matched TI DDK blobs, as on the Motorola Droid 4) but unbuilt — [research note](docs/2026-06-19-gpu-sgx540-acceleration-research.md) |
-| 🔈 **HDMI audio** | ✅ | selectable output since device r104 — `nq-hdmi` holds the video output up (HDMI carries audio only inside a video stream) and CEC asks the sink to select us. Offered only when the EDID says the sink takes audio. A sink already asleep must be switched on by hand: the PHY needs an HPD-driven LINK_CONNECT and CEC needs an EDID |
+| 🔈 **HDMI audio** | ✅ | selectable output since v1.18.0 — the video output is held up (HDMI carries audio only inside a video stream), offered only when the EDID says the sink takes audio; a sleeping sink must be switched on by hand |
 | 🌐 **Ethernet** (LAN9500A) | ✅ | cold-boot reliable since v1.6.8 (pinmux); the default deploy path (~80 Mbit/s); no MAC EEPROM → random MAC per boot |
 | 💿 **TOSLINK / SPDIF** | ✅ | mainline McASP DIT, selectable output; PA pinned to 48 kHz so the DIT locks · v1.6.15 |
 | 🎧 **TWL6040 headset codec** | ⚪ | unpopulated/unused on steelhead by design — the stock kernel never drove it |
@@ -251,7 +251,9 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.15.1 ─ ✦ a PulseAudio input could be dragged onto another source — pinned       2026-09-01
 1.15.2 ─ ✦ six days dark: the watchdog reconnects a stranded wlan0 · kernel OTA keeps the unit's identity   2026-09-05
 1.16.0 ─ ✦ the health monitor logged in 830× · the ring never idled — idle CPU 1.60 → 0.05 %   2026-09-16
-1.17.0 ─ ✦ the clock starts: the RTC never ran — MSECURE never driven high (pad 0x050→0x054)   2026-09-18   ← latest tag
+1.17.0 ─ ✦ the clock starts: the RTC never ran — MSECURE never driven high (pad 0x050→0x054)   2026-09-18
+1.18.0 ─ ✦ HDMI audio: the output that was never offered — issue #5                 2026-09-20   ← latest tag
+(dev) ── ✦ ramoops was never broken — the crash archive is /var/lib/systemd/pstore   2026-09-20
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

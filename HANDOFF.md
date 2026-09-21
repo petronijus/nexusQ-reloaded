@@ -184,6 +184,135 @@ authenticates nobody — anyone could sign a substitute update. A real keystore
 
 ---
 
+## Session 2026-09-20/21: **v1.18.0 released (HDMI audio) · sleep-state ladder designed and measured · ramoops was never broken — the crash archive is `/var/lib/systemd/pstore` · `nexusqd` r21**
+
+Desktop PC. Nothing pushed at the time of writing: HEAD `37da04a` on `main`, tree
+clean, five commits of today local only (`5d2d4c0`, `e6a2913`, `58f4d02`,
+`40fac0e`, `37da04a`) on top of the released tag.
+
+### Released: v1.18.0 (2026-09-20 13:03 UTC)
+
+`f517745`, tag **v1.18.0** — HDMI becomes a selectable audio output (device
+**r104**, `nexusq-control` **r48**, app **1.22.0+60**, kernel `6.18.48-r2`
+unchanged). GitHub release published with `nexusq-boot-v1.18.0.img`,
+`nexusq-rootfs-v1.18.0-sparse.img.zst`, `sha256sums-v1.18.0.txt`. Full story:
+CHANGELOG **[1.18.0]** + `docs/2026-09-20-hdmi-audio-the-output-that-was-never-offered.md`.
+_(The CHANGELOG still carried these entries under `[Unreleased]`, and README still
+called v1.17.0 the latest tag, until the 2026-09-21 doc sweep — see "Docs" below.)_
+
+### 🔴 ramoops was never broken — and this invalidates guidance in several places
+
+`systemd-pstore.service` copies every pstore record to `/var/lib/systemd/pstore/`
+at boot and then **unlinks it from pstorefs** (`Unlink=yes`, the default). So
+`/sys/fs/pstore` is empty a second after boot **by design**, and an empty one is
+evidence of nothing. Every "pstore is EMPTY" reading behind §4f/§4g of the sleep
+doc and behind B16 came from that drained directory; two sessions of theory
+("DRAM is scrubbed", then "the zone header is lost") and one kernel cmdline fix
+were built on it.
+
+A deliberate `sysrq` panic is captured in full:
+`/var/lib/systemd/pstore/dmesg-ramoops-0` (76 075 B, `Kernel panic - not syncing:
+sysrq triggered crash` + `unwind_backtrace`) and `console-ramoops-0` (19 357 B,
+all 300 injected probe lines). Zone counters reading 0 in raw DRAM after a reset
+is ramoops having **already recovered** the buffer and zapped the zone
+(`persistent_ram_zap()` rewrites the signature and zeroes the counters without
+clearing the data) — the success state, not the failure one.
+
+- **How to read a crash here:** `ls -la /var/lib/systemd/pstore/`, then
+  `grep -i "Kernel panic" /var/lib/systemd/pstore/dmesg-ramoops-*`. **Never**
+  `/sys/fs/pstore`, and never read an empty pstorefs as "the reset was clean".
+- **Kernel `6.18.48-r3`** ships `ramoops.mem_type=1` in `CONFIG_CMDLINE`
+  (`CONFIG_CMDLINE_FORCE=y`, so it cannot come from the boot header; both dev
+  repack scripts carry the same string). It was the candidate fix for a bug that
+  did not exist — harmless, kept, and **unproven**: `mem_type=0` was never
+  retested, because the test was "is `/sys/fs/pstore` non-empty".
+- **⚠️ Tooling gap, NOT fixed (needs a code change):** `nq-healthd`
+  (`#define PSTORE "/sys/fs/pstore"`, `pstore_count()`, the `pstore_new` crit
+  event and the `pstore` MQTT/HA field), `nq-diag-snapshot`'s `PSTORE` section and
+  `scripts/device-nexus-diag.sh` all read the drained directory — so the fleet
+  reports "no crash" forever. They must read `/var/lib/systemd/pstore/`.
+- **⚠️ Follow-up, not done:** `/var/lib/systemd/pstore/` is on the **rootfs**, so a
+  flash wipes the crash history. It belongs in the `cache`-partition persist store
+  next to the ssh host keys and BT bonds (device r103 machinery).
+- **Two probe traps, both repeated before being spotted:** `loglevel=4` filters a
+  `<4>` message away from every console including ramoops (only `<1>` and friends
+  land), and an `until ssh true` loop connects to the **still-running** system
+  before a backgrounded reboot lands — confirm a reset by `boot_id` or uptime,
+  never by reachability.
+
+### Sleep states: the ladder, and where it stands
+
+`docs/2026-09-20-sleep-states-design.md` is the single home for this (§1-§5 plus
+§4i and "Where this stands"). Summary only:
+
+- **R0 (cut the wakeup rate) is a design decision, not a bug hunt.** The two
+  largest idle wakeup sources are deliberate: shairport-sync's `alsa_buf_mon`
+  (~29-35/s, unconditional ~11.6 ms poll, no knob — a package patch) and
+  `nq-uac2-silence`'s `arecord` on the aloop (~6-9/s, held open while ASLEEP by
+  design so the first non-zero frame wakes promptly). Both trade wakeups for wake
+  latency on purpose. How much latency we give up for depth is **Petr's call, not
+  made**.
+- **R2 (register C2/C3) is UNBLOCKED** now that ramoops is known to work: a hang
+  is readable from the archive on the next boot. Serial is still unavailable and
+  always will be, so R2 rests on ramoops alone. The old standing note "deep
+  cpuidle C2+ BLOCKED on serial — do not re-attempt blind" is **retired**.
+- **R3/R4 stay blocked, measured** — the TWL6030 cannot wake s2idle by
+  construction; everything up to `syscore_suspend()` works.
+- ⚠️ **Do not quote the 308 exits/s reading.** It is contaminated (`nexusqd` had
+  restarted ~2 min earlier, screensaver still animating into the AVR over i2c).
+  **466 exits/s** (§4h) is the last trustworthy number; a re-run needs **>300 s of
+  settle** after any daemon restart.
+
+### `nexusqd` r21 — the gate's safety net is no longer unreachable
+
+`PA_SAFETY_ON_S` was dead code: the timed net ran only while the tap was off, or
+while the tap was on *and* the capture had read raw-silent, and neither exit can
+be taken when a `module-loopback` stream ends by **corking** (a `'change'`, not a
+membership event) and a suspended sink's monitor delivers no samples. It is now
+unconditional. The decision moved out of the main loop into two pure functions,
+`pa_gate_poll_due()` and `pa_gate_next_deadline()`
+(`userspace/nexusqd/include/audio.h`), because the tests link `$(SRC)` without
+`nexusqd.c`; `tests/test_audio_gate.c` covers the wedged state and a 10-minute
+idle simulation (re-count rate stays ~1/min), seen failing against the old
+behaviour first.
+
+⚠️ **This is HARDENING, not a measured bug fix — keep that framing.** The
+motivating observation ("`arecord` alive with 0 uncorked sink-inputs") was a
+**misattribution**: that `arecord` was `-D hw:Loopback,1,0`, ppid
+`python3 /usr/bin/nq-uac2-silence`, cgroup `nexusq-uac2-in.service`. There was no
+`arecord -D pulse` on the box at all; nexusqd's gate had been correct the whole
+time. **The lesson, now in the diag briefs: check an `arecord`'s `-D` argument and
+its ppid before attributing it to a daemon — three services on this box spawn
+one.** The documented idle tell "arecord running at idle = the LED gate regressed"
+was therefore wrong on its own and has been corrected.
+
+Verified on the device after the apk install: idle → no tap; a stream → tap on;
+stream ends → tap off within 3 s, sinks back to `SUSPENDED`.
+
+### Device and build state at hand-back
+
+- The Q runs kernel **`6.18.48-r3`**, device **r104**, `nexusq-control` **r48**,
+  `nexusqd` **r21** — r21 went on **by apk, the box was not reflashed**.
+- A full image passing the **29/29** verification gate exists but was **not
+  released** (no tag, no OTA publish):
+  `output/nexusq-boot-2026-09-20-nexusqd-r21.img` (6 717 440 B, carries the
+  `ramoops.mem_type=1` cmdline — checked) +
+  `output/nexusq-rootfs-2026-09-20-nexusqd-r21-sparse.img`, sha256 in
+  `output/nexusq-2026-09-20-nexusqd-r21.sha256`.
+- Neither `nexusqd` r21 nor kernel `6.18.48-r3` is in the OTA repo; the fleet is
+  on the v1.18.0 set.
+
+**Docs (2026-09-21 sweep):** CHANGELOG gained the `## [1.18.0]` section (its
+entries had been left under `[Unreleased]` after the release) and a `[Unreleased]`
+entry for the ramoops resolution; README's milestone list and HDMI row caught up
+to v1.18.0; PLAN gained the sleep-ladder / ramoops / v1.18.0 blocks and its deep-idle
+item is no longer "blocked on serial"; the pstore guidance was corrected in
+`.claude/skills/nexusq-diag/SKILL.md`, `.claude/agents/nexusq-diag.md`,
+`scripts/diag/README.md`, `docs/SMP-second-core.md` and in the two stale places in
+this file.
+
+---
+
 ## Session 2026-09-19: **the Prague Q takes r7 + r102 · why USB Audio was off · device r103: a per-unit persist store on the `cache` partition**
 
 Short session on the desktop PC, picking up the one open handover (Colony
@@ -3361,6 +3490,15 @@ progress separately (**no tag from here**). Full note:
   resume and debugging a resume hang blind (no console; pstore doesn't survive the
   DRAM re-init) is impractical. **Deferred until serial exists — do not re-attempt
   C2+ blind.**
+  > ⚠️ **Half of this is disproven (2026-09-20).** "pstore doesn't survive the DRAM
+  > re-init" was **false** — ramoops captures crashes correctly and always did; the
+  > records are archived to `/var/lib/systemd/pstore/` and unlinked from
+  > `/sys/fs/pstore` by `systemd-pstore.service` at boot, which is the empty
+  > directory everything was read from. So C2/C3 (rung **R2**) is **no longer
+  > blind and no longer deferred** — a hang is readable on the next boot. Serial
+  > is still unavailable and always will be. The suspend-to-RAM half stands:
+  > s2idle/`deep` cannot wake, by construction (TWL6030). See
+  > `docs/2026-09-20-sleep-states-design.md` §4i + "Where this stands".
 - **The 3 genuinely-external residuals (honest, not cleanly fixable):**
   (1) **eth-lan DHCP fail** on a DHCP-less direct PC cable — environmental
   (`autoconnect=false` would break real-LAN plug-and-play); (2) **kscreen
@@ -4405,7 +4543,11 @@ Built and flashed kernel **#4** (`6.12.12`), verified live over the USB gadget
   The old "software reboot re-enters fastboot" note applied to panic-reboots
   and `fastboot reboot`, NOT to a clean systemd reboot.
 - pstore/ramoops configured in cmdline (last 1 MB of RAM, mem=1008M) --
-  survives warm reboots only
+  ~~survives warm reboots only~~ **disproven 2026-09-20: ramoops captures
+  crashes across a reset too; the records are archived to
+  `/var/lib/systemd/pstore/` and unlinked from `/sys/fs/pstore` at boot, so the
+  empty pstorefs everyone read proved nothing.** See
+  `docs/2026-09-20-sleep-states-design.md` §4i.
 
 ### Current images
 - boot: `output/boot-wifi-v5.img` (GCC 13.3, gzip, no initramfs,
@@ -4418,7 +4560,9 @@ Built and flashed kernel **#4** (`6.12.12`), verified live over the USB gadget
 ### Known issues / next steps
 1. **Intermittent boot failure** (~1 in 3 boots: black screen, retry helps).
    Unexplained. Candidates: U-Boot flakiness, DRAM init, kernel race.
-   pstore won't help across cold cycles. Consider UART2/3 serial console.
+   ~~pstore won't help across cold cycles.~~ (Disproven 2026-09-20 — pstore
+   works; look in `/var/lib/systemd/pstore/`, not `/sys/fs/pstore`.)
+   Consider UART2/3 serial console.
 2. WiFi: NetworkManager connection profile not yet configured (needs SSID
    + password). brcmfmac autoloads on boot; firmware+nvram persist in rootfs.
 3. Bluetooth: bcm4330.hcd recovered; hci_bcm + UART2 wiring in DTS untested.

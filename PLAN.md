@@ -3,6 +3,66 @@
 Status as of **2026-06-10** (after the boot/WiFi debugging session, see
 HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
+> ## 🎯 IN PROGRESS (2026-09-20/21) — sleep states: the ladder, and where it stands
+>
+> The Q never asks for MPU/CORE retention: C1 (WFI) is the only state registered,
+> so the orb idles warm. The design is a **ladder** (R0 cut the wakeup rate → R2
+> register C2/C3 → R3 `freeze` → R4 suspend-to-RAM), each rung independently
+> useful. → `docs/2026-09-20-sleep-states-design.md`
+>
+> - **R0 — a design decision, not a bug hunt.** The two largest idle wakeup
+>   sources are deliberate: shairport-sync's `alsa_buf_mon` (~29-35/s,
+>   unconditional ~11.6 ms poll, no knob — needs a package patch) and
+>   `nq-uac2-silence`'s `arecord` on the aloop (~6-9/s, owns it while ASLEEP by
+>   design so a first non-zero frame wakes promptly). Both trade wakeups for wake
+>   latency on purpose, so the open question is **how much wake latency we give up
+>   for depth — Petr's call, not made.** Shipped on this rung: `nexusqd` **r21**
+>   (the sink-input gate's timed safety net was unreachable; now unconditional),
+>   installed by apk and verified on the device.
+> - **R2 — UNBLOCKED, and the next rung.** It was deferred on "no serial console,
+>   so a hang after registering C2/C3 cannot be debugged blind". **ramoops works
+>   and always did** (see the block below), so a hang is readable from
+>   `/var/lib/systemd/pstore/` on the next boot. Serial stays unavailable forever;
+>   R2 rests on ramoops alone.
+> - **R3 / R4 — BLOCKED, measured.** `freeze` hangs the box and suspend-to-RAM
+>   never comes back: the TWL6030 cannot wake s2idle by construction. Everything up
+>   to `syscore_suspend()` works — the failure is localised, not universal.
+> - ⚠️ **Do not quote 308 exits/s.** That 2026-09-20 reading is contaminated
+>   (`nexusqd` had restarted ~2 min earlier, screensaver still animating into the
+>   AVR over i2c). **466 exits/s** (§4h) is the last trustworthy figure, and a
+>   re-run needs **>300 s of settle** after any daemon restart.
+
+> ## ✅ RESOLVED (2026-09-20) — ramoops was never broken; the crash archive is `/var/lib/systemd/pstore`
+>
+> `systemd-pstore.service` copies every record out of pstorefs at boot and
+> **unlinks it** (`Unlink=yes`), so `/sys/fs/pstore` is empty by design — every
+> "pstore is EMPTY" reading, and the two sessions of theory built on them, came
+> from the wrong directory. A deliberate `sysrq` panic was captured in full
+> (`dmesg-ramoops-0`, 76 kB, panic line + `unwind_backtrace`). Kernel
+> **6.18.48-r3** carries `ramoops.mem_type=1`, built as the fix for a bug that did
+> not exist: harmless, kept, **unproven**. → CHANGELOG [Unreleased] ·
+> `docs/2026-09-20-sleep-states-design.md` §4i · B16 in
+> `docs/2026-07-02-boot-error-inventory.md`
+> ⚠️ Open (forward-looking): **the diag tooling reads `/sys/fs/pstore`** —
+> `nq-healthd` (`pstore` field, `pstore_new` crit), `nq-diag-snapshot` and
+> `scripts/device-nexus-diag.sh` therefore report "no crash" forever, HA panel
+> included; they must read `/var/lib/systemd/pstore/`. And that directory is on
+> the **rootfs**, so a flash wipes the crash history — it belongs in the per-unit
+> persist store next to the ssh host keys and BT bonds.
+
+> ## ✅ SHIPPED (2026-09-20, v1.18.0 — device r104 · nexusq-control r48 · app 1.22.0+60) — HDMI audio: the output that was never offered
+>
+> GitHub issue #5. The hardware path had always worked; the app could never show
+> HDMI (the row was dropped whenever PA had no sink for the deliberately
+> `PULSE_IGNORE`'d card) and HDMI audio needs the HDMI **video** output running,
+> which on this appliance it is not. `nq-hdmi` holds it up, `nq-cec` claims a
+> logical address and announces us, `outputsChanged` pushes availability. Kernel
+> **6.18.48-r2** unchanged. → CHANGELOG [1.18.0] ·
+> `docs/2026-09-20-hdmi-audio-the-output-that-was-never-offered.md`
+> ⚠️ Open (forward-looking): the Q **cannot wake a sink that has dropped HPD**
+> (measured, by forcing the PHY to `TXON` behind the driver — the sink never
+> noticed); receivers that keep HPD asserted in standby should answer CEC.
+
 > ## ✅ DONE (dev, 2026-09-19 — device r103 · nexusq-control r46 · nexusq-setupd r5) — the flash that forgot the unit
 >
 > A per-unit **persist store** on the `cache` partition (p12, ext4 `nq-persist`
@@ -33,8 +93,11 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > our DTS named the signal on pad `0x050`, referenced by nothing. **Fixed in
 > kernel 6.18.48-r2** (DTS only), delivered to the Prague Q by kernel OTA and
 > autopromoted to slot A the same evening; RTC verified running.
-> ⚠️ Open (forward-looking): the r2 apk is **not published** to the OTA repo and
-> no release is cut; the cottage Q is still on v1.15.2 (r1 units keep the
+> ⚠️ Open (forward-looking): ~~the r2 apk is **not published** to the OTA repo and
+> no release is cut~~ — both done since: v1.17.0 was tagged 2026-09-17 and
+> `linux-google-steelhead-6.18.48-r2.apk` is live in the OTA repo (verified on
+> `gh-pages` 2026-09-21, alongside device r104 / `nexusq-control` r48 /
+> `nexusqd` r20). The cottage Q is still on v1.15.2 (r1 units keep the
 > build-epoch clock until they take the kernel OTA); there is no backup cell, so
 > a mains unplug still resets the RTC until NTP — `/usr/lib/clock-epoch` stamped
 > with the image build date remains the cheap, optional interim for that window.
@@ -2008,7 +2071,7 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 | RTC (TWL6030) | ✅ **runs since kernel 6.18.48-r2** _(v1.17.0)_ | The counter never ran from the initial import until r2 (`RTC_CTRL_REG` 0x48:0x10 stuck at `0x00`, `since_epoch` frozen at 946684800, `hwclock -r` timing out — found 2026-09-16, "queued" until 2026-09-17): the TWL6030 drops every RTC write while **MSECURE** is low, and our DTS muxed the msecure group to pad `0x050` instead of stock's `0x054` (gpio_wk6) with no hog. Fixed DTS-only (`msecure_pins` 0x054 + `msecure_hog` + `&twl pinctrl-0` override), verified on the Prague Q: `gpio-6 (msecure) out hi`, `0x10 = 0x01`, `since_epoch` advancing, `hwclock -r` real time. No backup cell: warm reboots keep time, a mains unplug resets it to 2000-01-01 until NTP (`twl_rtc … Power up reset detected.` is the expected notice then). `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum | _(Updated 2026-07-02)_ `lm75` autoloads, `hwmon0: sensor 'tmp101'` (though `temp1_input not attached to any thermal zone`) |
 | LED ring (32× RGB) | ✅ works | our in-tree driver `leds-steelhead-avr` (patch 0005, rebased onto every kernel — 6.18.48 today; Plan 1, merged, auto-loads) + `nexusqd` daemon (Plan 2: idle glow, themes, CLI, autostart) -- behind `steelhead-avr` MCU (i2c `1-0020`). _(Updated 2026-07-01, v1.6.5:_ the ring **no longer goes dark after long idle** — the AVR fw starves without periodic frame commits; `nexusqd` now sends a 1 Hz keepalive re-commit. Color themes now **breathe** the hue (`nexusqd breathe R G B`) and the 5 music visualisations are app-selectable. See `docs/2026-07-01-led-ring-avr-starvation-keepalive.md` + `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.) |
 | Ethernet (LAN9500A) | ✅ works from cold | _(✅ FULLY FIXED 2026-07-06, task #17 CLOSED — was "🟠 enumeration intermittent" 2026-07-05, briefly "CLOSED" 2026-07-04, "🟠 sw bug", and a wrong "dead hardware" verdict)_ fixed in v1.1.0/v1.3.0 (patches 0006/0012), **regressed** in v1.4.0, enumeration+carrier **came back with batch 2b/`#29`** (2026-07-03), the "flap" was root-caused 2026-07-04 as **NM's serverless-DHCP retry loop** (fixed by baked eth0 NM profiles, device r21, v1.6.7: `no-auto-default=eth0` + `eth-lan` + `eth-direct` static + host `eth-direct-host`; `ssh root@10.42.0.2` works). The **enumeration** half was root-caused 2026-07-06 as a **pinmux miss**: `gpio_1` NENABLE = pad `kpd_col2` @ padconf `0x186`, which `ethernet_gpios` never muxed → gpiolib drove the DATAOUT latch (debugfs "asserted") but the pad stayed safe_mode → chip never powered → CCS=0 (the "0/3 vs 3/3" was stock priming, not a race). Fixed by the DTS pad mux (patch 0003, kernel `#33`, commit e33a1b4; 2500ms settle reverted as a false positive). **Gold-validated:** clean flash + true cold power-cycle → `eth0` 100Mbps/Full, 0 failed units. Ships v1.6.8. Caveat: no MAC EEPROM → random hw MAC per boot (LAN lease changes; pin a cloned MAC if needed). `docs/2026-07-06-eth-coldinit-resolved.md` (+ `docs/2026-07-04-ethernet-resolved-and-led-guard.md` for the NM half) |
-| SMP (2nd core) | ✅ works | _(Updated 2026-06-28)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare + `cpuidle.off=1`; `nproc=2` re-confirmed live. See `docs/SMP-second-core.md` |
+| SMP (2nd core) | ✅ works | _(Updated 2026-09-20)_ dual-core since v1.2.0 — patch 0009 `dsb_sev()` in prepare; `nproc=2` re-confirmed live. ~~`cpuidle.off=1`~~ was dropped 2026-07-02 for a **C1-only (WFI)** driver, patch 0024 — C1 is still the only state registered, which is rung R2's whole subject (`docs/2026-09-20-sleep-states-design.md`). See `docs/SMP-second-core.md` |
 
 ## Plan (by priority)
 
@@ -2261,13 +2324,17 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `cpuidle/state0` = "C1 - CPUx ON, MPUSS ON", governor `menu`, no
       registration error.
 - [ ] follow-on: deep idle C2+ — stock has C1–C4 but C2+ traps into the HS
-      secure dispatcher (services 0x1c/0x1d/0x21); a dedicated future project.
-      **BLOCKED on serial-console access (2026-07-06):** the code path is feasible
-      (mainline has the OMAP4460 HS secure idle dispatcher) but the suspend-to-RAM
-      de-risk step **HUNG on resume**, and there is **no serial console** on this
-      device (fastboot + ssh + stock/our build only; pstore doesn't survive the
-      DRAM re-init) to debug a resume hang blind. Deferred until serial exists —
-      do NOT re-attempt C2+ blind.
+      secure dispatcher (services 0x1c/0x1d/0x21); this is **rung R2** of the
+      sleep ladder, `docs/2026-09-20-sleep-states-design.md` §5.
+      ~~**BLOCKED on serial-console access (2026-07-06):** … pstore doesn't
+      survive the DRAM re-init …~~ — **UNBLOCKED 2026-09-20.** The premise was
+      false: ramoops captures crashes correctly and always did, and the archive is
+      `/var/lib/systemd/pstore/` (§4i), so a hang after registering C2/C3 is
+      readable on the next boot. There is still **no serial console** and there
+      never will be (fastboot + ssh only), so R2 rests on ramoops alone — but
+      "do NOT re-attempt C2+ blind" no longer applies: it is no longer blind.
+      Note R3 (`freeze`) and R4 (suspend-to-RAM) *are* blocked, measured — the
+      TWL6030 cannot wake s2idle by construction (§4c/§4d).
 
 ### 11. Companion app + LAN control bridge  ✅ DONE 2026-06-30 (v1.6.3)
 A modern phone/desktop remote for the Q + the on-device bridge it talks to — replacing

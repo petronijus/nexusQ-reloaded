@@ -63,6 +63,12 @@ established this session, so we don't lose the thread again.
 ## F. Observability — the real blocker
 - **pstore/ramoops does NOT survive reboot** (DRAM scrubbed), and a hang needs a
   power-cycle anyway → pstore is useless for this hang.
+  > ⚠️ **Disproven 2026-09-20** (left in place as the record of what was believed
+  > at the time): ramoops captures crashes on this board and always did. Every
+  > "pstore is empty" reading came from `/sys/fs/pstore`, which
+  > `systemd-pstore.service` drains and unlinks at boot after archiving each
+  > record to **`/var/lib/systemd/pstore/`**. A deliberate `sysrq` panic was
+  > recovered in full. See `docs/2026-09-20-sleep-states-design.md` §4i.
 - The intended method — boot `maxcpus=1`, trigger CPU1 at runtime
   (`echo 1 > /sys/devices/system/cpu/cpu1/online`), read the synchronous
   `pr_emerg` milestones (patch 0009) off the HDMI text console — is sound, but we

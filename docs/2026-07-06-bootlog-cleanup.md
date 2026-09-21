@@ -192,6 +192,14 @@ suspend-to-RAM de-risk step **HUNG on resume**, and debugging a resume hang blin
 (no console, pstore doesn't survive the DRAM re-init) is impractical. **Deferred
 until serial exists** — do not re-attempt C2+ blind.
 
+> ⚠️ **The pstore half is disproven, 2026-09-20** (original text kept as the
+> record): ramoops works and always did — records are archived to
+> `/var/lib/systemd/pstore/` and unlinked from `/sys/fs/pstore` at boot, which is
+> why pstorefs always read empty. So deep cpuidle C2/C3 (rung **R2** of
+> `docs/2026-09-20-sleep-states-design.md`) is **no longer blind and no longer
+> deferred**; there is still no serial console and never will be. The
+> suspend-to-RAM half stands: s2idle/`deep` cannot wake, by construction (§4c/§4d).
+
 ### The 3 genuinely-external residuals (honest)
 
 1. **eth-lan DHCP fail on a DHCP-less direct PC cable** — environmental;

@@ -41,6 +41,12 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
 - from **nq-healthd**'s latest `health.jsonl` sample (only when fresh, ≤60 s):
   `temp_c`, `freq_mhz`, `governor`, `load1`, `mem_avail_mb`, `nexusqd_alive`,
   `led_stall`, **`led_stalled`**, `dmesg_err`, `pstore`
+  > ⚠️ **`pstore` is always 0 and means nothing (2026-09-20).** `nq-healthd`
+  > counts `/sys/fs/pstore`, which `systemd-pstore.service` drains and unlinks at
+  > boot after archiving every record to `/var/lib/systemd/pstore/`. So the field
+  > (and the `pstore_new` crit event behind it) can never fire, and a crash is
+  > invisible to HA. Fix belongs in `nq-healthd`; see
+  > `docs/2026-09-20-sleep-states-design.md` §4i.
 - **`led_stalled` (bool) is the LED VERDICT — consumers must read this, never
   `led_stall`** (added **r2**, 2026-08-13):
 

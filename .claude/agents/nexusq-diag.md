@@ -501,6 +501,14 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   an `arecord` appears and the sink is **RUNNING**; **after** playback it re-gates off
   ~4 s later → SUSPENDED. Idle showing arecord running / sink IDLE / nexusqd ~7 % =
   the gate regressed. nexusqd depends on `pulseaudio-utils` (pactl).
+  🚨 **Corrected 2026-09-20 — an `arecord` at idle is NOT enough to convict the
+  gate.** Three services here spawn an `arecord`; only **`arecord -D pulse`** is
+  nexusqd's tap. `nq-uac2-silence` (`nexusq-uac2-in.service`) keeps
+  **`arecord -D hw:Loopback,1,0`** open **by design** while ASLEEP, so it wakes on
+  the first non-zero frame. **Check the `-D` argument and the ppid/cgroup**
+  (`ps -o pid,ppid,args`) before attributing one — reading that process as the LED
+  tap produced a confident wrong diagnosis (CHANGELOG, `nexusqd` r21, which is
+  hardening rather than the bug fix it was first written up as).
   🆕 **The gate is EVENT-DRIVEN since nexusqd r13 (2026-08-13).** It used to poll
   `pactl list short sink-inputs` every `PA_POLL_S`=1.5 s while the tap was off —
   ~0.67 forks/s around the clock, and every one of those short-lived clients also
@@ -664,7 +672,16 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   ℹ️ healthd's `dmesg_err` matcher also counts info-level brcmfmac `clm_blob`
   lines (too-broad matcher, noted 2026-07-13) — cosmetic false positives, not a
   device fault.
-- **pstore** (crit) — a previous boot panicked (only survives a *warm* reboot).
+- **pstore** (crit) — a previous boot panicked. ⚠️ ~~(only survives a *warm*
+  reboot)~~ **false, corrected 2026-09-20.** ramoops works and always did;
+  `systemd-pstore.service` archives every record to **`/var/lib/systemd/pstore/`**
+  at boot and **unlinks it from `/sys/fs/pstore`**, so pstorefs is empty by
+  design. **Read `/var/lib/systemd/pstore/`, never `/sys/fs/pstore`, and never
+  read an empty pstorefs as "no crash"/"clean reset".** `nq-healthd`'s `pstore`
+  field, its `pstore_new` crit and `nq-diag-snapshot`'s `PSTORE` section still
+  read the drained directory, so a `0` from them is not evidence — check
+  `ls -la /var/lib/systemd/pstore/` by hand. See
+  `docs/2026-09-20-sleep-states-design.md` §4i.
 
 Every boot/dmesg error is ours to fix — never dismiss one as benign/expected.
 As of **v1.6.10** the boot log is **GENUINELY CLEAN**: on a clean-flash boot of
@@ -707,7 +724,8 @@ report it:
     compiled-in **`TIME_EPOCH` = the systemd package's build date** (261.2-r1 →
     2026-08-23 00:03:32 UTC), so **pre-NTP journal timestamps are the build
     date, not when it happened** — reason from monotonic uptime, never from those
-    dates. The r2 apk is not yet published to the OTA repo.
+    dates. _(The r2 apk **is** published now — verified in the OTA repo
+    2026-09-21, with device r104 / `nexusq-control` r48 / `nexusqd` r20.)_
   `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.
 The whole former B/U residual set (B4 brcmfmac fw-probe, B10 hw-breakpoint, B16
 ramoops, B21 L2C/gpmc/pmu/journald-BPF+ACL, B22/B23 twl, U5 bluetoothd

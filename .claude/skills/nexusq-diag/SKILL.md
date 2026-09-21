@@ -299,6 +299,15 @@ Findings are tagged by `kind`; interpret them like this:
   `pactl list short sinks`, nexusqd **~0-1 %** CPU (was ~7 %); playback → arecord
   present + sink RUNNING; after → re-gated → SUSPENDED. arecord running at idle /
   sink IDLE / nexusqd ~7 % = regression. Dep `+pulseaudio-utils`.
+  🚨 **That tell misfires, corrected 2026-09-20 — check `-D` and ppid first.**
+  **Three services on this box spawn an `arecord`**, and only `arecord -D pulse`
+  is nexusqd's tap. `nq-uac2-silence` (in `nexusq-uac2-in.service`) holds
+  **`arecord -D hw:Loopback,1,0`** open **by design** while ASLEEP so it can wake
+  on the first non-zero frame — that one is *supposed* to be running on an idle
+  box. Attributing it to nexusqd produced a whole "wedged LED tap" diagnosis that
+  was wrong (see CHANGELOG, nexusqd r21). **Before blaming a daemon for an
+  `arecord`, read its full argv (`-D` target) and its ppid/cgroup**
+  (`ps -o pid,ppid,args`, `systemctl status <pid>`).
   🆕 **The gate is EVENT-DRIVEN since nexusqd r13 (2026-08-13)** — it used to poll
   `pactl list short sink-inputs` every 1.5 s while the tap was off (~0.67 forks/s,
   and each short-lived client also woke every *other* PA subscriber on the box).
@@ -462,8 +471,28 @@ Findings are tagged by `kind`; interpret them like this:
   `alsa_output.platform-sound-tas5713.stereo-fallback` (NOT `…snd_aloop…`). Red
   cross / "Connection refused" from `pactl` = PA not running = regression. See
   `docs/2026-07-07-desktop-audio-pulseaudio-fix.md`.
-- **pstore** (crit) — a previous boot panicked; the dump is in the `PSTORE`
-  section. Remember pstore only survives a *warm* reboot.
+- **pstore** (crit) — a previous boot panicked. ⚠️ **The finding and the `PSTORE`
+  snapshot section are both looking in the wrong place (2026-09-20).**
+  ~~Remember pstore only survives a *warm* reboot.~~ **False.** ramoops captures
+  crashes correctly and always did; `systemd-pstore.service` copies every record
+  to **`/var/lib/systemd/pstore/`** at boot and then **unlinks it from
+  `/sys/fs/pstore`** (`Unlink=yes`, the default), so pstorefs is empty a second
+  after boot **by design**.
+  - **Read crashes from `/var/lib/systemd/pstore/`, never `/sys/fs/pstore`**, and
+    **never read an empty pstorefs as "no crash" or "the reset was clean"**:
+    `ls -la /var/lib/systemd/pstore/` then
+    `grep -i "Kernel panic" /var/lib/systemd/pstore/dmesg-ramoops-*`.
+    A verified capture (deliberate `sysrq` panic, 2026-09-20): `dmesg-ramoops-0`
+    76 075 B with `Kernel panic - not syncing: sysrq triggered crash` +
+    `unwind_backtrace`, and `console-ramoops-0` 19 357 B.
+  - **The tooling has not caught up** — `nq-healthd` (`PSTORE "/sys/fs/pstore"`,
+    the `pstore` telemetry field and the `pstore_new` crit), `nq-diag-snapshot`'s
+    `PSTORE` section and `scripts/device-nexus-diag.sh` all count the drained
+    directory, so **`pstore: 0` from any of them means nothing**. Check the
+    archive by hand until they are fixed.
+  - Zone counters reading 0 in raw DRAM after a reset are ramoops having
+    *successfully* recovered and zapped the zone, not a lost buffer. See
+    `docs/2026-09-20-sleep-states-design.md` §4i.
 
 When a crit finding has a timestamp, `report.txt` prints the per-sample timeline
 around it — use that to correlate (e.g. did temp spike or freq stall at the
