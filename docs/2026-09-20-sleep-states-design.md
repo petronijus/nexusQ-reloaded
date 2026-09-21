@@ -801,13 +801,28 @@ registering C2/C3 is readable from `/var/lib/systemd/pstore/` on the next boot.
 Serial is still unavailable and always will be, so R2 must be attempted on the
 strength of ramoops alone.
 
-**Not yet measured:** a clean idle-exit baseline with the ring settled. The
-2026-09-20 reading of 308 exits/s is **contaminated** — `nexusqd` had been
-restarted ~2 min earlier, so the screensaver was still animating and pushing
-frames to the AVR (`48072000.i2c` at 55/s, `nexusqd` at 10.5/s, neither of which
-belongs in an idle figure). Re-run `idle-exits.sh` only after the daemon has been
-up **>300 s** ([[nexusqd-needs-300s-before-measuring]]). The last trustworthy
-figure remains **466 exits/s** from §4h.
+**Measured properly, 2026-09-21 19:36** — box up 20.5 h, `nexusqd` settled 19 h,
+tap correctly off, nothing playing:
+
+```
+idle exits            368/s      (cpu0 C1 entries 459/s)
+ tasks after an exit   alsa_buf_mon 24.6  python3 8.5  arecord 7.5  kworker/u9 7.5
+ interrupts            twd 93.5   IPI 51.2   mmc4 6.0   omap-dma 5.1   i2c 3.7
+```
+
+Two things to read from it. **Tasks account for only ~70/s of 368**, so most exits
+are interrupts serviced without any task switch — attributing wakeups by task
+alone will always under-explain this box. And **`twd` at 93.5/s is downstream, not
+a cause**: `CONFIG_NO_HZ_IDLE=y` with `CONFIG_HZ=100`, so a fully periodic tick on
+two cores would be 200/s; 93.5 means the tick does stop and is being re-armed by
+the timers the polling daemons set. Cutting the pollers takes `twd` with them —
+**do not chase the timer separately.**
+
+The earlier reading of **308 exits/s was contaminated** (`nexusqd` restarted ~2 min
+before, screensaver still animating into the AVR: `48072000.i2c` at 55/s versus
+3.7/s here, `nexusqd` at 10.5/s versus absent). That is the measurement discipline
+this needs — settle **>300 s** after any daemon restart
+([[nexusqd-needs-300s-before-measuring]]).
 
 ## Open questions
 
