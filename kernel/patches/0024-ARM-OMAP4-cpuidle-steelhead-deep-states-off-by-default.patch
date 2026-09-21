@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000024 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Mon, 21 Sep 2026 20:10:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: register steelhead's deep states disabled
+
+This used to truncate the driver to C1 (state_count = 1) because the
+C2/C3 MPUSS power transitions trap into the HS secure monitor and the
+historical failure was a CPU1 cpuidle panic with SMP online (stock 3.0.8
+guarded the same paths with cpuidle44xx.disallow_smp_idle).
+
+Truncating made the deep states unexaminable: with no registered state
+there are no residency counters, so whether mpu_pwrdm can reach CSWR or
+OSWR at all could not be measured, and the only way to find out was to
+build a kernel that entered them unconditionally -- an experiment whose
+failure mode is an unbootable box.
+
+Register C2/C3 with CPUIDLE_FLAG_OFF instead. The states exist and carry
+counters, but sysfs shows disable=1 and the governor never selects them,
+so an ordinary boot behaves exactly as C1-only did. One state can then be
+armed by hand for a measured run, and if it hangs, a reboot -- not a
+reflash -- restores the safe default.
+
+mpu_pwrdm and core_pwrdm have RET:0 OFF:0 on this board after 20 h of
+uptime: retention has never been *requested*, not refused. This is what
+makes asking possible.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+index df106524d..2f74d78c3 100644
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -11,6 +11,7 @@
+ #include <linux/cpuidle.h>
+ #include <linux/cpu_pm.h>
+ #include <linux/export.h>
++#include <linux/of.h>
+ #include <linux/tick.h>
+ 
+ #include <asm/cpuidle.h>
+@@ -326,5 +327,32 @@ int __init omap4_idle_init(void)
+ 	if (!cpu_clkdm[0] || !cpu_clkdm[1])
+ 		return -ENODEV;
+ 
++	/*
++	 * steelhead (HS OMAP4460): C2 and C3 drive MPUSS power transitions that
++	 * trap into the HS secure monitor. The historical failure was a CPU1
++	 * cpuidle panic with SMP online - stock 3.0.8 guarded the same paths
++	 * with its cpuidle44xx.disallow_smp_idle parameter - so for a long time
++	 * this truncated the driver to C1 (state_count = 1) and the deep states
++	 * did not exist at all.
++	 *
++	 * Register them DISABLED instead. CPUIDLE_FLAG_OFF leaves a state
++	 * visible in sysfs with disable=1, so the governor never selects it and
++	 * a boot is exactly as safe as C1-only, while
++	 *
++	 *   echo 0 > /sys/devices/system/cpu/cpu0/cpuidle/state1/disable
++	 *
++	 * arms one deliberately for a measured experiment. If that wedges the
++	 * box a plain reboot restores the safe default - nothing has to be
++	 * reflashed to recover, which is precisely what made this untestable
++	 * before. Registering them also makes their residency counters exist,
++	 * so "did mpu_pwrdm ever actually reach CSWR/OSWR" becomes answerable.
++	 */
++	if (of_machine_is_compatible("google,steelhead")) {
++		int i;
++
++		for (i = 1; i < idle_driver->state_count; i++)
++			idle_driver->states[i].flags |= CPUIDLE_FLAG_OFF;
++	}
++
+ 	return cpuidle_register(idle_driver, cpu_online_mask);
+ }
