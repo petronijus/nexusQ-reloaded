@@ -776,6 +776,59 @@ standby, measured separately today — see
 3. **R3**, independent of both, and possibly most of what the user actually wants.
 4. **R4**, last, because its cost is the resume path of every driver.
 
+## 4j. R2 ATTEMPTED: the deep states do not fault — they are simply never reached
+
+Kernel `6.18.48-r4` registers C2/C3 with `CPUIDLE_FLAG_OFF`, so they exist with
+counters and the governor cannot pick them until one is armed by hand. That made
+the experiment finally cheap to run, and it answers a question this project has
+carried unexamined since the SMP bring-up.
+
+**C2 was armed on BOTH cpus for 90 s. Nothing faulted.**
+
+```
+[BEFORE] mpu_pwrdm (ON),OFF:0,RET:0    cpu0 C2 usage=0   cpu1 C2 usage=0
+         disable flags -> cpu0=0 cpu1=0        (armed, both cores, 90 s)
+[AFTER]  mpu_pwrdm (ON),OFF:0,RET:0    cpu0 C2 usage=0   cpu1 C2 usage=0
+         system: running, 0 failed units, no new kernel err/warn
+```
+
+**⚠️ The long-standing premise is not confirmed.** Patch 0024 said "deep C-states
+fault — the MPUSS power transitions of C2/C3 trap into the secure monitor, which
+the HS secure side rejects with SMP online". With both cores online and C2 armed,
+nothing trapped, nothing panicked, the box stayed up. That does **not** prove the
+secure path is fine — **C2 was never entered**, so the faulting code never ran.
+What it does retire is the idea that merely *offering* the state is dangerous.
+
+**Why it was never entered, measured:**
+
+```
+cpu0   176636 idle periods / 137591186 us  ->  mean  778 us
+cpu1   137268 idle periods / 112939086 us  ->  mean  822 us
+
+C2     target_residency  960 us    exit_latency  768 us
+C3     target_residency 1100 us    exit_latency  978 us
+```
+
+The box's mean idle period is **~800 us**. C2 needs 960 us of *predicted* idle and
+C3 needs 1100 us, and the `menu` governor predicts conservatively from the recent
+distribution, so it is not close — and correctly never selects either. Both cores
+are online and both idle heavily (C1 usage 176 k / 137 k), so this is not a CPU1
+or coupled-entry problem: it is purely that nothing here is ever quiet for a
+millisecond.
+
+**This is what makes R0 a prerequisite rather than a preference, and it puts a
+number on it.** Mean idle has to rise above 960 us — call it a third more idle
+time per wakeup — before C2 becomes *selectable at all*, never mind profitable.
+At 368 idle exits/s that is roughly the wakeup rate the two deliberate pollers
+account for. So the ladder's order was right, and R2 cannot be evaluated until
+R0 is decided.
+
+**Still unknown, and only reachable after R0:** whether an actually-entered C2
+completes or trips the secure monitor. The experiment to run then is the same
+one, with the arm held long enough for the governor to pick the state once idle
+has grown — `usage` moving off 0 is the signal, and `mpu_pwrdm` RET leaving 0 is
+the payoff.
+
 ## Where this stands (end of 2026-09-20)
 
 **R0 — in progress, and it is not the bug hunt it looked like.** The two largest
