@@ -38,7 +38,7 @@ index df106524d..2f74d78c3 100644
  #include <linux/tick.h>
  
  #include <asm/cpuidle.h>
-@@ -326,5 +327,32 @@ int __init omap4_idle_init(void)
+@@ -326,5 +327,39 @@ int __init omap4_idle_init(void)
  	if (!cpu_clkdm[0] || !cpu_clkdm[1])
  		return -ENODEV;
  
@@ -55,6 +55,13 @@ index df106524d..2f74d78c3 100644
 +	 * a boot is exactly as safe as C1-only, while
 +	 *
 +	 *   echo 0 > /sys/devices/system/cpu/cpu0/cpuidle/state1/disable
++	 *
++	 * NOTE (2026-09-21): arming a deep state AT BOOT was tried twice (r5, r6)
++	 * and hung the board before the display came up, so nothing could be
++	 * printed or measured. Everything stays off here; patch 0048 adds the
++	 * runtime knob that arms one on a booted box with a live console.
++	 * Sysfs cannot do it -- CPUIDLE_FLAG_OFF sets DISABLED_BY_DRIVER and the
++	 * `disable` file only touches DISABLED_BY_USER.
 +	 *
 +	 * arms one deliberately for a measured experiment. If that wedges the
 +	 * box a plain reboot restores the safe default - nothing has to be

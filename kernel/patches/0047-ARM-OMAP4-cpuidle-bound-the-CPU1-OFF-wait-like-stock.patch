@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000047 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Mon, 21 Sep 2026 22:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: bound the CPU1-OFF wait, as stock did
+
+Registering the omap4 deep C-states and letting the governor pick them
+hangs this board before userspace: no console output, no USB enumeration,
+recovery only by pulling mains. Measured 2026-09-21 on kernel 6.18.48-r5.
+
+omap_enter_idle_coupled() has CPU0 spin until CPU1's power domain reads
+PWRDM_POWER_OFF. The only escape is cpu_done[1], which CPU1 sets *after*
+returning from omap4_enter_lowpower(). If CPU1 never reaches that call --
+and on this HS 4460 it demonstrably may not -- neither condition ever
+becomes true and CPU0 spins forever with interrupts already masked.
+
+Stock 3.0.8 took the same wait and bounded it. From reverse-eng/vmlinux.bin,
+omap4_enter_idle at 0xc00685e8 loads i = 0x000F4241 = 1000001 and polls at
+0xc00685f8-0xc006860c; on expiry it skips omap4_enter_sleep() (0xc0068620)
+and falls through to the CPU1 wake path. It also required
+pwrdm_wait_transition(cpu1_pd) == 0 before sleeping (0xc00686c4), a check
+mainline does not make at all.
+
+Reproduce both. On expiry we take the existing `fail` label, which unwinds
+through the coupled barrier and clears cpu_done[] -- the same net effect as
+stock's skip: this CPU does not sleep deep, and the box keeps running.
+
+The bound is stock's literal constant rather than a wall-clock time, so it
+scales with core speed exactly as stock's did.
+
+pwrdm_wait_transition() has to come back with it. 3.0.8 exported it as a
+standalone function; mainline folded the only call site into
+pwrdm_state_switch_nolock(), which also runs _pwrdm_state_switch()
+bookkeeping, and left the arch op reachable only through that. cpuidle wants
+the bare wait from an irq-masked idle path, so restore the pre-refactor
+wrapper rather than paying for state accounting on every idle entry. The
+omap4 op is itself bounded (PWRDM_TRANSITION_BAILOUT, -EAGAIN on expiry), so
+the new check cannot introduce an unbounded wait of its own.
+
+⚠️ The premise this file used to carry -- that stock fenced SMP deep idle
+off with cpuidle44xx.disallow_smp_idle -- is FALSE. That parameter lives in
+.bss (0xc0740ee8, above _edata 0xc0740680), is set nowhere in the built-in
+CONFIG_CMDLINE, the boot.img cmdline or the stock ramdisk, and gates CPU1
+only. Stock ran C2/C3/C4 with both cores online, by default.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -131,7 +131,21 @@
+ 	 * out of coherency and in OFF mode.
+ 	 */
+ 	if (dev->cpu == 0 && cpumask_test_cpu(1, cpu_online_mask)) {
++		int limit = 1000001;	/* stock 3.0.8: 0x000F4241 */
++
+ 		while (pwrdm_read_pwrst(cpu_pd[1]) != PWRDM_POWER_OFF) {
++			/*
++			 * BOUNDED, as stock was. cpu_done[1] below is the only
++			 * escape mainline has, and CPU1 sets it *after*
++			 * omap4_enter_lowpower() returns -- so a CPU1 that
++			 * never reaches that call leaves CPU0 spinning here
++			 * forever with interrupts masked. That is a hang no
++			 * console and no ramoops can report; it needs the mains
++			 * pulled. Giving up costs one missed deep idle.
++			 */
++			if (--limit <= 0)
++				goto fail;
++
+ 			cpu_relax();
+ 
+ 			/*
+@@ -145,6 +159,15 @@
+ 			    goto fail;
+ 
+ 		}
++
++		/*
++		 * Stock also refused to sleep while CPU1's domain was still in
++		 * transition (pwrdm_wait_transition, 0xc00686c4). Mainline omits
++		 * the check and can stack a new MPUSS transition on an
++		 * unfinished one.
++		 */
++		if (pwrdm_wait_transition(cpu_pd[1]))
++			goto fail;
+ 	}
+ 
+ 	mpuss_can_lose_context = (cx->mpu_state == PWRDM_POWER_RET) &&
+diff --git a/arch/arm/mach-omap2/powerdomain.c b/arch/arm/mach-omap2/powerdomain.c
+--- a/arch/arm/mach-omap2/powerdomain.c
++++ b/arch/arm/mach-omap2/powerdomain.c
+@@ -971,6 +971,28 @@
+ 	return (pwrdm && pwrdm->flags & PWRDM_HAS_HDWR_SAR) ? 1 : 0;
+ }
+ 
++/**
++ * pwrdm_wait_transition - wait for a powerdomain transition to complete
++ * @pwrdm: struct powerdomain * to wait for
++ *
++ * If the powerdomain @pwrdm is in the middle of a power state transition,
++ * spin until the transition completes or until the arch bailout value is
++ * reached. Returns -EINVAL if @pwrdm or the arch op is NULL, -EAGAIN if the
++ * bailout was hit, or 0 on success.
++ *
++ * Mainline reaches the arch op only via pwrdm_state_switch_nolock(), which
++ * additionally runs _pwrdm_state_switch() bookkeeping. cpuidle needs the bare
++ * wait from an irq-masked idle path, so this restores the standalone wrapper
++ * the OMAP PM core exported before that refactor.
++ */
++int pwrdm_wait_transition(struct powerdomain *pwrdm)
++{
++	if (!pwrdm || !arch_pwrdm || !arch_pwrdm->pwrdm_wait_transition)
++		return -EINVAL;
++
++	return arch_pwrdm->pwrdm_wait_transition(pwrdm);
++}
++
+ int pwrdm_state_switch_nolock(struct powerdomain *pwrdm)
+ {
+ 	int ret;
+diff --git a/arch/arm/mach-omap2/powerdomain.h b/arch/arm/mach-omap2/powerdomain.h
+--- a/arch/arm/mach-omap2/powerdomain.h
++++ b/arch/arm/mach-omap2/powerdomain.h
+@@ -238,5 +238,6 @@
+ bool pwrdm_has_hdwr_sar(struct powerdomain *pwrdm);
+ 
++int pwrdm_wait_transition(struct powerdomain *pwrdm);
+ int pwrdm_state_switch_nolock(struct powerdomain *pwrdm);
+ int pwrdm_state_switch(struct powerdomain *pwrdm);
+ int pwrdm_pre_transition(struct powerdomain *pwrdm);

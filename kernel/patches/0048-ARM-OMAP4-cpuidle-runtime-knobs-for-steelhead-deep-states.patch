@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000048 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Mon, 21 Sep 2026 23:55:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: runtime knobs to bring up steelhead's deep states
+
+The deep C-states are a must-have on this board -- stock ran C2/C3/C4 with
+both cores online by default, so the silicon does them. Getting there needs
+a way to experiment that does not cost a mains cycle per attempt.
+
+Three boot-time attempts (kernels r5 and r6) hung the board BEFORE the
+display was up. Nothing printed, ramoops could not help either because
+escaping the hang needs the mains pulled and a cold start scrubs DRAM. Each
+attempt therefore produced exactly one bit of information -- "it did not
+boot" -- which cannot distinguish "the CPU1 rendezvous deadlocked" from
+"the MPUSS CSWR transition itself is fatal".
+
+Stock carried escape hatches for precisely this: skip_off (0xc0740f08),
+keep_mpu_on (0xc0740ef8) and keep_core_on (0xc0740f00), all in .bss and all
+inert by default. Reproduce them, and add runtime arming so the experiment
+runs on a booted box with a live console:
+
+  /sys/module/cpuidle44xx/parameters/deep_idle        0=none 1=C2 2=C2+C3
+  /sys/module/cpuidle44xx/parameters/skip_cpu1_wait   bypass the rendezvous
+  /sys/module/cpuidle44xx/parameters/keep_mpu_on      leave mpu_pwrdm alone
+  /sys/module/cpuidle44xx/parameters/skip_lowpower    skip omap4_enter_lowpower
+
+That splits the question into answerable pieces. Arming C2 with
+skip_cpu1_wait=1 tests the MPUSS transition without the rendezvous; arming
+it with keep_mpu_on=1 tests the rendezvous without the MPUSS transition. A
+hang then happens in a running system, with the console alive and the full
+boot log already on disk.
+
+deep_idle cannot be done from sysfs, which is why it is here:
+CPUIDLE_FLAG_OFF sets CPUIDLE_STATE_DISABLED_BY_DRIVER, while the per-state
+`disable` file only reads and writes CPUIDLE_STATE_DISABLED_BY_USER. Writing
+0 to it clears a bit that was never set, the state stays disabled, and the
+file reads back 0 as though it had worked -- which is exactly how two
+earlier "armed" experiments measured nothing at all.
+
+Every knob defaults to its no-op value, so an untouched boot is byte-for-byte
+the behaviour of the kernel shipping today: C1 only, C2/C3 registered with
+counters but disabled.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -10,6 +10,8 @@
+ #include <linux/sched.h>
+ #include <linux/cpuidle.h>
+ #include <linux/cpu_pm.h>
++#include <linux/kstrtox.h>
++#include <linux/moduleparam.h>
+ #include <linux/export.h>
+ #include <linux/of.h>
+ #include <linux/tick.h>
+@@ -63,6 +65,68 @@
+ 	},
+ };
+ 
++/*
++ * steelhead deep-idle experiment scaffolding.
++ *
++ * Three boot-time attempts at enabling C2/C3 on this HS 4460 hung the board
++ * BEFORE the display came up, so nothing was printed and nothing measured: each
++ * run only ever answered "it did not boot", which conflates "is the CPU1
++ * rendezvous fatal?" with "is the MPU CSWR transition fatal?".
++ *
++ * Stock 3.0.8 carried exactly these escape hatches for exactly that reason
++ * (skip_off @0xc0740f08, keep_mpu_on @0xc0740ef8, keep_core_on @0xc0740f00 --
++ * all .bss, all inert by default). Reproduce them, and add a way to arm a state
++ * at RUNTIME, so the experiment happens on a booted box with a live console and
++ * a full boot log instead of in the dark.
++ *
++ * Why a runtime knob is needed at all: CPUIDLE_FLAG_OFF sets
++ * CPUIDLE_STATE_DISABLED_BY_DRIVER, and the sysfs `disable` file only reads and
++ * writes CPUIDLE_STATE_DISABLED_BY_USER -- writing 0 to it clears a bit that was
++ * never set, the state stays off, and the file reads back 0 as if it had worked.
++ * cpuidle_driver_state_disabled() is the only way to clear the driver bit.
++ *
++ * Every knob defaults to its safe/no-op value, so an untouched boot behaves
++ * exactly as it does today: C1 only, C2 and C3 registered but disabled.
++ */
++static struct cpuidle_driver *steelhead_drv;
++
++static bool skip_cpu1_wait;	/* skip the wait for CPU1 to reach OFF */
++static bool keep_mpu_on;	/* do not program mpu_pwrdm  (stock: keep_mpu_on) */
++static bool skip_lowpower;	/* do not call omap4_enter_lowpower (stock: skip_off) */
++module_param(skip_cpu1_wait, bool, 0644);
++module_param(keep_mpu_on, bool, 0644);
++module_param(skip_lowpower, bool, 0644);
++
++static int deep_idle;		/* 0 = none, 1 = C2 armed, 2 = C2 and C3 armed */
++
++static int deep_idle_set(const char *val, const struct kernel_param *kp)
++{
++	int want, rc;
++
++	rc = kstrtoint(val, 0, &want);
++	if (rc)
++		return rc;
++	if (want < 0 || want > 2)
++		return -EINVAL;
++	if (!steelhead_drv)
++		return -ENODEV;
++
++	/* index 1 = C2, index 2 = C3; `disabled` true means the state is off */
++	cpuidle_driver_state_disabled(steelhead_drv, 1, want < 1);
++	cpuidle_driver_state_disabled(steelhead_drv, 2, want < 2);
++	deep_idle = want;
++
++	pr_info("steelhead: deep idle = %d (C2 %s, C3 %s)\n", want,
++		want >= 1 ? "armed" : "off", want >= 2 ? "armed" : "off");
++	return 0;
++}
++
++static const struct kernel_param_ops deep_idle_ops = {
++	.set = deep_idle_set,
++	.get = param_get_int,
++};
++module_param_cb(deep_idle, &deep_idle_ops, &deep_idle, 0644);
++
+ static struct powerdomain *mpu_pd, *cpu_pd[MAX_CPUS];
+ static struct clockdomain *cpu_clkdm[MAX_CPUS];
+ 
+@@ -131,7 +195,8 @@
+ 	 * of triggeing all the possible low power modes once CPU1 is
+ 	 * out of coherency and in OFF mode.
+ 	 */
+-	if (dev->cpu == 0 && cpumask_test_cpu(1, cpu_online_mask)) {
++	if (!skip_cpu1_wait && dev->cpu == 0 &&
++	    cpumask_test_cpu(1, cpu_online_mask)) {
+ 		int limit = 1000001;	/* stock 3.0.8: 0x000F4241 */
+ 
+ 		while (pwrdm_read_pwrst(cpu_pd[1]) != PWRDM_POWER_OFF) {
+@@ -188,7 +253,7 @@
+ 	if (error)
+ 		goto cpu_pm_out;
+ 
+-	if (dev->cpu == 0) {
++	if (dev->cpu == 0 && !keep_mpu_on) {
+ 		pwrdm_set_logic_retst(mpu_pd, cx->mpu_logic_state);
+ 		omap_set_pwrdm_state(mpu_pd, cx->mpu_state);
+ 
+@@ -208,7 +273,8 @@
+ 		}
+ 	}
+ 
+-	omap4_enter_lowpower(dev->cpu, cx->cpu_state, true);
++	if (!skip_lowpower)
++		omap4_enter_lowpower(dev->cpu, cx->cpu_state, true);
+ 	cpu_done[dev->cpu] = true;
+ 
+ 	/* Wakeup CPU1 only if it is not offlined */
+@@ -385,5 +451,7 @@
+ 			idle_driver->states[i].flags |= CPUIDLE_FLAG_OFF;
+ 	}
+ 
++	steelhead_drv = idle_driver;
++
+ 	return cpuidle_register(idle_driver, cpu_online_mask);
+ }
