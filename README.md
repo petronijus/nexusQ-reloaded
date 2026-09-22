@@ -17,7 +17,7 @@ turned into a **dual-core postmarketOS media player** with Spotify&nbsp;Connect,
 a beat-reactive **32-LED ring**, an **on-demand Wayland desktop** you can drive with
 a **BT mouse&nbsp;+&nbsp;keyboard**, a 1.2&nbsp;GHz CPU, **NFC tap-to-send**, and a
 **phone/desktop companion remote** that doubles as the screenless orb's
-**Bluetooth settings panel** — and it **updates its own software over the air** and
+**Bluetooth settings panel** — it **can be updated over the air via the app** and
 **streams its health to Home Assistant over MQTT**.
 
 [**Install**](INSTALL.md) · [**Releases**](https://github.com/petronijus/nexusQ-reloaded/releases) · [**Changelog**](CHANGELOG.md) · [**The story**](#-first-light)
@@ -60,7 +60,7 @@ notes in [`docs/`](docs/).
 | 🔊 **Audio output selection** | ✅ | speaker / optical / HDMI = the PA default sink, picked from the app · v1.7.0 |
 | 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
-| 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, system, **kernel** (health-gated trial slot, keeps the unit's identity since r5 · 2026-09-05) and A/B rootfs — no cable · v1.12.0+ |
+| 🔄 **OTA updates via the app** | ✅ | signed apk repo on GitHub Pages: daemons, system, **kernel** (CLI only, `nq-kernel-ota` — not in the app yet; health-gated trial slot, keeps the unit's identity since r5 · 2026-09-05) and A/B rootfs — no cable · v1.12.0+ |
 | 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (19 entities); the app is the only credential provisioner (PROTOCOL §13) |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | on demand from the app — the `user` linger keeps music playing when it stops · v1.10.0; **software-rendered** (`WLR_RENDERER=pixman`), see the GPU row |
 | 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | factory MAC pinned in DT; 5 GHz solid — `roamoff=1` + a watchdog that heals a dead link and reconnects a stranded one (r93 · 2026-09-05); ~34 Mbit/s ceiling |

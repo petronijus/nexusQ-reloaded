@@ -114,7 +114,7 @@ to boot; since `nexusq-kernel-ota` **r5** (2026-09-05) the flow also carries the
 unit's own WiFi MAC / BT address onto the new kernel — on r3/r4 a kernel OTA on
 any unit but the first renamed it to the first unit's identity, see
 `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`)*.
-Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
+Since the post-v1.11.0 dev line, the Q **can be updated over the air via the app** —
 no fastboot, no cable — from a **signed apk repo on GitHub Pages**
 (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch); the device
 already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs

@@ -744,9 +744,9 @@ The control bridge runs as root and reaches the uid-10000 manager via
 Toggling a service that is mid-playback stops it (expected — turning it off means
 off); a Roon zone re-announces and reconnects when switched back on.
 
-## 12. OTA — the Q updates its own software — v1.11.x (dev)
+## 12. OTA — the Q can be updated over the air via the app — v1.11.x (dev)
 
-The Nexus Q **updates its own software over the air**, no reflash, no adb, no ssh.
+The Nexus Q **can be updated over the air via the app**, no reflash, no adb, no ssh.
 There are **two tracks**, surfaced in the app's Settings as **two Update items**:
 
 - **§12a — App update (daemons):** the four small daemons — `nexusq-control`,
