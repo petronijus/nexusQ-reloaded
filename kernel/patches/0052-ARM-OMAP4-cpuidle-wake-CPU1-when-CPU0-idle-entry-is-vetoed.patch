@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000052 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 13:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: wake CPU1 when CPU0's idle entry is vetoed
+
+In the coupled path CPU0 powers down only after CPU1 has reached OFF, and
+it is CPU0 that brings CPU1 back afterwards (omap_set_pwrdm_state(cpu_pd[1],
+ON)). If cpu_pm_enter() fails on CPU0 -- a CPU PM notifier vetoed the
+entry -- the error path jumps straight to cpu_pm_out and skips that wake.
+CPU1 then stays OFF, CPU0 waits for it at the coupled barrier, and the
+board hangs.
+
+Nothing in mainline vetoes CPU_PM_ENTER on OMAP4 today, so the path has
+never run. The next patch makes gpio-omap veto a C2 entry while a
+wake-enabled level GPIO interrupt is asserted but not latched, exactly as
+stock 3.0.8 aborted omap4_enter_sleep() with -EBUSY -- and stock always
+woke CPU1 after an aborted sleep (0xc0068624).
+
+Move the CPU1 wake into a helper and call it from the veto path too. At
+that point nothing of the cluster has been touched (the MPU is programmed
+after cpu_pm_enter()), and cpu_pm_enter() has already sent
+CPU_PM_ENTER_FAILED, so the veto path wakes CPU1 with the cluster context
+treated as kept and does neither cpu_cluster_pm_exit() nor cpu_pm_exit().
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+index 998fbf7..c1aebdd 100644
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -188,6 +188,30 @@ static int omap_enter_idle_smp(struct cpuidle_device *dev,
+ 	return index;
+ }
+ 
++/* Bring CPU1 back from the OFF state CPU0 waited for, unless it is offline */
++static void omap4_idle_wake_cpu1(bool mpuss_can_lose_context)
++{
++	if (!cpumask_test_cpu(1, cpu_online_mask))
++		return;
++
++	if (IS_PM44XX_ERRATUM(PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD) &&
++	    mpuss_can_lose_context)
++		gic_dist_disable();
++
++	clkdm_deny_idle(cpu_clkdm[1]);
++	omap_set_pwrdm_state(cpu_pd[1], PWRDM_POWER_ON);
++	clkdm_allow_idle(cpu_clkdm[1]);
++
++	if (IS_PM44XX_ERRATUM(PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD) &&
++	    mpuss_can_lose_context) {
++		while (gic_dist_disabled()) {
++			udelay(1);
++			cpu_relax();
++		}
++		gic_timer_retrigger();
++	}
++}
++
+ static int omap_enter_idle_coupled(struct cpuidle_device *dev,
+ 			struct cpuidle_driver *drv,
+ 			int index)
+@@ -257,8 +281,21 @@ static int omap_enter_idle_coupled(struct cpuidle_device *dev,
+ 	 * VFP and per CPU interrupt context is saved.
+ 	 */
+ 	error = cpu_pm_enter();
+-	if (error)
++	if (error) {
++		/*
++		 * A CPU PM notifier vetoed the entry -- gpio-omap does when a
++		 * wake-enabled level GPIO interrupt is asserted but not latched,
++		 * which a retained MPU would sleep through. CPU0 gets here only
++		 * after CPU1 has reached OFF, and only CPU0 brings it back, so
++		 * skip the power-down but still wake CPU1, as stock did after an
++		 * aborted sleep (0xc0068624). Nothing of the cluster was touched
++		 * yet, and cpu_pm_enter() has already sent CPU_PM_ENTER_FAILED,
++		 * so there is no cpu_cluster_pm_exit() and no cpu_pm_exit().
++		 */
++		if (dev->cpu == 0)
++			omap4_idle_wake_cpu1(false);
+ 		goto cpu_pm_out;
++	}
+ 
+ 	if (dev->cpu == 0 && keep_mpu_on) {
+ 		/*
+@@ -293,25 +330,8 @@ static int omap_enter_idle_coupled(struct cpuidle_device *dev,
+ 	cpu_done[dev->cpu] = true;
+ 
+ 	/* Wakeup CPU1 only if it is not offlined */
+-	if (dev->cpu == 0 && cpumask_test_cpu(1, cpu_online_mask)) {
+-
+-		if (IS_PM44XX_ERRATUM(PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD) &&
+-		    mpuss_can_lose_context)
+-			gic_dist_disable();
+-
+-		clkdm_deny_idle(cpu_clkdm[1]);
+-		omap_set_pwrdm_state(cpu_pd[1], PWRDM_POWER_ON);
+-		clkdm_allow_idle(cpu_clkdm[1]);
+-
+-		if (IS_PM44XX_ERRATUM(PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD) &&
+-		    mpuss_can_lose_context) {
+-			while (gic_dist_disabled()) {
+-				udelay(1);
+-				cpu_relax();
+-			}
+-			gic_timer_retrigger();
+-		}
+-	}
++	if (dev->cpu == 0)
++		omap4_idle_wake_cpu1(mpuss_can_lose_context);
+ 
+ 	/*
+ 	 * Call idle CPU cluster PM exit notifier chain

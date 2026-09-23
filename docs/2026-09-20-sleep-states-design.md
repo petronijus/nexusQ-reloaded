@@ -1448,6 +1448,124 @@ woke. The runs were on different boots at different uptimes (r13's services had
 had less time to settle). The next measurement should repeat both variants on the
 same boot.
 
+## 4t. BLOCKER for C2-by-default: WiFi drops packets in bursts while the MPU is in retention (2026-09-23)
+
+The r13 diag sweep noticed two WiFi-watchdog `loss:100` singletons that fell inside
+a C2 window. (A third one, at t=931, fell outside any window.) A controlled test
+followed. The PC pinged the Q's WiFi address (192.168.20.246) at 0.2 s intervals
+for 2 min per run, with the C2 runs detached through `systemd-run` and BT bound
+(KEEP_BT=1):
+
+| run | loss | pattern |
+|---|---|---|
+| no C2 | **0 %** (0/600) | — |
+| C2, MPU CSWR | **4 %** (24/600) | — |
+| C2, MPU CSWR (repeat) | **10.3 %** (62/600) | bursts: seq 182–204 (~4.5 s), 225–256 (~6 s) |
+| C2, MPU held ON (`keep_mpu_on=1`) | 0.3 % (2/600) | — |
+| C2, MPU CSWR + 20 Hz loop **reading GPIO2 registers** | **0 %** | — |
+| C2, MPU CSWR + 20 Hz loop reading **/proc/interrupts only** | **26.5 %** (159/600) | one ~29 s outage |
+
+C2 residency was similar across runs, so fewer idle entries do not explain the
+difference. What does explain it is the loop merely **reading GPIO2's registers**:
+it removes the loss entirely. The same loop without touching GPIO2 makes it
+worse. During an outage `brcmf_oob_intr` still fires, but at a much lower rate.
+
+**Mechanism (hypothesis consistent with all rows):**
+
+- The WiFi OOB host-wake is `gpio_53` = GPIO2 bit 21, `IRQ_TYPE_LEVEL_HIGH`.
+  GPIO2 has `LEVELDETECT1` and `RISINGDETECT` set on bit 21, and `IRQWAKEN_0` is
+  set.
+- While the MPU is in retention, GPIO2 smart-idles. An idle GPIO module can only
+  signal a new *edge*.
+- If the chip still holds the line high after an interrupt is serviced (more data
+  pending), no new edge ever comes. The level is not re-detected until something
+  wakes the GPIO module: an unrelated interrupt, or a register access.
+- Holding the MPU ON keeps the dynamic dependency that keeps L4PER/GPIO awake.
+
+**Stock parity:** the first audit already listed "gpio prepare_for_idle: every
+deep entry (stock `0xc0066428`) vs cluster-PM only (mainline)" as a MISMATCH.
+Stock ran its GPIO idle/resume hooks around **every** C2+ entry. Mainline
+`gpio-omap` idles and unidles banks only on `CPU_CLUSTER_PM_ENTER/EXIT`, which
+`cpuidle44xx` issues only when MPU logic is lost (C3), never in C2 CSWR. A
+focused stock audit of those hooks is under way. The fix waits for it.
+
+**C2 must not become the default until this is fixed.** BT host-wake is `gpio_47`
+(GPIO2 bit 15, edge), so it may be exposed to a lesser form of the same thing.
+
+### Stock audit result and kernel r14
+
+The audit confirmed the mechanism and refined it. Before every deep entry
+(C2/C3/C4 and suspend), stock's `omap2_gpio_prepare_for_idle` computed
+`(LEVEL_LOW & ~DATAIN) | (DATAIN & LEVEL_HIGH)` against the wake-enabled lines
+and **aborted the entry with -EBUSY** when any line was asserted
+(`0xc021cbe0–cc10`). It then always woke CPU1 (`0xc0068624`). Mainline has no
+such check in C2, and in C3 it tests IRQSTATUS, which is the latch that goes
+missing.
+
+Two stock pad settings also differ, but they are not the cause while CORE and
+L4PER stay ON. Both matter before any L4PER/CORE-RET work:
+
+- `gpio_53`: stock `0x4103`, ours `0x0103` (no WAKEUP_EN).
+- `gpio_47`: stock `0x4103`, ours `0x0107` (pull-down added, no WAKEUP_EN).
+
+Kernel **6.18.48-r14** adds:
+
+- **0052:** `cpuidle44xx` wakes CPU1 when CPU0's `cpu_pm_enter()` is vetoed.
+  Before this, the error path skipped the wake and would deadlock the coupled
+  barrier.
+- **0053:** `gpio-omap` vetoes `CPU_PM_ENTER` on CPU0 (OMAP4 machines only)
+  while a wake-enabled level IRQ reads active on DATAIN, like stock. Reading
+  DATAIN also wakes the bank, so the level is latched as soon as the veto
+  returns.
+
+**r14 results, and a confound.**
+
+- The first two C2 ping runs after boot still lost 10 % and 77.5 %.
+- A **no-C2 control taken right after them lost 34.7 %**, with the Q→PC RTT
+  averaging 454 ms (max 2.1 s). A couple of minutes later it recovered on its own
+  (0 % on 150 pings, before the radio was reset).
+
+So WiFi went through a degradation episode that persisted without C2. Whether an
+earlier C2 run triggered it, or it is the same thing as the overnight wedge on r7
+(no C2 involved at all), is **not established**.
+
+A clean **alternating run** followed: 640 s of continuous 0.2 s pings while the Q
+switched OFF / C2 / OFF / C2 / OFF in 2-minute blocks on a schedule
+(`/root/c2-alternate.sh`).
+
+```
+off1 595 sent 0 lost | c2a 613 sent 0 lost | off2 602/0 | c2b 613/0 | off3 598/0
+C2 residency in the two C2 blocks: 175 s of 240 s (73 %)
+```
+
+**0 % loss with C2 at 73 % residency on r14.** That supports the veto doing its
+job, but it does not yet clear the episodes. The r13 losses were measured without
+interleaved controls, and some of them may belong to the same environmental or
+chip episode. Before C2 goes default: a long soak (hours, ideally one night with
+C2 armed against one without) comparing `wifi-watchdog.jsonl` heal/bad counts and
+`brcmf_escan_timeout`.
+
+## 4u. CORE never idles: first look (2026-09-23)
+
+`core_pwrdm` never left ON in any run, even with `keep_core_on=0`.
+`pm_debug/count` clockdomain usecounts on r13 at idle:
+
+```
+l3_emif_clkdm (2)  l4_cfg_clkdm (1)  l3_instr_clkdm (1)  l3_1_clkdm (1)  l3_2_clkdm (1)   [core_pwrdm]
+l3_init_clkdm (5)  l4_per_clkdm (8)  l4_wkup_clkdm (4)                                     [own pwrdms]
+```
+
+A usecount is not proof of a veto, since hardware-supervised clockdomains can
+idle with clocks enabled. The likeliest holder is **L3INIT**, which carries two
+things:
+
+- the USB OTG gadget (the ssh/serial cable);
+- the EHCI host with the smsc95xx Ethernet PHY hanging off it.
+
+A USB host with an attached device issues SOFs every millisecond, and L3INIT's
+dynamic dependencies then keep L3/EMIF, and so CORE, awake. This is a
+whole-device design question, not a bug hunt. To be taken up after 4t.
+
 ## Power target: stock's wall draw is unknown, so measure it (open, 2026-09-23)
 
 No reliable public figure exists for the stock Nexus Q's idle draw:

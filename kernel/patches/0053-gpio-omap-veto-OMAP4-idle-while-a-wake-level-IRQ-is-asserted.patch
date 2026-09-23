@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000053 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 13:45:00 +0200
+Subject: [PATCH] gpio: omap: veto OMAP4 idle while a wake-enabled level IRQ is asserted
+
+With cpuidle C2 armed on a Nexus Q (OMAP4460, CPUs OFF, MPU in CSWR), the
+BCM4330 WLAN -- SDIO with an out-of-band host-wake on gpio_53, level-high --
+lost 4-26 % of pings in bursts of up to 29 s. Without C2: 0 %. With the MPU
+held ON: 0.3 %. And a 20 Hz loop that merely read GPIO2's registers made
+the loss vanish, while the same loop reading only /proc/interrupts made it
+worse.
+
+A level line that stays asserted after its interrupt was serviced (the chip
+has more data) is not latched again while the bank smart-idles, because an
+idle bank only reports edges. Once the MPU is in retention nothing keeps
+GPIO2 awake, so the CPUs sleep through the line until an unrelated event
+wakes the bank -- or a register access does.
+
+Mainline only idles/checks banks on CPU_CLUSTER_PM_ENTER, which OMAP4
+cpuidle issues only when MPU logic is lost (C3), and there it tests
+IRQSTATUS: the very latch that is missing. Stock 3.0.8 ran
+omap2_gpio_prepare_for_idle() before every deep entry (C2, C3, C4 and
+suspend, 0xc0066428) and aborted the entry with -EBUSY if any wake-enabled
+level line was at its active level on DATAIN (0xc021cbe0-cc10).
+
+Do the same on CPU_PM_ENTER, on CPU0 only -- OMAP4's coupled idle powers
+CPU0 down last, after CPU1 is OFF, which is where stock ran its hook; the
+previous patch makes cpuidle44xx wake CPU1 after such a veto. Reading DATAIN
+also wakes the bank, so the asserted level is latched and its interrupt
+taken as soon as the veto returns. Limited to OMAP4 machines: AM33xx and
+DRA7 share the "ti,omap4-gpio" register layout but not this idle path.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/drivers/gpio/gpio-omap.c b/drivers/gpio/gpio-omap.c
+index 8693544..4f32ba9 100644
+--- a/drivers/gpio/gpio-omap.c
++++ b/drivers/gpio/gpio-omap.c
+@@ -25,6 +25,7 @@
+ #include <linux/gpio/driver.h>
+ #include <linux/bitops.h>
+ #include <linux/platform_data/gpio-omap.h>
++#include <linux/smp.h>
+ 
+ #define OMAP4_GPIO_DEBOUNCINGTIME_MASK 0xFF
+ 
+@@ -71,6 +72,7 @@ struct gpio_bank {
+ 	bool dbck_flag;
+ 	bool loses_context;
+ 	bool context_valid;
++	bool level_wake_veto;
+ 	int stride;
+ 	u32 width;
+ 	int context_loss_count;
+@@ -1276,6 +1278,27 @@ static void omap_gpio_unidle(struct gpio_bank *bank)
+ 	}
+ }
+ 
++/*
++ * A level-triggered GPIO interrupt that is asserted but not latched in
++ * IRQSTATUS -- the line stayed at its active level after the previous
++ * interrupt was serviced, e.g. a WLAN host-wake with more data pending -- is
++ * not re-detected while the module smart-idles: an idle bank only reports
++ * edges. On OMAP4 the bank idles as soon as the MPU enters retention (cpuidle
++ * C2), so the CPUs would sleep through the line until something unrelated
++ * woke the bank; a BCM4330 over SDIO lost 4-26 % of pings in multi-second
++ * bursts that way. Stock OMAP4 kernels checked DATAIN against the wake-enabled
++ * level lines before every deep idle entry and aborted it with -EBUSY
++ * (omap2_gpio_prepare_for_idle()); do the same from CPU_PM_ENTER.
++ */
++static bool omap_gpio_level_wake_pending(struct gpio_bank *bank)
++{
++	u32 datain = readl_relaxed(bank->base + bank->regs->datain);
++	u32 active = (datain & bank->context.leveldetect1) |
++		     (~datain & bank->context.leveldetect0);
++
++	return active & bank->context.irqenable1 & bank->context.wake_en;
++}
++
+ static int gpio_omap_cpu_notifier(struct notifier_block *nb,
+ 				  unsigned long cmd, void *v)
+ {
+@@ -1291,6 +1314,16 @@ static int gpio_omap_cpu_notifier(struct notifier_block *nb,
+ 		goto out_unlock;
+ 
+ 	switch (cmd) {
++	case CPU_PM_ENTER:
++		/*
++		 * OMAP4's coupled idle has CPU0 power down last, after CPU1 is
++		 * OFF: that is the moment the MPU (and with it this bank) may
++		 * idle, and a veto there is handled by cpuidle44xx.
++		 */
++		if (bank->level_wake_veto && smp_processor_id() == 0 &&
++		    omap_gpio_level_wake_pending(bank))
++			ret = NOTIFY_BAD;
++		break;
+ 	case CPU_CLUSTER_PM_ENTER:
+ 		mask = omap_get_gpio_irqbank_mask(bank);
+ 		isr = readl_relaxed(bank->base + bank->regs->irqstatus) & mask;
+@@ -1433,6 +1466,11 @@ static int omap_gpio_probe(struct platform_device *pdev)
+ 	if (node) {
+ 		if (!of_property_read_bool(node, "ti,gpio-always-on"))
+ 			bank->loses_context = true;
++		/*
++		 * Not the whole "ti,omap4-gpio" family: AM33xx and DRA7 share the
++		 * register layout but not OMAP4's coupled idle.
++		 */
++		bank->level_wake_veto = of_machine_is_compatible("ti,omap4");
+ 	} else {
+ 		bank->loses_context = pdata->loses_context;
+ 
