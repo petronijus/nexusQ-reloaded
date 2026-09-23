@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000050 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 11:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: HS: configure CPU1's CP15 through the PPA on 4460 too
+
+omap4_secondary_init() calls PPA service 0x25 (OMAP4_PPA_CPU_ACTRL_SMP_INDEX)
+on secondary CPUs only for OMAP443x HS. On OMAP446x HS the same service is
+what sets the Cortex-A9 Diagnostic register bits for errata 742230, 743622
+and 751472 (0x850) on CPU1. A non-secure kernel cannot set them itself --
+those errata options depend on !ARCH_MULTIPLATFORM for that reason -- and
+the ROM sets them on CPU0 at cold boot, but CPU1's secondary boot does not.
+So on a 4460 HS CPU1 has been running without the three workarounds.
+
+Measured on a Nexus Q (4460 HS) with the SAR breadcrumbs of patch 0049,
+CPU1's Diagnostic register:
+
+  after secondary boot                0x00000000
+  as the ROM hands it back from OFF   0x00000000
+  after omap4_cpu_resume's PPA 0x25   0x00000850   (CPU0: 0x850 throughout)
+
+It is also why a CPU1 OFF from cpuidle hung the board: cpu_ca9mp_do_resume()
+compares the saved Diagnostic value (0) with the live one (0x850), finds them
+different, and writes the secure-only register from non-secure -- an
+undefined instruction taken with the MMU off.
+
+Stock 3.0.8 issues this service on CPU1 on every wake, with CPU0 running
+(ppa_cp15_cpu1_configure, 0xc0067978), which is the API's stated
+precondition and holds during secondary init. Issue it for every OMAP44xx HS
+secondary. The resume path retries until the service returns 0; do the same
+here, bounded, and say so if it never succeeds.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/omap-smp.c b/arch/arm/mach-omap2/omap-smp.c
+index bf06c02..1ac16a4 100644
+--- a/arch/arm/mach-omap2/omap-smp.c
++++ b/arch/arm/mach-omap2/omap-smp.c
+@@ -152,10 +152,36 @@ static void omap4_secondary_init(unsigned int cpu)
+ 	 * while executing NS_SMP API on CPU1 and PPA version must be 1.4.0+.
+ 	 * OMAP443X GP devices- SMP bit isn't accessible.
+ 	 * OMAP446X GP devices - SMP bit access is enabled on both CPUs.
++	 *
++	 * The same API also configures CPU1's CP15 on OMAP446X HS, and there
++	 * it is not optional: it is what sets the Cortex-A9 Diagnostic
++	 * register bits for errata 742230, 743622 and 751472 (0x850), which a
++	 * non-secure kernel cannot set itself (those errata options depend on
++	 * !ARCH_MULTIPLATFORM). The ROM sets them on CPU0 at cold boot; CPU1's
++	 * secondary boot does not, so without this call CPU1 runs with
++	 * Diagnostic == 0. Measured on a 4460 HS (Nexus Q): CPU1 0x000 after
++	 * boot, 0x850 only after omap4_cpu_resume's ppa_actrl_retry. Besides
++	 * the missing workarounds, cpu_ca9mp_do_resume() then finds the saved
++	 * 0 differing from the live 0x850 on the first CPU OFF, writes the
++	 * secure-only register from non-secure and hangs with the MMU off.
++	 * Stock 3.0.8 issued this call on CPU1 on every wake
++	 * (ppa_cp15_cpu1_configure), with CPU0 running as here.
++	 *
++	 * The resume path retries until the API returns 0; do the same here,
++	 * bounded, since a secondary that cannot configure itself should say so.
+ 	 */
+-	if (soc_is_omap443x() && (omap_type() != OMAP2_DEVICE_TYPE_GP))
+-		omap_secure_dispatcher(OMAP4_PPA_CPU_ACTRL_SMP_INDEX,
+-							4, 0, 0, 0, 0, 0);
++	if (soc_is_omap44xx() && (omap_type() != OMAP2_DEVICE_TYPE_GP)) {
++		int tries = 10;
++		u32 ret;
++
++		do {
++			ret = omap_secure_dispatcher(OMAP4_PPA_CPU_ACTRL_SMP_INDEX,
++						     4, 0, 0, 0, 0, 0);
++		} while (ret && --tries);
++		if (ret)
++			pr_warn("CPU%u: PPA CP15/ACTRL configure failed: %u\n",
++				cpu, ret);
++	}
+ 
+ 	if (soc_is_omap54xx() || soc_is_dra7xx()) {
+ 		/*

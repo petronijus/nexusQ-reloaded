@@ -1233,6 +1233,176 @@ t=45356 s. It shows the TX-wedge signature `loss:100 sig:-44` and 348
 a USB gadget re-enumeration at 8625 s. This is untested and tracked in CHANGELOG
 Known issues.
 
+## 4p. Breadcrumbs: CPU0 resumes fine, CPU1 dies inside the generic cpu_resume (2026-09-23)
+
+Kernel **6.18.48-r9** adds patch 0049 (`CONFIG_OMAP4_IDLE_BREADCRUMBS`). Each step
+of a CPU's trip into and back out of OFF writes a marker into an unused SAR word
+for that CPU (`0x4a326d80 + cpu*0x10`: stage, entry count, resume count,
+save_state). That covers `omap4_enter_lowpower`, the finisher in `sleep44xx.S`,
+and the MMU-off resume entry.
+
+- **SAR words chosen by measurement.** Bank 1 holds power-on noise everywhere
+  except `0xa00–0xa2c` and `0xfe4–0xffc`.
+- **Survives a warm reset.** A pattern written at `0xd80` came back unchanged
+  across a warm reboot.
+- **Word access only.** Byte-wise reads of SAR fault (SIGBUS), so the reader
+  uses 32-bit accesses. The base is `0x4A326000` (L4_WKUP + 0x26000).
+
+Clean T3 on r9 (MPU and CORE held ON). It hung as before, and after the watchdog
+reset the breadcrumbs read:
+
+```
+cpu0: 4e51000f  entries 1  resumes 1  save_state 1   -> OFF, ROM, resume, back in C: OK
+cpu1: 4e510033  entries 1  resumes 1  save_state 2   -> stopped after 0x33 "L2 done"
+```
+
+**CPU0 powers off and resumes completely.** That is the path hotplug never
+tested, and it works. **CPU1 dies inside the generic `cpu_resume`**, after
+`omap4_cpu_resume` has finished (the PPA NS-SMP call and L2 are both done).
+What runs there, still with the MMU off:
+
+- `cpu_ca9mp_do_resume` rewrites **Diagnostic** (c15,c0,1) and **Power
+  Control** (c15,c0,0) if they differ from the saved values.
+- `cpu_v7_do_resume` rewrites **ACTLR** the same way, then TTB/PRRR/NMRR, then
+  `cpu_resume_mmu`.
+
+On HS we run non-secure, so a write to a secure-only register is an undefined
+instruction with the MMU off, i.e. a silent hang. CPU0 gets through, so its
+values evidently match. The working hypothesis: something only the secure side
+sets on CPU1 at boot (errata bits in Diagnostic, for instance) is not re-set when
+the ROM wakes CPU1 from OFF. The same comparison would then ask the kernel to
+make a write it cannot make. Stock never writes Diagnostic or PCR on resume
+(audit, `0xc0067a40`).
+
+**r10** snapshots Diagnostic, PCR, ACTLR and NSACR per CPU at suspend and again
+just before `cpu_resume` (`0x4a326dc0 + cpu*0x20`). The pair that differs names
+the write. `nq-deep-idle-ladder.sh --crumbs` decodes all of it.
+
+Side findings from this run:
+
+- CPU1 computed `save_state 2` (MPU OSWR). It reads `mpuss_pd`'s next state
+  before CPU0 has applied `keep_mpu_on`: in the coupled path CPU0 waits for
+  CPU1 to reach OFF *before* it programs the MPU. With `keep_mpu_on` the MPU
+  stays ON regardless, so CPU1 over-saves context. That is harmless but wrong,
+  and it needs its own fix when the knob becomes a real policy.
+- The experiment kernels (r8, r9) are not published to the OTA repo. So
+  `nq-kernel-ota`'s post-promote reconcile warns that the apk database still
+  says `6.18.48-r7`. The running kernel is unaffected. This matters only to
+  `verify-self`/the rescue builder, and resolves when a kernel is published.
+
+## 4q. FOUND: CPU1 runs without the A9 errata bits, and its resume tries to clear them (2026-09-23)
+
+Kernel **6.18.48-r10** extends 0049 with CP15 snapshots. Clean T3 hung again, and
+`nq-deep-idle-ladder.sh --crumbs` after the watchdog reset read:
+
+```
+cpu0: stage 0x0f (resumed, back in C)         save_state 1
+      DIAG  before suspend 0x00000850  before cpu_resume 0x00000850
+      PCR   0x00000000 / 0x00000000   ACTLR 0x00000041 / 0x00000041
+      NSACR 0x00040c00 / 0x00040c00
+cpu1: stage 0x33 (next: generic cpu_resume)   save_state 2
+      DIAG  before suspend 0x00000000  before cpu_resume 0x00000850   <-- differs
+      PCR   0x00000000 / 0x00000000   ACTLR 0x00000041 / 0x00000041
+      NSACR 0x00060c00 / 0x00060c00
+```
+
+**The hang, exactly.** The ROM's wake-from-OFF path sets CPU1's Diagnostic
+register to `0x850`. `cpu_ca9mp_do_resume` finds that it differs from the `0`
+saved at suspend and executes `mcr p15, 0, r4, c15, c0, 1` to put the 0 back.
+From non-secure on this HS part that is an undefined instruction, taken with the
+MMU off: a silent hang. CPU0's values match, so it writes nothing and gets
+through.
+
+**The bigger finding: CPU1 runs without the errata workarounds.** `0x850` is
+bits 4, 6 and 11, the Cortex-A9 workarounds for errata **742230** (DMB),
+**743622** (store-buffer hazard) and **751472** (interrupted broadcast
+maintenance). The ROM/PPA sets them on CPU0 at cold boot and on any CPU it wakes
+from OFF, but **not** on CPU1's secondary boot (`omap4460_secondary_startup` +
+PPA 0x25). Mainline makes these options depend on `!ARCH_MULTIPLATFORM`: a
+non-secure kernel cannot write the register, so firmware owns it. So since SMP
+was brought up, CPU1 has been running exposed to three SMP-coherency errata.
+That is independent of sleep states, and worth fixing for its own sake.
+
+NSACR also differs between the cores (bit 17 set on CPU1 only), which the stock
+audit is to explain.
+
+Fix direction, pending the stock audit of CPU1 bring-up:
+
+- (a) make CPU1 boot with the same Diagnostic value as CPU0, through whatever
+  secure service stock used. This fixes the errata exposure *and* makes the
+  resume comparison match.
+- (b) as stock does, have the OMAP4 HS resume not rewrite secure-only CA9
+  registers.
+
+(a) is the root cause. (b) alone would hide the errata gap.
+
+## 4r. RESOLVED: PPA 0x25 sets CPU1's errata bits, and with it C2 runs (2026-09-23)
+
+**r11** added a third snapshot at the ROM handoff (resume stage 0x31, before
+`ppa_actrl_retry`). CPU1's Diagnostic register read:
+
+```
+suspend 0x000  ->  ROM handoff 0x000  ->  before cpu_resume 0x850
+```
+
+So the ROM's wake path leaves it alone, and **PPA service 0x25** sets it. Stock
+issues that service on CPU1 on every wake (`ppa_cp15_cpu1_configure`,
+`0xc0067978`). Mainline issues it at secondary init only on 443x. The stock audit
+confirmed the rest:
+
+- Stock never reads or writes c15,c0,0/1 anywhere; a full image scan found no
+  such `mcr`/`mrc`.
+- Stock never used the generic `cpu_resume` on OMAP4. It restored a custom SAR
+  context instead.
+- No secure service other than 0x25 touches Diag.
+
+**Patch 0050** (kernel **6.18.48-r12**) issues 0x25 at secondary init on every
+OMAP44xx HS, with a bounded retry and a warning on failure. It fixes two things
+at once:
+
+1. **CPU1 now boots with the A9 errata workarounds** (742230, 743622, 751472),
+   like CPU0. It had been running without them since SMP bring-up.
+2. The resume comparison matches, so `cpu_ca9mp_do_resume` no longer writes the
+   secure-only register.
+
+r12 booted from the trial slot and was promoted. `dmesg` has no PPA warning.
+
+**Clean T3 on r12** (`nq-deep-idle-ladder.sh 0 1 0 60 0 1`: BT released, CPU1
+online, MPU+CORE held ON):
+
+```
+t+60  C2 usage 7864 on both CPUs (lock-step), no hang
+cpu0_pwrdm OFF:10544   cpu1_pwrdm OFF:15558
+cpu0: 0x0f  entries 7779  resumes 5272   DIAG 0x850 / 0x850 / 0x850
+cpu1: 0x0f  entries 7864  resumes 7779   DIAG 0x850 / ROM 0x000 / 0x850
+```
+
+**Both CPUs power OFF from cpuidle and resume, thousands of times a minute.**
+That is the first time on this port. The unit stayed reachable throughout and
+restored itself to defaults afterwards. (The gap between entries and resumes is
+entries whose WFI fell through, stage 0x26 → 0x0e, when a wake event was
+already pending.)
+
+**Next rungs, same boot (r12):**
+
+| run | knobs | 60 s result |
+|---|---|---|
+| T4 | `0 0 0 60 0 1`, MPU free (mainline C2 = MPU CSWR), CORE held ON | **16168** C2 entries, `mpu_pwrdm RET:15372` (only MEMBANK1 = L1 off), cpu0/1 OFF 25916/31944, no hang |
+| T5 | `0 0 0 60 0 0`, MPU and CORE at mainline defaults | **24774** C2 entries, `mpu_pwrdm RET:31282`, no hang; **`core_pwrdm RET:0`** |
+
+So **mainline's C2, with the MPU subsystem in retention, works on this board**,
+given patch 0050. CORE never left ON even when free. Some CORE clock domain is
+never idle (USB gadget, SDIO WiFi, EMIF, …). Finding out which is the device-idle
+question. Stock's C2 took CORE only to INA.
+
+**What is still NOT done:**
+
+- CORE idle: find what keeps it ON (stock C2 = CORE INA, C3 = CSWR).
+- C3 (MPU OSWR) is untested. Stock never used MPU OSWR in idle, and the audit
+  lists the HS PPA 0x21 call after MPU context loss as missing.
+- The BT UART QoS (170 µs) still vetoes C2 whenever Bluetooth is bound (§4m).
+- Defaults are unchanged: C2/C3 are registered disabled, so nothing ships armed.
+
 ## Power target: stock's wall draw is unknown, so measure it (open, 2026-09-23)
 
 No reliable public figure exists for the stock Nexus Q's idle draw:
@@ -1253,7 +1423,32 @@ No reliable public figure exists for the stock Nexus Q's idle draw:
 - idle only, read after >300 s of settling.
 
 Stock idles with C1–C4 (CPUs OFF), so its number is the target for R2. Tracked in
-the AI-handover Todoist project. Waiting on Petr to pick the meter.
+the AI-handover Todoist project.
+
+### First wall readings (2026-09-23, kernel r12, Solight energy meter)
+
+The meter shows **power in whole watts only**: 237 V, 0.01 A steps, and a 0.1 kWh
+energy step that is useless at this load. Petr read it by eye. Runs were detached
+(`systemd-run`), with no ssh session open, nothing playing, after >15 min uptime.
+
+| state | display |
+|---|---|
+| default r12: C1 only, BT bound (QoS 170 µs) | steady **3 W** |
+| BT unbound only, C2 disabled (4 min) | 3 W, flicked to 2 W **once** |
+| BT unbound + C2 armed (MPU CSWR, T5 config; 5 min, 42 k entries/CPU, `mpu_pwrdm RET` 79 488×) | **flickers to 2 W repeatedly** |
+
+What this shows:
+
+- The unit idles at roughly **3 W at the wall** (somewhere in 2.5–3.5 W),
+  internal PSU included.
+- **C2 measurably lowers it**: the reading sits near the 2.5 W rounding
+  boundary instead of steadily above it.
+- Releasing the BT UART alone does little.
+- The size of the saving is **not** resolvable with 1 W steps. It is some tenths
+  of a watt.
+
+A meter with ≥0.1 W resolution is still needed, both to size it and to measure
+the stock target.
 
 ## Where this stands (end of 2026-09-22) — paused here
 

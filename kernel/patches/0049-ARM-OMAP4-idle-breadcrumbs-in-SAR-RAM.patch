@@ -1,0 +1,411 @@
+From 0000000000000000000000000000000000000049 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 10:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: leave CPU low-power breadcrumbs in SAR RAM
+
+On the Nexus Q (HS OMAP4460) a CPU entering OFF from cpuidle hangs the
+board within seconds, even with mpu_pwrdm and core_pwrdm held ON. The hang
+is silent: no oops, nothing in ramoops, because the interesting part of
+the path -- the finisher after the caches go off, and the ROM-called
+resume entry -- runs out of coherency or with the MMU off, where nothing
+can print. CPU1 hotplug does not exercise the resume half at all, so it
+tells us nothing about it.
+
+SAR RAM survives a warm reset, and the hardware watchdog already turns
+such a hang into one. So have each step write a marker into an otherwise
+unused SAR word for its CPU, and read the words back after the reset:
+
+  0x4a326d80 + cpu*0x10   +0 last stage  (0x4e5100NN)
+                          +4 omap4_enter_lowpower() entries
+                          +8 ROM -> omap4_cpu_resume entries
+                          +c save_state of the last entry
+
+  0x01 enter_lowpower reached     0x21 finisher, power-down path
+  0x02 about to call finisher     0x22 secure L1 clean done
+  0x0e finisher returned (abort)  0x23 L1 flushed, C bit off
+  0x0f resumed, MMU on, in C      0x24 SCU programmed, out of coherency
+                                  0x25 about to WFI
+  0x31 ROM handed back, MMU off   0x26 WFI fell through
+  0x32 past the NS SMP enable
+  0x33 L2 done, next: generic cpu_resume
+
+A CPU stuck at 0x33 died inside the generic resume (the CP15 restores in
+cpu_v7_do_resume / cpu_ca9mp_do_resume, or turning the MMU on); one stuck
+at 0x25 with no resume counted never came back from WFI. CPU1 hotplug
+goes through the same finisher, so it leaves 0x21..0x25 behind and then
+wakes through the secondary-startup path, without a 0x31.
+
+The words were chosen from measurement: bank 1 holds power-on noise
+everywhere except 0xa00-0xa2c (wakeup addresses, patch 0044's reboot
+reason) and 0xfe4-0xffc (SCU/L2 save), and a pattern written at 0xd80
+came back unchanged across a warm reboot. Stock 3.0.8 used 0xd20-0xd3c
+as scratch, so those are left alone.
+
+It also snapshots the Cortex-A9 registers that the generic resume
+(cpu_ca9mp_do_resume, cpu_v7_do_resume) rewrites whenever they differ from
+the value saved at suspend -- Diagnostic, Power Control, ACTLR, plus NSACR
+-- once on the way down and once just before the jump to cpu_resume:
+
+  0x4a326dc0 + cpu*0x20   +00..+0c  before suspend: DIAG PCR ACTLR NSACR
+                          +10..+1c  before cpu_resume: the same four
+  0x4a326e00 + cpu*0x10   +00..+0c  as the ROM hands the CPU back (0x31),
+                                    before PPA 0x25 runs on CPU1
+
+First run (6.18.48-r9, MPU and CORE held ON): CPU0 went OFF and came all
+the way back (stage 0x0f); CPU1 stopped after 0x33, inside the generic
+resume. A differing pair is a write the non-secure side cannot make on
+this HS part. Second run (r10): CPU1's Diagnostic register was 0 before
+suspend and 0x850 before cpu_resume, so cpu_ca9mp_do_resume tried to write
+the 0 back. The ROM-handoff snapshot tells whether the ROM's wake path or
+the PPA 0x25 call in between set it.
+
+Everything sits behind CONFIG_OMAP4_IDLE_BREADCRUMBS (default n). The C
+helpers run in the __cpuidle section with RCU not watching, so they are
+always-inline, use relaxed accessors and a plain DSB (not wmb(), whose
+outer_sync() takes the PL310 spinlock).
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/Kconfig b/arch/arm/mach-omap2/Kconfig
+index 821727e..8b4adb9 100644
+--- a/arch/arm/mach-omap2/Kconfig
++++ b/arch/arm/mach-omap2/Kconfig
+@@ -255,6 +255,19 @@ config MACH_NOKIA_N8X0
+ 	select MACH_NOKIA_N810
+ 	select MACH_NOKIA_N810_WIMAX
+ 
++config OMAP4_IDLE_BREADCRUMBS
++	bool "Leave OMAP4 CPU low-power breadcrumbs in SAR RAM"
++	depends on ARCH_OMAP4 && SMP && PM
++	help
++	  Record, per CPU, the last step reached on the way into and back out
++	  of a CPU low-power state (omap4_enter_lowpower, the finisher in
++	  sleep44xx.S and the ROM-called resume entry) in otherwise unused SAR
++	  RAM words at offset 0xd80. SAR RAM survives a warm reset, so after a
++	  hang that the hardware watchdog turns into a reboot the markers say
++	  where the CPU stopped -- including code that runs with the MMU off,
++	  which can print nothing. Costs a few uncached stores per deep-idle
++	  entry. Debug aid; say N unless you are bringing up deep idle.
++
+ endmenu
+ 
+ endif
+diff --git a/arch/arm/mach-omap2/omap-mpuss-lowpower.c b/arch/arm/mach-omap2/omap-mpuss-lowpower.c
+index f18ef45..ea0bf1c 100644
+--- a/arch/arm/mach-omap2/omap-mpuss-lowpower.c
++++ b/arch/arm/mach-omap2/omap-mpuss-lowpower.c
+@@ -40,7 +40,9 @@
+ #include <linux/linkage.h>
+ #include <linux/smp.h>
+ 
++#include <asm/barrier.h>
+ #include <asm/cacheflush.h>
++#include <asm/cputype.h>
+ #include <asm/tlbflush.h>
+ #include <asm/smp_scu.h>
+ #include <asm/suspend.h>
+@@ -92,6 +94,72 @@ static DEFINE_PER_CPU(struct omap4_cpu_pm_info, omap4_pm_info);
+ static struct powerdomain *mpuss_pd;
+ static u32 cpu_context_offset;
+ 
++/*
++ * CONFIG_OMAP4_IDLE_BREADCRUMBS markers. The finisher and the resume entry in
++ * sleep44xx.S write stages 0x2N and 0x3N; see omap4-sar-layout.h.
++ */
++enum {
++	IDLE_BC_ENTER		= 0x01,	/* omap4_enter_lowpower() reached */
++	IDLE_BC_SUSPEND		= 0x02,	/* about to call the finisher */
++	IDLE_BC_ABORTED		= 0x0e,	/* finisher returned: no power-down */
++	IDLE_BC_RESUMED		= 0x0f,	/* back through cpu_resume, MMU on */
++};
++
++#ifdef CONFIG_OMAP4_IDLE_BREADCRUMBS
++/*
++ * Runs inside the __cpuidle section with RCU not watching, so: always inline,
++ * relaxed accessors (no MMIO tracing), and a plain DSB to make each marker
++ * reach SAR before the next step -- not wmb(), whose outer_sync() takes the
++ * L2 controller's spinlock.
++ */
++static __always_inline void __iomem *idle_bc_base(unsigned int cpu)
++{
++	return sar_base + OMAP4_IDLE_BC_OFFSET + cpu * OMAP4_IDLE_BC_STRIDE;
++}
++
++static __always_inline void idle_bc(unsigned int cpu, u32 stage)
++{
++	if (!sar_base)
++		return;
++	writel_relaxed(OMAP4_IDLE_BC_MAGIC | stage,
++		       idle_bc_base(cpu) + OMAP4_IDLE_BC_STAGE);
++	dsb(st);
++}
++
++static __always_inline void idle_bc_enter(unsigned int cpu,
++					  unsigned int save_state)
++{
++	void __iomem *bc, *cp;
++	u32 diag, pcr, actlr, nsacr;
++
++	if (!sar_base)
++		return;
++	bc = idle_bc_base(cpu);
++	writel_relaxed(readl_relaxed(bc + OMAP4_IDLE_BC_ENTRIES) + 1,
++		       bc + OMAP4_IDLE_BC_ENTRIES);
++	writel_relaxed(save_state, bc + OMAP4_IDLE_BC_SAVE);
++
++	/* The values cpu_ca9mp_do_suspend()/cpu_v7_do_suspend() will save. */
++	if (read_cpuid_part() == ARM_CPU_PART_CORTEX_A9) {
++		asm volatile("mrc p15, 0, %0, c15, c0, 1" : "=r" (diag));
++		asm volatile("mrc p15, 0, %0, c15, c0, 0" : "=r" (pcr));
++		asm volatile("mrc p15, 0, %0, c1, c0, 1" : "=r" (actlr));
++		asm volatile("mrc p15, 0, %0, c1, c1, 2" : "=r" (nsacr));
++		cp = sar_base + OMAP4_IDLE_CP15_OFFSET +
++		     cpu * OMAP4_IDLE_CP15_STRIDE;
++		writel_relaxed(diag, cp + OMAP4_IDLE_CP15_PRE_DIAG);
++		writel_relaxed(pcr, cp + OMAP4_IDLE_CP15_PRE_PCR);
++		writel_relaxed(actlr, cp + OMAP4_IDLE_CP15_PRE_ACTLR);
++		writel_relaxed(nsacr, cp + OMAP4_IDLE_CP15_PRE_NSACR);
++	}
++	idle_bc(cpu, IDLE_BC_ENTER);
++}
++#else
++static __always_inline void idle_bc(unsigned int cpu, u32 stage) { }
++static __always_inline void idle_bc_enter(unsigned int cpu,
++					  unsigned int save_state) { }
++#endif
++
+ static int default_finish_suspend(unsigned long cpu_state)
+ {
+ 	omap_do_wfi();
+@@ -279,13 +347,22 @@ __cpuidle int omap4_enter_lowpower(unsigned int cpu, unsigned int power_state,
+ 	omap_pm_ops.scu_prepare(cpu, power_state);
+ 	l2x0_pwrst_prepare(cpu, save_state);
+ 
++	idle_bc_enter(cpu, save_state);
++	idle_bc(cpu, IDLE_BC_SUSPEND);
++
+ 	/*
+ 	 * Call low level function  with targeted low power state.
+ 	 */
+-	if (save_state)
+-		cpu_suspend(save_state, omap_pm_ops.finish_suspend);
+-	else
++	if (save_state) {
++		/* cpu_suspend() returns 0 after a real resume, 1 if it aborted */
++		if (cpu_suspend(save_state, omap_pm_ops.finish_suspend))
++			idle_bc(cpu, IDLE_BC_ABORTED);
++		else
++			idle_bc(cpu, IDLE_BC_RESUMED);
++	} else {
+ 		omap_pm_ops.finish_suspend(save_state);
++		idle_bc(cpu, IDLE_BC_ABORTED);
++	}
+ 
+ 	if (IS_PM44XX_ERRATUM(PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD) && cpu)
+ 		gic_dist_enable();
+diff --git a/arch/arm/mach-omap2/omap4-sar-layout.h b/arch/arm/mach-omap2/omap4-sar-layout.h
+index aabf064..8fda3dd 100644
+--- a/arch/arm/mach-omap2/omap4-sar-layout.h
++++ b/arch/arm/mach-omap2/omap4-sar-layout.h
+@@ -26,6 +26,46 @@
+ #define L2X0_PREFETCH_CTRL_OFFSET		0xffc
+ 
+ /* CPUx Wakeup Non-Secure Physical Address offsets in SAR_BANK1 */
++/*
++ * CONFIG_OMAP4_IDLE_BREADCRUMBS: 16 bytes per CPU in SAR bank 1 words that
++ * neither mainline, the ROM nor u-boot use (they hold power-on noise, and a
++ * pattern written there survives a warm reset unchanged -- measured on the
++ * Nexus Q, 2026-09-23). Stock 3.0.8 used 0xd20-0xd3c as scratch, so stay
++ * clear of that.
++ */
++#define OMAP4_IDLE_BC_OFFSET			0xd80
++#define OMAP4_IDLE_BC_STRIDE			0x10
++#define OMAP4_IDLE_BC_STAGE			0x0	/* last step reached */
++#define OMAP4_IDLE_BC_ENTRIES			0x4	/* omap4_enter_lowpower calls */
++#define OMAP4_IDLE_BC_RESUMES			0x8	/* ROM -> omap4_cpu_resume */
++#define OMAP4_IDLE_BC_SAVE			0xc	/* save_state of last entry */
++#define OMAP4_IDLE_BC_MAGIC			0x4e510000
++/*
++ * Cortex-A9 registers that cpu_ca9mp_do_resume()/cpu_v7_do_resume() rewrite
++ * when they differ from the value saved at suspend. Snapshot them on the way
++ * down (C, MMU on) and again just before the jump to cpu_resume (MMU off), so
++ * a resume that dies in there shows which write it was asked to make.
++ */
++#define OMAP4_IDLE_CP15_OFFSET			0xdc0
++#define OMAP4_IDLE_CP15_STRIDE			0x20
++#define OMAP4_IDLE_CP15_PRE_DIAG		0x00	/* c15, c0, 1 */
++#define OMAP4_IDLE_CP15_PRE_PCR			0x04	/* c15, c0, 0 */
++#define OMAP4_IDLE_CP15_PRE_ACTLR		0x08	/* c1, c0, 1 */
++#define OMAP4_IDLE_CP15_PRE_NSACR		0x0c	/* c1, c1, 2 */
++#define OMAP4_IDLE_CP15_POST_DIAG		0x10
++#define OMAP4_IDLE_CP15_POST_PCR		0x14
++#define OMAP4_IDLE_CP15_POST_ACTLR		0x18
++#define OMAP4_IDLE_CP15_POST_NSACR		0x1c
++/* OMAP4_IDLE_CP15_OFFSET + POST_DIAG, spelled out: it is an asm macro argument */
++#define OMAP4_IDLE_CP15_POST_BASE		0xdd0
++/*
++ * The same four registers at the moment the ROM hands the CPU back (resume
++ * stage 0x31), before any PPA call -- to tell what the ROM's wake path sets
++ * from what PPA 0x25 (ppa_actrl_retry, CPU1 on HS) sets.
++ */
++#define OMAP4_IDLE_CP15_ROM_OFFSET		0xe00
++#define OMAP4_IDLE_CP15_ROM_STRIDE		0x10
++
+ #define CPU0_WAKEUP_NS_PA_ADDR_OFFSET		0xa04
+ #define CPU1_WAKEUP_NS_PA_ADDR_OFFSET		0xa08
+ #define OMAP5_CPU0_WAKEUP_NS_PA_ADDR_OFFSET	0xe00
+diff --git a/arch/arm/mach-omap2/sleep44xx.S b/arch/arm/mach-omap2/sleep44xx.S
+index f09c919..a07a43c 100644
+--- a/arch/arm/mach-omap2/sleep44xx.S
++++ b/arch/arm/mach-omap2/sleep44xx.S
+@@ -29,6 +29,75 @@
+ 	dsb
+ .endm
+ 
++/*
++ * CONFIG_OMAP4_IDLE_BREADCRUMBS: record the step reached in this CPU's SAR
++ * word (omap4-sar-layout.h; stride 0x10, hence "lsl #4"). SAR RAM survives a
++ * warm reset, so a hang the watchdog turns into a reboot leaves the last
++ * marker readable -- even from the MMU-off resume path, which cannot print.
++ *
++ * IDLE_BC_VIRT  MMU on. Clobbers r0-r3, r10, lr: use only where those are dead
++ *               (r10 and lr are restored by the finisher's own frame).
++ * IDLE_BC_PHYS  MMU off, physical SAR address. Clobbers r10, r11.
++ */
++#ifdef CONFIG_OMAP4_IDLE_BREADCRUMBS
++.macro	IDLE_BC_VIRT stage
++	bl	omap4_get_sar_ram_base
++	mrc	p15, 0, r10, c0, c0, 5		@ MPIDR
++	and	r10, r10, #0x0f
++	add	r0, r0, r10, lsl #4
++	ldr	r10, =(OMAP4_IDLE_BC_MAGIC | \stage)
++	str	r10, [r0, #(OMAP4_IDLE_BC_OFFSET + OMAP4_IDLE_BC_STAGE)]
++	dsb
++.endm
++
++.macro	IDLE_BC_PHYS stage
++	ldr	r10, =OMAP44XX_SAR_RAM_BASE
++	mrc	p15, 0, r11, c0, c0, 5		@ MPIDR
++	and	r11, r11, #0x0f
++	add	r10, r10, r11, lsl #4
++	ldr	r11, =(OMAP4_IDLE_BC_MAGIC | \stage)
++	str	r11, [r10, #(OMAP4_IDLE_BC_OFFSET + OMAP4_IDLE_BC_STAGE)]
++	dsb
++.endm
++
++/* Snapshot DIAG, PCR, ACTLR, NSACR to SAR + \base + (cpu << \shift) + 0x0..0xc. */
++.macro	IDLE_BC_PHYS_CP15 base, shift
++	ldr	r10, =OMAP44XX_SAR_RAM_BASE + \base
++	mrc	p15, 0, r11, c0, c0, 5		@ MPIDR
++	and	r11, r11, #0x0f
++	add	r10, r10, r11, lsl #\shift
++	mrc	p15, 0, r11, c15, c0, 1		@ Diagnostic
++	str	r11, [r10, #0x0]
++	mrc	p15, 0, r11, c15, c0, 0		@ Power Control
++	str	r11, [r10, #0x4]
++	mrc	p15, 0, r11, c1, c0, 1		@ ACTLR
++	str	r11, [r10, #0x8]
++	mrc	p15, 0, r11, c1, c1, 2		@ NSACR
++	str	r11, [r10, #0xc]
++	dsb
++.endm
++
++.macro	IDLE_BC_PHYS_RESUMED			@ count ROM -> resume entries
++	ldr	r10, =OMAP44XX_SAR_RAM_BASE
++	mrc	p15, 0, r11, c0, c0, 5		@ MPIDR
++	and	r11, r11, #0x0f
++	add	r10, r10, r11, lsl #4
++	ldr	r11, [r10, #(OMAP4_IDLE_BC_OFFSET + OMAP4_IDLE_BC_RESUMES)]
++	add	r11, r11, #1
++	str	r11, [r10, #(OMAP4_IDLE_BC_OFFSET + OMAP4_IDLE_BC_RESUMES)]
++	dsb
++.endm
++#else
++.macro	IDLE_BC_VIRT stage
++.endm
++.macro	IDLE_BC_PHYS stage
++.endm
++.macro	IDLE_BC_PHYS_RESUMED
++.endm
++.macro	IDLE_BC_PHYS_CP15 base, shift
++.endm
++#endif
++
+ #ifdef CONFIG_ARCH_OMAP4
+ 
+ /*
+@@ -63,6 +132,7 @@ ENTRY(omap4_finish_suspend)
+ 	cmp	r0, #0x0
+ 	beq	do_WFI				@ No lowpower state, jump to WFI
+ 
++	IDLE_BC_VIRT 0x21			@ finisher, power-down path
+ 	/*
+ 	 * Flush all data from the L1 data cache before disabling
+ 	 * SCTLR.C bit.
+@@ -78,6 +148,7 @@ ENTRY(omap4_finish_suspend)
+ 	DO_SMC
+ 	ldmfd   r13!, {r4-r12, r14}
+ skip_secure_l1_clean:
++	IDLE_BC_VIRT 0x22			@ secure L1 clean done
+ 	bl	v7_flush_dcache_all
+ 
+ 	/*
+@@ -91,6 +162,7 @@ skip_secure_l1_clean:
+ 	isb
+ 
+ 	bl	v7_invalidate_l1
++	IDLE_BC_VIRT 0x23			@ L1 flushed, C bit off
+ 
+ 	/*
+ 	 * Switch the CPU from Symmetric Multiprocessing (SMP) mode
+@@ -123,6 +195,7 @@ scu_gp_set:
+ 	bl	omap4_get_scu_base
+ 	bl	scu_power_mode
+ skip_scu_gp_set:
++	IDLE_BC_VIRT 0x24			@ SCU programmed: out of coherency
+ 	mrc	p15, 0, r0, c1, c1, 2		@ Read NSACR data
+ 	tst	r0, #(1 << 18)
+ 	mrcne	p15, 0, r0, c1, c0, 1
+@@ -180,6 +253,7 @@ sync:
+ #endif
+ 
+ do_WFI:
++	IDLE_BC_VIRT 0x25			@ about to WFI
+ 	bl	omap_do_wfi
+ 
+ 	/*
+@@ -203,6 +277,7 @@ do_WFI:
+ 	orreq	r0, r0, #(1 << 6)
+ 	mcreq	p15, 0, r0, c1, c0, 1
+ 	isb
++	IDLE_BC_VIRT 0x26			@ WFI fell through, C/SMP back on
+ 	bl	omap4_get_sar_ram_base
+ 	mov	r8, r0
+ 	ldr	r9, [r8, #OMAP_TYPE_OFFSET]
+@@ -238,6 +313,9 @@ ENDPROC(omap4_finish_suspend)
+  * The restore function pointer is stored at CPUx_WAKEUP_NS_PA_ADDR_OFFSET.
+  */
+ ENTRY(omap4_cpu_resume)
++	IDLE_BC_PHYS_RESUMED
++	IDLE_BC_PHYS 0x31			@ ROM handed back, MMU off
++	IDLE_BC_PHYS_CP15 OMAP4_IDLE_CP15_ROM_OFFSET, 4	@ as the ROM left it
+ 	/*
+ 	 * Configure ACTRL and enable NS SMP bit access on CPU1 on HS device.
+ 	 * OMAP44XX EMU/HS devices - CPU0 SMP bit access is enabled in PPA
+@@ -273,6 +351,7 @@ enable_smp_bit:
+ 	mcreq	p15, 0, r0, c1, c0, 1
+ 	isb
+ skip_ns_smp_enable:
++	IDLE_BC_PHYS 0x32			@ past the NS SMP enable
+ #ifdef CONFIG_CACHE_L2X0
+ 	/*
+ 	 * Restore the L2 AUXCTRL and enable the L2 cache.
+@@ -320,6 +399,8 @@ set_aux_ctrl:
+ skip_l2en:
+ #endif
+ 
++	IDLE_BC_PHYS_CP15 OMAP4_IDLE_CP15_POST_BASE, 5	@ as cpu_resume finds it
++	IDLE_BC_PHYS 0x33			@ L2 done; next: generic cpu_resume
+ 	b	cpu_resume			@ Jump to generic resume
+ ppa_por_params_offset:
+ 	.long	ppa_por_params - .

@@ -6,6 +6,39 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — CPU1 ran without three Cortex-A9 errata workarounds (kernel **6.18.48-r12**)
+
+Since SMP was brought up, CPU1's Diagnostic register has read `0x000` while
+CPU0's reads `0x850`: bits 4, 6 and 11, the workarounds for **742230** (DMB),
+**743622** (store-buffer hazard) and **751472** (interrupted broadcast cache
+maintenance). A non-secure kernel cannot set them, which is why those options
+depend on `!ARCH_MULTIPLATFORM`. On this HS part PPA service 0x25 sets them.
+Mainline issues that service at secondary init only on 443x, and stock issued it
+on CPU1 on every wake. **Patch 0050** issues it for every OMAP44xx HS secondary,
+with a bounded retry and a warning if it fails.
+
+The same gap was what hung the board on the first CPU1 power-down from cpuidle.
+`cpu_ca9mp_do_resume` found saved `0` differing from the live `0x850` and wrote
+the secure-only register from non-secure, with the MMU off. With 0050, **both
+CPUs power OFF from cpuidle and resume**: 7864 C2 entries in 60 s,
+`cpu0_pwrdm OFF:10544`, `cpu1_pwrdm OFF:15558`, no hang. Defaults are unchanged
+(C2/C3 still registered disabled).
+
+### Added — SAR-RAM breadcrumbs for the CPU low-power path (kernel **r9–r11**, patch 0049)
+
+`CONFIG_OMAP4_IDLE_BREADCRUMBS` (on in the steelhead defconfig) writes, per CPU:
+
+- the last step reached, into unused SAR words at `0x4a326d80`, covering
+  `omap4_enter_lowpower`, every step of the finisher, and the MMU-off resume
+  entry;
+- the A9 Diagnostic, Power Control, ACTLR and NSACR registers at suspend, at the
+  ROM handoff, and before `cpu_resume`.
+
+SAR survives the warm reset the watchdog turns a hang into, so
+`nq-deep-idle-ladder.sh --crumbs` shows where a CPU stopped, even in code that can
+print nothing. It found the CPU1 errata gap above in three runs. Details:
+`docs/2026-09-20-sleep-states-design.md` §4p–§4r.
+
 ### Changed — deep-idle experiment knobs now do what stock's did (kernel **6.18.48-r8**)
 
 This is experiment scaffolding only. An untouched boot is unchanged: C1 only,
@@ -33,6 +66,15 @@ board. The fault is in the CPU's own OFF/resume path. See
 
 #### Known issues opened by this
 
+- **Boot can stall up to a minute waiting for entropy.** `systemd-random-seed`
+  waits for `random: crng init done`, which has taken 17–74 s across recent boots
+  (r12: 74 s, so `sysinit.target` came at 70 s). There is no `/dev/hwrng`. This
+  predates r12 and the fix is not established: seed crediting or a hardware RNG
+  source are the candidates. Found by the r12 diag sweep
+  (`nq-captures/20260923-102210/`).
+- **Roon can fail once at boot because PulseAudio is not up yet**
+  (`pa_context_connect() failed: Connection refused`, restarted fine). This is a
+  start-ordering race that has not been dispositioned.
 - **WiFi was lost for ~10 h overnight on the r7 boot** (22:52 on 09-22 → morning).
   It showed the TX-wedge signature `loss:100 sig:-44` and 348
   `brcmf_escan_timeout` despite `roamoff=1`, just after a USB gadget

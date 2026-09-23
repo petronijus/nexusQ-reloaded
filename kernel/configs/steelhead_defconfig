@@ -334,6 +334,7 @@ CONFIG_ARCH_OMAP2PLUS_TYPICAL=y
 # OMAP Legacy Platform Data Board Type
 #
 CONFIG_MACH_OMAP_GENERIC=y
+CONFIG_OMAP4_IDLE_BREADCRUMBS=y
 # end of TI OMAP2/3/4 Specific Features
 # end of TI OMAP/AM/DM/DRA Family
 
