@@ -35,6 +35,12 @@ driven from the idle path — the one patch 0024 disabled. They read zero becaus
 the accounting never runs, not because the hardware never moves. Reading them as
 "nothing ever transitions" was the first mistake.
 
+> ⚠️ **Corrected 2026-09-22 (§4n):** the next paragraph is wrong. Mainline
+> `pwrdms_setup()` (`pm44xx.c`) programs `mpu_pwrdm` and `core_pwrdm` to next=RET
+> with logic OFF **at boot**. Live on r7: `PM_MPU_PWRSTCTRL=0x003c0601`,
+> `PM_CORE_PWRSTCTRL=0x03ff0f01`. They are armed; they never transition only
+> because a CPU never powers off.
+
 What *is* true, and rests on the code rather than the counters: with only C1
 registered, nothing ever programs `mpu_pwrdm` or `core_pwrdm` to RET or OFF.
 `omap4_enter_lowpower()` is the only caller that would, and it is reached only
@@ -49,6 +55,13 @@ on a chip whose big power domains are pinned ON. But the fix is "ask for it",
 not "find out why the hardware refuses".
 
 ## 2. The hard part already works: CPU1 really does power off
+
+> ⚠️ **Corrected 2026-09-22 (§4n):** hotplug does **not** go through
+> `omap4_enter_lowpower()`. `omap4_hotplug_cpu()` (`omap-hotplug.c`) calls
+> `finish_suspend(1)` directly and wakes through `omap4460_secondary_startup`
+> + PPA 0x25. It proves the *entry* half (L1 flush, SMC 0x108, SCU OFF), never
+> `cpu_suspend`/`omap4_cpu_resume` or an interrupt wake through the ROM and
+> SAR+0xa04.
 
 CPU hotplug goes through the same `omap4_enter_lowpower()` machinery as the deep
 idle states, so it is a free test of that path — including the HS secure calls.
@@ -945,6 +958,243 @@ only one available without hardware Petr does not have.
 **R2 is therefore closed as attempted-and-blocked, and it no longer depends on R0.**
 The wakeup rate was never what stood in the way.
 
+## 4m. FOUND: a 170 µs CPU-latency QoS from the Bluetooth UART vetoes C2/C3 (2026-09-22)
+
+Earlier runs armed C2 at runtime (with the 0048 knob and with sysfs `disable=0`),
+and the governor still never picked it: `usage`, `above` and `below` all stayed 0
+on both CPUs, with teo the same as menu. (There turned out to be a second,
+independent gate as well. See §4n.)
+The handover's prime suspect was the coupled plumbing (an empty
+`dev->coupled_cpus` makes `cpuidle_coupled_register_device()` succeed without
+building anything). **That suspect is cleared, from source and from the running
+config:**
+
+- `cpuidle_register()` lives in `drivers/cpuidle/cpuidle.c`, not `driver.c`, and it
+  copies its second argument into `device->coupled_cpus` under
+  `CONFIG_ARCH_NEEDS_CPU_IDLE_COUPLED`.
+- `/proc/config.gz` on r7: `CONFIG_ARCH_NEEDS_CPU_IDLE_COUPLED=y` (selected by
+  `ARCH_OMAP4` when `SMP`).
+- `omap4_idle_init()` runs from `omap_late_initcall`, after `smp_init()`, so
+  `cpu_online_mask` already holds both cores.
+
+**The real veto is the CPU-latency QoS**, read on the unit after 19.7 h up:
+
+```
+/dev/cpu_dma_latency   170 us
+C2 exit_latency        768 us   (328 + 440)
+C3 exit_latency        978 us   (460 + 518)
+```
+
+menu and teo both drop every state whose exit latency is above
+`cpuidle_governor_latency_req()` before they even look at predicted idle. So
+neither governor can ever select C2 or C3. That is why the two agree, and why
+`above`/`below` never moved.
+
+**Where 170 comes from.** `8250_omap` sets
+`calc_latency = USEC_PER_SEC * 64 * 8 / baud` (a 64-byte FIFO filling at line
+rate) in `set_termios`, and applies it whenever the port is runtime-active
+(`omap8250_runtime_resume` / the IRQ handler). At 3 Mbaud that is
+512000000 / 3000000 = **170**. No other baud on this board produces it (115200 gives
+4444, 921600 gives 555). 3 Mbaud is the BCM4330 link (patch 0040).
+
+**Why the port never idles.** The chain that holds it:
+
+```
+serial0-0   (hci_uart_bcm)   runtime-SUSPENDED  - hci_bcm's own PM works
+serial0     (serdev ctrl)    no callbacks, held by serdev_device_open()
+4806c000.serial:0.0 (port)   active, 18.7 s suspended in 19.7 h
+4806c000.serial     (UART2)  active  ->  QoS = calc_latency = 170 us
+```
+
+`serdev_device_open()` takes `pm_runtime_get_sync(&ctrl->dev)` and only
+`serdev_device_close()` drops it. `hci_uart` opens the serdev at probe and keeps it
+open for the life of the driver. So while Bluetooth is bound, the UART is
+permanently active and the 170 µs QoS request is permanently in force.
+`hci_bcm`'s runtime suspend only deasserts the chip's device-wake. It never lets
+go of the UART.
+
+**Causality, measured.** Unbind `hci_uart_bcm` from `serial0-0`, read, rebind:
+
+```
+before:  qos=170   uart=active
+unbound: qos=4444  uart=suspended port=suspended
+rebound: qos=170   uart=active      (BCM4330B1 re-patched, hci0 powered)
+```
+
+4444 is the 115200 console UART, and it is above C3's 978 µs, so it does not block
+anything.
+
+### What this does to §4l and to the knob experiments
+
+- **The "four configurations survive on a running box" result measured nothing.**
+  None of them ever entered C2, because the QoS vetoed it before the governor got
+  that far. `omap_enter_idle_coupled()` never ran with `index >= 1`. The entry path
+  is **not** cleared.
+- **The r5/r6 boot hangs are consistent with this, and now read differently.** At
+  boot, before `hci_uart` probes and opens the UART, there is no 170 µs request.
+  C2/C3 were genuinely selectable and genuinely entered, and the board hung. The
+  boot hang is still the only time C2 has ever actually run on this box.
+
+### Stock parity (NOT yet verified against `reverse-eng/vmlinux.bin`)
+
+The expectation, from the Android OMAP 3.0 tree and not yet from our stock binary:
+stock 3.0.8 `omap-serial` carried the same formula (`fifosize * 8 * 10^6 / baud`)
+and the same "only while active" rule. What stock had and we do not is **bluesleep**:
+when the BCM4330 was idle (BT_WAKE / HOST_WAKE both deasserted) the UART was
+released and clock-gated, the QoS request went back to default, and deep idle was
+reachable with Bluetooth up. The parity fix is to make the BT UART idle when the
+chip idles: have `hci_bcm`'s runtime suspend/resume drop and retake the serdev
+controller's runtime-PM reference, and rely on HOST_WAKE (already wired, because
+`serial0-0` does runtime-suspend) to bring it back before data arrives.
+
+## 4n. R2 run for real: CPU0 entering OFF from idle hangs the board, alone (2026-09-22)
+
+### The second gate: patch 0048's premise is backwards
+
+With BT unbound (QoS 4444 µs) and `deep_idle=1`, C2 **still** got 0 entries, even
+with CPU1 offline. The per-state `disable` file read **1** while armed. That was the
+tell:
+
+```c
+/* drivers/cpuidle/cpuidle.c:653, v6.18.48 */
+if (drv->states[i].flags & CPUIDLE_FLAG_OFF)
+        dev->states_usage[i].disable |= CPUIDLE_STATE_DISABLED_BY_USER;
+```
+
+`CPUIDLE_FLAG_OFF` sets the **USER** bit, not the DRIVER bit. The sysfs `disable`
+file is exactly the right switch. `deep_idle` (which calls
+`cpuidle_driver_state_disabled()`) toggles a DRIVER bit that `FLAG_OFF` never set.
+So 0048's commit message and §4k have it the wrong way round. Arming C2 needs
+`echo 0 > cpu{0,1}/cpuidle/state1/disable`. The `deep_idle` knob is redundant at
+best: writing 0 to it *sets* the DRIVER bit and disables the state a second way.
+The three escape-hatch knobs (`skip_cpu1_wait`, `keep_mpu_on`, `skip_lowpower`) are
+still valid and still what split the question below.
+
+Every earlier "armed" run therefore had **two** vetoes in force at once: the 170 µs
+QoS (§4m) and the USER bit. Neither one alone would have shown up.
+
+### The ladder, with a hardware watchdog as the safety net
+
+Hangs no longer cost a mains cycle. `omap_wdt` (WDT2, `4a314000.wdt`, WKUP domain)
+is present and simply unarmed. Arm it at runtime, non-persistently:
+
+```sh
+busctl set-property org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+  org.freedesktop.systemd1.Manager RuntimeWatchdogUSec t 30000000
+dmesg -n 8     # so pr_info reaches the ramoops console record
+```
+
+A hang then becomes a **warm** reset about 50 s later, the unit boots back to
+defaults (C2 off, knobs off, watchdog off), and ramoops survives. §4i explains how
+to read it: `/var/lib/systemd/pstore/console-ramoops-0`. Three hangs were recovered
+this way without anyone touching the box.
+
+Each run: BT unbound, both C2 `disable=0`, knobs set, 60 s, C2 counters every 10 s.
+
+| run | skip_cpu1_wait | keep_mpu_on | skip_lowpower | CPU1 | result |
+|---|---|---|---|---|---|
+| T1 | 1 | 1 | **1** | online | **4969 C2 entries in 60 s**, identical count on both CPUs, no errors |
+| T2 | 1 | 1 | 0 | online | hang within 10 s of arming |
+| T3 | 0 | 1 | 0 | online | hang within 10 s of arming |
+| T3b | 0 | 1 | 0 | **offline** | hang within 10 s of arming |
+
+ramoops for T3 and T3b (at loglevel 8) ends with the arming line itself, then
+nothing: no oops, no warning, no lockup report.
+
+### What that establishes
+
+- **The coupled machinery works.** T1 ran the whole `omap_enter_idle_coupled()`
+  path (rendezvous, tick broadcast onto the gptimer1 clockevent, `cpu_pm_enter`,
+  the parallel barrier) thousands of times on both CPUs in lock-step. The handover
+  suspect is dead from both ends.
+- **The fatal step is `omap4_enter_lowpower()` putting a CPU into OFF from idle**,
+  even with `mpu_pwrdm` left ON.
+- **It is fatal for CPU0 on its own.** T3b had CPU1 hotplugged OFF
+  (`cpu1_pwrdm 3 != 0` in the record), so there was no coupling and no rendezvous.
+  CPU0 alone went OFF and never came back.
+- Contrast: **CPU1** OFF through the same function works through hotplug (§2). The
+  differences are which CPU it is, and how it wakes: hotplug wakes through the SMP
+  boot path, idle through an interrupt and the `omap4_cpu_resume` wakeup address
+  that the HS ROM must honour.
+- This matches the r5/r6 boot hangs (§4l), where the same step was the first deep
+  entry at boot.
+
+### Correction from the stock-parity audit: `keep_mpu_on=1` never kept MPU ON
+
+The table above reads as "a CPU going OFF is fatal even with the MPU ON". **The MPU
+was not ON.** Mainline `pwrdms_setup()` arms MPU and CORE for RET with logic OFF at
+boot, and nothing in the coupled idle path sets them back. 0048's `keep_mpu_on`
+only *skips re-programming* them. Live on r7, before any test:
+
+```
+PM_MPU_PWRSTCTRL   0x4A306300 = 0x003c0601   next=RET, LOGICRETSTATE=0 (logic OFF)
+PM_CORE_PWRSTCTRL  0x4A306700 = 0x03ff0f01   next=RET, logic OFF
+PRM_VOLTCTRL       0x4A307B10 = 0x0000732a   AUTO_RET on MPU/IVA/CORE, permanent
+```
+
+So in T2, T3 and T3b, as soon as both CPUs were OFF (or CPU0 alone with CPU1 hotplugged
+out), the MPU could drop into **OSWR**, which loses its logic. There was no
+`cpu_cluster_pm_enter()`, so GIC/wakeupgen were not saved. Voltage auto-retention on
+the TPS62361 rail could fire as well. Nothing could wake CPU0 after that. **So these
+runs were the first MPU (and possibly CORE) hardware transitions on this port. They
+are not a clean test of CPU OFF.**
+
+The stock contrast (`reverse-eng/vmlinux.bin`):
+
+- **Boot defaults.** Stock's `pwrdms_setup` (`0xc0012d04`) leaves mpu/core/cpu0/cpu1
+  **ON**.
+- **Per-entry programming.** Stock programs MPU/CORE only inside a deep entry and
+  forces both back to ON right after (`0xc00686d8`/`0xc00686e4`).
+- **VC auto-transition.** Stock disables it at boot (`omap_vc_set_auto_trans(…, 0)`)
+  and arms MPU=RET only around entries with mpu < INA.
+- **State table.** Stock's is **C1** WFI; **C2** CPUs OFF + MPU/CORE **INACTIVE**
+  (1100 µs); **C3** CPUs OFF + MPU/CORE CSWR (1200 µs); **C4** MPU CSWR + CORE OSWR
+  (1500 µs). CPU0 *did* go OFF from idle in every deep state.
+- **No MPU OSWR in idle.** Stock never used it, which is what mainline's C3 does.
+  Mainline's C2 (MPU CSWR) is stock's C3 on the MPU side.
+
+### Hotplug was never a control for this path
+
+§2's premise is corrected at its source. Hotplug skips `cpu_suspend`/`omap4_cpu_resume`
+and the ROM interrupt-wake through SAR+0xa04, so the **resume half** of CPU OFF has
+never run on this board. The audit ranks one resume item HIGH on its own:
+
+- **CP15 writes on CPU0 resume.** Mainline's `cpu_ca9mp_do_resume`/`cpu_v7_do_resume`
+  write Diagnostic, Power Control and ACTLR whenever they differ from the saved value.
+- Stock's CPU0 resume sets only ACTLR.SMP, and only if NSACR[18] (`0xc0067a40`).
+- On HS we are non-secure, so such a write is an undefined-instruction trap with the
+  MMU off, i.e. a silent hang.
+
+### Ranked next steps (from the audit, ordered by how cleanly each isolates)
+
+1. Make `keep_mpu_on` really hold MPU (and a new `keep_core_on`, CORE) at **ON**, the
+   way stock's knobs did. Re-run T3 with that fix. That is the first real test of
+   CPU OFF on its own.
+2. If it still hangs, suspect the CPU0 resume CP15 writes. Compare
+   ACTLR/NSACR/PCR on CPU1 after a hotplug cycle against CPU0.
+3. For parity: steelhead `pwrdms_setup` keeps mpu/core at ON, deep entries program
+   and then restore ON; VC auto-transition off at boot; stock's table (C2 = MPU/CORE
+   INA); i608 RTA + 4460 SRAM-LDO RETMODE; the coupled-case gaps (GICD disable before
+   waking CPU1, CPU1 L2-wait, CPU1 wakeupgen/GICC mask).
+
+## Where this stands (end of 2026-09-22) — paused here
+
+- **R2 blockers found:** the BT-UART QoS (§4m) and the USER-disable bit (§4n).
+  With both lifted, C2 runs on a live box through the whole coupled path (T1).
+- **Every rung that powers a CPU OFF hangs.** Those rungs were not clean tests,
+  because MPU/CORE were armed for RET/OSWR from boot and `keep_mpu_on` did not
+  disarm them (§4n correction, confirmed from live PRM registers).
+- **Instrument:** `scripts/diag/nq-deep-idle-ladder.sh`. The watchdog turns every
+  hang into an unattended warm reset with ramoops.
+- **Unit state at pause:** r7, all knobs default, C2/C3 disabled, watchdog off,
+  BT bound, healthy.
+- **Next (not started):** kernel r8, where 0048's `keep_mpu_on` programs MPU ON and
+  a new `keep_core_on` does the same for CORE, the way stock's did. Flash boot.img
+  only (only the built-in `cpuidle44xx.c` changes), then re-run T3. If it still
+  hangs, go to the CPU0-resume CP15 writes (§4n, ranked step 2).
+- **Nothing from this session is committed.** Changed: this doc,
+  `scripts/diag/README.md`, and the new ladder script.
+
 ## Where this stands (end of 2026-09-20)
 
 **R0 — in progress, and it is not the bug hunt it looked like.** The two largest
@@ -999,10 +1249,9 @@ this needs — settle **>300 s** after any daemon restart
   or does something else hold them? Unknown until asked — and the counters will
   only start meaning anything once the idle path runs, since that is what updates
   them.
-- Does `cpuidle44xx`'s coupled path work on this board once domains transition —
-  and is `ARCH_NEEDS_CPU_IDLE_COUPLED` actually enabled in our build? The
-  defconfig does not list it (it would be selected, and `savedefconfig` omits
-  selected symbols), so confirm against the built `.config`, not the defconfig.
+- Does `cpuidle44xx`'s coupled path work on this board once domains transition?
+  (`ARCH_NEEDS_CPU_IDLE_COUPLED=y` is confirmed in r7's `/proc/config.gz`, §4m.
+  The path itself has never run with C2 selected on a live box.)
 - What did stock's six tuning knobs actually gate? The literal-pool scan found
   only the `__param_*` structures; this kernel builds addresses with
   `movw`/`movt`, so a proper scan needs pair reconstruction over the whole
