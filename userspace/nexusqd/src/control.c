@@ -79,6 +79,20 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
         if (*e != 0 || v < 0 || v > 4) return -1;
         out->kind = CTL_SCENE; out->value = (int)v; return 0;
     }
+    /* dark 0|1 — the app's "LED ring off" (nexusq-control owns the setting and
+     * its schedule, and re-asserts it). While dark the ring draws only what
+     * reacts to the user — the music scene and the volume overlay — and none
+     * of its own: no screensaver, no theme, no manual-layer notification, no
+     * update-available blink on the mute LED.
+     * attend 0|1 — a person is being asked to look AT the ring (setup mode
+     * confirms the pairing by its colour), so the dark gate is lifted for as
+     * long as it is held. Kept separate from `dark` so setupd never has to know,
+     * or restore, the user's setting. */
+    if ((!strcmp(tok[0], "dark") || !strcmp(tok[0], "attend")) && n == 2) {
+        if (strcmp(tok[1], "0") && strcmp(tok[1], "1")) return -1;
+        out->kind = !strcmp(tok[0], "dark") ? CTL_DARK : CTL_ATTEND;
+        out->value = tok[1][0] - '0'; return 0;
+    }
     if (!strcmp(tok[0], "brightness") && n == 2) {
         char *e; long v = strtol(tok[1], &e, 10);
         if (*e != 0 || v < 0 || v > 255) return -1;

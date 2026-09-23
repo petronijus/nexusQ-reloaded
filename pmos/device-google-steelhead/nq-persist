@@ -4,7 +4,7 @@
 # A flash writes `boot` (p9) and `userdata` (p13) and nothing else. Everything
 # that makes THIS unit this unit -- which sources are switched on, its name,
 # its WiFi profile, its ssh host keys, its Bluetooth bonds, its site's NTP
-# server -- used to live on the rootfs, so every flash reset it to the image
+# server, its LED theme / ring switch / EQ -- used to live on the rootfs, so every flash reset it to the image
 # defaults and somebody re-did it by hand (or did not: on 2026-09-19 the Prague
 # Q had been without USB Audio for three days because the 09-16 flash switched
 # it off and nothing said so). The same class of defect as the first unit's MAC
@@ -288,6 +288,17 @@ render_ntp() {
 	mv "$SITE_NTP_OUT.tmp" "$SITE_NTP_OUT"
 }
 
+apply_settings() {
+	# The app's per-unit settings (device r106): theme.json, ring.json, eq.json,
+	# eq-presets.json. Like device.json they arrive through symlinks in
+	# /etc/nexusq that point here, written through by nexusq-control (>= r49)
+	# and nexusq-setupd (>= r6); a link with no file yet reads as "never set".
+	# Nothing to seed -- the r106 .pre-upgrade moved any existing plain file
+	# here (or under the unmounted mountpoint, merged by merge_shadow).
+	mkdir -p "$MNT/settings"
+	chmod 0755 "$MNT/settings"
+}
+
 cmd_apply() {
 	is_mounted "$MNT" || die "$MNT is not a mountpoint -- run prepare and mount the store first"
 	if [ ! -f "$MNT/$MARKER" ]; then
@@ -297,6 +308,7 @@ cmd_apply() {
 	merge_shadow
 	each_map seed_one
 	apply_identity
+	apply_settings
 	apply_ssh
 	mkdir -p "$MNT/site"
 	render_ntp
@@ -380,6 +392,7 @@ cmd_status() {
 	each_map status_one
 	echo "identity       : hostname=$(cat "$MNT/identity/hostname" 2>/dev/null || echo -)" \
 	     "device.json=$( [ -s "$MNT/identity/device.json" ] && cat "$MNT/identity/device.json" || echo -)"
+	echo "settings       : $(cd "$MNT/settings" 2>/dev/null && ls *.json 2>/dev/null | tr '\n' ' ' || true)"
 	echo "ssh host keys  : $(find "$MNT/ssh" -maxdepth 1 -name 'ssh_host_*_key' 2>/dev/null | wc -l)" \
 	     "($( [ -f "$SSHD_HOSTKEYS_OUT" ] && echo "rendered for sshd" || echo "NOT rendered -- sshd on rootfs keys"))"
 	echo "site NTP       : $(cat "$MNT/site/ntp-servers" 2>/dev/null || echo 'none (fleet list only)')"

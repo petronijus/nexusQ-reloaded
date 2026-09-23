@@ -116,6 +116,62 @@ static void test_everything_yielding_is_black_not_garbage(void) {
     CHECK(first_pixel_r(&f) == 0);
 }
 
+/* --- the "ring off" gate (comp_render_floor) ------------------------------
+ * With the ring switched off in the app, the ring shows nothing of its own —
+ * no screensaver breath, no theme, no notification drawn on the manual layer
+ * (OTA bar, pairing spin) — but it still reacts: music plays through, and the
+ * volume knob still shows its overlay (Petr, 2026-09-22: "kdyz se hraje nebo
+ * rotuje, tak ring normalne sviti vizualizace, ale nema breathing animaci ani
+ * zadny error notifikace"). nexusqd renders with the floor at PRI_MUSIC. */
+#define RING_DARK_FLOOR PRI_MUSIC
+
+static void test_dark_idle_ring_is_black(void) {
+    /* The whole point: idle, themed, screensaver breathing — and black. */
+    struct compositor c = {0};
+    struct stub ss = {5, 0, 0, 0}, theme = {10, 0, 0, 0}, music = {20, 0, 0, 1}, vol = {30, 0, 0, 1};
+    comp_add(&c, (struct layer){stub_render, &ss, PRI_SCREENSAVER, 1});
+    comp_add(&c, (struct layer){stub_render, &theme, PRI_THEME, 1});
+    comp_add(&c, (struct layer){stub_render, &music, PRI_MUSIC, 1});
+    comp_add(&c, (struct layer){stub_render, &vol, PRI_VOLUME, 1});
+    struct frame f;
+    frame_fill(&f, 99, 99, 99);
+    comp_render_floor(&c, 0.0, &f, RING_DARK_FLOOR);
+    CHECK(first_pixel_r(&f) == 0);
+}
+
+static void test_dark_ring_still_plays_music(void) {
+    struct compositor c = {0};
+    struct stub theme = {10, 0, 0, 0}, music = {20, 0, 0, 0};
+    comp_add(&c, (struct layer){stub_render, &theme, PRI_THEME, 1});
+    comp_add(&c, (struct layer){stub_render, &music, PRI_MUSIC, 1});
+    struct frame f;
+    comp_render_floor(&c, 0.0, &f, RING_DARK_FLOOR);
+    CHECK(first_pixel_r(&f) == 20);
+}
+
+static void test_dark_ring_still_shows_the_volume_knob(void) {
+    struct compositor c = {0};
+    struct stub theme = {10, 0, 0, 0}, music = {20, 0, 0, 1}, vol = {30, 0, 0, 0};
+    comp_add(&c, (struct layer){stub_render, &theme, PRI_THEME, 1});
+    comp_add(&c, (struct layer){stub_render, &music, PRI_MUSIC, 1});
+    comp_add(&c, (struct layer){stub_render, &vol, PRI_VOLUME, 1});
+    struct frame f;
+    comp_render_floor(&c, 0.0, &f, RING_DARK_FLOOR);
+    CHECK(first_pixel_r(&f) == 30);
+}
+
+static void test_music_stopping_under_a_dark_ring_does_not_reveal_the_theme(void) {
+    /* The fall-through must stop at the floor: when the music yields, the
+     * lit-ring behaviour is to fall to the theme — the dark ring must not. */
+    struct compositor c = {0};
+    struct stub theme = {10, 0, 0, 0}, music = {20, 0, 0, 1};
+    comp_add(&c, (struct layer){stub_render, &music, PRI_MUSIC, 1});
+    comp_add(&c, (struct layer){stub_render, &theme, PRI_THEME, 1});
+    struct frame f;
+    comp_render_floor(&c, 0.0, &f, RING_DARK_FLOOR);
+    CHECK(first_pixel_r(&f) == 0);
+}
+
 int main(void) {
     RUN(test_music_is_above_the_theme);
     RUN(test_the_theme_returns_when_music_yields);
@@ -123,5 +179,9 @@ int main(void) {
     RUN(test_it_falls_all_the_way_to_the_screensaver);
     RUN(test_an_inactive_layer_is_skipped_even_on_top);
     RUN(test_everything_yielding_is_black_not_garbage);
+    RUN(test_dark_idle_ring_is_black);
+    RUN(test_dark_ring_still_plays_music);
+    RUN(test_dark_ring_still_shows_the_volume_knob);
+    RUN(test_music_stopping_under_a_dark_ring_does_not_reveal_the_theme);
     return REPORT();
 }

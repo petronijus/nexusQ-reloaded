@@ -55,6 +55,7 @@ Config via env:
 | `NEXUSQ_SETUP_UUID` | `8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a` |
 | `NEXUSQD_SOCK` | `/run/nexusqd.sock` |
 | `NEXUSQ_IDENTITY` | `/etc/nexusq/device.json` — since device r103 (2026-09-19) a **symlink** into the persist store (`/var/lib/nexusq/persist/identity/device.json`); `setName` writes through it via `write_identity()` (r5, identical to nexusq-control r46's), so the name survives a reflash. Pinned in `tests/test_setupd.py` |
+| `NEXUSQ_THEME_CONF` | `/etc/nexusq/theme.json` — _(r6, 2026-09-22)_ the wizard's `setTheme` persists the choice here, through the persist-store symlink (device r106) via `write_json_through()`; before r6 it lived only in nexusqd's memory and was lost at the first reboot. Setup also holds nexusqd `attend 1` for its session, so a ring the user switched off still shows the pairing colour |
 | `NEXUSQ_SETUP_TIMEOUT` | `600` (seconds of inactivity before exit) |
 | `NEXUSQ_WLAN_IFACE` | `wlan0` |
 

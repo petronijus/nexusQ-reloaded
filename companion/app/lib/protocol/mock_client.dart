@@ -15,6 +15,11 @@ class MockClient implements NexusQClient {
   String _theme = 'blue';
   String _scene = 'waveform';
   String _output = 'speaker';
+  // The LED ring switch + schedule, with the bridge's rules (PROTOCOL §4):
+  // a manual switch disables the schedule; enabling one applies it at once
+  // (the mock's clock is always "synced" and it is always daytime).
+  bool _ringOn = true;
+  Map<String, dynamic> _ringSchedule = {'enabled': false, 'off': '23:00', 'on': '07:00'};
   bool _playing = true;
   int _trackIdx = 0;
   // Mirrors the device's 7-band parametric EQ (PROTOCOL §14) closely enough that
@@ -142,7 +147,19 @@ class MockClient implements NexusQClient {
         'output': _output,
         'nowPlaying': _nowPlaying,
         'name': 'Nexus Q (mock)',
+        'ring': _ring,
       };
+
+  Map<String, dynamic> get _ring =>
+      {'on': _ringOn, 'schedule': Map<String, dynamic>.from(_ringSchedule), 'clockSynced': true};
+
+  Map<String, dynamic> _emitRing() {
+    final r = _ring;
+    _events.add(NexusQEvent('ringChanged', r));
+    return r;
+  }
+
+  static final _hhmm = RegExp(r'^([01]\d|2[0-3]):[0-5]\d$');
 
   void _emitVolume() => _events.add(NexusQEvent('volumeChanged', {'volume': _volume, 'muted': _muted}));
   void _emitNowPlaying() => _events.add(NexusQEvent('nowPlayingChanged', _nowPlaying));
@@ -192,6 +209,23 @@ class MockClient implements NexusQClient {
         _output = id;
         _events.add(NexusQEvent('outputChanged', {'output': _output}));
         return {'output': _output};
+      case 'getRing':
+        return _ring;
+      case 'setRing':
+        if (p['on'] is! bool) throw NexusQError('bad_request', 'on must be a boolean');
+        _ringOn = p['on'] as bool;
+        _ringSchedule = {..._ringSchedule, 'enabled': false};
+        return _emitRing();
+      case 'setRingSchedule':
+        final off = p['off'] ?? _ringSchedule['off'];
+        final on = p['on'] ?? _ringSchedule['on'];
+        if (p['enabled'] is! bool || off is! String || on is! String ||
+            !_hhmm.hasMatch(off) || !_hhmm.hasMatch(on) || off == on) {
+          throw NexusQError('bad_request', 'bad schedule');
+        }
+        _ringSchedule = {'enabled': p['enabled'], 'off': off, 'on': on};
+        if (p['enabled'] == true) _ringOn = true;
+        return _emitRing();
       case 'setBrightness':
         _brightness = (p['brightness'] as num).round().clamp(0, 255);
         _events.add(NexusQEvent('brightnessChanged', {'brightness': _brightness}));

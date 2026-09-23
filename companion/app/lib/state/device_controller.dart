@@ -294,6 +294,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
             state.nowPlaying.playing != before.playing) {
           unawaited(refreshQueue());
         }
+      case 'ringChanged':
+        // Also how a SCHEDULED switch reaches the app: the bridge broadcasts
+        // it at the boundary, to every client.
+        state.ring = RingState.fromJson(e.data);
       case 'deviceInfoChanged':
         // Broadcast by the bridge on every rename, to every client — so the
         // home screen follows a rename done from this phone AND from another.
@@ -332,6 +336,47 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     state.brightness = b.clamp(0, 255);
     notifyListeners();
     _client.notify('setBrightness', {'brightness': state.brightness});
+  }
+
+  /// The last ring request the Q refused (e.g. a nexusqd too old to know
+  /// `dark`), shown under the ring controls until the next one succeeds.
+  String? ringError;
+
+  Future<void> setRingOn(bool on) {
+    final before = state.ring;
+    if (before == null) return Future.value();
+    // Optimistic, and with the bridge's rule: a manual switch ends the schedule.
+    return _ringRequest(before, before.copyWith(on: on, scheduleEnabled: false),
+        'setRing', {'on': on});
+  }
+
+  Future<void> setRingSchedule({required bool enabled, String? offAt, String? onAt}) {
+    final before = state.ring;
+    if (before == null) return Future.value();
+    final next = before.copyWith(scheduleEnabled: enabled, offAt: offAt, onAt: onAt);
+    return _ringRequest(before, next, 'setRingSchedule',
+        {'enabled': enabled, 'off': next.offAt, 'on': next.onAt});
+  }
+
+  /// A `call`, not a `notify`: the answer is the ring's real state (enabling a
+  /// schedule can switch the ring at once), and a refusal has to undo the
+  /// optimistic update instead of leaving the switch lying.
+  Future<void> _ringRequest(RingState before, RingState optimistic, String method,
+      Map<String, dynamic> params) async {
+    state.ring = optimistic;
+    notifyListeners();
+    try {
+      final r = await _client.call(method, params);
+      state.ring = RingState.fromJson(r);
+      ringError = null;
+    } on NexusQError catch (e) {
+      state.ring = before;
+      ringError = e.message;
+    } catch (_) {
+      state.ring = before;
+      ringError = 'The Nexus Q did not answer.';
+    }
+    notifyListeners();
   }
 
   void setOutput(String id) {

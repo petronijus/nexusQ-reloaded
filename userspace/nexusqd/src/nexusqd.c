@@ -97,13 +97,20 @@
 #define IDLE_TAP_FRAME_S 0.25
 #define IDLE_AFTER_TICKS 40
 
-/* Compositor layers, by priority (matches the original arbitration):
+/* Compositor layers, by priority:
  *   10  reaction   — volume overlay (Plan 2b), active only during the overlay
- *    8  manual     — CLI/socket override (set/theme/off), off until used (our feature)
- *    7  music      — the audio-reactive scene (Plan 3b), shown while audio plays
+ *    9  music      — the audio-reactive scene (Plan 3b), shown while audio plays
+ *    8  manual     — CLI/socket override (theme breathe, set/off, spin, progress)
  *    5  screensaver— the idle breathing screensaver (Plan 3), always on
  * The music scene fades in (childAlpha) when audio is present and the screensaver
- * fades out, mirroring BaseScreensaver; the volume overlay preempts everything. */
+ * fades out, mirroring BaseScreensaver; the volume overlay preempts everything.
+ *
+ * RING OFF (`dark 1`, the app's LED ring switch and its schedule): render with
+ * the floor at RING_DARK_FLOOR, so only the layers that answer the user — music
+ * and the volume overlay — can light the ring; the screensaver, the theme and
+ * every notification on the manual layer stay dark, and so does the
+ * update-available blink on the mute LED. `attend 1` (setup mode) lifts it. */
+#define RING_DARK_FLOOR 9
 
 /* --- manual override layer (priority 8) ----------------------------------- */
 struct manual_ctx { int rgb[3]; int breathe; int spin; double spin_speed; int progress; };
@@ -219,6 +226,8 @@ int main(void) {
     int vol_dir = 0; double vol_apply_next = 0.0;
     int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
                                  * (companion `brightness N` over the control socket) */
+    int dark = 0, attend = 0;   /* ring-off gate + setup's hold on it (CTL_DARK/CTL_ATTEND);
+                                 * the gate is effective while dark && !attend */
 
     /* Plan 3b audio: spawn `arecord -D pulse` to tap PA's default source, feed PCM
      * segments to the AudioCapture port (volume/FFT/beat); the music scene reacts
@@ -428,6 +437,7 @@ int main(void) {
                 char line[128] = {0}; int r = (int)read(c, line, sizeof(line)-1);
                 struct ctl_cmd cmd;
                 if (r > 0 && ctl_parse(line, &cmd) == 0) {
+                    int quiet = 0;   /* a command that changed nothing (see CTL_DARK) */
                     if (cmd.kind == CTL_SET) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; manual.progress = -1; comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_OFF) { manual.rgb[0]=manual.rgb[1]=manual.rgb[2]=0; manual.breathe = 0; manual.spin = 0; manual.progress = -1; comp.layers[manual_idx].active = 1; }
                     else if (cmd.kind == CTL_PROGRESS) { memcpy(manual.rgb, cmd.rgb, sizeof(manual.rgb)); manual.breathe = 0; manual.spin = 0; manual.progress = cmd.value; comp.layers[manual_idx].active = 1; }
@@ -499,6 +509,22 @@ int main(void) {
                         manual.spin_speed = cmd.speed;
                         comp.layers[manual_idx].active = 1;
                     }
+                    else if (cmd.kind == CTL_DARK || cmd.kind == CTL_ATTEND) {
+                        /* nexusq-control re-asserts `dark` every half minute so a
+                         * restarted nexusqd picks the setting back up. A re-assert
+                         * that changes nothing is therefore the COMMON case and
+                         * must not count as activity — it would pull the idle
+                         * cadence back to 20 fps twice a minute. */
+                        int was = dark && !attend;
+                        if (cmd.kind == CTL_DARK) dark = cmd.value; else attend = cmd.value;
+                        int gated = dark && !attend;
+                        if (gated == was) quiet = 1;
+                        else if (gated) {
+                            /* going dark mid-blink: leave the mute LED on its real
+                             * job (the steady mute state), never frozen amber */
+                            if (mute_blink && !muted && !reaction_overlay_active(&rx, now_s())) apply_mute_led(muted);
+                        } else if (mute_blink) { mute_blink_next = 0; mute_blink_on = 0; }   /* resume it */
+                    }
                     else if (cmd.kind == CTL_THEME) {
                         char path[256]; snprintf(path, sizeof(path), "%s/theme_%s", THEMES_DIR, cmd.name);
                         FILE *fp = fopen(path, "r");
@@ -512,7 +538,7 @@ int main(void) {
                      * probe fires every 5 s and must not keep cadence fast.
                      * CTL_DEBUG is read-only and must be the same, or reading the
                      * cadence would be what breaks it. */
-                    if (cmd.kind != CTL_STATUS && cmd.kind != CTL_DEBUG) { static_ticks = 0; next_frame = 0.0; }
+                    if (cmd.kind != CTL_STATUS && cmd.kind != CTL_DEBUG && !quiet) { static_ticks = 0; next_frame = 0.0; }
                     if (cmd.kind == CTL_DEBUG) {
                         /* One key=value line: the whole render-cadence state
                          * machine, plus the free-running counters. Every term of
@@ -530,7 +556,8 @@ int main(void) {
                             "ovl=%d rx_age=%.3f child_alpha=%.3f "
                             "manual_active=%d manual_breathe=%d manual_spin=%d "
                             "ss_noaudio=%.1f ss_bright=%.4f "
-                            "tap_fd=%d tap_should=%d quiet_since=%.1f vol=%d muted=%d\n",
+                            "tap_fd=%d tap_should=%d quiet_since=%.1f vol=%d muted=%d "
+                            "dark=%d attend=%d\n",
                             dnow - start, n_loops, n_renders, n_spin, n_ready,
                             n_ctl, n_keys, n_rearm, n_vol, vol_pid, vol_comm,
                             frame_int, static_ticks, last_animating,
@@ -539,7 +566,7 @@ int main(void) {
                             ss.elapsed_no_audio, screensaver_brightness(&ss),
                             afd, tap_should_run,
                             quiet_since >= 0.0 ? dnow - quiet_since : -1.0,
-                            volume, muted);
+                            volume, muted, dark, attend);
                         if (dn > 0 && write(c, db, (size_t)dn) < 0) { /* client gone */ }
                     }
                     else if (write(c, "ok\n", 3) < 0) { /* client gone */ }
@@ -607,7 +634,8 @@ int main(void) {
          * that borrows the LED) and resumes the moment that ends. Toggles every
          * MUTE_BLINK_S; the deadline gate keeps AVR writes to ~2x/s. Only `mblink stop`
          * (or an explicit `mute R G B` override) clears the flag. */
-        if (mute_blink && !muted && !reaction_overlay_active(&rx, now) && now >= mute_blink_next) {
+        int ring_dark = dark && !attend;   /* the ring-off gate, for this whole tick */
+        if (mute_blink && !muted && !ring_dark && !reaction_overlay_active(&rx, now) && now >= mute_blink_next) {
             mute_blink_on = !mute_blink_on;
             if (mute_blink_on) avr_set_mute(mute_blink_rgb[0], mute_blink_rgb[1], mute_blink_rgb[2]);
             else               avr_set_mute(0, 0, 0);
@@ -714,12 +742,15 @@ int main(void) {
         if (prev_overlay && !cur_overlay) {
             /* overlay timed out -> hand the mute LED back: resume the update blink if
              * one is pending (and we're not muted), else restore the steady mute state */
-            if (mute_blink && !muted) { mute_blink_next = 0; mute_blink_on = 0; }
+            if (mute_blink && !muted && !ring_dark) { mute_blink_next = 0; mute_blink_on = 0; }
             else apply_mute_led(muted);
         }
         prev_overlay = cur_overlay;
 
-        struct frame f; comp_render(&comp, now, &f); frame_pack(&f, pk);
+        struct frame f;
+        if (ring_dark) comp_render_floor(&comp, now, &f, RING_DARK_FLOOR);
+        else           comp_render(&comp, now, &f);
+        frame_pack(&f, pk);
         /* global ring brightness: scale the packed frame (255 = unchanged). The
          * dedicated mute LED is written separately and is not dimmed here. */
         if (brightness < 255)
@@ -749,7 +780,7 @@ int main(void) {
          * drain, then we loop and re-sleep. */
         int ovl = reaction_overlay_active(&rx, now);
         frame_int = ovl ? 0.016
-                  : ((child_alpha > 0.0f || (comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
+                  : ((child_alpha > 0.0f || (!ring_dark && comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
         /* r13 idle stretch (see IDLE_FRAME_S at the top). Two conditions must BOTH
          * hold, because neither alone is sound:
          *   - INTENT: nothing on the ring is meant to be animating — no volume
@@ -773,15 +804,17 @@ int main(void) {
          * first non-silent period WAKES the loop to drain and the very next
          * iteration renders — the cap was only ever belt-and-braces for a
          * paused->playing transition, which arrives as audio data too. */
+        /* A dark ring hides the manual layer and the screensaver, so neither
+         * can be "meant to animate" — the ring-off state idles at 1 Hz. */
         int animating = ovl || child_alpha > 0.0f
-                     || (comp.layers[manual_idx].active && (manual.breathe || manual.spin))
-                     || !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0);
+                     || (!ring_dark && comp.layers[manual_idx].active && (manual.breathe || manual.spin))
+                     || (!ring_dark && !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0));
         last_animating = animating;
         int tap_silent = quiet_since >= 0.0 && (now - quiet_since) >= TAP_QUIET_S;
         if (!animating && static_ticks >= IDLE_AFTER_TICKS && frame_int < IDLE_FRAME_S) {
             double cap = IDLE_FRAME_S;
             if (afd >= 0 && !tap_silent && cap > IDLE_TAP_FRAME_S) cap = IDLE_TAP_FRAME_S;
-            if (mute_blink && !muted && cap > MUTE_BLINK_S) cap = MUTE_BLINK_S;
+            if (mute_blink && !muted && !ring_dark && cap > MUTE_BLINK_S) cap = MUTE_BLINK_S;
             if (frame_int < cap) frame_int = cap;
         }
         next_frame = tick_base + frame_int;

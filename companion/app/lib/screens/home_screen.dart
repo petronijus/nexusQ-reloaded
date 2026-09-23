@@ -9,6 +9,7 @@ import '../update/update_coordinator.dart';
 import '../spotify/spotify_player.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
+import '../widgets/ring_controls.dart';
 import 'connect_gate.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
@@ -186,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 12),
                       Center(
                         child: DeviceSphere(
-                          on: !s.muted && s.theme != 'off',
+                          on: !s.muted && s.theme != 'off' && s.ring?.on != false,
                           colors: theme.colors, // base glow reflects the LED theme palette
                           size: 184,
                         ),
@@ -259,6 +260,20 @@ class _HomeScreenState extends State<HomeScreen> {
                           const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
                         ],
                       ),
+
+                      // --- LED RING (on/off + schedule) -----------------------
+                      // Only when the bridge reports a ring state: an older Q
+                      // has no `dark` gate, and a switch it cannot honour
+                      // would only lie.
+                      if (s.ring != null) ...[
+                        const _SectionHeader('LED RING'),
+                        RingControls(
+                          ring: s.ring!,
+                          error: controller.ringError,
+                          onRingChanged: controller.setRingOn,
+                          onScheduleChanged: controller.setRingSchedule,
+                        ),
+                      ],
 
                       // --- LIGHT THEME -----------------------------------------
                       const _SectionHeader('LIGHT THEME'),

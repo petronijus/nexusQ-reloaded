@@ -25,7 +25,7 @@ static int send_sock(const char *line) {
     close(s); return 0;
 }
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: nexusled set R G B | theme NAME | off | mute R G B | all R G B | status | debug\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: nexusled set R G B | theme NAME | off | mute R G B | all R G B | dark 0|1 | attend 0|1 | status | debug\n"); return 2; }
     char line[128] = {0};
     const char *verb = strcmp(argv[1], "all") == 0 ? "set" : argv[1];
     int p = snprintf(line, sizeof(line), "%s", verb);

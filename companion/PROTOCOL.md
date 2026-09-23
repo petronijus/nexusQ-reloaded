@@ -73,12 +73,17 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 { "volume": 42, "muted": false,
   "brightness": 200,
   "theme": "blue", "scene": "waveform",
+  "ring": { "on": true, "clockSynced": true,
+            "schedule": { "enabled": false, "off": "23:00", "on": "07:00" } },
   "output": "speaker",
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
                   "artUrl": "...", "source": "spotify", "transport": "spotify-web" } }
 ```
 - `output`: id of the active audio output (the current PulseAudio default sink) —
   one of `speaker` (TAS5713 banana terminals) / `spdif` (optical) / `hdmi`.
+- `ring`: the LED ring switch and its schedule (control **r49**+, see "LED ring
+  on/off" below). **Absent on older bridges** — the app offers the switch only
+  when it is present.
 
 ### Volume / mute  (→ the active output's PulseAudio sink + nexusqd mute LED, see §6)
 | Method | params | result | Event emitted |
@@ -131,9 +136,9 @@ switched off for `spdif`/`hdmi`.
 ### LED ring  (→ nexusqd Unix socket `/run/nexusqd.sock`)
 | Method | params | result | Event |
 |---|---|---|---|
-| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring. **Persistent since control r37**: stored in `/etc/nexusq/theme.json` once nexusqd accepted it, reported by `getState.theme` from the file after a bridge restart, and re-applied to nexusqd at boot; `unavailable` if the file cannot be written (the ring changed, the choice would not survive a reboot) |
+| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring. **Persistent since control r37**: stored in `/etc/nexusq/theme.json` once nexusqd accepted it (since device r106 a symlink into the persist store, so it also survives a flash; the setup wizard's choice is stored there too, setupd r6), reported by `getState.theme` **from the file on every call** (r49), and re-applied to nexusqd at boot; `unavailable` if the file cannot be written (the ring changed, the choice would not survive a reboot) |
 | `listThemes` | — | `{ "themes": [ {name, label} ] }` | — |
-| `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — **new**: picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `auto`+`scene 0..4`; shown while audio plays |
+| `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `scene 0..4`; shown while audio plays. _(Until r49 it sent `auto` first, which cleared the theme's breathing override.)_ |
 | `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
 | `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` — a software scalar applied in nexusqd |
 
@@ -141,6 +146,42 @@ switched off for `spdif`/`hdmi`.
 > primitives **`progress <pct> [R G B]`** (a determinate ring bar) and
 > **`mblink R G B | mblink stop`** (an autonomous mute-LED blink) — driven by the
 > bridge during a system update, see **§12.3**. They are not app-facing methods.
+
+#### LED ring on/off  (control r49 · nexusqd r22 · app 1.23.0)
+| Method | params | result | Event |
+|---|---|---|---|
+| `getRing` | — | ring object | — |
+| `setRing` | `{ "on": bool }` | ring object | `ringChanged` — **also disables the schedule** (any manual switch does; the times are kept) |
+| `setRingSchedule` | `{ "enabled": bool, "off"?: "HH:MM", "on"?: "HH:MM" }` | ring object | `ringChanged` — omitted times keep their stored value; enabling applies the schedule **at once** (the result may already say `on: false`) |
+
+Ring object: `{ "on": bool, "schedule": { "enabled": bool, "off": "HH:MM", "on": "HH:MM" }, "clockSynced": bool }`.
+
+- **Off is not black.** nexusqd's `dark 1` hides everything the ring does on its
+  own — the idle screensaver breath, the colour theme, every notification drawn
+  on the manual layer (OTA progress bar, BT-pairing spin) and the
+  update-available blink on the mute LED — but keeps what answers the user: the
+  **music visualiser** and the **volume-knob overlay** still light it. The mute
+  LED keeps showing the real mute state.
+- **Setup mode lifts it**: the pairing is confirmed by the ring's colour, so
+  `nexusq-setupd` holds nexusqd `attend 1` for its session (§8) without touching
+  the user's setting.
+- **Schedule**: times are the **Q's local time** (`/etc/localtime`), 24 h. The
+  off-window is `[off, on)` and wraps midnight when `off` is later than `on`.
+  `off == on` is `bad_request`. The bridge switches the ring at the boundary and
+  broadcasts `ringChanged` to every client.
+- **`clockSynced`** is false until systemd-timesyncd has set the clock
+  (`/run/systemd/timesync/synchronized`). The RTC has no backup cell, so after a
+  mains unplug the clock is wrong until NTP; until then the schedule **does
+  nothing** and the ring keeps its last state.
+- **Persistence**: `/etc/nexusq/ring.json` — a symlink into the persist store
+  (device r106), so it survives a flash — written atomically through the link
+  once nexusqd has accepted the change (the theme's discipline). nexusqd holds `dark` in memory
+  only, so the bridge **re-asserts** it every 30 s — which is also what restores
+  it at boot and after a nexusqd restart; nexusqd treats an unchanged re-assert
+  as a no-op, not as activity.
+- Errors: `bad_request` (non-bool `on`/`enabled`, a time not `HH:MM`, `off ==
+  on`); `unavailable` when nexusqd rejects `dark` (a nexusqd older than r22) —
+  nothing is stored then — or when the file cannot be written.
 
 ### Now-playing  (→ per-source backends, see §6)
 | Method | params | result | Event |
@@ -222,13 +263,18 @@ graduated from reserved to implemented: see `listOutputs`/`setOutput` above.)_
   that was never themed has no file and is left on nexusqd's stock idle screensaver. Pre-r37
   bridges forgot the theme on every boot and reported `blue` after their own restart while the
   ring still breathed the old hue.
-- **Visualisation** → `auto` + `scene 0..4` selects one of the 5 music-reactive scenes (priority 9,
+- **Visualisation** → `scene 0..4` selects one of the 5 music-reactive scenes (priority 9,
   shown while audio plays — **above** the breathing override since nexusqd r18. The theme is the
   ring's idle mood; the scene is what it does while music plays, and the scene yields (alpha 0 →
   the compositor falls through) the moment audio stops, so the theme comes back on its own.
   Below the override, as it was until 2026-09-07, the visualiser could never be seen once a theme
   was set — invisible only because the theme used to be forgotten on every boot).
 - **LED brightness** → a nexusqd `brightness` command + a software brightness scalar.
+- **LED ring on/off** → nexusqd `dark 0|1`: the compositor renders with a
+  priority **floor at the music layer (9)**, so only music (9) and the volume
+  overlay (10) can draw; the manual layer (8) and the screensaver (5) stay
+  black and the mute-LED update blink is suppressed. `attend 0|1` (setupd)
+  lifts the gate while held. The effective gate is `dark && !attend`.
 - **now-playing** → each source publishes track/artist/album/art + play state to the bridge:
   `librespot --onevent <hook>` for Spotify, shairport-sync's metadata pipe for AirPlay, the Roon
   Core for Roon. **Transport is per-source and advertised as `nowPlaying.transport`** (see §5):

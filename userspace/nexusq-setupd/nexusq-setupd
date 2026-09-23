@@ -35,6 +35,9 @@ import unicodedata
 SETUP_UUID = os.environ.get("NEXUSQ_SETUP_UUID", "8e1f0cf7-508f-4875-b62c-fcd67e2f3d3a")
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 IDENTITY_PATH = os.environ.get("NEXUSQ_IDENTITY", "/etc/nexusq/device.json")
+# The same file nexusq-control persists the theme in (a symlink into the
+# persist store since device r106) and restores it from at boot.
+THEME_CONF_PATH = os.environ.get("NEXUSQ_THEME_CONF", "/etc/nexusq/theme.json")
 SETUP_TIMEOUT = float(os.environ.get("NEXUSQ_SETUP_TIMEOUT", "600"))
 WLAN = os.environ.get("NEXUSQ_WLAN_IFACE", "wlan0")
 FORCE_FLAG = "/run/nexusq-setup.force"
@@ -81,21 +84,22 @@ def pairing_color(mac):
     return tuple(int(v * 255 + 0.5) for v in rgbf)
 
 
-def write_identity(path, ident):
-    """Atomically write the identity file THROUGH a symlink, never over it.
+def write_json_through(path, obj):
+    """Atomically write a per-unit JSON file THROUGH a symlink, never over it.
 
-    Since device r103 /etc/nexusq/device.json is a symlink into the per-unit
-    persist store (`nq-persist`): tmp-then-os.replace(link) would swap the link
-    for a regular file, and the next flash would lose the name again. The temp
-    file goes beside the link's TARGET and is renamed over that. Byte-for-byte
-    the same rule as nexusq-control's write_identity, for the same reason the
-    hostname rule is shared: two daemons, one file. Raises OSError."""
+    /etc/nexusq/device.json (device r103) and theme.json (r106) are symlinks
+    into the per-unit persist store (`nq-persist`): tmp-then-os.replace(link)
+    would swap the link for a regular file, and the next flash would lose the
+    setting again. The temp file goes beside the link's TARGET and is renamed
+    over that. Byte-for-byte the same rule as nexusq-control's
+    write_json_through, for the same reason the hostname rule is shared: two
+    daemons, one file. Raises OSError."""
     real = os.path.realpath(path)
     os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
     tmp = f"{real}.tmp.{os.getpid()}"
     try:
         with open(tmp, "w") as f:
-            json.dump(ident, f)
+            json.dump(obj, f)
         os.replace(tmp, real)
     except OSError:
         try:
@@ -103,6 +107,10 @@ def write_identity(path, ident):
         except OSError:
             pass
         raise
+
+
+def write_identity(path, ident):
+    write_json_through(path, ident)
 
 
 def sanitize_hostname(name):
@@ -212,6 +220,23 @@ class SetupCore:
 
     def touch(self):
         self.last_activity = time.monotonic()
+
+    # The ring during a setup session. The user may have switched the ring
+    # off in the app (nexusq-control sends nexusqd `dark 1`), and setup cannot
+    # work dark: the pairing is confirmed by the COLOUR on the ring
+    # (confirmColor), and the spin is how the orb says it is listening. So the
+    # session holds `attend 1`, which lifts the dark gate without touching the
+    # user's setting — setupd never needs to know it, or restore it.
+    def begin_led(self):
+        self.led.send("attend 1")
+        self.led.send(SPIN_CMD)
+
+    def end_led(self):
+        # LED back to auto unless a theme was chosen (finishSetup already
+        # applied it); then hand the ring back to the user's on/off setting.
+        if not self.finished:
+            self.led.send("auto")
+        self.led.send("attend 0")
 
     # -- dispatch --
     def handle(self, method, params):
@@ -382,6 +407,15 @@ class SetupCore:
         for c in THEME_CMDS[theme]:
             if not self.led.send(c):
                 raise Err("unavailable", "nexusqd rejected theme")
+        # Persist it where nexusq-control keeps the theme. Before this the
+        # wizard's choice lived only in nexusqd's memory: the ring breathed it
+        # until the first reboot, then fell back to the stock idle look, and
+        # the app went on reporting the bridge's default. Ring first, file
+        # second, like the bridge.
+        try:
+            write_json_through(THEME_CONF_PATH, {"theme": theme})
+        except OSError as e:
+            raise Err("unavailable", f"cannot persist theme: {e}")
         self.chosen_theme = theme
         return {"theme": theme}
 
@@ -585,7 +619,7 @@ def _run_transport():
     except OSError:
         pass
 
-    core.led.send(SPIN_CMD)
+    core.begin_led()
     log("setup mode active: discoverable, RFCOMM profile", SETUP_UUID)
 
     def _idle_check():
@@ -615,8 +649,7 @@ def _run_transport():
             adapter.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(False))
         except Exception:  # noqa: BLE001
             pass
-        if not core.finished:
-            core.led.send("auto")
+        core.end_led()
         try:
             os.unlink(FORCE_FLAG)
         except OSError:

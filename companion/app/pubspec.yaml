@@ -50,7 +50,12 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          the set of outputs follows the HDMI cable live. `listOutputs` is
 #          fetched once at connect, so before this a receiver switched on after
 #          the app had connected stayed greyed out until a restart.
-version: 1.22.0+60
+# 1.23.0 — LED ring on/off + schedule (setRing / setRingSchedule, needs
+#          nexusq-control r49 + nexusqd r22): off keeps the ring dark except
+#          for music and the volume knob; the schedule switches it by the Q's
+#          clock, and a manual switch turns the schedule off. Hidden on a Q
+#          whose bridge reports no `ring` state.
+version: 1.23.0+61
 
 environment:
   sdk: ^3.12.0

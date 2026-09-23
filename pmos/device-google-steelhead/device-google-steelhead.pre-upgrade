@@ -66,4 +66,25 @@ if [ -f "$f" ] && [ ! -L "$f" ]; then
 	fi
 fi
 
+# --- r106: the app's per-unit settings join the persist store ---------------
+# theme.json, ring.json, eq.json and eq-presets.json become symlinks into
+# /var/lib/nexusq/persist/settings, exactly as device.json did in r103 and for
+# the same reason: apk would install the link onto an unowned file. On a unit
+# already on r103+ the store is MOUNTED here, so the file lands straight in it;
+# on an older one it lands under the unmounted mountpoint and `nq-persist
+# prepare` parks it for `apply` to merge at the next boot.
+# Tested in tests/test_persist.sh ("r106 pre-upgrade moves plain settings").
+for name in theme.json ring.json eq.json eq-presets.json; do
+	f=/etc/nexusq/$name
+	if [ -f "$f" ] && [ ! -L "$f" ]; then
+		mkdir -p /var/lib/nexusq/persist/settings
+		if cp -p "$f" "/var/lib/nexusq/persist/settings/$name"; then
+			rm -f "$f"
+			echo "nexusq: $name moved into the persist store for r106" >&2
+		else
+			echo "nexusq: WARNING could not move $f for r106 -- apk may refuse the symlink" >&2
+		fi
+	fi
+done
+
 exit 0

@@ -94,6 +94,59 @@ class TestSetupCore(unittest.TestCase):
         self.assertEqual(r["rgb"], [0, 183, 255])
         core.led.send.assert_called_with("set 0 183 255")
 
+    def test_session_lifts_a_dark_ring_before_it_spins(self):
+        # The ring may be switched off in the app; setup confirms the pairing
+        # by the ring's colour, so the session must lift the gate FIRST.
+        mod = load_daemon()
+        core = self._core(mod)
+        core.begin_led()
+        sent = [c.args[0] for c in core.led.send.call_args_list]
+        self.assertEqual(sent, ["attend 1", mod.SPIN_CMD])
+
+    def test_session_end_hands_the_ring_back_last(self):
+        # attend 0 goes LAST: releasing it before `auto` would let the dark
+        # gate cut in while the ring is still showing setup's own colours.
+        mod = load_daemon()
+        core = self._core(mod)
+        core.end_led()
+        sent = [c.args[0] for c in core.led.send.call_args_list]
+        self.assertEqual(sent, ["auto", "attend 0"])
+
+    def test_finished_session_keeps_the_theme_and_still_releases(self):
+        mod = load_daemon()
+        core = self._core(mod)
+        core.finished = True       # finishSetup already applied the chosen theme
+        core.end_led()
+        sent = [c.args[0] for c in core.led.send.call_args_list]
+        self.assertEqual(sent, ["attend 0"])
+
+    def test_wizard_theme_is_persisted_through_the_store_link(self):
+        # Before device r106 / setupd r6 the wizard's theme lived only in
+        # nexusqd's memory and was gone after the first reboot.
+        mod = load_daemon()
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "persist", "settings", "theme.json")
+            link = os.path.join(d, "theme.json")
+            os.symlink(target, link)
+            with mock.patch.object(mod, "THEME_CONF_PATH", link):
+                core = self._core(mod)
+                core.led.send.return_value = True
+                self.assertEqual(core.handle("setTheme", {"theme": "warm"}), {"theme": "warm"})
+            self.assertTrue(os.path.islink(link), "the link was replaced")
+            with open(target) as f:
+                self.assertEqual(json.load(f), {"theme": "warm"})
+
+    def test_a_theme_nexusqd_refused_is_not_persisted(self):
+        mod = load_daemon()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "theme.json")
+            with mock.patch.object(mod, "THEME_CONF_PATH", path):
+                core = self._core(mod)
+                core.led.send.return_value = False
+                with self.assertRaises(mod.Err):
+                    core.handle("setTheme", {"theme": "warm"})
+            self.assertFalse(os.path.exists(path))
+
     def test_confirm_color_unknown_mac_is_unavailable_not_crash(self):
         # mainline kernels have no sysfs BT address; an empty/garbage MAC must
         # surface as the protocol error, never a ValueError from pairing_color

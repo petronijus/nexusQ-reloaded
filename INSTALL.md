@@ -307,7 +307,11 @@ the only partitions written, and the unit's own state lives on the `cache`
 partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — and
 `fastboot oem unlock` — never touch. So a reflashed unit comes back with its
 **source toggles, name, WiFi profile, Bluetooth bonds, ssh host keys and site
-NTP server** intact, and the app's toggles do not need re-doing. Its ssh
+NTP server** intact, and the app's toggles do not need re-doing. Since device
+**r106** the app's **LED theme, LED ring switch + schedule, EQ and EQ presets**
+are kept too (`/etc/nexusq/{theme,ring,eq,eq-presets}.json` are symlinks into
+the store's `settings/`). The MQTT broker login (`mqtt.json`) is **not** — it
+still has to be re-provisioned from the app after a flash. Its ssh
 fingerprint does not change either: the old "**after any reflash** run
 `ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
 unit that has never run r103, whose keys still live on the rootfs.

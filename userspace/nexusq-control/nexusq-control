@@ -75,23 +75,24 @@ def load_identity(path=None):
     return ident
 
 
-def write_identity(path, ident):
-    """Atomically write the identity file -- THROUGH a symlink, never over it.
+def write_json_through(path, obj):
+    """Atomically write a per-unit JSON file -- THROUGH a symlink, never over it.
 
-    Since device r103 /etc/nexusq/device.json is a symlink into the per-unit
-    persist store (`nq-persist`, the `cache` partition a flash never touches).
-    The old tmp-then-os.replace(link) would have swapped the LINK for a regular
-    file: the rename works, the name shows up, and the next flash loses it
-    again -- silently, which is the exact failure this store exists to end.
-    So the temp file is created beside the link's TARGET and renamed over
-    that. A plain file (tests, an image without the store) resolves to itself
-    and behaves exactly as before. Raises OSError; the caller decides."""
+    The per-unit files under /etc/nexusq are symlinks into the persist store
+    (`nq-persist`, the `cache` partition a flash never touches): device.json
+    since device r103, and theme / ring / eq / eq-presets since r106. The old
+    tmp-then-os.replace(link) would have swapped the LINK for a regular file:
+    the write works, the setting shows up, and the next flash loses it again --
+    silently, which is the exact failure this store exists to end. So the temp
+    file is created beside the link's TARGET and renamed over that. A plain
+    file (tests, an image without the store) resolves to itself and behaves
+    exactly as before. Raises OSError; the caller decides."""
     real = os.path.realpath(path)
     os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
     tmp = f"{real}.tmp.{os.getpid()}"
     try:
         with open(tmp, "w") as f:
-            json.dump(ident, f)
+            json.dump(obj, f)
         os.replace(tmp, real)
     except OSError:
         try:
@@ -99,6 +100,11 @@ def write_identity(path, ident):
         except OSError:
             pass
         raise
+
+
+def write_identity(path, ident):
+    """The identity file {name, room}; see write_json_through."""
+    write_json_through(path, ident)
 
 
 def sanitize_hostname(name):
@@ -228,20 +234,10 @@ def _theme_load(path=None):
 def _theme_save(name, path=None):
     """Atomic write (tempfile + rename), the same discipline as the EQ file:
     a crash mid-write must never leave a torn file that would then read as
-    'never themed'."""
-    path = path or THEME_CONF_PATH
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
+    'never themed'. Through the persist-store symlink (device r106)."""
     try:
-        with open(tmp, "w") as f:
-            json.dump({"theme": name}, f)
-        os.replace(tmp, path)
+        write_json_through(path or THEME_CONF_PATH, {"theme": name})
     except OSError as e:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         raise Err("unavailable", f"cannot persist theme: {e}")
 
 
@@ -261,11 +257,209 @@ def theme_restore_thread(path=None):
         time.sleep(5)
     log("theme restore failed: nexusqd never accepted", name)
 
+# --- LED ring on/off + its schedule ---------------------------------------
+# The app's "LED ring" switch. Off does not black the ring outright: nexusqd's
+# `dark 1` hides everything the ring does on its own (idle breath, theme,
+# notifications on the manual layer, the update-available blink on the mute
+# LED) and keeps what answers the user — the music visualiser and the volume
+# overlay (Petr, 2026-09-22). The schedule turns it off and on by the Q's own
+# wall clock; any manual switch disables the schedule, so there is never a
+# question of which one wins.
+#
+# The bridge owns the setting. nexusqd keeps it in memory only, so it is
+# re-asserted every RING_REASSERT_S — that is also what re-applies it after a
+# nexusqd restart and at boot, and nexusqd treats a re-assert that changes
+# nothing as a no-op (no cadence wake).
+RING_CONF_PATH = os.environ.get("NEXUSQ_RING_CONF", "/etc/nexusq/ring.json")
+# systemd-timesyncd creates this once the clock has been set from NTP. The RTC
+# has no backup cell, so after a mains unplug the clock is wrong until then —
+# and a schedule acting on a wrong clock would switch the ring at random. Until
+# the flag exists the schedule does nothing and the ring keeps its last state.
+TIME_SYNC_FLAG = os.environ.get("NEXUSQ_TIME_SYNC_FLAG",
+                                "/run/systemd/timesync/synchronized")
+RING_REASSERT_S = 30
+RING_SCHEDULE_DEFAULT = {"enabled": False, "off": "23:00", "on": "07:00"}
+_HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _ring_hhmm(v, field):
+    if not isinstance(v, str) or not _HHMM.match(v):
+        raise Err("bad_request", f"{field} must be HH:MM (24 h), got {v!r}")
+    return v
+
+
+def _ring_minutes(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def ring_schedule_wants_on(schedule, now):
+    """Whether the schedule has the ring ON at wall-clock `now` (a datetime).
+    The off-window is [off, on): it wraps midnight when off is later than on
+    (23:00 -> 07:00), and is a plain daytime span otherwise (09:00 -> 17:00)."""
+    t = now.hour * 60 + now.minute
+    off, on = _ring_minutes(schedule["off"]), _ring_minutes(schedule["on"])
+    dark = (off <= t < on) if off < on else (t >= off or t < on)
+    return not dark
+
+
+def ring_seconds_to_boundary(schedule, now):
+    """Seconds from `now` until the next off/on minute begins — only a bound
+    for the scheduler's sleep, so a DST shift that makes it an hour long is
+    harmless (the re-assert cadence caps the sleep anyway)."""
+    t = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
+    best = None
+    for key in ("off", "on"):
+        d = _ring_minutes(schedule[key]) * 60 - t
+        if d <= 0:
+            d += 86400
+        best = d if best is None else min(best, d)
+    return best
+
+
+class Ring:
+    """The ring-off setting, its schedule and its persistence. Transport-free:
+    `send` is nexusqd_send, `clock` returns local wall-clock time, `synced`
+    says whether that clock can be trusted, `on_change` broadcasts."""
+
+    def __init__(self, path=None, send=None, clock=None, synced=None,
+                 on_change=None):
+        import datetime
+        self.path = path or RING_CONF_PATH
+        self.send = send or nexusqd_send
+        self.clock = clock or datetime.datetime.now
+        self.synced = synced or (lambda: os.path.exists(TIME_SYNC_FLAG))
+        self.on_change = on_change or (lambda snap: None)
+        self.lock = threading.Lock()
+        self.conf = self._load()
+        self._last_synced = self.synced()
+
+    # --- persistence (atomic, through the persist-store symlink) -------------
+    def _load(self):
+        conf = {"on": True, "schedule": dict(RING_SCHEDULE_DEFAULT)}
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return conf
+        if not isinstance(data, dict):
+            return conf
+        if isinstance(data.get("on"), bool):
+            conf["on"] = data["on"]
+        s = data.get("schedule")
+        if isinstance(s, dict):
+            try:
+                off = _ring_hhmm(s.get("off"), "off")
+                on = _ring_hhmm(s.get("on"), "on")
+                if off != on and isinstance(s.get("enabled"), bool):
+                    conf["schedule"] = {"enabled": s["enabled"], "off": off, "on": on}
+            except Err:
+                pass   # a torn schedule falls back to the default, disabled
+        return conf
+
+    def _save(self):
+        try:
+            write_json_through(self.path, self.conf)
+        except OSError as e:
+            raise Err("unavailable", f"cannot persist the ring setting: {e}")
+
+    # --- state ------------------------------------------------------------
+    def snapshot(self):
+        with self.lock:
+            return self._snapshot()
+
+    def _snapshot(self):
+        return {"on": self.conf["on"], "schedule": dict(self.conf["schedule"]),
+                "clockSynced": self._last_synced}
+
+    def _apply(self):
+        return self.send("dark %d" % (0 if self.conf["on"] else 1))
+
+    def _commit(self, new_conf):
+        """Ring first, file second — the theme's discipline: the hardware is
+        the truth and the file only has to agree with it. A nexusqd that does
+        not know `dark` (an older build) answers err, and the setting is
+        refused rather than stored as if it had worked."""
+        old = self.conf
+        self.conf = new_conf
+        if not self._apply():
+            self.conf = old
+            self._apply()
+            raise Err("unavailable", "nexusqd rejected the ring setting")
+        self._save()
+
+    # --- methods ----------------------------------------------------------
+    def set_on(self, p):
+        on = p.get("on")
+        if not isinstance(on, bool):
+            raise Err("bad_request", "on must be a boolean")
+        with self.lock:
+            sched = dict(self.conf["schedule"], enabled=False)   # manual wins, schedule off
+            self._commit({"on": on, "schedule": sched})
+            return self._snapshot()
+
+    def set_schedule(self, p):
+        enabled = p.get("enabled")
+        if not isinstance(enabled, bool):
+            raise Err("bad_request", "enabled must be a boolean")
+        with self.lock:
+            off = _ring_hhmm(p.get("off", self.conf["schedule"]["off"]), "off")
+            on_t = _ring_hhmm(p.get("on", self.conf["schedule"]["on"]), "on")
+            if off == on_t:
+                raise Err("bad_request", "off and on must differ")
+            sched = {"enabled": enabled, "off": off, "on": on_t}
+            on = self.conf["on"]
+            self._last_synced = self.synced()
+            if enabled and self._last_synced:
+                on = ring_schedule_wants_on(sched, self.clock())
+            self._commit({"on": on, "schedule": sched})
+            return self._snapshot()
+
+    # --- the scheduler ----------------------------------------------------
+    def tick(self):
+        """One scheduler step: follow the schedule, re-assert the ring state
+        to nexusqd, and report whether anything the app shows changed.
+        Returns the seconds to sleep before the next step."""
+        changed = False
+        with self.lock:
+            synced = self.synced()
+            if synced != self._last_synced:
+                self._last_synced = synced
+                changed = True
+            sched = self.conf["schedule"]
+            now = self.clock()
+            if sched["enabled"] and synced:
+                want = ring_schedule_wants_on(sched, now)
+                if want != self.conf["on"]:
+                    self.conf["on"] = want
+                    changed = True
+                    try:
+                        self._save()
+                    except Err as e:
+                        log("ring schedule: cannot persist:", e.message)
+            self._apply()
+            snap = self._snapshot() if changed else None
+            sleep = RING_REASSERT_S
+            if sched["enabled"]:
+                sleep = min(sleep, ring_seconds_to_boundary(sched, now) + 0.5)
+        if snap is not None:
+            self.on_change(snap)
+        return sleep
+
+    def run(self):
+        while True:
+            try:
+                delay = self.tick()
+            except Exception as e:  # noqa: BLE001 - the scheduler must never die
+                log("ring scheduler step failed:", e)
+                delay = RING_REASSERT_S
+            time.sleep(delay)
+
+
 # The 5 audio-reactive music visualisations, in nexusqd's RenderEngine order
 # (userspace/nexusqd music.c: scene 0..4). setScene selects which effect the ring
-# shows while audio plays. It also sends `auto` first so any solid color-theme
-# override (a `set R G B` from setTheme, compositor priority 8) is cleared and the
-# visualiser (priority 7) is actually visible.
+# shows while audio plays. The music layer (priority 9) sits above the theme's
+# override (8), so the scene is visible without touching the theme.
 SCENES = [
     {"name": "waveform",      "label": "Waveform",   "index": 0},
     {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
@@ -1608,20 +1802,11 @@ def _eq_user_presets_load(path=None):
 
 
 def _eq_user_presets_write(presets, path=None):
-    path = path or EQ_PRESETS_PATH
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
     try:
-        with open(tmp, "w") as f:
-            json.dump({"presets": [{k: v for k, v in p.items() if k != "builtin"}
-                                   for p in presets]}, f)
-        os.replace(tmp, path)
+        write_json_through(path or EQ_PRESETS_PATH,
+                           {"presets": [{k: v for k, v in p.items() if k != "builtin"}
+                                        for p in presets]})
     except OSError as e:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         raise Err("unavailable", f"cannot persist presets: {e}")
 
 
@@ -1748,18 +1933,9 @@ def set_eq(p, path=None):
     if not eq_supported():
         raise Err("unavailable", "kernel does not expose the TAS5713 biquads")
     _eq_apply(st)
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
     try:
-        with open(tmp, "w") as f:
-            json.dump({"bands": st["bands"], "preamp_db": st["preamp_db"]}, f)
-        os.replace(tmp, path)
+        write_json_through(path, {"bands": st["bands"], "preamp_db": st["preamp_db"]})
     except OSError as e:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         raise Err("unavailable", f"cannot persist eq: {e}")
     active = [f"{b['freq_hz']:.0f}Hz {b['gain_db']:+.1f}" for b in st["bands"]
               if b.get("enabled", True) and abs(b["gain_db"]) >= 0.05]
@@ -2234,6 +2410,10 @@ class Bridge:
             log("boot output: PA never became ready, leaving PA's default")
         threading.Thread(target=_boot_output, daemon=True).start()
         threading.Thread(target=self._hdmi_watch, daemon=True).start()
+        # The LED ring switch + schedule; its scheduler thread is started by
+        # main(), like the other restore threads, so a test can build a Bridge
+        # without one.
+        self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap))
 
     # --- HDMI availability is dynamic, so it has to be pushed -------------
     def _hdmi_watch(self):
@@ -2381,7 +2561,13 @@ class Bridge:
             return {"subscribed": ["*"]}, []
         if method == "getState":
             with self.lock:
-                return dict(self.state), []
+                st = dict(self.state)
+            # The theme FILE is the truth, not this bridge's memory: setupd
+            # writes it too, and the setup wizard picks the theme AFTER setName
+            # has restarted this bridge, so the copy read at start-up is stale.
+            st["theme"] = _theme_load() or st["theme"]
+            st["ring"] = self.ring.snapshot()
+            return st, []
         if method == "getDeviceInfo":
             return {"name": DEVICE_NAME, "model": "steelhead", "room": DEVICE_ROOM,
                     "serial": _serial(), "swVersion": _sw_version()}, []
@@ -2406,6 +2592,14 @@ class Bridge:
             with self.lock:
                 self.state["theme"] = name
             return {"theme": name}, [("themeChanged", {"theme": name})]
+        if method == "getRing":
+            return self.ring.snapshot(), []
+        if method == "setRing":
+            snap = self.ring.set_on(p)
+            return snap, [("ringChanged", snap)]
+        if method == "setRingSchedule":
+            snap = self.ring.set_schedule(p)
+            return snap, [("ringChanged", snap)]
         if method == "listThemes":
             return {"themes": THEMES}, []
         if method == "listScenes":
@@ -2415,8 +2609,13 @@ class Bridge:
             idx = SCENE_INDEX.get(name)
             if idx is None:
                 raise Err("bad_request", f"unknown scene {name}")
-            # drop any solid override so the audio visualiser is visible, then select it
-            if not nexusqd_send("auto") or not nexusqd_send(f"scene {idx}"):
+            # Select the scene and nothing else. This used to send `auto` first,
+            # from when the manual override sat ABOVE the music layer and had to
+            # be cleared for the visualiser to show. Since nexusqd r18 music is
+            # above it, so `auto` only did harm: it cleared the colour theme's
+            # breathing override until the next setTheme or reboot, while
+            # getState kept reporting the theme as set.
+            if not nexusqd_send(f"scene {idx}"):
                 raise Err("unavailable", "nexusqd rejected scene")
             with self.lock:
                 self.state["scene"] = name
@@ -3379,6 +3578,7 @@ def main():
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
+    threading.Thread(target=bridge.ring.run, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

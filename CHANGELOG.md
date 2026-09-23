@@ -6,6 +6,90 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the LED ring can be switched off, by hand or on a schedule (nexusqd r22 · nexusq-control r49 · nexusq-setupd r6 · app 1.23.0+61)
+
+The app's home screen has a **LED RING** card: a switch, and a schedule
+(default off 23:00, on 07:00) that switches it by the Q's own clock.
+
+- **Off is not black.** Petr's definition (2026-09-22): while music plays or the
+  volume knob turns, the ring lights as usual; otherwise it is dark — no idle
+  breath, no theme, no notifications. nexusqd gets a new `dark 0|1` command
+  that renders the compositor with a **priority floor at the music layer**, so
+  only the music scene (9) and the volume overlay (10) can draw. The manual
+  layer (8: theme breathe, OTA progress bar, BT-pairing spin, setup colours) and
+  the screensaver (5) stay black, and the amber update-available blink on the
+  mute LED is suppressed; the mute LED still shows the real mute state. The
+  dark ring idles at 1 Hz like a blanked screensaver.
+- **Setup mode is exempt.** The pairing is confirmed by the ring's colour, so a
+  ring switched off would make setup impossible. `nexusq-setupd` holds
+  `attend 1` for its session, which lifts the gate without it ever needing to
+  know — or restore — the user's setting.
+- **Any manual switch disables the schedule** (Petr's choice over "manual holds
+  until the next boundary"); the schedule's times are kept.
+- **The schedule waits for NTP.** The RTC has no backup cell, so after a mains
+  unplug the clock is wrong until timesyncd sets it. Until
+  `/run/systemd/timesync/synchronized` exists the schedule does nothing and the
+  ring keeps its last state; the app says "Waiting for network time".
+- **Persistence and re-assert.** The setting lives in `/etc/nexusq/ring.json`
+  (atomic, written once nexusqd accepted it — the theme's discipline). nexusqd
+  holds `dark` in memory only, so the bridge re-asserts it every 30 s, which
+  also restores it at boot and after a nexusqd restart; nexusqd treats an
+  unchanged `dark`/`attend` as a no-op so the re-assert never wakes the render
+  cadence.
+- Compatibility: the app shows the card only when `getState` carries `ring`
+  (control r49+); a bridge whose nexusqd predates `dark` answers `unavailable`,
+  nothing is stored, and the app reverts the switch and shows the reason.
+- Tests: compositor floor (4, seen failing with the floor removed), `dark` /
+  `attend` parsing, setupd's hold ordering, the bridge's schedule window /
+  manual-disables-schedule / unsynced-clock guard / re-assert (14, the two rule
+  tests seen failing under mutation), app controller + widget (10, the revert
+  seen failing under mutation). Not yet run on hardware.
+
+### Fixed — picking a visualisation no longer wipes the colour theme (nexusq-control r49)
+
+`setScene` sent nexusqd `auto` before `scene N`. `auto` deactivates the manual
+layer, which is where the theme's breathing override lives, so choosing a
+visualisation put the ring back on the stock idle screensaver until the next
+`setTheme` or reboot — while `getState.theme` went on reporting the theme. The
+`auto` dated from when the manual layer sat above the music layer and had to be
+cleared for the visualiser to show; since nexusqd r18 music is above it, so the
+`auto` did nothing but harm. `setScene` now sends only `scene N`
+(`tests/test_settings_persist.py`, seen failing with the `auto` put back).
+
+### Fixed — the LED theme, ring switch and EQ survive a flash (device r106 · nexusq-control r49 · nexusq-setupd r6)
+
+`theme.json`, `ring.json`, `eq.json` and `eq-presets.json` lived on the rootfs,
+so every flash reset the app's settings to defaults — the same class of defect
+r103 ended for the name, WiFi, bonds and ssh keys. They now follow
+`device.json`'s pattern exactly:
+
+- the device package ships `/etc/nexusq/<name>.json` as **symlinks into
+  `/var/lib/nexusq/persist/settings/`**; a dangling link reads as "never set";
+- every writer — the bridge's theme / ring / EQ / preset saves and setupd's
+  wizard theme — goes through `write_json_through()`, which renames over the
+  link's **target** (a plain `os.replace` onto the link would replace it with a
+  file: the setting works, and the next flash loses it again);
+- the r106 `.pre-upgrade` moves an existing plain file to the link target: into
+  the mounted store on an r103+ unit, or under the unmounted mountpoint on an
+  older one, where `nq-persist prepare` parks it and `apply` merges it;
+- `nq-persist apply` creates `settings/`, and `status` lists what is stored.
+
+**The setup wizard's theme was never persisted at all.** setupd drove the ring
+but did not write `theme.json`, so the wizard's choice lasted until the first
+reboot. setupd r6 writes it (through the link), and since the wizard picks the
+theme *after* `setName` has restarted the bridge, `getState.theme` is now read
+from the file on every call instead of from the bridge's start-up copy.
+
+Deliberately **not** included: `mqtt.json` (the broker password — the image and
+apk secret gates refuse any member of that name, and rightly; it needs its own
+decision) and `roon.json` (hand-provisioned, not written by the app).
+
+Tests: `tests/test_settings_persist.py` (each setting written through a link,
+seen failing against a writer that replaces the link), setupd's wizard-theme
+tests, and `test_persist.sh` sections 9–10 (pre-upgrade migration seen failing
+with the loop disabled; parked settings merged; a flash keeps them) — 60/60 in
+the container.
+
 ### Changed — the sink-input gate's safety net is no longer unreachable (nexusqd r21)
 
 ⚠️ **This is hardening, not a measured bug fix — the motivating observation was a
