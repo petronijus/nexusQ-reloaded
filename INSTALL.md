@@ -309,7 +309,8 @@ partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — an
 **source toggles, name, WiFi profile, Bluetooth bonds, ssh host keys and site
 NTP server** intact, and the app's toggles do not need re-doing. Since device
 **r106** the app's **LED theme, LED ring switch + schedule, EQ and EQ presets**
-are kept too (`/etc/nexusq/{theme,ring,eq,eq-presets}.json` are symlinks into
+are kept too, and so is the brightness slider with its ambient switch
+(`/etc/nexusq/{theme,ring,eq,eq-presets,brightness}.json` are symlinks into
 the store's `settings/`). The MQTT broker login (`mqtt.json`) is **not** — it
 still has to be re-provisioned from the app after a flash. Its ssh
 fingerprint does not change either: the old "**after any reflash** run

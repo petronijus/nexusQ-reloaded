@@ -24,8 +24,8 @@ options="!check !archcheck !fhs !tracedeps"
 # slots, the switch is a 512-byte write to p7 "misc", and the choice is made by
 # an initramfs in the boot image; a boot image without it just mounts p13, which
 # is slot A (docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md).
-# r106 moves theme/ring/eq/eq-presets.json into the persist store and needs
-# nexusq-control >= 0.1.0-r49 and nexusq-setupd >= 0.1.0-r6, the revisions that
+# r106 moves theme/ring/eq/eq-presets/brightness.json into the persist store and needs
+# nexusq-control >= 0.1.0-r50 and nexusq-setupd >= 0.1.0-r6, the revisions that
 # write THROUGH the new links (an older bridge would replace a link with a
 # plain file: the setting works, and the next flash loses it again).
 # r104 adds nq-hdmi / nq-cec / nq-hdmi-hold.service and needs nexusq-control
@@ -682,12 +682,12 @@ package() {
 	install -dm755 "$pkgdir"/etc/nexusq
 	ln -s /var/lib/nexusq/persist/identity/device.json "$pkgdir"/etc/nexusq/device.json
 	# r106: the app's per-unit settings (LED theme, ring switch + schedule, EQ,
-	# EQ presets) the same way -- a flash used to reset them all. Written
-	# through the link by nexusq-control >= r49 and nexusq-setupd >= r6; a
+	# EQ presets, brightness + ambient) the same way -- a flash used to reset them all. Written
+	# through the link by nexusq-control >= r50 and nexusq-setupd >= r6; a
 	# dangling link reads as "never set". mqtt.json is deliberately NOT here:
 	# it holds the broker password, and the image/apk secret gates would (rightly)
 	# refuse a member of that name -- it needs its own decision.
-	for f in theme.json ring.json eq.json eq-presets.json; do
+	for f in theme.json ring.json eq.json eq-presets.json brightness.json; do
 		ln -s "/var/lib/nexusq/persist/settings/$f" "$pkgdir/etc/nexusq/$f"
 	done
 

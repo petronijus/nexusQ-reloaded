@@ -55,7 +55,11 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          for music and the volume knob; the schedule switches it by the Q's
 #          clock, and a manual switch turns the schedule off. Hidden on a Q
 #          whose bridge reports no `ring` state.
-version: 1.23.0+61
+# 1.24.0 — Ambient brightness (setAmbient, needs nexusq-control r50 + nexusqd
+#          r23): the slider becomes the maximum and the Q dims the ring through
+#          dusk to a quarter of it, by the sun at its time zone's location.
+#          Hidden on a Q whose bridge reports no `ambient` state.
+version: 1.24.0+62
 
 environment:
   sdk: ^3.12.0

@@ -168,6 +168,45 @@ class RingState {
       );
 }
 
+/// Ambient brightness (PROTOCOL §4, "Ambient brightness"). With it on, the
+/// brightness slider is the MAXIMUM and the Q dims the ring through dusk by
+/// the sun at its time zone's location — never to dark.
+class AmbientState {
+  const AmbientState({
+    this.enabled = false,
+    this.level = 255,
+    this.zone,
+    this.clockSynced = true,
+  });
+
+  final bool enabled;
+  /// What the ring runs at right now (0..255), under the slider's maximum.
+  final int level;
+  /// The time zone the location comes from; null = no known location, so
+  /// ambient cannot be switched on.
+  final String? zone;
+  final bool clockSynced;
+
+  bool get available => zone != null;
+
+  factory AmbientState.fromJson(Map<String, dynamic> j) {
+    final loc = j['location'] is Map ? Map<String, dynamic>.from(j['location']) : null;
+    return AmbientState(
+      enabled: j['enabled'] is bool ? j['enabled'] as bool : false,
+      level: j['level'] is num ? (j['level'] as num).round() : 255,
+      zone: loc != null && loc['zone'] is String ? loc['zone'] as String : null,
+      clockSynced: j['clockSynced'] is bool ? j['clockSynced'] as bool : true,
+    );
+  }
+
+  AmbientState copyWith({bool? enabled}) => AmbientState(
+        enabled: enabled ?? this.enabled,
+        level: level,
+        zone: zone,
+        clockSynced: clockSynced,
+      );
+}
+
 /// The full device state mirrored from the bridge (`getState` / events).
 class DeviceState {
   DeviceState({
@@ -183,6 +222,7 @@ class DeviceState {
     this.reconnecting = false,
     this.deviceName = 'Nexus Q',
     this.ring,
+    this.ambient,
   }) : outputs = outputs ?? kDefaultOutputs;
 
   int volume; // 0..100
@@ -198,6 +238,8 @@ class DeviceState {
   String deviceName;
   /// Null when the bridge predates the ring switch — the app then offers none.
   RingState? ring;
+  /// Null when the bridge predates ambient brightness — no switch then.
+  AmbientState? ambient;
 
   DeviceState copy() => DeviceState(
         volume: volume,
@@ -212,6 +254,7 @@ class DeviceState {
         reconnecting: reconnecting,
         deviceName: deviceName,
         ring: ring,
+        ambient: ambient,
       );
 
   void applyJson(Map<String, dynamic> j) {
@@ -223,6 +266,7 @@ class DeviceState {
     if (j['output'] is String) output = j['output'] as String;
     if (j['nowPlaying'] is Map) nowPlaying = NowPlaying.fromJson(Map<String, dynamic>.from(j['nowPlaying']));
     if (j['ring'] is Map) ring = RingState.fromJson(Map<String, dynamic>.from(j['ring']));
+    if (j['ambient'] is Map) ambient = AmbientState.fromJson(Map<String, dynamic>.from(j['ambient']));
     // NB: `getState` also carries a `name`, and it is deliberately IGNORED here.
     // The bridge snapshots it into its state dict at start-up and never
     // refreshes it, so after a rename that field serves the OLD name — and the

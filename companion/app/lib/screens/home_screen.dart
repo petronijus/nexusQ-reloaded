@@ -10,6 +10,7 @@ import '../spotify/spotify_player.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
 import '../widgets/ring_controls.dart';
+import '../widgets/ambient_brightness.dart';
 import 'connect_gate.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
@@ -260,6 +261,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
                         ],
                       ),
+                      if (s.ambient != null)
+                        AmbientBrightnessTile(
+                          ambient: s.ambient!,
+                          maximum: s.brightness,
+                          error: controller.ambientError,
+                          onChanged: controller.setAmbient,
+                        ),
 
                       // --- LED RING (on/off + schedule) -----------------------
                       // Only when the bridge reports a ring state: an older Q

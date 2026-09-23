@@ -99,6 +99,7 @@ def bare_bridge(mod):
     b.lock = threading.Lock()
     b.state = {"theme": "blue", "scene": "waveform", "brightness": 255}
     b.ring = mock.Mock(snapshot=mock.Mock(return_value={"on": True}))
+    b.brightness = mock.Mock(snapshot=mock.Mock(return_value={"enabled": False}))
     return b
 
 

@@ -456,6 +456,272 @@ class Ring:
             time.sleep(delay)
 
 
+# --- LED brightness + ambient brightness ----------------------------------
+# The brightness slider is persistent (it used to reset to 255 on every bridge
+# restart) and, with AMBIENT on, it is the MAXIMUM: the ring sits at it while
+# the sun is up and dims through dusk to AMBIENT_NIGHT_FACTOR of it, then
+# brightens again through dawn. It never goes dark — switching the ring off at
+# night is the ring schedule's job, not this one's (Petr, 2026-09-23).
+#
+# The curve follows the sun's elevation at the Q's location, which is taken
+# from its time zone: tzdata's zone.tab gives every zone a representative
+# coordinate (Europe/Prague -> 50.08 N 14.43 E). Within one zone that is off by
+# at most a few minutes of dusk, which is invisible in a fade that takes an
+# hour; it needs no GPS and no location permission in the app.
+BRIGHTNESS_CONF_PATH = os.environ.get("NEXUSQ_BRIGHTNESS_CONF",
+                                      "/etc/nexusq/brightness.json")
+ZONEINFO_DIR = os.environ.get("NEXUSQ_ZONEINFO", "/usr/share/zoneinfo")
+BRIGHTNESS_DEFAULT = 255
+# Full brightness from this elevation up: the sun is clear of the horizon haze.
+AMBIENT_DAY_ELEV = 6.0
+# Night level from here down: the end of nautical twilight, when the sky has
+# no useful light left. Between the two the fade is a smoothstep, so it has no
+# visible knee at either end.
+AMBIENT_NIGHT_ELEV = -12.0
+# Night = a quarter of the user's maximum. The ring's brightness is a linear
+# PWM scalar and the eye is roughly logarithmic, so a quarter reads as clearly
+# dimmer without looking off.
+AMBIENT_NIGHT_FACTOR = 0.25
+# Never below this, whatever the maximum: under it the ring's colours break up
+# into the AVR's lowest PWM steps.
+AMBIENT_MIN_LEVEL = 8
+AMBIENT_TICK_S = 60
+
+
+def sun_elevation(lat, lon, when_utc):
+    """The sun's elevation in degrees at (lat, lon) — north and east positive —
+    at the aware datetime `when_utc`. NOAA's solar-position algorithm (the one
+    behind their solar calculator), good to well under a tenth of a degree
+    for this century; refraction is ignored, which matters only at the very
+    horizon."""
+    import datetime
+    rad, deg = math.radians, math.degrees
+    ts = when_utc.astimezone(datetime.timezone.utc)
+    jd = ts.timestamp() / 86400.0 + 2440587.5
+    t = (jd - 2451545.0) / 36525.0
+    l0 = (280.46646 + t * (36000.76983 + t * 0.0003032)) % 360.0
+    m = 357.52911 + t * (35999.05029 - 0.0001537 * t)
+    e = 0.016708634 - t * (0.000042037 + 0.0000001267 * t)
+    c = (math.sin(rad(m)) * (1.914602 - t * (0.004817 + 0.000014 * t))
+         + math.sin(rad(2 * m)) * (0.019993 - 0.000101 * t)
+         + math.sin(rad(3 * m)) * 0.000289)
+    omega = 125.04 - 1934.136 * t
+    lam = l0 + c - 0.00569 - 0.00478 * math.sin(rad(omega))
+    eps0 = 23 + (26 + (21.448 - t * (46.815 + t * (0.00059 - t * 0.001813))) / 60) / 60
+    eps = eps0 + 0.00256 * math.cos(rad(omega))
+    decl = math.asin(math.sin(rad(eps)) * math.sin(rad(lam)))
+    y = math.tan(rad(eps) / 2) ** 2
+    eqtime = 4 * deg(y * math.sin(2 * rad(l0))
+                     - 2 * e * math.sin(rad(m))
+                     + 4 * e * y * math.sin(rad(m)) * math.cos(2 * rad(l0))
+                     - 0.5 * y * y * math.sin(4 * rad(l0))
+                     - 1.25 * e * e * math.sin(2 * rad(m)))       # minutes
+    minutes = ts.hour * 60 + ts.minute + ts.second / 60 + ts.microsecond / 6e7
+    ha = (minutes + eqtime + 4 * lon) / 4 - 180                    # hour angle, degrees
+    cos_zen = (math.sin(rad(lat)) * math.sin(decl)
+               + math.cos(rad(lat)) * math.cos(decl) * math.cos(rad(ha)))
+    return 90.0 - deg(math.acos(max(-1.0, min(1.0, cos_zen))))
+
+
+def ambient_factor(elev):
+    """1.0 by day, AMBIENT_NIGHT_FACTOR by night, a smoothstep through twilight."""
+    if elev >= AMBIENT_DAY_ELEV:
+        return 1.0
+    if elev <= AMBIENT_NIGHT_ELEV:
+        return AMBIENT_NIGHT_FACTOR
+    x = (elev - AMBIENT_NIGHT_ELEV) / (AMBIENT_DAY_ELEV - AMBIENT_NIGHT_ELEV)
+    s = x * x * (3 - 2 * x)
+    return AMBIENT_NIGHT_FACTOR + (1.0 - AMBIENT_NIGHT_FACTOR) * s
+
+
+def ambient_level(maximum, elev):
+    """The brightness to send nexusqd for the user's `maximum` at elevation
+    `elev`. Never above the maximum; never below AMBIENT_MIN_LEVEL unless the
+    maximum itself is lower (a user who set 3 gets 3, not 8)."""
+    lvl = int(round(maximum * ambient_factor(elev)))
+    return max(min(maximum, AMBIENT_MIN_LEVEL), min(maximum, lvl))
+
+
+def _tab_coord(s, deg_digits):
+    """One ISO 6709 coordinate from zone.tab: sign, degrees, minutes[, seconds]."""
+    sign = -1.0 if s[0] == "-" else 1.0
+    body = s[1:]
+    d, rest = int(body[:deg_digits]), body[deg_digits:]
+    mins = int(rest[:2]) if rest else 0
+    secs = int(rest[2:4]) if len(rest) > 2 else 0
+    return sign * (d + mins / 60 + secs / 3600)
+
+
+def zone_location(zone, zoneinfo=None):
+    """(lat, lon) of the representative city tzdata gives `zone`, or None.
+    zone.tab first — it names every zone a country uses, links included
+    (Europe/Bratislava) — then zone1970.tab."""
+    zi = zoneinfo or ZONEINFO_DIR
+    for tab in ("zone.tab", "zone1970.tab"):
+        try:
+            with open(os.path.join(zi, tab)) as f:
+                for line in f:
+                    if line.startswith("#"):
+                        continue
+                    cols = line.rstrip("\n").split("\t")
+                    if len(cols) >= 3 and cols[2] == zone:
+                        m = re.match(r"^([+-]\d{4,6})([+-]\d{5,7})$", cols[1])
+                        if m:
+                            return (_tab_coord(m.group(1), 2), _tab_coord(m.group(2), 3))
+        except OSError:
+            continue
+    return None
+
+
+def local_zone(root=""):
+    """The Q's IANA zone name: /etc/timezone, else the /etc/localtime link."""
+    try:
+        with open(root + "/etc/timezone") as f:
+            z = f.read().strip()
+            if z:
+                return z
+    except OSError:
+        pass
+    try:
+        target = os.readlink(root + "/etc/localtime")
+        if "zoneinfo/" in target:
+            return target.split("zoneinfo/", 1)[1]
+    except OSError:
+        pass
+    return None
+
+
+class Brightness:
+    """The brightness setting (the user's maximum), the ambient switch, and the
+    scheduler that follows the sun. Transport-free like Ring: `send` is
+    nexusqd_send, `clock` returns an aware UTC datetime, `synced` says whether
+    the clock can be trusted, `location` is (zone, lat, lon) or None."""
+
+    def __init__(self, path=None, send=None, clock=None, synced=None,
+                 location=None, on_change=None):
+        import datetime
+        self.path = path or BRIGHTNESS_CONF_PATH
+        self.send = send or nexusqd_send
+        self.clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
+        self.synced = synced or (lambda: os.path.exists(TIME_SYNC_FLAG))
+        if location is None:
+            zone = local_zone()
+            ll = zone_location(zone) if zone else None
+            location = (zone, ll[0], ll[1]) if ll else None
+        self.location = location or None
+        self.on_change = on_change or (lambda snap: None)
+        self.lock = threading.Lock()
+        self.conf = self._load()
+        self._last_synced = self.synced()
+        self._level = self._compute()
+
+    # --- persistence ------------------------------------------------------
+    def _load(self):
+        conf = {"max": BRIGHTNESS_DEFAULT, "ambient": False}
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return conf
+        if not isinstance(data, dict):
+            return conf
+        m = data.get("max")
+        if isinstance(m, int) and not isinstance(m, bool) and 0 <= m <= 255:
+            conf["max"] = m
+        if isinstance(data.get("ambient"), bool):
+            conf["ambient"] = data["ambient"]
+        return conf
+
+    def _save(self):
+        try:
+            write_json_through(self.path, self.conf)
+        except OSError as e:
+            raise Err("unavailable", f"cannot persist brightness: {e}")
+
+    # --- the level --------------------------------------------------------
+    def _elevation(self):
+        if not self.location:
+            return None
+        return sun_elevation(self.location[1], self.location[2], self.clock())
+
+    def _compute(self):
+        """What nexusqd should run at now. Ambient needs a location AND a
+        trusted clock; without either it holds the maximum — it never dims on
+        a guess."""
+        m = self.conf["max"]
+        if not (self.conf["ambient"] and self.location and self._last_synced):
+            return m
+        return ambient_level(m, self._elevation())
+
+    def snapshot(self):
+        with self.lock:
+            return self._snapshot()
+
+    def _snapshot(self):
+        loc = None
+        if self.location:
+            loc = {"zone": self.location[0], "lat": round(self.location[1], 2),
+                   "lon": round(self.location[2], 2)}
+        return {"enabled": self.conf["ambient"], "level": self._level,
+                "location": loc, "clockSynced": self._last_synced}
+
+    def maximum(self):
+        with self.lock:
+            return self.conf["max"]
+
+    def _commit(self, new_conf):
+        """nexusqd first, file second (the theme's and the ring's rule)."""
+        old, old_level = self.conf, self._level
+        self.conf = new_conf
+        self._level = self._compute()
+        if not self.send("brightness %d" % self._level):
+            self.conf, self._level = old, old_level
+            raise Err("unavailable", "nexusqd rejected brightness")
+        self._save()
+
+    # --- methods ----------------------------------------------------------
+    def set_max(self, value):
+        with self.lock:
+            self._last_synced = self.synced()
+            self._commit(dict(self.conf, max=max(0, min(255, int(value)))))
+            return self.conf["max"], self._snapshot()
+
+    def set_ambient(self, p):
+        enabled = p.get("enabled")
+        if not isinstance(enabled, bool):
+            raise Err("bad_request", "enabled must be a boolean")
+        with self.lock:
+            if enabled and not self.location:
+                raise Err("unavailable",
+                          "the Nexus Q's time zone has no known location")
+            self._last_synced = self.synced()
+            self._commit(dict(self.conf, ambient=enabled))
+            return self._snapshot()
+
+    # --- the scheduler ----------------------------------------------------
+    def tick(self):
+        """Recompute, re-assert to nexusqd (which also restores the level
+        after a nexusqd restart or at boot), report a change to the app."""
+        with self.lock:
+            before = (self._level, self._last_synced)
+            self._last_synced = self.synced()
+            self._level = self._compute()
+            self.send("brightness %d" % self._level)
+            snap = self._snapshot() if (self._level, self._last_synced) != before else None
+        if snap is not None:
+            self.on_change(snap)
+        return AMBIENT_TICK_S
+
+    def run(self):
+        while True:
+            try:
+                delay = self.tick()
+            except Exception as e:  # noqa: BLE001 - the scheduler must never die
+                log("brightness scheduler step failed:", e)
+                delay = AMBIENT_TICK_S
+            time.sleep(delay)
+
+
 # The 5 audio-reactive music visualisations, in nexusqd's RenderEngine order
 # (userspace/nexusqd music.c: scene 0..4). setScene selects which effect the ring
 # shows while audio plays. The music layer (priority 9) sits above the theme's
@@ -2414,6 +2680,10 @@ class Bridge:
         # main(), like the other restore threads, so a test can build a Bridge
         # without one.
         self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap))
+        # The brightness slider (persistent since r50) and ambient brightness.
+        self.brightness = Brightness(
+            on_change=lambda snap: self.broadcast("ambientChanged", snap))
+        self.state["brightness"] = self.brightness.maximum()
 
     # --- HDMI availability is dynamic, so it has to be pushed -------------
     def _hdmi_watch(self):
@@ -2567,6 +2837,7 @@ class Bridge:
             # has restarted this bridge, so the copy read at start-up is stale.
             st["theme"] = _theme_load() or st["theme"]
             st["ring"] = self.ring.snapshot()
+            st["ambient"] = self.brightness.snapshot()
             return st, []
         if method == "getDeviceInfo":
             return {"name": DEVICE_NAME, "model": "steelhead", "room": DEVICE_ROOM,
@@ -2621,12 +2892,22 @@ class Bridge:
                 self.state["scene"] = name
             return {"scene": name}, [("sceneChanged", {"scene": name})]
         if method == "setBrightness":
-            b = max(0, min(255, int(p.get("brightness", 255))))
-            if not nexusqd_send(f"brightness {b}"):
-                raise Err("unavailable", "nexusqd rejected brightness")
+            # With ambient on this is the MAXIMUM; nexusqd gets the level the
+            # sun allows under it. `brightness` stays the user's own value, so
+            # the slider never jumps under their finger.
+            v = p.get("brightness", 255)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise Err("bad_request", "brightness must be a number")
+            b, amb = self.brightness.set_max(v)
             with self.lock:
                 self.state["brightness"] = b
-            return {"brightness": b}, [("brightnessChanged", {"brightness": b})]
+            return {"brightness": b}, [("brightnessChanged", {"brightness": b}),
+                                       ("ambientChanged", amb)]
+        if method == "getAmbient":
+            return self.brightness.snapshot(), []
+        if method == "setAmbient":
+            snap = self.brightness.set_ambient(p)
+            return snap, [("ambientChanged", snap)]
         if method == "getPlayState":
             with self.lock:
                 np = dict(self.state["nowPlaying"])
@@ -3579,6 +3860,7 @@ def main():
     threading.Thread(target=eq_restore_thread, daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
     threading.Thread(target=bridge.ring.run, daemon=True).start()
+    threading.Thread(target=bridge.brightness.run, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

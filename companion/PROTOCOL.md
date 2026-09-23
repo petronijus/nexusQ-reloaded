@@ -75,6 +75,8 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
   "theme": "blue", "scene": "waveform",
   "ring": { "on": true, "clockSynced": true,
             "schedule": { "enabled": false, "off": "23:00", "on": "07:00" } },
+  "ambient": { "enabled": false, "level": 200, "clockSynced": true,
+               "location": { "zone": "Europe/Prague", "lat": 50.08, "lon": 14.43 } },
   "output": "speaker",
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
                   "artUrl": "...", "source": "spotify", "transport": "spotify-web" } }
@@ -84,6 +86,9 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 - `ring`: the LED ring switch and its schedule (control **r49**+, see "LED ring
   on/off" below). **Absent on older bridges** — the app offers the switch only
   when it is present.
+- `ambient`: ambient brightness (control **r50**+, see "Ambient brightness"
+  below); `brightness` stays the user's slider value (the maximum). Absent on
+  older bridges.
 
 ### Volume / mute  (→ the active output's PulseAudio sink + nexusqd mute LED, see §6)
 | Method | params | result | Event emitted |
@@ -140,12 +145,39 @@ switched off for `spdif`/`hdmi`.
 | `listThemes` | — | `{ "themes": [ {name, label} ] }` | — |
 | `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `scene 0..4`; shown while audio plays. _(Until r49 it sent `auto` first, which cleared the theme's breathing override.)_ |
 | `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
-| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` — a software scalar applied in nexusqd |
+| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` + `ambientChanged` — a software scalar applied in nexusqd. **Persistent since r50** (`/etc/nexusq/brightness.json`; it used to reset to 255 on every bridge restart). With ambient on it sets the **maximum** and nexusqd runs the level the sun allows under it |
 
 > nexusqd's LED-command vocabulary (over `/run/nexusqd.sock`) also carries the OTA
 > primitives **`progress <pct> [R G B]`** (a determinate ring bar) and
 > **`mblink R G B | mblink stop`** (an autonomous mute-LED blink) — driven by the
 > bridge during a system update, see **§12.3**. They are not app-facing methods.
+
+#### Ambient brightness  (control r50 · nexusqd r23 · app 1.24.0)
+| Method | params | result | Event |
+|---|---|---|---|
+| `getAmbient` | — | ambient object | — |
+| `setAmbient` | `{ "enabled": bool }` | ambient object | `ambientChanged` — also broadcast by the bridge whenever the level moves (checked every 60 s) |
+
+Ambient object: `{ "enabled": bool, "level": 0..255, "location": { "zone", "lat", "lon" } | null, "clockSynced": bool }` — `level` is what nexusqd runs right now.
+
+- The slider is the **maximum**. The level follows the sun's **elevation** at the
+  Q's location (NOAA solar position): the maximum from **+6°** up, **25 %** of it
+  from **−12°** (end of nautical twilight) down, a smoothstep between. It never
+  goes below `min(maximum, 8)` — it dims, it never switches the ring off (that is
+  the ring schedule's job).
+- **Location = the Q's time zone**: `/etc/timezone` (or the `/etc/localtime`
+  link) looked up in tzdata's `zone.tab` / `zone1970.tab` (Europe/Prague →
+  50.08 N 14.43 E). No GPS, no app permission; within a zone the error is a few
+  minutes of dusk. A zone with no coordinates gives `location: null`, and
+  `setAmbient {enabled: true}` answers `unavailable`.
+- **Clock**: until timesyncd has set the clock (`clockSynced: false`) ambient
+  holds the maximum — it never dims on a guess.
+- The bridge **re-asserts** `brightness N` every 60 s, which also restores the
+  level at boot and after a nexusqd restart; nexusqd r23 treats an unchanged
+  level as a no-op.
+- Errors: `bad_request` (non-bool `enabled`, non-number `brightness`);
+  `unavailable` (no location, nexusqd rejected the level — nothing is stored —,
+  or the file cannot be written).
 
 #### LED ring on/off  (control r49 · nexusqd r22 · app 1.23.0)
 | Method | params | result | Event |

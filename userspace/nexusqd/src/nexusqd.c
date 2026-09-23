@@ -487,8 +487,14 @@ int main(void) {
                         }
                     }
                     else if (cmd.kind == CTL_BRIGHTNESS) {
-                        brightness = cmd.value;
-                        memset(lastpk, 0xFF, sizeof(lastpk));   /* force a re-push at the new brightness */
+                        /* nexusq-control re-asserts the level every minute (ambient
+                         * brightness, and to restore it after a nexusqd restart);
+                         * an unchanged one is a no-op, like an unchanged `dark`. */
+                        if (cmd.value == brightness) quiet = 1;
+                        else {
+                            brightness = cmd.value;
+                            memset(lastpk, 0xFF, sizeof(lastpk));   /* force a re-push at the new brightness */
+                        }
                     }
                     else if (cmd.kind == CTL_BREATHE) {
                         /* companion color theme: a BREATHING solid-color override at

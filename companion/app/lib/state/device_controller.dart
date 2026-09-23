@@ -294,6 +294,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
             state.nowPlaying.playing != before.playing) {
           unawaited(refreshQueue());
         }
+      case 'ambientChanged':
+        // Pushed by the Q as the sun moves (the level), and after a slider
+        // move (the level under the new maximum).
+        state.ambient = AmbientState.fromJson(e.data);
       case 'ringChanged':
         // Also how a SCHEDULED switch reaches the app: the bridge broadcasts
         // it at the boundary, to every client.
@@ -375,6 +379,28 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       state.ring = before;
       ringError = 'The Nexus Q did not answer.';
+    }
+    notifyListeners();
+  }
+
+  /// The last ambient request the Q refused, shown under the switch.
+  String? ambientError;
+
+  Future<void> setAmbient(bool enabled) async {
+    final before = state.ambient;
+    if (before == null) return;
+    state.ambient = before.copyWith(enabled: enabled);
+    notifyListeners();
+    try {
+      final r = await _client.call('setAmbient', {'enabled': enabled});
+      state.ambient = AmbientState.fromJson(r);
+      ambientError = null;
+    } on NexusQError catch (e) {
+      state.ambient = before;
+      ambientError = e.message;
+    } catch (_) {
+      state.ambient = before;
+      ambientError = 'The Nexus Q did not answer.';
     }
     notifyListeners();
   }

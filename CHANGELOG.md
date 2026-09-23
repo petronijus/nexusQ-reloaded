@@ -6,6 +6,40 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — ambient brightness: the ring dims with the daylight (nexusq-control r50 · nexusqd r23 · app 1.24.0+62)
+
+A switch under the brightness slider. Off, brightness works exactly as before.
+On, the slider is the **maximum**: the ring runs at it while the sun is up and
+fades through dusk to a quarter of it, then back up through dawn. It never
+goes dark — switching the ring off at night is the ring schedule's job (Petr,
+2026-09-23).
+
+- **The sun, not a clock table.** The bridge computes the sun's elevation (the
+  NOAA solar-position algorithm) at the Q's location every 60 s: the maximum
+  from +6° up, 25 % of it from −12° (end of nautical twilight) down, a
+  smoothstep between, so an autumn dusk fades over roughly an hour and a half
+  with no visible step. Never below `min(maximum, 8)`.
+- **Location from the time zone.** tzdata's `zone.tab` gives every zone a
+  coordinate (Europe/Prague → 50.08 N 14.43 E). Petr chose this over the
+  phone's GPS: no location permission, no new app dependency, and within the
+  zone the error is a few minutes of dusk. `nexusq-control` now depends on
+  `tzdata` explicitly (it was only there through the device package).
+- **Never dims on a wrong clock**: until timesyncd has set it, ambient holds
+  the maximum.
+- **The slider is persistent now** (`/etc/nexusq/brightness.json`, a symlink
+  into the persist store like the other settings, so it also survives a
+  flash). It used to reset to 255 on every bridge restart — and the app's
+  default of 200 never matched it.
+- nexusqd r23 treats an unchanged `brightness N` as a no-op (no render wake, no
+  forced re-push), since the bridge now re-asserts it every minute.
+- Tests: `tests/test_ambient.py` — the solar maths against the equinox and
+  solstice noon elevations and Prague's published sunrise/sunset for
+  2026-09-22 (seen failing with the longitude sign flipped), the curve
+  (monotonic, no jump, never dark), zone.tab parsing, the unsynced-clock guard
+  (seen failing with the guard removed), re-assert, persistence; app
+  controller + widget tests (the revert on refusal seen failing under mutation).
+  Not yet run on hardware.
+
 ### Added — the LED ring can be switched off, by hand or on a schedule (nexusqd r22 · nexusq-control r49 · nexusq-setupd r6 · app 1.23.0+61)
 
 The app's home screen has a **LED RING** card: a switch, and a schedule

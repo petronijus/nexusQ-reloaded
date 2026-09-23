@@ -290,8 +290,8 @@ render_ntp() {
 
 apply_settings() {
 	# The app's per-unit settings (device r106): theme.json, ring.json, eq.json,
-	# eq-presets.json. Like device.json they arrive through symlinks in
-	# /etc/nexusq that point here, written through by nexusq-control (>= r49)
+	# eq-presets.json, brightness.json. Like device.json they arrive through
+	# symlinks in /etc/nexusq that point here, written through by nexusq-control (>= r50)
 	# and nexusq-setupd (>= r6); a link with no file yet reads as "never set".
 	# Nothing to seed -- the r106 .pre-upgrade moved any existing plain file
 	# here (or under the unmounted mountpoint, merged by merge_shadow).

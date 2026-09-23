@@ -19,6 +19,8 @@ class MockClient implements NexusQClient {
   // a manual switch disables the schedule; enabling one applies it at once
   // (the mock's clock is always "synced" and it is always daytime).
   bool _ringOn = true;
+  // Ambient brightness: the mock is always at midday, so the level is the max.
+  bool _ambient = false;
   Map<String, dynamic> _ringSchedule = {'enabled': false, 'off': '23:00', 'on': '07:00'};
   bool _playing = true;
   int _trackIdx = 0;
@@ -148,6 +150,14 @@ class MockClient implements NexusQClient {
         'nowPlaying': _nowPlaying,
         'name': 'Nexus Q (mock)',
         'ring': _ring,
+        'ambient': _ambientState,
+      };
+
+  Map<String, dynamic> get _ambientState => {
+        'enabled': _ambient,
+        'level': _brightness,
+        'location': {'zone': 'Europe/Prague', 'lat': 50.08, 'lon': 14.43},
+        'clockSynced': true,
       };
 
   Map<String, dynamic> get _ring =>
@@ -209,6 +219,14 @@ class MockClient implements NexusQClient {
         _output = id;
         _events.add(NexusQEvent('outputChanged', {'output': _output}));
         return {'output': _output};
+      case 'getAmbient':
+        return _ambientState;
+      case 'setAmbient':
+        if (p['enabled'] is! bool) throw NexusQError('bad_request', 'enabled must be a boolean');
+        _ambient = p['enabled'] as bool;
+        final a = _ambientState;
+        _events.add(NexusQEvent('ambientChanged', a));
+        return a;
       case 'getRing':
         return _ring;
       case 'setRing':

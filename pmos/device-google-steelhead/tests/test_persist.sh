@@ -216,11 +216,13 @@ check "a second run leaves the symlink alone" "[ -L /etc/nexusq/device.json ]"
 echo "=== 9. r106 pre-upgrade moves plain settings into the store, leaves links alone ==="
 echo '{"theme": "rose"}' > /etc/nexusq/theme.json
 echo '{"on": false}' > /etc/nexusq/ring.json
+echo '{"max": 90, "ambient": true}' > /etc/nexusq/brightness.json
 ln -s /var/lib/nexusq/persist/settings/eq.json /etc/nexusq/eq.json               # already migrated
 sh /pre >/dev/null 2>&1; rc=$?
 check "pre-upgrade exits 0 (rc=$rc)" "[ $rc -eq 0 ]"
 check "theme moved to the link target path" "[ ! -e /etc/nexusq/theme.json ] && grep -q rose /var/lib/nexusq/persist/settings/theme.json"
 check "ring moved to the link target path" "[ ! -e /etc/nexusq/ring.json ] && grep -q false /var/lib/nexusq/persist/settings/ring.json"
+check "brightness moved to the link target path" "[ ! -e /etc/nexusq/brightness.json ] && grep -q ambient /var/lib/nexusq/persist/settings/brightness.json"
 check "an existing link is left alone" "[ -L /etc/nexusq/eq.json ]"
 check "a setting that was never set stays absent" "[ ! -e /var/lib/nexusq/persist/settings/eq-presets.json ]"
 for f in theme.json ring.json eq-presets.json; do                                 # what apk installs next

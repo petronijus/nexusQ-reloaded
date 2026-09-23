@@ -4,7 +4,7 @@
 # librespot (now-playing). Built for the target by pmbootstrap.
 pkgname=nexusq-control
 pkgver=0.1.0
-pkgrel=49
+pkgrel=50
 pkgdesc="Nexus Q companion control bridge (LAN ↔ nexusqd/PulseAudio/librespot)"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
@@ -18,7 +18,7 @@ license="GPL-2.0-only"
 # dependency back would be a cycle. The bridge degrades instead: a missing
 # nq-hdmi makes hdmi_probe() return {} and the HDMI row simply never appears,
 # which is exactly the right behaviour on a unit without them.
-depends="python3 pulseaudio-utils alsa-utils avahi-tools"
+depends="python3 pulseaudio-utils alsa-utils avahi-tools tzdata"
 options="!check"
 # Staged flat next to this APKBUILD by docker-build.sh from userspace/nexusq-control/.
 source="
