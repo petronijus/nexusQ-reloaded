@@ -23,6 +23,9 @@
 #                                       CONFIG_OMAP4_IDLE_BREADCRUMBS) -- run it
 #                                       right after the watchdog brought the unit back
 #
+# KEEP_BT=1 in the environment leaves Bluetooth bound (kernel >= r13, patch 0051
+# releases the UART itself while BT idles, so the 170 us QoS is gone anyway).
+#
 # keep_core_on needs kernel >= 6.18.48-r8 (patch 0048 rev 2); on r7 the
 # parameter does not exist and the script refuses a non-zero value.
 #
@@ -90,7 +93,7 @@ PY
 }
 if [ "${1:-}" = --crumbs ]; then crumbs read; exit; fi
 
-[ $# -ge 3 ] || { sed -n '2,38p' "$0"; exit 2; }
+[ $# -ge 3 ] || { sed -n '2,41p' "$0"; exit 2; }
 SKIP_WAIT=$1 KEEP_MPU=$2 SKIP_LP=$3 SECS=${4:-60} CPU1_OFF=${5:-0} KEEP_CORE=${6:-0}
 
 hostname
@@ -104,7 +107,7 @@ busctl set-property org.freedesktop.systemd1 /org/freedesktop/systemd1 \
 systemctl show -p RuntimeWatchdogUSec
 dmesg -n 8
 
-[ -e $BT/serial0-0 ] && echo serial0-0 > $BT/unbind
+[ "${KEEP_BT:-0}" = 1 ] || { [ -e $BT/serial0-0 ] && echo serial0-0 > $BT/unbind; }
 [ "$CPU1_OFF" = 1 ] && echo 0 > /sys/devices/system/cpu/cpu1/online
 sleep 2
 echo "qos=$(qos) us  online=$(cat /sys/devices/system/cpu/online)"
@@ -137,7 +140,7 @@ grep -E '^(mpu|core|cpu0|cpu1)_pwrdm' /sys/kernel/debug/pm_debug/count
 echo 0 > $P/skip_cpu1_wait; echo 0 > $P/keep_mpu_on; echo 0 > $P/skip_lowpower
 [ -e $P/keep_core_on ] && echo 0 > $P/keep_core_on
 [ "$CPU1_OFF" = 1 ] && echo 1 > /sys/devices/system/cpu/cpu1/online
-echo serial0-0 > $BT/bind
+[ -e $BT/serial0-0 ] || echo serial0-0 > $BT/bind
 dmesg -n 4
 busctl set-property org.freedesktop.systemd1 /org/freedesktop/systemd1 \
 	org.freedesktop.systemd1.Manager RuntimeWatchdogUSec t 0

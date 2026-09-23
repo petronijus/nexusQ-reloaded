@@ -1403,6 +1403,51 @@ question. Stock's C2 took CORE only to INA.
 - The BT UART QoS (170 µs) still vetoes C2 whenever Bluetooth is bound (§4m).
 - Defaults are unchanged: C2/C3 are registered disabled, so nothing ships armed.
 
+## 4s. The BT UART lets go while Bluetooth idles, so C2 no longer needs BT unbound (2026-09-23)
+
+Kernel **6.18.48-r13**, patch 0051, is the mainline equivalent of stock's
+bluesleep. It adds `serdev_device_pm_put()`/`serdev_device_pm_get()`, so a serdev
+client can hand back the controller reference that `serdev_device_open()` holds
+for the life of the device. `hci_bcm` uses them only when it has a host-wake IRQ:
+
+- **Release** in its runtime suspend, after flow control is off and BT_WAKE is
+  deasserted.
+- **Take back** first thing on resume, before flow control is re-enabled.
+- **In `bcm_close`**, take it back so `serdev_device_close()` stays balanced.
+
+`serdev_device_pm_get()` keeps the reference even if the resume fails, for the
+same reason.
+
+This follows what upstream 8250_omap already anticipated when it stopped forcing
+autosuspend off for serdev ports: "the policy can be managed by the serdev
+driver".
+
+Measured on r13, with BT bound and powered:
+
+```
+idle (8 s after boot settled): qos=4444  uart=suspended  port=suspended  serdev=suspended
+passive scan, 12 s: 22 devices seen, host_wake IRQ 7x, uart active during, suspended 8 s later
+C2 armed 60 s + scan at t+25: 23 devices; C2 usage paused while the UART was up
+                              (QoS back at 170), resumed on its own afterwards;
+                              5938 C2 entries, mpu RET 8184x, no errors
+```
+
+That is exactly the intended behaviour: BT activity briefly vetoes C2, and idle
+BT no longer does.
+
+**5-minute C2 runs compared** (detached, nothing playing):
+
+| run | C2 residency (cpu0) | `mpu_pwrdm RET` | wall display |
+|---|---|---|---|
+| r12, BT unbound | 239.8 s / 300 = **80 %** | 79 488 | flickers to 2 W |
+| r13, BT bound, UART released | 213.1 s / 300 = **71 %** | 72 610 | flickers to 2 W, Petr's impression: less often |
+
+The ~9-point gap is real, but its cause is **not established**. `host_wake`
+stayed at 13 across the whole r13 run, so the chip sent nothing and the UART never
+woke. The runs were on different boots at different uptimes (r13's services had
+had less time to settle). The next measurement should repeat both variants on the
+same boot.
+
 ## Power target: stock's wall draw is unknown, so measure it (open, 2026-09-23)
 
 No reliable public figure exists for the stock Nexus Q's idle draw:

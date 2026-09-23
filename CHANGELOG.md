@@ -6,6 +6,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — an idle Bluetooth link no longer keeps the BT UART (and its 170 µs QoS) up (kernel **6.18.48-r13**)
+
+While Bluetooth was bound, `serdev_device_open()`'s runtime-PM reference kept
+the BCM4330's host UART active permanently. 8250_omap then held a CPU-latency
+QoS request of 170 µs (64 characters at 3 Mbaud), below the exit latency of
+every deep C-state. **Patch 0051** is the mainline form of stock's bluesleep:
+
+- `serdev_device_pm_put()`/`serdev_device_pm_get()` let a serdev client hand
+  that reference back while idle.
+- `hci_bcm` does so in its runtime suspend when it has a host-wake IRQ, after
+  flow control is off.
+- It takes the reference back before re-enabling flow control on resume.
+
+On the unit, with BT bound and powered: `/dev/cpu_dma_latency` idles at 4444,
+and the UART is suspended. Passive scans still see 22–23 devices, with
+`host_wake` doing the waking. A scan during armed C2 pauses C2 only while the
+UART is up. No frame or timeout errors.
+
 ### Fixed — CPU1 ran without three Cortex-A9 errata workarounds (kernel **6.18.48-r12**)
 
 Since SMP was brought up, CPU1's Diagnostic register has read `0x000` while

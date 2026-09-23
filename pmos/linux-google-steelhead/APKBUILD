@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=12
+pkgrel=13
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -79,6 +79,7 @@ source="
 	0048-ARM-OMAP4-cpuidle-runtime-knobs-for-steelhead-deep-states.patch
 	0049-ARM-OMAP4-idle-breadcrumbs-in-SAR-RAM.patch
 	0050-ARM-OMAP4-HS-configure-CPU1-CP15-via-PPA-on-4460-too.patch
+	0051-Bluetooth-hci_bcm-release-the-host-UART-while-runtime-suspended.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -177,4 +178,5 @@ SKIP  0047-ARM-OMAP4-cpuidle-bound-the-CPU1-OFF-wait-like-stock.patch
 SKIP  0048-ARM-OMAP4-cpuidle-runtime-knobs-for-steelhead-deep-states.patch
 SKIP  0049-ARM-OMAP4-idle-breadcrumbs-in-SAR-RAM.patch
 SKIP  0050-ARM-OMAP4-HS-configure-CPU1-CP15-via-PPA-on-4460-too.patch
+SKIP  0051-Bluetooth-hci_bcm-release-the-host-UART-while-runtime-suspended.patch
 "

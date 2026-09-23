@@ -1,0 +1,199 @@
+From 0000000000000000000000000000000000000051 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 12:30:00 +0200
+Subject: [PATCH] Bluetooth: hci_bcm: release the host UART while runtime-suspended
+
+serdev_device_open() takes a runtime PM reference on the serdev controller
+and keeps it until serdev_device_close(), and hci_uart opens the device at
+registration. So the host UART stays active for as long as Bluetooth is
+bound, idle or not. On OMAP4 that is not just a clock: 8250_omap holds a
+CPU-latency QoS request of 64 characters at line rate while the port is
+active -- 170 us at the BCM4330's 3 Mbaud on the Nexus Q -- which is below
+the exit latency of every OMAP4 deep C-state (C2 768 us). A bound, idle BT
+link therefore vetoed deep idle entirely. Measured: /dev/cpu_dma_latency
+reads 170 with hci_uart_bcm bound and 4444 (the 115200 console) unbound.
+
+hci_bcm already runtime-suspends an idle device when it has a host-wake
+IRQ: it stops flow control, deasserts device-wake, and bcm_setup_sleep()
+has told the chip it may let the host sleep, so the chip holds its data
+and raises host-wake before sending. The UART is simply not needed while
+suspended -- which is what the vendor "bluesleep" drivers exploited, and
+what 8250_omap anticipated when it stopped forcing autosuspend off for
+serdev ports ("the policy can be managed by the serdev driver").
+
+Add serdev_device_pm_put()/serdev_device_pm_get() so a client can hand the
+controller reference back while idle and take it again before using the
+port, and use them in hci_bcm: release after the device is suspended (flow
+control already off), take the UART back first thing on resume (before
+flow control is re-enabled), and in close before serdev_device_close()
+drops the reference. Only with a host-wake IRQ; without one nothing
+changes. serdev_device_pm_get() keeps the reference even if the resume
+fails, so close stays balanced either way.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/drivers/bluetooth/hci_bcm.c b/drivers/bluetooth/hci_bcm.c
+index fff845e..5d2b61c 100644
+--- a/drivers/bluetooth/hci_bcm.c
++++ b/drivers/bluetooth/hci_bcm.c
+@@ -102,6 +102,8 @@ struct bcm_device_data {
+  * @hu: pointer to HCI UART controller struct,
+  *	used to disable flow control during runtime suspend and system sleep
+  * @is_suspended: whether flow control is currently disabled
++ * @uart_released: whether the serdev controller reference is handed back, so
++ *	the host UART may runtime-suspend (only with a host-wake IRQ)
+  * @no_early_set_baudrate: don't set_baudrate before setup()
+  * @drive_rts_on_open: drive RTS signal on ->open() when platform requires it
+  * @no_uart_clock_set: UART clock set command for >3Mbps mode is unavailable
+@@ -142,6 +144,7 @@ struct bcm_device {
+ #ifdef CONFIG_PM
+ 	struct hci_uart		*hu;
+ 	bool			is_suspended;
++	bool			uart_released;
+ #endif
+ 	bool			no_early_set_baudrate;
+ 	bool			drive_rts_on_open;
+@@ -319,6 +322,36 @@ err_regulator_disable:
+ }
+ 
+ #ifdef CONFIG_PM
++/*
++ * serdev_device_open() keeps the host UART powered for as long as the HCI is
++ * registered, and a UART such as 8250_omap holds a CPU-latency QoS request
++ * while its port is active (64 characters at line rate: 170 us at 3 Mbaud),
++ * so an idle link vetoed every deep C-state. With a host-wake IRQ the UART is
++ * not needed while the device is runtime-suspended: flow control is off, so
++ * the chip holds its data and raises host-wake (bcm_setup_sleep() allows it
++ * to let the host sleep), which resumes us before the port is used again.
++ * This is what the vendor "bluesleep" drivers did.
++ */
++static void bcm_uart_release(struct bcm_device *bdev)
++{
++	if (bdev->uart_released || !bdev->irq_acquired ||
++	    !bdev->hu || !bdev->hu->serdev)
++		return;
++
++	serdev_device_pm_put(bdev->hu->serdev);
++	bdev->uart_released = true;
++}
++
++static int bcm_uart_acquire(struct bcm_device *bdev)
++{
++	if (!bdev->uart_released)
++		return 0;
++
++	/* The reference is back even if the UART failed to resume */
++	bdev->uart_released = false;
++	return serdev_device_pm_get(bdev->hu->serdev);
++}
++
+ static irqreturn_t bcm_host_wake(int irq, void *data)
+ {
+ 	struct bcm_device *bdev = data;
+@@ -545,6 +578,11 @@ static int bcm_close(struct hci_uart *hu)
+ 	}
+ 
+ 	if (bdev) {
++#ifdef CONFIG_PM
++		/* serdev_device_close() will drop the controller reference */
++		if (bcm_uart_acquire(bdev))
++			bt_dev_err(hu->hdev, "Failed to resume the host UART");
++#endif
+ 		if (IS_ENABLED(CONFIG_PM) && bdev->irq_acquired) {
+ 			devm_free_irq(bdev->dev, bdev->irq, bdev);
+ 			device_init_wakeup(bdev->dev, false);
+@@ -786,6 +824,8 @@ static int bcm_suspend_device(struct device *dev)
+ 	bt_dev_dbg(bdev, "suspend, delaying 15 ms");
+ 	msleep(15);
+ 
++	bcm_uart_release(bdev);
++
+ 	return 0;
+ }
+ 
+@@ -796,6 +836,13 @@ static int bcm_resume_device(struct device *dev)
+ 
+ 	bt_dev_dbg(bdev, "");
+ 
++	/* The UART first: flow control is re-enabled below */
++	err = bcm_uart_acquire(bdev);
++	if (err) {
++		dev_err(dev, "Failed to resume the host UART: %d\n", err);
++		return err;
++	}
++
+ 	err = bdev->set_device_wakeup(bdev, true);
+ 	if (err) {
+ 		dev_err(dev, "Failed to power up\n");
+diff --git a/drivers/tty/serdev/core.c b/drivers/tty/serdev/core.c
+index 40eedc1..f91a4a3 100644
+--- a/drivers/tty/serdev/core.c
++++ b/drivers/tty/serdev/core.c
+@@ -186,6 +186,42 @@ void serdev_device_close(struct serdev_device *serdev)
+ }
+ EXPORT_SYMBOL_GPL(serdev_device_close);
+ 
++/**
++ * serdev_device_pm_put() - let the controller runtime-suspend while idle
++ * @serdev:	an open serdev device
++ *
++ * serdev_device_open() holds a runtime PM reference on the controller for as
++ * long as the device is open, which keeps the UART behind it powered and, on
++ * some UARTs, a CPU-latency QoS request in force. A client with an out-of-band
++ * wake-up (a host-wake line, for instance) can hand that reference back while
++ * it is idle, and must take it again with serdev_device_pm_get() before it
++ * touches the port. Calls must pair, and the device must stay open.
++ */
++void serdev_device_pm_put(struct serdev_device *serdev)
++{
++	pm_runtime_put(&serdev->ctrl->dev);
++}
++EXPORT_SYMBOL_GPL(serdev_device_pm_put);
++
++/**
++ * serdev_device_pm_get() - take back the controller reference
++ * @serdev:	an open serdev device whose reference was handed back with
++ *		serdev_device_pm_put()
++ *
++ * Resumes the controller (and so the UART) synchronously. The reference is
++ * taken back even if resuming fails, so that serdev_device_close() stays
++ * balanced; the caller decides whether a failed resume is fatal.
++ *
++ * Return: 0 on success, a negative errno if the controller did not resume.
++ */
++int serdev_device_pm_get(struct serdev_device *serdev)
++{
++	int ret = pm_runtime_get_sync(&serdev->ctrl->dev);
++
++	return ret < 0 ? ret : 0;
++}
++EXPORT_SYMBOL_GPL(serdev_device_pm_get);
++
+ static void devm_serdev_device_close(void *serdev)
+ {
+ 	serdev_device_close(serdev);
+diff --git a/include/linux/serdev.h b/include/linux/serdev.h
+index 5654c58..3f1a40f 100644
+--- a/include/linux/serdev.h
++++ b/include/linux/serdev.h
+@@ -202,6 +202,8 @@ static inline size_t serdev_controller_receive_buf(struct serdev_controller *ctr
+ int serdev_device_open(struct serdev_device *);
+ void serdev_device_close(struct serdev_device *);
+ int devm_serdev_device_open(struct device *, struct serdev_device *);
++void serdev_device_pm_put(struct serdev_device *);
++int serdev_device_pm_get(struct serdev_device *);
+ unsigned int serdev_device_set_baudrate(struct serdev_device *, unsigned int);
+ void serdev_device_set_flow_control(struct serdev_device *, bool);
+ int serdev_device_write_buf(struct serdev_device *, const u8 *, size_t);
+@@ -241,6 +243,11 @@ static inline int serdev_device_open(struct serdev_device *sdev)
+ 	return -ENODEV;
+ }
+ static inline void serdev_device_close(struct serdev_device *sdev) {}
++static inline void serdev_device_pm_put(struct serdev_device *sdev) {}
++static inline int serdev_device_pm_get(struct serdev_device *sdev)
++{
++	return 0;
++}
+ static inline unsigned int serdev_device_set_baudrate(struct serdev_device *sdev, unsigned int baudrate)
+ {
+ 	return 0;
