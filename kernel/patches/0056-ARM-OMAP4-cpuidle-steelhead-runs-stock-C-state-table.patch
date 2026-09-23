@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000056 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 15:20:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: steelhead runs stock's C-state table
+
+Mainline's OMAP4 C2 is "CPUs OFF, MPU CSWR" and its C3 "MPU OSWR". Stock
+3.0.8 on this board (omap4_init_power_states, 0xc0068768) ran:
+
+  C1  CPU WFI                                4 / 5 us
+  C2  CPUs OFF, MPU INA,  CORE INA        1100 / 1100
+  C3  CPUs OFF, MPU CSWR, CORE CSWR       1200 / 1200
+  C4  CPUs OFF, MPU CSWR, CORE OSWR       1500 / 1500
+
+and programmed CORE per entry (0xc00686f4), putting MPU and CORE back to ON
+right after (0xc00686d8/0xc00686e4). It never used MPU OSWR in idle, and
+its most frequent deep state retained nothing -- so it depended on no
+retention voltage, SRAM LDO mode or context save. With C2 armed, mainline's
+table sends the MPU into retention tens of thousands of times a minute.
+
+Use stock's C1-C3 on steelhead (C4 needs CORE OSWR context handling in
+idle, which nothing here provides, and CORE does not idle yet anyway):
+a separate idle_statedata table with core state and a restore_on flag,
+stock's latencies, CORE programmed on CPU0's entry, MPU and CORE back to ON
+before CPU1 is woken. INACTIVE needs the previous powerdomain patch; the
+ON resting state the pm44xx one.
+
+keep_core_on goes back to a plain knob with stock's "skip programming"
+semantics, which on this table means "stays ON".
+
+Other OMAP4 boards keep mainline's table.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+index c1aebdd..4e5775e 100644
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -10,7 +10,6 @@
+ #include <linux/sched.h>
+ #include <linux/cpuidle.h>
+ #include <linux/cpu_pm.h>
+-#include <linux/kstrtox.h>
+ #include <linux/moduleparam.h>
+ #include <linux/export.h>
+ #include <linux/of.h>
+@@ -32,6 +31,10 @@ struct idle_statedata {
+ 	u32 mpu_logic_state;
+ 	u32 mpu_state;
+ 	u32 mpu_state_vote;
++	/* steelhead: CORE programmed per entry, MPU+CORE put back ON after */
++	u32 core_state;
++	u32 core_logic_state;
++	bool restore_on;
+ };
+ 
+ static struct idle_statedata omap4_idle_data[] = {
+@@ -52,6 +55,41 @@ static struct idle_statedata omap4_idle_data[] = {
+ 	},
+ };
+ 
++/*
++ * Nexus Q (OMAP4460 HS): stock 3.0.8's table (omap4_init_power_states,
++ * 0xc0068768), not mainline's. Stock's C2 retained nothing -- MPU and CORE
++ * only clock-gated (INACTIVE) -- and its C3 was the first state to retain
++ * the MPU, together with CORE; stock never used MPU OSWR in idle. The state
++ * that runs tens of thousands of times a minute thus depends on nothing
++ * about retention voltages, SRAM LDO or context save. Latencies in
++ * omap4_idle_init().
++ */
++static struct idle_statedata steelhead_idle_data[] = {
++	{
++		.cpu_state = PWRDM_POWER_ON,
++		.mpu_state = PWRDM_POWER_ON,
++		.mpu_logic_state = PWRDM_POWER_RET,
++		.core_state = PWRDM_POWER_ON,
++		.core_logic_state = PWRDM_POWER_RET,
++	},
++	{
++		.cpu_state = PWRDM_POWER_OFF,
++		.mpu_state = PWRDM_POWER_INACTIVE,
++		.mpu_logic_state = PWRDM_POWER_RET,
++		.core_state = PWRDM_POWER_INACTIVE,
++		.core_logic_state = PWRDM_POWER_RET,
++		.restore_on = true,
++	},
++	{
++		.cpu_state = PWRDM_POWER_OFF,
++		.mpu_state = PWRDM_POWER_RET,
++		.mpu_logic_state = PWRDM_POWER_RET,
++		.core_state = PWRDM_POWER_RET,
++		.core_logic_state = PWRDM_POWER_RET,
++		.restore_on = true,
++	},
++};
++
+ static struct idle_statedata omap5_idle_data[] = {
+ 	{
+ 		.cpu_state = PWRDM_POWER_ON,
+@@ -97,42 +135,13 @@ module_param(keep_mpu_on, bool, 0644);
+ module_param(skip_lowpower, bool, 0644);
+ 
+ static struct powerdomain *core_pd;
+-static bool keep_core_on;	/* hold core_pwrdm ON (stock: keep_core_on) */
+-static u8 core_saved_next_pwrst;
+-
+ /*
+- * The idle path never programs core_pwrdm, so apply the knob right here, in
+- * process context, and restore whatever next state it replaced when cleared.
++ * Skip programming core_pwrdm (stock: keep_core_on). CORE rests at ON on
++ * steelhead (pm44xx) and is put back to ON after every entry, so skipping the
++ * programming leaves it ON -- the semantics stock's knob had.
+  */
+-static int keep_core_on_set(const char *val, const struct kernel_param *kp)
+-{
+-	bool on;
+-	int rc;
+-
+-	rc = kstrtobool(val, &on);
+-	if (rc)
+-		return rc;
+-	if (!core_pd)
+-		return -ENODEV;
+-
+-	if (on && !keep_core_on) {
+-		core_saved_next_pwrst = pwrdm_read_next_pwrst(core_pd);
+-		rc = omap_set_pwrdm_state(core_pd, PWRDM_POWER_ON);
+-	} else if (!on && keep_core_on) {
+-		rc = omap_set_pwrdm_state(core_pd, core_saved_next_pwrst);
+-	}
+-	if (rc)
+-		return rc;
+-
+-	keep_core_on = on;
+-	return 0;
+-}
+-
+-static const struct kernel_param_ops keep_core_on_ops = {
+-	.set = keep_core_on_set,
+-	.get = param_get_bool,
+-};
+-module_param_cb(keep_core_on, &keep_core_on_ops, &keep_core_on, 0644);
++static bool keep_core_on;
++module_param(keep_core_on, bool, 0644);
+ 
+ static struct powerdomain *mpu_pd, *cpu_pd[MAX_CPUS];
+ static struct clockdomain *cpu_clkdm[MAX_CPUS];
+@@ -325,10 +334,26 @@ static int omap_enter_idle_coupled(struct cpuidle_device *dev,
+ 		}
+ 	}
+ 
++	/* steelhead: CORE follows the state too (stock 0xc00686f4) */
++	if (dev->cpu == 0 && cx->restore_on && !keep_core_on) {
++		pwrdm_set_logic_retst(core_pd, cx->core_logic_state);
++		omap_set_pwrdm_state(core_pd, cx->core_state);
++	}
++
+ 	if (!skip_lowpower)
+ 		omap4_enter_lowpower(dev->cpu, cx->cpu_state, true);
+ 	cpu_done[dev->cpu] = true;
+ 
++	/*
++	 * steelhead: put MPU and CORE back to ON before CPU1 runs again, so a
++	 * later WFI outside this path cannot drop them into a low-power state
++	 * programmed for this entry (stock 0xc00686d8/0xc00686e4).
++	 */
++	if (dev->cpu == 0 && cx->restore_on) {
++		omap_set_pwrdm_state(mpu_pd, PWRDM_POWER_ON);
++		omap_set_pwrdm_state(core_pd, PWRDM_POWER_ON);
++	}
++
+ 	/* Wakeup CPU1 only if it is not offlined */
+ 	if (dev->cpu == 0)
+ 		omap4_idle_wake_cpu1(mpuss_can_lose_context);
+@@ -484,9 +509,21 @@ int __init omap4_idle_init(void)
+ 
+ 		for (i = 1; i < idle_driver->state_count; i++)
+ 			idle_driver->states[i].flags |= CPUIDLE_FLAG_OFF;
+-	}
+ 
+-	core_pd = pwrdm_lookup("core_pwrdm");
++		/* stock's table and numbers, see steelhead_idle_data */
++		core_pd = pwrdm_lookup("core_pwrdm");
++		if (!core_pd)
++			return -ENODEV;
++		state_ptr = &steelhead_idle_data[0];
++		idle_driver->states[1].exit_latency = 1100;
++		idle_driver->states[1].target_residency = 1100;
++		strscpy(idle_driver->states[1].desc, "CPUx OFF, MPUSS + CORE INA",
++			CPUIDLE_DESC_LEN);
++		idle_driver->states[2].exit_latency = 1200;
++		idle_driver->states[2].target_residency = 1200;
++		strscpy(idle_driver->states[2].desc, "CPUx OFF, MPUSS + CORE CSWR",
++			CPUIDLE_DESC_LEN);
++	}
+ 
+ 	return cpuidle_register(idle_driver, cpu_online_mask);
+ }

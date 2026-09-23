@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000057 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 15:40:00 +0200
+Subject: [PATCH] ARM: dts: omap4-steelhead: MPU and CORE states belong to cpuidle, not genpd
+
+The PRM driver registers every PRM instance that has #power-domain-cells as a
+genpd, and genpd writes the instance's PWRSTCTRL: at late_initcall_sync it
+powers an unused prm_mpu off (lowest mode RET with LOGICRETSTATE cleared --
+the MPU armed for OSWR), and prm_core has OMAP_PRM_RET_WHEN_IDLE, so its "on"
+is RET-when-idle. Mainline's cpuidle reprograms the MPU on every deep entry,
+so the conflict never shows upstream.
+
+Steelhead runs stock's policy -- MPU and CORE rest at ON, cpuidle programs
+them per entry and puts them back (patches 0055/0056) -- and with genpd also
+owning the same registers both came up armed for RET after every boot (live
+on 6.18.48-r15: PM_MPU_PWRSTCTRL 0x3c0601, PM_CORE_PWRSTCTRL 0x3ff0f01,
+pm_genpd_summary: prm_mpu off-0), until the first deep entry put them back.
+
+Remove the genpd provider from prm_mpu and prm_core (prm_core stays the IPU
+reset provider) and the power-domains reference from their only consumers,
+the MPU target module and l4_cfg. Stock had no genpd; every other PRM
+domain keeps its genpd.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+--- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -1000,6 +1000,42 @@
+  */
+ 
+ /*
++ * MPU and CORE power states belong to cpuidle, not to genpd.
++ *
++ * The PRM driver (drivers/pmdomain/ti/omap_prm.c) registers every PRM
++ * instance with #power-domain-cells as a genpd, and genpd writes PWRSTCTRL:
++ * it powers "unused" prm_mpu off at late_initcall_sync (lowest mode = RET,
++ * LOGICRETSTATE cleared, i.e. MPU armed for OSWR), and prm_core carries
++ * OMAP_PRM_RET_WHEN_IDLE, so even "on" means RET-when-idle. Mainline's
++ * cpuidle reprograms the MPU on every deep entry anyway, so upstream never
++ * notices. Steelhead runs stock's policy instead -- MPU and CORE rest at ON
++ * and cpuidle programs them per entry and puts them back (kernel patches
++ * 0055/0056, stock 0xc0012d04/0xc00686d8) -- and two owners of one register
++ * left both armed for RET from boot (live on r15: PM_MPU_PWRSTCTRL 0x3c0601,
++ * PM_CORE_PWRSTCTRL 0x3ff0f01, pm_genpd: prm_mpu off-0).
++ *
++ * So take these two out of genpd: no provider on prm_mpu/prm_core (prm_core
++ * stays the IPU reset provider), and their only consumers -- the MPU target
++ * module and l4_cfg -- lose the power-domains reference. Stock had no genpd
++ * at all; the PWRSTCTRL of every other domain is unchanged.
++ */
++&prm_mpu {
++	/delete-property/ #power-domain-cells;
++};
++
++&prm_core {
++	/delete-property/ #power-domain-cells;
++};
++
++&l4_cfg {
++	/delete-property/ power-domains;
++};
++
++&{/ocp/target-module@48210000} {
++	/delete-property/ power-domains;
++};
++
++/*
+  * B2: second core. The shared omap4.dtsi declares cpu@0 and cpu@1. cpu@1 is
+  * kept (no longer deleted) now that the kernel is built SMP (CONFIG_SMP=y /
+  * NR_CPUS=2) for OMAP4460 CPU1 bring-up. Without this node arm_dt_init_cpu_maps

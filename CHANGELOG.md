@@ -6,6 +6,34 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — steelhead runs stock's C-states and power-domain policy (kernel **6.18.48-r16**)
+
+Mainline's OMAP4 C2 retains the MPU (CSWR) and its C3 goes to MPU OSWR.
+Stock's C2 retained nothing (MPU and CORE INACTIVE), its C3 was MPU+CORE
+CSWR, and between entries MPU and CORE stayed ON. Steelhead now does the same:
+
+- **0054** allows INACTIVE for mpu/core. Without it, mainline silently rounds
+  INACTIVE down to RET.
+- **0055** makes MPU/CORE rest at ON and sets `PRM_PWRREQCTRL=3`,
+  `PRM_CLKREQCTRL=2` and the RTA bits.
+- **0056** installs stock's table: C2 1100/1100 µs, C3 1200/1200 µs. CORE is
+  programmed per entry, and MPU/CORE go back to ON after each one.
+- **0057 (DTS)** takes `prm_mpu`/`prm_core` out of genpd. The genpd driver
+  owned the same PWRSTCTRLs and re-armed both for RET after every boot, with
+  the MPU set up for OSWR.
+
+The retention audit found no voltage risk. VDD_MPU never dropped in retention,
+because `VDD_*_I2C_DISABLE` is set and the SRAM LDO stays active. Defaults are
+unchanged: C2/C3 are still registered disabled. On r16 a 60 s C2 run did 6212
+entries per CPU with the MPU in INA and no errors, and MPU/CORE were back at ON
+afterwards.
+
+### Fixed — deep-idle entry could be vetoed without waking CPU1, and WiFi's level IRQ could be slept through (kernel r14)
+
+See the r14 commit. Patch 0052 has cpuidle wake CPU1 after a vetoed CPU0
+entry. Patch 0053 has gpio-omap veto the entry while a wake-enabled level GPIO
+IRQ is asserted but not latched, as stock did.
+
 ### Changed — an idle Bluetooth link no longer keeps the BT UART (and its 170 µs QoS) up (kernel **6.18.48-r13**)
 
 While Bluetooth was bound, `serdev_device_open()`'s runtime-PM reference kept

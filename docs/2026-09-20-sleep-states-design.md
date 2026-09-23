@@ -1545,6 +1545,108 @@ chip episode. Before C2 goes default: a long soak (hours, ideally one night with
 C2 armed against one without) comparing `wifi-watchdog.jsonl` heal/bad counts and
 `brcmf_escan_timeout`.
 
+### Audio under C2 (r14, Spotify via librespot → PulseAudio → McBSP2 → TAS5713)
+
+Petr started Spotify himself, at his own volume, with the speakers switched off.
+Protocol: 60 s without C2, then 180 s with C2 armed (BT bound), both during
+playback.
+
+```
+OFF 60 s : kernel audio errors +0, ALSA RUNNING, librespot err/warn 1
+C2 180 s : kernel audio errors +0 (no XRUN/underrun/McBSP/DMA/TAS571x), ALSA RUNNING,
+           C2 residency 95 s of 180 (20 524 entries), cpu_dma_latency 1312 us
+```
+
+ALSA holds a 1312 µs QoS request while playing (period 1200 frames at 48 kHz).
+That is above C2's 768 µs, so music does **not** block C2, and C2's wake latency
+stays well inside the audio budget.
+
+librespot logged 7 network warnings in the C2 window (audio-key timeout, "Spirc shut
+down unexpectedly"). These cannot be pinned on C2. WiFi was already flaky:
+
+- the watchdog logged `bad` at 13:12:49, 25 s **before** C2 was armed;
+- it reported `ok` at both checks inside the window;
+- earlier the same hour, a full WiFi wedge (92 % loss, heal bounce) happened with
+  C2 disabled.
+
+That recurring WiFi problem is now its own task, independent of C2.
+
+## 4v. MPU retention parity: first register read (2026-09-23)
+
+With C2 armed the MPU enters CSWR tens of thousands of times a minute, so how
+retention is configured electrically now matters. r14, PRM_DEVICE:
+
+```
++0x10 PRM_VOLTCTRL = 0x732a  -> AUTO_CTRL retention on VDD_MPU, VDD_IVA and VDD_CORE, permanently
++0xb4 0x1  +0xb8 0x7  +0xc0 0x7  +0xc8 0x7  -> bit0 set, matches stock (i608 RTA)
++0xbc 0x0  +0xc4 0x0  +0xcc 0x0             -> bit0 CLEAR; stock sets it on 446x
+```
+
+Stock differs in two ways:
+
+- It disabled VC auto-transitions at boot and armed MPU=RET only around entries
+  with MPU below INA.
+- Its C2 never retained the MPU at all (MPU INA).
+
+The mainline C2 we run therefore sends the MPU into retention in a way stock's C2
+never did. A stock audit of the retention voltage, SRAM LDO and RTA settings is
+under way before anything changes.
+
+## 4w. Stock's C-state table and PM policy (kernels r15, r16 — 2026-09-23)
+
+The retention-parity audit settled the §4v worry. **Our MPU CSWR never lowered any
+voltage**:
+
+- `PRM_VOLTCTRL` keeps `VDD_{CORE,MPU,IVA}_I2C_DISABLE` set (mainline's
+  `OMAP4_VDD_DEFAULT_VAL`), so the VC sends no RET command.
+- VDD_MPU stayed at the OPP voltage throughout.
+- The SRAM LDO stayed in active mode.
+
+So there was no L2/SRAM risk, but the *policy* still differed from stock in every
+respect:
+
+| | stock 3.0.8 | mainline (≤ r14) |
+|---|---|---|
+| C2 | CPUs OFF, MPU **INA**, CORE **INA**, 1100/1100 | CPUs OFF, MPU **CSWR**, 768/960 |
+| C3 | MPU CSWR + CORE CSWR, 1200/1200 | MPU **OSWR** (stock never used it) |
+| MPU/CORE between entries | ON; programmed per entry, restored after | RET; CORE armed for OSWR with no context save |
+| PWRREQCTRL / CLKREQCTRL | 3 / 2 | 0 / 0 |
+
+**r15** makes steelhead run stock's policy:
+
+- **0054:** INACTIVE is allowed for mpu/core. Mainline's `omap_set_pwrdm_state()`
+  rounds an unsupported state *down*, so stock's C2 would silently have been
+  CSWR. Stock's own pwrdm data declared core RET|INA|ON (0x0e) and mpu
+  OFF|RET|INA|ON (0x0f).
+- **0055:** MPU/CORE rest at ON, with `PWRREQCTRL=3`, `CLKREQCTRL=2` and
+  explicit RTA bits.
+- **0056:** stock's C1–C3 table on steelhead only. CORE is programmed on CPU0's
+  entry, and MPU+CORE go back to ON before CPU1 is woken. C4 (CORE OSWR) is left
+  out, because nothing provides CORE context save in idle.
+
+**r16 (0057, DTS)** fixes something r15 exposed: MPU/CORE were back at RET after
+every boot. The PRM genpd driver (`drivers/pmdomain/ti/omap_prm.c`) also owns
+those PWRSTCTRLs:
+
+- At `late_initcall_sync` it powers the unused `prm_mpu` off, which writes RET
+  with LOGICRETSTATE cleared, i.e. OSWR armed.
+- `prm_core` has `OMAP_PRM_RET_WHEN_IDLE`, so its "on" already means RET.
+
+The DTS takes both out of genpd; their only consumers were `l4_cfg` and the MPU
+target module. Upstream never notices, because its cpuidle reprograms the MPU on
+every entry.
+
+Verified on r16:
+
+```
+boot:        PM_MPU_PWRSTCTRL 0x3c0607 (ON), PM_CORE_PWRSTCTRL 0x3ff0f03 (ON); prm_mpu/prm_core gone from genpd
+C2 60 s:     6212 entries/CPU, mpu_pwrdm INA 7986 / RET 0, cpu0/1 OFF 7990/12366, no errors
+after:       MPU 0x3c0607, CORE 0x3ff0f07 — back at ON
+```
+
+CORE still never leaves ON, not even to INA. That is the §4u question: something
+in CORE is always active.
+
 ## 4u. CORE never idles: first look (2026-09-23)
 
 `core_pwrdm` never left ON in any run, even with `keep_core_on=0`.

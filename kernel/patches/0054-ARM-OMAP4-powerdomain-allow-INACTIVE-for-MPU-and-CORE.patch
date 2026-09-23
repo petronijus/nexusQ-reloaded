@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000054 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 15:00:00 +0200
+Subject: [PATCH] ARM: OMAP4: powerdomain: allow INACTIVE for MPU and CORE, as stock did
+
+The stock 3.0 OMAP4 kernels declared core_pwrdm as RET|INA|ON (pwrsts 0x0e,
+core_44xx_pwrdm) and mpu_pwrdm as OFF|RET|INA|ON (0x0f, mpu_443x_pwrdm),
+and their C2 -- the deep state that runs most often -- was "CPUs OFF, MPU +
+CORE INACTIVE": clock-gated, powered, nothing retained or lost. Mainline
+declares both RET|ON, so omap_set_pwrdm_state() silently rounds a requested
+INACTIVE *down* to RET -- stock's C2 would quietly have become MPU/CORE
+retention -- and INACTIVE cannot be expressed at all.
+
+Add INACTIVE to both. Nothing in mainline requests it, and the lowest-valid
+lookups used by the generic PM setup and suspend still land on RET, so no
+existing user changes behaviour; the steelhead cpuidle table uses it.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/powerdomains44xx_data.c b/arch/arm/mach-omap2/powerdomains44xx_data.c
+index 37fd1a5..0f845a9 100644
+--- a/arch/arm/mach-omap2/powerdomains44xx_data.c
++++ b/arch/arm/mach-omap2/powerdomains44xx_data.c
+@@ -33,7 +33,8 @@ static struct powerdomain core_44xx_pwrdm = {
+ 	.voltdm		  = { .name = "core" },
+ 	.prcm_offs	  = OMAP4430_PRM_CORE_INST,
+ 	.prcm_partition	  = OMAP4430_PRM_PARTITION,
+-	.pwrsts		  = PWRSTS_RET_ON,
++	/* INACTIVE: stock OMAP4 kernels used it for C2, see mpu_44xx_pwrdm */
++	.pwrsts		  = PWRSTS_RET | PWRSTS_INA_ON,
+ 	.pwrsts_logic_ret = PWRSTS_OFF_RET,
+ 	.banks		  = 5,
+ 	.pwrsts_mem_ret	= {
+@@ -202,7 +203,14 @@ static struct powerdomain mpu_44xx_pwrdm = {
+ 	.voltdm		  = { .name = "mpu" },
+ 	.prcm_offs	  = OMAP4430_PRM_MPU_INST,
+ 	.prcm_partition	  = OMAP4430_PRM_PARTITION,
+-	.pwrsts		  = PWRSTS_RET_ON,
++	/*
++	 * INACTIVE (clock-gated, powered, nothing retained or lost) is a valid
++	 * MPU and CORE target: the stock 3.0 OMAP4 kernels declared
++	 * RET|INA|ON for core_pwrdm and OFF|RET|INA|ON for mpu_pwrdm, and their
++	 * C2 ran "CPUs OFF, MPU + CORE INA". Without it omap_set_pwrdm_state()
++	 * silently rounds a requested INACTIVE down to RET.
++	 */
++	.pwrsts		  = PWRSTS_RET | PWRSTS_INA_ON,
+ 	.pwrsts_logic_ret = PWRSTS_OFF_RET,
+ 	.banks		  = 3,
+ 	.pwrsts_mem_ret	= {

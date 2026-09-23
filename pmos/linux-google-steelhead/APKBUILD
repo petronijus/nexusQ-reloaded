@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=14
+pkgrel=16
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -82,6 +82,10 @@ source="
 	0051-Bluetooth-hci_bcm-release-the-host-UART-while-runtime-suspended.patch
 	0052-ARM-OMAP4-cpuidle-wake-CPU1-when-CPU0-idle-entry-is-vetoed.patch
 	0053-gpio-omap-veto-OMAP4-idle-while-a-wake-level-IRQ-is-asserted.patch
+	0054-ARM-OMAP4-powerdomain-allow-INACTIVE-for-MPU-and-CORE.patch
+	0055-ARM-OMAP4-pm-steelhead-stock-boot-PM-setup-for-deep-idle.patch
+	0056-ARM-OMAP4-cpuidle-steelhead-runs-stock-C-state-table.patch
+	0057-ARM-dts-omap4-steelhead-MPU-and-CORE-states-belong-to-cpuidle.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -183,4 +187,8 @@ SKIP  0050-ARM-OMAP4-HS-configure-CPU1-CP15-via-PPA-on-4460-too.patch
 SKIP  0051-Bluetooth-hci_bcm-release-the-host-UART-while-runtime-suspended.patch
 SKIP  0052-ARM-OMAP4-cpuidle-wake-CPU1-when-CPU0-idle-entry-is-vetoed.patch
 SKIP  0053-gpio-omap-veto-OMAP4-idle-while-a-wake-level-IRQ-is-asserted.patch
+SKIP  0054-ARM-OMAP4-powerdomain-allow-INACTIVE-for-MPU-and-CORE.patch
+SKIP  0055-ARM-OMAP4-pm-steelhead-stock-boot-PM-setup-for-deep-idle.patch
+SKIP  0056-ARM-OMAP4-cpuidle-steelhead-runs-stock-C-state-table.patch
+SKIP  0057-ARM-dts-omap4-steelhead-MPU-and-CORE-states-belong-to-cpuidle.patch
 "

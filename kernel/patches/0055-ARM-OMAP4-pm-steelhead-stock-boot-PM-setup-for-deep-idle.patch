@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000055 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 23 Sep 2026 15:10:00 +0200
+Subject: [PATCH] ARM: OMAP4: pm: steelhead: stock's boot PM setup for deep idle
+
+What stock 3.0.8 set up before its deep C-states ran, and mainline does not
+(stock-parity audit of reverse-eng/vmlinux.bin, 2026-09-23):
+
+ - MPU and CORE rest at ON (stock pwrdms_setup, 0xc0012d04); cpuidle
+   programs them per entry and puts them back. Mainline's pwrdms_setup()
+   arms both for RET, CORE with logic OFF, permanently -- so a CORE that
+   ever idled would drop into OSWR without any context save. Live on r14:
+   PM_CORE_PWRSTCTRL 0x03ff0f01.
+ - PRM_PWRREQCTRL = 3 and PRM_CLKREQCTRL = 2 (0xc0013150, 0xc0013048);
+   mainline leaves both at 0. TWL6030 sleep, and with it the TPS62361
+   VDD_MPU enable (SYSEN in the APE group, patch 0014), follows PWRREQ, so
+   it must not drop while the MPU holds retained state. Latent until CORE
+   retains, but required before it does.
+ - DISABLE_RTA_EXPORT in PRM_SRAM_WKUP_SETUP and PRM_LDO_SRAM_{CORE,MPU,
+   IVA}_SETUP (0xc0012f64-0xc0012fd0, every OMAP4). The ROM already leaves
+   them set on this unit; do not depend on it.
+
+Not done here, deliberately: clearing PRM_VOLTCTRL's AUTO_CTRL fields.
+With the VDD_*_I2C_DISABLE bits mainline sets, AUTO_CTRL sends no
+retention-voltage command at all (VDD_MPU stays at the OPP voltage through
+retention), and stock's table no longer retains the MPU in C2. Aligning
+the VC policy with stock belongs with any change that enables RET voltage.
+
+Also note: the MPU/CORE ON written here does not survive boot on its own --
+the PRM genpd driver re-arms both for RET at late_initcall_sync. The
+steelhead DTS patch 0057 takes those two domains out of genpd.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/pm44xx.c b/arch/arm/mach-omap2/pm44xx.c
+index 37b1681..aa96354 100644
+--- a/arch/arm/mach-omap2/pm44xx.c
++++ b/arch/arm/mach-omap2/pm44xx.c
+@@ -15,11 +15,16 @@
+ #include <linux/slab.h>
+ #include <asm/system_misc.h>
+ 
++#include <linux/of.h>
++
+ #include "soc.h"
+ #include "common.h"
+ #include "clockdomain.h"
+ #include "powerdomain.h"
+ #include "pm.h"
++#include "prcm44xx.h"
++#include "prm44xx.h"
++#include "prminst44xx.h"
+ 
+ u16 pm44xx_errata;
+ 
+@@ -147,6 +152,66 @@ static int __init pwrdms_setup(struct powerdomain *pwrdm, void *unused)
+ 	return omap_set_pwrdm_state(pwrst->pwrdm, pwrst->next_state);
+ }
+ 
++/*
++ * Nexus Q (OMAP4460 HS): what stock set up before its deep C-states ran, and
++ * mainline does not. Offsets in PRM_DEVICE (the 6.18 headers stop at 0xac).
++ */
++#define STEELHEAD_PRM_CLKREQCTRL		0x000c
++#define STEELHEAD_PRM_PWRREQCTRL		0x0014
++#define STEELHEAD_PRM_SRAM_WKUP_SETUP		0x00b4
++#define STEELHEAD_PRM_LDO_SRAM_CORE_SETUP	0x00b8
++#define STEELHEAD_PRM_LDO_SRAM_MPU_SETUP	0x00c0
++#define STEELHEAD_PRM_LDO_SRAM_IVA_SETUP	0x00c8
++#define STEELHEAD_DISABLE_RTA_EXPORT		BIT(0)
++
++static void __init omap4_steelhead_pm_setup(void)
++{
++	static const u16 rta[] __initconst = {
++		STEELHEAD_PRM_SRAM_WKUP_SETUP, STEELHEAD_PRM_LDO_SRAM_CORE_SETUP,
++		STEELHEAD_PRM_LDO_SRAM_MPU_SETUP, STEELHEAD_PRM_LDO_SRAM_IVA_SETUP,
++	};
++	struct powerdomain *pd;
++	int i;
++
++	/*
++	 * MPU and CORE rest at ON (stock pwrdms_setup, 0xc0012d04); cpuidle
++	 * programs them per deep entry and puts them back afterwards. The
++	 * generic setup above armed both for RET -- CORE with logic OFF -- for
++	 * good, which a CORE that ever idled would have entered without any
++	 * context save.
++	 */
++	pd = pwrdm_lookup("mpu_pwrdm");
++	if (pd)
++		omap_set_pwrdm_state(pd, PWRDM_POWER_ON);
++	pd = pwrdm_lookup("core_pwrdm");
++	if (pd)
++		omap_set_pwrdm_state(pd, PWRDM_POWER_ON);
++
++	/*
++	 * PWRREQ released only when every domain is OFF, CLKREQ condition 2 --
++	 * stock's values (0xc0013150, 0xc0013048). TWL6030 sleep, and with it
++	 * the TPS62361 VDD_MPU enable, follows PWRREQ, so it must never drop
++	 * while the MPU holds retained state. Only relevant once CORE retains.
++	 */
++	omap4_prminst_write_inst_reg(0x3, OMAP4430_PRM_PARTITION,
++				     OMAP4430_PRM_DEVICE_INST,
++				     STEELHEAD_PRM_PWRREQCTRL);
++	omap4_prminst_write_inst_reg(0x2, OMAP4430_PRM_PARTITION,
++				     OMAP4430_PRM_DEVICE_INST,
++				     STEELHEAD_PRM_CLKREQCTRL);
++
++	/*
++	 * Retention-till-access off for the SRAM wake-up and the CORE/MPU/IVA
++	 * SRAM LDOs, as stock set on every OMAP4 (0xc0012f64-0xc0012fd0). The
++	 * ROM leaves them set on this unit already; do not depend on that.
++	 */
++	for (i = 0; i < ARRAY_SIZE(rta); i++)
++		omap4_prminst_rmw_inst_reg_bits(STEELHEAD_DISABLE_RTA_EXPORT,
++						STEELHEAD_DISABLE_RTA_EXPORT,
++						OMAP4430_PRM_PARTITION,
++						OMAP4430_PRM_DEVICE_INST, rta[i]);
++}
++
+ /**
+  * omap_default_idle - OMAP4 default ilde routine.'
+  *
+@@ -265,6 +330,9 @@ int __init omap4_pm_init(void)
+ 		goto err2;
+ 	}
+ 
++	if (of_machine_is_compatible("google,steelhead"))
++		omap4_steelhead_pm_setup();
++
+ 	if (cpu_is_omap44xx())
+ 		ret = omap4plus_init_static_deps(omap4_static_dep_map);
+ 	else if (soc_is_omap54xx() || soc_is_dra7xx())
