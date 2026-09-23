@@ -6,6 +6,39 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — deep-idle experiment knobs now do what stock's did (kernel **6.18.48-r8**)
+
+This is experiment scaffolding only. An untouched boot is unchanged: C1 only,
+with C2 and C3 registered but disabled. On the unit it went through
+`nq-kernel-ota` and was autopromoted. A full diag sweep found no regression.
+
+- **`cpuidle44xx.keep_mpu_on` programs `mpu_pwrdm` ON.** Before, it only skipped
+  the programming. Mainline's `pwrdms_setup()` arms MPU and CORE for RET with logic
+  OFF at boot, so the MPU was never actually held ON. It also stops running
+  `cpu_cluster_pm_exit()` without a matching enter.
+- **New `cpuidle44xx.keep_core_on`** does the same for `core_pwrdm`, as stock's
+  knob did (`0xc0740f00`).
+- **The `deep_idle` knob is removed.** It cleared the DRIVER disable bit, but
+  `CPUIDLE_FLAG_OFF` sets the USER bit, so the per-CPU sysfs `disable` file is
+  the real switch. Patch 0024's comment and message had the same error and are
+  corrected.
+- New instrument: `scripts/diag/nq-deep-idle-ladder.sh`. It releases the BT UART,
+  which otherwise pins a 170 µs CPU-latency QoS that vetoes C2/C3, and arms the
+  hardware watchdog for the run. A hang is then an unattended warm reset with
+  ramoops, not a mains cycle.
+
+Result: with MPU and CORE held ON, a CPU going OFF from idle **still** hangs the
+board. The fault is in the CPU's own OFF/resume path. See
+`docs/2026-09-20-sleep-states-design.md` §4m–§4o.
+
+#### Known issues opened by this
+
+- **WiFi was lost for ~10 h overnight on the r7 boot** (22:52 on 09-22 → morning).
+  It showed the TX-wedge signature `loss:100 sig:-44` and 348
+  `brcmf_escan_timeout` despite `roamoff=1`, just after a USB gadget
+  re-enumeration. It is not caused by r8 but cannot be cleared on r8 yet; check
+  `wifi-watchdog.jsonl` after a few hours of uptime.
+
 ### Changed — the sink-input gate's safety net is no longer unreachable (nexusqd r21)
 
 ⚠️ **This is hardening, not a measured bug fix — the motivating observation was a

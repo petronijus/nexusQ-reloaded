@@ -1177,6 +1177,84 @@ never run on this board. The audit ranks one resume item HIGH on its own:
    INA); i608 RTA + 4460 SRAM-LDO RETMODE; the coupled-case gaps (GICD disable before
    waking CPU1, CPU1 L2-wait, CPU1 wakeupgen/GICC mask).
 
+## 4o. Kernel r8: MPU and CORE held ON, and CPU OFF still hangs (2026-09-23)
+
+Kernel **6.18.48-r8** carries patch 0048 rev 2:
+
+- `keep_mpu_on` now *programs* `mpu_pwrdm` ON on every CPU0 entry. It also
+  clears `mpuss_can_lose_context`, because rev 1 left it set for C3 and ran
+  `cpu_cluster_pm_exit()` without a matching enter.
+- A new `keep_core_on` programs `core_pwrdm` ON from the parameter write, and
+  restores the previous next state when cleared.
+- The `deep_idle` knob is gone, since it toggled the wrong bit (§4n).
+
+Patch 0024's comment and message are corrected too. r8 went on the unit through
+`nq-kernel-ota` (trial boot from slot B, health-gated autopromote to slot A). A full
+`nexusq-diag` sweep afterwards found no regression
+(`nq-captures/20260923-091115/`).
+
+**Clean T3** (`nq-deep-idle-ladder.sh 0 1 0 60 0 1`): BT released (QoS 4444 µs), CPU1
+online, both CPUs waiting for each other, and MPU **and** CORE confirmed ON
+(`pm_debug`: `mpu_pwrdm (ON)`, `core_pwrdm (ON)`, both `RET:0`). Result: a **hang
+within seconds of arming**, as on r7. The watchdog brought the unit back warm on r8.
+ramoops ends at the `pm_debug` read before arming, with no oops and no warning.
+
+So the hang does **not** need the MPU or CORE to transition. What remains is the
+CPU's own OFF → wake → resume path, which hotplug never exercises (§2 correction).
+The audit ranks it as follows:
+
+1. **CP15 writes on resume.** `cpu_ca9mp_do_resume` / `cpu_v7_do_resume` write the
+   Diagnostic, Power Control and ACTLR registers whenever the saved value
+   differs. Stock's CPU0 resume sets only ACTLR.SMP (if NSACR[18]). Non-secure on
+   HS, such a write traps with the MMU off, which is a silent hang.
+2. **SGI/PPI distributor mask before OFF** (stock `0xc006713c`) and CPU1's
+   wakeupgen/GICC mask before OFF (`0xc00684bc`), both missing here.
+3. The wake never arrives at all (wakeupgen routing for the broadcast timer).
+
+**Next: breadcrumbs, not guesses.** A hang with the MMU off cannot print
+anything, but SAR RAM survives a warm reset (patch 0044 already keeps the reboot
+reason there). Have `sleep44xx.S` / `omap4_cpu_resume` write a step marker to a
+free SAR word by physical address at each stage:
+
+- before the SMC 0x108 pair;
+- before WFI;
+- first instruction after the ROM hands back;
+- after each CP15 restore;
+- MMU on.
+
+After the watchdog reset, read the markers from `/dev/mem`. That localises the hang
+to one instruction range in a single run.
+
+### Also found by the r8 sweep (not caused by r8)
+
+The r7 boot lost WiFi for about 10 h overnight, from t=8646 s (22:52 on 09-22) to
+t=45356 s. It shows the TX-wedge signature `loss:100 sig:-44` and 348
+`brcmf_escan_timeout`, with `roamoff=1` loaded. The only event just before it was
+a USB gadget re-enumeration at 8625 s. This is untested and tracked in CHANGELOG
+Known issues.
+
+## Power target: stock's wall draw is unknown, so measure it (open, 2026-09-23)
+
+No reliable public figure exists for the stock Nexus Q's idle draw:
+
+- Google's Guidebook specs give only the integrated 35 W supply (85–265 V), the
+  2 × 12.5 W / 8 Ω class-D amp, and "automatic shutdown for audio amp supply when
+  not in use".
+- Wikipedia and the 2012 reviews (Engadget, LaptopMag, michaelevans.org) repeat
+  only those ratings.
+- A search-engine hit claiming "1.82 W idle, Yokogawa WT310E" (lifetips.alibaba.com)
+  is fabricated. The same page credits the Q with a Zigbee mesh, 3× 1080p RTSP
+  streams and local ASR. Do not cite it.
+
+**Plan.** Measure it ourselves:
+
+- stock RAM-boot versus our build, on the same meter (≥0.1 W resolution);
+- the same cabling for both (network, HDMI, speakers);
+- idle only, read after >300 s of settling.
+
+Stock idles with C1–C4 (CPUs OFF), so its number is the target for R2. Tracked in
+the AI-handover Todoist project. Waiting on Petr to pick the meter.
+
 ## Where this stands (end of 2026-09-22) — paused here
 
 - **R2 blockers found:** the BT-UART QoS (§4m) and the USER-disable bit (§4n).

@@ -20,14 +20,20 @@ so an ordinary boot behaves exactly as C1-only did. One state can then be
 armed by hand for a measured run, and if it hangs, a reboot -- not a
 reflash -- restores the safe default.
 
-mpu_pwrdm and core_pwrdm have RET:0 OFF:0 on this board after 20 h of
-uptime: retention has never been *requested*, not refused. This is what
-makes asking possible.
+One state is armed by writing 0 to its sysfs `disable` file for cpu0 and
+cpu1: CPUIDLE_FLAG_OFF sets the USER disable bit (drivers/cpuidle/cpuidle.c),
+which is exactly what that file controls. (An earlier revision of this
+message and of patch 0048 said FLAG_OFF set the DRIVER bit; it does not.)
+
+mpu_pwrdm and core_pwrdm read RET:0 OFF:0 after 20 h of uptime. Not because
+retention was never requested -- mainline's pwrdms_setup() arms both for
+RET at boot -- but because a CPU never powers off, so the MPUSS never gets
+the chance to transition.
 
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
 diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
-index df106524d..2f74d78c3 100644
+index df10652..ea7d0e4 100644
 --- a/arch/arm/mach-omap2/cpuidle44xx.c
 +++ b/arch/arm/mach-omap2/cpuidle44xx.c
 @@ -11,6 +11,7 @@
@@ -38,7 +44,7 @@ index df106524d..2f74d78c3 100644
  #include <linux/tick.h>
  
  #include <asm/cpuidle.h>
-@@ -326,5 +327,39 @@ int __init omap4_idle_init(void)
+@@ -326,5 +327,40 @@ int __init omap4_idle_init(void)
  	if (!cpu_clkdm[0] || !cpu_clkdm[1])
  		return -ENODEV;
  
@@ -56,18 +62,19 @@ index df106524d..2f74d78c3 100644
 +	 *
 +	 *   echo 0 > /sys/devices/system/cpu/cpu0/cpuidle/state1/disable
 +	 *
-+	 * NOTE (2026-09-21): arming a deep state AT BOOT was tried twice (r5, r6)
-+	 * and hung the board before the display came up, so nothing could be
-+	 * printed or measured. Everything stays off here; patch 0048 adds the
-+	 * runtime knob that arms one on a booted box with a live console.
-+	 * Sysfs cannot do it -- CPUIDLE_FLAG_OFF sets DISABLED_BY_DRIVER and the
-+	 * `disable` file only touches DISABLED_BY_USER.
++	 * (and the same for cpu1) arms one for a measured experiment.
++	 * CPUIDLE_FLAG_OFF sets the USER disable bit (drivers/cpuidle/cpuidle.c),
++	 * so that sysfs file is exactly the switch. If the experiment wedges the
++	 * box, a reboot restores the safe default; nothing has to be reflashed.
++	 * Registering the states also makes their residency counters exist.
 +	 *
-+	 * arms one deliberately for a measured experiment. If that wedges the
-+	 * box a plain reboot restores the safe default - nothing has to be
-+	 * reflashed to recover, which is precisely what made this untestable
-+	 * before. Registering them also makes their residency counters exist,
-+	 * so "did mpu_pwrdm ever actually reach CSWR/OSWR" becomes answerable.
++	 * Arming at BOOT was tried twice (r5, r6) and hung the board before the
++	 * display came up. A running box needs two more things before the
++	 * governor can pick C2 at all: the Bluetooth UART must be released (while
++	 * hci_uart holds it, 8250_omap keeps a 170 us CPU-latency QoS request at
++	 * 3 Mbaud, below C2's 768 us exit latency), and the escape hatches of
++	 * patch 0048 decide how much of the entry path runs. See
++	 * docs/2026-09-20-sleep-states-design.md sections 4m and 4n.
 +	 */
 +	if (of_machine_is_compatible("google,steelhead")) {
 +		int i;
