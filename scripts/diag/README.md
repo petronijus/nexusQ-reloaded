@@ -65,6 +65,23 @@ live burst instead of reading the persistent log.
 
 All sources were verified against the live device + the kernel/DTS, not guessed.
 
+**Deep C-states (healthd ≥ device r106, kernel ≥ 6.18.48-r16)** — four fields,
+appended to the sample (earlier fields unchanged):
+
+- `cstate_ms` and `cstate_n`: per-window residency (ms) and entries by state
+  name, both CPUs summed, differenced from
+  `…/cpuN/cpuidle/stateM/{time,usage}`. They read `{}` on the first sample or a
+  counter reset, like `opp_ms`.
+- `cstate_armed`: the deep states whose per-state `disable` is 0 on cpu0. It is
+  empty by default, because C2/C3 are registered disabled.
+- `qos_us`: the CPU-latency QoS limit, read from `/dev/cpu_dma_latency`.
+
+`nq-health-report` turns these into an info line, `cstate_residency`, and a
+warning, `cstate_vetoed`. The warning fires when states are armed while
+`qos_us` sits below their exit latency (C2 1100 µs, C3 1200 µs), which means
+the governor cannot pick them. A held-open BT UART did exactly that unnoticed
+(`docs/2026-09-20-sleep-states-design.md` §4m).
+
 **Compute / governor** — `…/cpu0/cpufreq/{scaling_governor,scaling_cur_freq,…}`,
 `nproc`, `/sys/kernel/debug/clk/dpll_mpu_ck/clk_rate`. OPPs: 350/700/920/1200 MHz.
 cpufreq stats are off in the kernel on images up to v1.6.5 (`CONFIG_CPU_FREQ_STAT`

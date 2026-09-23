@@ -6,6 +6,36 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — healthd reports whether the deep C-states run, and what vetoes them (device **r106**)
+
+`nq-healthd` appends four fields to every sample; no existing field changes:
+
+- `cstate_ms` and `cstate_n`: per-window residency and entries per state, both
+  CPUs, differenced from the kernel counters;
+- `cstate_armed`: which deep states are enabled;
+- `qos_us`: the CPU-latency QoS limit.
+
+`nq-health-report` summarises them as `cstate_residency`. It warns with
+`cstate_vetoed` when C2/C3 are armed but the QoS sits below their exit latency,
+the situation that went unseen for weeks with the BT UART.
+
+New host test `userspace/nq-healthd/tests/test_cstate.c` (in `make test`)
+checks:
+
+- differencing and summing over both CPUs;
+- first-sample and counter-reset gaps;
+- an offline CPU;
+- armed parsing;
+- the s32 QoS read.
+
+The test was seen failing against three mutants.
+
+On the unit (r106 + kernel r16, default state):
+`"cstate_ms":{"C1":6044,"C2":0,"C3":0},"cstate_armed":"","qos_us":4444`.
+
+The app OTA path restarts `nq-healthd` after upgrading `device-google-steelhead`
+(`_RESTART_ORDER`); a hand `apk add` does not.
+
 ### Changed — steelhead runs stock's C-states and power-domain policy (kernel **6.18.48-r16**)
 
 Mainline's OMAP4 C2 retains the MPU (CSWR) and its C3 goes to MPU OSWR.

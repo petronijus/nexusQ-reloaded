@@ -50,7 +50,8 @@ notes in [`docs/`](docs/).
 | Subsystem | Status | Notes |
 |---|:---:|---|
 | 🐧 **Boot** — mainline 6.18 LTS + postmarketOS (systemd) | ✅ | daily-usable from a clean flash; 6.18.48-r2 since v1.17.0 (6.12.12 → 6.18 in v1.15.0, upstream-supported to Dec 2028); boot log kept clean since v1.6.10, and since v1.17.0 `dmesg -l err,warn` is **empty** — the last line standing was the stopped RTC |
-| ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0 |
+| ⚡ **Dual-core SMP** | ✅ | both Cortex-A9 cores online (`nproc=2`) · v1.2.0; since kernel r12 CPU1 also gets the Cortex-A9 errata workarounds (742230/743622/751472) the secure firmware sets on CPU0 — it ran without them before (patch 0050) |
+| 💤 **Deep CPU idle** (C2/C3 — both cores OFF) | 🟡 | works on stock's own table since kernel r16 (C2 = CPUs OFF + MPU/CORE inactive, C3 = MPU/CORE retention) with Bluetooth, audio and WiFi alive; **registered disabled** until an overnight soak clears it. Arm with `echo 0 > /sys/devices/system/cpu/cpu[01]/cpuidle/state{1,2}/disable`; healthd reports `cstate_*`/`qos_us`. CORE itself stays ON while USB is up — as on stock. [design + story](docs/2026-09-20-sleep-states-design.md) |
 | 🚄 **CPU freq scaling** 350 → **1200 MHz** | ✅ | DVFS since v1.4.0; an idle box sits at 350 MHz ~90 % of the time even with a USB host attached and not playing · device r90 (2026-08-30) |
 | 🔊 **TAS5713 25 W speaker** | ✅ | audible since v1.6.13 (McBSP2 pinmux); playback crackle closed in v1.8.1 (sDMA priority + DPLL_ABE relock) |
 | 🎵 **Spotify Connect** (librespot) | ✅ | advertises **"Nexus Q"**, one movable PulseAudio input · v1.6.15 |
@@ -254,6 +255,7 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.17.0 ─ ✦ the clock starts: the RTC never ran — MSECURE never driven high (pad 0x050→0x054)   2026-09-18
 1.18.0 ─ ✦ HDMI audio: the output that was never offered — issue #5                 2026-09-20   ← latest tag
 (dev) ── ✦ ramoops was never broken — the crash archive is /var/lib/systemd/pstore   2026-09-20
+(dev) ── ✦ deep idle: both cores OFF — CPU1 errata, BT QoS, WiFi IRQ veto, stock C-states   2026-09-23
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

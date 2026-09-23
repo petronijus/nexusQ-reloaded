@@ -1647,6 +1647,18 @@ after:       MPU 0x3c0607, CORE 0x3ff0f07 — back at ON
 CORE still never leaves ON, not even to INA. That is the §4u question: something
 in CORE is always active.
 
+**C3 on r16** (`DEEP=2 KEEP_BT=1 nq-deep-idle-ladder.sh 0 0 0 90 0 0`, with a BT
+passive scan at t+30):
+
+```
+C3: 9107 entries/CPU, 51 s of 90 s   C2: ~6500 entries
+mpu_pwrdm RET (CSWR) 17128, INA 8618; cpu0/1 OFF 25750/31168; core_pwrdm never left ON
+BT scan during deep idle: 26 devices, host_wake OK, no UART/HCI errors
+```
+
+Both deep states work on stock's table. The governor picks C3 for the longer
+gaps, as it should.
+
 ## 4u. CORE never idles: first look (2026-09-23)
 
 `core_pwrdm` never left ON in any run, even with `keep_core_on=0`.
@@ -1667,6 +1679,90 @@ things:
 A USB host with an attached device issues SOFs every millisecond, and L3INIT's
 dynamic dependencies then keep L3/EMIF, and so CORE, awake. This is a
 whole-device design question, not a bug hunt. To be taken up after 4t.
+
+### Answered on r16: USB holds CORE, by design (2026-09-23)
+
+`/root/cm-core.py` (read-only CM2 dump) shows **USB_HOST, USB_OTG and USB_TLL
+functional with STBYST=0**: their master ports never go to standby, so L3INIT
+keeps L3/EMIF busy and CORE cannot idle. Everything else under CORE (SDMA, C2C,
+Ducati) is idle or disabled.
+
+- **EHCI + LAN9500A.** The Ethernet device (`1-1`, smsc95xx) has
+  `power/control=on` (the USB core default for non-hub devices). Setting it to
+  `auto` changes nothing while `eth0` is up, because the LAN9500A reports
+  `bmAttributes=0x80`: no remote wakeup (there is no EEPROM), so usbnet refuses
+  to autosuspend an open interface. With `eth0` down, smsc95xx does suspend, but
+  the **EHCI root hub stays active**. Patch 0006 pins it deliberately: an
+  autosuspended root hub halts EHCI, the OMAP gates the functional clock, port
+  VBUS drops and the soldered LAN9500A loses its session.
+- **OTG gadget.** It is active while the USB cable to the PC is plugged in, which
+  is the development link. A deployed Q normally has no cable.
+
+So CORE idle is a **product decision about Ethernet**, not a PM bug. Options, none
+chosen yet:
+
+- (a) power the LAN9500A and EHCI down when there is no carrier, and detect a
+  cable by periodic probing (it cannot wake the host);
+- (b) accept CORE ON while Ethernet is present and the port is powered;
+- (c) Ethernet off by default, enabled on demand from the app.
+
+Measuring CORE idle also needs the USB gadget unplugged, so it would have to run
+over WiFi or Ethernet instead of the cable.
+
+### Stock audit: stock never powered Ethernet down, so its CORE never idled either
+
+Petr's direction was "powering Ethernet down without a cable is fine, but do what
+stock did". The audit (`reverse-eng/vmlinux.bin` plus the stock /system) found
+that **stock did nothing of the kind**:
+
+- `gpio_1` NENABLE and `gpio_62` NRESET are written once, in
+  `omap4_steelhead_ehci_init` (`0xc0017a1c`/`0xc0017a34`), and held claimed.
+  There is no runtime power-down or reset.
+- `usb_new_device` disables autosuspend on every device (`0xc0318fcc`), and
+  stock smsc95xx had `supports_autosuspend=0`. So the LAN9500A never
+  USB-suspended, the root hub never suspended, and stock's
+  `ehci_omap_bus_suspend` (which *would* have put usbhs and gated auxclk3)
+  never ran at runtime.
+- Android's `EthernetDataTracker` kept eth0 admin-UP forever. On no carrier it
+  only stopped DHCP and cleared addresses.
+- The UHH/TLL/OTG hwmods are SWSUP_SIDLE|SWSUP_MSTANDBY, so an enabled module
+  never stands by.
+
+It follows that stock's C2/C3 programmed CORE INA/CSWR while CORE stayed ON,
+exactly as ours does now. This is inferred, not measured: a stock RAM-boot
+measurement with the cable unplugged is specified in the audit. **Stock parity is
+therefore "CORE stays ON while Ethernet is present"**, and powering Ethernet down
+would go beyond stock. The least-divergent way to do it would be:
+
+- port stock's `ehci_omap_bus_suspend/_resume` (put/get usbhs, gate auxclk3)
+  and its ULPI port-resume recovery `uhh_omap_reset_link` (`0xc0331bdc`), which is
+  almost certainly what 0006's "session loss" really was;
+- drop 0006's root-hub pin;
+- have userspace take eth0 down after N s without carrier and probe it
+  periodically, because the LAN9500A cannot wake the host.
+
+**Decision (Petr, 2026-09-23): mirror stock.** Ethernet stays powered with or
+without a cable, and CORE stays ON. Ethernet never blocked C2/C3, which run fine
+with eth0 up, as they did on stock. It could only ever block the CORE domain one
+level deeper, which stock evidently never reached either. That Ethernet is the
+CORE holder is itself unproven here: the OTG gadget cable pins L3INIT too, and
+0006's root-hub pin masked the eth0-down test. Powering Ethernet down stays a
+possible beyond-stock improvement, not a gap.
+
+The same audit found two stock-parity gaps that stand on their own:
+
+- **Ethernet MAC.** Stock passed `smsc95xx.mac_addr=f8:8f:ca:20:3e:97` on its
+  cmdline. We have no `local-mac-address` on `ethernet@1`, so eth0 comes up with
+  a **random MAC and a new DHCP identity every boot**. It must **not** be
+  hard-coded in the DTS. Petr has more than one unit, and a DTS value is the same
+  on every unit a release image is flashed to, which is also a latent problem for
+  the WiFi/BT MACs that sit in the DTS today. The right source is each unit's own
+  factory data, wherever the stock bootloader read `smsc95xx.mac_addr`,
+  `wifi_macaddr` and `btaddr` from; a Die-ID-derived locally administered
+  address is the fallback. Open.
+- **Pad 0x042** (sim_clk / gpio_wk1). Our `ethernet_wkup_pins` drives it as an
+  output. Stock left it in safe mode (`0x010f`); stock's NENABLE pad is `0x186`
+  only.
 
 ## Power target: stock's wall draw is unknown, so measure it (open, 2026-09-23)
 
@@ -1714,6 +1810,40 @@ What this shows:
 
 A meter with ≥0.1 W resolution is still needed, both to size it and to measure
 the stock target.
+
+## Where this stands (end of 2026-09-23) — R2 functionally DONE
+
+**C2 and C3 work on stock's own table, kernel 6.18.48-r16.** Both cores go OFF,
+MPU goes INACTIVE (C2) or CSWR (C3). CORE is programmed per entry, and MPU/CORE
+are restored to ON after it.
+
+Getting there took eight fixes, each found by measurement:
+
+| # | fix | where |
+|---|---|---|
+| 1 | CPU1 had no A9 errata bits; its resume wrote a secure-only register | patch 0050, §4q/§4r |
+| 2 | idle BT link held a 170 µs QoS through the UART | patch 0051, §4m/§4s |
+| 3 | `CPUIDLE_FLAG_OFF` sets the USER bit | 0048 rev 2, §4n |
+| 4 | vetoed CPU0 entry did not wake CPU1 | patch 0052, §4t |
+| 5 | WiFi level IRQ slept through with the MPU retained | patch 0053, §4t |
+| 6 | INACTIVE silently rounded down to RET | patch 0054, §4w |
+| 7 | MPU/CORE armed for RET/OSWR between entries | patches 0055/0056, §4w |
+| 8 | genpd re-armed MPU/CORE after boot | patch 0057 (DTS), §4w |
+
+Instruments: SAR-RAM breadcrumbs (0049), `nq-deep-idle-ladder.sh` (watchdog, BT,
+`KEEP_BT`, `DEEP=2`, `--crumbs`), and healthd `cstate_*`/`qos_us` (device r106).
+
+**Still registered disabled.** Before C2/C3 become the default:
+
+- an overnight C2/C3-vs-none soak (Todoist, AI-handover), which is only
+  meaningful once the independent **WiFi wedge** is understood (Todoist; it
+  reproduces with C2/C3 disabled);
+- a boot with the states enabled, where r5/r6 once hung, which was almost
+  certainly the CPU1 errata problem that 0050 fixed.
+
+**Mirrors stock, by decision:** CORE stays ON while USB (Ethernet/EHCI and the
+gadget) is up (§4u). Open: per-unit factory MACs instead of DTS values (§4u),
+and a proper power measurement (the Solight meter shows whole watts only).
 
 ## Where this stands (end of 2026-09-22) — paused here
 

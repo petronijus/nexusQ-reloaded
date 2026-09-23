@@ -23,6 +23,7 @@
 #                                       CONFIG_OMAP4_IDLE_BREADCRUMBS) -- run it
 #                                       right after the watchdog brought the unit back
 #
+# DEEP=2 in the environment arms C3 as well as C2 (default: C2 only).
 # KEEP_BT=1 in the environment leaves Bluetooth bound (kernel >= r13, patch 0051
 # releases the UART itself while BT idles, so the 170 us QoS is gone anyway).
 #
@@ -43,6 +44,8 @@ set -u
 
 P=/sys/module/cpuidle44xx/parameters
 C2="/sys/devices/system/cpu/cpu0/cpuidle/state1 /sys/devices/system/cpu/cpu1/cpuidle/state1"
+C3="/sys/devices/system/cpu/cpu0/cpuidle/state2 /sys/devices/system/cpu/cpu1/cpuidle/state2"
+[ "${DEEP:-1}" = 2 ] && ARM="$C2 $C3" || ARM="$C2"
 BT=/sys/bus/serial/drivers/hci_uart_bcm
 
 # Breadcrumbs (patch 0049): 0x4a326d80 + cpu*0x10 -> stage, entries, resumes, save_state;
@@ -93,14 +96,14 @@ PY
 }
 if [ "${1:-}" = --crumbs ]; then crumbs read; exit; fi
 
-[ $# -ge 3 ] || { sed -n '2,41p' "$0"; exit 2; }
+[ $# -ge 3 ] || { sed -n '2,42p' "$0"; exit 2; }
 SKIP_WAIT=$1 KEEP_MPU=$2 SKIP_LP=$3 SECS=${4:-60} CPU1_OFF=${5:-0} KEEP_CORE=${6:-0}
 
 hostname
 [ "$(hostname)" = steelhead ] || { echo "not the Q -- refusing" >&2; exit 1; }
 
 qos() { python3 -c 'import struct;print(struct.unpack("i",open("/dev/cpu_dma_latency","rb").read(4))[0])'; }
-c2() { for s in $C2; do [ -d "$s" ] && printf '%s usage=%s time=%s  ' "${s#/sys/devices/system/cpu/}" "$(cat $s/usage)" "$(cat $s/time)"; done; echo; }
+c2() { for s in $ARM; do [ -d "$s" ] && printf '%s usage=%s time=%s  ' "${s#/sys/devices/system/cpu/}" "$(cat $s/usage)" "$(cat $s/time)"; done; echo; }
 
 busctl set-property org.freedesktop.systemd1 /org/freedesktop/systemd1 \
 	org.freedesktop.systemd1.Manager RuntimeWatchdogUSec t 30000000
@@ -128,11 +131,11 @@ if [ "$(zcat /proc/config.gz 2>/dev/null | grep -c '^CONFIG_OMAP4_IDLE_BREADCRUM
 	crumbs clear; echo "breadcrumbs cleared"
 fi
 echo "ARM at $(date +%T)"
-for s in $C2; do [ -d "$s" ] && echo 0 > $s/disable; done
+for s in $ARM; do [ -d "$s" ] && echo 0 > $s/disable; done
 i=0
 while [ $i -lt "$SECS" ]; do sleep 10; i=$((i + 10)); echo "t+$i"; c2; done
 
-for s in $C2; do [ -d "$s" ] && echo 1 > $s/disable; done
+for s in $ARM; do [ -d "$s" ] && echo 1 > $s/disable; done
 echo "DISARMED at $(date +%T)"
 zcat /proc/config.gz 2>/dev/null | grep -q '^CONFIG_OMAP4_IDLE_BREADCRUMBS=y' && crumbs read
 grep -E '^(mpu|core|cpu0|cpu1)_pwrdm' /sys/kernel/debug/pm_debug/count

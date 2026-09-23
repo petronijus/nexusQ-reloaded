@@ -216,6 +216,107 @@ static long long opp_voltage(long long khz)
     }
 }
 
+/* ---------- cpuidle residency: do the deep C-states actually run? --------
+ * Same rule as OPP residency: difference the kernel's cumulative counters,
+ * never a spot read. Summed over both CPUs, keyed by the state's name. C2/C3
+ * are coupled, so both CPUs spend ~the same time in them; C1 is per CPU.
+ * Two more fields say whether a deep state CAN run at all, which is what two
+ * whole investigations were about (docs/2026-09-20-sleep-states-design.md
+ * 4m/4n): `cstate_armed` lists the deep states whose per-state `disable` is 0
+ * on cpu0 (CPUIDLE_FLAG_OFF registers them disabled), and `qos_us` is the CPU
+ * latency QoS limit the governor honours -- anything below a state's exit
+ * latency (C2 1100 us, C3 1200 us on steelhead) vetoes it. Reading the QoS
+ * device opens and drops a no-constraint request; it adds nothing. */
+#ifndef CPUIDLE_ROOT
+#define CPUIDLE_ROOT "/sys/devices/system/cpu"
+#endif
+#ifndef QOS_DEV
+#define QOS_DEV "/dev/cpu_dma_latency"
+#endif
+#define MAX_CPU 2
+#define MAX_CST 4
+struct cst_prev { long long usage, time_us; };
+static struct cst_prev prev_cst[MAX_CPU][MAX_CST];
+static int prev_cst_n;   /* states seen last time; 0 = no previous sample */
+
+static void cstate_sample(char *ms_out, size_t ms_n, char *n_out, size_t n_n,
+                          char *armed, size_t ar_n)
+{
+    char path[256], names[MAX_CST][16];
+    struct cst_prev cur[MAX_CPU][MAX_CST];
+    int nst = 0, reset = (prev_cst_n == 0);
+    size_t ao = 0;
+
+    snprintf(ms_out, ms_n, "{}");
+    snprintf(n_out, n_n, "{}");
+    armed[0] = '\0';
+
+    for (int st = 0; st < MAX_CST; st++) {
+        snprintf(path, sizeof path, CPUIDLE_ROOT "/cpu0/cpuidle/state%d/name", st);
+        slurp_line(path, names[st], sizeof names[st], "");
+        if (!names[st][0])
+            break;
+        for (int c = 0; c < MAX_CPU; c++) {
+            snprintf(path, sizeof path, CPUIDLE_ROOT "/cpu%d/cpuidle/state%d/usage", c, st);
+            cur[c][st].usage = slurp_ll(path, -1);
+            snprintf(path, sizeof path, CPUIDLE_ROOT "/cpu%d/cpuidle/state%d/time", c, st);
+            cur[c][st].time_us = slurp_ll(path, -1);
+        }
+        if (st > 0) {
+            snprintf(path, sizeof path, CPUIDLE_ROOT "/cpu0/cpuidle/state%d/disable", st);
+            if (slurp_ll(path, 1) == 0 && ao < ar_n)
+                ao += (size_t)snprintf(armed + ao, ar_n - ao, "%s%s",
+                                       ao ? "," : "", names[st]);
+        }
+        nst++;
+    }
+
+    if (nst != prev_cst_n)
+        reset = 1;                           /* first sample, or states changed */
+
+    char ms[256], nn[256];
+    size_t mo = 0, no = 0;
+    for (int st = 0; st < nst && !reset; st++) {
+        long long dt = 0, du = 0;
+        for (int c = 0; c < MAX_CPU; c++) {
+            const struct cst_prev *p = &prev_cst[c][st], *q = &cur[c][st];
+            if (q->usage < 0 || q->time_us < 0) /* CPU offline: no counters */
+                continue;
+            if (p->usage < 0 || q->usage < p->usage || q->time_us < p->time_us) {
+                reset = 1;                   /* came online, or counters reset */
+                break;
+            }
+            du += q->usage - p->usage;
+            dt += q->time_us - p->time_us;
+        }
+        if (reset)
+            break;
+        mo += (size_t)snprintf(ms + mo, sizeof ms - mo, "%s\"%s\":%lld",
+                               mo ? "," : "", names[st], dt / 1000);
+        no += (size_t)snprintf(nn + no, sizeof nn - no, "%s\"%s\":%lld",
+                               no ? "," : "", names[st], du);
+    }
+
+    memcpy(prev_cst, cur, sizeof prev_cst);
+    prev_cst_n = nst;
+    /* `{}` on a reset is an honest gap, not a poisoned window. */
+    if (!reset && mo) {
+        snprintf(ms_out, ms_n, "{%s}", ms);
+        snprintf(n_out, n_n, "{%s}", nn);
+    }
+}
+
+static long long qos_limit_us(void)
+{
+    int fd = open(QOS_DEV, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    int v;
+    ssize_t r = read(fd, &v, sizeof v);
+    close(fd);
+    return r == (ssize_t)sizeof v ? v : -1;
+}
+
 /* Regulator dirs are regulator.N with an opaque index; the stable key is the
  * "name" attribute. Resolved once and cached. */
 static int reg_dir(const char *want, char *dst, size_t n)
@@ -742,6 +843,11 @@ int main(int argc, char **argv)
         long long opp_trans;
         opp_sample(opp_ms, sizeof opp_ms, &opp_trans);
 
+        char cst_ms[300], cst_n[300], cst_armed[64];
+        cstate_sample(cst_ms, sizeof cst_ms, cst_n, sizeof cst_n,
+                      cst_armed, sizeof cst_armed);
+        long long qos_us = qos_limit_us();
+
         long long temp = slurp_ll(TZ0 "/temp", 0);
         long long cool = slurp_ll(COOL0 "/cur_state", -1);
 
@@ -903,7 +1009,8 @@ int main(int argc, char **argv)
             }
         }
 
-        /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it. */
+        /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it.
+         * Fields are only ever APPENDED (cstate_*, qos_us since device r106). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -926,13 +1033,16 @@ int main(int argc, char **argv)
                 "\"ls_active\":\"%s\",\"ls_restarts\":%ld,\"avr_irq\":%lld,"
                 "\"led_sum\":%lld,\"led_changed\":%d,\"led_stall\":%lld,"
                 "\"dmesg_err\":%lld,\"dmesg_err_new\":%lld,\"pstore\":%ld,"
-                "\"load1\":%s,\"mem_avail_kB\":%lld}\n",
+                "\"load1\":%s,\"mem_avail_kB\":%lld,"
+                "\"cstate_ms\":%s,\"cstate_n\":%s,\"cstate_armed\":\"%s\","
+                "\"qos_us\":%lld}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
                 lsa, ls_restarts, avr_irq,
                 led_sum, led_changed, led_stall,
-                derr, derr_new, pstore, loadbuf, memav);
+                derr, derr_new, pstore, loadbuf, memav,
+                cst_ms, cst_n, cst_armed, qos_us);
         fflush(dst);
 
         if (once)

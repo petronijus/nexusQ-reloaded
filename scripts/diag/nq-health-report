@@ -200,6 +200,42 @@ def analyze(rows, events, snap_text):
         res_str = ", ".join(f"{k//1000}MHz:{v}" for k, v in sorted(residency.items()))
         add("info", "freq_residency", f"governor={gov}; residency [{res_str}]")
 
+    # ---- cpuidle: are the deep C-states armed, running, or vetoed? ----
+    # healthd >= device r106 adds cstate_ms/cstate_n (per-window residency by
+    # state name, both CPUs summed), cstate_armed and qos_us. Older samples lack
+    # them and are skipped. The veto check is the one that matters: a 170 us QoS
+    # request from the BT UART kept C2 from ever running for weeks while every
+    # counter looked merely "quiet" (docs/2026-09-20-sleep-states-design.md 4m).
+    # Exit latencies are steelhead's stock table (kernel patch 0056).
+    exit_lat_us = {"C2": 1100, "C3": 1200}
+    cst_rows = [r for r in rows if isinstance(r.get("cstate_ms"), dict)]
+    if cst_rows:
+        tot = {}
+        for r in cst_rows:
+            for k, v in r["cstate_ms"].items():
+                tot[k] = tot.get(k, 0) + (v or 0)
+        idle_ms = sum(tot.values())
+        armed_now = cst_rows[-1].get("cstate_armed", "") or ""
+        share = ", ".join(f"{k} {100 * v / idle_ms:.1f}%" for k, v in sorted(tot.items())) \
+            if idle_ms else "no idle time recorded"
+        add("info", "cstate_residency",
+            f"deep states armed: {armed_now or 'none'}; share of idle time [{share}]")
+
+        vetoed = []
+        for r in cst_rows:
+            armed = [s for s in (r.get("cstate_armed") or "").split(",") if s]
+            q = r.get("qos_us")
+            lat = [exit_lat_us[s] for s in armed if s in exit_lat_us]
+            if lat and isinstance(q, int) and 0 <= q < min(lat):
+                vetoed.append(r)
+        if vetoed:
+            ex = vetoed[0]
+            add("warn", "cstate_vetoed",
+                f"deep C-states armed but CPU-latency QoS below their exit latency in "
+                f"{len(vetoed)}/{len(cst_rows)} sample(s) (e.g. qos {ex.get('qos_us')} us, "
+                f"armed {ex.get('cstate_armed')}) — the governor cannot pick them; look for "
+                f"a held-open device (BT UART, ALSA with a tiny period)", ex.get("t_mono"))
+
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):
         n = sum(r.get("dmesg_err_new", 0) for r in rows)
