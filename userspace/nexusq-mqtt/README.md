@@ -124,6 +124,42 @@ so a device too old to publish `led_stalled` reads **healthy** rather than
 inventing an alarm out of a missing signal. Live since 2026-08-13:
 `binary_sensor.nexus_q_led_ring = off` with `led_stall=17, led_stalled=False`.
 
+### LED ring control (r7, 2026-09-23) — writable entities
+
+With a bridge that reports a ring (`nexusq-control` r49+), the same device also
+gets entities Home Assistant can **drive**:
+
+| Entity | Topic (`<prefix>/<node_id>/ring/…`) | Bridge call |
+|---|---|---|
+| `light` **LED ring** — on/off + brightness (json schema, `brightness_scale` 255) | `light/set` | `setRing` (only when the on/off state really changes) + `setBrightness` |
+| `switch` **LED ring schedule** (config) | `schedule/set` | `setRingSchedule {enabled}` |
+| `text` **LED ring off at** / **on at** (config, `HH:MM`) | `off_at/set`, `on_at/set` | `setRingSchedule {enabled: current, off\|on}` |
+| `switch` **Ambient brightness** (config, bridge r50+) | `ambient/set` | `setAmbient` |
+| `sensor` **LED ring level** (diagnostic, % of the maximum) | — | — |
+
+- **One mechanism, two front ends.** Every command is one of the bridge's own
+  methods — the ones the app calls — so HA gets the app's rules: a manual
+  switch disables the schedule, ambient never dims on an unsynced clock. The
+  light's brightness is the app's slider, i.e. the **maximum** when ambient is on.
+- **HA sends `state: ON` with every brightness move.** Forwarding that as
+  `setRing` would count as a manual switch and silently turn the schedule off,
+  so `setRing` is sent only when the requested state differs from the current one.
+- **State is pushed, not polled.** A persistent connection to the bridge's TCP
+  API receives its `ringChanged` / `ambientChanged` / `brightnessChanged`
+  broadcasts and republishes the retained `ring/state` JSON at once — a change
+  in the app, or the schedule at 23:00, is in HA within a second, not at the
+  next 30 s telemetry tick.
+- **Availability** is `all` of the Q's status topic and `ring/available`, which
+  goes `offline` while the bridge link is down (restart, OTA) — HA greys the
+  controls instead of accepting commands nothing will carry out.
+- **Only what the bridge supports is announced.** The entities appear with the
+  first `getState` that carries `ring` (and the ambient pair with `ambient`);
+  missing ones are deleted with an empty retained config.
+- Commands are accepted only on this node's own `ring/…/set` topics and mapped
+  to a fixed set of calls; a malformed payload maps to nothing. A refused call
+  republishes the real state so the entity does not keep showing the wish.
+- Disable with `NQMQTT_RING=0`.
+
 ## Configuration (NOT baked into the image — provisioned by the companion app)
 
 Broker credentials are per-home secrets — the (public) image ships **no**
@@ -229,4 +265,4 @@ remaining-length boundaries, CONNACK refusal, dead-broker detection), config
 validation, health-tail parsing (torn lines, staleness), OPP residency math
 (rolling-window pruning + since-boot fallback + counter-reset discard),
 discovery payload contract (unique_ids, shared topics, device block),
-identity fallbacks. 28 tests as of r1.
+identity fallbacks, and (r7) the LED ring control: command mapping, state/discovery payloads, the bridge link against a fake bridge (`tests/test_ring_ha.py`). 65 tests as of r7.

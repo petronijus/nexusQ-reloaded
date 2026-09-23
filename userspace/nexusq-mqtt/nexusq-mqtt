@@ -661,6 +661,11 @@ class MqttClient:
         self._packet_id = 0
         #: called with (topic, payload_bytes) for every incoming PUBLISH.
         self.on_message = None
+        # One writer at a time. Since the Roon bridge the publish socket's
+        # thread publishes beside the main loop, and since the ring control
+        # two more threads do: two sendall() calls racing on one socket can
+        # interleave their bytes and corrupt both packets.
+        self._send_lock = threading.Lock()
 
     def connect(self, timeout=10):
         self.sock = socket.create_connection((self.host, self.port), timeout)
@@ -742,13 +747,15 @@ class MqttClient:
     # -- wire helpers -----------------------------------------------------
 
     def _send(self, data):
-        if self.sock is None:
-            raise MqttError("not connected")
-        try:
-            self.sock.sendall(data)
-        except OSError as e:
-            raise MqttError(f"send failed: {e}")
-        self._last_send = time.monotonic()
+        with self._send_lock:
+            sock = self.sock
+            if sock is None:
+                raise MqttError("not connected")
+            try:
+                sock.sendall(data)
+            except OSError as e:
+                raise MqttError(f"send failed: {e}")
+            self._last_send = time.monotonic()
 
     def _read_packet(self):
         """Blocking read of one packet (used only for CONNACK, while the
@@ -964,6 +971,373 @@ def discovery_configs(node_id, display_name, prefix):
     return configs
 
 
+
+# --------------------------------------------------------------------------
+# LED ring control from Home Assistant (2026-09-23)
+# --------------------------------------------------------------------------
+# The ring switch, its brightness (the app's slider — the MAXIMUM when ambient
+# is on), the off/on schedule and ambient brightness, as WRITABLE entities.
+#
+# Every command goes through the control bridge's own methods (setRing,
+# setBrightness, setRingSchedule, setAmbient) — the same ones the app calls —
+# so Home Assistant gets exactly the app's rules (a manual switch disables the
+# schedule; ambient never dims on an unsynced clock) and there is one
+# device-side mechanism with two front ends. The state is not polled: a
+# persistent connection to the bridge receives its ringChanged /
+# ambientChanged / brightnessChanged broadcasts, so a change made in the app,
+# or by the schedule at 23:00, reaches Home Assistant at once.
+RING_ENABLED = os.environ.get("NQMQTT_RING", "1") != "0"
+RING_RETRY_S = 5
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def ring_topics(prefix, node_id):
+    base = f"{prefix}/{node_id}/ring"
+    return {
+        "state": f"{base}/state",
+        "available": f"{base}/available",
+        "light": f"{base}/light/set",
+        "schedule": f"{base}/schedule/set",
+        "off_at": f"{base}/off_at/set",
+        "on_at": f"{base}/on_at/set",
+        "ambient": f"{base}/ambient/set",
+    }
+
+
+def ring_state_payload(st):
+    """The ring's picture as Home Assistant reads it (one retained JSON for all
+    the ring entities; the light entity uses the json schema, which reads
+    `state`/`brightness`/`color_mode` and ignores the rest). None when the
+    bridge has no ring (older than control r49)."""
+    ring = st.get("ring")
+    if not isinstance(ring, dict) or not isinstance(ring.get("on"), bool):
+        return None
+    sched = ring.get("schedule") if isinstance(ring.get("schedule"), dict) else {}
+    mx = st.get("brightness") if isinstance(st.get("brightness"), int) else 255
+    out = {
+        "state": "ON" if ring["on"] else "OFF",
+        "brightness": mx,
+        "color_mode": "brightness",
+        "schedule": bool(sched.get("enabled")),
+        "off_at": sched.get("off", ""),
+        "on_at": sched.get("on", ""),
+    }
+    amb = st.get("ambient")
+    if isinstance(amb, dict):
+        level = amb.get("level") if isinstance(amb.get("level"), int) else mx
+        out["ambient"] = bool(amb.get("enabled"))
+        out["level_pct"] = round(level * 100 / mx) if mx > 0 else 0
+    return out
+
+
+def ring_commands(kind, payload, st):
+    """Translate one Home Assistant command into bridge calls, [(method,
+    params)], given the current state `st`. Pure, so the mapping is testable
+    without a broker or a bridge. Anything malformed maps to nothing: the
+    broker is the household's, and a bad payload must never reach the Q as a
+    guess."""
+    try:
+        text = payload.decode("utf-8").strip() if isinstance(payload, bytes) else str(payload).strip()
+    except UnicodeDecodeError:
+        return []
+    ring = st.get("ring") if isinstance(st.get("ring"), dict) else {}
+    sched = ring.get("schedule") if isinstance(ring.get("schedule"), dict) else {}
+    if kind == "light":
+        try:
+            cmd = json.loads(text)
+        except ValueError:
+            return []
+        if not isinstance(cmd, dict):
+            return []
+        calls = []
+        b = cmd.get("brightness")
+        if isinstance(b, int) and not isinstance(b, bool) and 1 <= b <= 255:
+            calls.append(("setBrightness", {"brightness": b}))
+        want = cmd.get("state")
+        if want in ("ON", "OFF"):
+            on = want == "ON"
+            # Only a real change is a switch. HA sends state ON with every
+            # brightness move; passing that on would count as a manual switch
+            # and silently turn the schedule off.
+            if on != ring.get("on"):
+                calls.append(("setRing", {"on": on}))
+        return calls
+    if kind in ("schedule", "ambient"):
+        if text not in ("ON", "OFF"):
+            return []
+        if kind == "schedule":
+            return [("setRingSchedule", {"enabled": text == "ON"})]
+        return [("setAmbient", {"enabled": text == "ON"})]
+    if kind in ("off_at", "on_at"):
+        if not _HHMM.match(text):
+            return []
+        key = "off" if kind == "off_at" else "on"
+        return [("setRingSchedule",
+                 {"enabled": bool(sched.get("enabled")), key: text})]
+    return []
+
+
+def ring_discovery_configs(node_id, display_name, prefix, st):
+    """HA discovery for the ring entities this bridge supports: the ring ones
+    when `st` carries `ring`, the ambient ones when it carries `ambient`.
+    Returns [(suffix, config-or-None)]: None = delete a stale entity (a bridge
+    downgraded, or ambient not there), published as an empty retained config."""
+    topics = ring_topics(prefix, node_id)
+    _, status_topic = device_topics(prefix, node_id)
+    device = {"identifiers": [node_id], "name": display_name,
+              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
+              "sw_version": os.uname().release}
+    base = {
+        "state_topic": topics["state"],
+        "device": device,
+        # both must be online: the Q (its Will) and the bridge link
+        "availability": [{"topic": status_topic}, {"topic": topics["available"]}],
+        "availability_mode": "all",
+    }
+    has_ring = isinstance(st.get("ring"), dict)
+    has_amb = has_ring and isinstance(st.get("ambient"), dict)
+    hhmm = r"^([01]\d|2[0-3]):[0-5]\d$"
+    entries = [
+        ("light", "ring", has_ring, {
+            "name": "LED ring", "schema": "json",
+            "command_topic": topics["light"],
+            "brightness": True, "brightness_scale": 255,
+            "supported_color_modes": ["brightness"], "icon": "mdi:circle-slice-8"}),
+        ("switch", "ring_schedule", has_ring, {
+            "name": "LED ring schedule", "command_topic": topics["schedule"],
+            "value_template": "{{ 'ON' if value_json.schedule else 'OFF' }}",
+            "entity_category": "config", "icon": "mdi:clock-outline"}),
+        ("text", "ring_off_at", has_ring, {
+            "name": "LED ring off at", "command_topic": topics["off_at"],
+            "value_template": "{{ value_json.off_at }}",
+            "pattern": hhmm, "min": 5, "max": 5,
+            "entity_category": "config", "icon": "mdi:weather-night"}),
+        ("text", "ring_on_at", has_ring, {
+            "name": "LED ring on at", "command_topic": topics["on_at"],
+            "value_template": "{{ value_json.on_at }}",
+            "pattern": hhmm, "min": 5, "max": 5,
+            "entity_category": "config", "icon": "mdi:weather-sunny"}),
+        ("switch", "ambient", has_amb, {
+            "name": "Ambient brightness", "command_topic": topics["ambient"],
+            "value_template": "{{ 'ON' if value_json.ambient else 'OFF' }}",
+            "entity_category": "config", "icon": "mdi:theme-light-dark"}),
+        ("sensor", "ring_level", has_amb, {
+            "name": "LED ring level", "unit_of_measurement": "%",
+            "state_class": "measurement", "entity_category": "diagnostic",
+            "value_template": "{{ value_json.level_pct | default('unknown') }}",
+            "icon": "mdi:brightness-6"}),
+    ]
+    out = []
+    for component, key, supported, extra in entries:
+        suffix = f"{component}/{node_id}/{key}/config"
+        out.append((suffix, {**base, "unique_id": f"{node_id}_{key}", **extra}
+                    if supported else None))
+    return out
+
+
+def control_call(method, params, timeout=5):
+    """One request to the control bridge over its local TCP API. Returns the
+    result dict; raises OSError / ValueError on a transport failure and
+    ControlError when the bridge answered with an error."""
+    with socket.create_connection((CONTROL_HOST, CONTROL_PORT), 2) as s:
+        s.settimeout(timeout)
+        s.sendall(json.dumps({"id": 1, "method": method, "params": params}).encode() + b"\n")
+        buf = b""
+        while True:
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                obj = json.loads(line.decode())
+                if obj.get("id") != 1:
+                    continue           # a broadcast event reaching this client too
+                if obj.get("ok") is False:
+                    err = obj.get("error") or {}
+                    raise ControlError(err.get("code", "error"), err.get("message", ""))
+                return obj.get("result", {})
+            chunk = s.recv(4096)
+            if not chunk:
+                raise OSError("bridge closed the connection")
+            buf += chunk
+            if len(buf) > 262144:
+                raise ValueError("bridge reply too large")
+
+
+class ControlError(Exception):
+    def __init__(self, code, message):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+class RingLink:
+    """The ring's picture from the bridge, published to MQTT, and HA commands
+    turned into bridge calls.
+
+    Three threads touch it: the bridge listener (events in), the command worker
+    (HA commands out) and the main loop (republish after a broker reconnect).
+    `publish(topic, payload, retain)` and `call(method, params)` are injected,
+    so the whole thing runs in tests without a broker or a bridge."""
+
+    #: the getState fields that make up the ring's picture
+    FIELDS = ("brightness", "ring", "ambient")
+
+    def __init__(self, node_id, display_name, prefix, discovery_prefix,
+                 publish, call=control_call):
+        self.node_id, self.display_name = node_id, display_name
+        self.prefix, self.discovery_prefix = prefix, discovery_prefix
+        self.topics = ring_topics(prefix, node_id)
+        self.publish = publish
+        self.call = call
+        self.lock = threading.Lock()
+        self.st = {}
+        self.bridge_up = False
+        self._announced = None      # which entity set HA was last told about
+        self._queue = []
+        self._cv = threading.Condition()
+
+    # --- state in -----------------------------------------------------------
+    def set_state(self, full):
+        with self.lock:
+            self.st = {k: full[k] for k in self.FIELDS if k in full}
+            self.bridge_up = True
+        self.announce()
+        self.publish_state()
+
+    def apply_event(self, event, data):
+        key = {"ringChanged": "ring", "ambientChanged": "ambient",
+               "brightnessChanged": "brightness"}.get(event)
+        if key is None or not isinstance(data, dict):
+            return False
+        with self.lock:
+            value = data.get("brightness") if key == "brightness" else data
+            if self.st.get(key) == value:
+                return False
+            self.st[key] = value
+        if key in ("ring", "ambient"):
+            self.announce()          # a first ambient event can add entities
+        self.publish_state()
+        return True
+
+    def bridge_down(self):
+        with self.lock:
+            self.bridge_up = False
+        self.publish(self.topics["available"], "offline", True)
+
+    # --- MQTT out -----------------------------------------------------------
+    def announce(self, force=False):
+        """(Re)publish discovery for exactly the entities this bridge supports."""
+        with self.lock:
+            st = dict(self.st)
+        shape = (isinstance(st.get("ring"), dict), isinstance(st.get("ambient"), dict))
+        if not force and shape == self._announced:
+            return
+        self._announced = shape
+        for suffix, cfg in ring_discovery_configs(
+                self.node_id, self.display_name, self.prefix, st):
+            self.publish(f"{self.discovery_prefix}/{suffix}",
+                         json.dumps(cfg) if cfg is not None else "", True)
+
+    def publish_state(self):
+        with self.lock:
+            payload = ring_state_payload(self.st) if self.bridge_up else None
+        if payload is None:
+            return
+        self.publish(self.topics["available"], "online", True)
+        self.publish(self.topics["state"], json.dumps(payload), True)
+
+    def on_mqtt_connect(self):
+        """After every broker (re)connect: the broker kept retained values, but
+        a new session is the moment to make sure HA has the current picture."""
+        self.announce(force=True)
+        with self.lock:
+            up = self.bridge_up
+        if up:
+            self.publish_state()
+        else:
+            self.publish(self.topics["available"], "offline", True)
+
+    # --- commands in --------------------------------------------------------
+    def kind_of(self, topic):
+        for kind in ("light", "schedule", "off_at", "on_at", "ambient"):
+            if topic == self.topics[kind]:
+                return kind
+        return None
+
+    def submit(self, topic, payload):
+        """From the MQTT receive path: queue, never block it on the bridge."""
+        kind = self.kind_of(topic)
+        if kind is None:
+            return False
+        with self._cv:
+            self._queue.append((kind, payload))
+            self._cv.notify()
+        return True
+
+    def execute(self, kind, payload):
+        with self.lock:
+            st = dict(self.st)
+        calls = ring_commands(kind, payload, st)
+        if not calls:
+            log("ring: ignored malformed", kind, "command")
+        for method, params in calls:
+            try:
+                self.call(method, params)
+            except (OSError, ValueError, ControlError) as e:
+                log("ring:", method, "failed:", e)
+                # HA shows what the state topic says; re-send the truth so a
+                # refused command does not leave the entity showing the wish.
+                self.publish_state()
+                return
+
+    def worker(self):
+        while not _shutdown:
+            with self._cv:
+                while not self._queue and not _shutdown:
+                    self._cv.wait(1)
+                if _shutdown:
+                    return
+                kind, payload = self._queue.pop(0)
+            self.execute(kind, payload)
+
+    # --- the bridge listener ------------------------------------------------
+    def listen(self):
+        """Hold a connection to the bridge: getState once, then its events."""
+        while not _shutdown:
+            try:
+                with socket.create_connection((CONTROL_HOST, CONTROL_PORT), 3) as s:
+                    s.settimeout(None)
+                    s.sendall(json.dumps({"id": 1, "method": "getState"}).encode() + b"\n")
+                    buf = b""
+                    while not _shutdown:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            raise OSError("bridge closed the connection")
+                        buf += chunk
+                        while b"\n" in buf:
+                            line, buf = buf.split(b"\n", 1)
+                            if line.strip():
+                                self.handle_line(line)
+            except (OSError, ValueError) as e:
+                log("ring: bridge link down:", e)
+            self.bridge_down()
+            for _ in range(RING_RETRY_S):
+                if _shutdown:
+                    return
+                time.sleep(1)
+
+    def handle_line(self, line):
+        try:
+            obj = json.loads(line.decode("utf-8", "replace"))
+        except ValueError:
+            return
+        if not isinstance(obj, dict):
+            return
+        if obj.get("id") == 1 and isinstance(obj.get("result"), dict):
+            self.set_state(obj["result"])
+        elif isinstance(obj.get("event"), str):
+            self.apply_event(obj["event"], obj.get("data"))
+
+
 # --------------------------------------------------------------------------
 # main loop
 # --------------------------------------------------------------------------
@@ -1003,6 +1377,32 @@ def run():
     tis_history = []   # rolling time_in_state snapshots for the 1 h residency window
     backoff = 5
     client = None
+
+    def safe_publish(topic, payload, retain=False):
+        """For the side threads: the main loop owns reconnects, so a publish
+        into a dead or absent connection is dropped here and the whole
+        picture is re-sent after the next connect."""
+        c = client
+        if c is None:
+            return
+        try:
+            c.publish(topic, payload, retain=retain)
+        except (MqttError, OSError):
+            pass
+
+    ring = None
+    if RING_ENABLED:
+        ring = RingLink(node_id, display_name, prefix, conf["discovery_prefix"],
+                        safe_publish)
+        threading.Thread(target=ring.listen, daemon=True).start()
+        threading.Thread(target=ring.worker, daemon=True).start()
+
+    def on_message(topic, payload):
+        if ring is not None and ring.submit(topic, payload):
+            return
+        if ROON_ENABLED:
+            roon_forward(topic, payload)
+
     if ROON_ENABLED:
         # A closure, not the object: the client is replaced on every reconnect
         # and a captured reference would publish into a dead socket forever.
@@ -1024,19 +1424,24 @@ def run():
             client.connect()
             log("connected")
             backoff = 5
+            client.on_message = on_message
             if ROON_ENABLED:
                 # Re-subscribed on every reconnect: a clean session keeps no
                 # subscriptions, and the broker replays the retained values, so
                 # the bridge is re-seeded with the current zone picture for free.
-                client.on_message = roon_forward
                 client.subscribe(ROON_FILTERS)
                 log(f"subscribed to {ROON_ROOT}/… for Roon now-playing")
+            if ring is not None:
+                client.subscribe([ring.topics[k] for k in
+                                  ("light", "schedule", "off_at", "on_at", "ambient")])
             client.publish(status_topic, "online", retain=True)
             client.publish(legacy_status_topic, "online", retain=True)
             for suffix, cfg in discovery_configs(
                     node_id, display_name, prefix):
                 client.publish(f"{conf['discovery_prefix']}/{suffix}",
                                json.dumps(cfg), retain=True)
+            if ring is not None:
+                ring.on_mqtt_connect()
             while not _shutdown:
                 state, tis_history = collect(tis_history)
                 payload = json.dumps(state)

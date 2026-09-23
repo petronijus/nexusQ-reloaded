@@ -6,6 +6,33 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the LED ring, its schedule and ambient brightness in Home Assistant (nexusq-mqtt r7)
+
+`nexusq-mqtt` now announces **writable** entities on the Q's HA device: a
+`light` "LED ring" (on/off + brightness, the app's slider), a "LED ring
+schedule" switch with "off at" / "on at" times (`text`, `HH:MM`), an "Ambient
+brightness" switch and a "LED ring level" sensor (% of the maximum).
+
+- Every command is one of the bridge's own methods, so HA and the app share one
+  device-side mechanism and one set of rules. HA sends `state: ON` with every
+  brightness move; that is forwarded as `setRing` only when the state really
+  changes, or dimming the ring from HA would silently disable the schedule
+  (seen failing with the guard removed).
+- State is pushed: a persistent link to the bridge receives its broadcasts, so
+  a switch made in the app or by the schedule reaches HA at once. While the
+  link is down the entities are `unavailable` rather than silently ignored.
+- Entities are announced only for what the running bridge supports, and a
+  refused command republishes the real state (seen failing without it).
+- `MqttClient._send` now takes a lock. The publish-socket thread already
+  published beside the main loop and the ring adds two more threads; this is
+  defensive — no interleaved packet was ever observed, and no test could provoke one,
+  because the socket is non-blocking and small writes go to
+  the kernel whole.
+- Tests: `tests/test_ring_ha.py` (17) — the command mapping, the state and
+  discovery payloads, and the link against a fake bridge on a real TCP socket
+  (state on connect, a change made elsewhere, a command's round trip, a
+  refusal, a bridge restart). Not yet run against the real broker.
+
 ### Added — ambient brightness: the ring dims with the daylight (nexusq-control r50 · nexusqd r23 · app 1.24.0+62)
 
 A switch under the brightness slider. Off, brightness works exactly as before.
