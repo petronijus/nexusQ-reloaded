@@ -58,7 +58,7 @@ Config (/etc/nexusq/mqtt.json, mode 0600):
 
 Env overrides (host-test seams, mirroring nq-healthd's NQ_* style):
     NQMQTT_CONF NQMQTT_IDENTITY NQMQTT_HEALTH NQMQTT_TIS NQMQTT_WLAN
-    NQMQTT_MAC_PATH NQMQTT_CGROUP NQMQTT_UPTIME
+    NQMQTT_MAC_PATH NQMQTT_CGROUP NQMQTT_UPTIME NQMQTT_WIFI_WD
 """
 
 import json
@@ -81,6 +81,8 @@ TIS_PATH = os.environ.get(
 WLAN_IFACE = os.environ.get("NQMQTT_WLAN", "wlan0")
 MAC_PATH = os.environ.get("NQMQTT_MAC_PATH", "/sys/class/net/wlan0/address")
 UPTIME_PATH = os.environ.get("NQMQTT_UPTIME", "/proc/uptime")
+# Repair count kept by nexusq-wifi-watchdog (tmpfs: per boot).
+WIFI_WD_PATH = os.environ.get("NQMQTT_WIFI_WD", "/run/nexusq/wifi-watchdog.json")
 # user-unit liveness: a user unit is ACTIVE iff its cgroup has processes
 # (see nexusq-control _service_on for why systemctl --machine is unusable).
 USER_CGROUP = os.environ.get(
@@ -509,6 +511,51 @@ def read_services():
     return states
 
 
+# A WiFi repair older than this no longer raises the "WiFi link" problem sensor;
+# the counter keeps it on record for the rest of the boot.
+WIFI_REPAIR_RECENT_S = 24 * 3600
+# time.time() below this is a clock that has not been set yet (the Q's RTC does
+# not tick, docs/2026-09-16-*), so no wall-clock timestamp is derived from it.
+PLAUSIBLE_EPOCH = 1_600_000_000
+
+
+def read_wifi_repairs(uptime, now=None):
+    """What nexusq-wifi-watchdog had to repair this boot, as state fields.
+
+    The watchdog writes {"repairs": N} at start and adds last_kind / last_ok /
+    last_uptime (seconds since boot) after every heal or reconnect. Since
+    firmware r3 the BCM4330 wedge those heals existed for is gone
+    (docs/2026-09-23-wifi-unicast-wedge-firmware.md), so a repair now is a
+    failure that happened, and it goes to Home Assistant instead of only the log.
+
+    The verdict `wifi_repaired_recently` is made here, on the device, from the
+    two uptimes (the same monotonic clock), so it is right even while the wall
+    clock is still unset. The wall-clock `wifi_last_repair` is derived from it
+    only once the clock is plausible. Returns {} when the watchdog has never
+    written the file (not running): absent fields read as healthy downstream."""
+    try:
+        with open(WIFI_WD_PATH) as f:
+            wd = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(wd, dict) or not isinstance(wd.get("repairs"), int):
+        return {}
+    out = {"wifi_repairs": wd["repairs"], "wifi_repaired_recently": False}
+    last = wd.get("last_uptime")
+    if isinstance(last, (int, float)) and uptime is not None and last <= uptime:
+        ago = uptime - last
+        out["wifi_repaired_recently"] = ago < WIFI_REPAIR_RECENT_S
+        now = time.time() if now is None else now
+        if now >= PLAUSIBLE_EPOCH:
+            out["wifi_last_repair"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now - ago))
+        if isinstance(wd.get("last_kind"), str):
+            out["wifi_last_repair_kind"] = wd["last_kind"]
+        if isinstance(wd.get("last_ok"), bool):
+            out["wifi_last_repair_ok"] = wd["last_ok"]
+    return out
+
+
 def read_uptime():
     try:
         with open(UPTIME_PATH) as f:
@@ -594,6 +641,8 @@ def collect(tis_history):
     uptime = read_uptime()
     if uptime is not None:
         state["uptime_s"] = uptime
+
+    state.update(read_wifi_repairs(uptime))
 
     return state, tis_history
 
@@ -918,6 +967,20 @@ def discovery_configs(node_id, display_name, prefix):
          {"unit_of_measurement": "%", "icon": "mdi:volume-high",
           "value_template":
               "{{ value_json.volume_pct | default('unknown') }}"}),
+        # Repairs nexusq-wifi-watchdog had to make this boot. total_increasing:
+        # the drop to 0 at a reboot is a counter reset, not a decrease, and an
+        # automation can trigger on any rise.
+        ("wifi_repairs", "WiFi repairs",
+         {"state_class": "total_increasing", "entity_category": "diagnostic",
+          "icon": "mdi:wifi-refresh",
+          "value_template":
+              "{{ value_json.wifi_repairs | default('unknown') }}"}),
+        # 'None' is what an MQTT sensor reads as "no value": a timestamp sensor
+        # would log a parse error on 'unknown' every publish.
+        ("wifi_last_repair", "Last WiFi repair",
+         {"device_class": "timestamp", "entity_category": "diagnostic",
+          "value_template":
+              "{{ value_json.wifi_last_repair | default('None') }}"}),
     ]
     # per-OPP residency — "podíl frekvencí" (share of time at each OPP over the
     # publish window). The four OPPs are the fixed steelhead table.
@@ -955,6 +1018,10 @@ def discovery_configs(node_id, display_name, prefix):
         # rather than inventing an alarm out of a missing signal.
         ("led", "LED ring",
          "not (value_json.led_stalled | default(false))"),
+        # ON for a day after any watchdog repair; absent (no watchdog, older
+        # device) reads as healthy, like the LED ring.
+        ("wifi_link", "WiFi link",
+         "not (value_json.wifi_repaired_recently | default(false))"),
     ):
         cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
                "device_class": "problem", "entity_category": "diagnostic",

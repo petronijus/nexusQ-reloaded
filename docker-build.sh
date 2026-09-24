@@ -278,14 +278,18 @@ done
 # BCM4330 WiFi (brcmfmac) + Bluetooth firmware. The mainline kernel drives this
 # chip with brcmfmac + hci_uart_bcm, which request these EXACT names under
 # /lib/firmware/brcm (verified live on the device):
-#   brcm/brcmfmac4330-sdio.bin  WiFi base fw  (redistributable, upstream linux-firmware)
+#   brcm/brcmfmac4330-sdio.bin  WiFi fw       (stock fw_bcmdhd.bin 5.90.125.0, proprietary)
 #   brcm/brcmfmac4330-sdio.txt  WiFi NVRAM    (the device's bcmdhd.cal -- key=value NVRAM)
 #   brcm/BCM4330B1.hcd          BT patchram   (proprietary, from the device)
 # Without them: "brcmfmac ... Direct firmware load ... -2" (no WiFi) and
-# "BCM: firmware Patch file not found" (no BT). The two proprietary blobs live in
-# ./firmware (gitignored, maintainer/private-overlay provided); the brcmfmac base
-# fw is redistributable and cached in ./firmware (or fetched on demand). Stage all
-# three into the firmware aport so firmware-google-steelhead installs them.
+# "BCM: firmware Patch file not found" (no BT). All three live in ./firmware
+# (gitignored, staged from the private overlay by scripts/setup-firmware.sh) and
+# are staged into the firmware aport so firmware-google-steelhead installs them.
+# The WiFi fw used to be the redistributable linux-firmware 5.90.195.114 blob;
+# with it the Q stopped receiving unicast every few minutes (73% ping loss,
+# 2026-09-23) while stock's own firmware under the same brcmfmac ran clean --
+# docs/2026-09-23-wifi-unicast-wedge-firmware.md. There is no download fallback
+# any more: a fetched linux-firmware blob would silently bring the wedge back.
 # Baked-in device access (ssh authorized_keys + the WiFi connection profile).
 # The WiFi PSK is a secret and the ssh pubkeys are personal, so both live in
 # the PRIVATE overlay (./private/access) — never in the public tree. Stage them
@@ -312,44 +316,30 @@ rm -f "$DEV_APORT/ssh-authorized-keys" "$DEV_APORT/wifi.nmconnection"
 echo "  access files are NOT staged into the aport (baked into the rootfs in Phase 10)"
 
 FW_APORT="$PMAPORTS/device/testing/firmware-google-steelhead"
-# Mirrors for the redistributable brcmfmac firmware, tried in order. linux-firmware's
-# canonical home moved to GitLab; the old kernel.org cgit `plain/brcm/...` path now
-# answers 404, which used to degrade SILENTLY into the EMPTY firmware package below
-# (green build, image with no wlan0 and no BT -- 2026-08-30). Keep more than one.
-BRCMFMAC_URLS="
-https://gitlab.com/kernel-firmware/linux-firmware/-/raw/main/brcm/brcmfmac4330-sdio.bin
-https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/brcm/brcmfmac4330-sdio.bin
-"
-if [ -f "$SRC/firmware/bcm4330.hcd" ] && [ -f "$SRC/firmware/bcmdhd.cal" ]; then
-    cp "$SRC/firmware/bcm4330.hcd" "$FW_APORT/BCM4330B1.hcd"
-    cp "$SRC/firmware/bcmdhd.cal"  "$FW_APORT/brcmfmac4330-sdio.txt"
-    if [ -f "$SRC/firmware/brcmfmac4330-sdio.bin" ]; then
-        cp "$SRC/firmware/brcmfmac4330-sdio.bin" "$FW_APORT/brcmfmac4330-sdio.bin"
-        echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (local cache)"
-    else
-        echo "  Fetching redistributable brcmfmac4330-sdio.bin from upstream linux-firmware..."
-        for _u in $BRCMFMAC_URLS; do
-            if curl -fsSL --max-time 120 "$_u" -o "$FW_APORT/brcmfmac4330-sdio.bin"; then
-                echo "  Staged BCM4330 firmware: BT .hcd + WiFi .txt + brcmfmac .bin (downloaded from $_u)"
-                break
-            fi
-            echo "  (mirror failed: $_u)"
-            rm -f "$FW_APORT/brcmfmac4330-sdio.bin"
-        done
-        if [ ! -f "$FW_APORT/brcmfmac4330-sdio.bin" ]; then
-            # The proprietary overlay IS present, so this is a maintainer build meant
-            # for flashing: refuse to fall through to the empty package. Cache the file
-            # in ./firmware/brcmfmac4330-sdio.bin (gitignored) and re-run.
-            echo "  ERROR: could not fetch brcmfmac4330-sdio.bin from any mirror."
-            echo "         The firmware overlay is present, so this build would ship an"
-            echo "         image with NO WiFi and NO BT. Cache the blob at"
-            echo "         ./firmware/brcmfmac4330-sdio.bin and re-run."
-            exit 1
-        fi
+# Each blob is checked against the md5 of the one correct steelhead copy before it
+# is staged (same sums as scripts/setup-firmware.sh). The overlay being present
+# means this is a maintainer build meant for flashing, so a missing or wrong blob
+# is a hard error, never a quiet fallback.
+_fw_stage() {  # <source under ./firmware> <name in the aport> <md5>
+    _got=$(md5sum "$SRC/firmware/$1" 2>/dev/null | cut -d' ' -f1)
+    if [ "$_got" != "$3" ]; then
+        if [ -n "$_got" ]; then _why="the wrong blob (md5 $_got)"; else _why="missing"; fi
+        echo "  ERROR: ./firmware/$1 is $_why; expected md5 $3."
+        echo "         The firmware overlay is present, so this build is meant for a device."
+        echo "         Run scripts/setup-firmware.sh (it stages and verifies all three blobs)."
+        exit 1
     fi
+    cp "$SRC/firmware/$1" "$FW_APORT/$2"
+}
+if [ -f "$SRC/firmware/bcm4330.hcd" ] || [ -f "$SRC/firmware/bcmdhd.cal" ] \
+        || [ -f "$SRC/firmware/fw_bcmdhd.bin" ]; then
+    _fw_stage bcm4330.hcd   BCM4330B1.hcd         7e5bb859e33142e94052c76fba23b9e6
+    _fw_stage bcmdhd.cal    brcmfmac4330-sdio.txt f222187eb4c97e47b0f173a270001563
+    _fw_stage fw_bcmdhd.bin brcmfmac4330-sdio.bin 658765a665299744947e99e1f1986d19
+    echo "  Staged BCM4330 firmware: BT .hcd + WiFi NVRAM + stock WiFi fw 5.90.125.0 (md5 verified)"
 fi
 if [ ! -f "$FW_APORT/BCM4330B1.hcd" ] || [ ! -f "$FW_APORT/brcmfmac4330-sdio.bin" ]; then
-    # Public clone without the firmware overlay (or a failed fetch): fall back to an
+    # Public clone without the firmware overlay: fall back to an
     # EMPTY firmware package so the build still succeeds (WiFi/BT just get no firmware).
     echo "  WARNING: BCM4330 firmware blobs incomplete -> building EMPTY firmware-google-steelhead"
     rm -f "$FW_APORT"/brcmfmac4330-sdio.* "$FW_APORT"/BCM4330B1.hcd

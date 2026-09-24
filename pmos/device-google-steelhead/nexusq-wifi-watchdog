@@ -32,6 +32,15 @@
 #      them up. This is how we tell IF and WHEN the link still degrades and
 #      whether roamoff=1 is enough.
 #
+#   4. REPORT — every repair (heal or reconnect) is also counted in a small
+#      state file, $RUNDIR/wifi-watchdog.json, which nexusq-mqtt publishes to
+#      Home Assistant (a "WiFi repairs" counter and a "WiFi link" problem
+#      sensor). A repair is a failure that happened, not a normal event: the
+#      firmware wedge these heals were built for is gone since firmware r3
+#      (docs/2026-09-23-wifi-unicast-wedge-firmware.md), so a repair that shows
+#      up now is news, and a quiet fix buried in a log would hide it. /run is
+#      tmpfs, so the count is per boot; a restart of this service continues it.
+#
 # Scope: ONLY ever touches wlan0. States that are not ours to fix are left
 # alone: unmanaged (10) and unavailable (20) mean the radio is off or the driver
 # is gone, and anything between prepare (40) and activated (100) means NM is
@@ -40,7 +49,7 @@
 # state NM will not leave on its own.
 #
 # Env overrides: NQ_WIFI_INTERVAL, NQ_WIFI_FAILS, NQ_WIFI_COOLDOWN,
-# NQ_WIFI_BADLOSS, NQ_WIFI_DOWNS, NQ_LOGDIR, NQ_WIFI_LOGCAP.
+# NQ_WIFI_BADLOSS, NQ_WIFI_DOWNS, NQ_LOGDIR, NQ_WIFI_LOGCAP, NQ_RUNDIR.
 set -u
 
 IFACE=wlan0
@@ -61,8 +70,10 @@ LOGDIR="${NQ_LOGDIR:-/var/log/nq-health}"
 LOG="$LOGDIR/wifi-watchdog.jsonl"
 CAP="${NQ_WIFI_LOGCAP:-20000}"           # keep at most this many log lines (weeks of
                                          # data; a steady day is only ~300 lines now)
+RUNDIR="${NQ_RUNDIR:-/run/nexusq}"
+STATE="$RUNDIR/wifi-watchdog.json"       # repair count for nexusq-mqtt (job 4)
 
-mkdir -p "$LOGDIR"
+mkdir -p "$LOGDIR" "$RUNDIR"
 
 mono()   { cut -d. -f1 /proc/uptime; }
 emit()   { printf '%s\n' "$1" >> "$LOG"; }
@@ -127,6 +138,41 @@ connect_wlan() {
 	fi
 }
 
+# TESTABLE:repairs_in
+# repairs_in <state-file>: the number of repairs already recorded this boot, 0
+# when there is no file yet or it cannot be read. Read once at start, so a
+# restarted watchdog keeps counting instead of silently resetting to zero.
+repairs_in() {
+	_n=$(sed -n 's/.*"repairs":\([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n 1)
+	echo "${_n:-0}"
+}
+
+# TESTABLE:repair_ok
+# repair_ok <associated yes|no> <loss-after %> <bad-loss threshold>: "true" when
+# the repair left wlan0 associated with a usable link, "false" otherwise.
+repair_ok() {
+	if [ "$1" = yes ] && [ "$2" -lt "$3" ]; then echo true; else echo false; fi
+}
+
+# TESTABLE:write_state
+# write_state <file> <repairs> [<kind> <ok> <uptime-s>]: replace the state file
+# as a whole (tempfile + rename) so nexusq-mqtt never reads half a document.
+# Without the last three arguments it records the count alone (no repair yet).
+write_state() {
+	if [ $# -ge 5 ]; then
+		_body="\"repairs\":$2,\"last_kind\":\"$3\",\"last_ok\":$4,\"last_uptime\":$5"
+	else
+		_body="\"repairs\":$2"
+	fi
+	printf '{%s}\n' "$_body" > "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+
+# Count a finished repair and publish it through the state file.
+record_repair() {  # <kind> <associated yes|no> <loss-after %>
+	repairs=$((repairs + 1))
+	write_state "$STATE" "$repairs" "$1" "$(repair_ok "$2" "$3" "$BAD_LOSS")" "$(mono)"
+}
+
 heal() {
 	loss="$1"; sig=$(signal)
 	emit "{\"t\":$(mono),\"ev\":\"heal\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"note\":\"bounce wlan0 after $FAILS_TO_HEAL bad checks\"}"
@@ -135,6 +181,7 @@ heal() {
 	up=$(connect_wlan)
 	g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
 	emit "{\"t\":$(mono),\"ev\":\"heal_result\",\"assoc\":\"$up\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+	record_repair heal "$up" "$after"
 }
 
 reconnect() {
@@ -143,14 +190,19 @@ reconnect() {
 	up=$(connect_wlan)
 	g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
 	emit "{\"t\":$(mono),\"ev\":\"reconnect_result\",\"assoc\":\"$up\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+	record_repair reconnect "$up" "$after"
 }
 
 fails=0
 downs=0
 last_heal=0
+repairs=$(repairs_in "$STATE")
+# First start this boot: publish "0 repairs" so a reader can tell a running
+# watchdog with nothing to report from one that is not running at all.
+[ -f "$STATE" ] || write_state "$STATE" 0
 prev_st=""
 tick=0
-emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"downs_to_reconnect\":$DOWN_TO_RECONNECT,\"heartbeat_every\":$HEARTBEAT_EVERY}"
+emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"downs_to_reconnect\":$DOWN_TO_RECONNECT,\"heartbeat_every\":$HEARTBEAT_EVERY,\"repairs\":$repairs}"
 
 while :; do
 	tick=$((tick + 1))

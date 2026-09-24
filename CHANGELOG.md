@@ -6,6 +6,82 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — WiFi stops dropping: the Q runs stock's own WiFi firmware (firmware **r3**)
+
+The Q kept going offline on WiFi (Home Assistant "offline", Spotify skips, the
+watchdog bouncing the link) while every other device on the AP was fine.
+
+During an episode:
+
+- the Q stayed associated and kept transmitting;
+- no unicast frame reached the host, while broadcast and multicast still did;
+- DHCP then failed, because its replies are unicast.
+
+Toggling power-save did not help, which ruled out an AP power-save desync. The
+cause was the firmware. The linux-firmware blob we shipped
+(5.90.195.114, 2013) is not what stock ran. Stock's own
+`/vendor/firmware/fw_bcmdhd.bin` (5.90.125.0, 2012) loads under brcmfmac
+unchanged, and "brcmfmac cannot use bcmdhd images" was never true.
+
+| Firmware | Result |
+|---|---|
+| linux-firmware | 73 % of gateway pings lost in 28 min |
+| stock | 1200/1200 pings from the PC; 5.8 h with zero bad watchdog checks and no heals |
+
+The `brcmf_escan_timeout` flood stopped as well.
+
+The price is bulk throughput. The Q receives at 13–16 Mbit/s instead of
+18–20, and transmits at 13–14 instead of 28–30. That is still several times
+what Spotify, AirPlay or Roon at 48 kHz need.
+
+- `firmware-google-steelhead` **r3** ships the stock image as
+  `brcmfmac4330-sdio.bin`.
+- `docker-build.sh` and `scripts/setup-firmware.sh` md5-verify all three BCM4330
+  blobs (WiFi fw, NVRAM, BT patchram) against the one correct steelhead copy.
+- The linux-firmware download fallback is gone, because a fetched blob would
+  quietly bring the wedge back.
+- The stock blob lives in the private overlay (`firmware/fw_bcmdhd.bin`).
+
+Full story, measurements, and how to read firmware iovars through the nl80211
+vendor DCMD: `docs/2026-09-23-wifi-unicast-wedge-firmware.md`.
+
+### Changed — WiFi watchdog repairs show up in Home Assistant (device **r107**, nexusq-mqtt **r7**)
+
+The watchdog's heals were built for the wedge above. A repair it still has to
+make is now a failure worth seeing, so it is no longer fixed quietly in a log.
+Each heal or reconnect is counted in `/run/nexusq/wifi-watchdog.json` (per
+boot; a service restart continues the count). nexusq-mqtt publishes these
+fields:
+
+- `wifi_repairs`, `wifi_repaired_recently` and `wifi_last_repair`;
+- `wifi_last_repair_kind` and `wifi_last_repair_ok`.
+
+HA discovery adds three entities:
+
+- **WiFi repairs**, a `total_increasing` counter an automation can trigger on;
+- **Last WiFi repair**, a timestamp;
+- **WiFi link**, a problem sensor that is ON for 24 h after a repair.
+
+Recency comes from uptimes, so an unset clock cannot fake it. An absent field
+reads as healthy. The heal itself stays, because it also rescues a
+NetworkManager stuck in DHCP, which no firmware fixes.
+
+Tests:
+
+- `tests/test_wifi_watchdog_repair_state.sh`: 17 cases, extracted from the
+  script by TESTABLE markers.
+- 10 new nexusq-mqtt tests, 58 in total.
+- All ten mutants tried against the new code were caught.
+
+Verified end to end on the unit:
+
+- A forced `nmcli device disconnect wlan0` was reconnected by the watchdog
+  after 4 checks (~2 min).
+- Within one publish, Home Assistant showed `sensor.nexus_q_wifi_repairs` = 1,
+  `sensor.nexus_q_last_wifi_repair` at the right minute, and
+  `binary_sensor.nexus_q_wifi_link` = on.
+- The test repair was then reset, and the entities returned to 0 and off.
+
 ### Added — healthd reports whether the deep C-states run, and what vetoes them (device **r106**)
 
 `nq-healthd` appends four fields to every sample; no existing field changes:

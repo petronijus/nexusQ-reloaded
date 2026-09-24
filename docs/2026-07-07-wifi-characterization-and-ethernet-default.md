@@ -1,5 +1,12 @@
 # 2026-07-07 — WiFi characterized (5 GHz healthy, bulk is a HW ceiling) + ethernet is now the default deploy path
 
+> **Superseded in part (2026-09-23).** These measurements were taken with the
+> linux-firmware 5.90.195.114 blob. That firmware turned out to stop delivering
+> unicast every few minutes (which is why "flaky" kept coming back after this
+> note retired it), and the Q now runs stock's own 5.90.125.0 firmware. The
+> ~34 Mbit/s figure is not a chip ceiling: with the stock firmware bulk is
+> 13–16 Mbit/s. See `2026-09-23-wifi-unicast-wedge-firmware.md`.
+
 All measured live 2026-07-07 on the running **v1.6.10** image (device pkg
 `r28`, kernel `6.12.12 #36`). Two outcomes: (1) the long-standing "WiFi is
 flaky" framing is **retired** — 5 GHz is healthy and the ~34 Mbit/s bulk cap is

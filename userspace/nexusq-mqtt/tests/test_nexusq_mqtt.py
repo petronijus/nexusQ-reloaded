@@ -462,6 +462,97 @@ class TestCollect(unittest.TestCase):
         self.assertNotIn("freq_mhz", state)
 
 
+class TestWifiRepairs(unittest.TestCase):
+    """The watchdog's repair count, as published to Home Assistant. Since
+    firmware r3 a repair is a failure worth seeing, not routine
+    (docs/2026-09-23-wifi-unicast-wedge-firmware.md)."""
+
+    NOW = 1_790_200_000.0  # a set wall clock
+
+    def wd(self, doc):
+        f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        f.write(doc if isinstance(doc, str) else json.dumps(doc))
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return mock.patch.object(MOD, "WIFI_WD_PATH", f.name)
+
+    def test_no_watchdog_publishes_nothing(self):
+        with mock.patch.object(MOD, "WIFI_WD_PATH", "/nonexistent.json"):
+            self.assertEqual(MOD.read_wifi_repairs(1000, self.NOW), {})
+
+    def test_start_marker_is_zero_and_healthy(self):
+        with self.wd({"repairs": 0}):
+            self.assertEqual(MOD.read_wifi_repairs(1000, self.NOW),
+                             {"wifi_repairs": 0,
+                              "wifi_repaired_recently": False})
+
+    def test_recent_repair_raises_the_flag_with_its_time(self):
+        with self.wd({"repairs": 2, "last_kind": "heal", "last_ok": True,
+                      "last_uptime": 1000}):
+            out = MOD.read_wifi_repairs(1600, self.NOW)
+        self.assertEqual(out["wifi_repairs"], 2)
+        self.assertTrue(out["wifi_repaired_recently"])
+        self.assertEqual(out["wifi_last_repair_kind"], "heal")
+        self.assertIs(out["wifi_last_repair_ok"], True)
+        # 600 s before now, in UTC, in the form a HA timestamp sensor parses
+        self.assertEqual(out["wifi_last_repair"], time.strftime(
+            "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(self.NOW - 600)))
+
+    def test_a_day_old_repair_is_counted_but_no_longer_a_problem(self):
+        with self.wd({"repairs": 1, "last_kind": "reconnect",
+                      "last_ok": False, "last_uptime": 100}):
+            out = MOD.read_wifi_repairs(100 + 24 * 3600, self.NOW)
+        self.assertEqual(out["wifi_repairs"], 1)
+        self.assertFalse(out["wifi_repaired_recently"])
+        self.assertIs(out["wifi_last_repair_ok"], False)
+
+    def test_unset_clock_keeps_the_verdict_but_invents_no_time(self):
+        # The RTC does not tick: right after boot time.time() can be 1970.
+        # Recency comes from the two uptimes, so it is still right; a wall
+        # clock time derived from an unset clock would be a lie.
+        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
+                      "last_uptime": 50}):
+            out = MOD.read_wifi_repairs(80, 1000.0)
+        self.assertTrue(out["wifi_repaired_recently"])
+        self.assertNotIn("wifi_last_repair", out)
+
+    def test_repair_from_the_future_is_ignored(self):
+        # last_uptime > uptime cannot come from this boot (/run is tmpfs);
+        # report the count but make no recency claim from it.
+        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
+                      "last_uptime": 5000}):
+            out = MOD.read_wifi_repairs(100, self.NOW)
+        self.assertEqual(out, {"wifi_repairs": 1,
+                               "wifi_repaired_recently": False})
+
+    def test_unknown_uptime_reports_the_count_only(self):
+        with self.wd({"repairs": 3, "last_kind": "heal", "last_ok": True,
+                      "last_uptime": 50}):
+            out = MOD.read_wifi_repairs(None, self.NOW)
+        self.assertEqual(out, {"wifi_repairs": 3,
+                               "wifi_repaired_recently": False})
+
+    def test_garbage_is_ignored(self):
+        for doc in ("", "{", "[]", '{"repairs":"3"}', '{"last_ok":true}'):
+            with self.subTest(doc=doc), self.wd(doc):
+                self.assertEqual(MOD.read_wifi_repairs(100, self.NOW), {})
+
+    def test_collect_carries_the_fields(self):
+        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
+                      "last_uptime": 1200}), \
+                mock.patch.object(MOD, "HEALTH_PATH", "/nonexistent"), \
+                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
+                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
+                mock.patch.object(MOD, "read_wifi",
+                                  return_value=(None, None)), \
+                mock.patch.object(MOD, "read_volume",
+                                  return_value=(None, None)), \
+                mock.patch.object(MOD, "read_uptime", return_value=1234):
+            state, _ = MOD.collect([])
+        self.assertEqual(state["wifi_repairs"], 1)
+        self.assertTrue(state["wifi_repaired_recently"])
+
+
 # --------------------------------------------------------------------------
 # HA discovery contract
 # --------------------------------------------------------------------------
@@ -515,8 +606,30 @@ class TestDiscovery(unittest.TestCase):
                          "mem_avail", "uptime", "wifi_rssi", "volume",
                          "opp350", "opp700", "opp920", "opp1200",
                          "spotify", "airplay", "roon", "usbaudio",
-                         "nexusqd", "healthd"):
+                         "nexusqd", "healthd", "wifi_repairs",
+                         "wifi_last_repair", "wifi_link"):
             self.assertIn(expected, keys)
+
+    def test_wifi_repair_entities(self):
+        by_key = {t.split("/")[2]: (t, cfg) for t, cfg in self.configs}
+        topic, cfg = by_key["wifi_repairs"]
+        self.assertTrue(topic.startswith("sensor/"))
+        # a reboot resets the count to 0: total_increasing reads that as a
+        # reset, not as repairs going away
+        self.assertEqual(cfg["state_class"], "total_increasing")
+        self.assertIn("value_json.wifi_repairs", cfg["value_template"])
+        topic, cfg = by_key["wifi_last_repair"]
+        self.assertEqual(cfg["device_class"], "timestamp")
+        # 'None' (not 'unknown') is what HA's MQTT sensor treats as no value
+        self.assertIn("default('None')", cfg["value_template"])
+        topic, cfg = by_key["wifi_link"]
+        self.assertTrue(topic.startswith("binary_sensor/"))
+        self.assertEqual(cfg["device_class"], "problem")
+        # healthy unless the device says it repaired the link recently; an
+        # absent field (no watchdog, older device) must read healthy
+        self.assertIn("wifi_repaired_recently | default(false)",
+                      cfg["value_template"])
+        self.assertIn("'OFF' if (not (", cfg["value_template"])
 
     def test_opp_templates_reference_their_field(self):
         by_key = {t.split("/")[2]: cfg for t, cfg in self.configs}

@@ -62,9 +62,9 @@ notes in [`docs/`](docs/).
 | 🔴 **LED music visualizer** | ✅ | 5 visualisations + breathing themes, volume-independent AGC; stops rendering into a blanked ring on a silent tap since nexusqd r14 |
 | 📱 **Companion app** + LAN control bridge | ✅ | Flutter remote **and** the screenless orb's BT settings panel; Android + iOS (first-time setup and self-update stay Android-only); MQTT health panel; own version track |
 | 🔄 **OTA self-update** | ✅ | signed apk repo on GitHub Pages: daemons, system, **kernel** (health-gated trial slot, keeps the unit's identity since r5 · 2026-09-05) and A/B rootfs — no cable · v1.12.0+ |
-| 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (19 entities); the app is the only credential provisioner (PROTOCOL §13) |
+| 📊 **MQTT health telemetry** | ✅ | `nexusq-mqtt` publishes retained health + HA discovery (22 entities, incl. WiFi repairs); the app is the only credential provisioner (PROTOCOL §13) |
 | 🖥 **HDMI desktop** (LXQt · Wayland) | ✅ | on demand from the app — the `user` linger keeps music playing when it stops · v1.10.0; **software-rendered** (`WLR_RENDERER=pixman`), see the GPU row |
-| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | factory MAC pinned in DT; 5 GHz solid — `roamoff=1` + a watchdog that heals a dead link and reconnects a stranded one (r93 · 2026-09-05); ~34 Mbit/s ceiling |
+| 📶 **WiFi** (BCM4330, 5 GHz) | ✅ | runs **stock's own firmware** (5.90.125.0) since firmware r3 — the linux-firmware blob stopped receiving unicast every few minutes; 5.8 h with zero drops after the switch; ~13–16 Mbit/s bulk. Factory MAC pinned in DT, `roamoff=1`; the watchdog still repairs a dead link, and every repair shows up in Home Assistant. [story](docs/2026-09-23-wifi-unicast-wedge-firmware.md) |
 | 🔵 **Bluetooth** + **A2DP audio** | ✅ | reliable since v1.8.0 (BT UART `max-speed`, patch 0040); Just-Works pairing via the permanent `nexusq-btagent` |
 | 🖱 **BT pairing from the app** — both directions | ✅ | phone in (A2DP) *and* mouse/keyboard out; `bonded` (not `paired`) is the survives-a-reboot truth · v1.10.0 |
 | 📲 **App-driven onboarding** (NFC → BT → WiFi) | ✅ | tap the dome → bonded encrypted RFCOMM → WiFi join; the pairing window fails closed · v1.9.0 |

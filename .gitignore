@@ -22,7 +22,9 @@ companion/app/assets/stock/**
 !companion/app/assets/stock/raw/.keep
 firmware/bcm4330.hcd
 firmware/bcmdhd.cal
-# Redistributable (upstream linux-firmware) -- cached locally, else fetched at build time
+firmware/fw_bcmdhd.bin
+# The old linux-firmware WiFi blob (no longer used since 2026-09-23; ignored so a
+# leftover cached copy never shows up as untracked)
 firmware/brcmfmac4330-sdio.bin
 
 # Build/session scratch logs

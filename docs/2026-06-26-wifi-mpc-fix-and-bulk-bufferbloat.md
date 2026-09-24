@@ -2,6 +2,15 @@
 
 ## TL;DR
 
+> **Correction (2026-09-23): the firmware was NOT the same as stock.** 5.90.195.114 is
+> the linux-firmware blob *we* loaded. The stock-adb RAM boot used for this comparison
+> never mounts `/system` (those partitions hold postmarketOS), yet stock `bcmdhd` loads
+> `/system/vendor/firmware/fw_bcmdhd.bin`. So the test ran the stock *driver* on *our*
+> blob. The stock factory image (`tungsten-ian67k`) actually ships `fw_bcmdhd.bin`
+> **5.90.125.0**. The NVRAM really is byte-identical. That firmware difference turned
+> out to cause the recurring unicast-RX wedge, and the Q now runs stock's 5.90.125.0.
+> See `2026-09-23-wifi-unicast-wedge-firmware.md`.
+
 - **Stock proves it's our software.** Same firmware (`5.90.195.114`) + byte-identical
   nvram (`bcmdhd.cal`) + same chip + same AP as the stock Android image, which works
   with the vendor `bcmdhd` driver. Our mainline uses `brcmfmac`. So every WiFi defect

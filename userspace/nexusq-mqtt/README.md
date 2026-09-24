@@ -93,6 +93,19 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
   - `services` — `{spotify, airplay, roon, usbaudio}` booleans (instant
     cgroup.procs read, the nexusq-control pattern)
   - `uptime_s`, `healthd_fresh`, `healthd_age_s`
+  - **WiFi repairs (r7, 2026-09-23)**: from `/run/nexusq/wifi-watchdog.json`,
+    which `nexusq-wifi-watchdog` rewrites after every heal or reconnect:
+    - `wifi_repairs`: repairs this boot;
+    - `wifi_repaired_recently`: the verdict, true for 24 h after a repair;
+    - `wifi_last_repair`: ISO-8601 UTC, only once the wall clock is set;
+    - `wifi_last_repair_kind`: `heal` or `reconnect`;
+    - `wifi_last_repair_ok`: whether the link came back usable.
+
+    Recency is computed from the two uptimes, so it is right even before the
+    clock is set (the RTC does not tick). All absent when the watchdog is not
+    running. Since firmware r3 fixed the BCM4330 wedge the heals were built
+    for, a repair is a failure that happened; it is published instead of
+    being fixed quietly in a log (`docs/2026-09-23-wifi-unicast-wedge-firmware.md`).
     ⚠️ `healthd_fresh:false` with `nq-healthd.service` active is not proof of
     a dead sampler: device **r77–r79** (fixed **r80**, 2026-08-23) had a
     healthd rotation bug that renamed `health.jsonl` without closing the
@@ -107,10 +120,12 @@ Discovery creates one device ("Nexus Q" / the name from
 `/etc/nexusq/device.json`, keyed by the factory WiFi MAC) with:
 
 - sensors: die temperature, CPU frequency, governor, load, memory available,
-  uptime, WiFi RSSI, volume, 4× per-OPP residency
+  uptime, WiFi RSSI, volume, 4× per-OPP residency, **WiFi repairs**
+  (`total_increasing`, so a reboot's reset to 0 is not a decrease and an
+  automation can fire on any rise) and **Last WiFi repair** (timestamp)
 - binary sensors: Spotify Connect / AirPlay / Roon / USB Audio (running),
-  LED daemon + Health sampler + **LED ring** (problem class — ON means something
-  is wrong)
+  LED daemon + Health sampler + **LED ring** + **WiFi link** (problem class —
+  ON means something is wrong; WiFi link is ON for 24 h after a watchdog repair)
 
 The problem-class binaries are **inverted** — `off` = healthy. The **LED ring**
 entity (key `led`, `device_class: problem`, `entity_category: diagnostic`, added
@@ -229,4 +244,5 @@ remaining-length boundaries, CONNACK refusal, dead-broker detection), config
 validation, health-tail parsing (torn lines, staleness), OPP residency math
 (rolling-window pruning + since-boot fallback + counter-reset discard),
 discovery payload contract (unique_ids, shared topics, device block),
-identity fallbacks. 28 tests as of r1.
+identity fallbacks, WiFi-repair state (recency, unset clock, garbage, the HA
+entity contract). 28 tests as of r1, 58 as of r7.

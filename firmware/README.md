@@ -9,11 +9,24 @@ The mainline kernel drives the BCM4330 with **`brcmfmac`** (WiFi) and
 firmware under `/lib/firmware/brcm/` with very specific names (verified live from
 `dmesg` on the device):
 
-| File (in `/lib/firmware/brcm/`) | What | Source | In git? |
+| File (in `/lib/firmware/brcm/`) | What | Source (`./firmware/`) | md5 |
 |---|---|---|---|
-| `brcmfmac4330-sdio.bin` | brcmfmac WiFi base firmware | upstream **linux-firmware** (redistributable) | no — cached in `./firmware`, else fetched at build time |
-| `brcmfmac4330-sdio.txt` | brcmfmac WiFi NVRAM / calibration | the device's `bcmdhd.cal` (already key=value NVRAM) | no — proprietary |
-| `BCM4330B1.hcd` | Bluetooth patchram for the BCM4330B1 | the device's vendor BT firmware | no — proprietary |
+| `brcmfmac4330-sdio.bin` | WiFi firmware, **stock** 5.90.125.0 | `fw_bcmdhd.bin` = stock `system.img:/vendor/firmware/fw_bcmdhd.bin` | `658765a665299744947e99e1f1986d19` |
+| `brcmfmac4330-sdio.txt` | WiFi NVRAM / calibration | `bcmdhd.cal` = stock `/etc/wifi/bcmdhd.cal` (already key=value NVRAM) | `f222187eb4c97e47b0f173a270001563` |
+| `BCM4330B1.hcd` | Bluetooth patchram for the BCM4330B1 | `bcm4330.hcd` = stock `/vendor/firmware/bcm4330.hcd` | `7e5bb859e33142e94052c76fba23b9e6` |
+
+All three are proprietary: they are not in git and are staged from the private
+overlay. `docker-build.sh` and `scripts/setup-firmware.sh` refuse any copy whose
+md5 differs.
+
+> ✅ **The WiFi firmware is stock's own since firmware r3 (2026-09-23).** Until then
+> we shipped linux-firmware's `brcmfmac4330-sdio.bin` (5.90.195.114, 2013). It
+> stopped delivering unicast frames every few minutes (73 % gateway ping loss),
+> and that was the recurring "WiFi drops" problem. Stock's 5.90.125.0 runs under
+> brcmfmac unchanged, with zero drops in 5.8 h. It costs bulk throughput
+> (~13–16 Mbit/s instead of 18–30), which is irrelevant for audio streaming. See
+> `../docs/2026-09-23-wifi-unicast-wedge-firmware.md`. Do not "upgrade" back to
+> linux-firmware.
 
 Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware load
 ... failed ... -2` and there is **no WiFi**; without `BCM4330B1.hcd` it logs
@@ -37,9 +50,11 @@ Without `brcmfmac4330-sdio.bin` the kernel logs `brcmfmac ... Direct firmware lo
 > second BlueZ agent (`blueman-applet`) before touching firmware. *Never re-derive a
 > hardware limit from a userspace symptom.*
 
-> ⚠️ `firmware-aosp-broadcom-wlan` (a build dependency) ships the *bcmdhd*-style
-> `fw_bcm4330_*.bin` images. **brcmfmac cannot use those** — they are kept only for
-> parity. The WiFi firmware that actually loads is `brcmfmac4330-sdio.bin` above.
+> ℹ️ `firmware-aosp-broadcom-wlan` (a build dependency) ships AOSP's bcmdhd-style
+> `fw_bcm4330_*.bin` images under other names; nothing loads them, and the
+> dependency is kept only for parity with firmware-samsung-maguro. (The old claim
+> that brcmfmac *cannot* use a bcmdhd image was never tested and is wrong. On the
+> 4330 both drivers speak BCDC over SDIO, and we now run stock's bcmdhd image.)
 
 brcmfmac also probes board-specific and optional firmware names. These logged
 `Direct firmware load ... failed with error -2` at boot (inventory item B4) —
@@ -89,22 +104,15 @@ brcmfmac also probes board-specific and optional firmware names. These logged
 > factory MAC on **every** profile, so no per-profile clone is needed. The factory MACs
 > are consecutive: BT `…49:e5`, WiFi `…48:e1`.
 
-`bcmdhd.cal` and `bcm4330.hcd` are device-specific, **proprietary and not
-redistributable**, so they are **not committed** (gitignored). You provide them
-yourself (see below). `brcmfmac4330-sdio.bin` is redistributable; it is gitignored
-too but `docker-build.sh` will fetch it from upstream linux-firmware if it is not
-already cached in `./firmware`.
+All three blobs are **proprietary and not redistributable**, so they are **not
+committed** (gitignored). You provide them yourself (see below).
 
-> ⚠️ **That fetch is a mirror LIST now, and it can FAIL the build (2026-08-30, v1.14.1).**
-> linux-firmware's canonical home moved to GitLab and the hardcoded kernel.org cgit
-> `plain/brcm/brcmfmac4330-sdio.bin` path started answering **404** — while the failure
-> branch merely warned and fell through to the empty package below: a green build and a
-> flashable image with **no WiFi and no BT**. `BRCMFMAC_URLS` is now ordered (GitLab
-> canonical, kernel.org second), and **when the proprietary overlay is present** — i.e. a
-> build meant to be flashed — an unfetchable blob is now `exit 1` naming the cache path,
-> not a warning. A public clone without the overlay still gets the empty package and a
-> green build; that asymmetry is the point. Cache the blob at
-> `./firmware/brcmfmac4330-sdio.bin` (gitignored) to skip the fetch entirely.
+> ℹ️ **The linux-firmware download is gone (2026-09-23).** From v1.14.1 on,
+> `docker-build.sh` fetched `brcmfmac4330-sdio.bin` from a mirror list. That
+> blob is the firmware that wedged unicast RX, so a fetch would quietly bring
+> the bug back. With the overlay present, a missing or wrong blob is now
+> `exit 1`. A public clone without the overlay still gets the empty package
+> and a green build.
 
 ## Getting the blobs
 
@@ -116,26 +124,27 @@ git clone <nexusQ-reloaded-private> private
 ./scripts/setup-firmware.sh        # copies private/firmware/* -> firmware/ (gitignored)
 ```
 
-**Anyone else (extract from your own device):** boot the Nexus Q into its
-original Android system and pull the files over ADB:
+**Anyone else (extract from the stock factory image):** Google's
+`tungsten-ian67k` factory image contains all three in `system.img`. Unsparse it
+with `simg2img system.img system.raw.img`, then:
 
 ```bash
-adb pull /system/vendor/firmware/bcmdhd.cal firmware/bcmdhd.cal
-# the BCM4330 BT .hcd patchram lives alongside the vendor BT firmware
+debugfs -R "dump /vendor/firmware/fw_bcmdhd.bin firmware/fw_bcmdhd.bin" system.raw.img
+debugfs -R "dump /vendor/firmware/bcm4330.hcd   firmware/bcm4330.hcd"   system.raw.img
+debugfs -R "dump /etc/wifi/bcmdhd.cal           firmware/bcmdhd.cal"    system.raw.img
+md5sum firmware/fw_bcmdhd.bin firmware/bcm4330.hcd firmware/bcmdhd.cal   # compare with the table above
 ```
 
-Place them at `firmware/bcmdhd.cal` and `firmware/bcm4330.hcd` (both gitignored).
-Without the calibration, WiFi still works on generic defaults (RF performance
-may be sub-optimal); without the `.hcd`, Bluetooth won't come up.
+(On a Q still running Android, `adb pull` of the same paths works too.)
 
 ## Packaging
 
 `docker-build.sh` (Phase 6) stages the three blobs into the
 `firmware-google-steelhead` aport under the exact driver-requested names
-(`BCM4330B1.hcd`, `brcmfmac4330-sdio.txt` from `bcmdhd.cal`, and
-`brcmfmac4330-sdio.bin` from the local cache or upstream linux-firmware), and the
-APKBUILD installs them to `/lib/firmware/brcm/`. So you only need to place
-`firmware/bcmdhd.cal` and `firmware/bcm4330.hcd` — the build does the rest.
+(`BCM4330B1.hcd` from `bcm4330.hcd`, `brcmfmac4330-sdio.txt` from `bcmdhd.cal`,
+and `brcmfmac4330-sdio.bin` from `fw_bcmdhd.bin`), each md5-verified, and the
+APKBUILD installs them to `/lib/firmware/brcm/`. So you only need to place the
+three files in `firmware/`, and the build does the rest.
 
 If the proprietary blobs are **absent** (a public clone without the overlay),
 `docker-build.sh` automatically swaps in an **empty** `firmware-google-steelhead`
@@ -146,8 +155,7 @@ package so the build still succeeds; WiFi/BT simply come up with no firmware.
 > gitignored `./firmware/` overlay was never populated, the image builds and
 > flashes fine but boots with **no `wlan0` and no BT** (`/lib/firmware/brcm/`
 > empty). On any new build machine stage the blobs FIRST
-> (`cp private/firmware/bcm4330.hcd private/firmware/bcmdhd.cal firmware/`, or
-> `./scripts/setup-firmware.sh`), and verify the build log says
+> (`./scripts/setup-firmware.sh`), and verify the build log says
 > **`Staged BCM4330 firmware`** — not the empty fallback. The image verification
 > gate now also checks the rootfs `/lib/firmware/brcm/` contents (the final
 > v1.8.1 rebuild verified `brcmfmac4330-sdio.bin`/`.txt` + `BCM4330B1.hcd` + the

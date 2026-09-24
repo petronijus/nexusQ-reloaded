@@ -3,7 +3,7 @@
 # Modeled on firmware-samsung-maguro (identical BCM4330 chip)
 pkgname=firmware-google-steelhead
 pkgver=1
-pkgrel=2
+pkgrel=3
 pkgdesc="Google Nexus Q BCM4330 WiFi (brcmfmac) + BT firmware"
 url="https://postmarketos.org"
 arch="armv7"
@@ -14,14 +14,20 @@ options="!strip !check !archcheck !spdx !tracedeps"
 # (from ./firmware/), because the proprietary ones must not live in the public
 # tree. The mainline kernel drives this chip with brcmfmac (WiFi) + hci_uart_bcm
 # (BT), which look for these exact names under /lib/firmware/brcm:
-#   - brcmfmac4330-sdio.bin : brcmfmac base firmware (redistributable, upstream
-#                             linux-firmware) -- else "brcmfmac ... failed ... -2".
+#   - brcmfmac4330-sdio.bin : WiFi firmware -- stock's own fw_bcmdhd.bin
+#                             (5.90.125.0, from system.img /vendor/firmware), which
+#                             brcmfmac runs fine; else "brcmfmac ... failed ... -2".
+#                             r3 replaced the linux-firmware 5.90.195.114 blob, which
+#                             stopped delivering unicast frames every few minutes
+#                             (docs/2026-09-23-wifi-unicast-wedge-firmware.md).
 #   - brcmfmac4330-sdio.txt : brcmfmac NVRAM/calibration (the device's bcmdhd.cal,
 #                             which is already key=value NVRAM) -- RF calibration.
 #   - BCM4330B1.hcd         : BT patchram for the BCM4330B1 -- else
 #                             "BCM: firmware Patch file not found" and no Bluetooth.
-# NOTE: firmware-aosp-broadcom-wlan ships the *bcmdhd* (Android driver) fw_bcm4330
-# images, which brcmfmac CANNOT use; it is kept as a dependency only for parity.
+# NOTE: firmware-aosp-broadcom-wlan ships AOSP's bcmdhd fw_bcm4330 images under
+# other names; nothing here loads them, the dependency is kept only for parity with
+# firmware-samsung-maguro. (The old claim that brcmfmac cannot run a bcmdhd image
+# was never tested and is wrong: on the 4330 both drivers speak BCDC over SDIO.)
 # If the blobs are absent (public clone without the firmware overlay), docker-build.sh
 # replaces this with an empty package -- WiFi/BT then simply have no firmware.
 source="
