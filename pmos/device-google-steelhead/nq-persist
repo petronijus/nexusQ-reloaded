@@ -4,7 +4,7 @@
 # A flash writes `boot` (p9) and `userdata` (p13) and nothing else. Everything
 # that makes THIS unit this unit -- which sources are switched on, its name,
 # its WiFi profile, its ssh host keys, its Bluetooth bonds, its site's NTP
-# server -- used to live on the rootfs, so every flash reset it to the image
+# server, its Roon identity -- used to live on the rootfs, so every flash reset it to the image
 # defaults and somebody re-did it by hand (or did not: on 2026-09-19 the Prague
 # Q had been without USB Audio for three days because the 09-16 flash switched
 # it off and nothing said so). The same class of defect as the first unit's MAC
@@ -60,10 +60,18 @@ SHADOW=$RUN/persist-shadow
 #                   moved to /usr/lib/NetworkManager/system-connections, so
 #                   this directory is per-unit and nothing else.
 #   bluetooth       BlueZ's adapter state and bonds
+#   roon            RoonBridge's own state (r108): Database/Registry holds the
+#                   device identity the Roon core knows this unit by, Settings
+#                   its zone setup. Without it every flash made the Q a NEW
+#                   device in Roon -- enable it again, set the zone up again --
+#                   while the old one sat there as "not found". The Roon
+#                   sandbox binds /opt/glibc-rt recursively, so a bind mount
+#                   under it is what RoonBridge sees inside.
 MAP='
 user-systemd /home/user/.config/systemd USER 0755
 nm-connections /etc/NetworkManager/system-connections root:root 0755
 bluetooth /var/lib/bluetooth root:root 0700
+roon /opt/glibc-rt/home/roon/.RoonBridge USER 0755
 '
 
 log()  { echo "nq-persist: $*"; }

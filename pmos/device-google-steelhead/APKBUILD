@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=107
+pkgrel=109
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -158,6 +158,7 @@ source="
 	nexusq-persist-user-systemd.mount
 	nexusq-persist-nm-connections.mount
 	nexusq-persist-bluetooth.mount
+	nexusq-persist-roon.mount
 	nexusq-persist-hostname.path
 	nexusq-persist-hostname.service
 	10-nexusq-persist-sshd.conf
@@ -638,7 +639,7 @@ package() {
 	# server -- lives on the `cache` partition and is bind-mounted over its
 	# rootfs path at boot. /usr/bin/nq-persist carries the design; the units
 	# are the plumbing: prepare (format once) -> mount -> apply (seed/render)
-	# -> three bind mounts, all wanted by local-fs.target so everything after
+	# -> the bind mounts, all wanted by local-fs.target so everything after
 	# sysinit (the user manager, NetworkManager, sshd, bluetoothd, timesyncd)
 	# sees the unit's own state without knowing the store exists.
 	install -Dm755 "$srcdir"/nq-persist "$pkgdir"/usr/bin/nq-persist
@@ -657,10 +658,14 @@ package() {
 		"$pkgdir"/etc/systemd/system/'etc-NetworkManager-system\x2dconnections.mount'
 	install -Dm644 "$srcdir"/nexusq-persist-bluetooth.mount \
 		"$pkgdir"/etc/systemd/system/var-lib-bluetooth.mount
+	# r108: RoonBridge's identity + zone settings (a flash made it a new device).
+	install -Dm644 "$srcdir"/nexusq-persist-roon.mount \
+		"$pkgdir"/etc/systemd/system/'opt-glibc\x2drt-home-roon-.RoonBridge.mount'
 	install -dm755 "$pkgdir"/etc/systemd/system/local-fs.target.wants
 	for u in nexusq-persist-prepare.service var-lib-nexusq-persist.mount \
 		 nexusq-persist-apply.service home-user-.config-systemd.mount \
-		 'etc-NetworkManager-system\x2dconnections.mount' var-lib-bluetooth.mount; do
+		 'etc-NetworkManager-system\x2dconnections.mount' var-lib-bluetooth.mount \
+		 'opt-glibc\x2drt-home-roon-.RoonBridge.mount'; do
 		ln -sf "../$u" "$pkgdir/etc/systemd/system/local-fs.target.wants/$u"
 	done
 	# The hostname is hostnamed's file (rewritten atomically, so neither a

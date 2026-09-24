@@ -42,4 +42,5 @@ enable nexusq-persist-apply.service
 enable home-user-.config-systemd.mount
 enable etc-NetworkManager-system\x2dconnections.mount
 enable var-lib-bluetooth.mount
+enable opt-glibc\x2drt-home-roon-.RoonBridge.mount
 enable nexusq-persist-hostname.path

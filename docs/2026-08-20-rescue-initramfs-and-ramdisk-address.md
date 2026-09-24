@@ -472,3 +472,41 @@ been running all along — the r79 **rootfs** has not been flashed, so its packa
 database still says `nexusq-kernel-ota-0.1.0-r2` even though the fixed tools were
 installed by hand. Flashing `output/nexusq-rootfs-ab-r79-sparse.img` is what
 reconciles that, and it needs fastboot.
+
+## 2026-09-24 — a built image into a slot, without fastboot
+
+`nq-rootfs-ab populate` copies the *running* rootfs, which suits an
+apk-upgraded system and does nothing for a freshly built image. That part of
+the A/B promise was missing. `scripts/deploy-rootfs-slot.sh` is it:
+
+    scripts/deploy-rootfs-slot.sh [--try] [--reboot] output/google-steelhead.img
+
+It writes the raw ext4 image (a sparse one is refused) into whichever slot is
+NOT running, over ssh, gzip on the wire. It then:
+
+- reads the bytes back and compares their sha256 with the image;
+- requires `e2fsck -fp` to exit 0;
+- gives the slot back its own label and UUID, so the same image in both slots
+  never carries one UUID twice;
+- rewrites the slot's fstab to that UUID, as `populate` does.
+
+`--try` arms the one-shot trial. `--reboot` boots it and waits until the
+unit's own health gate commits the slot. The ext4 stays at image size; the
+image's first-boot `nexusq-resize-rootfs` grows it, as after a fastboot flash.
+
+First use, 2026-09-24 00:45–00:58:
+
+- Prague unit on slot A (device r108) → r109 fresh build into slot B (p14).
+- 3 024 093 184 bytes written; read-back sha256 `b4f1183d…` matched.
+- Slot B booted as a trial and was committed by the health gate.
+- The rootfs grew to the full 1 723 643 blocks.
+- All four persist bind mounts came up, including the new Roon one. The
+  RoonBridge identity files were byte-identical to slot A's, so the Roon core
+  sees the same device.
+- WiFi joined on the stock firmware.
+- Slot A still holds the previous system untouched: `nq-rootfs-ab try a`
+  goes back.
+
+That run also caught a bug the A/B split had left behind. `nexusq-resize-rootfs`
+hard-coded p13, so a rootfs in slot B would never have grown (device r109,
+CHANGELOG).

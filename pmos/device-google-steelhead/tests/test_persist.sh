@@ -6,7 +6,7 @@
 # What is being protected: a flash writes boot + userdata and resets everything
 # per-unit to the image defaults -- which sources are on, the WiFi profile, the
 # ssh host keys, the Bluetooth bonds, the name, the site's NTP server. The store
-# ends that. These tests pin that (1) the partition is formatted exactly once
+# ends that (and since r108 also the Roon identity). These tests pin that (1) the partition is formatted exactly once
 # and never when it is in use or already ours, (2) the store is seeded from the
 # running rootfs on the upgrade path, (3) a "flash" (rootfs wiped, store kept)
 # comes back with the unit's own state once the bind mounts are up -- and, as
@@ -58,9 +58,10 @@ truncate -s 64M "$IMG"
 
 # ---- the rootfs of a unit in the field (what r102 left behind) -------------
 fresh_rootfs() {  # fresh_rootfs <hostname>  -- image defaults: nothing per-unit
-    rm -rf /fake/home /fake/etc/NetworkManager /fake/var /fake/etc/ssh /fake/etc/nexusq
+    rm -rf /fake/home /fake/etc/NetworkManager /fake/var /fake/etc/ssh /fake/etc/nexusq /fake/opt
     mkdir -p /fake/home/user/.config /fake/etc/NetworkManager/system-connections \
-             /fake/var/lib/bluetooth /fake/etc/ssh /fake/etc/nexusq
+             /fake/var/lib/bluetooth /fake/etc/ssh /fake/etc/nexusq \
+             /fake/opt/glibc-rt/home/roon     # nexusq-glibc-rt ships it; .RoonBridge is RoonBridge's own
     printf '%s\n' "$1" > /fake/etc/hostname
     cat > /fake/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip.conf <<'F'
 [Time]
@@ -78,21 +79,28 @@ unit_state() {  # the per-unit state a used unit carries
     mkdir -p /fake/var/lib/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF
     echo "[LinkKey]" > /fake/var/lib/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF/info
     chmod 700 /fake/var/lib/bluetooth
+    # RoonBridge's identity: what the Roon core knows this unit by
+    mkdir -p /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry /fake/opt/glibc-rt/home/roon/.RoonBridge/Settings
+    echo "unique_id=nq-test-roon-id" > /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db
+    chown -R 10000:10000 /fake/opt/glibc-rt/home/roon/.RoonBridge
     ssh-keygen -A -f /fake >/dev/null 2>&1        # -> /fake/etc/ssh/ssh_host_*
     NKEYS=$(ls /fake/etc/ssh/ssh_host_*_key | wc -l)   # 3 on Alpine 3.21's OpenSSH, 4 on the unit's 10.5 (adds mldsa44)
 }
 has_state() {  # what "the unit is itself again" means, as seen at the rootfs paths
     [ -L /fake/home/user/.config/systemd/user/default.target.wants/nexusq-uac2-in.service ] \
     && grep -q hunter2 /fake/etc/NetworkManager/system-connections/wifi.nmconnection 2>/dev/null \
-    && [ -f /fake/var/lib/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF/info ]
+    && [ -f /fake/var/lib/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF/info ] \
+    && grep -q nq-test-roon-id /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db 2>/dev/null
 }
-bind_all() {   # what the three .mount units do
+bind_all() {   # what the four .mount units do
     mount --bind /persist/user-systemd /fake/home/user/.config/systemd \
     && mount --bind /persist/nm-connections /fake/etc/NetworkManager/system-connections \
-    && mount --bind /persist/bluetooth /fake/var/lib/bluetooth
+    && mount --bind /persist/bluetooth /fake/var/lib/bluetooth \
+    && mount --bind /persist/roon /fake/opt/glibc-rt/home/roon/.RoonBridge
 }
 unbind_all() {
-    umount /fake/home/user/.config/systemd /fake/etc/NetworkManager/system-connections /fake/var/lib/bluetooth 2>/dev/null
+    umount /fake/home/user/.config/systemd /fake/etc/NetworkManager/system-connections /fake/var/lib/bluetooth \
+           /fake/opt/glibc-rt/home/roon/.RoonBridge 2>/dev/null
     umount /persist 2>/dev/null
 }
 
@@ -122,6 +130,7 @@ check "toggle symlink seeded" "[ -L /persist/user-systemd/user/default.target.wa
 check "store's user-systemd owned by 10000" "[ \"\$(stat -c %u:%g /persist/user-systemd)\" = 10000:10000 ]"
 check "wifi profile seeded, mode kept" "grep -q hunter2 /persist/nm-connections/wifi.nmconnection && [ \"\$(stat -c %a /persist/nm-connections/wifi.nmconnection)\" = 600 ]"
 check "bluetooth bond seeded" "[ -f /persist/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF/info ]"
+check "Roon identity seeded, store owned by 10000" "grep -q nq-test-roon-id /persist/roon/Database/Registry/registry.db && [ \"\$(stat -c %u:%g /persist/roon)\" = 10000:10000 ]"
 check "ssh host keys seeded ($NKEYS)" "[ \"\$(ls /persist/ssh/ssh_host_*_key | wc -l)\" = $NKEYS ]"
 check "sshd host-key list rendered with $NKEYS HostKey lines into the store" "[ \"\$(grep -c '^HostKey /persist/ssh/' /fake/run/nexusq/sshd-hostkeys.conf)\" = $NKEYS ]"
 check "hostname seeded" "[ \"\$(cat /persist/identity/hostname)\" = steelhead ]"
@@ -141,16 +150,18 @@ check "no reformat on the flash path" "[ \"\$(blkid -s UUID -o value $IMG)\" = $
 check "hostname put back from the store" "[ \"\$(cat /fake/etc/hostname)\" = steelhead ] && said 'hostname applied'"
 check "ssh keys NOT regenerated: same ed25519 fingerprint" "[ \"\$(ssh-keygen -lf /persist/ssh/ssh_host_ed25519_key.pub | awk '{print \$2}')\" = $fp_before ]"
 check "mountpoints created on the fresh rootfs, user-owned" "[ -d /fake/home/user/.config/systemd ] && [ \"\$(stat -c %u /fake/home/user/.config/systemd)\" = 10000 ]"
+check "Roon mountpoint created on the fresh rootfs (RoonBridge has not run yet), user-owned" "[ -d /fake/opt/glibc-rt/home/roon/.RoonBridge ] && [ \"\$(stat -c %u /fake/opt/glibc-rt/home/roon/.RoonBridge)\" = 10000 ]"
 bind_all; rc=$?
 check "bind mounts succeed (rc=$rc)" "[ $rc -eq 0 ]"
-check "USB Audio toggle, WiFi profile and BT bond are back at the rootfs paths" "has_state"
+check "USB Audio toggle, WiFi profile, BT bond and Roon identity are back at the rootfs paths" "has_state"
 run nq-persist status
-check "status reports the three bind mounts as MOUNTED" "[ \"\$(grep -c MOUNTED $OUT)\" = 3 ]"
+check "status reports the four bind mounts as MOUNTED" "[ \"\$(grep -c MOUNTED $OUT)\" = 4 ]"
 unbind_all
 
 echo "=== 3b. seen failing: the same flash WITHOUT the store loses the state ==="
 fresh_rootfs steelhead-fresh
 check "no store -> USB Audio toggle gone after the flash" "! has_state && [ \"\$(cat /fake/etc/hostname)\" = steelhead-fresh ]"
+check "no store -> Roon identity gone after the flash (a new device to the Roon core)" "[ ! -e /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db ]"
 
 echo "=== 4. parked writes: made under the unmounted mountpoint, merged, never clobbering ==="
 fresh_rootfs steelhead

@@ -114,6 +114,19 @@ What could not be a bind mount, and why:
   unit's own networks and is safe to bind-mount. `nmcli c up eth-direct` is
   unchanged.
 
+**Added in r108 (2026-09-24): RoonBridge's state.**
+`/opt/glibc-rt/home/roon/.RoonBridge` holds `Database/Registry`, the identity
+the Roon core knows the unit by, and `Settings`, its zone setup. It lived on
+the rootfs, so every flash turned the Q into a *new* device in Roon, to be
+enabled and set up again next to a stale "not found" one. The Prague unit's
+directory was dated 21-09 23:26, minutes after that evening's flash. It is now
+a fourth bind mount, `opt-glibc\x2drt-home-roon-.RoonBridge.mount`. The Roon
+sandbox (`bwrap --bind /opt/glibc-rt /`) binds recursively, so RoonBridge sees
+the store's copy as its `$HOME/.RoonBridge`. The first `apply` after the
+upgrade seeds it from the rootfs, before the user manager starts RoonBridge.
+The audit that found it also cleared librespot, which runs with
+`--disable-credential-cache` and so has nothing per-unit to keep.
+
 Deliberately **not** in the store: `machine-id` (PID 1 reads it before any
 mount), PulseAudio's saved volumes (a flash resetting the amp to the safe
 default is a feature), `authorized_keys` and `mqtt.json` (fleet values, baked

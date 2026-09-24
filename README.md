@@ -144,7 +144,8 @@ fastboot flash boot      nexusq-boot-v*.img
 fastboot -S 100M flash userdata nexusq-rootfs-v*-sparse.img   # -S chunking is REQUIRED
 
 # 4. Power-cycle without touching the dome. Tux → kernel → desktop.
-#    (r103+: the unit's toggles, name, WiFi, BT bonds and ssh keys survive a flash —
+#    (r103+: the unit's toggles, name, WiFi, BT bonds and ssh keys survive a flash,
+#     r108+: its Roon identity too —
 #     they live on the `cache` partition, see `nq-persist status`.)
 ```
 

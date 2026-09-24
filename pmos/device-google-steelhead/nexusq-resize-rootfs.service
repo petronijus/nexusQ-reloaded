@@ -1,5 +1,5 @@
-# Grow the root ext4 to fill its 14 GB partition, once, after a flash.
-# See /usr/bin/nexusq-resize-rootfs for why (flashed fs is ~2 GB in a 14 GB part).
+# Grow the root ext4 to fill its partition (whichever A/B slot / is on), once,
+# after a flash. See /usr/bin/nexusq-resize-rootfs for why.
 [Unit]
 Description=Grow root filesystem to fill its partition (once, post-flash)
 DefaultDependencies=no

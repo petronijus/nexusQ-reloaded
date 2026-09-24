@@ -45,6 +45,71 @@ what Spotify, AirPlay or Roon at 48 kHz need.
 Full story, measurements, and how to read firmware iovars through the nl80211
 vendor DCMD: `docs/2026-09-23-wifi-unicast-wedge-firmware.md`.
 
+### Known issues (found by the full diag after the slot-B deploy, 2026-09-24)
+
+- **healthd's `dmesg_err` never starts at 0.** `line_is_error()` in
+  `nq-healthd.c` matches `oops` and `panic` as plain substrings, so the kernel
+  command line (`ramoops.*`, `panic=30`) and the four `ramoops:` /
+  `pstore: Registered ramoops` lines count as errors on every clean boot
+  (baseline 5). `dmesg_err_new` stays 0, so no alert fires. The raw count,
+  though, is also published to MQTT/HA, where it overstates the errors.
+- **nq-health-report calls any pstore file a "crash dump",** including the
+  100-byte `console-ramoops-0` that a clean reboot leaves
+  (`watchdog did not stop!` / `reboot: Restarting system`). A crash is a
+  `dmesg-ramoops-*` record; the report, and healthd's `pstore` count behind it,
+  should key on that.
+
+### Added — a built rootfs image goes into the inactive slot without fastboot
+
+`scripts/deploy-rootfs-slot.sh [--try] [--reboot] <raw image>` fills the gap
+`nq-rootfs-ab populate` (running rootfs only) left. It writes the image to the
+slot that is not running, over ssh, then:
+
+- verifies the read-back sha256;
+- requires a clean `e2fsck -fp`;
+- keeps the slot's own label and UUID and fixes its fstab;
+- optionally trial-boots the slot and waits for the unit's health gate to
+  commit it.
+
+First run: the r109 fresh build went into slot B and was committed, with the
+unit's state (including the Roon identity) intact. Details in
+`docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md`.
+
+### Fixed — the first-boot rootfs grow works in slot B (device **r109**)
+
+`nexusq-resize-rootfs` still had `ROOT_DEV=/dev/mmcblk0p13` from before the A/B
+split. A rootfs booted from slot B (p14) would have checked slot A's
+filesystem, found it already full, set its once-only flag, and stayed at its
+~3 GB image size in a 6.6 GB slot for good. It now asks the running system: the
+major:minor of `/` (`mountpoint -d /`) through `/sys/dev/block`. Found while
+preparing the first built image for slot B, before it was deployed.
+`tests/test_resize_rootfs_root_dev.sh` runs against a fake sysfs laid out like
+the unit's (extended `259:N` dev_t): p13, p14 with its own size, and an unknown
+device as an error rather than a fallback to p13. A hard-coded slot-A mutant
+fails it.
+
+### Fixed — a flash no longer makes the Q a new device in Roon (device **r108**)
+
+RoonBridge's state (`/opt/glibc-rt/home/roon/.RoonBridge`) lived on the
+rootfs:
+
+- `Database/Registry` is the identity the Roon core knows the unit by;
+- `Settings` holds its zone setup.
+
+So every flash turned the Q into a new Roon device, to be enabled and set up
+again. It is now the persist store's fourth bind mount
+(`opt-glibc\x2drt-home-roon-.RoonBridge.mount`). The first `apply` after the
+upgrade seeds it from the rootfs. The Roon sandbox binds `/opt/glibc-rt`
+recursively, so RoonBridge sees the store's copy.
+
+This came out of auditing what a fresh image would lose before deploying
+one. The rest of the unit state was already covered, and librespot keeps no
+credentials (`--disable-credential-cache`).
+
+`tests/test_persist.sh` covers Roon now: seeding, ownership, the mountpoint on
+a virgin rootfs, the state back after a flash, and a flash without the store
+losing it. 51 pass, and removing the map entry turns 5 of them red.
+
 ### Changed — WiFi watchdog repairs show up in Home Assistant (device **r107**, nexusq-mqtt **r7**)
 
 The watchdog's heals were built for the wedge above. A repair it still has to

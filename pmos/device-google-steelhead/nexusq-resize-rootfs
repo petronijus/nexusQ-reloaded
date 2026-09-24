@@ -1,8 +1,8 @@
 #!/bin/sh
 # Grow the root ext4 to fill its partition — once, after a flash.
 #
-# The flashed rootfs image is ~2.1 GB, but it is written to mmcblk0p13, a
-# 14.1 GB partition on the 15.8 GB eMMC. ext4 does NOT grow into the partition on
+# The flashed rootfs image is ~3 GB, but it is written to a 6.6 GB rootfs
+# slot (p13 or p14 since the A/B split, 2026-08-20). ext4 does NOT grow into the partition on
 # its own, so a fresh flash boots with the fs pinned at ~2 GB and only tens of MB
 # free — dangerously tight for any apk op, and far too small for the glibc chroot
 # the Roon/Tidal services need. resize2fs grows a MOUNTED ext4 online, so this is
@@ -13,13 +13,31 @@
 # no harm.
 set -e
 
-ROOT_DEV=/dev/mmcblk0p13
 FLAG=/var/lib/nexusq/.rootfs-resized
+
+# TESTABLE:root_device
+# root_device <major:minor of /> [sysfs root]: prints "<device node> <partition
+# bytes>" for the partition the running root lives on. Since the A/B split the
+# root is p13 OR p14, whichever the initramfs mounted, so it is asked, never
+# assumed: the old hard-coded p13 made a rootfs booted from slot B check slot
+# A's filesystem, find it full, set the flag -- and leave slot B at its image
+# size for good (found 2026-09-24, before the first image was deployed to B).
+root_device() {
+	_sys="${2:-/sys}/dev/block/$1"
+	[ -e "$_sys/size" ] || return 1
+	_name=$(basename "$(readlink -f "$_sys")")
+	echo "/dev/$_name $(( $(cat "$_sys/size") * 512 ))"
+}
 
 mkdir -p /var/lib/nexusq
 
 # Partition size (512-byte sectors -> bytes) vs current fs size (blocks * bs).
-part_bytes=$(( $(cat /sys/class/block/mmcblk0p13/size) * 512 ))
+set -- $(root_device "$(mountpoint -d /)") || {
+	echo "nexusq-resize-rootfs: cannot tell which partition / is on" >&2
+	exit 1
+}
+ROOT_DEV=$1
+part_bytes=$2
 bs=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block size/{gsub(/ /,"",$2);print $2}')
 fs_blocks=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block count/{gsub(/ /,"",$2);print $2}')
 fs_bytes=$(( bs * fs_blocks ))
