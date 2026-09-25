@@ -50,6 +50,23 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > the **rootfs**, so a flash wipes the crash history — it belongs in the per-unit
 > persist store next to the ssh host keys and BT bonds.
 
+> ## ✅ SHIPPED (2026-09-26, v1.19.0 — kernel 6.18.48-r17 · device r109 · firmware r3 · nexusqd r21 · nexusq-mqtt r7) — both cores asleep, and the WiFi that stopped dropping
+>
+> Stock's C-state table on by default (C2 = both CPUs OFF, C3 = MPU/CORE
+> retention; 86 % of idle in C3 over an 8 h soak, 0 XRUNs in an hour of
+> playback), and stock's own BCM4330 WiFi firmware in place of the linux-firmware
+> blob that stopped delivering unicast. Cut on the MacBook (full build 69 min, of
+> which the kernel 56 min on a host deep in swap). Cutting it found that
+> `firmware-google-steelhead` had never been in the OTA set, so the firmware fix
+> would have reached flashes only — now listed. Boot image **6 723 584 B** → U-Boot
+> headroom **90 KiB**. → CHANGELOG [1.19.0] ·
+> `docs/2026-09-20-sleep-states-design.md` ·
+> `docs/2026-09-23-wifi-unicast-wedge-firmware.md`
+> ⚠️ Open (forward-looking): librespot 0.8.0's re-auth loop after a dealer reset;
+> `nq-kernel-ota reconcile` cannot fall back to a staged local apk; healthd's
+> `dmesg_err` baseline of 5 and the "crash dump" label on a clean reboot's
+> console record (CHANGELOG [1.19.0] Known issues).
+
 > ## ✅ SHIPPED (2026-09-20, v1.18.0 — device r104 · nexusq-control r48 · app 1.22.0+60) — HDMI audio: the output that was never offered
 >
 > GitHub issue #5. The hardware path had always worked; the app could never show
@@ -166,7 +183,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > slot in 48 s with zero dmesg errors and stock VDD_MPU voltages. Everything is
 > now cross-compiled — a full build **4080 s → 399 s**.
 > ⚠️ Still open, and forward-looking: **the boot image grew ~200 KB** (staged
-> 6 709 248 B; 6 719 488 B in v1.16.0 → 94 KB; **6 721 536 B in v1.17.0 → 92 KB**), leaving ever less U-Boot headroom — the next LTS bump
+> 6 709 248 B; 6 719 488 B in v1.16.0 → 94 KB; 6 721 536 B in v1.17.0 → 92 KB; **6 723 584 B in v1.19.0 → 90 KB**), leaving ever less U-Boot headroom — the next LTS bump
 > (due ~Nov/Dec 2026) has to be measured against that ceiling before it is
 > planned. Ethernet from cold, HDMI, fastboot-over-ssh (0044) and USB-host
 > re-probe are **unverified on 6.18**, and the kernel-OTA rollback fix was seen

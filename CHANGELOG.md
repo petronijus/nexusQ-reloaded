@@ -6,6 +6,32 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-09-26 — both cores asleep, and the WiFi that stopped dropping
+
+Kernel **6.18.48-r17** (patches 0047–0058), device **r109**, WiFi/BT firmware
+**r3**, `nexusqd` **r21**, `nexusq-mqtt` **r7**; `nexusq-control` r48,
+`nexusq-setupd` r5, `nexusq-kernel-ota` r7, `nexusq-btagent` r5 and
+`nexusq-rootfs-ab` r1 unchanged from v1.18.0. Released 2026-09-26 with
+`nexusq-boot-v1.19.0.img` (6.41 MiB) + `nexusq-rootfs-v1.19.0-sparse.img.zst`
+(674 MiB), cut on the MacBook.
+
+The Q idles the way stock did: both CPUs power off in C2/C3 (86 % of idle time
+in C3 overnight, 54 % while playing Spotify), with nothing lost on the way —
+WiFi interrupts, Bluetooth, audio QoS. And it runs stock's own BCM4330 WiFi
+firmware, which ends the unicast wedge behind months of "offline" in Home
+Assistant. **Coming from v1.18.0 flash BOTH `boot` and `userdata`** (the kernel
+changed), or take it over the air: the app's system update for the packages,
+then `nq-kernel-ota` for the kernel.
+
+### Fixed — the WiFi firmware fix actually reaches boxes in the field (OTA set)
+
+`firmware-google-steelhead` was never in `pmos/ota-packages.list`.
+`device-google-steelhead-nonfree-firmware` only *depends* on it, and a box that
+has any version installed satisfies that, so apk would never have offered r3 —
+the stock-firmware fix below would have reached only a freshly flashed Q, with
+every UI reporting "up to date". Found while cutting this release; the package is
+in the OTA set now, and the parity gate checks it like the rest.
+
 ### Changed — the deep C-states are on by default, as on stock (kernel **6.18.48-r17**)
 
 Patch 0058 registers C2 and C3 enabled; 0024 had registered them with
