@@ -8,7 +8,38 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Šumperák Q — 2026-09-19: take device r103 + `nexusq-control` r46 + `nexusq-setupd` r5 (the persist store)
+## Šumperák Q — 2026-09-26: brought to v1.19.0 — ✅ done
+
+Done at the cottage from the MacBook, on the cottage LAN, right after v1.19.0
+was published (gh-pages `1c18c2e`). This supersedes the 2026-09-19 section
+below — r103's persist store came along in the same upgrade.
+
+- `apk upgrade --available --ignore linux-google-steelhead`: device r102 →
+  **r109**, firmware r2 → **r3**, `nexusqd` r20 → r21, `nexusq-control` r45 →
+  r48, `nexusq-setupd` r4 → r5, `nexusq-mqtt` r6 → r7, plus 110-odd Alpine edge
+  packages. The r103 `.pre-upgrade` moved `device.json` under the persist
+  mountpoint as designed.
+- Reboot → `nq-persist status`: store created and mounted, all **four** bind
+  mounts MOUNTED (user-systemd, nm-connections 4 entries, bluetooth 9, roon),
+  4 ssh host keys rendered, no site NTP (correct for the cottage). Hostname,
+  `device.json` (Šumperák / chalupa), all four ssh fingerprints, WiFi profiles
+  and the BT bond are unchanged against the pre-upgrade capture.
+- `nq-kernel-ota stage-latest` (identity carried: wifi `05:1f:11`, bt
+  `73:ac:9c`) → `try` → back in 53 s → **healthy after 10 s, promoted**;
+  reconcile left apk on `linux-google-steelhead-6.18.48-r17` without help,
+  because the kernel came from the published repo this time.
+- On r17: WiFi firmware `5.90.125 (TOB)` (stock), C2/C3 enabled and entered on
+  both CPUs, `dmesg -l err,warn` = the four known initramfs/GPT lines, no failed
+  units, MQTT connected, gateway `192.168.50.1` 0 % loss.
+- Captures: `nq-captures/sumperak-v1.19.0/` (before / after-reboot / kota-* / final).
+
+⚠️ Noticed, not changed: the cottage Q still carries Prague's
+`wifi-svatovitske-internety-5g.nmconnection` (and two `.bak` copies of its own
+profile), now inside the persist store. That profile holds the Prague PSK that
+the open p1 Todoist task says to rotate — once it is rotated, this copy is
+stale; delete it (via the trash) the next time anyone is on this box.
+
+## Šumperák Q — 2026-09-19: take device r103 + `nexusq-control` r46 + `nexusq-setupd` r5 (the persist store) — ✅ done 2026-09-26 (see above)
 
 Published from the desktop (gh-pages `aacc4ae`, secrets gate 11/11 clean) and
 running on the Prague Q. The cottage Q was **not reachable from Prague**: the
