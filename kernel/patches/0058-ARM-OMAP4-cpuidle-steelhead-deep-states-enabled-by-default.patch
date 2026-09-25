@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000058 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Fri, 25 Sep 2026 16:30:00 +0200
+Subject: [PATCH] ARM: OMAP4: cpuidle: steelhead's C2/C3 enabled by default, as on stock
+
+Patch 0024 registered C2 and C3 with CPUIDLE_FLAG_OFF, so the states
+existed and had counters but the governor never picked them until they
+were armed by hand through sysfs. That was the right default while
+every attempt hung:
+- r5 and r6 armed them at boot and hung;
+- r7-r11 hung whenever CPU0 went OFF on a running box.
+
+Those hangs are understood and fixed in this series:
+- 0050: CPU1's A9 errata bits through PPA 0x25, which the resume needed;
+- 0051: hci_bcm releases the BT UART while idle, so the 170 us QoS stops
+  vetoing C2/C3;
+- 0052/0053: a pending level GPIO interrupt vetoes the entry and wakes
+  CPU1, so no WiFi interrupt is lost;
+- 0054-0057: stock's table, targets and PM setup.
+
+With all of that in, both states were armed for an 8 h overnight soak
+(2026-09-24): 3.67 M C3 entries per CPU, 86 % of idle time in C3, no hang,
+no watchdog reset, no WiFi repair. Then for an hour of Spotify playback
+(2026-09-25): 0 XRUNs, 0 underruns, 54 % of the time in C3 while playing.
+Audio's own CPU-latency request (1312 us) sits above both exit latencies,
+so playback does not veto them.
+
+So register them enabled, as stock does. The first deep entries now
+happen at boot again, before hci_bcm is up, which is where r5/r6 hung.
+Those hangs are attributed to the missing CPU1 errata bits (0050); the
+first r17 boot is the check, and it goes through the kernel-OTA trial
+slot, so a hang costs a power cycle, not a reflash.
+
+`echo 1 > .../cpuidle/state{1,2}/disable` still takes a state out at
+runtime.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/mach-omap2/cpuidle44xx.c b/arch/arm/mach-omap2/cpuidle44xx.c
+index 4e5775e44..bd5a33b35 100644
+--- a/arch/arm/mach-omap2/cpuidle44xx.c
++++ b/arch/arm/mach-omap2/cpuidle44xx.c
+@@ -113,8 +113,8 @@ static struct idle_statedata omap5_idle_data[] = {
+  * default). Reproduce them, so the entry path can be taken apart step by step
+  * on a booted box.
+  *
+- * Arming a state needs no knob here: CPUIDLE_FLAG_OFF (patch 0024) sets the
+- * USER disable bit, so the per-CPU sysfs `disable` file is the switch.
++ * Disarming a state needs no knob here either: the per-CPU sysfs `disable`
++ * file sets the USER disable bit, which the governor honours.
+  *
+  * keep_mpu_on / keep_core_on must PROGRAM the domain ON, not merely leave it
+  * alone: mainline's pwrdms_setup() (pm44xx.c) arms mpu_pwrdm and core_pwrdm for
+@@ -124,8 +124,8 @@ static struct idle_statedata omap5_idle_data[] = {
+  * pwrdms_setup (0xc0012d04) left both ON, which is why its knobs could be
+  * "skip programming" and still mean "stays ON".
+  *
+- * Every knob defaults to its no-op value, so an untouched boot behaves exactly
+- * as before: C1 only, C2 and C3 registered but disabled.
++ * Every knob defaults to its no-op value, so an untouched boot runs stock's
++ * table unmodified: C1, C2 and C3 all selectable.
+  */
+ static bool skip_cpu1_wait;	/* skip the wait for CPU1 to reach OFF */
+ static bool keep_mpu_on;	/* hold mpu_pwrdm ON  (stock: keep_mpu_on) */
+@@ -477,39 +477,29 @@ int __init omap4_idle_init(void)
+ 		return -ENODEV;
+ 
+ 	/*
+-	 * steelhead (HS OMAP4460): C2 and C3 drive MPUSS power transitions that
+-	 * trap into the HS secure monitor. The historical failure was a CPU1
+-	 * cpuidle panic with SMP online - stock 3.0.8 guarded the same paths
+-	 * with its cpuidle44xx.disallow_smp_idle parameter - so for a long time
+-	 * this truncated the driver to C1 (state_count = 1) and the deep states
+-	 * did not exist at all.
++	 * steelhead (HS OMAP4460): C2 and C3 are ENABLED from registration, as
++	 * on stock. They drive MPUSS power transitions that trap into the HS
++	 * secure monitor, and for most of this port's life they were either
++	 * truncated away (state_count = 1) or registered with CPUIDLE_FLAG_OFF
++	 * (patch 0024), because every early attempt hung: a boot with them
++	 * armed (r5, r6) and CPU0 going OFF on a running box (r7-r11).
+ 	 *
+-	 * Register them DISABLED instead. CPUIDLE_FLAG_OFF leaves a state
+-	 * visible in sysfs with disable=1, so the governor never selects it and
+-	 * a boot is exactly as safe as C1-only, while
++	 * What made them safe, each found on the unit and each in this series:
++	 *   0050  CPU1's A9 errata bits (PPA 0x25) -- the resume that hung;
++	 *   0051  hci_bcm releases the BT UART while idle, so its 170 us
++	 *         CPU-latency QoS no longer vetoes C2/C3;
++	 *   0052/0053  a pending level GPIO interrupt vetoes the entry, and
++	 *         CPU1 is woken on veto, so WiFi interrupts are not lost;
++	 *   0054-0057  stock's C-state table, MPU/CORE targets and PM setup.
++	 * Then: an 8 h overnight soak with both armed (2026-09-24, 3.67 M C3
++	 * entries per CPU, no hang, no WiFi repair) and an hour of playback
++	 * (2026-09-25, 0 XRUNs, 54 % of the time in C3 while playing).
+ 	 *
+-	 *   echo 0 > /sys/devices/system/cpu/cpu0/cpuidle/state1/disable
+-	 *
+-	 * (and the same for cpu1) arms one for a measured experiment.
+-	 * CPUIDLE_FLAG_OFF sets the USER disable bit (drivers/cpuidle/cpuidle.c),
+-	 * so that sysfs file is exactly the switch. If the experiment wedges the
+-	 * box, a reboot restores the safe default; nothing has to be reflashed.
+-	 * Registering the states also makes their residency counters exist.
+-	 *
+-	 * Arming at BOOT was tried twice (r5, r6) and hung the board before the
+-	 * display came up. A running box needs two more things before the
+-	 * governor can pick C2 at all: the Bluetooth UART must be released (while
+-	 * hci_uart holds it, 8250_omap keeps a 170 us CPU-latency QoS request at
+-	 * 3 Mbaud, below C2's 768 us exit latency), and the escape hatches of
+-	 * patch 0048 decide how much of the entry path runs. See
+-	 * docs/2026-09-20-sleep-states-design.md sections 4m and 4n.
++	 * `echo 1 > /sys/devices/system/cpu/cpu[01]/cpuidle/state{1,2}/disable`
++	 * still takes a state out by hand, at runtime.
++	 * docs/2026-09-20-sleep-states-design.md has the whole story.
+ 	 */
+ 	if (of_machine_is_compatible("google,steelhead")) {
+-		int i;
+-
+-		for (i = 1; i < idle_driver->state_count; i++)
+-			idle_driver->states[i].flags |= CPUIDLE_FLAG_OFF;
+-
+ 		/* stock's table and numbers, see steelhead_idle_data */
+ 		core_pd = pwrdm_lookup("core_pwrdm");
+ 		if (!core_pd)

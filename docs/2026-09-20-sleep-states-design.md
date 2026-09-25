@@ -1811,6 +1811,63 @@ What this shows:
 A meter with ≥0.1 W resolution is still needed, both to size it and to measure
 the stock target.
 
+## Where this stands (2026-09-25) — C2/C3 on by default (kernel r17)
+
+The two gates the 09-23 section left open are closed. The states are now
+registered enabled, as on stock (patch 0058).
+
+**Overnight soak, 2026-09-24 01:10–09:13.** Setup:
+- fresh rootfs r109, stock WiFi firmware;
+- `DEEP=2 KEEP_BT=1 nq-deep-idle-ladder.sh 0 0 0 28800 0 0`, i.e. stock
+  policy with every knob off and the hardware watchdog armed at 30 s.
+
+Result:
+- no hang, no warm reset, nothing in pstore;
+- per CPU, 3.67 M C3 entries and 120 k C2 entries;
+- idle split C1 12 %, C2 2 %, **C3 86 %**;
+- the WiFi watchdog logged 81 checks, all ok, with 0 loss, 0 repairs and
+  0 escan timeouts.
+
+The die median was 48.9 °C, against 51.8 °C the previous evening with C1
+only. That comparison is confounded by time of day; the wall-socket
+measurement is still open.
+
+**An hour of Spotify playback, 2026-09-25 15:04–16:04.** Same ladder, 3600 s,
+~20 track loads:
+- 0 XRUNs, 0 PulseAudio underruns, 0 kernel errors, 0 WiFi repairs;
+- 54 % of the wall time in C3 *while playing*.
+
+Playback's own CPU-latency request is 1312 µs, above both exit latencies
+(1100/1200), so audio does not veto the deep states. A short veto does
+happen while the BT UART streams. `nq-health-report` now warns only when the
+veto holds for ≥ 90 % of samples; anything less is info.
+
+**The boot.** r5 and r6 hung when the states were armed from boot. r17 does
+exactly that and came up in the kernel-OTA trial slot, with 2289 C3 entries in
+its first minute, and was promoted by the health gate. That confirms the r5/r6
+hangs as the CPU1 errata problem patch 0050 fixed.
+
+**Full sweep on r17** (nq-captures/20260925-163622):
+- this boot's idle split: C1 30 %, C2 3 %, C3 67 %; `cstate_armed="C2,C3"` in
+  every sample;
+- `vdd_mismatch` 0 in all 2180 samples, VDD and ABB exact at every OPP,
+  1.2 GHz reached;
+- `mpu_pwrdm` RET 98 542 and INA 5 034; `core_pwrdm` never left ON, which is
+  the stock-parity decision of §4u;
+- WiFi 30/30 with 0 repairs; BT, NFC, LED, MQTT and every audio service up;
+  `dmesg -l err,warn` empty.
+
+Watch item: the boot-storm peak was 97.2 °C, against 91.8 °C on the r16 boot.
+That is 50 s at 1200 MHz with load ~4, so deep idle is not in play, and it
+stays under the 100 °C passive trip. Steady idle ran 60–64 °C while polled.
+
+**Not settled, and not attributed to C2/C3.** A Spotify Connect dealer-websocket
+reset left librespot 0.8.0 in a 7-second re-authentication loop at 15:28
+(C2/C3 armed); music stopped until librespot was restarted. The same reset at
+12:36 with C2/C3 off recovered on its own. Upstream knows the failure class
+(librespot #1419; open PRs #1692, #1716). It is tracked there and in CHANGELOG
+Known issues, not here.
+
 ## Where this stands (end of 2026-09-23) — R2 functionally DONE
 
 **C2 and C3 work on stock's own table, kernel 6.18.48-r16.** Both cores go OFF,

@@ -6,6 +6,48 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — the deep C-states are on by default, as on stock (kernel **6.18.48-r17**)
+
+Patch 0058 registers C2 and C3 enabled; 0024 had registered them with
+`CPUIDLE_FLAG_OFF` while every attempt hung. They were cleared by:
+
+- an 8 h overnight soak with both armed: no hang, 86 % of idle time in C3,
+  3.67 M C3 entries per CPU, 0 WiFi repairs;
+- an hour of Spotify playback: 0 XRUNs, 0 underruns, 54 % of the time in C3
+  while playing. Audio's own 1312 µs QoS request sits above both exit
+  latencies.
+
+The first r17 boot is exactly what r5/r6 hung on, the states armed from boot.
+It came up in the kernel-OTA trial slot, with 2289 C3 entries in its first
+minute, and was promoted by the health gate.
+
+- `nq-deep-idle-ladder.sh` puts back the disable bits it found, instead of
+  forcing 1 at the end of a run.
+- `nq-health-report`: a veto in ≥ 90 % of samples is the warning
+  `cstate_vetoed`; less is the info `cstate_vetoed_transient`. With the states
+  armed on every boot, a short veto (BT streaming) is ordinary.
+  `scripts/diag/tests/test_health_report_cstate.py` (5 tests) fails 2 against
+  the old logic.
+
+### Known issues (2026-09-25)
+
+- **librespot 0.8.0 can wedge in a re-authentication loop after a Spotify
+  dealer-websocket reset.** Seen at 15:28: `Connecting to AP` → `Authenticated`
+  → `Wasn't able to reply to dealer request: channel closed` every ~7 s, with
+  another device active and "context is not available". Music stopped until
+  `librespot.service` was restarted. The same reset at 12:36 recovered on its
+  own. The failure class is known upstream: #1419, with open fixes #1692 (large,
+  unreviewed, does not apply to 0.8.0) and #1716 (one line). Next: reproduce
+  with debug logging by dropping the dealer socket, with and without C2/C3,
+  then carry the smallest fix that matches as `librespot 0.8.0-r100`, with a
+  build gate so a newer upstream release still replaces it.
+- **`nq-kernel-ota` cannot reconcile the package database for a kernel staged
+  from a local apk that the OTA repo does not carry yet.** `reconcile` only
+  runs `apk add --upgrade` against the repo. Seen on 2026-09-17 and again with
+  r17, which had to be reconciled by hand (stash the old modules, `apk add` the
+  local file, put them back). The staged apk should be kept and used as the
+  fallback.
+
 ### Fixed — WiFi stops dropping: the Q runs stock's own WiFi firmware (firmware **r3**)
 
 The Q kept going offline on WiFi (Home Assistant "offline", Spotify skips, the

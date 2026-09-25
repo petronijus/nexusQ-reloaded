@@ -7,9 +7,11 @@
 #   * the Bluetooth UART is released -- while hci_uart_bcm holds it open,
 #     8250_omap pins a 170 us CPU-latency QoS request (3 Mbaud) and menu/teo can
 #     never pick C2 (768 us exit) or C3 (978 us);
-#   * the per-state sysfs `disable` is 0 on both CPUs -- CPUIDLE_FLAG_OFF sets the
-#     USER bit, so that file is the real switch (0048 rev 1's deep_idle knob
-#     toggled the DRIVER bit instead; it is gone in r8).
+#   * the per-state sysfs `disable` is 0 on both CPUs -- it is the USER disable
+#     bit, so that file is the real switch (0048 rev 1's deep_idle knob toggled
+#     the DRIVER bit instead; it is gone in r8). Up to kernel r16 the states
+#     were registered with CPUIDLE_FLAG_OFF (disable=1); since r17 (patch 0058)
+#     they boot enabled, and this script puts back whatever it found.
 #
 # A hang is expected on some rungs. The hardware watchdog (omap_wdt WDT2) is
 # armed through systemd for the duration, non-persistently: a hang becomes a warm
@@ -131,11 +133,15 @@ if [ "$(zcat /proc/config.gz 2>/dev/null | grep -c '^CONFIG_OMAP4_IDLE_BREADCRUM
 	crumbs clear; echo "breadcrumbs cleared"
 fi
 echo "ARM at $(date +%T)"
-for s in $ARM; do [ -d "$s" ] && echo 0 > $s/disable; done
+# Remember each state's disable bit and put it back afterwards, rather than
+# forcing 1: since kernel r17 (patch 0058) C2/C3 are ENABLED by default, and a
+# run that ended by disabling them would leave the unit on C1 until the next boot.
+PRIOR=""
+for s in $ARM; do [ -d "$s" ] && PRIOR="$PRIOR $s=$(cat $s/disable)" && echo 0 > $s/disable; done
 i=0
 while [ $i -lt "$SECS" ]; do sleep 10; i=$((i + 10)); echo "t+$i"; c2; done
 
-for s in $ARM; do [ -d "$s" ] && echo 1 > $s/disable; done
+for p in $PRIOR; do echo "${p#*=}" > "${p%=*}/disable"; done
 echo "DISARMED at $(date +%T)"
 zcat /proc/config.gz 2>/dev/null | grep -q '^CONFIG_OMAP4_IDLE_BREADCRUMBS=y' && crumbs read
 grep -E '^(mpu|core|cpu0|cpu1)_pwrdm' /sys/kernel/debug/pm_debug/count
@@ -147,4 +153,4 @@ echo 0 > $P/skip_cpu1_wait; echo 0 > $P/keep_mpu_on; echo 0 > $P/skip_lowpower
 dmesg -n 4
 busctl set-property org.freedesktop.systemd1 /org/freedesktop/systemd1 \
 	org.freedesktop.systemd1.Manager RuntimeWatchdogUSec t 0
-echo "restored: qos=$(qos) us, watchdog off, knobs off"
+echo "restored: qos=$(qos) us, watchdog off, knobs off, C-state disable bits as found"

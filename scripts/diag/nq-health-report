@@ -228,13 +228,27 @@ def analyze(rows, events, snap_text):
             lat = [exit_lat_us[s] for s in armed if s in exit_lat_us]
             if lat and isinstance(q, int) and 0 <= q < min(lat):
                 vetoed.append(r)
+        # Since kernel r17 the states are armed on every boot, so a SHORT veto is
+        # ordinary: an active Bluetooth UART pins 170 us while it streams, and the
+        # deep states wait it out. What must never hide again is the veto that
+        # never lets go -- that is how C2 not running at all went unseen for weeks.
+        # So: persistent (>= VETO_PERSISTENT of the samples) is a warn, anything
+        # less an info that still says how much of the window was vetoed.
+        VETO_PERSISTENT = 0.9
         if vetoed:
             ex = vetoed[0]
-            add("warn", "cstate_vetoed",
-                f"deep C-states armed but CPU-latency QoS below their exit latency in "
-                f"{len(vetoed)}/{len(cst_rows)} sample(s) (e.g. qos {ex.get('qos_us')} us, "
-                f"armed {ex.get('cstate_armed')}) — the governor cannot pick them; look for "
-                f"a held-open device (BT UART, ALSA with a tiny period)", ex.get("t_mono"))
+            frac = len(vetoed) / len(cst_rows)
+            detail = (f"CPU-latency QoS below the armed states' exit latency in "
+                      f"{len(vetoed)}/{len(cst_rows)} sample(s) (e.g. qos {ex.get('qos_us')} us, "
+                      f"armed {ex.get('cstate_armed')})")
+            if frac >= VETO_PERSISTENT:
+                add("warn", "cstate_vetoed",
+                    detail + " — the governor can (almost) never pick them; look for a "
+                    "held-open device (BT UART, ALSA with a tiny period)", ex.get("t_mono"))
+            else:
+                add("info", "cstate_vetoed_transient",
+                    detail + " — transient (e.g. Bluetooth streaming), deep idle resumes after",
+                    ex.get("t_mono"))
 
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):

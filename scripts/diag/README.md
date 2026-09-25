@@ -72,15 +72,19 @@ appended to the sample (earlier fields unchanged):
   name, both CPUs summed, differenced from
   `…/cpuN/cpuidle/stateM/{time,usage}`. They read `{}` on the first sample or a
   counter reset, like `opp_ms`.
-- `cstate_armed`: the deep states whose per-state `disable` is 0 on cpu0. It is
-  empty by default, because C2/C3 are registered disabled.
+- `cstate_armed`: the deep states whose per-state `disable` is 0 on cpu0. Since
+  kernel r17 it reads `C2,C3` on every boot (patch 0058); up to r16 it was empty
+  by default, because C2/C3 were registered disabled.
 - `qos_us`: the CPU-latency QoS limit, read from `/dev/cpu_dma_latency`.
 
 `nq-health-report` turns these into an info line, `cstate_residency`, and a
-warning, `cstate_vetoed`. The warning fires when states are armed while
-`qos_us` sits below their exit latency (C2 1100 µs, C3 1200 µs), which means
-the governor cannot pick them. A held-open BT UART did exactly that unnoticed
-(`docs/2026-09-20-sleep-states-design.md` §4m).
+veto verdict. A sample is vetoed when states are armed while `qos_us` sits
+below their exit latency (C2 1100 µs, C3 1200 µs), so the governor cannot pick
+them. A veto in ≥ 90 % of the samples is the warning `cstate_vetoed`: the
+never-lets-go case a held-open BT UART caused unnoticed for weeks
+(`docs/2026-09-20-sleep-states-design.md` §4m). Anything less is the info
+`cstate_vetoed_transient`. With the states armed on every boot, a short veto is
+ordinary, e.g. while Bluetooth streams. Tests: `scripts/diag/tests/`.
 
 **Compute / governor** — `…/cpu0/cpufreq/{scaling_governor,scaling_cur_freq,…}`,
 `nproc`, `/sys/kernel/debug/clk/dpll_mpu_ck/clk_rate`. OPPs: 350/700/920/1200 MHz.
