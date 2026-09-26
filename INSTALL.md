@@ -125,7 +125,7 @@ to boot; since `nexusq-kernel-ota` **r5** (2026-09-05) the flow also carries the
 unit's own WiFi MAC / BT address onto the new kernel — on r3/r4 a kernel OTA on
 any unit but the first renamed it to the first unit's identity, see
 `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md`)*.
-Since the post-v1.11.0 dev line, the Q **updates itself over the air** —
+Since the post-v1.11.0 dev line, the Q **can be updated over the air via the app** —
 no fastboot, no cable — from a **signed apk repo on GitHub Pages**
 (`petronijus.github.io/nexusQ-reloaded/nexusq`, the `gh-pages` branch); the device
 already trusts the `pmos@local` build key baked in `/etc/apk/keys`, so `apk` installs
@@ -318,7 +318,12 @@ the only partitions written, and the unit's own state lives on the `cache`
 partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — and
 `fastboot oem unlock` — never touch. So a reflashed unit comes back with its
 **source toggles, name, WiFi profile, Bluetooth bonds, ssh host keys and site
-NTP server** intact, and the app's toggles do not need re-doing. Its ssh
+NTP server** intact, and the app's toggles do not need re-doing. Since device
+**r116** the app's **LED theme, LED ring switch + schedule, EQ and EQ presets**
+are kept too, and so is the brightness slider with its ambient switch
+(`/etc/nexusq/{theme,ring,eq,eq-presets,brightness}.json` are symlinks into
+the store's `settings/`). The MQTT broker login (`mqtt.json`) is **not** — it
+still has to be re-provisioned from the app after a flash. Its ssh
 fingerprint does not change either: the old "**after any reflash** run
 `ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
 unit that has never run r103, whose keys still live on the rootfs.

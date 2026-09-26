@@ -254,6 +254,40 @@ check "status never prints the password" "! said cottage-secret"
 rm -f /persist/site/mqtt.json; fresh_rootfs steelhead   # an unprovisioned unit
 run nq-persist apply
 check "unprovisioned: no link, no file (nexusq-mqtt stays off)" "[ $rc -eq 0 ] && [ ! -e /fake/etc/nexusq/mqtt.json ] && [ ! -L /fake/etc/nexusq/mqtt.json ]"
+echo "=== 10. r116 pre-upgrade moves plain settings into the store, leaves links alone ==="
+echo '{"theme": "rose"}' > /etc/nexusq/theme.json
+echo '{"on": false}' > /etc/nexusq/ring.json
+echo '{"max": 90, "ambient": true}' > /etc/nexusq/brightness.json
+ln -s /var/lib/nexusq/persist/settings/eq.json /etc/nexusq/eq.json               # already migrated
+sh /pre >/dev/null 2>&1; rc=$?
+check "pre-upgrade exits 0 (rc=$rc)" "[ $rc -eq 0 ]"
+check "theme moved to the link target path" "[ ! -e /etc/nexusq/theme.json ] && grep -q rose /var/lib/nexusq/persist/settings/theme.json"
+check "ring moved to the link target path" "[ ! -e /etc/nexusq/ring.json ] && grep -q false /var/lib/nexusq/persist/settings/ring.json"
+check "brightness moved to the link target path" "[ ! -e /etc/nexusq/brightness.json ] && grep -q ambient /var/lib/nexusq/persist/settings/brightness.json"
+check "an existing link is left alone" "[ -L /etc/nexusq/eq.json ]"
+check "a setting that was never set stays absent" "[ ! -e /var/lib/nexusq/persist/settings/eq-presets.json ]"
+for f in theme.json ring.json eq-presets.json; do                                 # what apk installs next
+    ln -s /var/lib/nexusq/persist/settings/$f /etc/nexusq/$f
+done
+check "the links now serve the old settings" "grep -q rose /etc/nexusq/theme.json && grep -q false /etc/nexusq/ring.json"
+check "a never-set link dangles (reads as default)" "[ -L /etc/nexusq/eq-presets.json ] && [ ! -e /etc/nexusq/eq-presets.json ]"
+
+echo "=== 11. settings parked under the unmounted store are merged, and survive a flash ==="
+umount /persist 2>/dev/null || true
+mkdir -p /persist/settings
+echo '{"theme": "warm"}' > /persist/settings/theme.json       # what r116 pre-upgrade leaves on an r102 unit
+run nq-persist prepare
+check "prepare parks the settings (rc=$rc)" "[ $rc -eq 0 ] && [ -f /fake/run/nexusq/persist-shadow/settings/theme.json ]"
+mount "$IMG" /persist
+run nq-persist apply
+check "apply merges the parked theme (rc=$rc)" "[ $rc -eq 0 ] && grep -q warm /persist/settings/theme.json"
+check "apply makes the settings dir" "[ -d /persist/settings ] && [ \"\$(stat -c %a /persist/settings)\" = 755 ]"
+run nq-persist status
+check "status lists the stored settings" "said 'settings *: .*theme.json'"
+# a flash: rootfs wiped, store kept -- the store still holds the theme
+rm -rf /fake/etc/nexusq
+run nq-persist apply
+check "a flash does not touch the stored theme" "grep -q warm /persist/settings/theme.json"
 umount /persist
 EOF
 )

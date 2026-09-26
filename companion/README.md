@@ -64,7 +64,7 @@ a mouse never connects TO us, so the Q must discover it and call `Pair()`). Plus
 on → the appliance is a computer. ⚠️ **Read `bonded`, never `paired` — `paired`
 alone LIES** (§9.2). Record:
 `../docs/2026-07-15-step2-bt-pairing-implemented.md`.)_
-_(**OTA self-update (post-v1.11.0 dev):** the Settings **Update cluster** has **two
+_(**OTA updates via the app (post-v1.11.0 dev):** the Settings **Update cluster** has **two
 items**. **App update** — the phone app **and** the four device daemons, versioned
 together as the companion system: the app checks a manifest on raw.githubusercontent
 (compares Android `versionCode`, downloads + installs the apk — the manifest

@@ -38,6 +38,11 @@ static void test_ok(void) {
     CHECK(ctl_parse("mblink 255 140 0", &c) == 0 && c.kind == CTL_MBLINK
           && c.value == 1 && c.rgb[0]==255 && c.rgb[1]==140 && c.rgb[2]==0);
     CHECK(ctl_parse("mblink stop", &c) == 0 && c.kind == CTL_MBLINK && c.value == 0);
+    /* dark / attend: the ring-off gate and setup's hold on it */
+    CHECK(ctl_parse("dark 1", &c) == 0 && c.kind == CTL_DARK && c.value == 1);
+    CHECK(ctl_parse("dark 0", &c) == 0 && c.kind == CTL_DARK && c.value == 0);
+    CHECK(ctl_parse("attend 1", &c) == 0 && c.kind == CTL_ATTEND && c.value == 1);
+    CHECK(ctl_parse("attend 0", &c) == 0 && c.kind == CTL_ATTEND && c.value == 0);
 }
 static void test_bad(void) {
     struct ctl_cmd c;
@@ -49,7 +54,9 @@ static void test_bad(void) {
                          "progress", "progress 101", "progress -1", "progress x",
                          "progress 50 10 20", "progress 50 10 20 999",
                          "mblink", "mblink 255 140", "mblink 255 140 999",
-                         "mblink go", "mblink stop now", NULL};
+                         "mblink go", "mblink stop now",
+                         "dark", "dark 2", "dark -1", "dark 01", "dark on", "dark 1 1",
+                         "attend", "attend 2", "attend x", NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }
