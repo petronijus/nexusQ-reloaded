@@ -130,6 +130,19 @@ sh /post; echo \"rc2 \$?\"")
 check "first run exits 0" "$out" "^rc1 0$"
 check "second run exits 0" "$out" "^rc2 0$"
 
+echo "=== 7. the first-boot unit's link: apk's .apk-new replaces the preset's ==="
+# (Kept in this file because it is the same script and the same container.)
+out=$(run_case "
+mkdir -p /etc/systemd/system/sysinit.target.wants
+ln -s /etc/systemd/system/nexusq-resize-rootfs.service /etc/systemd/system/sysinit.target.wants/nexusq-resize-rootfs.service
+ln -s ../nexusq-resize-rootfs.service /etc/systemd/system/sysinit.target.wants/nexusq-resize-rootfs.service.apk-new
+sh /post; echo \"rc \$?\"
+ls /etc/systemd/system/sysinit.target.wants/
+echo \"target \$(readlink /etc/systemd/system/sysinit.target.wants/nexusq-resize-rootfs.service)\"")
+check "exits 0" "$out" "^rc 0$"
+check "no .apk-new left for systemd to trip over" "$(printf '%s' "$out" | grep -c 'apk-new' || true)" "^0$"
+check "the link is the package's" "$out" "^target ../nexusq-resize-rootfs.service$"
+
 echo
 echo "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

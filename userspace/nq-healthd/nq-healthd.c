@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -519,9 +520,26 @@ static void led_frame(const char *attr, long long *sum, long long *hash)
  *     not include them either: carry on from the new oldest record.
  *
  * Scans stay amortized (every NQ_DMESG_EVERY ticks, 30 s by default). */
+/* w appears in l as a word START: at the beginning, or after a non-alphanumeric.
+ * "Oops:" and "Internal error: Oops" match, "ramoops" does not. */
+static int has_word(const char *l, const char *w)
+{
+    size_t n = strlen(w);
+    for (const char *p = l; (p = strcasestr(p, w)) != NULL; p += n)
+        if (p == l || !isalnum((unsigned char)p[-1]))
+            return 1;
+    return 0;
+}
+
 static int line_is_error(const char *l)
 {
-    if (strcasestr(l, "oops") || strcasestr(l, "panic") ||
+    /* The command line is configuration, not an event -- and ours names
+     * ramoops and panic=30. With "ramoops" matching "oops", the five lines that
+     * announce ramoops at boot made dmesg_err read 5 on every clean boot (the
+     * cottage Q, 2026-09-26); Home Assistant plotted a fault that never was. */
+    if (strncasecmp(l, "Kernel command line:", 20) == 0)
+        return 0;
+    if (has_word(l, "oops") || has_word(l, "panic") ||
         strcasestr(l, "call trace") || strcasestr(l, "bug:") ||
         strcasestr(l, "hung task") || strcasestr(l, "rcu_sched stall") ||
         strcasestr(l, "omap_voltage"))
@@ -678,7 +696,11 @@ static long pstore_count_dir(const char *path, int depth)
             long k = pstore_count_dir(sub, depth + 1);
             if (k > 0)
                 n += k;
-        } else {
+        } else if (strncmp(e->d_name, "dmesg-", 6) == 0) {
+            /* Only a dmesg record is a crash (an oops or panic dump). The
+             * console-ramoops-N next to it is the previous boot's console
+             * tail, which EVERY reboot leaves, clean or not -- counting it
+             * made nq-health-report call a plain reboot a "crash dump". */
             n++;
         }
     }

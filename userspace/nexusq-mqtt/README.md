@@ -41,12 +41,25 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
 - from **nq-healthd**'s latest `health.jsonl` sample (only when fresh, ≤60 s):
   `temp_c`, `freq_mhz`, `governor`, `load1`, `mem_avail_mb`, `nexusqd_alive`,
   `led_stall`, **`led_stalled`**, `dmesg_err`, `pstore`
-  > ⚠️ **`pstore` is always 0 and means nothing (2026-09-20).** `nq-healthd`
-  > counts `/sys/fs/pstore`, which `systemd-pstore.service` drains and unlinks at
-  > boot after archiving every record to `/var/lib/systemd/pstore/`. So the field
-  > (and the `pstore_new` crit event behind it) can never fire, and a crash is
-  > invisible to HA. Fix belongs in `nq-healthd`; see
-  > `docs/2026-09-20-sleep-states-design.md` §4i.
+  > `pstore` counts the kernel crash dumps (`dmesg-*`) archived under
+  > `/var/lib/systemd/pstore/`. Until 2026-09-20 it counted `/sys/fs/pstore`,
+  > which `systemd-pstore.service` empties at boot, so it could never be
+  > non-zero (`docs/2026-09-20-sleep-states-design.md` §4i). Since device r114
+  > the archive is a bind mount from the persist store, so the count survives
+  > a reflash: non-zero means "this unit has crashed at some point".
+- **Deep idle (r8, 2026-09-26)**, also from the healthd sample:
+  - `cstate_armed`: the deep C-states the governor may pick (`C2,C3`);
+  - `cpu_latency_limit_us`: the CPU-latency PM QoS limit, **only while some
+    driver holds one** (absent = unconstrained);
+  - `deep_idle_blocked_pct`: the share of this daemon's samples over the
+    rolling hour in which no deep state could run — none armed, or the QoS
+    limit below every armed state's exit latency (read from cpuidle, 1100/1200
+    µs on steelhead);
+  - `deep_idle_blocked`: the verdict, true when that share is ≥ 90 %, the
+    rule `nq-health-report` applies to a capture. A short block is ordinary
+    (the BT UART pins 170 µs while it streams). **Absent until the window
+    spans 10 min** (`NQMQTT_VETO_MIN_SPAN_S`), so one sample after a start
+    cannot be 100 % of the hour; absent means healthy.
 - **`led_stalled` (bool) is the LED VERDICT — consumers must read this, never
   `led_stall`** (added **r2**, 2026-08-13):
 
@@ -78,6 +91,14 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
     Petr: "lítá to úplně jak se to zlíbí"). Until an hour of history exists
     the window is honestly shorter (since daemon start); a kernel counter
     reset discards the history rather than poisoning an hour of readings
+  - `idle_c1_pct` `idle_c2_pct` `idle_c3_pct` (r8) — share of **wall time**
+    each CPU spent in each C-state over the same rolling hour, from the
+    kernel's cumulative `cpuN/cpuidle/stateM/time` (both CPUs, averaged).
+    They do not add up to 100: the rest is busy time. Measured on the cottage
+    Q at idle: C3 95 %, C1 2 %.
+  - `diagnostics` (r8) — the diagnostics mode is on (`nexusq-control`
+    `setDiagnostics`, PROTOCOL §16; read from `/var/lib/nexusq/diagnostics.json`),
+    with `diagnostics_until` (ISO-8601 UTC) while it is
   - `wifi_rssi_dbm`, `wifi_ssid` — `iw dev wlan0 link`
   - `volume_pct`, `muted` — **since r4 (2026-08-20) asked from
     `nexusq-control` over loopback first** (it holds a persistent `pactl
@@ -120,12 +141,17 @@ Discovery creates one device ("Nexus Q" / the name from
 `/etc/nexusq/device.json`, keyed by the factory WiFi MAC) with:
 
 - sensors: die temperature, CPU frequency, governor, load, memory available,
-  uptime, WiFi RSSI, volume, 4× per-OPP residency, **WiFi repairs**
+  uptime, WiFi RSSI, volume, 4× per-OPP residency, 3× C-state residency
+  (**Time in C1/C2/C3**), **CPU latency limit**, **Deep idle blocked** (%),
+  **WiFi repairs**
   (`total_increasing`, so a reboot's reset to 0 is not a decrease and an
   automation can fire on any rise) and **Last WiFi repair** (timestamp)
 - binary sensors: Spotify Connect / AirPlay / Roon / USB Audio (running),
-  LED daemon + Health sampler + **LED ring** + **WiFi link** (problem class —
-  ON means something is wrong; WiFi link is ON for 24 h after a watchdog repair)
+  **Diagnostics mode** (diagnostic; ON while the services log verbosely),
+  LED daemon + Health sampler + **LED ring** + **WiFi link** + **Deep idle**
+  (problem class — ON means something is wrong; WiFi link is ON for 24 h after
+  a watchdog repair, Deep idle while the deep C-states are blocked ≥ 90 % of
+  the hour)
 
 The problem-class binaries are **inverted** — `off` = healthy. The **LED ring**
 entity (key `led`, `device_class: problem`, `entity_category: diagnostic`, added
@@ -245,4 +271,4 @@ validation, health-tail parsing (torn lines, staleness), OPP residency math
 (rolling-window pruning + since-boot fallback + counter-reset discard),
 discovery payload contract (unique_ids, shared topics, device block),
 identity fallbacks, WiFi-repair state (recency, unset clock, garbage, the HA
-entity contract). 28 tests as of r1, 58 as of r7.
+entity contract). 28 tests as of r1, 58 as of r7, 69 as of r8.

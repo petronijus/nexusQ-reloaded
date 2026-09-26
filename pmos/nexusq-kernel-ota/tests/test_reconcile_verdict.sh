@@ -36,7 +36,12 @@ stubs() {
 case "\$1" in
   info) if [ -f "$T/upgraded" ]; then echo "linux-google-steelhead-\$(cat "$T/after")"
         else echo "linux-google-steelhead-\$(cat "$T/before")"; fi ;;
-  add)  touch "$T/upgraded"; exit 0 ;;          # exit 0 even when nothing moved
+  add)  case "\$2" in
+          --upgrade) touch "$T/upgraded" ;;       # exit 0 even when nothing moved
+          *.apk)    echo "\$2" > "$T/added-file"   # a local apk: it lands
+                    printf '%s\n' "\$(basename "\$2" .apk | sed 's/^linux-google-steelhead-//')" > "$T/after"
+                    touch "$T/upgraded" ;;
+        esac; exit 0 ;;
 esac
 exit 0
 STUB
@@ -46,10 +51,11 @@ STUB
 exec /bin/uname "\$@"
 STUB
     chmod +x "$T/bin/apk" "$T/bin/uname"
-    rm -f "$T/upgraded"
+    rm -f "$T/upgraded" "$T/added-file"
+    rm -rf "$T/state"; mkdir -p "$T/state"
 }
 
-run() { PATH="$T/bin:$PATH" sh "$TOOL" reconcile 2>&1; }
+run() { PATH="$T/bin:$PATH" NQ_KOTA_STATE_DIR="$T/state" sh "$TOOL" reconcile 2>&1; }
 
 # --- 1. the measured 2026-09-17 case: apk succeeds, database still disagrees ---
 stubs 6.18.48-r2 6.18.48-r1 6.18.48-r1
@@ -86,6 +92,36 @@ if printf '%s' "$OUT" | grep -q "package database already agrees"; then
     ok "already in agreement -> short-circuits before touching the network"
 else
     bad "already in agreement -> should short-circuit; got: $(printf '%s' "$OUT" | tr '\n' '|')"
+fi
+
+# --- 4. the repo lacks it, but stage-apk kept the apk: install from that ------
+# The 6.18.48-r17 case (2026-09-25): staged from a local apk, promoted, and the
+# repo did not publish r17 yet. The kept apk makes the database agree anyway.
+stubs 6.18.48-r17 6.18.48-r2 6.18.48-r2
+mkdir -p "$T/state/staged-apk"; : > "$T/state/staged-apk/linux-google-steelhead-6.18.48-r17.apk"
+OUT=$(run)
+if printf '%s' "$OUT" | grep -q "installing the apk it was staged from" \
+   && grep -q "staged-apk/linux-google-steelhead-6.18.48-r17.apk" "$T/added-file" 2>/dev/null; then
+    ok "repo lacks the running kernel -> installs the apk kept by stage-apk"
+else
+    bad "should fall back to the kept apk; got: $(printf '%s' "$OUT" | tr '\n' '|')"
+fi
+if printf '%s' "$OUT" | grep -q "apk now agrees: linux-google-steelhead-6.18.48-r17"; then
+    ok "and then reports agreement on the running kernel"
+else
+    bad "should report agreement after the fallback"
+fi
+[ ! -d "$T/state/staged-apk" ] && ok "the kept apk is dropped once the database agrees" \
+    || bad "the kept apk should be removed after agreement"
+
+# --- 5. a kept apk for ANOTHER kernel is not used ------------------------------
+stubs 6.18.48-r17 6.18.48-r2 6.18.48-r2
+mkdir -p "$T/state/staged-apk"; : > "$T/state/staged-apk/linux-google-steelhead-6.18.48-r16.apk"
+OUT=$(run)
+if [ ! -f "$T/added-file" ] && printf '%s' "$OUT" | grep -q "WARNING: the package database still says"; then
+    ok "an apk kept for a different kernel is never installed; still warns"
+else
+    bad "must not install an apk for another kernel; got: $(printf '%s' "$OUT" | tr '\n' '|')"
 fi
 
 echo

@@ -32,19 +32,30 @@
 set -u
 
 KERNEL_PKG=linux-google-steelhead
-BOOT_SLOT=/dev/mmcblk0p9          # A — proven kernel
-TRIAL_SLOT=/dev/mmcblk0p8         # B — trial (stock recovery lives here)
-STATE_DIR=/var/lib/nexusq-kernel-ota
+BOOT_SLOT=${NQ_KOTA_BOOT_SLOT:-/dev/mmcblk0p9}     # A — proven kernel (override: tests only)
+TRIAL_SLOT=${NQ_KOTA_TRIAL_SLOT:-/dev/mmcblk0p8}   # B — trial (stock recovery lives here)
+STATE_DIR=${NQ_KOTA_STATE_DIR:-/var/lib/nexusq-kernel-ota}   # overridable for tests only
 PENDING="$STATE_DIR/pending"      # marker: a trial boot is in flight
 BACKUP="$STATE_DIR/slot-a-backup.img"
+# The apk the staged kernel came from, kept until the package database agrees
+# with it: reconcile falls back to it when the OTA repo does not carry it yet.
+STAGED_APK_DIR="$STATE_DIR/staged-apk"
 SAR_ADDR=0x4A326A0C               # reboot-reason string, read by stock u-boot
+DT_ROOT=${NQ_KOTA_DT_ROOT:-/sys/firmware/devicetree/base}
+PERSIST_MNT=${NQ_KOTA_PERSIST_MNT:-/var/lib/nexusq/persist}
+IDENTITY_RECORD=${NQ_KOTA_IDENTITY_RECORD:-$PERSIST_MNT/identity/radio}
+EMMC_CID=${NQ_KOTA_CID:-/sys/block/mmcblk0/device/cid}
 
 die() { echo "nq-kernel-ota: $*" >&2; exit 1; }
 log() { echo "nq-kernel-ota: $*"; }
 
 part_bytes() {
-    _n=$(basename "$1")
-    echo $(( $(cat "/sys/block/mmcblk0/$_n/size") * 512 ))
+    if [ -b "$1" ]; then
+        _n=$(basename "$1")
+        echo $(( $(cat "/sys/block/mmcblk0/$_n/size") * 512 ))
+    else
+        stat -c %s "$1"         # a plain file standing in for a slot (tests)
+    fi
 }
 
 # --- the reboot reason, straight out of the SAR scratchpad -------------------
@@ -225,6 +236,61 @@ elif mode == "carry":
     if changed:
         open(dst, "wb").write(dd)
     print("nq-kernel-ota: identity carry-over: %d propert%s patched" % (changed, "y" if changed == 1 else "ies"))
+elif mode == "split":
+    # split <boot image|partition> <out kernel> <out dtb> <out cmdline>: the
+    # boot image's kernel section is zImage + appended DTB; hand back the two
+    # halves and the header's own cmdline, so a repack reproduces the image.
+    src, ok_, od, oc = sys.argv[2:6]
+    d, b, t = load(src)
+    if d[:8] != b"ANDROID!":
+        sys.exit("split: %s is not an Android boot image" % src)
+    ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", d, 8)
+    open(ok_, "wb").write(d[ps:b]); open(od, "wb").write(d[b:b + t])
+    open(oc, "wb").write(d[64:576].split(b"\0", 1)[0])
+elif mode == "set":
+    # set <bare dtb> <wifi aa:bb:..> <bt aa:bb:..>: write this identity.
+    dst, want = sys.argv[2], {"local-mac-address": sys.argv[3], "local-bd-address": sys.argv[4]}
+    dd, db, dt = load(dst)
+    if dd[:8] == b"ANDROID!":
+        sys.exit("set: the destination must be a bare .dtb, not a boot image")
+    dp = props(dd, db); dd = bytearray(dd)
+    for name, rev in PROPS:
+        _, do, _ = one(dp, name, dst)
+        v = bytes.fromhex(want[name].replace(":", ""))
+        if len(v) != 6:
+            sys.exit("set: %s is not a 6-byte address" % want[name])
+        dd[do:do + 6] = v[::-1] if rev else v
+        print("nq-kernel-ota: %s -> %s" % (name, want[name].lower()))
+    open(dst, "wb").write(dd)
+elif mode == "diffcheck":
+    # diffcheck <proven image|partition> <new image>: the new image may differ
+    # from the proven one ONLY in the two identity payloads and the header's
+    # SHA1 id -- anything else means the repack is not the image that booted.
+    a, _, _ = load(sys.argv[2]); bimg, bb, bt = load(sys.argv[3])
+    ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", bimg, 8)
+    n = len(bimg)
+    if len(a) < n or a[n:].strip(b"\0"):
+        sys.exit("diffcheck: the proven image is not the new one's length (plus padding)")
+    allowed = set(range(576, 608))                 # the header's id field
+    for name, rev in PROPS:
+        _, off, _ = one(props(bimg, bb), name, sys.argv[3])
+        allowed.update(range(off, off + 6))
+    diff = [i for i in range(n) if a[i] != bimg[i]]
+    bad = [i for i in diff if i not in allowed]
+    if bad:
+        sys.exit("diffcheck: %d byte(s) differ outside the identity (first at %d)" % (len(bad), bad[0]))
+    print("nq-kernel-ota: the new image differs from the proven one in %d byte(s), all identity or header id" % len(diff))
+elif mode == "running":
+    # running <devicetree root>: the identity the RUNNING kernel was given.
+    import os
+    found = {}
+    for root, dirs, files in os.walk(sys.argv[2]):
+        for name, rev in PROPS:
+            if name in files:
+                v = open(os.path.join(root, name), "rb").read()
+                if len(v) == 6:
+                    found.setdefault(name, []).append(fmt(v, rev))
+    print(" ".join("%s=%s" % (LABEL[n], found[n][0] if len(found.get(n, [])) == 1 else "?") for n, _ in PROPS))
 else:
     sys.exit("fdt_tool: unknown mode %s" % mode)
 FDTEOF
@@ -385,6 +451,14 @@ cmd_stage_apk() {
     # autopromote compares this against `uname -r` after the trial boot, so it can
     # tell "the new kernel is running" from "we fell back to slot A".
     NQ_KOTA_RELEASE="$_rel" cmd_stage "$_tmp/boot.img"
+    # Keep the apk itself for reconcile_pkgdb: a kernel staged from a LOCAL apk
+    # (one the OTA repo does not publish yet) could otherwise never be handed to
+    # the package database -- seen 2026-09-17 and again with 6.18.48-r17, both
+    # fixed by hand. One at a time: whatever was kept for an earlier stage goes.
+    rm -rf "$STAGED_APK_DIR"
+    mkdir -p "$STAGED_APK_DIR"
+    cp "$_apk" "$STAGED_APK_DIR/$KERNEL_PKG-$_rel.apk" \
+        || log "warning: could not keep $_apk for reconcile"
     rm -rf "$_tmp"
     log "staged kernel $_rel. Nothing has booted it yet -- run 'try' with the device in reach."
 }
@@ -413,6 +487,14 @@ HEALTH_WAIT_S="${NQ_KOTA_HEALTH_WAIT_S:-180}"
 health_ok() {
     [ "$(systemctl is-active nexusq-control)" = active ] || return 1
     [ "$(systemctl is-active nq-healthd)" = active ] || return 1
+    # An identity trial (personalize) runs the SAME kernel and ramdisk as the
+    # boot slot, 12 address bytes apart, and the gate above it has already
+    # proven the new DTB is the one running. Reachability is not in question --
+    # and a freshly flashed unit, which is exactly who gets an identity trial,
+    # has no network yet: it is set up AFTER its first boot. Requiring a route
+    # there would leave the trial unpromoted and the unit on the image's
+    # generic identity for good.
+    [ "${_identity_trial:-0}" = 1 ] && return 0
 
     # Routed network: a gateway that answers.
     _gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
@@ -444,6 +526,17 @@ cmd_autopromote() {
         log "slot A is intact and still in charge. Leaving the marker for inspection;"
         log "clear it with 'nq-kernel-ota restore' or stage again."
         exit 0
+    fi
+    _wid=$(awk '{print $5}' "$PENDING" 2>/dev/null | tr ',' ' ')
+    _identity_trial=0
+    if [ -n "$_wid" ]; then
+        _identity_trial=1
+        _rid=$(fdt_tool running "$DT_ROOT")
+        if [ "$_rid" != "$_wid" ]; then
+            log "the running kernel reports $_rid, the trial staged $_wid —"
+            log "the trial slot did NOT boot. Slot A is intact and in charge; the marker stays."
+            exit 0
+        fi
     fi
 
     log "running the staged kernel ($_now); waiting up to ${HEALTH_WAIT_S}s for the device to prove it is usable"
@@ -506,6 +599,10 @@ usage: nq-kernel-ota <command>
   carry-identity <src> <dst.dtb>
                      byte-patch the identity found in <src> into a bare DTB; this
                      is what stage-apk does with the boot slot before packing
+  personalize [--no-boot]
+                     make the boot slot carry THIS unit's identity (persist-store
+                     record, else derived from the eMMC CID) and record it;
+                     repacks and trial-boots only when the slot says otherwise
 
   rescue <img>       boot a maintenance image (rootfs left UNMOUNTED) out of the
                      trial slot; `reboot` from it returns to the normal system
@@ -517,6 +614,7 @@ cmd_status() {
     log "slot B (trial) $TRIAL_SLOT  $(part_bytes $TRIAL_SLOT) B  md5 $(dd if=$TRIAL_SLOT bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)"
     log "reboot reason  '$(sar read)'"
     log "identity       slot A: $(identity_of "$BOOT_SLOT" 2>/dev/null || echo '?')   slot B: $(identity_of "$TRIAL_SLOT" 2>/dev/null || echo '?')"
+    log "identity rec.  $(head -n1 "$IDENTITY_RECORD" 2>/dev/null || echo 'none in the persist store yet')"
     if [ -f "$PENDING" ]; then
         log "PENDING trial boot: $(cat "$PENDING")"
     else
@@ -560,7 +658,11 @@ write_trial() {
 
 cmd_stage() {
     write_trial "${1:?usage: nq-kernel-ota stage <boot.img>}"
-    printf '%s %s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" "${NQ_KOTA_RELEASE:-}" > "$PENDING"
+    # Field 5, when set, is the identity the staged DTB carries (personalize):
+    # the same kernel release on both slots cannot tell autopromote which one
+    # booted, the identity the running kernel reports can.
+    _idf=$(printf '%s' "${NQ_KOTA_IDENTITY:-}" | tr ' ' ',')
+    printf '%s %s %s %s %s\n' "$(date -u +%FT%TZ)" "$_img" "$_want" "${NQ_KOTA_RELEASE:-}" "$_idf" > "$PENDING"
     log "staged. Next: 'nq-kernel-ota try' — and read what it prints first."
 }
 
@@ -603,6 +705,107 @@ EOF
     log "reason is now '$(sar read)' — rebooting into the rescue image"
     sync
     systemctl reboot --reboot-argument=recovery
+}
+
+# --- personalize: one generic boot image, every unit its own identity ---------
+#
+# The WiFi MAC and BT address live in the DTB appended to the boot image, and
+# the DTS carries ONE unit's: the Prague Q's, whose factory values they are
+# (docs/2026-08-28-per-unit-bt-wifi-identity.md). The hardware reports no address
+# of its own, and stock's bootloader-cmdline channel is closed by
+# CONFIG_CMDLINE_FORCE. So until now every other unit got its identity as a hand
+# byte-patch at flash time -- and every unit flashed from a public release came
+# up as the Prague Q on both radios.
+#
+# This makes the identity the unit's own, from the one unique thing it has that
+# the OS can read: the eMMC CID.
+#
+#   the unit's identity is, in this order:
+#     1. the record in the persist store (identity/radio) -- what it has been,
+#        across any flash;
+#     2. otherwise, what its boot slot carries, IF that is not the image's
+#        generic identity (a unit personalised before this existed: the
+#        cottage Q, and any unit a kernel OTA carried an identity onto);
+#     3. otherwise the generic identity if this IS the unit it belongs to
+#        (IDENTITY_OWNER_CID);
+#     4. otherwise derived from the CID: the Google OUI the factory used plus
+#        three bytes of sha256("nexusq/<wifi|bt>/emmc-cid/<cid>").
+#   It is recorded in the store (so a flash cannot lose it), and if the boot
+#   slot says otherwise, the slot's image is repacked with it -- the proven
+#   kernel and ramdisk, 12 identity bytes changed, checked byte for byte
+#   (fdt_tool diffcheck) -- staged in the trial slot and booted once. The
+#   autopromote gate promotes it only when the RUNNING kernel reports the new
+#   identity, i.e. only when the new DTB is what actually booted.
+IDENTITY_GENERIC="wifi=f8:8f:ca:20:48:e1 bt=f8:8f:ca:20:49:e5"
+IDENTITY_OWNER_CID=1501004d414734464125ef8120a7ce45   # the Prague Q's eMMC
+
+# TESTABLE:derive_identity
+# derive_identity <eMMC CID>: "wifi=f8:8f:ca:xx:xx:xx bt=f8:8f:ca:yy:yy:yy".
+derive_identity() {
+    _w=$(printf '%s' "nexusq/wifi/emmc-cid/$1" | sha256sum | cut -c1-6)
+    _b=$(printf '%s' "nexusq/bt/emmc-cid/$1" | sha256sum | cut -c1-6)
+    printf 'wifi=f8:8f:ca:%s:%s:%s bt=f8:8f:ca:%s:%s:%s\n' \
+        "$(echo "$_w" | cut -c1-2)" "$(echo "$_w" | cut -c3-4)" "$(echo "$_w" | cut -c5-6)" \
+        "$(echo "$_b" | cut -c1-2)" "$(echo "$_b" | cut -c3-4)" "$(echo "$_b" | cut -c5-6)"
+}
+
+# TESTABLE:wanted_identity
+# wanted_identity <record or ""> <boot slot identity> <eMMC CID>: the rules above.
+wanted_identity() {
+    if [ -n "$1" ]; then echo "$1"; return; fi
+    case "$2" in *"?"*) ;; *)
+        if [ "$2" != "$IDENTITY_GENERIC" ]; then echo "$2"; return; fi
+        if [ "$3" = "$IDENTITY_OWNER_CID" ]; then echo "$2"; return; fi ;;
+    esac
+    derive_identity "$3"
+}
+
+cmd_personalize() {
+    _boot=1
+    [ "${1:-}" = --no-boot ] && _boot=0        # stage it, do not reboot (tests, by hand)
+    if [ -f "$PENDING" ]; then
+        log "a trial boot is pending; the identity check waits until it is resolved"
+        return 0
+    fi
+    _have=$(identity_of "$BOOT_SLOT") || die "cannot read the boot slot's identity"
+    _rec=""; [ -s "$IDENTITY_RECORD" ] && _rec=$(head -n1 "$IDENTITY_RECORD")
+    _cid=$(cat "$EMMC_CID" 2>/dev/null || true)
+    [ -n "$_rec" ] || [ -n "$_cid" ] || die "no identity record and no eMMC CID to derive one from"
+    _want=$(wanted_identity "$_rec" "$_have" "$_cid")
+
+    if [ -z "$_rec" ]; then
+        if mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
+            mkdir -p "$(dirname "$IDENTITY_RECORD")"
+            printf '%s\n' "$_want" > "$IDENTITY_RECORD.tmp" && mv "$IDENTITY_RECORD.tmp" "$IDENTITY_RECORD"
+            log "identity recorded in the persist store: $_want"
+        else
+            log "the persist store is not mounted; the identity is not recorded this boot"
+        fi
+    fi
+    if [ "$_want" = "$_have" ]; then
+        log "identity ok: $_have"
+        return 0
+    fi
+
+    log "the boot slot carries $_have; this unit is $_want"
+    _tmp=$(mktemp -d)
+    fdt_tool split "$BOOT_SLOT" "$_tmp/kernel" "$_tmp/dtb" "$_tmp/cmdline" \
+        || { rm -rf "$_tmp"; die "cannot take the boot slot's image apart"; }
+    _w=$(echo "$_want" | sed 's/.*wifi=\([^ ]*\).*/\1/'); _b=$(echo "$_want" | sed 's/.*bt=\([^ ]*\).*/\1/')
+    fdt_tool set "$_tmp/dtb" "$_w" "$_b" || { rm -rf "$_tmp"; die "cannot write the identity into the DTB"; }
+    _rd=$(current_ramdisk "$_tmp/ramdisk.img")
+    pack_bootimg "$_tmp/kernel" "$_tmp/dtb" "$_tmp/boot.img" "$(cat "$_tmp/cmdline")" "$_rd" >/dev/null \
+        || { rm -rf "$_tmp"; die "pack failed"; }
+    fdt_tool diffcheck "$BOOT_SLOT" "$_tmp/boot.img" \
+        || { rm -rf "$_tmp"; die "the repacked image is not the proven one plus the identity -- refusing"; }
+    NQ_KOTA_RELEASE=$(uname -r) NQ_KOTA_IDENTITY="$_want" cmd_stage "$_tmp/boot.img"
+    rm -rf "$_tmp"
+    if [ "$_boot" = 0 ]; then
+        log "staged, not booted (--no-boot)"
+        return 0
+    fi
+    log "booting it once so it takes effect; the health gate promotes it"
+    NQ_KOTA_YES=1 cmd_try
 }
 
 cmd_try() {
@@ -683,7 +886,17 @@ reconcile_pkgdb() {
         # the kernel that is actually running; never infer it from an exit code.
         apk add --upgrade "$KERNEL_PKG" >/dev/null 2>&1 || true
         _now=$(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1 | sed "s/^$KERNEL_PKG-//")
+        # The repo does not carry the running kernel (yet): install it from the
+        # apk it was staged from. Same stash/restore around it as the repo path,
+        # because `apk add` of a file deletes the outgoing tree just the same.
+        _kept="$STAGED_APK_DIR/$KERNEL_PKG-$(uname -r).apk"
+        if [ "$_now" != "$(uname -r)" ] && [ -f "$_kept" ]; then
+            log "the repo has no $KERNEL_PKG-$(uname -r); installing the apk it was staged from"
+            apk add "$_kept" >/dev/null 2>&1 || log "warning: apk add $_kept failed"
+            _now=$(apk info -v 2>/dev/null | grep "^$KERNEL_PKG-" | head -1 | sed "s/^$KERNEL_PKG-//")
+        fi
         if [ "$_now" = "$(uname -r)" ]; then
+            rm -rf "$STAGED_APK_DIR"
             log "apk now agrees: $KERNEL_PKG-$_now"
         else
             log "WARNING: the package database still says $KERNEL_PKG-${_now:-none}"
@@ -745,6 +958,7 @@ case "${1:-}" in
     try)     cmd_try ;;
     promote)     cmd_promote ;;
     reconcile)   reconcile_pkgdb ;;
+    personalize) shift; cmd_personalize "$@" ;;
     autopromote) cmd_autopromote ;;
     status)  cmd_status ;;
     identity)       identity_of "${2:-$BOOT_SLOT}" ;;

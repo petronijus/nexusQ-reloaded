@@ -11,3 +11,4 @@
 # watching: the whole point is that the trial gets promoted or abandoned by
 # itself, and the reboot reason gets disarmed either way.
 enable nexusq-kernel-ota-promote.service
+enable nexusq-identity.service

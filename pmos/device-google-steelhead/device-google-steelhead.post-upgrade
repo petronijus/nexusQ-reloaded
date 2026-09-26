@@ -36,6 +36,18 @@ else
 	      /etc/systemd/system/dbus-org.freedesktop.oom1.service
 fi
 
+# --- r113+: the first-boot unit's enable link is now the package's ---------
+# Units in the field got sysinit.target.wants/nexusq-resize-rootfs.service from
+# the apk trigger's preset (an absolute link), before the package shipped its
+# own (relative). apk will not overwrite a config file that differs, so it left
+# the package's as `.apk-new` -- which systemd then reads as a Wants= drop-in
+# with an invalid name and complains about on every boot (seen on the cottage Q,
+# r114). Both links name the same unit; take the package's.
+_w=/etc/systemd/system/sysinit.target.wants/nexusq-resize-rootfs.service
+if [ -L "$_w.apk-new" ]; then
+	mv -f "$_w.apk-new" "$_w"
+fi
+
 STASH=/var/lib/nexusq/access-migration
 [ -d "$STASH" ] || exit 0
 

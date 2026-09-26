@@ -1,0 +1,24 @@
+# Nexus Q persist store: the crash archive (device r114, 2026-09-26).
+# systemd-pstore moves every ramoops record the kernel recovered into
+# /var/lib/systemd/pstore at boot. That directory was on the rootfs, so a flash
+# -- the usual answer to a unit in trouble -- wiped the only record of why. The
+# store keeps it across flashes; nq-healthd counts it (crash records only) and
+# nexusq-mqtt reports it. Ordered before systemd-pstore so the archive lands in
+# the store, not underneath it. Skipped when the store did not mount.
+[Unit]
+Description=Nexus Q persist: crash archive (systemd-pstore)
+DefaultDependencies=no
+Requires=nexusq-persist-apply.service
+After=nexusq-persist-apply.service
+Before=local-fs.target umount.target systemd-pstore.service
+Conflicts=umount.target
+ConditionPathIsMountPoint=/var/lib/nexusq/persist
+
+[Mount]
+What=/var/lib/nexusq/persist/pstore
+Where=/var/lib/systemd/pstore
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

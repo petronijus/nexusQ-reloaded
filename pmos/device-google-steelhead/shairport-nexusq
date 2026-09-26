@@ -33,5 +33,15 @@ EOF
 # `mpris_service_bus` config key does NOT work -- measured 2026-09-07: set in the
 # config it is ignored and the interface still goes to the system bus; only this
 # flag moves it.
-exec /usr/bin/shairport-sync --dbus-default-message-bus=session \
+#
+# Diagnostics mode (PROTOCOL §16): -vv, shairport's session-level debug output
+# (connections, timing, buffer state), not -vvv's per-packet detail. NEXUSQ_DIAG=1
+# marks the process for nexusq-control, as in librespot-nexusq.
+set --
+if nq-diag active 2>/dev/null; then
+	export NEXUSQ_DIAG=1
+	set -- -vv
+	echo "shairport-nexusq: diagnostics mode -- verbose logging ($(nq-diag status))" >&2
+fi
+exec /usr/bin/shairport-sync --dbus-default-message-bus=session "$@" \
 	-c /etc/nexusq/shairport-sync.conf -a "$NQ_NAME"

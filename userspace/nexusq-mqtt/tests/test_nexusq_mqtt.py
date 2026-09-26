@@ -390,6 +390,189 @@ class TestWindowResidency(unittest.TestCase):
         self.assertEqual(hist2, hist)
 
 
+def cpuidle_tree(root, per_cpu):
+    """A fake /sys/devices/system/cpu: per_cpu = [[(name, time_us, lat)...]]."""
+    for c, states in enumerate(per_cpu):
+        for i, (name, t, lat) in enumerate(states):
+            d = os.path.join(root, f"cpu{c}", "cpuidle", f"state{i}")
+            os.makedirs(d, exist_ok=True)
+            for f, v in (("name", name), ("time", t), ("latency", lat)):
+                with open(os.path.join(d, f), "w") as fh:
+                    fh.write(f"{v}\n")
+    os.makedirs(os.path.join(root, "cpufreq"), exist_ok=True)  # not a cpuN
+
+
+STEELHEAD_LAT = {"C1": 4, "C2": 1100, "C3": 1200}
+
+
+class TestCpuidle(unittest.TestCase):
+    """C-state residency over the rolling hour, and the deep-idle veto."""
+
+    def test_read_sums_cpus_and_keeps_latencies(self):
+        root = tempfile.mkdtemp()
+        cpuidle_tree(root, [[("C1", 10, 4), ("C2", 20, 1100), ("C3", 30, 1200)],
+                            [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]])
+        with mock.patch.object(MOD, "CPUIDLE_ROOT", root):
+            times, lat, ncpu = MOD.read_cpuidle()
+        self.assertEqual(times, {"C1": 11, "C2": 22, "C3": 33})
+        self.assertEqual(lat, STEELHEAD_LAT)
+        self.assertEqual(ncpu, 2)
+
+    def test_read_without_cpuidle(self):
+        with mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"):
+            self.assertEqual(MOD.read_cpuidle(), ({}, {}, 0))
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "cpu0"))   # a CPU without cpuidle
+        with mock.patch.object(MOD, "CPUIDLE_ROOT", root):
+            self.assertEqual(MOD.read_cpuidle(), ({}, {}, 0))
+
+    def test_window_is_share_of_wall_time_per_cpu(self):
+        # since boot: 2 CPUs x 100 s; 150 s of C3 summed = 75 % per CPU
+        pct, hist = MOD.idle_window([], {"C1": 20e6, "C3": 150e6}, 2, 100.0,
+                                    window_s=3600)
+        self.assertEqual(pct, {"C1": 10.0, "C3": 75.0})
+        # next 100 s: 190 s of C3 over 2 x 100 s -> 95 %, measured from t=100
+        pct, hist = MOD.idle_window(hist, {"C1": 22e6, "C3": 340e6}, 2, 200.0,
+                                    window_s=3600)
+        self.assertEqual(pct, {"C1": 1.0, "C3": 95.0})
+        self.assertEqual(len(hist), 2)
+
+    def test_window_slides_and_clamps(self):
+        hist = [(0.0, {"C3": 0}, 2)]
+        pct, hist = MOD.idle_window(hist, {"C3": 7000e6}, 2, 4000.0,
+                                    window_s=3600)
+        # t=0 expired: no base left, so since boot (0 at monotonic 0) again
+        self.assertEqual(pct["C3"], 87.5)
+        # a counter ahead of the wall clock (sleep stretch booked late) clamps
+        pct, _ = MOD.idle_window([], {"C3": 300e6}, 1, 100.0, window_s=3600)
+        self.assertEqual(pct["C3"], 100.0)
+
+    def test_window_restarts_on_reset_or_cpu_count(self):
+        hist = [(10.0, {"C1": 5e6, "C3": 9e6}, 2)]
+        _, h = MOD.idle_window(hist, {"C1": 1e6, "C3": 9e6}, 2, 20.0,
+                               window_s=3600)
+        self.assertEqual(len(h), 1)            # counter went backwards
+        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 1, 20.0,
+                               window_s=3600)
+        self.assertEqual(len(h), 1)            # a CPU went offline
+        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 2, 20.0,
+                               window_s=3600)
+        self.assertEqual(len(h), 2)            # ordinary step
+        pct, h = MOD.idle_window(hist, {}, 0, 20.0, window_s=3600)
+        self.assertEqual((pct, h), ({}, hist))  # no cpuidle: history kept
+
+    def test_blocked_rule(self):
+        f = MOD.deep_idle_blocked
+        self.assertFalse(f("C2,C3", MOD.QOS_NO_LIMIT, STEELHEAD_LAT))
+        # playback's own request (1312 us) is above both exit latencies
+        self.assertFalse(f("C2,C3", 1312, STEELHEAD_LAT))
+        # the BT UART's 170 us vetoes both
+        self.assertTrue(f("C2,C3", 170, STEELHEAD_LAT))
+        # 1150 us vetoes C3 but C2 can still run
+        self.assertFalse(f("C2,C3", 1150, STEELHEAD_LAT))
+        self.assertTrue(f("C3", 1150, STEELHEAD_LAT))
+        # nothing armed: deep idle impossible whatever the QoS
+        self.assertTrue(f("", MOD.QOS_NO_LIMIT, STEELHEAD_LAT))
+        # cannot say: older healthd, a kernel with only WFI, a failed QoS read
+        self.assertIsNone(f(None, 170, STEELHEAD_LAT))
+        self.assertIsNone(f("", 170, {"C1": 4}))
+        self.assertIsNone(f("C2,C3", -1, STEELHEAD_LAT))
+        self.assertIsNone(f("C2,C3", True, STEELHEAD_LAT))
+
+    def test_veto_needs_persistence_and_span(self):
+        with mock.patch.object(MOD, "VETO_MIN_SPAN_S", 600):
+            hist = []
+            share, judged, hist = MOD.veto_window(hist, True, 0.0, 3600)
+            # one blocked sample is 100 % of nothing: no judgement yet
+            self.assertEqual((share, judged), (100.0, None))
+            for i in range(1, 20):
+                share, judged, hist = MOD.veto_window(hist, True, 30.0 * i, 3600)
+            self.assertIsNone(judged)          # 570 s: still too short
+            share, judged, hist = MOD.veto_window(hist, True, 600.0, 3600)
+            self.assertTrue(judged)            # 21/21 blocked over 600 s
+            share, judged, hist = MOD.veto_window(hist, False, 630.0, 3600)
+            share, judged, hist = MOD.veto_window(hist, False, 660.0, 3600)
+            share, judged, hist = MOD.veto_window(hist, False, 690.0, 3600)
+            self.assertEqual(share, round(100 * 21 / 24, 1))
+            self.assertFalse(judged)           # 87.5 % < 90 %: transient
+            # a sample that cannot say is not recorded
+            n = len(hist)
+            _, _, hist = MOD.veto_window(hist, None, 720.0, 3600)
+            self.assertEqual(len(hist), n)
+
+    def test_collect_publishes_idle_and_veto(self):
+        root = tempfile.mkdtemp()
+        cpuidle_tree(root, [[("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)],
+                            [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]])
+        health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        health.write(json.dumps({"cstate_armed": "C2,C3", "qos_us": 170}) + "\n")
+        health.close()
+        self.addCleanup(os.unlink, health.name)
+        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
+                mock.patch.object(MOD, "CPUIDLE_ROOT", root), \
+                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
+                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
+                mock.patch.object(MOD, "read_wifi", return_value=(None, None)), \
+                mock.patch.object(MOD, "read_volume",
+                                  return_value=(None, None)), \
+                mock.patch.object(MOD, "read_uptime", return_value=1):
+            win = MOD.Windows()
+            state = MOD.collect(win)
+        for k in ("idle_c1_pct", "idle_c2_pct", "idle_c3_pct"):
+            self.assertIn(k, state)
+        self.assertEqual(state["cstate_armed"], "C2,C3")
+        self.assertEqual(state["cpu_latency_limit_us"], 170)
+        self.assertEqual(state["deep_idle_blocked_pct"], 100.0)
+        self.assertNotIn("deep_idle_blocked", state)   # window too short
+        self.assertEqual(len(win.idle), 1)
+        self.assertEqual(len(win.veto), 1)
+
+    def test_unconstrained_qos_is_not_published(self):
+        health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        health.write(json.dumps({"cstate_armed": "C2,C3",
+                                 "qos_us": MOD.QOS_NO_LIMIT}) + "\n")
+        health.close()
+        self.addCleanup(os.unlink, health.name)
+        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
+                mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"), \
+                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
+                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
+                mock.patch.object(MOD, "read_wifi", return_value=(None, None)), \
+                mock.patch.object(MOD, "read_volume",
+                                  return_value=(None, None)), \
+                mock.patch.object(MOD, "read_uptime", return_value=1):
+            state = MOD.collect(MOD.Windows())
+        self.assertNotIn("cpu_latency_limit_us", state)
+        # no cpuidle -> no latency table -> the veto cannot be judged
+        self.assertNotIn("deep_idle_blocked_pct", state)
+
+
+class TestDiagnosticsMode(unittest.TestCase):
+    NOW = 1_790_000_000.0
+
+    def _read(self, doc):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "diagnostics.json")
+        if doc is not None:
+            with open(path, "w") as f:
+                f.write(doc)
+        with mock.patch.object(MOD, "DIAG_PATH", path):
+            return MOD.read_diagnostics(self.NOW)
+
+    def test_states(self):
+        self.assertEqual(self._read(None), {"diagnostics": False})
+        self.assertEqual(self._read('{"until": null, "endedAt": 5}'),
+                         {"diagnostics": False})
+        self.assertEqual(self._read(json.dumps({"until": self.NOW - 1})),
+                         {"diagnostics": False})
+        self.assertEqual(self._read(json.dumps({"until": self.NOW + 3600})),
+                         {"diagnostics": True,
+                          "diagnostics_until": "2026-09-21T15:13:20Z"})
+        for doc in ("", "{", "[]", '{"until": true}', '{"until": "x"}'):
+            with self.subTest(doc=doc):
+                self.assertEqual(self._read(doc), {"diagnostics": False})
+
+
 class TestCollect(unittest.TestCase):
     def test_omits_unavailable_and_maps_units(self):
         health = tempfile.NamedTemporaryFile(
@@ -417,7 +600,8 @@ class TestCollect(unittest.TestCase):
                 mock.patch.object(MOD, "read_volume",
                                   return_value=(None, None)), \
                 mock.patch.object(MOD, "read_uptime", return_value=1234):
-            state, hist = MOD.collect([])
+            win = MOD.Windows()
+            state = MOD.collect(win)
 
         self.assertEqual(state["temp_c"], 76.5)
         self.assertEqual(state["freq_mhz"], 350)
@@ -438,7 +622,7 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(state["services"], {
             "spotify": False, "airplay": False,
             "roon": True, "usbaudio": False})
-        self.assertEqual(hist[-1][1], {350000: 900, 700000: 100})
+        self.assertEqual(win.tis[-1][1], {350000: 900, 700000: 100})
 
     def test_stale_healthd_drops_health_fields(self):
         health = tempfile.NamedTemporaryFile(
@@ -456,7 +640,7 @@ class TestCollect(unittest.TestCase):
                 mock.patch.object(MOD, "read_volume",
                                   return_value=(None, None)), \
                 mock.patch.object(MOD, "read_uptime", return_value=None):
-            state, _ = MOD.collect([])
+            state = MOD.collect(MOD.Windows())
         self.assertFalse(state["healthd_fresh"])
         self.assertNotIn("temp_c", state)
         self.assertNotIn("freq_mhz", state)
@@ -548,7 +732,7 @@ class TestWifiRepairs(unittest.TestCase):
                 mock.patch.object(MOD, "read_volume",
                                   return_value=(None, None)), \
                 mock.patch.object(MOD, "read_uptime", return_value=1234):
-            state, _ = MOD.collect([])
+            state = MOD.collect(MOD.Windows())
         self.assertEqual(state["wifi_repairs"], 1)
         self.assertTrue(state["wifi_repaired_recently"])
 
@@ -607,7 +791,10 @@ class TestDiscovery(unittest.TestCase):
                          "opp350", "opp700", "opp920", "opp1200",
                          "spotify", "airplay", "roon", "usbaudio",
                          "nexusqd", "healthd", "wifi_repairs",
-                         "wifi_last_repair", "wifi_link"):
+                         "wifi_last_repair", "wifi_link",
+                         "idle_c1", "idle_c2", "idle_c3",
+                         "cpu_latency_limit", "deep_idle_blocked_share",
+                         "deep_idle", "diagnostics"):
             self.assertIn(expected, keys)
 
     def test_wifi_repair_entities(self):
@@ -630,6 +817,18 @@ class TestDiscovery(unittest.TestCase):
         self.assertIn("wifi_repaired_recently | default(false)",
                       cfg["value_template"])
         self.assertIn("'OFF' if (not (", cfg["value_template"])
+
+    def test_deep_idle_entities(self):
+        by_key = {t.split("/")[2]: (t, cfg) for t, cfg in self.configs}
+        for key in ("c1", "c2", "c3"):
+            self.assertIn(f"value_json.idle_{key}_pct",
+                          by_key[f"idle_{key}"][1]["value_template"])
+        topic, cfg = by_key["deep_idle"]
+        self.assertTrue(topic.startswith("binary_sensor/"))
+        self.assertEqual(cfg["device_class"], "problem")
+        # absent judgement (short window, older device) must read healthy
+        self.assertIn("deep_idle_blocked | default(false)",
+                      cfg["value_template"])
 
     def test_opp_templates_reference_their_field(self):
         by_key = {t.split("/")[2]: cfg for t, cfg in self.configs}

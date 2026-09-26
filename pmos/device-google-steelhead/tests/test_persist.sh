@@ -60,7 +60,7 @@ truncate -s 64M "$IMG"
 fresh_rootfs() {  # fresh_rootfs <hostname>  -- image defaults: nothing per-unit
     rm -rf /fake/home /fake/etc/NetworkManager /fake/var /fake/etc/ssh /fake/etc/nexusq /fake/opt
     mkdir -p /fake/home/user/.config /fake/etc/NetworkManager/system-connections \
-             /fake/var/lib/bluetooth /fake/etc/ssh /fake/etc/nexusq \
+             /fake/var/lib/bluetooth /fake/etc/ssh /fake/etc/nexusq /fake/var/lib/systemd/pstore \
              /fake/opt/glibc-rt/home/roon     # nexusq-glibc-rt ships it; .RoonBridge is RoonBridge's own
     printf '%s\n' "$1" > /fake/etc/hostname
     cat > /fake/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip.conf <<'F'
@@ -83,6 +83,8 @@ unit_state() {  # the per-unit state a used unit carries
     mkdir -p /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry /fake/opt/glibc-rt/home/roon/.RoonBridge/Settings
     echo "unique_id=nq-test-roon-id" > /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db
     chown -R 10000:10000 /fake/opt/glibc-rt/home/roon/.RoonBridge
+    # the crash archive: a panic this unit had (r114)
+    echo "Kernel panic - not syncing: test" > /fake/var/lib/systemd/pstore/dmesg-ramoops-0
     ssh-keygen -A -f /fake >/dev/null 2>&1        # -> /fake/etc/ssh/ssh_host_*
     NKEYS=$(ls /fake/etc/ssh/ssh_host_*_key | wc -l)   # 3 on Alpine 3.21's OpenSSH, 4 on the unit's 10.5 (adds mldsa44)
 }
@@ -90,17 +92,19 @@ has_state() {  # what "the unit is itself again" means, as seen at the rootfs pa
     [ -L /fake/home/user/.config/systemd/user/default.target.wants/nexusq-uac2-in.service ] \
     && grep -q hunter2 /fake/etc/NetworkManager/system-connections/wifi.nmconnection 2>/dev/null \
     && [ -f /fake/var/lib/bluetooth/F8:8F:CA:20:49:E5/AA:BB:CC:DD:EE:FF/info ] \
-    && grep -q nq-test-roon-id /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db 2>/dev/null
+    && grep -q nq-test-roon-id /fake/opt/glibc-rt/home/roon/.RoonBridge/Database/Registry/registry.db 2>/dev/null \
+    && grep -q "Kernel panic" /fake/var/lib/systemd/pstore/dmesg-ramoops-0 2>/dev/null
 }
-bind_all() {   # what the four .mount units do
+bind_all() {   # what the five .mount units do
     mount --bind /persist/user-systemd /fake/home/user/.config/systemd \
     && mount --bind /persist/nm-connections /fake/etc/NetworkManager/system-connections \
     && mount --bind /persist/bluetooth /fake/var/lib/bluetooth \
-    && mount --bind /persist/roon /fake/opt/glibc-rt/home/roon/.RoonBridge
+    && mount --bind /persist/roon /fake/opt/glibc-rt/home/roon/.RoonBridge \
+    && mount --bind /persist/pstore /fake/var/lib/systemd/pstore
 }
 unbind_all() {
     umount /fake/home/user/.config/systemd /fake/etc/NetworkManager/system-connections /fake/var/lib/bluetooth \
-           /fake/opt/glibc-rt/home/roon/.RoonBridge 2>/dev/null
+           /fake/opt/glibc-rt/home/roon/.RoonBridge /fake/var/lib/systemd/pstore 2>/dev/null
     umount /persist 2>/dev/null
 }
 
@@ -155,7 +159,7 @@ bind_all; rc=$?
 check "bind mounts succeed (rc=$rc)" "[ $rc -eq 0 ]"
 check "USB Audio toggle, WiFi profile, BT bond and Roon identity are back at the rootfs paths" "has_state"
 run nq-persist status
-check "status reports the four bind mounts as MOUNTED" "[ \"\$(grep -c MOUNTED $OUT)\" = 4 ]"
+check "status reports the five bind mounts as MOUNTED" "[ \"\$(grep -c MOUNTED $OUT)\" = 5 ]"
 unbind_all
 
 echo "=== 3b. seen failing: the same flash WITHOUT the store loses the state ==="

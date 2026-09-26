@@ -68,11 +68,16 @@ MQTT_CONF=${NQ_MQTT_CONF:-/etc/nexusq/mqtt.json}
 #                   while the old one sat there as "not found". The Roon
 #                   sandbox binds /opt/glibc-rt recursively, so a bind mount
 #                   under it is what RoonBridge sees inside.
+#   pstore          systemd-pstore's crash archive (r114): the ramoops records
+#                   of every oops and panic this unit has had. On the rootfs a
+#                   flash -- the usual response to a unit in trouble -- wiped
+#                   the only evidence of why it was in trouble.
 MAP='
 user-systemd /home/user/.config/systemd USER 0755
 nm-connections /etc/NetworkManager/system-connections root:root 0755
 bluetooth /var/lib/bluetooth root:root 0700
 roon /opt/glibc-rt/home/roon/.RoonBridge USER 0755
+pstore /var/lib/systemd/pstore root:root 0755
 '
 
 log()  { echo "nq-persist: $*"; }

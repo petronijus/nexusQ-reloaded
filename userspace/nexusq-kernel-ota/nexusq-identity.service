@@ -1,0 +1,25 @@
+# Every unit its own WiFi MAC and BT address, from one generic boot image
+# (nexusq-kernel-ota r8, 2026-09-26). See `nq-kernel-ota personalize`.
+#
+# Cheap when there is nothing to do -- one read of the boot slot's DTB and of
+# the persist store's record -- which is every boot but two: the first boot
+# after flashing a release image onto any unit but the one whose addresses the
+# image carries, and the first boot after a full flash of a unit whose identity
+# the store remembers. Then it repacks the boot slot's image with the unit's own
+# identity (12 bytes, checked) and trial-boots it once.
+#
+# After the kernel OTA's own promote step, so a trial in flight is resolved
+# first (personalize refuses to stage over a pending trial anyway), and after
+# the persist store is up, so the record can be read and written.
+[Unit]
+Description=Nexus Q identity: the boot slot carries this unit's own WiFi MAC and BT address
+After=nexusq-kernel-ota-promote.service nexusq-persist-apply.service multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nq-kernel-ota personalize
+RemainAfterExit=yes
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

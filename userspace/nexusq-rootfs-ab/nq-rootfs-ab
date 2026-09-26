@@ -117,6 +117,14 @@ cmd_populate() {
         log "fstab / entry in slot $_tgt now points at UUID=$_uuid"
     fi
 
+    # Per-slot state does not travel. The random seed is credited at boot
+    # (device r114): two slots holding the same seed would credit the same bits
+    # twice, so the copy gets none and the new slot makes its own, as a fresh
+    # flash does. And the storage check's record and markers describe the slot
+    # they were written on; the new slot checks itself on its first boot.
+    rm -f "$MNT/var/lib/systemd/random-seed" \
+          "$MNT/var/lib/nexusq/storage-ok" "$MNT/var/lib/nexusq/.ab-split-pending"
+
     sync
     umount "$MNT"
     trap - EXIT

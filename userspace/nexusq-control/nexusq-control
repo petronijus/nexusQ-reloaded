@@ -1197,6 +1197,224 @@ def service_log(sid, lines=200):
     return {"id": sid, "name": s["name"], "lines": out}
 
 
+# --- Diagnostics mode (PROTOCOL §16) -----------------------------------------
+# Verbose logging on the device for a limited time, switched on from the app's
+# Developer screen and off again by itself. It exists for faults that need a
+# debug log from a unit in the field -- the first being librespot 0.8.0 stuck
+# re-authenticating after a Spotify dealer-websocket reset -- and that nobody
+# should have to remember to switch off: a debug librespot logs every Connect
+# frame, into the eMMC journal, for as long as it runs.
+#
+# The contract with the launchers (librespot-nexusq, shairport-nexusq, through
+# `nq-diag active`): the file below names a wall-clock `until`; a service started
+# before it passes reads verbose, and exports NEXUSQ_DIAG=1 into the process it
+# execs. That variable is how this side knows what a RUNNING process was started
+# with -- it is read from /proc, not remembered, so a restart of this bridge,
+# a service toggled from elsewhere or a reboot cannot leave the two disagreeing.
+DIAG_PATH = os.environ.get("NEXUSQ_DIAG_PATH", "/var/lib/nexusq/diagnostics.json")
+DIAG_DEFAULT_H = 24
+DIAG_MAX_H = 72
+# The services whose launchers honour the mode, in the order they are listed.
+DIAG_SERVICES = ("spotify", "airplay")
+# While a running service still has the other mode, re-check this often: it is
+# restarted as soon as it is not playing, and not a moment before.
+DIAG_PENDING_POLL_S = float(os.environ.get("NEXUSQ_DIAG_POLL_S", "30"))
+# With nothing pending the thread sleeps until the expiry, but never longer than
+# this, so a wall clock stepped by NTP is noticed within the hour.
+DIAG_MAX_SLEEP_S = 3600.0
+
+
+def diag_load(path=None):
+    """{"until": epoch|None, "since": epoch|None, "hours": n|None,
+    "endedAt": epoch|None} -- all None when there is no file or it is garbage."""
+    st = {"until": None, "since": None, "hours": None, "endedAt": None}
+    try:
+        with open(path or DIAG_PATH) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return st
+    if isinstance(raw, dict):
+        for k in st:
+            v = raw.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                st[k] = v
+    return st
+
+
+def diag_write(st, path=None):
+    """Atomic write, 0644: the launchers read it as uid 10000."""
+    path = path or DIAG_PATH
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def diag_is_on(st, now):
+    return isinstance(st.get("until"), (int, float)) and st["until"] > now
+
+
+# The binary each launcher finally execs, as /proc/<pid>/comm shows it.
+DIAG_EXE = {"spotify": "librespot", "airplay": "shairport-sync"}
+
+
+def _proc_diag(unit, exe):
+    """What the RUNNING unit was started with: True (verbose), False, "starting"
+    while its launcher has not exec'd `exe` yet, or None when it is not running.
+
+    The launcher exports NEXUSQ_DIAG=1 before it execs, and /proc/<pid>/environ
+    shows the environment a process was exec'd with -- so the flag is visible on
+    the final binary only. While the launcher shell is still waiting (for a
+    wlan0 address, up to 3 min) its environ says nothing about the mode, and
+    reading that as "normal" would restart it over and over."""
+    try:
+        with open(f"{_USER_CGROUP}/{unit}/cgroup.procs") as f:
+            pids = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return None
+    if not pids:
+        return None
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != exe:
+                    continue
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                return b"\0NEXUSQ_DIAG=1\0" in b"\0" + f.read()
+        except OSError:
+            continue
+    return "starting"
+
+
+def _diag_key(v):
+    """A view minus the countdown, which changes every second and is no news."""
+    return {k: x for k, x in v.items() if k != "remainingS"}
+
+
+class Diagnostics:
+    """The mode's state and the thread that ends it and applies it.
+
+    Callables are injected so the logic is testable without systemd:
+      proc_diag(unit, exe) -> True/False/"starting"/None   (_proc_diag)
+      busy(sid)        -> is that source playing or holding a track right now
+      restart(unit)    -> restart it if it runs (systemctl --user try-restart)
+      notify(view)     -> broadcast diagnosticsChanged
+    A service whose running mode differs from the wanted one is "pending" and
+    restarted the moment it is not busy: turning diagnostics on or off must
+    never cut a song off. A service that is not running needs nothing -- its
+    launcher reads the file when it next starts."""
+
+    def __init__(self, proc_diag, busy, restart, notify, path=None,
+                 clock=time.time):
+        self.proc_diag, self.busy = proc_diag, busy
+        self.restart, self.notify = restart, notify
+        self.path, self.clock = path, clock
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self._last_view = None
+
+    def _units(self):
+        return [(sid, _SERVICE_BY_ID[sid]) for sid in DIAG_SERVICES]
+
+    def view(self):
+        now = self.clock()
+        st = diag_load(self.path)
+        on = diag_is_on(st, now)
+        services, pending = [], []
+        for sid, svc in self._units():
+            mode = self.proc_diag(svc["unit"], DIAG_EXE[sid])
+            services.append({"id": sid, "name": svc["name"],
+                             "running": mode is not None,
+                             "verbose": mode is True})
+            if isinstance(mode, bool) and mode != on:
+                pending.append(sid)
+        return {"enabled": on,
+                "until": int(st["until"]) if on else None,
+                "remainingS": int(st["until"] - now) if on else 0,
+                "endedAt": (int(st["endedAt"]) if not on and st["endedAt"]
+                            else None),
+                "maxHours": DIAG_MAX_H,
+                "services": services,
+                "pending": pending}
+
+    def set(self, p):
+        if not isinstance(p.get("enabled"), bool):
+            raise Err("bad_request", "enabled (bool) required")
+        hours = p.get("hours", DIAG_DEFAULT_H)
+        if (isinstance(hours, bool) or not isinstance(hours, (int, float))
+                or not 0 < hours <= DIAG_MAX_H):
+            raise Err("bad_request", f"hours must be in (0, {DIAG_MAX_H}]")
+        now = self.clock()
+        with self.lock:
+            st = diag_load(self.path)
+            if p["enabled"]:
+                # Switching it on again extends from NOW: the app's switch
+                # means "the next N hours", not "N more hours".
+                st = {"until": now + hours * 3600, "since": now,
+                      "hours": hours, "endedAt": None}
+            elif diag_is_on(st, now):
+                st = {"until": None, "since": st["since"], "hours": st["hours"],
+                      "endedAt": now}
+            try:
+                diag_write(st, self.path)
+            except OSError as e:
+                raise Err("internal", f"could not write the diagnostics state: {e}")
+        log("diagnostics", "on until " + time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(st["until"]))
+            if p["enabled"] else "off")
+        self.wake.set()
+        v = self.view()
+        self._last_view = v
+        return v
+
+    def step(self):
+        """One pass: end an expired mode, restart what is pending and idle.
+        Returns how long to sleep before the next pass."""
+        now = self.clock()
+        with self.lock:
+            st = diag_load(self.path)
+            if st["until"] is not None and not diag_is_on(st, now):
+                st = {"until": None, "since": st["since"], "hours": st["hours"],
+                      "endedAt": st["until"]}
+                try:
+                    diag_write(st, self.path)
+                    log("diagnostics expired")
+                except OSError as e:
+                    log("diagnostics: could not record the expiry:", e)
+        on = diag_is_on(st, now)
+        for sid, svc in self._units():
+            mode = self.proc_diag(svc["unit"], DIAG_EXE[sid])
+            if not isinstance(mode, bool) or mode == on or self.busy(sid):
+                continue
+            log(f"diagnostics: restarting {svc['unit']} "
+                f"({'verbose' if on else 'normal'} logging)")
+            self.restart(svc["unit"])
+        v = self.view()
+        if self._last_view is not None and _diag_key(v) != _diag_key(self._last_view):
+            self.notify(v)
+        self._last_view = v
+        if v["pending"]:
+            return DIAG_PENDING_POLL_S
+        if on:
+            return max(1.0, min(DIAG_MAX_SLEEP_S, st["until"] - now))
+        return None                        # nothing to do until set() wakes us
+
+    def run(self):
+        self._last_view = self.view()
+        while True:
+            try:
+                wait = self.step()
+            except Exception as e:  # noqa: BLE001 - never kill the thread
+                log("diagnostics step failed:", e)
+                wait = DIAG_PENDING_POLL_S
+            self.wake.wait(wait)
+            self.wake.clear()
+
+
 # --- MQTT telemetry provisioning (PROTOCOL §13) ------------------------------
 # The companion app is the ONLY provisioner of the broker credentials: they are
 # a per-home secret that must never be baked into the (public) image, and the
@@ -2191,6 +2409,10 @@ class Bridge:
         #: extension. Only ever READ for the zone that is playing to us.
         self.roon = {}
         self._roon_zone = None
+        self.diag = Diagnostics(
+            proc_diag=_proc_diag, busy=self._source_busy,
+            restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
+            notify=lambda v: self.broadcast("diagnosticsChanged", v))
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -2239,6 +2461,12 @@ class Bridge:
             log("boot output: PA never became ready, leaving PA's default")
         threading.Thread(target=_boot_output, daemon=True).start()
         threading.Thread(target=self._hdmi_watch, daemon=True).start()
+
+    def _source_busy(self, sid):
+        """Is this source playing, or holding a paused track? Either way a
+        restart would take something from the listener."""
+        with self.lock:
+            return self.state["nowPlaying"].get("source") == sid
 
     # --- HDMI availability is dynamic, so it has to be pushed -------------
     def _hdmi_watch(self):
@@ -2519,6 +2747,13 @@ class Bridge:
             if not isinstance(sid, str) or not sid:
                 raise Err("bad_request", "id required")
             return service_log(sid, p.get("lines", 200)), []
+
+        # --- diagnostics mode (PROTOCOL §16) -------------------------------
+        if method == "getDiagnostics":
+            return self.diag.view(), []
+        if method == "setDiagnostics":
+            v = self.diag.set(p)
+            return v, [("diagnosticsChanged", v)]
 
         # --- MQTT telemetry provisioning (PROTOCOL §13) --------------------
         if method == "getMqttStatus":
@@ -3400,6 +3635,7 @@ def main():
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
+    threading.Thread(target=bridge.diag.run, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

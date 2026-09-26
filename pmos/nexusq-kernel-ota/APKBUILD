@@ -4,7 +4,7 @@
 # docs/2026-08-18-kernel-ota-phase2.md
 pkgname=nexusq-kernel-ota
 pkgver=0.1.0
-pkgrel=7
+pkgrel=8
 pkgdesc="Nexus Q kernel OTA — trial-slot writer with health-gated promotion"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
@@ -23,6 +23,7 @@ options="!check"
 # userspace/nexusq-kernel-ota/.
 source="
 	nq-kernel-ota nexusq-kernel-ota-promote.service 97-nexusq-kernel-ota.preset
+	nexusq-identity.service
 "
 builddir="$srcdir"
 
@@ -34,6 +35,11 @@ package() {
 	install -d "$pkgdir"/usr/lib/systemd/system/multi-user.target.wants
 	ln -sf ../nexusq-kernel-ota-promote.service \
 		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-kernel-ota-promote.service
+	# r8: every unit its own identity from one generic boot image.
+	install -Dm644 nexusq-identity.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-identity.service
+	ln -sf ../nexusq-identity.service \
+		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-identity.service
 	install -Dm644 97-nexusq-kernel-ota.preset \
 		"$pkgdir"/usr/lib/systemd/system-preset/97-nexusq-kernel-ota.preset
 

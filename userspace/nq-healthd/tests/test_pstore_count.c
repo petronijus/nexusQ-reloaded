@@ -30,7 +30,9 @@ static void test_flat_archive_is_counted(void) {
     rmrf(TEST_ARCHIVE); mk(TEST_ARCHIVE);
     touch(TEST_ARCHIVE "/console-ramoops-0");
     touch(TEST_ARCHIVE "/dmesg-ramoops-0");
-    CHECK(pstore_count() == 2);
+    /* Only the dmesg record is a crash: console-ramoops-N is the previous
+     * boot's console tail, left by EVERY reboot, clean or not. */
+    CHECK(pstore_count() == 1);
 }
 
 /* systemd nests records under a per-boot directory in other versions; the same
@@ -42,7 +44,7 @@ static void test_nested_archive_is_counted(void) {
     touch(TEST_ARCHIVE "/8f1c2d/console-ramoops-0");
     mk(TEST_ARCHIVE "/9a2b3c");
     touch(TEST_ARCHIVE "/9a2b3c/dmesg-ramoops-0");
-    CHECK(pstore_count() == 3);
+    CHECK(pstore_count() == 2);
 }
 
 static void test_an_empty_archive_is_zero_not_a_fallback(void) {
@@ -74,6 +76,14 @@ static void test_dotfiles_are_ignored(void) {
     CHECK(pstore_count() == 1);
 }
 
+/* A clean reboot leaves only console-ramoops-0 (measured on the cottage Q,
+ * 2026-09-26: 628 B, "reboot: Restarting system"). That is not a crash. */
+static void test_console_record_alone_is_not_a_crash(void) {
+    rmrf(TEST_ARCHIVE); mk(TEST_ARCHIVE);
+    touch(TEST_ARCHIVE "/console-ramoops-0");
+    CHECK(pstore_count() == 0);
+}
+
 int main(void) {
     test_flat_archive_is_counted();
     test_nested_archive_is_counted();
@@ -81,6 +91,7 @@ int main(void) {
     test_no_archive_falls_back_to_pstorefs();
     test_neither_present_is_zero();
     test_dotfiles_are_ignored();
+    test_console_record_alone_is_not_a_crash();
     rmrf(TEST_ARCHIVE); rmrf(TEST_PSTOREFS);
     printf(fails ? "FAILED (%d)\n" : "OK\n", fails);
     return fails ? 1 : 0;

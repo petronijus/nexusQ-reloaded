@@ -6,6 +6,132 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — diagnostics mode: verbose device logs that switch themselves off (`nexusq-control` **r51**, device **r115**)
+
+`setDiagnostics {enabled, hours}` (PROTOCOL §16) turns the streaming services'
+logging up for a set time, 24 h by default and at most 72. librespot runs with
+`RUST_LOG=libmdns=info,librespot=debug` and shairport-sync with `-vv`. The mode
+ends by itself; the state is a wall-clock `until` in
+`/var/lib/nexusq/diagnostics.json`, read by the launchers through the new
+`nq-diag` when a service starts.
+
+A running service is restarted into the new mode **only when it is not
+playing or holding a paused track**, so switching the mode on or off, or its
+expiry at 3 a.m., never cuts a song off. Until then the service is listed as
+`pending`. What mode a running service is in is read from its process (the
+launcher exports `NEXUSQ_DIAG=1`), not remembered, so a bridge restart or a
+reboot cannot leave the two disagreeing. A launcher still waiting for a WiFi
+address is never restarted for it. `tests/test_diagnostics.py` (12 tests).
+Home Assistant shows the mode as **Diagnostics mode** (nexusq-mqtt r8).
+
+The first use is the librespot 0.8.0 re-authentication loop (known issue
+below): the next time it happens on a unit with the mode on, the journal has
+the dealer websocket's side of it.
+
+### Added — deep idle in Home Assistant (`nexusq-mqtt` **r8**)
+
+The C-states now appear in Home Assistant next to the OPP residency:
+
+- **Time in C1/C2/C3**: the share of wall time each CPU spent in each state
+  over the same rolling hour, from the kernel's cumulative cpuidle counters.
+  The rest is busy time. On the cottage Q at idle: C3 95 %, C1 2 %.
+- **CPU latency limit**: the PM QoS limit, only while a driver holds one.
+- **Deep idle blocked** (%) and the problem sensor **Deep idle**: ON when no
+  deep state could run (none armed, or the QoS limit below every armed state's
+  exit latency) in ≥ 90 % of the hour's samples. That is the rule
+  `nq-health-report` applies to a capture. A short block is ordinary (the BT
+  UART pins 170 µs while it streams), and no verdict is given until the window
+  spans 10 min.
+
+`collect()` now carries its rolling histories in one `Windows` object. 69
+tests.
+
+### Added — every unit its own WiFi MAC and BT address, from one generic boot image (`nexusq-kernel-ota` **r8**)
+
+Both addresses live in the DTB appended to the boot image, and the DTS carries
+one unit's: the Prague Q's factory values. The hardware reports no address of
+its own. Stock received them on the bootloader cmdline, which
+`CONFIG_CMDLINE_FORCE` discards. So every other unit got its identity as a hand
+byte-patch at flash time, and **every unit flashed from a public release came
+up as the Prague Q on both radios**.
+
+`nq-kernel-ota personalize` runs on every boot (`nexusq-identity.service`). It
+settles the unit's identity, in this order:
+
+1. the persist store's record (`identity/radio`), so a full flash comes back as
+   itself;
+2. otherwise, what the boot slot carries if that is not the image's generic
+   identity (the cottage Q keeps its own; no unit is renamed);
+3. otherwise, the generic identity, but only on the unit it belongs to (the
+   Prague Q, recognised by its eMMC CID);
+4. otherwise, an identity derived from the **eMMC CID**, the one unique
+   identifier the OS can read: Google's OUI plus three bytes of
+   `sha256("nexusq/<wifi|bt>/emmc-cid/<cid>")`.
+
+The result is recorded in the store. If the boot slot says otherwise, the
+slot's own image is split into kernel, DTB and header cmdline, the 12 identity
+bytes are written, and it is repacked. `fdt_tool diffcheck` must find it equal
+to the proven image except in those bytes and the header id (measured on the
+cottage Q: a same-identity repack is byte-identical, a changed one differs in
+exactly 26 bytes). It is then staged in the trial slot and booted once.
+Autopromote promotes it only when the **running** kernel reports the staged
+identity (a new pending-marker field). For such a trial, autopromote skips the
+network part of its health gate: the kernel is identical, and a freshly flashed
+unit has no network until it is set up. `tests/test_personalize.sh` (27 checks)
+covers the rules, all five situations and the gate. The hand patch in
+`docs/2026-08-28-per-unit-bt-wifi-identity.md` is no longer part of a flash.
+
+### Fixed — boot waited 17–74 s for entropy (device **r114**)
+
+`systemd-random-seed` loads the saved seed, then blocks until the kernel's CRNG
+is initialised, and `sysinit.target` waits for it. This systemd build credits
+the seed only when told to ("`$SYSTEMD_RANDOM_SEED_CREDIT` is not set, not
+crediting entropy"), and the HS OMAP4460 offers the kernel no hardware RNG. So
+the CRNG gathered entropy alone: `crng init done` came 17–74 s into boot across
+the cottage Q's last ten boots, with `sysinit.target` 0.03 s after it every
+time. A drop-in now sets `SYSTEMD_RANDOM_SEED_CREDIT=1`. That is the careful
+mode: it credits only a seed that systemd itself marked creditable, never on a
+first boot.
+
+Two related guards:
+
+- `verify-rootfs.sh` fails an image that carries a seed, which would be credited
+  on every unit flashed from it.
+- `nq-rootfs-ab populate` drops the seed from the slot it copies to, so two
+  slots never credit the same one. It also drops the storage check's per-slot
+  state.
+
+### Fixed — Roon failed once at boot because PulseAudio was not up yet (device **r114**)
+
+`roon.service` is `After=pulseaudio.service`, but that unit is `Type=simple`
+(this PulseAudio build has no `sd_notify`), so "started" meant forked, not
+listening. At boot `roon-nexusq`'s `pactl` calls met "Connection refused" and
+the unit restarted. It now waits up to 30 s for `pactl info` to answer, as
+`nexusq-uac2-in` always has (`tests/test_roon_waits_for_pulse.sh`).
+
+### Fixed — a flash wiped the crash history (device **r114**)
+
+`/var/lib/systemd/pstore`, where systemd-pstore archives every ramoops record,
+is now the persist store's fifth bind mount (`var-lib-systemd-pstore.mount`,
+ordered before systemd-pstore). A flash, the usual answer to a unit in trouble,
+no longer deletes the only record of why it was in trouble.
+
+### Fixed — the diagnostics reported faults that were not there (device **r114**, `nexusq-kernel-ota` **r8**)
+
+- **healthd's `dmesg_err` read 5 on every clean boot.** "ramoops" contains
+  "oops", and the kernel command line names ramoops and `panic=30`. "oops" and
+  "panic" now match only as words, and the command-line record is skipped. A
+  real "Internal error: Oops" or "Kernel panic" still counts, and the baseline
+  is 0 (`tests/test_kmsg_count.c`).
+- **nq-health-report called a clean reboot a "crash dump".** healthd's `pstore`
+  now counts `dmesg-*` records only. The `console-ramoops-N` beside them is the
+  previous boot's console tail, and every reboot leaves one.
+- **`nq-kernel-ota reconcile` could not reconcile a kernel staged from a local
+  apk.** `stage-apk` now keeps the apk until the package database agrees, and
+  reconcile installs it when the repo does not carry that kernel yet. This
+  happened with 6.18.48-r17 and was fixed by hand then.
+  `tests/test_reconcile_verdict.sh` (9 checks) fails 3 against the old code.
+
 ### Added — every Q gets its A/B rootfs slots, from a flash or over the air (device **r112–r113**, `nexusq-rootfs-ab` **r3–r4**)
 
 A/B rootfs (p13 "userdata" = slot A, p14 "userdata_b" = slot B, 6.57 GiB each)

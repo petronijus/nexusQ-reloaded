@@ -1106,3 +1106,63 @@ Errors: `bad_request` (missing/blank/non-string name, non-string room),
 `internal` (hostname change or identity write failed — validated before any side
 effect, so a refusal leaves no half-rename behind), `unavailable`
 (`hostnamectl` unreachable).
+
+## 16. Diagnostics mode — verbose device logs for a limited time (nexusq-control r51+)
+
+A fault seen in the field often needs a debug log that nobody wants running
+all the time: librespot at `debug` logs every Spotify Connect frame into the
+eMMC journal. This mode switches the streaming services to verbose logging
+for a set number of hours and **switches itself off** when they run out. The
+app offers it in the Developer screen; it is separate from the app's own
+debug log.
+
+| method | params | result | event |
+|---|---|---|---|
+| `getDiagnostics` | — | diagnostics object (below) | — |
+| `setDiagnostics` | `{ enabled: bool, hours?: number }` | diagnostics object | `diagnosticsChanged` (the same object) |
+
+`hours` defaults to **24**; the range is `(0, maxHours]` with `maxHours` = 72.
+Switching it on while it is on restarts the count **from now**. Switching it
+off ends it at once.
+
+```jsonc
+{
+  "enabled": true,
+  "until": 1790086400,        // epoch s (wall clock), null when off
+  "remainingS": 86312,        // 0 when off
+  "endedAt": null,            // epoch s the last session ended, while off
+  "maxHours": 72,
+  "services": [
+    {"id": "spotify", "name": "Spotify Connect", "running": true,  "verbose": true},
+    {"id": "airplay", "name": "AirPlay",         "running": false, "verbose": false}
+  ],
+  "pending": []               // running services still in the other mode
+}
+```
+
+What verbose means per service: librespot `RUST_LOG=libmdns=info,librespot=debug`,
+shairport-sync `-vv`. The launchers read the mode when a service starts
+(`nq-diag active`, state in `/var/lib/nexusq/diagnostics.json`).
+
+**A running service is restarted into the new mode only when it is not
+playing** — not playing and not holding a paused track (`nowPlaying.source`
+is not that service). Until then it is listed in `pending`, and the app should
+say the change applies when playback stops. The bridge re-checks every 30 s
+while anything is pending and pushes `diagnosticsChanged` once it is applied;
+the expiry is pushed the same way. A service that is not running needs
+nothing: it starts in the right mode.
+
+`running`/`verbose` are read from the process itself (its environment carries
+`NEXUSQ_DIAG=1` when verbose), not remembered, so they are right after a bridge
+restart or a reboot. While a launcher is still starting (it waits for a WiFi
+address) the service reads `running: true, verbose: false` and is not pending.
+
+The end time is wall clock. The RTC does not keep time, but `timesyncd`
+restores the last saved time at boot, so after a power cut the mode runs at
+most as much longer as the unit was off.
+
+Errors: `bad_request` (`enabled` not a bool, `hours` outside the range or not
+a number), `internal` (the state file could not be written; nothing changed).
+
+Home Assistant sees the mode as the diagnostic binary sensor **Diagnostics
+mode** (nexusq-mqtt r8).

@@ -60,6 +60,22 @@ static void test_header_is_not_the_message(void)
     CHECK(!line_is_error(msg));
 }
 
+/* The five lines that made dmesg_err read 5 on every clean boot (the cottage Q,
+ * 2026-09-26): "ramoops" contains "oops", and the command line names ramoops
+ * and panic=30. None is an error; a real oops and a real panic still are. */
+static void test_ramoops_and_the_cmdline_are_not_errors(void)
+{
+    CHECK(!line_is_error("Kernel command line: console=ttyS2 ramoops.mem_address=0xbf000000 panic=30"));
+    CHECK(!line_is_error("ramoops: using module parameters"));
+    CHECK(!line_is_error("printk: legacy console [ramoops-1] enabled"));
+    CHECK(!line_is_error("pstore: Registered ramoops as persistent store backend"));
+    CHECK(!line_is_error("ramoops: using 0x100000@0xbf000000, ecc: 0"));
+    CHECK(line_is_error("Internal error: Oops: 5 [#1] SMP ARM"));
+    CHECK(line_is_error("Kernel panic - not syncing: sysrq triggered crash"));
+    CHECK(line_is_error("oops: 0000"));
+    CHECK(line_is_error("BUG: scheduling while atomic"));
+}
+
 static void test_malformed_records_are_rejected(void)
 {
     unsigned long long seq;
@@ -128,6 +144,7 @@ int main(void)
     test_parse_keeps_continuation_lines();
     test_header_is_not_the_message();
     test_malformed_records_are_rejected();
+    test_ramoops_and_the_cmdline_are_not_errors();
     test_trim_drops_only_what_left_the_ring();
     test_push_grows();
     test_incremental_equals_recount();

@@ -434,6 +434,7 @@ cp "$SRC/pmos/nexusq-kernel-ota/APKBUILD"                             "$NEXUSQKO
 cp "$SRC/userspace/nexusq-kernel-ota/nq-kernel-ota"                   "$NEXUSQKOTA_DIR/"
 cp "$SRC/userspace/nexusq-kernel-ota/nexusq-kernel-ota-promote.service" "$NEXUSQKOTA_DIR/"
 cp "$SRC/userspace/nexusq-kernel-ota/97-nexusq-kernel-ota.preset"     "$NEXUSQKOTA_DIR/"
+cp "$SRC/userspace/nexusq-kernel-ota/nexusq-identity.service"        "$NEXUSQKOTA_DIR/"
 echo "  Installed: nexusq-kernel-ota (aport + tool -> main/nexusq-kernel-ota)"
 
 NEXUSQAB_DIR="$PMAPORTS/main/nexusq-rootfs-ab"

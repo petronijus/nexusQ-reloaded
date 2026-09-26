@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""nq-diag -- is the Nexus Q's diagnostics mode on?
+
+    nq-diag active    exit 0 while it is on, 1 otherwise (also when unset)
+    nq-diag status    one line: "on until <ISO-8601 UTC>" or "off"
+
+The mode is switched from the companion app (nexusq-control setDiagnostics,
+PROTOCOL §16), which owns the state file and ends the mode when it runs out.
+This is the reading side for the service launchers (librespot-nexusq,
+shairport-nexusq): a service started while the mode is on logs verbosely and
+exports NEXUSQ_DIAG=1, which is how nexusq-control tells what mode a running
+process was started in. Read-only; runs as any user (the file is 0644).
+"""
+import json
+import os
+import sys
+import time
+
+PATH = os.environ.get("NQ_DIAG_PATH", "/var/lib/nexusq/diagnostics.json")
+
+
+def until():
+    """The wall-clock end of the mode, or None when it is not on."""
+    try:
+        with open(PATH) as f:
+            v = json.load(f).get("until")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v if v > time.time() else None
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "status"
+    u = until()
+    if cmd == "active":
+        return 0 if u is not None else 1
+    if cmd == "status":
+        print("on until " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(u))
+              if u is not None else "off")
+        return 0
+    print("usage: nq-diag active|status", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -58,7 +58,8 @@ Config (/etc/nexusq/mqtt.json, mode 0600):
 
 Env overrides (host-test seams, mirroring nq-healthd's NQ_* style):
     NQMQTT_CONF NQMQTT_IDENTITY NQMQTT_HEALTH NQMQTT_TIS NQMQTT_WLAN
-    NQMQTT_MAC_PATH NQMQTT_CGROUP NQMQTT_UPTIME NQMQTT_WIFI_WD
+    NQMQTT_MAC_PATH NQMQTT_CGROUP NQMQTT_UPTIME NQMQTT_WIFI_WD NQMQTT_CPUIDLE
+    NQMQTT_DIAG
 """
 
 import json
@@ -78,6 +79,10 @@ IDENTITY_PATH = os.environ.get("NQMQTT_IDENTITY", "/etc/nexusq/device.json")
 HEALTH_PATH = os.environ.get("NQMQTT_HEALTH", "/var/log/nq-health/health.jsonl")
 TIS_PATH = os.environ.get(
     "NQMQTT_TIS", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
+# Diagnostics mode state, owned by nexusq-control (PROTOCOL §16).
+DIAG_PATH = os.environ.get("NQMQTT_DIAG", "/var/lib/nexusq/diagnostics.json")
+# cpuN/cpuidle/stateM/{name,time,latency} live under here.
+CPUIDLE_ROOT = os.environ.get("NQMQTT_CPUIDLE", "/sys/devices/system/cpu")
 WLAN_IFACE = os.environ.get("NQMQTT_WLAN", "wlan0")
 MAC_PATH = os.environ.get("NQMQTT_MAC_PATH", "/sys/class/net/wlan0/address")
 UPTIME_PATH = os.environ.get("NQMQTT_UPTIME", "/proc/uptime")
@@ -281,6 +286,132 @@ def window_residency(history, cur, now, window_s=None):
     pct = opp_residency(base, cur)
     history.append((now, cur))
     return pct, history
+
+
+class Windows:
+    """The rolling histories collect() carries from one publish to the next:
+    cpufreq time_in_state, cpuidle time and the deep-idle veto samples. One
+    object, so a new window never changes collect()'s signature again."""
+
+    def __init__(self):
+        self.tis = []     # [(monotonic_t, {freq_khz: ticks})]
+        self.idle = []    # [(monotonic_t, {state: us}, ncpu)]
+        self.veto = []    # [(monotonic_t, blocked: bool)]
+
+
+def read_cpuidle():
+    """({state: time_us summed over the CPUs}, {state: exit_latency_us}, ncpu)
+    from the kernel's cumulative cpuidle counters; ({}, {}, 0) without cpuidle.
+    Only CPUs whose counters are readable are counted, so an offline CPU does
+    not dilute the shares; a change in that count resets the window."""
+    times, lat, ncpu = {}, {}, 0
+    try:
+        cpus = sorted(d for d in os.listdir(CPUIDLE_ROOT)
+                      if re.fullmatch(r"cpu\d+", d))
+    except OSError:
+        return {}, {}, 0
+    for cpu in cpus:
+        base = os.path.join(CPUIDLE_ROOT, cpu, "cpuidle")
+        seen = {}
+        st = 0
+        while True:
+            d = os.path.join(base, f"state{st}")
+            try:
+                with open(os.path.join(d, "name")) as f:
+                    name = f.read().strip()
+                with open(os.path.join(d, "time")) as f:
+                    t = int(f.read().strip())
+                with open(os.path.join(d, "latency")) as f:
+                    lt = int(f.read().strip())
+            except (OSError, ValueError):
+                break
+            if name:
+                seen[name] = t
+                lat.setdefault(name, lt)
+            st += 1
+        if not seen:
+            continue
+        ncpu += 1
+        for name, t in seen.items():
+            times[name] = times.get(name, 0) + t
+    return times, lat, ncpu
+
+
+def idle_window(history, cur, ncpu, now, window_s=None):
+    """Rolling-window share of WALL time spent in each C-state (%), per CPU
+    on average: time in the state over (ncpu x elapsed). Unlike OPP residency
+    the states do not add up to 100 -- the rest is time the CPUs were busy.
+
+    history: [(monotonic_t, snapshot, ncpu)] oldest-first. With no history the
+    base is the boot (monotonic 0, counters 0), the same honest since-boot
+    fallback the OPP window uses. A counter that went backwards, a state that
+    appeared or vanished, or a different CPU count restarts the history.
+    cpuidle adds a stretch to `time` only when it ends, so a CPU asleep right
+    now is under-counted by that one stretch; over an hour that is noise, and
+    the share is clamped to 100 for the first publish after boot."""
+    window_s = OPP_WINDOW_S if window_s is None else window_s
+    if not cur or ncpu <= 0:
+        return {}, history
+    if history:
+        _, newest, n = history[-1]
+        if (n != ncpu or set(newest) != set(cur)
+                or any(cur[k] < v for k, v in newest.items())):
+            history = []
+    history = [h for h in history if now - h[0] <= window_s]
+    t0, base = (history[0][0], history[0][1]) if history else (0.0, {})
+    history.append((now, cur, ncpu))
+    span_us = (now - t0) * 1e6 * ncpu
+    if span_us <= 0:
+        return {}, history
+    return ({k: round(min(100.0, 100.0 * (v - base.get(k, 0)) / span_us), 1)
+             for k, v in cur.items()}, history)
+
+
+# A deep state the governor may not pick is the failure two investigations were
+# about: a 170 us CPU-latency request from the BT UART kept C2 from ever running
+# for weeks while every counter merely looked "quiet"
+# (docs/2026-09-20-sleep-states-design.md 4m). A SHORT block is ordinary (the
+# BT UART pins 170 us while it streams), so -- exactly as nq-health-report
+# judges a capture -- only a block in >= 90 % of the samples is a problem, and
+# only once the window spans long enough that one sample cannot be 90 % of it.
+VETO_PERSISTENT = 0.9
+VETO_MIN_SPAN_S = int(os.environ.get("NQMQTT_VETO_MIN_SPAN_S", "600"))
+# PM QoS "no constraint" (PM_QOS_CPU_LATENCY_DEFAULT_VALUE).
+QOS_NO_LIMIT = 2000000000
+
+
+def deep_idle_blocked(armed, qos_us, latency):
+    """True when no deep C-state can run: none is armed, or the CPU-latency
+    QoS limit is below every armed state's exit latency. None when the
+    sample cannot say (older healthd, a kernel without deep states)."""
+    # every state but the shallowest (WFI, C1 on steelhead) is a deep one
+    shallow = min(latency, key=latency.get) if latency else None
+    deep = [n for n in latency if n != shallow]
+    if not deep or not isinstance(armed, str):
+        return None
+    armed_deep = [n for n in armed.split(",") if n in deep]
+    if not armed_deep:
+        return True
+    if not isinstance(qos_us, int) or isinstance(qos_us, bool) or qos_us < 0:
+        return None
+    return qos_us < min(latency[n] for n in armed_deep)
+
+
+def veto_window(history, blocked, now, window_s=None):
+    """(share of blocked samples %, judgement or None, new history). The
+    judgement is None until the window spans VETO_MIN_SPAN_S; a sample that
+    cannot say (None) is not recorded."""
+    window_s = OPP_WINDOW_S if window_s is None else window_s
+    history = [h for h in history if now - h[0] <= window_s]
+    if blocked is not None:
+        history.append((now, bool(blocked)))
+    if not history:
+        return None, None, history
+    share = sum(1 for _, b in history if b) / len(history)
+    judged = None
+    if now - history[0][0] >= VETO_MIN_SPAN_S:
+        judged = share >= VETO_PERSISTENT
+    return round(100.0 * share, 1), judged, history
 
 
 def read_wifi():
@@ -556,6 +687,23 @@ def read_wifi_repairs(uptime, now=None):
     return out
 
 
+def read_diagnostics(now=None):
+    """{"diagnostics": bool, "diagnostics_until": ISO-8601 UTC (only while
+    on)}. No file (never switched on) is plainly off."""
+    now = time.time() if now is None else now
+    try:
+        with open(DIAG_PATH) as f:
+            until = json.load(f).get("until")
+    except (OSError, ValueError, AttributeError):
+        until = None
+    if isinstance(until, bool) or not isinstance(until, (int, float)) \
+            or until <= now:
+        return {"diagnostics": False}
+    return {"diagnostics": True,
+            "diagnostics_until": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                               time.gmtime(until))}
+
+
 def read_uptime():
     try:
         with open(UPTIME_PATH) as f:
@@ -564,13 +712,13 @@ def read_uptime():
         return None
 
 
-def collect(tis_history):
+def collect(win):
     """One publishable state snapshot. Fields whose source is unavailable are
     OMITTED (not null) so HA value_templates can `| default('unknown')` and the
-    app can distinguish 'absent' from a real value. Returns
-    (state, tis_history) — the caller threads the rolling residency history
-    through consecutive calls."""
+    app can distinguish 'absent' from a real value. `win` (a Windows) carries
+    the rolling histories between consecutive calls and is updated in place."""
     state = {}
+    now = time.monotonic()
 
     health, age = read_health()
     fresh = age is not None and age <= HEALTH_FRESH_S
@@ -620,9 +768,34 @@ def collect(tis_history):
             state["pstore"] = int(health["pstore"])
 
     cur_tis = read_time_in_state()
-    pct, tis_history = window_residency(tis_history, cur_tis, time.monotonic())
+    pct, win.tis = window_residency(win.tis, cur_tis, now)
     for freq, val in pct.items():
         state[f"opp{freq // 1000}_pct"] = val
+
+    # C-states: share of wall time over the same rolling hour, from the kernel's
+    # counters (healthd's per-sample cstate_ms is a 5 s window; an hour of it
+    # would mean re-reading the whole log every publish).
+    idle, latency, ncpu = read_cpuidle()
+    pct, win.idle = idle_window(win.idle, idle, ncpu, now)
+    for name, val in pct.items():
+        key = re.sub(r"[^a-z0-9]", "", name.lower())
+        if key:
+            state[f"idle_{key}_pct"] = val
+    blocked = None
+    if health and fresh:
+        armed = health.get("cstate_armed")
+        qos = health.get("qos_us")
+        if isinstance(armed, str):
+            state["cstate_armed"] = armed
+        if isinstance(qos, int) and not isinstance(qos, bool) \
+                and 0 <= qos < QOS_NO_LIMIT:
+            state["cpu_latency_limit_us"] = qos
+        blocked = deep_idle_blocked(armed, qos, latency)
+    share, judged, win.veto = veto_window(win.veto, blocked, now)
+    if share is not None:
+        state["deep_idle_blocked_pct"] = share
+    if judged is not None:
+        state["deep_idle_blocked"] = judged
 
     rssi, ssid = read_wifi()
     if rssi is not None:
@@ -643,8 +816,9 @@ def collect(tis_history):
         state["uptime_s"] = uptime
 
     state.update(read_wifi_repairs(uptime))
+    state.update(read_diagnostics())
 
-    return state, tis_history
+    return state
 
 
 # --------------------------------------------------------------------------
@@ -991,6 +1165,32 @@ def discovery_configs(node_id, display_name, prefix):
              "entity_category": "diagnostic", "icon": "mdi:sine-wave",
              "value_template":
                  f"{{{{ value_json.opp{mhz}_pct | default('unknown') }}}}"}))
+    # C-state residency: share of wall time in each state over the same hour.
+    # C1 is WFI, C2 both cores off with the MPU retained, C3 the MPU off too --
+    # steelhead's stock table (kernel patch 0056); what is left is busy time.
+    for key, name in (("c1", "Time in C1 (WFI)"),
+                      ("c2", "Time in C2 (cores off)"),
+                      ("c3", "Time in C3 (MPU off)")):
+        sensors.append((
+            f"idle_{key}", name,
+            {"unit_of_measurement": "%", "state_class": "measurement",
+             "entity_category": "diagnostic", "icon": "mdi:sleep",
+             "value_template":
+                 f"{{{{ value_json.idle_{key}_pct | default('unknown') }}}}"}))
+    sensors += [
+        # Present only while some driver holds a limit; 'None' (no value) is
+        # the normal, unconstrained state, not a fault.
+        ("cpu_latency_limit", "CPU latency limit",
+         {"unit_of_measurement": "µs", "entity_category": "diagnostic",
+          "icon": "mdi:timer-lock-outline",
+          "value_template":
+              "{{ value_json.cpu_latency_limit_us | default('None') }}"}),
+        ("deep_idle_blocked_share", "Deep idle blocked",
+         {"unit_of_measurement": "%", "state_class": "measurement",
+          "entity_category": "diagnostic", "icon": "mdi:sleep-off",
+          "value_template":
+              "{{ value_json.deep_idle_blocked_pct | default('unknown') }}"}),
+    ]
     binary = [
         ("spotify", "Spotify Connect", "running", "services.spotify"),
         ("airplay", "AirPlay", "running", "services.airplay"),
@@ -1008,6 +1208,14 @@ def discovery_configs(node_id, display_name, prefix):
                    f"{{{{ 'ON' if (value_json.{path} | default(false)) "
                    f"else 'OFF' }}}}"}
         configs.append((f"binary_sensor/{node_id}/{key}/config", cfg))
+    # Verbose device logging, switched on from the app for a limited time.
+    cfg = {**base, "name": "Diagnostics mode",
+           "unique_id": f"{node_id}_diagnostics",
+           "entity_category": "diagnostic", "icon": "mdi:bug-outline",
+           "value_template":
+               "{{ 'ON' if (value_json.diagnostics | default(false)) "
+               "else 'OFF' }}"}
+    configs.append((f"binary_sensor/{node_id}/diagnostics/config", cfg))
     # problem-style binaries: ON == something is wrong
     for key, name, expr in (
         ("nexusqd", "LED daemon",
@@ -1022,6 +1230,10 @@ def discovery_configs(node_id, display_name, prefix):
         # device) reads as healthy, like the LED ring.
         ("wifi_link", "WiFi link",
          "not (value_json.wifi_repaired_recently | default(false))"),
+        # ON when the deep C-states were blocked in >= 90 % of the last hour's
+        # samples; absent (window still short, older device) reads healthy.
+        ("deep_idle", "Deep idle",
+         "not (value_json.deep_idle_blocked | default(false))"),
     ):
         cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
                "device_class": "problem", "entity_category": "diagnostic",
@@ -1067,7 +1279,7 @@ def run():
     signal.signal(signal.SIGTERM, _on_sigterm)
     signal.signal(signal.SIGINT, _on_sigterm)
 
-    tis_history = []   # rolling time_in_state snapshots for the 1 h residency window
+    win = Windows()    # rolling histories for the 1 h residency windows
     backoff = 5
     client = None
     if ROON_ENABLED:
@@ -1105,7 +1317,7 @@ def run():
                 client.publish(f"{conf['discovery_prefix']}/{suffix}",
                                json.dumps(cfg), retain=True)
             while not _shutdown:
-                state, tis_history = collect(tis_history)
+                state = collect(win)
                 payload = json.dumps(state)
                 client.publish(state_topic, payload, retain=True)
                 client.publish(legacy_state_topic, payload, retain=True)

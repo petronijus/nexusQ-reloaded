@@ -268,6 +268,17 @@ for f in .ab-split-pending .rootfs-resized storage-ok ab-migrate.attempted ab-mi
         ok "no per-unit storage state baked: $f"
     fi
 done
+# The saved random seed is CREDITED at boot since device r114 (boot no longer
+# waits 17-74 s for the CRNG). A seed baked into a release image would then be
+# credited on every unit flashed from it -- the same "entropy" everywhere. The
+# image must carry none; each unit writes its own on its first boot.
+if has var/lib/systemd/random-seed; then
+    bad "no random seed baked" "var/lib/systemd/random-seed is in the image and would be credited on every unit"
+else
+    ok "no random seed baked"
+fi
+chk_has usr/lib/systemd/system/systemd-random-seed.service.d/10-nexusq-random-seed-credit.conf \
+                                                                     "seed crediting drop-in"
 chk_has usr/lib/nexusq-rootfs-ab/ab-lib.sh                           "A/B layout code (ab-lib.sh)"
 if grep -q '/usr/lib/nexusq-rootfs-ab/ab-lib.sh' "$MNT/usr/bin/nexusq-resize-rootfs" 2>/dev/null \
    && grep -q '^ab_layout()' "$MNT/usr/lib/nexusq-rootfs-ab/ab-lib.sh" 2>/dev/null \

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=113
+pkgrel=115
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -110,6 +110,7 @@ source="
 	nexusq-nfc.service
 	20-nexusq-nsresourced-off.preset
 	20-nexusq-oomd-off.preset
+	10-nexusq-random-seed-credit.conf
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
 	50-nexusq-48k.conf
@@ -129,6 +130,7 @@ source="
 	10-nexusq-ntp-by-ip.conf
 	librespot.service
 	librespot-nexusq
+	nq-diag
 	85-nexusq-zeroconf-rebind
 	shairport-sync.service
 	shairport-nexusq
@@ -160,6 +162,7 @@ source="
 	nexusq-persist-nm-connections.mount
 	nexusq-persist-bluetooth.mount
 	nexusq-persist-roon.mount
+	nexusq-persist-pstore.mount
 	nexusq-persist-hostname.path
 	nexusq-persist-hostname.service
 	10-nexusq-persist-sshd.conf
@@ -292,6 +295,10 @@ package() {
 	# which makes preset-all warn). See the .preset file header for the ordering.
 	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
 		"$pkgdir"/usr/lib/systemd/system-preset/20-nexusq-nsresourced-off.preset
+	# Credit the saved random seed, so boot stops waiting 17-74 s for the CRNG
+	# (see the drop-in's header).
+	install -Dm644 "$srcdir"/10-nexusq-random-seed-credit.conf \
+		"$pkgdir"/usr/lib/systemd/system/systemd-random-seed.service.d/10-nexusq-random-seed-credit.conf
 	# Same mechanism for systemd-oomd: the largest idle CPU consumer, guarding
 	# nothing this appliance meets (see the .preset header for the numbers).
 	install -Dm644 "$srcdir"/20-nexusq-oomd-off.preset \
@@ -535,6 +542,9 @@ package() {
 		"$pkgdir"/etc/asound.conf
 	install -Dm755 "$srcdir"/librespot-nexusq \
 		"$pkgdir"/usr/bin/librespot-nexusq
+	# Reading side of the diagnostics mode (nexusq-control, PROTOCOL §16): the
+	# launchers ask it whether to start verbose.
+	install -Dm755 "$srcdir"/nq-diag "$pkgdir"/usr/bin/nq-diag
 	# librespot 0.8.0 takes only an ADDRESS for --zeroconf-interface, captured
 	# once at start, so a DHCP move leaves it announcing on an address that no
 	# longer exists -- alive, listening, and invisible to every Spotify client,
@@ -689,11 +699,14 @@ package() {
 	# r108: RoonBridge's identity + zone settings (a flash made it a new device).
 	install -Dm644 "$srcdir"/nexusq-persist-roon.mount \
 		"$pkgdir"/etc/systemd/system/'opt-glibc\x2drt-home-roon-.RoonBridge.mount'
+	# r114: the crash archive -- a flash used to wipe the only record of a crash.
+	install -Dm644 "$srcdir"/nexusq-persist-pstore.mount \
+		"$pkgdir"/etc/systemd/system/var-lib-systemd-pstore.mount
 	install -dm755 "$pkgdir"/etc/systemd/system/local-fs.target.wants
 	for u in nexusq-persist-prepare.service var-lib-nexusq-persist.mount \
 		 nexusq-persist-apply.service home-user-.config-systemd.mount \
 		 'etc-NetworkManager-system\x2dconnections.mount' var-lib-bluetooth.mount \
-		 'opt-glibc\x2drt-home-roon-.RoonBridge.mount'; do
+		 'opt-glibc\x2drt-home-roon-.RoonBridge.mount' var-lib-systemd-pstore.mount; do
 		ln -sf "../$u" "$pkgdir/etc/systemd/system/local-fs.target.wants/$u"
 	done
 	# The hostname is hostnamed's file (rewritten atomically, so neither a
@@ -777,6 +790,7 @@ SKIP  nexusq-cpufreq-tune.service
 SKIP  10-nexusq-ntp-by-ip.conf
 SKIP  20-nexusq-nsresourced-off.preset
 SKIP  20-nexusq-oomd-off.preset
+SKIP  10-nexusq-random-seed-credit.conf
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf
 SKIP  50-nexusq-48k.conf
@@ -793,6 +807,7 @@ SKIP  nexusq-wifi-watchdog
 SKIP  nexusq-wifi-watchdog.service
 SKIP  librespot.service
 SKIP  librespot-nexusq
+SKIP  nq-diag
 SKIP  85-nexusq-zeroconf-rebind
 SKIP  shairport-sync.service
 SKIP  shairport-nexusq
@@ -823,6 +838,7 @@ SKIP  nexusq-persist-apply.service
 SKIP  nexusq-persist-user-systemd.mount
 SKIP  nexusq-persist-nm-connections.mount
 SKIP  nexusq-persist-bluetooth.mount
+SKIP  nexusq-persist-pstore.mount
 SKIP  nexusq-persist-hostname.path
 SKIP  nexusq-persist-hostname.service
 SKIP  10-nexusq-persist-sshd.conf
