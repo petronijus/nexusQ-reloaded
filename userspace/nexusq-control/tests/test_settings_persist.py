@@ -1,4 +1,4 @@
-"""The per-unit settings survive a flash (device r106).
+"""The per-unit settings survive a flash (device r116).
 
 theme.json, ring.json, eq.json and eq-presets.json under /etc/nexusq are
 symlinks into the persist store, like device.json since r103. A write that
@@ -86,7 +86,7 @@ class TestEverySettingWritesThroughItsLink(LinkedSetting):
             self.assertEqual(json.load(f)["presets"][0]["id"], "vinyl")
 
     def test_a_plain_file_still_works(self):
-        # an image without the store, or a unit that never booted r106
+        # an image without the store, or a unit that never booted r116
         plain = os.path.join(self.tmp.name, "theme.json")
         self.mod._theme_save("warm", plain)
         self.assertFalse(os.path.islink(plain))

@@ -1,4 +1,4 @@
-"""Ambient brightness (nexusq-control r50): the slider is the maximum, the sun
+"""Ambient brightness (nexusq-control r53): the slider is the maximum, the sun
 decides how much of it the ring gets.
 
 The solar maths is checked against things that do not depend on this code:

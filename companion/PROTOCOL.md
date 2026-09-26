@@ -83,10 +83,10 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 ```
 - `output`: id of the active audio output (the current PulseAudio default sink) —
   one of `speaker` (TAS5713 banana terminals) / `spdif` (optical) / `hdmi`.
-- `ring`: the LED ring switch and its schedule (control **r49**+, see "LED ring
+- `ring`: the LED ring switch and its schedule (control **r52**+, see "LED ring
   on/off" below). **Absent on older bridges** — the app offers the switch only
   when it is present.
-- `ambient`: ambient brightness (control **r50**+, see "Ambient brightness"
+- `ambient`: ambient brightness (control **r53**+, see "Ambient brightness"
   below); `brightness` stays the user's slider value (the maximum). Absent on
   older bridges.
 
@@ -141,18 +141,18 @@ switched off for `spdif`/`hdmi`.
 ### LED ring  (→ nexusqd Unix socket `/run/nexusqd.sock`)
 | Method | params | result | Event |
 |---|---|---|---|
-| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring. **Persistent since control r37**: stored in `/etc/nexusq/theme.json` once nexusqd accepted it (since device r106 a symlink into the persist store, so it also survives a flash; the setup wizard's choice is stored there too, setupd r6), reported by `getState.theme` **from the file on every call** (r49), and re-applied to nexusqd at boot; `unavailable` if the file cannot be written (the ring changed, the choice would not survive a reboot) |
+| `setTheme` | `{ "theme": "<name>" }` | `{ theme }` | `themeChanged` — a color theme is a **breathing override** (blue/warm/cool/rose/smoke/off) via nexusqd `breathe R G B` (a manual-layer pulse in the theme hue, always visible); `off` blanks the ring. **Persistent since control r37**: stored in `/etc/nexusq/theme.json` once nexusqd accepted it (since device r116 a symlink into the persist store, so it also survives a flash; the setup wizard's choice is stored there too, setupd r6), reported by `getState.theme` **from the file on every call** (r52), and re-applied to nexusqd at boot; `unavailable` if the file cannot be written (the ring changed, the choice would not survive a reboot) |
 | `listThemes` | — | `{ "themes": [ {name, label} ] }` | — |
-| `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `scene 0..4`; shown while audio plays. _(Until r49 it sent `auto` first, which cleared the theme's breathing override.)_ |
+| `setScene` | `{ "scene": "<name>" }` | `{ scene }` | `sceneChanged` — picks the music-reactive visualisation (waveform/waveformsolid/circles/pointmorph/starfield) via nexusqd `scene 0..4`; shown while audio plays. _(Until r52 it sent `auto` first, which cleared the theme's breathing override.)_ |
 | `listScenes` | — | `{ "scenes": [ {name, label, index} ] }` | — |
-| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` + `ambientChanged` — a software scalar applied in nexusqd. **Persistent since r50** (`/etc/nexusq/brightness.json`; it used to reset to 255 on every bridge restart). With ambient on it sets the **maximum** and nexusqd runs the level the sun allows under it |
+| `setBrightness` | `{ "brightness": 0..255 }` | `{ brightness }` | `brightnessChanged` + `ambientChanged` — a software scalar applied in nexusqd. **Persistent since r53** (`/etc/nexusq/brightness.json`; it used to reset to 255 on every bridge restart). With ambient on it sets the **maximum** and nexusqd runs the level the sun allows under it |
 
 > nexusqd's LED-command vocabulary (over `/run/nexusqd.sock`) also carries the OTA
 > primitives **`progress <pct> [R G B]`** (a determinate ring bar) and
 > **`mblink R G B | mblink stop`** (an autonomous mute-LED blink) — driven by the
 > bridge during a system update, see **§12.3**. They are not app-facing methods.
 
-#### Ambient brightness  (control r50 · nexusqd r23 · app 1.24.0)
+#### Ambient brightness  (control r53 · nexusqd r23 · app 1.24.0)
 | Method | params | result | Event |
 |---|---|---|---|
 | `getAmbient` | — | ambient object | — |
@@ -179,7 +179,7 @@ Ambient object: `{ "enabled": bool, "level": 0..255, "location": { "zone", "lat"
   `unavailable` (no location, nexusqd rejected the level — nothing is stored —,
   or the file cannot be written).
 
-#### LED ring on/off  (control r49 · nexusqd r22 · app 1.23.0)
+#### LED ring on/off  (control r52 · nexusqd r22 · app 1.23.0)
 | Method | params | result | Event |
 |---|---|---|---|
 | `getRing` | — | ring object | — |
@@ -206,7 +206,7 @@ Ring object: `{ "on": bool, "schedule": { "enabled": bool, "off": "HH:MM", "on":
   mains unplug the clock is wrong until NTP; until then the schedule **does
   nothing** and the ring keeps its last state.
 - **Persistence**: `/etc/nexusq/ring.json` — a symlink into the persist store
-  (device r106), so it survives a flash — written atomically through the link
+  (device r116), so it survives a flash — written atomically through the link
   once nexusqd has accepted the change (the theme's discipline). nexusqd holds `dark` in memory
   only, so the bridge **re-asserts** it every 30 s — which is also what restores
   it at boot and after a nexusqd restart; nexusqd treats an unchanged re-assert

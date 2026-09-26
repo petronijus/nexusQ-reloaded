@@ -51,11 +51,11 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          fetched once at connect, so before this a receiver switched on after
 #          the app had connected stayed greyed out until a restart.
 # 1.23.0 — LED ring on/off + schedule (setRing / setRingSchedule, needs
-#          nexusq-control r49 + nexusqd r22): off keeps the ring dark except
+#          nexusq-control r52 + nexusqd r22): off keeps the ring dark except
 #          for music and the volume knob; the schedule switches it by the Q's
 #          clock, and a manual switch turns the schedule off. Hidden on a Q
 #          whose bridge reports no `ring` state.
-# 1.24.0 — Ambient brightness (setAmbient, needs nexusq-control r50 + nexusqd
+# 1.24.0 — Ambient brightness (setAmbient, needs nexusq-control r53 + nexusqd
 #          r23): the slider becomes the maximum and the Q dims the ring through
 #          dusk to a quarter of it, by the sun at its time zone's location.
 #          Hidden on a Q whose bridge reports no `ambient` state.

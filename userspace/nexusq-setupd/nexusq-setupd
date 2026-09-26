@@ -36,7 +36,7 @@ SETUP_UUID = os.environ.get("NEXUSQ_SETUP_UUID", "8e1f0cf7-508f-4875-b62c-fcd67e
 NEXUSQD_SOCK = os.environ.get("NEXUSQD_SOCK", "/run/nexusqd.sock")
 IDENTITY_PATH = os.environ.get("NEXUSQ_IDENTITY", "/etc/nexusq/device.json")
 # The same file nexusq-control persists the theme in (a symlink into the
-# persist store since device r106) and restores it from at boot.
+# persist store since device r116) and restores it from at boot.
 THEME_CONF_PATH = os.environ.get("NEXUSQ_THEME_CONF", "/etc/nexusq/theme.json")
 SETUP_TIMEOUT = float(os.environ.get("NEXUSQ_SETUP_TIMEOUT", "600"))
 WLAN = os.environ.get("NEXUSQ_WLAN_IFACE", "wlan0")
@@ -87,7 +87,7 @@ def pairing_color(mac):
 def write_json_through(path, obj):
     """Atomically write a per-unit JSON file THROUGH a symlink, never over it.
 
-    /etc/nexusq/device.json (device r103) and theme.json (r106) are symlinks
+    /etc/nexusq/device.json (device r103) and theme.json (r116) are symlinks
     into the per-unit persist store (`nq-persist`): tmp-then-os.replace(link)
     would swap the link for a regular file, and the next flash would lose the
     setting again. The temp file goes beside the link's TARGET and is renamed

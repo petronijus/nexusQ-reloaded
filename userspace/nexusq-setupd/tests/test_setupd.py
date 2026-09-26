@@ -121,7 +121,7 @@ class TestSetupCore(unittest.TestCase):
         self.assertEqual(sent, ["attend 0"])
 
     def test_wizard_theme_is_persisted_through_the_store_link(self):
-        # Before device r106 / setupd r6 the wizard's theme lived only in
+        # Before device r116 / setupd r6 the wizard's theme lived only in
         # nexusqd's memory and was gone after the first reboot.
         mod = load_daemon()
         with tempfile.TemporaryDirectory() as d:

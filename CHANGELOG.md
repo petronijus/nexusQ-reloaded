@@ -6,7 +6,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Added — the LED ring, its schedule and ambient brightness in Home Assistant (nexusq-mqtt r7)
+### Added — the LED ring, its schedule and ambient brightness in Home Assistant (nexusq-mqtt r9)
 
 `nexusq-mqtt` now announces **writable** entities on the Q's HA device: a
 `light` "LED ring" (on/off + brightness, the app's slider), a "LED ring
@@ -33,7 +33,7 @@ brightness" switch and a "LED ring level" sensor (% of the maximum).
   (state on connect, a change made elsewhere, a command's round trip, a
   refusal, a bridge restart). Not yet run against the real broker.
 
-### Added — ambient brightness: the ring dims with the daylight (nexusq-control r50 · nexusqd r23 · app 1.24.0+62)
+### Added — ambient brightness: the ring dims with the daylight (nexusq-control r53 · nexusqd r23 · app 1.24.0+62)
 
 A switch under the brightness slider. Off, brightness works exactly as before.
 On, the slider is the **maximum**: the ring runs at it while the sun is up and
@@ -67,7 +67,7 @@ goes dark — switching the ring off at night is the ring schedule's job (Petr,
   controller + widget tests (the revert on refusal seen failing under mutation).
   Not yet run on hardware.
 
-### Added — the LED ring can be switched off, by hand or on a schedule (nexusqd r22 · nexusq-control r49 · nexusq-setupd r6 · app 1.23.0+61)
+### Added — the LED ring can be switched off, by hand or on a schedule (nexusqd r22 · nexusq-control r52 · nexusq-setupd r6 · app 1.23.0+61)
 
 The app's home screen has a **LED RING** card: a switch, and a schedule
 (default off 23:00, on 07:00) that switches it by the Q's own clock.
@@ -98,7 +98,7 @@ The app's home screen has a **LED RING** card: a switch, and a schedule
   unchanged `dark`/`attend` as a no-op so the re-assert never wakes the render
   cadence.
 - Compatibility: the app shows the card only when `getState` carries `ring`
-  (control r49+); a bridge whose nexusqd predates `dark` answers `unavailable`,
+  (control r52+); a bridge whose nexusqd predates `dark` answers `unavailable`,
   nothing is stored, and the app reverts the switch and shows the reason.
 - Tests: compositor floor (4, seen failing with the floor removed), `dark` /
   `attend` parsing, setupd's hold ordering, the bridge's schedule window /
@@ -106,7 +106,7 @@ The app's home screen has a **LED RING** card: a switch, and a schedule
   tests seen failing under mutation), app controller + widget (10, the revert
   seen failing under mutation). Not yet run on hardware.
 
-### Fixed — picking a visualisation no longer wipes the colour theme (nexusq-control r49)
+### Fixed — picking a visualisation no longer wipes the colour theme (nexusq-control r52)
 
 `setScene` sent nexusqd `auto` before `scene N`. `auto` deactivates the manual
 layer, which is where the theme's breathing override lives, so choosing a
@@ -117,7 +117,7 @@ cleared for the visualiser to show; since nexusqd r18 music is above it, so the
 `auto` did nothing but harm. `setScene` now sends only `scene N`
 (`tests/test_settings_persist.py`, seen failing with the `auto` put back).
 
-### Fixed — the LED theme, ring switch and EQ survive a flash (device r106 · nexusq-control r49 · nexusq-setupd r6)
+### Fixed — the LED theme, ring switch and EQ survive a flash (device r116 · nexusq-control r52 · nexusq-setupd r6)
 
 `theme.json`, `ring.json`, `eq.json` and `eq-presets.json` lived on the rootfs,
 so every flash reset the app's settings to defaults — the same class of defect
@@ -130,7 +130,7 @@ r103 ended for the name, WiFi, bonds and ssh keys. They now follow
   wizard theme — goes through `write_json_through()`, which renames over the
   link's **target** (a plain `os.replace` onto the link would replace it with a
   file: the setting works, and the next flash loses it again);
-- the r106 `.pre-upgrade` moves an existing plain file to the link target: into
+- the r116 `.pre-upgrade` moves an existing plain file to the link target: into
   the mounted store on an r103+ unit, or under the unmounted mountpoint on an
   older one, where `nq-persist prepare` parks it and `apply` merges it;
 - `nq-persist apply` creates `settings/`, and `status` lists what is stored.

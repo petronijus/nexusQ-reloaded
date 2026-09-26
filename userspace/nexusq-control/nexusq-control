@@ -80,7 +80,7 @@ def write_json_through(path, obj):
 
     The per-unit files under /etc/nexusq are symlinks into the persist store
     (`nq-persist`, the `cache` partition a flash never touches): device.json
-    since device r103, and theme / ring / eq / eq-presets since r106. The old
+    since device r103, and theme / ring / eq / eq-presets since r116. The old
     tmp-then-os.replace(link) would have swapped the LINK for a regular file:
     the write works, the setting shows up, and the next flash loses it again --
     silently, which is the exact failure this store exists to end. So the temp
@@ -234,7 +234,7 @@ def _theme_load(path=None):
 def _theme_save(name, path=None):
     """Atomic write (tempfile + rename), the same discipline as the EQ file:
     a crash mid-write must never leave a torn file that would then read as
-    'never themed'. Through the persist-store symlink (device r106)."""
+    'never themed'. Through the persist-store symlink (device r116)."""
     try:
         write_json_through(path or THEME_CONF_PATH, {"theme": name})
     except OSError as e:
@@ -2680,7 +2680,7 @@ class Bridge:
         # main(), like the other restore threads, so a test can build a Bridge
         # without one.
         self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap))
-        # The brightness slider (persistent since r50) and ambient brightness.
+        # The brightness slider (persistent since r53) and ambient brightness.
         self.brightness = Brightness(
             on_change=lambda snap: self.broadcast("ambientChanged", snap))
         self.state["brightness"] = self.brightness.maximum()

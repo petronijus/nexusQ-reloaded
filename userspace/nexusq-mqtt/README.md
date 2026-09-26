@@ -124,9 +124,9 @@ so a device too old to publish `led_stalled` reads **healthy** rather than
 inventing an alarm out of a missing signal. Live since 2026-08-13:
 `binary_sensor.nexus_q_led_ring = off` with `led_stall=17, led_stalled=False`.
 
-### LED ring control (r7, 2026-09-23) — writable entities
+### LED ring control (r9, 2026-09-23) — writable entities
 
-With a bridge that reports a ring (`nexusq-control` r49+), the same device also
+With a bridge that reports a ring (`nexusq-control` r52+), the same device also
 gets entities Home Assistant can **drive**:
 
 | Entity | Topic (`<prefix>/<node_id>/ring/…`) | Bridge call |
@@ -134,7 +134,7 @@ gets entities Home Assistant can **drive**:
 | `light` **LED ring** — on/off + brightness (json schema, `brightness_scale` 255) | `light/set` | `setRing` (only when the on/off state really changes) + `setBrightness` |
 | `switch` **LED ring schedule** (config) | `schedule/set` | `setRingSchedule {enabled}` |
 | `text` **LED ring off at** / **on at** (config, `HH:MM`) | `off_at/set`, `on_at/set` | `setRingSchedule {enabled: current, off\|on}` |
-| `switch` **Ambient brightness** (config, bridge r50+) | `ambient/set` | `setAmbient` |
+| `switch` **Ambient brightness** (config, bridge r53+) | `ambient/set` | `setAmbient` |
 | `sensor` **LED ring level** (diagnostic, % of the maximum) | — | — |
 
 - **One mechanism, two front ends.** Every command is one of the bridge's own
@@ -265,4 +265,4 @@ remaining-length boundaries, CONNACK refusal, dead-broker detection), config
 validation, health-tail parsing (torn lines, staleness), OPP residency math
 (rolling-window pruning + since-boot fallback + counter-reset discard),
 discovery payload contract (unique_ids, shared topics, device block),
-identity fallbacks, and (r7) the LED ring control: command mapping, state/discovery payloads, the bridge link against a fake bridge (`tests/test_ring_ha.py`). 65 tests as of r7.
+identity fallbacks, and (r9) the LED ring control: command mapping, state/discovery payloads, the bridge link against a fake bridge (`tests/test_ring_ha.py`). 65 tests as of r9.

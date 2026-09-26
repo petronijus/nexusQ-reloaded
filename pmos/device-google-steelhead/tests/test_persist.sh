@@ -213,7 +213,7 @@ check "the symlink now serves the old name" "grep -q Sumperak /etc/nexusq/device
 sh /pre >/dev/null 2>&1
 check "a second run leaves the symlink alone" "[ -L /etc/nexusq/device.json ]"
 
-echo "=== 9. r106 pre-upgrade moves plain settings into the store, leaves links alone ==="
+echo "=== 9. r116 pre-upgrade moves plain settings into the store, leaves links alone ==="
 echo '{"theme": "rose"}' > /etc/nexusq/theme.json
 echo '{"on": false}' > /etc/nexusq/ring.json
 echo '{"max": 90, "ambient": true}' > /etc/nexusq/brightness.json
@@ -234,7 +234,7 @@ check "a never-set link dangles (reads as default)" "[ -L /etc/nexusq/eq-presets
 echo "=== 10. settings parked under the unmounted store are merged, and survive a flash ==="
 umount /persist 2>/dev/null || true
 mkdir -p /persist/settings
-echo '{"theme": "warm"}' > /persist/settings/theme.json       # what r106 pre-upgrade leaves on an r102 unit
+echo '{"theme": "warm"}' > /persist/settings/theme.json       # what r116 pre-upgrade leaves on an r102 unit
 run nq-persist prepare
 check "prepare parks the settings (rc=$rc)" "[ $rc -eq 0 ] && [ -f /fake/run/nexusq/persist-shadow/settings/theme.json ]"
 mount "$IMG" /persist

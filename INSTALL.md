@@ -308,7 +308,7 @@ partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — an
 `fastboot oem unlock` — never touch. So a reflashed unit comes back with its
 **source toggles, name, WiFi profile, Bluetooth bonds, ssh host keys and site
 NTP server** intact, and the app's toggles do not need re-doing. Since device
-**r106** the app's **LED theme, LED ring switch + schedule, EQ and EQ presets**
+**r116** the app's **LED theme, LED ring switch + schedule, EQ and EQ presets**
 are kept too, and so is the brightness slider with its ambient switch
 (`/etc/nexusq/{theme,ring,eq,eq-presets,brightness}.json` are symlinks into
 the store's `settings/`). The MQTT broker login (`mqtt.json`) is **not** — it
