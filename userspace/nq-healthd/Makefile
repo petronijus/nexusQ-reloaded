@@ -11,11 +11,14 @@ nq-healthd: nq-healthd.c
 TESTDIRS = -DTEST_ARCHIVE='"/tmp/nqh-test-archive"' -DTEST_PSTOREFS='"/tmp/nqh-test-pstorefs"'
 # cstate_sample()/qos_limit_us() likewise read a fixture cpuidle tree and QoS file.
 CSTDIRS  = -DTEST_CPUROOT='"/tmp/nqh-test-cpu"' -DTEST_QOS='"/tmp/nqh-test-qos"'
-test: tests/test_pstore_count.c tests/test_cstate.c nq-healthd.c
+test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c nq-healthd.c
 	$(CC) $(CFLAGS) -I. $(TESTDIRS) -o /tmp/nqh-test-pstore tests/test_pstore_count.c
 	@/tmp/nqh-test-pstore
 	$(CC) $(CFLAGS) -I. $(CSTDIRS) -o /tmp/nqh-test-cstate tests/test_cstate.c
 	@/tmp/nqh-test-cstate
+	# kmsg_parse()/kerr_*(): the incremental dmesg_err count (no fixtures needed).
+	$(CC) $(CFLAGS) -I. -o /tmp/nqh-test-kmsg tests/test_kmsg_count.c
+	@/tmp/nqh-test-kmsg
 
 install: nq-healthd
 	install -Dm755 nq-healthd $(DESTDIR)$(PREFIX)/bin/nq-healthd

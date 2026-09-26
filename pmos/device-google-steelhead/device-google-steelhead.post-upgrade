@@ -1,6 +1,8 @@
 #!/bin/sh
-# Restore the access files .pre-upgrade stashed, if the new package did not ship
-# them. See device-google-steelhead.pre-upgrade for why this pair exists.
+# Two jobs, independent of each other:
+#   1. (r110) keep systemd-oomd disabled on boxes already in the field;
+#   2. restore the access files .pre-upgrade stashed, if the new package did not
+#      ship them. See device-google-steelhead.pre-upgrade for why that pair exists.
 #
 # Runs AFTER apk has unpacked the new version and removed the files that left the
 # package's file list — which, from r91 on, is exactly these three.
@@ -11,6 +13,28 @@
 #   * keeps the stash on any failure, so a half-finished migration can be
 #     retried by hand instead of having silently eaten the only copy.
 set -e
+
+# --- r110: systemd-oomd off on boxes already in the field -------------------
+# A fresh image never enables it (.post-install + 20-nexusq-oomd-off.preset);
+# a box that took an earlier image has it enabled AND running, and neither the
+# preset (read only by a preset pass) nor .post-install (never run on upgrade)
+# reaches it. On a live system `daemon-reload` first, so PID 1 sees the /etc
+# drop-ins that switch off systemd's ManagedOOM defaults (they are what pulled
+# oomd back in through every user session — see the APKBUILD), then
+# `disable --now` removes the three enable links and stops it; outside a booted
+# systemd (a chroot, an image build) the same links are removed by hand, which
+# is what disable does.
+# Idempotent, so it simply re-asserts the state on every later upgrade. Never
+# fatal: an upgrade must not fail over an optional daemon.
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl disable --now systemd-oomd.service systemd-oomd.socket \
+		>/dev/null 2>&1 || echo "nexusq: could not disable systemd-oomd" >&2
+else
+	rm -f /etc/systemd/system/multi-user.target.wants/systemd-oomd.service \
+	      /etc/systemd/system/sockets.target.wants/systemd-oomd.socket \
+	      /etc/systemd/system/dbus-org.freedesktop.oom1.service
+fi
 
 STASH=/var/lib/nexusq/access-migration
 [ -d "$STASH" ] || exit 0

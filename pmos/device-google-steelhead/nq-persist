@@ -48,6 +48,7 @@ FLEET_NTP=${NQ_FLEET_NTP:-$ROOT/etc/systemd/timesyncd.conf.d/10-nexusq-ntp-by-ip
 SITE_NTP_OUT=${NQ_SITE_NTP_OUT:-$ROOT/run/systemd/timesyncd.conf.d/20-nexusq-site-ntp.conf}
 SSHD_HOSTKEYS_OUT=$RUN/sshd-hostkeys.conf
 SHADOW=$RUN/persist-shadow
+MQTT_CONF=${NQ_MQTT_CONF:-/etc/nexusq/mqtt.json}
 
 # The bind-mount map. One line per directory: <store subdir> <rootfs path>
 # <owner> <mode>. The .mount units in the device package name the same pairs;
@@ -88,7 +89,8 @@ usage: nq-persist <command>
                        written under the unmounted mountpoint for `apply`
   apply                with the store mounted: seed it from the rootfs where it
                        is empty, merge parked writes, render the sshd host-key
-                       list and the site NTP drop-in, apply the hostname
+                       list and the site NTP drop-in, apply the hostname, serve
+                       /etc/nexusq/mqtt.json from the store
   save-hostname        record /etc/hostname in the store
   ntp show             the site's own NTP server(s), if any
   ntp set <ip> [...]   put this site's NTP server(s) FIRST, before the fleet's
@@ -296,6 +298,50 @@ render_ntp() {
 	mv "$SITE_NTP_OUT.tmp" "$SITE_NTP_OUT"
 }
 
+# /etc/nexusq/mqtt.json: this unit's MQTT broker, credentials and topic prefix
+# (2026-09-26). It is per-SITE, not a fleet value -- the cottage publishes to
+# its own broker under its own prefix -- and until now it lived only on the
+# rootfs, so a flash replaced it with whatever the image baked (Prague's, on a
+# personal build; nothing, on a release) and Home Assistant lost the unit. It
+# lives in the store as site/mqtt.json (0600: it holds a password), and
+# /etc/nexusq/mqtt.json becomes a symlink to it, the same way device.json is.
+# nexusq-control writes THROUGH the link when the app provisions MQTT.
+#
+#   - store empty, rootfs has a real file (a unit upgraded from before this,
+#     or the image's baked default on its first boot): seed the store from it;
+#   - store has it: the store wins, as everywhere in this store. A different
+#     regular file on the rootfs (the image default after a flash) is kept as
+#     mqtt.json.displaced, never just dropped, and replaced by the link;
+#   - neither: an unprovisioned unit, nothing to do -- nexusq-mqtt's
+#     ConditionPathExists keeps it stopped either way.
+apply_mqtt() {
+	link="$ROOT$MQTT_CONF"
+	stored="$MNT/site/mqtt.json"
+	want="$MNT/site/mqtt.json"     # the link's target as the running unit sees it
+	mkdir -p "$MNT/site"
+	if [ ! -s "$stored" ] && [ -f "$link" ] && [ ! -L "$link" ] && [ -s "$link" ]; then
+		cp -p "$link" "$stored.tmp"
+		chmod 0600 "$stored.tmp"
+		mv "$stored.tmp" "$stored"
+		log "mqtt config seeded into the store from $MQTT_CONF"
+	fi
+	[ -s "$stored" ] || return 0
+	chmod 0600 "$stored"
+	chown root:root "$stored" 2>/dev/null || true
+	if [ -L "$link" ] && [ "$(readlink "$link")" = "$want" ]; then
+		return 0
+	fi
+	mkdir -p "$(dirname "$link")"
+	if [ -f "$link" ] && [ ! -L "$link" ] && ! cmp -s "$link" "$stored"; then
+		cp -p "$link" "$link.displaced"
+		chmod 0600 "$link.displaced"
+		log "the rootfs had a different $MQTT_CONF (image default?); kept as $MQTT_CONF.displaced"
+	fi
+	ln -sfn "$want" "$link.nq-persist-tmp"
+	mv -f "$link.nq-persist-tmp" "$link"
+	log "$MQTT_CONF is now served from the store"
+}
+
 cmd_apply() {
 	is_mounted "$MNT" || die "$MNT is not a mountpoint -- run prepare and mount the store first"
 	if [ ! -f "$MNT/$MARKER" ]; then
@@ -308,6 +354,7 @@ cmd_apply() {
 	apply_ssh
 	mkdir -p "$MNT/site"
 	render_ntp
+	apply_mqtt
 	log "apply done"
 }
 
@@ -391,6 +438,16 @@ cmd_status() {
 	echo "ssh host keys  : $(find "$MNT/ssh" -maxdepth 1 -name 'ssh_host_*_key' 2>/dev/null | wc -l)" \
 	     "($( [ -f "$SSHD_HOSTKEYS_OUT" ] && echo "rendered for sshd" || echo "NOT rendered -- sshd on rootfs keys"))"
 	echo "site NTP       : $(cat "$MNT/site/ntp-servers" 2>/dev/null || echo 'none (fleet list only)')"
+	# Never the password: host and prefix only, read with sed from the JSON.
+	if [ -s "$MNT/site/mqtt.json" ]; then
+		_h=$(sed -n 's/.*"host": *"\([^"]*\)".*/\1/p' "$MNT/site/mqtt.json")
+		_p=$(sed -n 's/.*"prefix": *"\([^"]*\)".*/\1/p' "$MNT/site/mqtt.json")
+		_l=$( [ "$(readlink "$ROOT$MQTT_CONF" 2>/dev/null)" = "$MNT/site/mqtt.json" ] \
+			&& echo "served from the store" || echo "NOT linked -- $MQTT_CONF is the rootfs copy")
+		echo "mqtt           : ${_h:-?} prefix=${_p:-nexusq} ($_l)"
+	else
+		echo "mqtt           : none in the store"
+	fi
 }
 
 cmd=${1:-}; [ $# -gt 0 ] && shift

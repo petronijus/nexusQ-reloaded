@@ -223,6 +223,34 @@ ln -s /var/lib/nexusq/persist/identity/device.json /etc/nexusq/device.json     #
 check "the symlink now serves the old name" "grep -q Sumperak /etc/nexusq/device.json"
 sh /pre >/dev/null 2>&1
 check "a second run leaves the symlink alone" "[ -L /etc/nexusq/device.json ]"
+
+echo "=== 9. mqtt.json: per-site, so it lives in the store (2026-09-26) ==="
+COTTAGE='{"host": "192.168.48.52", "port": 1883, "username": "nexusq", "password": "cottage-secret", "prefix": "nexusq-sumperak"}'
+IMAGE='{"host": "192.168.20.10", "port": 1883, "username": "nexusq", "password": "image-default", "prefix": "nexusq"}'
+mount -o loop "$IMG" /persist
+rm -f /persist/site/mqtt.json
+fresh_rootfs steelhead
+printf '%s\n' "$COTTAGE" > /fake/etc/nexusq/mqtt.json; chmod 600 /fake/etc/nexusq/mqtt.json
+run nq-persist apply
+check "upgrade path: apply succeeds (rc=$rc)" "[ $rc -eq 0 ]"
+check "upgrade path: the unit's config is seeded into the store, 0600" "grep -q cottage-secret /persist/site/mqtt.json && [ \"\$(stat -c %a /persist/site/mqtt.json)\" = 600 ]"
+check "upgrade path: /etc/nexusq/mqtt.json is now the link into the store" "[ \"\$(readlink /fake/etc/nexusq/mqtt.json)\" = /persist/site/mqtt.json ]"
+check "upgrade path: read through the link it is the same config" "grep -q nexusq-sumperak /fake/etc/nexusq/mqtt.json"
+fresh_rootfs steelhead                             # the flash: the image bakes its own default
+printf '%s\n' "$IMAGE" > /fake/etc/nexusq/mqtt.json; chmod 600 /fake/etc/nexusq/mqtt.json
+run nq-persist apply
+check "flash: the store wins over the image default" "grep -q cottage-secret /fake/etc/nexusq/mqtt.json && [ -L /fake/etc/nexusq/mqtt.json ]"
+check "flash: the store copy is not overwritten by the image" "grep -q cottage-secret /persist/site/mqtt.json && ! grep -q image-default /persist/site/mqtt.json"
+check "flash: the displaced image default is kept, 0600, not dropped" "grep -q image-default /fake/etc/nexusq/mqtt.json.displaced && [ \"\$(stat -c %a /fake/etc/nexusq/mqtt.json.displaced)\" = 600 ]"
+run nq-persist apply
+check "idempotent: a second apply changes nothing (rc=$rc)" "[ $rc -eq 0 ] && ! said seeded && ! said displaced && [ -L /fake/etc/nexusq/mqtt.json ]"
+run nq-persist status
+check "status names the broker and prefix" "said '192.168.48.52 prefix=nexusq-sumperak (served from the store)'"
+check "status never prints the password" "! said cottage-secret"
+rm -f /persist/site/mqtt.json; fresh_rootfs steelhead   # an unprovisioned unit
+run nq-persist apply
+check "unprovisioned: no link, no file (nexusq-mqtt stays off)" "[ $rc -eq 0 ] && [ ! -e /fake/etc/nexusq/mqtt.json ] && [ ! -L /fake/etc/nexusq/mqtt.json ]"
+umount /persist
 EOF
 )
 rc=$?

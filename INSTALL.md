@@ -323,10 +323,34 @@ fingerprint does not change either: the old "**after any reflash** run
 `ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
 unit that has never run r103, whose keys still live on the rootfs.
 
+**What a flash keeps, since device r112 (2026-09-26):** the unit's **MQTT
+configuration** too (`/etc/nexusq/mqtt.json` links into the store), so a
+reflashed unit reports to the same Home Assistant under the same prefix.
+
 **Never run** `fastboot flash bootloader` or touch `xloader` -- that is the
 only way to brick the device.
 
 ## 3. First boot
+
+> **The first boot after a flash takes a minute or two longer (device r112+):**
+> it splits the eMMC into the two rootfs slots A/B (p13 `userdata` and p14
+> `userdata_b`, ~6.6 GB each) before it grows the root filesystem. That is
+> what later lets a whole new rootfs be installed into the slot that is not
+> running and tried with a way back. Nothing to do; do not cut the power while
+> it runs. `nq-rootfs-ab status` shows both slots afterwards.
+>
+> **Units already in use get their slot B over the air, and every update checks
+> it.** After each system update (`nexusq-rootfs-ab` r4+), and ten minutes
+> after each boot, the Q runs a storage check. It makes sure the eMMC is split
+> into slots A and B and that the root filesystem fills its slot, and fixes
+> whichever is missing. A unit whose root already fills the whole old
+> partition needs its filesystem shrunk first. It does that once per update,
+> only while nothing is playing: it reboots into a small maintenance image,
+> shrinks the root into slot A, creates slot B and comes back. That takes about
+> two minutes offline and two reboots, and settings are kept. Keep it plugged
+> in while it runs. If it is refused (the rootfs does not fit slot A with room
+> to spare), nothing is changed, `nq-rootfs-ab status` says why, and the next
+> update tries again. `nq-rootfs-ab ensure` runs the check by hand.
 
 1. Unplug power, wait 5 s, plug back in **without touching the dome**.
 2. Watch HDMI: Tux logo -> kernel log -> a console. The **desktop is not started

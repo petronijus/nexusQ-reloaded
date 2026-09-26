@@ -102,6 +102,50 @@ class TestSetMqttConfig(unittest.TestCase):
                          ["mqtt.json"])  # no leftover tempfiles
 
 
+class TestSetMqttConfigThroughTheStore(unittest.TestCase):
+    """Since 2026-09-26 /etc/nexusq/mqtt.json is a symlink into the per-unit
+    persist store (nq-persist, site/mqtt.json), so the site's broker survives a
+    flash. A tmp-then-os.replace(link) would swap the LINK for a regular file:
+    the app's change would work until the next flash, then silently vanish."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.store = os.path.join(self.dir.name, "persist", "site")
+        os.makedirs(self.store)
+        self.target = os.path.join(self.store, "mqtt.json")
+        etc = os.path.join(self.dir.name, "etc", "nexusq")
+        os.makedirs(etc)
+        self.link = os.path.join(etc, "mqtt.json")
+        os.symlink(self.target, self.link)
+
+    def _set(self, p):
+        with _no_restart():
+            return MOD.set_mqtt_config(p, path=self.link)
+
+    def test_writes_through_the_link_into_the_store(self):
+        with open(self.target, "w") as f:
+            json.dump({"host": "old", "username": "u", "password": "p0"}, f)
+        self._set({"host": "new", "username": "u", "password": "p1"})
+        self.assertTrue(os.path.islink(self.link), "the link was replaced by a file")
+        self.assertEqual(os.readlink(self.link), self.target)
+        self.assertEqual(json.load(open(self.target))["host"], "new")
+        self.assertEqual(stat.S_IMODE(os.stat(self.target).st_mode), 0o600)
+        self.assertEqual(sorted(os.listdir(self.store)), ["mqtt.json"])  # no tempfiles
+
+    def test_first_provision_creates_the_store_file(self):
+        # A dangling link: the store has no config yet (a fresh store).
+        self._set({"host": "h", "username": "u", "password": "p"})
+        self.assertTrue(os.path.islink(self.link))
+        self.assertEqual(json.load(open(self.target))["host"], "h")
+
+    def test_status_reads_through_the_link(self):
+        self._set({"host": "h", "username": "u", "password": "p", "prefix": "q"})
+        st = MOD.get_mqtt_status(self.link)
+        self.assertTrue(st["configured"])
+        self.assertEqual(st["prefix"], "q")
+
+
 class TestGetMqttStatus(unittest.TestCase):
     def test_unconfigured(self):
         with _no_restart():

@@ -1262,16 +1262,21 @@ def set_mqtt_config(p, path=None):
     interval = p.get("interval_s")
     if isinstance(interval, int) and 10 <= interval <= 600:
         conf["interval_s"] = interval
-    # atomic + never world-readable, even transiently: 0600 tempfile in the
-    # same directory, then rename over the target.
-    d = os.path.dirname(path) or "."
+    # atomic + never world-readable, even transiently: 0600 tempfile beside
+    # the file, then rename over it. THROUGH a symlink, never over it: since
+    # 2026-09-26 /etc/nexusq/mqtt.json links into the persist store
+    # (site/mqtt.json) so the site's broker survives a flash, and replacing the
+    # link with a regular file would lose this change at the next flash —
+    # silently. Same rule as write_identity(); a plain file resolves to itself.
+    real = os.path.realpath(path)
+    d = os.path.dirname(real) or "."
     os.makedirs(d, exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
+    tmp = f"{real}.tmp.{os.getpid()}"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(conf, f)
-        os.replace(tmp, path)
+        os.replace(tmp, real)
     except OSError as e:
         try:
             os.unlink(tmp)
@@ -3136,9 +3141,24 @@ def read_json_lines(sock, on_obj):
             on_obj(obj)
 
 
+def _logs_connection(addr):
+    """Whether a client's connect/disconnect is worth a journal line.
+
+    The app connects from the LAN, and when it does, that is exactly what one
+    wants to see in the log. Loopback clients are the Q's own daemons —
+    nexusq-mqtt reads getState on every 30 s publish — and logging those came to
+    ~5 800 journal lines a day of nothing (measured on the cottage Q,
+    2026-09-26). The listener is AF_INET only, so addr is (ip, port).
+    """
+    host = addr[0] if isinstance(addr, tuple) and addr else ""
+    return not str(host).startswith("127.")
+
+
 def client_thread(bridge, sock, addr):
     cid = bridge.add_client(sock)
-    log("client connected:", addr)
+    noisy = _logs_connection(addr)
+    if noisy:
+        log("client connected:", addr)
 
     def run_request(obj):
         method = obj.get("method")
@@ -3184,7 +3204,8 @@ def client_thread(bridge, sock, addr):
     finally:
         bridge.remove_client(cid)
         sock.close()
-        log("client disconnected:", addr)
+        if noisy:
+            log("client disconnected:", addr)
 
 
 def hook_thread(bridge, sock):

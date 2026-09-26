@@ -1,0 +1,15 @@
+# Runs `nq-rootfs-ab ensure --auto` 10 min after this timer starts -- after boot,
+# or right after an OTA installs this package (its install script starts it) --
+# and then every 30 min after each run. Between updates a run is one stat and a
+# return; after an OTA (the apk generation changed) it is the full check. 10 min:
+# never in the middle of the boot or the upgrade; 30 min: "not now, something is
+# playing" gets another chance the same evening.
+[Unit]
+Description=Storage check after every OTA (A/B slots, root fills its slot)
+
+[Timer]
+OnActiveSec=10min
+OnUnitInactiveSec=30min
+
+[Install]
+WantedBy=timers.target

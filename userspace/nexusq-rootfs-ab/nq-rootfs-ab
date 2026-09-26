@@ -15,6 +15,11 @@ set -eu
 SLOT_A=/dev/mmcblk0p13
 SLOT_B=/dev/mmcblk0p14
 MNT=/mnt/nq-slot-target
+LIBDIR=${NQ_AB_LIBDIR:-/usr/lib/nexusq-rootfs-ab}
+STATE=${NQ_AB_STATE:-/var/lib/nexusq}
+SYSBLOCK=${NQ_AB_SYSBLOCK:-/sys/class/block}
+APKDB=${NQ_AB_APKDB:-/lib/apk/db}               # installed + lock
+RESIZE=${NQ_AB_RESIZE:-/usr/bin/nexusq-resize-rootfs}
 
 die() { echo "nq-rootfs-ab: $*" >&2; exit 1; }
 log() { echo "nq-rootfs-ab: $*"; }
@@ -45,6 +50,10 @@ cmd_status() {
         _uuid=$(blkid -s UUID -o value "$_d" 2>/dev/null || echo "-")
         log "slot $s: $_d  label=$_lbl  uuid=$_uuid"
     done
+    [ -f "$STATE/storage-ok" ] && log "storage ok     : $(cat "$STATE/storage-ok")"
+    [ -f "$STATE/ab-migrate.attempted" ] && log "split attempted: $(cat "$STATE/ab-migrate.attempted")"
+    [ -f "$STATE/ab-migrate.result" ] && log "split result   : $(cat "$STATE/ab-migrate.result")"
+    return 0
 }
 
 # Copy the RUNNING rootfs into the other slot.
@@ -188,6 +197,215 @@ cmd_autopromote() {
     exit 1
 }
 
+# --- split: give a unit whose ext4 already fills p13 its slot B --------------
+#
+# A fresh flash is split on its first boot by nexusq-resize-rootfs, online,
+# because its ext4 is still only the image's size. A unit that has been running
+# (anything flashed before device r112) has an ext4 filling the whole of p13, and
+# ext4 cannot shrink while mounted. So this builds a small maintenance image ON
+# THE UNIT -- slot A's own kernel section (its own identity), init-split, ab-lib.sh
+# and the unit's own e2fsck/resize2fs/dumpe2fs/sfdisk -- and boots it once out
+# of the kernel trial slot (nq-kernel-ota rescue). init-split shrinks the ext4 to
+# slot A's size, writes the A/B table and reboots; the next normal boot formats
+# slot B (the pending marker it leaves for nexusq-resize-rootfs).
+#
+# --auto is how `ensure --auto` (nexusq-storage-check.timer) calls it. It adds
+# what a person at the keyboard would otherwise judge: only when nothing is
+# playing and apk is idle, and ONE attempt per system state -- per OTA. The
+# attempt is recorded with the apk database's generation before the reboot; if
+# the maintenance boot does not come back with "ok", nothing retries it until
+# the next OTA changes that generation. So a unit can never loop through
+# maintenance boots, and every update still gets its one chance.
+
+# TESTABLE:apk_generation
+# apk_generation <apk installed db>: a token that changes with every apk
+# transaction -- every OTA -- and costs one stat to compute: mtime-size.
+apk_generation() {
+    stat -c '%Y-%s' "$1" 2>/dev/null || echo none
+}
+
+# TESTABLE:done_for
+# done_for <record file> <generation>: true if the record names this generation.
+# The record's LAST field is the generation, so it may carry a timestamp first.
+done_for() {
+    [ -f "$1" ] && [ "$(awk '{print $NF; exit}' "$1")" = "$2" ]
+}
+
+# TESTABLE:audio_busy
+# audio_busy [procfs asound root]: true while any ALSA playback substream runs.
+audio_busy() {
+    grep -qs 'state: RUNNING' "${1:-/proc/asound}"/card*/pcm*p/sub*/status
+}
+
+# Kernel section (zImage + appended DTB, i.e. with this unit's identity) of the
+# Android boot image in slot A.
+boot_slot_kernel() {
+    python3 - "$1" "$2" <<'KEOF'
+import struct, sys
+src, out = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    hdr = f.read(4096)
+    if hdr[:8] != b"ANDROID!":
+        sys.exit("not an Android boot image")
+    ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", hdr, 8)
+    f.seek(ps)
+    data = f.read(ks)
+if len(data) != ks:
+    sys.exit("truncated kernel: got %d of %d B" % (len(data), ks))
+open(out, "wb").write(data)
+print(ks)
+KEOF
+}
+
+cmd_split() {
+    _auto=0; _dry=0
+    for _a in "$@"; do
+        case "$_a" in
+            --auto)    _auto=1 ;;
+            --dry-run) _dry=1 ;;        # build and size the image, boot nothing
+            *) die "usage: nq-rootfs-ab split [--auto] [--dry-run]" ;;
+        esac
+    done
+    _gen=$(apk_generation "$APKDB/installed")
+    if [ -e "$SYSBLOCK/mmcblk0p14" ]; then
+        log "slot B (p14) exists -- this unit is already split"
+        return 0
+    fi
+    [ "$(running_slot)" = a ] || die "not running from slot A (p13)"
+    if [ "$_auto" = 1 ] && done_for "$STATE/ab-migrate.attempted" "$_gen"; then
+        log "the offline split was already attempted on this system state ($(cat "$STATE/ab-migrate.attempted"))"
+        log "result: $(cat "$STATE/ab-migrate.result" 2>/dev/null || echo 'none recorded')"
+        log "the next OTA gets another attempt; 'nq-rootfs-ab split' tries now"
+        return 0
+    fi
+    if nq-kernel-ota status 2>/dev/null | grep -q 'PENDING trial'; then
+        log "a kernel OTA trial is pending; not now"
+        return 0
+    fi
+    if ! flock -n "$APKDB/lock" true 2>/dev/null; then
+        log "apk is busy; not now"
+        return 0
+    fi
+    if [ "$_auto" = 1 ] && audio_busy; then
+        log "audio is playing; not now"
+        return 0
+    fi
+
+    . "$LIBDIR/ab-lib.sh"
+    set -- $(ab_layout "$(cat "$SYSBLOCK/mmcblk0/size")" "$(cat "$SYSBLOCK/mmcblk0p13/start")")
+    _asz=$1
+
+    # Both are caches -- librespot fetches audio files again on demand, apk keeps
+    # downloads only for reinstalls -- and every block they hold is a block the
+    # shrink has to move while the power must not fail. So they go first, always.
+    _c=$(du -sk /home/user/.cache/librespot/files /var/cache/apk 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    if [ "$_dry" = 1 ]; then
+        log "dry run: would clear $(( _c / 1024 )) MiB of caches (Spotify audio files, apk downloads);"
+        log "the fit below is judged WITH them, so it is the pessimistic answer"
+    else
+        rm -rf /home/user/.cache/librespot/files 2>/dev/null || true
+        apk cache clean >/dev/null 2>&1 || true
+        rm -f /var/cache/apk/*.apk /var/cache/apk/*.tar.gz 2>/dev/null || true
+        log "cleared $(( _c / 1024 )) MiB of caches (Spotify audio files, apk downloads)"
+        sync
+    fi
+
+    # The same judgement init-split makes on the unmounted fs (ab_fits), made here
+    # first so a unit that does not fit is never rebooted for nothing.
+    _root=$(awk '$2 == "/" {print $1}' /proc/mounts | head -1)
+    [ "$_root" = /dev/root ] && _root=$SLOT_A
+    _bs=$(dumpe2fs -h "$_root" 2>/dev/null | awk -F: '/^Block size/{gsub(/ /,"",$2);print $2}')
+    _cnt=$(dumpe2fs -h "$_root" 2>/dev/null | awk -F: '/^Block count/{gsub(/ /,"",$2);print $2}')
+    _free=$(dumpe2fs -h "$_root" 2>/dev/null | awk -F: '/^Free blocks/{gsub(/ /,"",$2);print $2}')
+    _min=$(resize2fs -P "$_root" 2>/dev/null | awk -F: '/minimum size/{gsub(/ /,"",$2);print $2}')
+    [ -n "$_bs" ] && [ -n "$_cnt" ] && [ -n "$_free" ] && [ -n "$_min" ] \
+        || die "cannot read the root filesystem's geometry"
+    _target=$(( _asz * 512 / _bs ))
+    _fit=$(ab_fits "$_min" "$(( _cnt - _free ))" "$_target" "$(( 1073741824 / _bs ))")
+    _used=$(( (_cnt - _free) * _bs / 1024 ))
+    if [ "$_fit" != ok ]; then
+        log "the rootfs does not fit slot A even without its caches ($_fit). Not splitting."
+        return 0
+    fi
+
+    _tmp=$(mktemp -d /tmp/ab-split.XXXXXX)
+    mkdir -p "$_tmp/extra/lib"
+    cp "$LIBDIR/ab-lib.sh" "$_tmp/extra/lib/ab-lib.sh"
+    python3 "$LIBDIR/make-ab-initramfs.py" / "$LIBDIR/init-split" "$_tmp/extra" \
+        "$_tmp/split.cpio.gz" /usr/bin/e2fsck /usr/bin/resize2fs /usr/bin/dumpe2fs /usr/bin/sfdisk \
+        || die "could not build the maintenance initramfs"
+    boot_slot_kernel /dev/mmcblk0p9 "$_tmp/kernel" >/dev/null || die "could not read slot A's kernel"
+    nq-kernel-ota bootimg "$_tmp/kernel" - "$_tmp/split.img" /boot/config "$_tmp/split.cpio.gz" \
+        || die "could not pack the maintenance image (too big for the 8 MiB slot?)"
+    if [ "$_dry" = 1 ]; then
+        log "dry run: $_tmp/split.img, $(stat -c %s "$_tmp/split.img") B of the 8388608 B trial slot;"
+        log "rootfs uses $(( _used / 1024 )) MiB, slot A would hold $(( _asz / 2048 )) MiB. Nothing booted."
+        return 0
+    fi
+
+    _how=manual; [ "$_auto" = 1 ] && _how=auto
+    printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_how" "$_gen" > "$STATE/ab-migrate.attempted"
+    rm -f "$STATE/ab-migrate.result"
+    sync
+    log "booting the maintenance image: the ext4 on p13 is shrunk to $(( _asz / 2048 )) MiB"
+    log "and slot B is created. Takes a few minutes and two reboots -- do not cut the power."
+    NQ_KOTA_YES=1 nq-kernel-ota rescue "$_tmp/split.img"
+}
+
+# --- ensure: the storage check after every OTA -------------------------------
+#
+# The state every unit should be in: the eMMC split into slot A and slot B, and
+# the running root ext4 filling its slot. `ensure` gets it there from wherever
+# the unit is, the safest way first:
+#
+#   1. nexusq-resize-rootfs -- the same code the boot runs. If slot B is missing
+#      and the ext4 is still small (a fresh flash, or an image whose first-boot
+#      unit never ran, like v1.19.0's), it splits ONLINE with the root mounted,
+#      nothing moved; then it grows the ext4 to fill its slot.
+#   2. If slot B is still missing, the ext4 already fills p13 and only the
+#      offline split can shrink it: `split --auto`, one attempt per OTA.
+#
+# (Grow-then-split would reach the same end but force step 2's shrink on units
+# that never needed it -- the one step in all of this where a power cut would
+# hurt. Splitting before growing avoids it wherever it can be avoided.)
+#
+# --auto is nexusq-storage-check.timer: 10 min after boot, then every 30 min. A
+# run that finds everything in order records the apk generation it checked, and
+# later runs return after one stat until an OTA changes it -- so the check costs
+# nothing between updates and runs in full after every one.
+cmd_ensure() {
+    _auto=0
+    [ "${1:-}" = --auto ] && _auto=1
+    _gen=$(apk_generation "$APKDB/installed")
+    if [ "$_auto" = 1 ] && done_for "$STATE/storage-ok" "$_gen"; then
+        return 0
+    fi
+    if ! flock -n "$APKDB/lock" true 2>/dev/null; then
+        log "apk is busy; the storage check waits for the next run"
+        return 0
+    fi
+
+    # 1. Online: split if it can be done with the root mounted, grow.
+    if ! "$RESIZE"; then
+        log "the online storage check reported an error (see its journal); trying again next run"
+        return 0
+    fi
+
+    # 2. Slot B present: nothing left to do for this system state.
+    if [ -e "$SYSBLOCK/mmcblk0p14" ]; then
+        printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_gen" > "$STATE/storage-ok"
+        log "storage ok: slots A and B, the root fills its slot"
+        return 0
+    fi
+
+    # 3. Offline: the ext4 fills p13, so only the maintenance boot can split it.
+    if [ "$_auto" = 1 ]; then
+        cmd_split --auto
+    else
+        cmd_split
+    fi
+}
+
 cmd_promote() {
     _run=$(running_slot)
     nq-slot promote "$_run"
@@ -200,5 +418,7 @@ case "${1:-status}" in
     populate) cmd_populate ;;
     try)      shift; cmd_try "$@" ;;
     promote)  cmd_promote ;;
-    *) echo "usage: nq-rootfs-ab [status|populate|try <a|b>|promote]" >&2; exit 1 ;;
+    split)    shift; cmd_split "$@" ;;
+    ensure)   shift; cmd_ensure "$@" ;;
+    *) echo "usage: nq-rootfs-ab [status|populate|try <a|b>|promote|ensure [--auto]|split [--auto] [--dry-run]]" >&2; exit 1 ;;
 esac

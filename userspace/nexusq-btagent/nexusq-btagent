@@ -313,14 +313,34 @@ def _run():
             self.registered = False
             self._control_sock = None
 
+        def _bluez(self, path):
+            """A proxy for a BlueZ object, built WITHOUT introspection.
+
+            dbus-python's get_object() introspects by default: every new proxy
+            costs an Introspect round trip to bluetoothd plus an XML parse of the
+            object (the adapter's lists every known device as a child node). We
+            never need it — every call below names its interface through
+            dbus.Interface — and proxies are deliberately NOT cached, because
+            one resolves the well-known name to bluetoothd's unique name when it
+            is built and would go stale if bluetoothd restarts. Measured on the
+            Q (2026-09-26): 3.6 ms of CPU per property read with introspection,
+            0.55 ms without; the 10 s reconcile tick makes five of them, and at
+            350 MHz it cost 61 ms per tick — 0.62 % of a core on an idle box,
+            the third-largest consumer after systemd-oomd and nq-healthd.
+            """
+            return self.bus.get_object(BLUEZ, path, introspect=False)
+
         def _props(self, path=ADAPTER_PATH):
-            return dbus.Interface(self.bus.get_object(BLUEZ, path), PROPS_IFACE)
+            return dbus.Interface(self._bluez(path), PROPS_IFACE)
 
         def _get(self, name, path=ADAPTER_PATH, iface=ADAPTER_IFACE):
             return self._props(path).Get(iface, name)
 
         def _set(self, name, value, path=ADAPTER_PATH, iface=ADAPTER_IFACE):
-            self._props(path).Set(iface, name, value)
+            # signature is REQUIRED without introspection: guessed from the
+            # Python types, a dbus.Boolean would go out as "b", not the "v"
+            # Properties.Set takes, and bluetoothd rejects the call.
+            self._props(path).Set(iface, name, value, signature="ssv")
 
         def arm_window_timeout(self):
             """Make the pairing window close ITSELF, in bluez, not in us.
@@ -361,18 +381,20 @@ def _run():
             try:
                 if self.agent is None:
                     self.agent = Agent(self.bus, AGENT_PATH)
-                am = dbus.Interface(self.bus.get_object(BLUEZ, "/org/bluez"),
+                am = dbus.Interface(self._bluez("/org/bluez"),
                                     "org.bluez.AgentManager1")
                 try:
-                    am.UnregisterAgent(AGENT_PATH)
+                    am.UnregisterAgent(AGENT_PATH, signature="o")
                 except dbus.DBusException:
                     pass  # not registered yet — the normal path
-                am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY)
+                # Explicit signatures: AGENT_PATH is a str, which without
+                # introspection would be guessed as "s", not an object path.
+                am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY, signature="os")
                 # Last RequestDefaultAgent caller wins. blueman-applet's
                 # DisplayYesNo agent is kept out of autostart by the device
                 # package for exactly this reason; if it is ever started by hand
                 # it steals the default and pairing breaks again (see header).
-                am.RequestDefaultAgent(AGENT_PATH)
+                am.RequestDefaultAgent(AGENT_PATH, signature="o")
                 self.registered = True
                 log(f"agent registered as default ({AGENT_CAPABILITY})")
             except dbus.DBusException as e:
@@ -468,7 +490,7 @@ def _run():
             """Snapshot of known devices, already typed for the app."""
             out = []
             try:
-                om = dbus.Interface(self.bus.get_object(BLUEZ, "/"),
+                om = dbus.Interface(self._bluez("/"),
                                     "org.freedesktop.DBus.ObjectManager")
                 objs = om.GetManagedObjects()
             except dbus.DBusException:
@@ -551,7 +573,7 @@ def _run():
             if m == "startScan":
                 secs = max(5, min(int(req.get("secs", SCAN_SECS)), 60))
                 try:
-                    dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                    dbus.Interface(self._bluez(ADAPTER_PATH),
                                    ADAPTER_IFACE).StartDiscovery()
                 except dbus.DBusException as e:
                     if "InProgress" not in str(e):
@@ -569,14 +591,15 @@ def _run():
                 return reply({"devices": self._devices(paired_only=True)})
             if m == "remove":
                 try:
-                    dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
-                                   ADAPTER_IFACE).RemoveDevice(self._dev_path(mac))
+                    dbus.Interface(self._bluez(ADAPTER_PATH),
+                                   ADAPTER_IFACE).RemoveDevice(self._dev_path(mac),
+                                                               signature="o")
                     return reply({"removed": True})
                 except dbus.DBusException as e:
                     return reply({"error": "not_found", "message": str(e)})
             if m in ("connect", "disconnect"):
                 try:
-                    dev = dbus.Interface(self.bus.get_object(BLUEZ, self._dev_path(mac)),
+                    dev = dbus.Interface(self._bluez(self._dev_path(mac)),
                                          DEVICE_IFACE)
                     (dev.Connect if m == "connect" else dev.Disconnect)(timeout=30)
                     return reply({"ok": True})
@@ -588,7 +611,7 @@ def _run():
 
         def _stop_scan_once(self):
             try:
-                dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                dbus.Interface(self._bluez(ADAPTER_PATH),
                                ADAPTER_IFACE).StopDiscovery()
             except dbus.DBusException:
                 pass  # already stopped
@@ -611,7 +634,7 @@ def _run():
             # from their scan is usually GONE (measured: Pair -> UnknownObject).
             # Own the discovery here instead of trusting a previous scan.
             try:
-                dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                dbus.Interface(self._bluez(ADAPTER_PATH),
                                ADAPTER_IFACE).StartDiscovery()
             except dbus.DBusException as e:
                 if "InProgress" not in str(e):
@@ -626,7 +649,7 @@ def _run():
                     # report "not advertising" for a device that was right there.)
                     self._get("Address", path=self._dev_path(mac), iface=DEVICE_IFACE)
                     dev = dbus.Interface(
-                        self.bus.get_object(BLUEZ, self._dev_path(mac)), DEVICE_IFACE)
+                        self._bluez(self._dev_path(mac)), DEVICE_IFACE)
                 except dbus.DBusException:
                     deadline[0] -= 1
                     if deadline[0] > 0:

@@ -64,6 +64,27 @@ done
 echo "==> Release gate: no baked-in personal access"
 scripts/release-preflight-no-secrets.sh "$RAW"
 
+# ...and the image has to be the one we think it is. verify-rootfs.sh used to be
+# run by the build agent and nowhere else, so a release cut by hand never ran it
+# -- and the v1.19.0 image shipped with its first-boot unit not enabled (a fresh
+# flash never grew its root; with device r112 it would never have split into
+# A/B either), which that script's section 8 caught the first time it existed.
+# It mounts the image, so it needs root: directly on Linux, otherwise inside the
+# privileged builder image the way HANDOFF.md "macOS specifics" describes. There
+# is no path that skips it.
+echo "==> Release gate: the rootfs is what it should be (verify-rootfs.sh)"
+if [ "$(uname -s)" = Linux ] && sudo -n true 2>/dev/null; then
+    scripts/verify-rootfs.sh "$RAW" "$BOOT"
+elif command -v docker >/dev/null && docker image inspect nexusq-builder >/dev/null 2>&1; then
+    docker run --rm --privileged --user root --entrypoint bash \
+        -v /dev:/dev -v "$PWD:/src" -w /src \
+        nexusq-builder scripts/verify-rootfs.sh "$RAW" "$BOOT"
+else
+    echo "ERROR: verify-rootfs.sh needs root (Linux + sudo) or docker with the" >&2
+    echo "       nexusq-builder image; neither is available. Not packaging." >&2
+    exit 1
+fi
+
 # ...and the install guide has to be about THIS release. INSTALL.md went four
 # releases stale while looking maintained -- it kept gaining correct new sections
 # bolted onto a v1.11.0-era spine, because nothing in the release process owned

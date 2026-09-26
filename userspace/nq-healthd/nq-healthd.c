@@ -502,9 +502,23 @@ static void led_frame(const char *attr, long long *sum, long long *hash)
  * The pattern list is known to be somewhat broad; that is a separate argument
  * to have, with the field's consumers, not a thing to change under them.
  *
- * /dev/kmsg is opened fresh per scan because it starts at the OLDEST record —
- * that is how we get a whole-ring recount without forking dmesg. Scans are
- * amortized (every NQ_DMESG_EVERY ticks, 30 s by default). */
+ * The number is "matching records CURRENTLY IN THE RING", as `dmesg | grep -c`
+ * gave. Up to device r109 that was computed literally: /dev/kmsg opened fresh
+ * every scan and the whole ring re-read from its oldest record — ~900 read()s
+ * and ~12 k substring matches every 30 s, measured on the cottage Q
+ * (2026-09-26) at 157 ms per scan at 350 MHz, 0.52 % of a core and most of
+ * this daemon's idle cost. It is now INCREMENTAL with the same result:
+ *
+ *   - one fd stays open and only records added since the last scan are read
+ *     and matched; the seq of every match is remembered;
+ *   - a second fd is rewound (SEEK_SET = the oldest record still in the ring)
+ *     and one record read, so matches older than that seq — overwritten, no
+ *     longer in the ring — are forgotten, exactly as a recount would drop them;
+ *   - EPIPE on the reading fd means records we had not read yet were
+ *     overwritten first. They are gone from the ring too, so a recount would
+ *     not include them either: carry on from the new oldest record.
+ *
+ * Scans stay amortized (every NQ_DMESG_EVERY ticks, 30 s by default). */
 static int line_is_error(const char *l)
 {
     if (strcasestr(l, "oops") || strcasestr(l, "panic") ||
@@ -525,31 +539,117 @@ static int line_is_error(const char *l)
     return 0;
 }
 
+/* "prio,seq,ts,flags;message" -> seq and a pointer to the message. The match
+ * runs on the message (and any continuation lines after it) only, so a digit in
+ * the header can never look like a hit. Returns 0 on a malformed record. */
+static int kmsg_parse(char *rec, unsigned long long *seq, char **msg)
+{
+    char *c = strchr(rec, ',');
+    char *semi = strchr(rec, ';');
+    if (!c || !semi || c > semi)
+        return 0;
+    char *end;
+    errno = 0;
+    unsigned long long v = strtoull(c + 1, &end, 10);
+    if (errno || end == c + 1 || *end != ',')
+        return 0;
+    *seq = v;
+    *msg = semi + 1;
+    return 1;
+}
+
+/* The seqs of matching records believed to be in the ring, oldest first. Kept
+ * as a growable array; matches are rare (5 on a clean boot), so this stays tiny. */
+static unsigned long long *kerr_seq;
+static size_t kerr_n, kerr_cap;
+
+static void kerr_push(unsigned long long seq)
+{
+    if (kerr_n == kerr_cap) {
+        size_t cap = kerr_cap ? kerr_cap * 2 : 16;
+        unsigned long long *p = realloc(kerr_seq, cap * sizeof *p);
+        if (!p)
+            return;              /* undercount rather than crash the monitor */
+        kerr_seq = p;
+        kerr_cap = cap;
+    }
+    kerr_seq[kerr_n++] = seq;
+}
+
+/* Forget matches the ring no longer holds (seq < oldest). */
+static void kerr_trim(unsigned long long oldest)
+{
+    size_t i = 0;
+    while (i < kerr_n && kerr_seq[i] < oldest)
+        i++;
+    if (i) {
+        memmove(kerr_seq, kerr_seq + i, (kerr_n - i) * sizeof *kerr_seq);
+        kerr_n -= i;
+    }
+}
+
+static void kerr_reset(void) { kerr_n = 0; }
+
+static int kmsg_rd = -1, kmsg_head = -1;
+
+#ifndef KMSG
+#define KMSG "/dev/kmsg"
+#endif
+
 static long long kmsg_error_count(void)
 {
-    int fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0)
-        return -1;
+    if (kmsg_rd < 0) {
+        /* A fresh fd starts at the oldest record, so the first scan after a
+         * (re)open IS the full recount; the list starts empty to match. */
+        kmsg_rd = open(KMSG, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (kmsg_rd < 0)
+            return -1;
+        kerr_reset();
+    }
+    if (kmsg_head < 0)
+        kmsg_head = open(KMSG, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
     char buf[8192];
-    long long n = 0;
     ssize_t r;
     for (;;) {
-        r = read(fd, buf, sizeof buf - 1);
+        r = read(kmsg_rd, buf, sizeof buf - 1);
         if (r > 0) {
             buf[r] = '\0';
-            /* "prio,seq,ts,flag;message" — only the message is matched, so a
-             * digit in the header can never look like a hit. */
-            char *msg = strchr(buf, ';');
-            if (msg && line_is_error(msg + 1))
-                n++;
+            unsigned long long seq;
+            char *msg;
+            if (kmsg_parse(buf, &seq, &msg) && line_is_error(msg))
+                kerr_push(seq);
             continue;
         }
         if (r < 0 && errno == EPIPE)
-            continue;            /* ring wrapped past us; keep reading */
-        break;                   /* EAGAIN = end of ring, or a real error */
+            continue;            /* unread records were overwritten; see above */
+        break;                   /* EAGAIN = caught up, or a real error */
     }
-    close(fd);
-    return n;
+    if (r < 0 && errno != EAGAIN) {
+        /* A real read error: drop the fd so the next scan starts over with a
+         * full recount instead of reporting a count it can no longer keep. */
+        close(kmsg_rd);
+        kmsg_rd = -1;
+        return -1;
+    }
+
+    /* The oldest record still in the ring bounds what a recount would see. */
+    if (kmsg_head >= 0 && lseek(kmsg_head, 0, SEEK_SET) == 0) {
+        for (;;) {
+            r = read(kmsg_head, buf, sizeof buf - 1);
+            if (r < 0 && errno == EPIPE)
+                continue;        /* the oldest moved while we looked; retry */
+            break;
+        }
+        if (r > 0) {
+            buf[r] = '\0';
+            unsigned long long oldest;
+            char *msg;
+            if (kmsg_parse(buf, &oldest, &msg))
+                kerr_trim(oldest);
+        }
+    }
+    return (long long)kerr_n;
 }
 
 /* Count records under a directory, recursing: systemd nests them under per-boot

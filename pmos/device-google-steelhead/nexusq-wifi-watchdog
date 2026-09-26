@@ -75,26 +75,90 @@ STATE="$RUNDIR/wifi-watchdog.json"       # repair count for nexusq-mqtt (job 4)
 
 mkdir -p "$LOGDIR" "$RUNDIR"
 
-mono()   { cut -d. -f1 /proc/uptime; }
-emit()   { printf '%s\n' "$1" >> "$LOG"; }
-assoc()  { iw dev "$IFACE" link 2>/dev/null | grep -q "Connected to"; }
-signal() { iw dev "$IFACE" link 2>/dev/null | awk '/signal:/{print $2; exit}'; }
-gw()     { ip route show default dev "$IFACE" 2>/dev/null | awk '/default/{print $3; exit}'; }
+# FORK DIET (device r110). The steady-state check used to fork ~15 times every
+# 30 s — `cut` for the uptime, `iw` twice (once for assoc, once for signal) each
+# into grep/awk, `ip | awk`, `ping | grep | grep`, and `wc -l` over the whole
+# JSONL log for the size cap. Measured on the cottage Q (2026-09-26, sched
+# trace): 465 ms of CPU per minute, 0.78 % of a core — as much as systemd-oomd,
+# and invisible in per-process accounting because every fork is a new PID. Now
+# one `iw`, one `ip` and one `ping` per check, parsed by the shell itself
+# (parse_link / parse_gw / parse_loss below, tested against real device output),
+# the uptime read with a builtin, and the log length kept in a counter.
+# The helpers still return values through variables rather than stdout, because
+# every $(...) is a fork of its own in this shell.
+
+# Seconds since boot, into NOW. `read` is a builtin: no fork.
+now_s()  { read -r _up _rest < /proc/uptime; NOW=${_up%%.*}; }
+mono()   { now_s; echo "$NOW"; }    # for the rare repair paths only
+
+# TESTABLE:parse_link
+# parse_link <output of `iw dev wlan0 link`>: sets LINK_ASSOC to yes|no and
+# LINK_SIG to the signal in dBm ("-45"), empty when there is none. Same answers
+# as the `grep -q "Connected to"` and `awk '/signal:/{print $2}'` it replaces.
+parse_link() {
+	LINK_ASSOC=no; LINK_SIG=
+	case "$1" in *"Connected to"*) LINK_ASSOC=yes ;; esac
+	case "$1" in
+		*"signal:"*)
+			_s=${1#*signal:}
+			_s=${_s#"${_s%%[!	 ]*}"}   # drop the blanks after the colon
+			LINK_SIG=${_s%%[	 
+]*} ;;
+	esac
+}
+
+# TESTABLE:parse_gw
+# parse_gw <output of `ip route show default dev wlan0`>: sets GW to the first
+# default route's gateway, empty when there is none. (The awk it replaces
+# printed the third field of any line containing "default", which for a
+# gateway-less default route was a word, not an address; a route with no "via"
+# now reads, correctly, as no gateway.)
+parse_gw() {
+	GW=
+	case "$1" in
+		*"default via "*)
+			_g=${1#*default via }
+			GW=${_g%%[	 
+]*} ;;
+	esac
+}
+
+# TESTABLE:parse_loss
+# parse_loss <output of ping>: sets LOSS to the integer packet-loss %, or 100
+# when there is no summary line (ping could not even send) — as the
+# `grep -oE '[0-9]+% packet loss' | grep -oE '^[0-9]+' || echo 100` it replaces.
+parse_loss() {
+	LOSS=100
+	case "$1" in
+		*"% packet loss"*)
+			_l=${1%%"% packet loss"*}
+			_l=${_l##*[!0-9]}
+			[ -n "$_l" ] && LOSS=$_l ;;
+	esac
+}
+
+probe_link() { parse_link "$(iw dev "$IFACE" link 2>/dev/null)"; }
+probe_gw()   { parse_gw "$(ip route show default dev "$IFACE" 2>/dev/null)"; }
+probe_loss() { parse_loss "$(ping -I "$IFACE" -c4 -W2 "$1" 2>/dev/null)"; }
+
+emit()   { printf '%s\n' "$1" >> "$LOG"; LOG_LINES=$((LOG_LINES + 1)); }
+assoc()  { probe_link; [ "$LINK_ASSOC" = yes ]; }
+signal() { probe_link; echo "$LINK_SIG"; }
+gw()     { probe_gw; echo "$GW"; }
 # NetworkManager's numeric device state for wlan0 ("30 (disconnected)" -> 30);
 # empty when NM is not answering, which is treated like "not ours".
 nm_state() { nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null | cut -d' ' -f1; }
 
 # integer packet-loss % pinging $1 over wlan0 (100 if unpingable)
-loss_to() {
-	ping -I "$IFACE" -c4 -W2 "$1" 2>/dev/null \
-		| grep -oE '[0-9]+% packet loss' | grep -oE '^[0-9]+' || echo 100
-}
+loss_to() { probe_loss "$1"; echo "$LOSS"; }
 
-# keep the log bounded without rewriting it every line
+# Keep the log bounded without rewriting it every line — and without re-reading
+# it either: LOG_LINES is counted once at start (below) and kept by emit(). A
+# `wc -l` over a 15 k-line file here cost 61 ms at 350 MHz on every check.
 cap_log() {
-	lines=$(wc -l < "$LOG" 2>/dev/null || echo 0)
-	if [ "$lines" -gt "$CAP" ]; then
+	if [ "$LOG_LINES" -gt "$CAP" ]; then
 		tail -n $((CAP / 2)) "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+		LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 	fi
 }
 
@@ -193,6 +257,7 @@ reconnect() {
 	record_repair reconnect "$up" "$after"
 }
 
+LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 fails=0
 downs=0
 last_heal=0
@@ -206,9 +271,10 @@ emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$
 
 while :; do
 	tick=$((tick + 1))
-	sig=$(signal)
+	probe_link              # one `iw` for both assoc and signal
+	sig=$LINK_SIG
 	loss=-1
-	if ! assoc; then
+	if [ "$LINK_ASSOC" != yes ]; then
 		st=down; fails=0
 		nm=$(nm_state)
 		act=$(down_action "$nm" $((downs + 1)))
@@ -216,10 +282,12 @@ while :; do
 		# NM that is busy, or has no device, resets the count — those are not
 		# the stranded case, and reconnecting into them would fight NM.
 		if [ "$act" = leave ]; then downs=0; else downs=$((downs + 1)); fi
-		line="{\"t\":$(mono),\"st\":\"down\",\"sig\":\"${sig:-?}\",\"nm\":\"${nm:-?}\",\"downs\":$downs}"
+		now_s
+		line="{\"t\":$NOW,\"st\":\"down\",\"sig\":\"${sig:-?}\",\"nm\":\"${nm:-?}\",\"downs\":$downs}"
 	else
 		downs=0
-		g=$(gw)
+		probe_gw
+		g=$GW
 		if [ -z "$g" ]; then
 			# Associated but NO default route/gateway: NetworkManager wedged in
 			# "getting IP configuration" (DHCP got no lease), so wlan0 has an IP
@@ -227,15 +295,18 @@ while :; do
 			# but-dead wedge — count it like a bad check so the heal fires; the
 			# old code held fails=0 here and so NEVER healed this exact case.
 			fails=$((fails + 1)); st=nogw
-			line="{\"t\":$(mono),\"st\":\"nogw\",\"sig\":\"${sig:-?}\",\"fails\":$fails}"
+			now_s
+			line="{\"t\":$NOW,\"st\":\"nogw\",\"sig\":\"${sig:-?}\",\"fails\":$fails}"
 		else
-			loss=$(loss_to "$g")
+			probe_loss "$g"
+			loss=$LOSS
 			if [ "$loss" -ge "$BAD_LOSS" ]; then
 				fails=$((fails + 1)); st=bad
 			else
 				fails=0; st=ok
 			fi
-			line="{\"t\":$(mono),\"st\":\"$st\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"fails\":$fails}"
+			now_s
+			line="{\"t\":$NOW,\"st\":\"$st\",\"loss\":$loss,\"sig\":\"${sig:-?}\",\"fails\":$fails}"
 		fi
 	fi
 
@@ -246,7 +317,8 @@ while :; do
 	fi
 	prev_st="$st"
 
-	now=$(mono)
+	now_s
+	now=$NOW
 	if { [ "$st" = bad ] || [ "$st" = nogw ]; } && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
 		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
 			heal "$loss"

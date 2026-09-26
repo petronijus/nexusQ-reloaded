@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=109
+pkgrel=113
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -109,6 +109,7 @@ source="
 	nexusq-nfc-send
 	nexusq-nfc.service
 	20-nexusq-nsresourced-off.preset
+	20-nexusq-oomd-off.preset
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
 	50-nexusq-48k.conf
@@ -291,6 +292,21 @@ package() {
 	# which makes preset-all warn). See the .preset file header for the ordering.
 	install -Dm644 "$srcdir"/20-nexusq-nsresourced-off.preset \
 		"$pkgdir"/usr/lib/systemd/system-preset/20-nexusq-nsresourced-off.preset
+	# Same mechanism for systemd-oomd: the largest idle CPU consumer, guarding
+	# nothing this appliance meets (see the .preset header for the numbers).
+	install -Dm644 "$srcdir"/20-nexusq-oomd-off.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/20-nexusq-oomd-off.preset
+	# Disabling is not enough on its own: systemd ships 10-oomd-defaults.conf
+	# drop-ins that set ManagedOOMMemoryPressure=kill on user@.service, -.slice
+	# and system.slice, and PID 1 turns any ManagedOOM*= setting into an implicit
+	# Wants=/After=systemd-oomd.service — so the first user session started it
+	# again on every boot (seen on the cottage Q, 2026-09-26, device r110). A
+	# same-named drop-in in /etc that points at /dev/null is systemd's documented
+	# way to switch a vendor drop-in off.
+	for _d in "user@.service.d" "-.slice.d" "system.slice.d"; do
+		install -dm755 "$pkgdir/etc/systemd/system/$_d"
+		ln -sf /dev/null "$pkgdir/etc/systemd/system/$_d/10-oomd-defaults.conf"
+	done
 	# Align bluetooth.service ConfigurationDirectoryMode with the shipped
 	# /etc/bluetooth 0755 (silences the 755-vs-555 mode warning).
 	install -Dm644 "$srcdir"/bluetooth-confdir-mode.conf \
@@ -560,13 +576,25 @@ package() {
 	install -Dm644 "$srcdir"/61_airplay.nft \
 		"$pkgdir"/etc/nftables.d/61_airplay.nft
 
-	# First-boot rootfs grow: the flashed ext4 (~2 GB) is pinned inside its 14 GB
-	# partition until resize2fs runs. Local unit (lives in /etc) enabled via the
-	# 95-nexusq preset; runs once early (sysinit.target) then self-guards.
+	# First boot after a flash: split the eMMC into the A/B rootfs slots (r112),
+	# then grow the root ext4, which is pinned at the image's size until then.
+	# Runs once early (sysinit.target) and self-guards.
+	#
+	# ENABLED BY A STATIC LINK, like every other local unit in this package. Until
+	# r113 it relied on the 95-nexusq preset alone, and preset-all leaves local
+	# (/etc) units alone -- the preset header says so. The v1.19.0 image, built
+	# on the MacBook, shipped with NO sysinit.target.wants link: a fresh flash
+	# never grew its root (and from r112 would never have split). Units in the
+	# field had the link from the apk trigger's per-unit preset, which is why
+	# nothing looked wrong. Caught by verify-rootfs.sh section 8 the first time
+	# it ran. The preset line stays, for a `systemctl preset` by hand.
 	install -Dm755 "$srcdir"/nexusq-resize-rootfs \
 		"$pkgdir"/usr/bin/nexusq-resize-rootfs
 	install -Dm644 "$srcdir"/nexusq-resize-rootfs.service \
 		"$pkgdir"/etc/systemd/system/nexusq-resize-rootfs.service
+	install -dm755 "$pkgdir"/etc/systemd/system/sysinit.target.wants
+	ln -sf ../nexusq-resize-rootfs.service \
+		"$pkgdir"/etc/systemd/system/sysinit.target.wants/nexusq-resize-rootfs.service
 
 	# --- Roon Bridge (glibc/Mono in a bwrap sandbox) ------------------------
 	# The glibc sandbox BASE (the ~180 MB Debian bookworm armhf rootfs at
@@ -748,6 +776,7 @@ SKIP  nexusq-cpufreq-tune
 SKIP  nexusq-cpufreq-tune.service
 SKIP  10-nexusq-ntp-by-ip.conf
 SKIP  20-nexusq-nsresourced-off.preset
+SKIP  20-nexusq-oomd-off.preset
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf
 SKIP  50-nexusq-48k.conf

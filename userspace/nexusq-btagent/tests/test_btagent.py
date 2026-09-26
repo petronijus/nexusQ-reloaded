@@ -247,5 +247,42 @@ class TestDeviceKind(unittest.TestCase):
         self.assertEqual(self.mod.device_kind("", None, None), "other")
 
 
+class TestBluezProxiesSkipIntrospection(unittest.TestCase):
+    """Source-level guards for the 2026-09-26 idle-cost fix.
+
+    The D-Bus plumbing lives inside _run() and needs a live BlueZ, so these pin
+    the two halves of the fix in the source instead:
+
+    * every proxy is built by _bluez() with introspect=False — an introspecting
+      get_object() costs an Introspect round trip + XML parse per property read
+      (3.6 ms vs 0.55 ms of CPU on the Q; 0.62 % of a core on the 10 s tick);
+    * every method that takes arguments names its signature — without
+      introspection dbus-python guesses it from the Python types, and bluetoothd
+      rejects the guess (Properties.Set with a dbus.Boolean went out as "ssb":
+      UnknownMethod, measured on the Q; a str agent path would go out as "s").
+    """
+
+    def setUp(self):
+        with open(DAEMON, encoding="utf-8") as f:
+            self.src = f.read()
+
+    def test_the_only_get_object_is_the_non_introspecting_helper(self):
+        calls = [ln.strip() for ln in self.src.splitlines()
+                 if "get_object(" in ln and not ln.strip().startswith(("#", "dbus-python"))]
+        self.assertEqual(calls, ["return self.bus.get_object(BLUEZ, path, introspect=False)"])
+
+    def test_argumented_methods_carry_their_signature(self):
+        for needle in ('.Set(iface, name, value, signature="ssv")',
+                       'am.UnregisterAgent(AGENT_PATH, signature="o")',
+                       'am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY, signature="os")',
+                       'am.RequestDefaultAgent(AGENT_PATH, signature="o")',
+                       'signature="o")'):
+            self.assertIn(needle, self.src)
+        # RemoveDevice is split over two lines; check the call and its signature
+        # arrive together.
+        i = self.src.index(".RemoveDevice(")
+        self.assertIn('signature="o"', self.src[i:i + 200])
+
+
 if __name__ == "__main__":
     unittest.main()

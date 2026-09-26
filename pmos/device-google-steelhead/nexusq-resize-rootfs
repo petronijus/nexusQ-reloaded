@@ -1,19 +1,63 @@
 #!/bin/sh
-# Grow the root ext4 to fill its partition — once, after a flash.
+# The storage check: give the eMMC its two rootfs slots if that can be done with
+# the root mounted, then grow the root ext4 to fill its own. Runs at every boot
+# (nexusq-resize-rootfs.service) and from `nq-rootfs-ab ensure` after every OTA;
+# on a unit that is already split and grown it changes nothing.
 #
-# The flashed rootfs image is ~3 GB, but it is written to a 6.6 GB rootfs
-# slot (p13 or p14 since the A/B split, 2026-08-20). ext4 does NOT grow into the partition on
-# its own, so a fresh flash boots with the fs pinned at ~2 GB and only tens of MB
-# free — dangerously tight for any apk op, and far too small for the glibc chroot
-# the Roon/Tidal services need. resize2fs grows a MOUNTED ext4 online, so this is
-# safe to run against the live root.
+# THE SPLIT (device r112, 2026-09-26). A/B rootfs (p13 "userdata" = slot A, p14
+# "userdata_b" = slot B) is what lets a fresh image go into the slot that is not
+# running and be trial-booted with a way back (nq-rootfs-ab, deploy-rootfs-slot.sh).
+# Until now p14 existed on exactly one unit: the Prague Q was repartitioned BY
+# HAND from a rescue initramfs on 2026-08-20, and nothing in the image or the
+# install guide ever did it again — the cottage Q and every Q flashed from a
+# GitHub release had the whole A/B machinery installed and no slot B.
 #
-# Idempotent: the unit's ConditionPathExists guards the flag, and this also
-# skips if the fs already fills the partition, so a stale flag or a hand-run does
-# no harm.
+# A factory Q's p13 runs from sector 3200000 to the very last sector of the eMMC
+# (which is also why its backup GPT has never fit — B8 in the boot error
+# inventory). After a flash, though, the ext4 INSIDE p13 is only the image's size
+# (~3 GB): nothing has grown it yet. So on that first boot, before growing
+# anything, the space behind the filesystem is still empty, and p13 can be cut
+# down to half of the space while mounted:
+#
+#   1. rewrite the GPT with p13 shortened and p14 added behind it, and let sfdisk
+#      put the backup GPT at the real end of the disk (fixes B8 as a side effect);
+#   2. tell the running kernel with BLKPG (resizepart, partx -a) — never a table
+#      re-read, which a disk with a mounted partition refuses;
+#   3. confirm the kernel now sees exactly the new sizes; ONLY then
+#   4. format slot B and grow slot A's ext4 to its new, smaller partition.
+#
+# Step 3 is the load-bearing check. If the GPT on disk changed but the kernel
+# still had p13 at its old size, growing the ext4 would run it straight into
+# slot B's space. So a split that does not verify stops there; the next boot
+# reads the new table from disk, and this script then finds p14 present,
+# formats it if it is still blank, and grows the root into p13's new size.
+#
+# The layout is computed, not hard-coded, and reproduces the Prague split
+# exactly on this eMMC: p13 3200000 +13788160, p14 16988160 +13789151.
+#
+# A unit whose ext4 already fills p13 (anything flashed before r112 and booted
+# since) cannot be split this way — ext4 does not shrink while mounted. Such a
+# unit gets A/B by flashing userdata again; the per-unit persist store (device
+# r103+) carries its identity, WiFi, Bluetooth and ssh keys across that flash.
+#
+# THE GROW. The image is written to a slot much larger than itself and ext4 does
+# not grow into the partition on its own, so a fresh flash would boot with tens
+# of MB free. resize2fs grows a MOUNTED ext4 online, so this runs on the live
+# root. Idempotent: each step checks the state it would change, so running it at
+# every boot and after every OTA costs two dumpe2fs header reads when there is
+# nothing to do. The flag (.rootfs-resized) is only a record now, not a guard.
 set -e
 
-FLAG=/var/lib/nexusq/.rootfs-resized
+STATE_DIR="${NQ_STATE_DIR:-/var/lib/nexusq}"
+ROOT_MNT="${NQ_ROOT_MNT:-/}"
+FLAG="$STATE_DIR/.rootfs-resized"
+# Written before the new table goes to disk, removed once slot B is formatted.
+# It is the ONLY thing that licenses formatting p14: a p14 this script did not
+# create (the hand-split Prague unit, say) is a rootfs, never touched here.
+PENDING="$STATE_DIR/.ab-split-pending"
+LOG_TAG=nexusq-resize-rootfs
+
+log() { echo "$LOG_TAG: $*" >&2; }
 
 # TESTABLE:root_device
 # root_device <major:minor of /> [sysfs root]: prints "<device node> <partition
@@ -29,28 +73,132 @@ root_device() {
 	echo "/dev/$_name $(( $(cat "$_sys/size") * 512 ))"
 }
 
-mkdir -p /var/lib/nexusq
+# ab_layout and ab_table -- the layout and the new table -- live in
+# nexusq-rootfs-ab's ab-lib.sh, shared with the maintenance initramfs that splits
+# units whose ext4 already fills p13 (`nq-rootfs-ab split`), so both paths write
+# the same table.
+AB_LIB="${NQ_AB_LIB:-/usr/lib/nexusq-rootfs-ab/ab-lib.sh}"
+if [ -r "$AB_LIB" ]; then
+	. "$AB_LIB"
+	HAVE_AB_LIB=1
+else
+	# A device package newer than nexusq-rootfs-ab (they ship together, but the
+	# depends= is unversioned): no split this boot, just the grow as before.
+	HAVE_AB_LIB=0
+fi
 
-# Partition size (512-byte sectors -> bytes) vs current fs size (blocks * bs).
-set -- $(root_device "$(mountpoint -d /)") || {
-	echo "nexusq-resize-rootfs: cannot tell which partition / is on" >&2
+sectors_of() { cat "/sys/class/block/$1/size" 2>/dev/null || echo 0; }
+
+# Wait (bounded) for a block device node to appear after BLKPG added it.
+wait_for_node() {
+	_i=0
+	while [ ! -b "$1" ] && [ "$_i" -lt 50 ]; do sleep 0.2; _i=$((_i + 1)); done
+	[ -b "$1" ]
+}
+
+# Format the slot B this script created — and only that one (see PENDING). Its
+# sectors held the tail of the old, larger p13, so whatever blkid might read
+# there is leftover, not a filesystem; -F formats over it.
+format_slot_b() {
+	[ -f "$PENDING" ] || return 0
+	wait_for_node "$1" || {
+		log "ERROR: $1 did not appear; the next boot will format it"
+		exit 1
+	}
+	log "formatting slot B $1 (ext4, label pmOS_root_b)"
+	mkfs.ext4 -q -F -L pmOS_root_b -m 0 "$1"
+	rm -f "$PENDING"
+}
+
+split_ab() {  # split_ab <disk name> <A part name> <A partno> <fs bytes>
+	_disk=$1; _a=$2; _anr=$3; _fsb=$4
+	_bnr=$(( _anr + 1 ))
+	_b="${_disk}p${_bnr}"
+	_disk_sectors=$(sectors_of "$_disk")
+	_a_start=$(cat "/sys/class/block/$_a/start")
+	set -- $(ab_layout "$_disk_sectors" "$_a_start")
+	_asz=$1; _bst=$2; _bsz=$3
+
+	# Only the case this was designed for: slot A is the last partition and runs
+	# to the end of the usable disk or past it (the factory layout), and the ext4
+	# inside it still fits in the smaller slot A with room to spare.
+	_a_end=$(( _a_start + $(sectors_of "$_a") ))
+	if [ "$_a_end" -lt "$(( _bst + _bsz ))" ]; then
+		log "slot A does not reach the end of the disk; not splitting"
+		return 0
+	fi
+	if [ "$(( _fsb + 268435456 ))" -gt "$(( _asz * 512 ))" ]; then
+		log "the root ext4 (${_fsb} B) already fills more than slot A would ($(( _asz * 512 )) B)."
+		log "A/B needs a fresh flash of userdata on this unit; growing in place instead."
+		return 0
+	fi
+
+	log "splitting /dev/$_a into slot A ($_asz sectors) and slot B /dev/$_b ($_bsz sectors at $_bst)"
+	_old="$STATE_DIR/gpt-before-ab.sfdisk"
+	sfdisk -d "/dev/$_disk" > "$_old" 2>/dev/null
+	dd if="/dev/$_disk" of="$STATE_DIR/gpt-before-ab.head.bin" bs=512 count=34 2>/dev/null
+	_new="$STATE_DIR/gpt-ab.sfdisk"
+	ab_table "$_old" "/dev/$_a" "$_asz" "/dev/$_b" "$_bst" "$_bsz" > "$_new" || {
+		log "could not build the new table from $_old; not splitting"
+		return 0
+	}
+
+	# Write the table; tell the kernel ourselves, entry by entry.
+	: > "$PENDING"
+	sfdisk --no-reread --no-tell-kernel -f -q "/dev/$_disk" < "$_new"
+	resizepart "/dev/$_disk" "$_anr" "$_asz"
+	partx -a --nr "$_bnr" "/dev/$_disk"
+
+	if [ "$(sectors_of "$_a")" != "$_asz" ] || [ "$(sectors_of "$_b")" != "$_bsz" ]; then
+		log "ERROR: the kernel does not see the new layout (A $(sectors_of "$_a"), B $(sectors_of "$_b"))."
+		log "The table on disk is written; NOT growing the root. The next boot reads it and finishes."
+		exit 1
+	fi
+	format_slot_b "/dev/$_b"
+	log "split done; old table kept in $_old"
+}
+
+mkdir -p "$STATE_DIR"
+
+set -- $(root_device "$(mountpoint -d "$ROOT_MNT")") || {
+	log "cannot tell which partition / is on"
 	exit 1
 }
 ROOT_DEV=$1
-part_bytes=$2
+ROOT_NAME=${ROOT_DEV#/dev/}
+
 bs=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block size/{gsub(/ /,"",$2);print $2}')
 fs_blocks=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/Block count/{gsub(/ /,"",$2);print $2}')
 fs_bytes=$(( bs * fs_blocks ))
 
+# The split concerns slot A on a disk with no slot B yet. From slot B the table
+# already has both, so there is nothing to do but grow.
+if [ -e "/sys/class/block/$ROOT_NAME/partition" ]; then
+	disk=$(basename "$(readlink -f "/sys/class/block/$ROOT_NAME/..")")
+	partno=$(cat "/sys/class/block/$ROOT_NAME/partition")
+	b_name="${disk}p$(( partno + 1 ))"
+	if [ "$partno" = 13 ] && [ "$HAVE_AB_LIB" = 1 ]; then
+		if [ -e "/sys/class/block/$b_name" ]; then
+			# The table has slot B. If this script created it and the kernel update
+			# did not verify last boot, finish the job; otherwise leave it alone.
+			format_slot_b "/dev/$b_name"
+		else
+			split_ab "$disk" "$ROOT_NAME" "$partno" "$fs_bytes"
+		fi
+	fi
+fi
+
+# Grow. Partition size is re-read: the split may just have shortened it.
+part_bytes=$(( $(sectors_of "$ROOT_NAME") * 512 ))
 # Leave a small margin (256 MB) — if the fs is already within it of the
 # partition, there is nothing meaningful to reclaim.
 if [ "$(( part_bytes - fs_bytes ))" -lt 268435456 ]; then
-	echo "nexusq-resize-rootfs: fs already fills the partition (${fs_bytes} of ${part_bytes} B)" >&2
+	log "fs already fills the partition (${fs_bytes} of ${part_bytes} B)"
 	touch "$FLAG"
 	exit 0
 fi
 
-echo "nexusq-resize-rootfs: growing $ROOT_DEV ext4 from ${fs_bytes} to ${part_bytes} B" >&2
+log "growing $ROOT_DEV ext4 from ${fs_bytes} to ${part_bytes} B"
 resize2fs "$ROOT_DEV"
 touch "$FLAG"
-echo "nexusq-resize-rootfs: done" >&2
+log "done"

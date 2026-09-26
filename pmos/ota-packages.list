@@ -66,3 +66,8 @@ firmware-google-steelhead
 # other, or a device that OTA-upgrades keeps Alpine's SCALAR build and silently
 # loses the resampler win.
 speexdsp
+
+# The same kind of override (pmos/shairport-sync/APKBUILD): Alpine's build plus a
+# patch that stops the ALSA monitor thread polling every 10 ms. Unpublished, a box
+# in the field would keep Alpine's 5.1-r0 and its 100 wakeups/s.
+shairport-sync

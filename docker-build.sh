@@ -51,7 +51,8 @@ for apkbuild in \
     "$SRC/pmos/nexusq-mqtt/APKBUILD" \
     "$SRC/pmos/nexusq-kernel-ota/APKBUILD" \
     "$SRC/pmos/nexusq-rootfs-ab/APKBUILD" \
-    "$SRC/pmos/speexdsp/APKBUILD"; do
+    "$SRC/pmos/speexdsp/APKBUILD" \
+    "$SRC/pmos/shairport-sync/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -418,6 +419,15 @@ mkdir -p "$SPEEXDSP_DIR"
 cp "$SRC/pmos/speexdsp/APKBUILD"                          "$SPEEXDSP_DIR/"
 echo "  Installed: speexdsp (NEON override -> main/speexdsp)"
 
+# shairport-sync: the same kind of OVERRIDE — Alpine's build plus one patch that
+# stops its ALSA monitor thread polling a flag every 10 ms (91 idle exits/s on
+# an idle Q). See pmos/shairport-sync/APKBUILD for the numbers and the pin.
+SHAIRPORT_DIR="$PMAPORTS/main/shairport-sync"
+mkdir -p "$SHAIRPORT_DIR"
+cp "$SRC/pmos/shairport-sync/APKBUILD"                    "$SHAIRPORT_DIR/"
+cp "$SRC"/pmos/shairport-sync/*.patch                     "$SHAIRPORT_DIR/"
+echo "  Installed: shairport-sync (no-idle-poll override -> main/shairport-sync)"
+
 NEXUSQKOTA_DIR="$PMAPORTS/main/nexusq-kernel-ota"
 mkdir -p "$NEXUSQKOTA_DIR"
 cp "$SRC/pmos/nexusq-kernel-ota/APKBUILD"                             "$NEXUSQKOTA_DIR/"
@@ -433,6 +443,14 @@ cp "$SRC/userspace/nexusq-rootfs-ab/nq-slot"                            "$NEXUSQ
 cp "$SRC/userspace/nexusq-rootfs-ab/nq-rootfs-ab"                       "$NEXUSQAB_DIR/"
 cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-rootfs-ab-promote.service"   "$NEXUSQAB_DIR/"
 cp "$SRC/userspace/nexusq-rootfs-ab/95-nexusq-rootfs-ab.preset"         "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/ab-lib.sh"                          "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/init-split"                         "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-storage-check.service"          "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-storage-check.timer"            "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-rootfs-ab.post-install"      "$NEXUSQAB_DIR/"
+cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-rootfs-ab.post-upgrade"      "$NEXUSQAB_DIR/"
+# The one initramfs collector, shared with Phase 10's A/B initramfs build.
+cp "$SRC/scripts/make-ab-initramfs.py"                                  "$NEXUSQAB_DIR/"
 echo "  Installed: nexusq-rootfs-ab (aport + tools -> main/nexusq-rootfs-ab)"
 
 # python3: NO local override any more (retired 2026-08-17).
@@ -1370,6 +1388,42 @@ else
 fi
 
 echo ""
+echo "=== Phase 7c7: Build shairport-sync (override: no idle polling) ==="
+set +e
+# MUST run before Phase 8 for the same reason as speexdsp:
+# device-google-steelhead depends= shairport-sync, so the device build would
+# otherwise pull Alpine's binary and never build ours. The APKBUILD gates on the
+# poll being gone from audio_alsa.c.
+pmbootstrap $_ucross build shairport-sync --arch armv7 --force 2>&1
+SHAIRPORT_RC=$?
+set -e
+echo "=== shairport-sync build exit code: $SHAIRPORT_RC ==="
+if [ $SHAIRPORT_RC -eq 0 ]; then
+    # pkgrel-EXACT, same reason as speexdsp: never export a stale apk from the
+    # persistent work-volume repo.
+    _sps_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/shairport-sync/APKBUILD" | head -1)
+    _sps_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/shairport-sync/APKBUILD" | head -1)
+    SHAIRPORT_APK=$(find "$WORK/packages" -name "shairport-sync-${_sps_pv}-r${_sps_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$SHAIRPORT_APK" ]; then
+        cp "$SHAIRPORT_APK" /tmp/output/ && echo "  Exported: $(basename "$SHAIRPORT_APK")"
+    else
+        echo "  FATAL: shairport-sync built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE shairport-sync from the warm repo."
+        exit 1
+    fi
+else
+    echo "  ##############################################################"
+    echo "  # shairport-sync (override) FAILED TO BUILD. The image would"
+    echo "  # silently take Alpine's build, whose ALSA monitor thread wakes"
+    echo "  # the CPU 100 times a second forever. See pmos/shairport-sync/."
+    echo "  ##############################################################"
+    grep -n "ERROR\|error:\|FAILED\|keep_dac_busy" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue: that is a measured idle-power regression."
+    exit 1
+fi
+
+echo ""
 echo "=== Phase 7e: Build the kernel CROSS-NATIVE (native x86_64 speed) ==="
 # The kernel is by far the most expensive package in the tree, and until now it was
 # compiled -- like everything else here -- under qemu-arm emulation, because every
@@ -1756,6 +1810,31 @@ print(f\"{p['start']} {p['size']} {ss}\")
                 echo "  # will cost ~3x what it should. The image is usable but"
                 echo "  # this is a regression: see Phase 7c6 above for why the"
                 echo "  # NEON build did not win."
+                echo "  ##########################################################" ;;
+        esac
+        # SHIP CHECK: the same question for the shairport-sync override. -r100 can
+        # only exist if its no-poll gate passed; anything else is Alpine's build,
+        # whose ALSA monitor wakes the CPU 100 times a second. Not fatal (AirPlay
+        # works either way), but never silent.
+        _ship_sps="$(sudo awk -v RS="" -v FS="\n" '
+            { pkg = ""; ver = ""
+              for (i = 1; i <= NF; i++) {
+                  if ($i == "P:shairport-sync")      pkg = 1
+                  else if (substr($i, 1, 2) == "V:") ver = substr($i, 3)
+              }
+              if (pkg && ver) { print ver; exit } }' \
+            "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
+        case "${_ship_sps:-}" in
+            *-r100)
+                echo "  SHIP CHECK: shairport-sync = $_ship_sps (our no-idle-poll build)." ;;
+            "")
+                echo "  SHIP CHECK: shairport-sync not installed in the rootfs (?)." ;;
+            *)
+                echo "  ##########################################################"
+                echo "  # SHIP CHECK: shairport-sync = $_ship_sps -- that is"
+                echo "  # ALPINE'S build, not our override: its ALSA monitor will"
+                echo "  # wake the CPU 100x/s. See Phase 7c7 and the pin warning in"
+                echo "  # pmos/shairport-sync/APKBUILD."
                 echo "  ##########################################################" ;;
         esac
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"

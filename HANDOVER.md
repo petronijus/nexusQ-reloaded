@@ -8,6 +8,32 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published
+
+Current: device-google-steelhead **r113** (r112 + the static enable link for
+nexusq-resize-rootfs, which now runs every boot) and `nexusq-rootfs-ab` **r4**
+(`ensure`, nexusq-storage-check.timer — the storage check after every OTA),
+`output/ota-r113/`; and from earlier today: `nexusq-rootfs-ab` r3 (superseded),
+`nexusq-control` **r50**, `nexusq-btagent` **r6** and the new `shairport-sync`
+**5.1-r100** override (`output/ota-r112/`, btagent + shairport in
+`output/ota-r110/`). r110/r111, control r49 and rootfs-ab r2 were local test
+builds superseded by these — never publish them. Nothing is on gh-pages yet,
+and `shairport-sync` is new to `pmos/ota-packages.list`, so the next publish
+must carry it.
+
+The cottage Q got its A/B slots over the air from rootfs-ab r2/r3 on
+2026-09-26 (`docs/2026-09-26-ab-slots-for-every-unit.md`). Prague already has
+them (hand split, 2026-08-20), so the migration timer does nothing there.
+**The first-boot online split has only run in a container** — the first unit
+flashed with an image from this tree is its hardware test.
+
+- Publish with the normal OTA path (`OTA_PACKAGES_ONLY=1` build on a machine
+  with the fleet key, then `publish-ota-repo.sh`), or with the next release.
+- **Prague**: after the publish, the app's system update — `.post-upgrade`
+  disables and stops systemd-oomd live; no reboot required, but one gives the
+  cleanest check (`systemctl is-active systemd-oomd` must stay `inactive`).
+- Record: `docs/2026-09-26-idle-audit-five-pollers.md`, CHANGELOG [Unreleased].
+
 ## Šumperák Q — 2026-09-26: brought to v1.19.0 — ✅ done
 
 Done at the cottage from the MacBook, on the cottage LAN, right after v1.19.0

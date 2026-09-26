@@ -648,7 +648,10 @@ remains set to `never`"*). The monitor thread runs **unconditionally** on a fixe
 was reverted rather than left carrying a setting that looks effective and is not.
 
 Fixing it therefore means patching or bumping `shairport-sync` itself — a package
-change, not a config one. Worth doing on correctness grounds (a daemon has no
+change, not a config one. **Done 2026-09-26** (`shairport-sync` 5.1-r100, a
+version-pinned override carrying a patch that blocks on a condition variable
+instead; upstream 5.5.2 still polls): 91 idle exits/s → 0. See
+`docs/2026-09-26-idle-audit-five-pollers.md`. Worth doing on correctness grounds (a daemon has no
 business waking a box 86 times a second through silence) rather than for the
 degrees it saves, which are within noise.
 

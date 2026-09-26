@@ -1,0 +1,9 @@
+Connected to 02:00:00:00:00:01 (on wlan0)
+	SSID: example-ssid
+	freq: 5220.0
+	signal: -45 dBm
+	rx bitrate: 6.5 MBit/s
+	tx bitrate: 65.0 MBit/s
+	bss flags: 
+	dtim period: 1
+	beacon int: 100

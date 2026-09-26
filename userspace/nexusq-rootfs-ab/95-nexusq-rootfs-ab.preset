@@ -1,1 +1,2 @@
 enable nexusq-rootfs-ab-promote.service
+enable nexusq-storage-check.timer

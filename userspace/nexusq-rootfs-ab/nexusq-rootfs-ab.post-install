@@ -1,0 +1,17 @@
+#!/bin/sh
+# Start the storage-check timer on a live system (nexusq-rootfs-ab r4).
+#
+# A fresh image gets it enabled by the static timers.target.wants link and the
+# preset; a unit that receives this package by OTA is already booted, so nothing
+# would start the timer until the next reboot. So: reload (unit files changed)
+# and start it now -- its first run is 10 minutes later, never in the middle of
+# the upgrade that installed it. Units that ran the unpublished r2/r3 test builds
+# had the same timer under its old name; stop that one. Outside a booted systemd
+# (an image build) there is nothing to start. Never fatal.
+if [ -d /run/systemd/system ]; then
+	systemctl stop nexusq-ab-migrate.timer >/dev/null 2>&1 || true
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl start nexusq-storage-check.timer >/dev/null 2>&1 \
+		|| echo "nexusq-rootfs-ab: could not start nexusq-storage-check.timer" >&2
+fi
+exit 0

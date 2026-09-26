@@ -1,0 +1,16 @@
+# The storage check after every OTA (nexusq-rootfs-ab, 2026-09-26): the eMMC
+# split into A/B rootfs slots, and the root ext4 filling its slot -- made so,
+# from whatever state the unit is in. See `nq-rootfs-ab ensure` for the order
+# and the safeguards. Started by nexusq-storage-check.timer.
+#
+# No conditions here on purpose: `ensure --auto` returns after one stat when the
+# apk generation it last found in order has not changed, so a unit that is
+# already split and grown pays nothing between updates, and every OTA -- which
+# always changes that generation -- gets the full check.
+[Unit]
+Description=Storage check: A/B rootfs slots and a root filesystem that fills its slot
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nq-rootfs-ab ensure --auto

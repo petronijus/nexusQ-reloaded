@@ -1,0 +1,146 @@
+#!/bin/sh
+# /init of the A/B split maintenance image (nexusq-rootfs-ab, 2026-09-26).
+#
+# `nq-rootfs-ab split` builds this image on the unit itself -- slot A's own kernel
+# (so its own WiFi/BT identity), this init, ab-lib.sh and the unit's own e2fsck /
+# resize2fs / dumpe2fs / sfdisk -- and boots it ONCE out of the kernel trial slot
+# (nq-kernel-ota rescue). It runs entirely in RAM with the rootfs on p13
+# UNMOUNTED, which is the only way to shrink an ext4 that already fills p13.
+# Nothing here waits for a human: it does the one job and reboots.
+#
+#   1. make this image single-shot (slot A's kernel over the trial slot);
+#   2. e2fsck -f the rootfs;
+#   3. ask resize2fs for the minimum size, refuse if it would not fit slot A
+#      with room to spare;
+#   4. shrink the ext4 to exactly slot A's size, e2fsck again;
+#   5. write the A/B table (ab-lib.sh: the same one the first-boot split writes);
+#   6. mount p13 and leave the normal system its instructions: the pending marker
+#      that makes nexusq-resize-rootfs format slot B, and the result + log;
+#   7. reboot into the normal system.
+#
+# Every failure before step 5 leaves the table alone. A failure AFTER the shrink
+# but before the table write removes the resize flag, so the next normal boot
+# grows the ext4 straight back over p13: the unit returns to where it started.
+# The one thing no code here can cover is power lost DURING resize2fs; that is
+# why `split --auto` only starts on an idle unit, and why this does nothing but
+# the job.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+mount -t proc     none /proc  2>/dev/null || true
+mount -t sysfs    none /sys   2>/dev/null || true
+mount -t devtmpfs none /dev   2>/dev/null || true
+mkdir -p /tmp /mnt
+
+LOG=/tmp/ab-split.log
+say() {
+    echo "[ab-split] $*"
+    echo "[ab-split] $*" >> "$LOG"
+    echo "<3>[ab-split] $*" > /dev/kmsg 2>/dev/null || true   # lands in console-ramoops too
+}
+
+# NQ_SPLIT_* exist for tests/test_init_split.sh, which runs this against a loop
+# device. As PID 1 of the initramfs there is no environment, so on the unit these
+# are always the defaults.
+DISK=${NQ_SPLIT_DISK:-mmcblk0}
+REBOOT=${NQ_SPLIT_REBOOT:-reboot -f}
+HEADROOM_MIB=${NQ_SPLIT_HEADROOM_MIB:-1024}
+A=/dev/${DISK}p13
+B_NAME=${DISK}p14
+STATE=/mnt/var/lib/nexusq      # on p13, once mounted
+RESULT=""
+
+. /lib/ab-lib.sh
+
+# Leave the result where the normal system looks for it, then reboot. Called on
+# every exit path; $1 = ok | failed:<why>, $2 = 1 if the next boot must grow the
+# ext4 back over p13 (a shrink that was not followed by a table write).
+finish() {
+    RESULT=$1
+    say "result: $RESULT"
+    if mount -t ext4 "$A" /mnt 2>/dev/null; then
+        mkdir -p "$STATE"
+        if [ "$RESULT" = ok ]; then
+            : > "$STATE/.ab-split-pending"      # nexusq-resize-rootfs formats slot B
+            rm -f "$STATE/.rootfs-resized"      # ...which it only does if it runs
+        elif [ "${2:-0}" = 1 ]; then
+            rm -f "$STATE/.rootfs-resized"      # grow back over the unchanged p13
+        fi
+        printf '%s %s\n' "$RESULT" "$(cat /proc/uptime | cut -d' ' -f1)" > "$STATE/ab-migrate.result"
+        cp "$LOG" "$STATE/ab-migrate.log" 2>/dev/null
+        sync
+        umount /mnt
+    else
+        say "could not mount $A to record the result"
+    fi
+    sync
+    sleep 2
+    $REBOOT
+    # reboot -f does not return. If it ever did, PID 1 exiting panics the
+    # kernel, and panic=30 reboots it -- the same destination, later.
+    exit 0
+}
+
+say "maintenance boot: splitting the eMMC into A/B rootfs slots"
+
+# 1. Single-shot, first thing: after this no reboot can land back here, whatever
+# the SAR reason word says. The trial slot is scratch space by design.
+if dd if=/dev/${DISK}p9 of=/dev/${DISK}p8 bs=1M count=8 conv=fsync 2>/dev/null; then
+    sync; say "trial slot restored from slot A"
+else
+    say "WARNING: could not restore the trial slot"
+fi
+
+i=0
+while [ ! -b "$A" ] && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
+[ -b "$A" ] || finish "failed:no-p13"
+[ -e "/sys/class/block/$B_NAME" ] && finish "failed:p14-exists"
+
+disk_sectors=$(cat /sys/class/block/$DISK/size)
+a_start=$(cat /sys/class/block/${DISK}p13/start)
+set -- $(ab_layout "$disk_sectors" "$a_start")
+A_SECTORS=$1; B_START=$2; B_SECTORS=$3
+say "layout: p13 $a_start +$A_SECTORS, p14 $B_START +$B_SECTORS"
+
+# 2. Check the filesystem. 0 = clean, 1 = errors fixed; anything else stops here.
+e2fsck -f -y "$A" >> "$LOG" 2>&1
+rc=$?
+[ "$rc" -le 1 ] || finish "failed:e2fsck-rc$rc"
+say "e2fsck ok (rc $rc)"
+
+bs=$(dumpe2fs -h "$A" 2>/dev/null | awk -F: '/^Block size/{gsub(/ /,"",$2);print $2}')
+count=$(dumpe2fs -h "$A" 2>/dev/null | awk -F: '/^Block count/{gsub(/ /,"",$2);print $2}')
+free=$(dumpe2fs -h "$A" 2>/dev/null | awk -F: '/^Free blocks/{gsub(/ /,"",$2);print $2}')
+[ -n "$bs" ] && [ -n "$count" ] && [ -n "$free" ] || finish "failed:dumpe2fs"
+target=$(( A_SECTORS * 512 / bs ))
+
+# 3. Will it fit? ab_fits (ab-lib.sh): resize2fs's own minimum must fit, and the
+# blocks actually in use plus HEADROOM_MIB (1 GiB) must too -- the same check
+# `nq-rootfs-ab split` made before rebooting here, now on the unmounted fs.
+min=$(resize2fs -P "$A" 2>/dev/null | awk -F: '/minimum size/{gsub(/ /,"",$2);print $2}')
+[ -n "$min" ] || finish "failed:resize2fs-P"
+used=$(( count - free ))
+headroom=$(( HEADROOM_MIB * 1048576 / bs ))
+say "ext4: $count blocks of $bs B, $used used, minimum $min; slot A holds $target"
+fit=$(ab_fits "$min" "$used" "$target" "$headroom")
+[ "$fit" = ok ] || finish "failed:does-not-fit-$fit"
+
+# 4. Shrink (skipped if it is already small enough, e.g. a retried run).
+if [ "$count" -gt "$target" ]; then
+    say "shrinking the ext4 to $target blocks -- do not cut the power"
+    resize2fs "$A" "$target" >> "$LOG" 2>&1 || finish "failed:resize2fs" 1
+    e2fsck -f -n "$A" >> "$LOG" 2>&1 || finish "failed:e2fsck-after-shrink" 1
+    say "shrunk and checked"
+fi
+
+# 5. The table. Nothing is mounted, so a plain write; the next boot reads it.
+old=/tmp/gpt-before-ab.sfdisk
+new=/tmp/gpt-ab.sfdisk
+sfdisk -d "/dev/$DISK" > "$old" 2>/dev/null || finish "failed:sfdisk-dump" 1
+ab_table "$old" "$A" "$A_SECTORS" "/dev/$B_NAME" "$B_START" "$B_SECTORS" > "$new" \
+    || finish "failed:ab-table" 1
+cat "$old" >> "$LOG"
+sfdisk --no-reread -f -q "/dev/$DISK" < "$new" >> "$LOG" 2>&1 || finish "failed:sfdisk-write" 1
+sfdisk -d "/dev/$DISK" 2>/dev/null | grep -q "^/dev/$B_NAME " || finish "failed:table-not-written" 1
+say "A/B table written"
+
+finish ok

@@ -1,16 +1,28 @@
-# Grow the root ext4 to fill its partition (whichever A/B slot / is on), once,
-# after a flash. See /usr/bin/nexusq-resize-rootfs for why.
+# The storage check, at every boot: split the eMMC into A/B rootfs slots if it
+# can be done online, and grow the root ext4 to fill its slot. See
+# /usr/bin/nexusq-resize-rootfs for why and how.
+#
+# EVERY boot, not once (2026-09-26). It used to be guarded by the
+# /var/lib/nexusq/.rootfs-resized flag, so it ran after a flash and never again.
+# But the state it establishes can be missing later, too -- an image whose unit
+# was never enabled (v1.19.0), a split that finished only on the next boot, a
+# slot restored from an older rootfs -- and the script is idempotent and cheap
+# when there is nothing to do (two dumpe2fs header reads and a sysfs lookup).
+# The flag is still written, as a record of the last run that changed nothing.
+# The later half -- a unit whose ext4 already fills p13 and needs the offline
+# split -- is `nq-rootfs-ab ensure`, run by nexusq-storage-check.timer.
 [Unit]
-Description=Grow root filesystem to fill its partition (once, post-flash)
+Description=Storage check: A/B rootfs slots and a root filesystem that fills its slot
 DefaultDependencies=no
 After=systemd-remount-fs.service local-fs.target
 Before=sysinit.target
-# Run only until it has succeeded once; the script also self-skips if the fs
-# already fills the partition, so this is belt-and-suspenders.
-ConditionPathExists=!/var/lib/nexusq/.rootfs-resized
 
 [Service]
 Type=oneshot
+# The first boot after a flash also splits the eMMC and formats slot B
+# (~6.6 GB) before growing slot A: minutes, not seconds, on this eMMC. The
+# default 90 s start timeout would kill it half way.
+TimeoutStartSec=15min
 ExecStart=/usr/bin/nexusq-resize-rootfs
 RemainAfterExit=yes
 

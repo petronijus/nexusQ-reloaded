@@ -93,6 +93,15 @@ fi
 rm -f /etc/systemd/system/sockets.target.wants/systemd-nsresourced.socket \
       /etc/systemd/system/multi-user.target.wants/systemd-nsresourced.service
 
+# --- Disable systemd-oomd (the largest idle CPU consumer; guards nothing here) ---
+# Same trap as nsresourced above: systemd's own configure enables it before our
+# 20-nexusq-oomd-off.preset exists. These are the three links `systemctl enable`
+# made (WantedBy, the socket pulled in by Also=, and the D-Bus Alias). Boxes
+# already in the field never run .post-install — .post-upgrade handles them.
+rm -f /etc/systemd/system/multi-user.target.wants/systemd-oomd.service \
+      /etc/systemd/system/sockets.target.wants/systemd-oomd.socket \
+      /etc/systemd/system/dbus-org.freedesktop.oom1.service
+
 # --- Constrain avahi (mDNS) to WiFi only ---
 # librespot 0.8.0's only zeroconf backend (libmdns) is pinned to the wlan0 IP by
 # the librespot-nexusq wrapper, but avahi-daemon itself also answers steelhead.local

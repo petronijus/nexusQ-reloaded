@@ -44,13 +44,45 @@ EOF
 )"
 [ -n "$NQ_NAME" ] || NQ_NAME="Nexus Q"
 
+# Audio-file cache cap (2026-09-26). Without one the cache only ever grew: 2.0 GB
+# on the cottage Q, written to the eMMC as it played. The cap is 5 GiB — but never
+# more than the rootfs slot can spare: since every unit has two ~6.6 GB slots
+# (device r112), 5 GiB of cache next to a ~2.5 GB system would fill a slot, so the
+# cap shrinks to leave CACHE_RESERVE_MIB free for upgrades and kernel OTA
+# staging. Recomputed at every start from what is free NOW (plus what the cache
+# already holds, since it may keep that); librespot evicts the oldest files down
+# to the cap when it starts.
+CACHE_DIR="${CACHE_DIRECTORY:-/var/cache/librespot}"
+CACHE_MAX_MIB=5120
+CACHE_RESERVE_MIB=1536
+CACHE_MIN_MIB=128
+
+# TESTABLE:cache_limit_mib
+# cache_limit_mib <free KiB on the cache fs> <KiB the cache holds now>: prints
+# the cap in MiB — CACHE_MAX_MIB, or less so that CACHE_RESERVE_MIB stays free,
+# but never below CACHE_MIN_MIB (a cache that cannot hold one track is useless).
+cache_limit_mib() {
+	_room=$(( ($1 + $2) / 1024 - ${CACHE_RESERVE_MIB:-1536} ))
+	_cap=${CACHE_MAX_MIB:-5120}
+	[ "$_room" -lt "$_cap" ] && _cap=$_room
+	[ "$_cap" -lt "${CACHE_MIN_MIB:-128}" ] && _cap=${CACHE_MIN_MIB:-128}
+	echo "$_cap"
+}
+
+mkdir -p "$CACHE_DIR" 2>/dev/null || true
+_free_kib=$(df -Pk "$CACHE_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+_used_kib=$(du -sk "$CACHE_DIR" 2>/dev/null | cut -f1)
+CACHE_LIMIT="$(cache_limit_mib "${_free_kib:-0}" "${_used_kib:-0}")M"
+echo "librespot-nexusq: audio cache cap $CACHE_LIMIT (free ${_free_kib:-?} KiB, cache ${_used_kib:-?} KiB)" >&2
+
 # --ap-port 443: VLAN20 blocks Spotify's default access-point port 4070; without
 #   this, discovery succeeds but playback stalls right after the credential handoff.
 # --zeroconf-port 37879: matches the 60_spotify.nft firewall drop-in.
 # --disable-credential-cache: stay in discovery mode (device always advertises for
 #   Spotify Connect) rather than auto-logging into one cached account.
 # --cache $CACHE_DIRECTORY: audio-file cache in the user-owned systemd CacheDirectory
-#   (falls back to /var/cache/librespot when run by hand outside systemd).
+#   (falls back to /var/cache/librespot when run by hand outside systemd), capped
+#   by --cache-size-limit as computed above.
 # --onevent nexusq-onevent: now-playing + volume hook for the companion bridge.
 exec /usr/bin/librespot \
 	--name "$NQ_NAME" \
@@ -58,5 +90,5 @@ exec /usr/bin/librespot \
 	--bitrate 320 --format S16 --initial-volume 60 \
 	--ap-port 443 \
 	--zeroconf-port 37879 --zeroconf-interface "$WIP" \
-	--cache "${CACHE_DIRECTORY:-/var/cache/librespot}" --disable-credential-cache \
+	--cache "$CACHE_DIR" --cache-size-limit "$CACHE_LIMIT" --disable-credential-cache \
 	--onevent /usr/bin/nexusq-onevent

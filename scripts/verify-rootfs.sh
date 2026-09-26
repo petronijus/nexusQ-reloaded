@@ -237,5 +237,65 @@ else
 fi
 
 say ""
+say "=== 8. A/B slots: the first boot splits the eMMC (device r112, 2026-09-26) ==="
+# Every unit flashed from a release gets its slot B (p14) on its first boot, from
+# nexusq-resize-rootfs, while the flashed ext4 is still only the image's size.
+# Nothing else would ever give a fresh flash A/B, and every way this can break
+# is SILENT -- the unit boots fine, it just never gets slot B:
+#   - the unit not enabled, or its script missing;
+#   - per-unit storage state baked into the image. The worst of it is
+#     .ab-split-pending: it licenses formatting p14, so on a unit whose slot B
+#     holds a rootfs it would format that rootfs. The rest (the check's record,
+#     the offline split's attempt and result) would misreport or skip a check;
+#   - the shared layout code (nexusq-rootfs-ab's ab-lib.sh) absent, in which
+#     case the script only grows;
+#   - an image whose ext4 is too large to fit the smaller slot A with the
+#     script's 256 MiB margin, which it then refuses to split.
+# The OTA path for units already in the field (nexusq-storage-check.timer) is
+# checked here too: a release that dropped it would strand every such unit
+# without slot B.
+chk_has usr/bin/nexusq-resize-rootfs                                 "first-boot split + grow script"
+if compgen -G "$MNT/etc/systemd/system/*.target.wants/nexusq-resize-rootfs.service" >/dev/null 2>&1 \
+   || compgen -G "$MNT/usr/lib/systemd/system/*.target.wants/nexusq-resize-rootfs.service" >/dev/null 2>&1; then
+    ok "nexusq-resize-rootfs is enabled"
+else
+    bad "nexusq-resize-rootfs is enabled" "no *.target.wants link -- the first boot neither splits nor grows"
+fi
+for f in .ab-split-pending .rootfs-resized storage-ok ab-migrate.attempted ab-migrate.result; do
+    if has "var/lib/nexusq/$f"; then
+        bad "no per-unit storage state baked: $f" "present in the image -- it belongs to a unit, not to a release"
+    else
+        ok "no per-unit storage state baked: $f"
+    fi
+done
+chk_has usr/lib/nexusq-rootfs-ab/ab-lib.sh                           "A/B layout code (ab-lib.sh)"
+if grep -q '/usr/lib/nexusq-rootfs-ab/ab-lib.sh' "$MNT/usr/bin/nexusq-resize-rootfs" 2>/dev/null \
+   && grep -q '^ab_layout()' "$MNT/usr/lib/nexusq-rootfs-ab/ab-lib.sh" 2>/dev/null \
+   && grep -q '^ab_table()' "$MNT/usr/lib/nexusq-rootfs-ab/ab-lib.sh" 2>/dev/null; then
+    ok "the first-boot script uses ab_layout/ab_table"
+else
+    bad "the first-boot script uses ab_layout/ab_table" "the script or ab-lib.sh does not match -- no split"
+fi
+# The ext4's own size, read the way nexusq-resize-rootfs reads it (dumpe2fs block
+# count x block size; statfs would under-report by the metadata overhead). Slot A
+# on the Nexus Q's eMMC is 13788160 sectors (ab_layout of 30777344 sectors from
+# 3200000); the script splits only if the ext4 plus 256 MiB fits in it.
+_blocks=$(dumpe2fs -h "$IMG" 2>/dev/null | awk -F: '/^Block count/{gsub(/ /,"",$2);print $2}')
+_bsize=$(dumpe2fs -h "$IMG" 2>/dev/null | awk -F: '/^Block size/{gsub(/ /,"",$2);print $2}')
+if [ -z "$_blocks" ] || [ -z "$_bsize" ]; then
+    read -r _blocks _bsize < <(stat -f -c '%b %S' "$MNT")     # no dumpe2fs: statfs, a lower bound
+fi
+_fs=$(( _blocks * _bsize )); _slot=$(( 13788160 * 512 ))
+if [ $(( _fs + 268435456 )) -le "$_slot" ]; then
+    ok "the image's ext4 fits slot A for the online split" "$((_fs / 1048576)) MiB of $((_slot / 1048576)) MiB"
+else
+    bad "the image's ext4 fits slot A for the online split" \
+        "$((_fs / 1048576)) MiB + 256 MiB > $((_slot / 1048576)) MiB -- a fresh flash would not split"
+fi
+chk_has usr/lib/nexusq-rootfs-ab/init-split                          "OTA split: maintenance init"
+chk_has usr/lib/nexusq-rootfs-ab/make-ab-initramfs.py                "OTA split: initramfs collector"
+chk_has usr/lib/systemd/system/timers.target.wants/nexusq-storage-check.timer "storage check after every OTA: timer enabled"
+
+say ""
 say "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

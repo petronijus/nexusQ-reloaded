@@ -6,6 +6,216 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — every Q gets its A/B rootfs slots, from a flash or over the air (device **r112–r113**, `nexusq-rootfs-ab` **r3–r4**)
+
+A/B rootfs (p13 "userdata" = slot A, p14 "userdata_b" = slot B, 6.57 GiB each)
+lets a new rootfs go into the slot that is not running, be trial-booted, and fall
+back. Until now exactly one unit had it: the Prague Q, repartitioned by hand
+from a rescue shell on 2026-08-20. Every other unit carried the whole A/B
+machinery with no slot B. That included the cottage Q and any Q flashed from a
+GitHub release.
+
+- **A fresh flash splits itself on its first boot.** `nexusq-resize-rootfs` now
+  runs before it grows anything, while the ext4 in p13 is still only the
+  image's size. It shortens p13 and adds p14 while slot A is mounted: sfdisk
+  writes the table, and `resizepart`/`partx` update the kernel's view of it
+  (BLKPG), since a disk with a mounted partition cannot be re-read. Once the
+  kernel shows exactly the new sizes it formats slot B and grows slot A. If
+  the kernel does not take the change, it grows nothing, so the ext4 can never
+  run into slot B, and the next boot finishes the job. It only formats a
+  slot B it created itself. The layout is computed, and on this eMMC it is the
+  Prague split sector for sector. It also moves the backup GPT to the real end
+  of the disk, which fixes B8 ("Alternate GPT is invalid") on every factory
+  unit. Tested on a loop device carrying a factory GPT copied off a unit
+  (`tests/test_ab_split.sh`, 25 checks), not yet on hardware.
+- **The storage check runs after every OTA** (`nexusq-rootfs-ab` r4,
+  `nq-rootfs-ab ensure`). The state every unit should be in is: split into
+  slots A and B, with the root ext4 filling its slot. `ensure` gets a unit
+  there from wherever it is, the safe way first:
+  - it runs the same online check the boot runs (split while mounted if the
+    ext4 is still small, then grow);
+  - only if slot B is still missing because the ext4 already fills p13 does it
+    take the offline split below.
+
+  It runs from `nexusq-storage-check.timer`, which the package starts on
+  install: 10 minutes later, then every 30. A run that finds everything in
+  order records the apk database's generation (mtime and size), and later runs
+  return after one stat until an OTA changes it. The check therefore costs
+  nothing between updates and runs in full after every one. The first-boot
+  unit, `nexusq-resize-rootfs.service`, also runs at every boot now instead of
+  once; it is idempotent and costs two dumpe2fs header reads when there is
+  nothing to do. `tests/test_ensure.sh` (16 checks) covers the gating.
+- **A unit in the field splits itself over the air.** Its ext4 already fills
+  p13, and ext4 cannot shrink while mounted. When nothing is playing, apk is
+  idle and no kernel trial is pending, `nq-rootfs-ab split --auto`:
+  - clears the Spotify and apk caches;
+  - checks the ext4 will fit slot A with 1 GiB to spare (`ab_fits`: resize2fs's
+    own minimum must fit, and the blocks actually used plus the reserve must
+    fit);
+  - builds a maintenance image on the unit from slot A's own kernel section
+    (its own WiFi/BT identity) and its own e2fsck/resize2fs/sfdisk;
+  - boots it once from the kernel trial slot (`nq-kernel-ota rescue`).
+
+  `init-split` makes itself single-shot, then runs e2fsck, shrinks the ext4,
+  checks it again, writes the same A/B table, records the result on p13 and
+  reboots. The normal boot then formats slot B. A unit gets at most one
+  automatic attempt per OTA (the attempt is recorded with the apk generation),
+  so it can never loop through maintenance boots, yet every update still gets
+  its chance. The failure paths leave a unit that boots: if the ext4
+  does not fit, nothing changes; if the shrink fails, the table is untouched
+  and the next boot grows the ext4 back over p13. The one thing no code can
+  cover is losing power during the shrink, which is why the split waits for an
+  idle unit and clears the caches first (fewer blocks to move).
+  `tests/test_init_split.sh` (33 checks) runs the real init against the
+  factory GPT copy, including the next boot, and verifies data survives by
+  checksum.
+- **On the cottage Q, over the air (2026-09-26):** the maintenance boot took
+  40 s. The ext4 went from 3 447 168 to 1 723 520 blocks with 773 288 in use.
+  The table came out identical to Prague's, `sfdisk -V` is clean and B8 is
+  gone. The unit was offline about two minutes and came back as itself:
+  identity, WiFi, persist store and MQTT, with no failed units. The first
+  attempt had refused to split because r2 added its reserve to resize2fs's
+  minimum (6.15 GiB) rather than to the blocks in use (5.4 GiB); r3 fixed the
+  rule.
+- `nq-rootfs-ab split [--auto] [--dry-run]`; `--dry-run` builds and sizes the
+  image (7.55 MB of the 8 MiB slot on the cottage Q) without booting it or
+  clearing anything. `nq-rootfs-ab status` shows the attempt and its result.
+
+### Fixed — a fresh flash never grew its root (device **r113**); the release now proves the image first
+
+**v1.19.0's image ships `nexusq-resize-rootfs` without an enable link.** A unit
+freshly flashed from it boots with its root ext4 at the image's size (~2.7 GiB),
+in a 13 GiB partition, and stays that way; from r112 on it would also never
+split into A/B. The unit relied on the `95-nexusq` preset alone, and the
+preset's own header says preset-all leaves local (`/etc`) units alone. Every
+other local unit in the package ships a static `*.wants` link; this one did not.
+Units in the field were never affected: the apk trigger's per-unit preset
+enabled it on each upgrade, which is why nothing looked wrong. r113 ships
+`sysinit.target.wants/nexusq-resize-rootfs.service`. A unit flashed with v1.19.0
+gets the link with its next system update, and on the boot after that it
+splits and grows. If the migration timer comes first, it takes the maintenance
+route instead, which skips the shrink because there is nothing to shrink.
+
+Found by a new **section 8 in `scripts/verify-rootfs.sh`**, which checks that an
+image will split and grow on its first boot:
+
+- the unit is enabled;
+- no first-boot state is baked in (`.rootfs-resized`, `.ab-split-pending`, the
+  migration's attempt/result);
+- `ab-lib.sh` is present and used;
+- the image's ext4 plus 256 MiB fits slot A;
+- the OTA migration (`init-split`, the collector, the timer) is present.
+
+`verify-rootfs.sh` used to run only when the build agent ran it. **It is now a
+mandatory gate in `scripts/package-release.sh`**: on Linux directly, otherwise
+in the privileged `nexusq-builder` image. There is no path that packages an
+image without it. Run against the v1.19.0 image, section 8 fails on the missing
+link and the absent A/B code, as it should.
+
+### Fixed — the MQTT configuration survives a flash (device **r112**, `nexusq-control` **r50**)
+
+`/etc/nexusq/mqtt.json` names the site's broker, credentials and topic prefix.
+The cottage Q, for example, publishes to its own broker. It lived only on the
+rootfs, so a flash replaced it with whatever the image baked and Home Assistant
+lost the unit. It now lives in the persist store as `site/mqtt.json` (0600), and
+`/etc/nexusq/mqtt.json` is a symlink to it, the same way `device.json` works.
+`nq-persist apply` behaves as follows:
+
+- a unit upgraded from before this has its current file seeded into the store;
+- after a flash the store wins, and the image's differing default is kept as
+  `mqtt.json.displaced`, not dropped;
+- an unprovisioned unit gets no link.
+
+`nexusq-control`'s `setMqtt` writes through the link. Its old
+tmp-then-rename would have replaced the link with a file, and the change would
+have been lost at the next flash; the new test failed on the old code.
+`nq-persist status` shows the broker and prefix, never the password. The
+2026-09-19 note that called `mqtt.json` a fleet value was wrong and is
+corrected. Seen working on the cottage Q.
+
+### Changed — librespot's audio cache is capped (device **r112**)
+
+The cache had no limit: it had grown to 2.0 GB on the cottage Q, written to the
+eMMC as music played. The cap is 5 GiB, lowered at each librespot start so the
+rootfs slot keeps 1.5 GiB free. With A/B slots of ~6.6 GB, that works out to
+about 2 GB on both units (2 084 MiB on the cottage Q after its split).
+
+### Changed — the idle Q does half the work it did (device **r111**, `nexusq-btagent` **r6**, `nexusq-control` **r49**, `shairport-sync` **5.1-r100**)
+
+An overnight audit of the cottage Q on r17 (7.5 h idle, a passive sched trace)
+found the CPU still left idle 721 times a second and spent 4.7 % of a core
+while nothing was playing. Five periodic jobs made up most of that. None of
+them was needed, and each is fixed at the source.
+
+The same 60 s trace, idle, before and after:
+
+| | r109 | r111 |
+|---|---|---|
+| idle exits/s | 721 | **353** |
+| CPU of all tasks (% of one core) | 4.71 | **2.21** |
+
+- **`systemd-oomd` is off** (0.81 % → 0). It polled every 1.25 s to guard a
+  1 GB appliance whose MemAvailable never dropped below 849 MiB overnight; the
+  kernel's OOM killer remains the backstop. Disabling it was not enough on its
+  own. systemd's `10-oomd-defaults.conf` drop-ins give `user@.service`, `-.slice`
+  and `system.slice` `ManagedOOMMemoryPressure=kill`, and PID 1 turns that into
+  an implicit `Wants=systemd-oomd.service`, so the first user session started it
+  again on every boot (seen with r110). The package now shadows those drop-ins
+  with `/dev/null` in `/etc/systemd/system/`, ships `20-nexusq-oomd-off.preset`,
+  and removes the enable links on a fresh image (`.post-install`) and on an
+  upgrade (`.post-upgrade`: `daemon-reload`, then `disable --now`).
+- **shairport-sync no longer polls** (`alsa_buf_mon` 0.47 %, 91 exits/s → 0).
+  Its ALSA monitor thread waited for `keep_dac_busy` with a 10 ms `usleep` loop,
+  and with `disable_standby_mode = "never"` that flag never becomes true. No
+  configuration stops it and upstream 5.5.2 still does it, so `shairport-sync`
+  is now a version-pinned override of Alpine's 5.1 (like `speexdsp`) carrying
+  one patch: every write of the flag goes through a setter that signals a
+  condition variable, and the thread blocks on it. On the ALSA null device the
+  thread went from 85 wakeups/s to 0, and "always" mode is unchanged at 30/s.
+  The build gates on the poll being gone, and the rootfs SHIP CHECK reports if
+  Alpine's build wins instead.
+- **nq-healthd stops re-reading the kernel log** (0.63 % → 0.13 %). Every 30 s
+  it re-read the whole kmsg ring, ~900 records, for `dmesg_err`: 157 ms at
+  350 MHz. It now reads only new records and forgets matches that have left the
+  ring, which gives the same number. On the device it tracked a full recount
+  through +2 matches, a flood that wrapped the ring (7 → 0) and a match after
+  the wrap. `tests/test_kmsg_count.c` covers the bookkeeping.
+- **The WiFi watchdog forks 4 times per check, not ~15** (its processes 0.78 %
+  → ~0.2 %). One `iw` feeds both the association and signal checks, where there
+  used to be two. The shell parses `iw`, `ip` and `ping` output itself, reads the
+  uptime with a builtin, and keeps the log length in a counter instead of
+  running `wc -l` over the whole log (61 ms per check). The cost was invisible
+  in per-process accounting, because every fork has a new PID. The new parsers
+  are tested differentially against the pipelines they replace, on captured
+  device output, under bash and BusyBox ash; a smoke test runs the whole loop
+  against stubs. One deliberate difference: a default route without a gateway
+  now reads as "no gateway". The old awk read it as a word and pinged that.
+- **nexusq-btagent's 10 s tick costs a sixth of what it did** (0.62 % →
+  ~0.1 %). Each property read built a fresh BlueZ proxy with introspection,
+  costing an `Introspect` round trip and an XML parse: 3.6 ms of CPU versus
+  0.55 ms without. Proxies are now built with `introspect=False`, and every
+  method that takes arguments names its D-Bus signature. Without introspection
+  dbus-python guesses the signature from the Python types; `Properties.Set`
+  then goes out as `ssb` and bluetoothd rejects it (verified on the device).
+- **nexusq-control no longer logs loopback clients.** nexusq-mqtt connects on
+  every 30 s publish, and that came to ~5 800 journal lines a day. App
+  connections from the LAN are still logged.
+
+Record: `docs/2026-09-26-idle-audit-five-pollers.md`, captures in
+`nq-captures/sumperak-soak-20260926/`.
+
+### Known issues (2026-09-26)
+
+- ~~librespot's audio cache has no size limit~~ — capped, see "librespot's
+  audio cache is capped" above.
+- The conservative governor's 20 ms sampling (`dbs_work`, 26–47 wakeups/s) is
+  now the largest idle wakeup source we control. Lengthening it slows the ramp
+  when playback starts, so it waits for a listening test
+  (`docs/2026-08-16-idle-700mhz-deep-analysis.md` item 4).
+- `psimon` still wakes ~4×/s with oomd gone. PID 1, both user managers and
+  journald hold cpu/io/memory PSI triggers (sd-event's pressure watches,
+  checked in `/proc/*/fd`). Whether `CONFIG_PSI` is still worth having is open.
+
 ## [1.19.0] — 2026-09-26 — both cores asleep, and the WiFi that stopped dropping
 
 Kernel **6.18.48-r17** (patches 0047–0058), device **r109**, WiFi/BT firmware

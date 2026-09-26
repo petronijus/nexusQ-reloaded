@@ -129,8 +129,13 @@ The audit that found it also cleared librespot, which runs with
 
 Deliberately **not** in the store: `machine-id` (PID 1 reads it before any
 mount), PulseAudio's saved volumes (a flash resetting the amp to the safe
-default is a feature), `authorized_keys` and `mqtt.json` (fleet values, baked
-by `docker-build.sh`, the same on every unit).
+default is a feature), `authorized_keys` (a fleet value, baked by `docker-build.sh`, the same on every
+unit). `mqtt.json` was listed here as a fleet value too, and that was wrong: it
+names the SITE's broker and topic prefix (the cottage publishes to its own), so
+a flash replaced it with the image's and Home Assistant lost the unit. Since
+2026-09-26 it lives in the store as `site/mqtt.json`, with
+`/etc/nexusq/mqtt.json` a symlink to it (`nq-persist apply`), and
+nexusq-control writes through the link.
 
 ## 4. Failure modes, in order of preference
 

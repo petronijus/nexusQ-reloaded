@@ -12,20 +12,29 @@
 # docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md
 pkgname=nexusq-rootfs-ab
 pkgver=0.1.0
-pkgrel=1
+pkgrel=4
 pkgdesc="Nexus Q rootfs A/B — slot marker, slot population and health-gated commit"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
 license="GPL-2.0-only"
-# Nothing beyond the base install. The copy uses GNU tar (--one-file-system,
-# --xattrs, --sparse), which is already in the image; ping comes from busybox and
-# ip from the base, the same reasoning as nexusq-kernel-ota's depends= note.
-depends="tar"
+# The copy uses GNU tar (--one-file-system, --xattrs, --sparse); ping comes from
+# busybox and ip from the base, the same reasoning as nexusq-kernel-ota's
+# depends= note. `split` (r2) builds its maintenance initramfs from the unit's
+# own e2fsck (e2fsprogs), resize2fs + dumpe2fs (e2fsprogs-extra) and sfdisk, and
+# runs the collector and the kernel-section reader under python3; all of them
+# are in the image already, named here so an OTA can never leave one out.
+depends="tar e2fsprogs e2fsprogs-extra sfdisk python3 flock nexusq-kernel-ota"
+install="$pkgname.post-install $pkgname.post-upgrade"
 options="!check"
 # Staged flat next to this APKBUILD by docker-build.sh from
 # userspace/nexusq-rootfs-ab/.
+# make-ab-initramfs.py is the repo's one initramfs collector (scripts/), copied in
+# by docker-build.sh so the unit builds its maintenance image with the same code
+# the image build uses for the A/B initramfs.
 source="
 	nq-slot nq-rootfs-ab nexusq-rootfs-ab-promote.service 95-nexusq-rootfs-ab.preset
+	ab-lib.sh init-split make-ab-initramfs.py
+	nexusq-storage-check.service nexusq-storage-check.timer
 "
 builddir="$srcdir"
 
@@ -40,6 +49,18 @@ package() {
 		"$pkgdir"/usr/lib/systemd/system/multi-user.target.wants/nexusq-rootfs-ab-promote.service
 	install -Dm644 95-nexusq-rootfs-ab.preset \
 		"$pkgdir"/usr/lib/systemd/system-preset/95-nexusq-rootfs-ab.preset
+
+	# split (r2): shared layout code, the maintenance init, the collector.
+	install -Dm644 ab-lib.sh            "$pkgdir"/usr/lib/nexusq-rootfs-ab/ab-lib.sh
+	install -Dm755 init-split           "$pkgdir"/usr/lib/nexusq-rootfs-ab/init-split
+	install -Dm755 make-ab-initramfs.py "$pkgdir"/usr/lib/nexusq-rootfs-ab/make-ab-initramfs.py
+	install -Dm644 nexusq-storage-check.service \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-storage-check.service
+	install -Dm644 nexusq-storage-check.timer \
+		"$pkgdir"/usr/lib/systemd/system/nexusq-storage-check.timer
+	install -d "$pkgdir"/usr/lib/systemd/system/timers.target.wants
+	ln -sf ../nexusq-storage-check.timer \
+		"$pkgdir"/usr/lib/systemd/system/timers.target.wants/nexusq-storage-check.timer
 }
 
 sha512sums="SKIP"
