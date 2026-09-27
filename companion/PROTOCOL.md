@@ -81,6 +81,13 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
   "nowPlaying": { "playing": true, "artist": "...", "track": "...", "album": "...",
                   "artUrl": "...", "source": "spotify", "transport": "spotify-web" } }
 ```
+- `volume` / `muted`: **`null` while the level is not known yet** (control
+  **r55**+). The bridge starts before the user session's PulseAudio, so a client
+  that asks in the first ~30 s of a boot gets `null`, and a `volumeChanged`
+  follows the moment the sink can be read. Until r54 this was a made-up `50`
+  that nothing corrected until the next real volume change. A client must keep
+  whatever it shows until then; `adjustVolume` / `toggleMute` answer
+  `unavailable` while PulseAudio is down rather than act on a guess.
 - `output`: id of the active audio output (the current PulseAudio default sink) —
   one of `speaker` (TAS5713 banana terminals) / `spdif` (optical) / `hdmi`.
 - `ring`: the LED ring switch and its schedule (control **r52**+, see "LED ring
@@ -122,7 +129,7 @@ first. So:
 | Method | params | result | Event emitted |
 |---|---|---|---|
 | `listOutputs` | — | `{ "outputs": [ {id, label, sink, available} ], "active": "<id>" }` | `outputsChanged` — unsolicited, see below |
-| `setOutput` | `{ "output": "<id>" }` | `{ output }` | `outputChanged` — also re-emits `volumeChanged` (new sink's level/mute) |
+| `setOutput` | `{ "output": "<id>" }` | `{ output }` | `outputChanged` — also re-emits `volumeChanged` (new sink's level/mute; not while the level is unknown) |
 
 Output ids: `speaker` ("Reproduktor", TAS5713 banana terminals) · `spdif`
 ("Optický výstup", optical S/PDIF) · `hdmi` ("HDMI").
@@ -192,6 +199,12 @@ Ambient object: `{ "enabled": bool, "level": 0..255, "location": { "zone", "lat"
 - The bridge **re-asserts** `brightness N` every 60 s, which also restores the
   level at boot and after a nexusqd restart; nexusqd r23 treats an unchanged
   level as a no-op.
+- **Transitions** (nexusqd r24 + control r56): nexusqd takes
+  `brightness N [ms]` and fades in perceived lightness. Switching ambient on
+  or off fades over 3 s and the minute steps over 2 s; `setBrightness` (the
+  slider) stays immediate. The first level after a nexusqd start is applied at
+  once, and an older nexusqd that refuses the argument gets the level without
+  it.
 - Errors: `bad_request` (non-bool `enabled`, non-number `brightness`);
   `unavailable` (no location, nexusqd rejected the level — nothing is stored —,
   or the file cannot be written).

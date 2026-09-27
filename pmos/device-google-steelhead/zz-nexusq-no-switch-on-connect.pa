@@ -1,0 +1,23 @@
+# Nexus Q: the default sink and the default source belong to nexusq-control.
+#
+# postmarketOS's postmarketos.pa (in this directory, read before this file)
+# loads module-switch-on-connect, a phone's convenience: every newly appeared
+# sink or source becomes the default, and existing streams are moved onto it.
+# On the Q nothing appears that should win that way. The outputs are switched
+# by the bridge (setOutput, the HDMI sink it loads itself), and the sources
+# that come and go are our own loopback inputs, usb_in (nexusq-uac2-in) and
+# roon_in (roon-nexusq), loaded whenever USB audio or Roon starts.
+#
+# Each of those used to take the default source, and with it the LED ring's
+# visualiser tap (`arecord -D pulse`, which records the default source): the
+# ring then watched an idle USB input while the speaker played, and showed no
+# visualisation (Prague Q, 2026-09-27). The same module stole the two
+# loopbacks' capture side on 2026-09-01, which source_dont_move=true pins
+# (docs/2026-09-01-loopback-source-stolen.md).
+#
+# Unloaded, not reconfigured: its `blacklist=` could list today's two
+# sources, but the next input would take the tap the same way. .nofail keeps
+# PulseAudio starting if a future postmarketos.pa stops loading the module.
+.nofail
+unload-module module-switch-on-connect
+.fail

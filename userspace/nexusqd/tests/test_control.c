@@ -19,6 +19,15 @@ static void test_ok(void) {
     CHECK(ctl_parse("brightness 0", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 0);
     CHECK(ctl_parse("brightness 255", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 255);
     CHECK(ctl_parse("brightness 128", &c) == 0 && c.kind == CTL_BRIGHTNESS && c.value == 128);
+    /* brightness N: at once; brightness N MS: over MS milliseconds */
+    CHECK(ctl_parse("brightness 128", &c) == 0 && c.ms == 0);
+    CHECK(ctl_parse("brightness 50 3000", &c) == 0 && c.kind == CTL_BRIGHTNESS
+          && c.value == 50 && c.ms == 3000);
+    CHECK(ctl_parse("brightness 50 0", &c) == 0 && c.ms == 0);
+    CHECK(ctl_parse("brightness 50 60000", &c) == 0 && c.ms == 60000);
+    /* a later command does not inherit an earlier one's fade */
+    CHECK(ctl_parse("brightness 50 3000", &c) == 0 && ctl_parse("brightness 60", &c) == 0
+          && c.ms == 0);
     /* spin R G B: default speed 0 (daemon default rate) */
     CHECK(ctl_parse("spin 0 153 204", &c) == 0 && c.kind == CTL_SPIN
           && c.rgb[1]==153 && c.speed == 0.0);
@@ -56,7 +65,10 @@ static void test_bad(void) {
                          "mblink", "mblink 255 140", "mblink 255 140 999",
                          "mblink go", "mblink stop now",
                          "dark", "dark 2", "dark -1", "dark 01", "dark on", "dark 1 1",
-                         "attend", "attend 2", "attend x", NULL};
+                         "attend", "attend 2", "attend x",
+                         "brightness", "brightness 256", "brightness 50 -1",
+                         "brightness 50 60001", "brightness 50 1.5", "brightness 50 3000 1",
+                         NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
 int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }

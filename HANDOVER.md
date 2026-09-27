@@ -16,11 +16,11 @@ waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
 
 | package | rev | what |
 |---|---|---|
-| device-google-steelhead | **r117** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume |
+| device-google-steelhead | **r118** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap) |
 | nexusq-alsa-vol | **r1 (new aport)** | the `ctl.nexusq_vol` ALSA control: one volume (`docs/2026-09-27-one-volume.md`) |
-| nexusq-control | **r54** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54) |
+| nexusq-control | **r56** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54), no made-up volume at boot (r55), ambient fades + the tap's source kept on the monitor (r56) |
 | nexusq-mqtt | **r10** | C-states + diagnostics (r8), ring in HA (r9), HA system update + volume/mute (r10) |
-| nexusqd / nexusq-setupd | r23 / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda) |
+| nexusqd / nexusq-setupd | **r24** / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda); `brightness N [ms]` fades (r24) |
 | nexusq-kernel-ota / nexusq-rootfs-ab | r8 / r5 | per-unit identity at boot; storage check per OTA |
 | shairport-sync | 5.1-r100 | no idle polling (new to `ota-packages.list`) |
 | app | **1.25.0+63** | ring (1.23), ambient (1.24), device diagnostics + Idle depth + Spotify volume mirror (1.25) |
@@ -72,6 +72,13 @@ waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
   (tcp reset) the dealer's address for a minute. `ss -K` does not work here:
   the kernel has `CONFIG_INET_DIAG_DESTROY` off. Then read `journalctl
   _SYSTEMD_USER_UNIT=librespot.service`.
+
+**The Prague Q** runs everything above since 2026-09-27 evening, installed from
+local apks on the desktop (`output/ota-r117/`; since 23:55 also device **r118**,
+control **r56**, nexusqd **r24**, applied live without a reboot), rebooted
+twice before that; the full diag sweep is in `nq-captures/20260927-223229/`. Before the
+install its sink was lowered from 90 % to 30 %, because the sink is now also
+Spotify's and AirPlay's level. After the publish its apk simply agrees.
 
 **The cottage Q** already runs everything above except the kernel/rootfs
 parts it had (installed 2026-09-26/27 from local apks: device r117, control

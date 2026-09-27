@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=117
+pkgrel=118
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -122,6 +122,7 @@ source="
 	bluetooth-confdir-mode.conf
 	pulse-client-no-autospawn.conf
 	50-nexusq-48k.conf
+	zz-nexusq-no-switch-on-connect.pa
 	nm-lo-unmanaged.conf
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
@@ -334,6 +335,11 @@ package() {
 	# 48 kHz family cleanly; 44.1 kHz -> McASP "off by 88435 PPM"). Resample 44.1.
 	install -Dm644 "$srcdir"/50-nexusq-48k.conf \
 		"$pkgdir"/etc/pulse/daemon.conf.d/50-nexusq-48k.conf
+	# postmarketos.pa's module-switch-on-connect hands every new source the
+	# default -- and the LED ring's visualiser tap with it (see the file).
+	# "zz-" sorts it after postmarketos.pa in the default.pa.d include.
+	install -Dm644 "$srcdir"/zz-nexusq-no-switch-on-connect.pa \
+		"$pkgdir"/etc/pulse/default.pa.d/zz-nexusq-no-switch-on-connect.pa
 	# NM: loopback unmanaged so the dns-filter dispatcher never runs (and fails) on lo.
 	install -Dm644 "$srcdir"/nm-lo-unmanaged.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/10-lo-unmanaged.conf
@@ -816,6 +822,7 @@ SKIP  10-nexusq-random-seed-credit.conf
 SKIP  bluetooth-confdir-mode.conf
 SKIP  pulse-client-no-autospawn.conf
 SKIP  50-nexusq-48k.conf
+SKIP  zz-nexusq-no-switch-on-connect.pa
 SKIP  nm-lo-unmanaged.conf
 SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service

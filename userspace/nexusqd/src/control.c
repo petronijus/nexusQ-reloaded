@@ -1,5 +1,6 @@
 /* userspace/nexusqd/src/control.c */
 #include "control.h"
+#include "brightfade.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
     for (char *p = strtok(buf, " \t\r\n"); p && n < 6; p = strtok(NULL, " \t\r\n")) tok[n++] = p;
     if (n == 0) return -1;
     out->speed = 0.0;
+    out->ms = 0;
     if (!strcmp(tok[0], "theme") && n == 2) {
         out->kind = CTL_THEME; snprintf(out->name, sizeof(out->name), "%s", tok[1]); return 0;
     }
@@ -93,10 +95,17 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
         out->kind = !strcmp(tok[0], "dark") ? CTL_DARK : CTL_ATTEND;
         out->value = tok[1][0] - '0'; return 0;
     }
-    if (!strcmp(tok[0], "brightness") && n == 2) {
+    /* brightness N [ms] — the global ring level 0..255, reached over `ms`
+     * milliseconds (0..BRIGHTFADE_MAX_MS, omitted = at once). */
+    if (!strcmp(tok[0], "brightness") && (n == 2 || n == 3)) {
         char *e; long v = strtol(tok[1], &e, 10);
         if (*e != 0 || v < 0 || v > 255) return -1;
-        out->kind = CTL_BRIGHTNESS; out->value = (int)v; return 0;
+        long ms = 0;
+        if (n == 3) {
+            ms = strtol(tok[2], &e, 10);
+            if (*e != 0 || ms < 0 || ms > BRIGHTFADE_MAX_MS) return -1;
+        }
+        out->kind = CTL_BRIGHTNESS; out->value = (int)v; out->ms = (int)ms; return 0;
     }
     return -1;
 }

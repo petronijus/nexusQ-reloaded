@@ -6,6 +6,128 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the LED ring showed no visualisation while music played (device **r118**, `nexusq-control` **r56**)
+
+Prague Q, 2026-09-27, during the first listening test of the one-volume
+build: Spotify played through the speaker and the ring stayed on its theme.
+PulseAudio's default source was **`usb_in`**. The ring's tap is
+`arecord -D pulse`, which records the default source, so it was recording an
+idle USB input.
+
+- **The cause** is postmarketOS's `/etc/pulse/default.pa.d/postmarketos.pa`,
+  which loads `module-switch-on-connect`. That is a phone's convenience: every
+  newly appeared sink or source becomes the default, and existing streams move
+  onto it. `nexusq-uac2-in` loads `usb_in` after the bridge set the speaker's
+  monitor at boot, so `usb_in` took the default and the tap moved with it.
+  Roon starting (`roon_in`) or USB audio being re-armed does the same at any
+  later time. It is the module that stole the two loopbacks on 2026-09-01. That
+  fix pinned the loopbacks (`source_dont_move=true`) but left the module
+  loaded, so the tap, which has to follow the default, stayed exposed.
+- **device r118** ships `zz-nexusq-no-switch-on-connect.pa`, which unloads the
+  module. On the Q nothing appears that should win that way: the bridge
+  switches the outputs (and loads the HDMI sink itself), and the sources that
+  come and go are our own loopback inputs. The file is unloaded, not given a
+  `blacklist=`, because a list of today's two sources would let the next input
+  steal the tap the same way. The `zz-` prefix is load-bearing: PulseAudio
+  includes the directory in name order, and with an `aa-` name the module was
+  loaded again after it.
+- **The bridge keeps the invariant** (`Bridge._reconcile_source`): the default
+  source is the monitor of PulseAudio's default sink. It checks when
+  `pa_watch_thread` subscribes and on every `change` on the server, and puts
+  the source back if it drifted. That also covers PulseAudio's own
+  `module-default-device-restore`, which at start restores whatever default it
+  saved last (`usb_in` on that unit). The check follows the default **sink**
+  rather than `state.output`, because `_set_output` sets the default sink
+  first and the state last: a server event in between must not steer the tap
+  back to the output being left.
+- Tests:
+  - `tests/test_switch_on_connect_off.sh`: the drop-in through a real
+    PulseAudio 17 (Alpine edge) beside a stand-in `postmarketos.pa`. The
+    control run without it must still find the module loaded. Seen failing
+    with the file renamed `aa-`.
+  - nexusq-control `tests/test_tap_source.py` (6): each part of the reconcile
+    was reverted on its own and seen failing, including the one that follows
+    the output state instead of the default sink.
+- On the unit, the default source was put back by hand at 23:49. The tap
+  moved to the speaker's monitor, the pinned loopbacks stayed on
+  `usb_in`/`roon_in`, and Petr confirmed the visualisation was back.
+
+### Changed — ambient brightness fades instead of jumping (`nexusqd` **r24**, `nexusq-control` **r56**)
+
+Petr, 2026-09-27: switched on in the evening, ambient brightness jumped
+straight to the night level. He wants a transition.
+
+- **nexusqd** takes `brightness N [ms]` and runs the transition itself
+  (`src/brightfade.c`). The renderer owns the frame timing, and at idle it
+  draws once a second, so steps sent from the bridge would be visible.
+  - The fade runs in perceived lightness (duty^(1/2.2)), eased with a
+    smoothstep. A duty-linear 200 → 50 fade reads as a slow start and a drop
+    at the end.
+  - A new target in the middle of a fade starts from where the ring is, so
+    switching back never jumps.
+  - An unchanged target stays a no-op, so the minute re-assert neither wakes
+    the renderer nor restarts a fade.
+  - The first level after nexusqd starts is applied at once. The daemon starts
+    at 255, and fading down from that on every boot would be a flash, not a
+    transition.
+  - While fading, the ring renders at 30 ms: at 20 fps the dark end of a fade
+    shows as a staircase.
+- **The bridge**:
+  - switching ambient on or off fades over **3 s**;
+  - the minute steps through twilight fade over **2 s**;
+  - the brightness slider stays **immediate**, because the app sends it on
+    every move of the finger.
+  - A nexusqd older than r24 refuses the fade argument, and the level is then
+    sent without one.
+- Tests:
+  - nexusqd `tests/test_brightfade.c` (8): the perceptual midpoint, eased ends,
+    reversal, no-op re-assert and the immediate first level were each
+    reverted in the code and seen failing;
+  - `test_control.c`: the parser's new forms and limits;
+  - `test_ambient.py` (+3): toggle fades, slider immediate, old-nexusqd
+    fallback, each seen failing under mutation.
+
+### Fixed — Home Assistant showed a made-up volume after every boot (`nexusq-control` **r55**)
+
+Found on the Prague Q on 2026-09-27, in the first diagnostic sweep after the
+one-volume install: HA's **Volume** said 50 while the sink, the bridge's
+`getState` and the room were all at 30. It stayed wrong until the next real
+volume change.
+
+- **The cause, four steps.** The bridge starts before the user session's
+  PulseAudio (23.9 s into that boot), could not read the sink, and seeded
+  `state.volume` with a made-up `50`. nexusq-mqtt connected at ~35 s and read
+  it. At 39.4 s `_boot_output` switched to the speaker and read the real 30
+  into the state, but threw away the events `_set_output` returned. Its comment
+  said "no clients yet", which stopped being true when nexusq-mqtt became a
+  bridge client. `pa_watch_thread` then compared every sink event against a
+  state that already said 30, so it never broadcast either. The app had the
+  same problem whenever it connected in those first seconds, and it also missed
+  the switch of output.
+- **The level is `null` until it is read.** An event is a statement of the Q's
+  volume, and 50 was a guess. nexusq-mqtt already treats a non-number as "not
+  known" and keeps the entity `unavailable`, and the app keeps what it shows.
+  `setOutput` does not emit a `volumeChanged` with a null level.
+- **`pa_watch_thread` reconciles every time it subscribes**: at the first
+  PulseAudio of a boot and after any PulseAudio restart. A change made while
+  nobody was subscribed produces no event of its own. The read comes after the
+  subscribe, so nothing can fall between the two. The per-event path and this
+  one share `Bridge._reconcile_volume`.
+- **`_boot_output` broadcasts** the `outputChanged` and `volumeChanged` that
+  `_set_output` returns. It is now a method (it was a closure in `__init__`),
+  so it can be tested.
+- **`adjustVolume` and `toggleMute` never act on a guess.** They are relative:
+  with the level unknown they read the sink, and while PulseAudio is down they
+  answer `unavailable`.
+- Tests: `tests/test_volume_reconcile.py` (12). It runs the real `__init__`
+  with PulseAudio down, and runs `pa_watch_thread` through one subscribe with a
+  stale client and no sink event. Each of the five parts of the fix was
+  reverted on its own and the matching test went red. Suite 260 OK.
+- Also seen in that boot, and not changed: two `nexusqd send failed` lines at
+  23.9 s, because the bridge starts before nexusqd has created its socket. And
+  Roon's first RAATServer connect was refused at 54.4 s; Roon retried after 2 s
+  by itself.
+
 ### Added — one volume: Spotify, AirPlay, the app, the knob and Home Assistant move the same one (device **r117**, `nexusq-alsa-vol` **r1**, `nexusq-control` **r54**, `nexusq-mqtt` **r10**, app **1.25.0**)
 
 The Q had two volumes in series for Spotify and AirPlay: the player's own

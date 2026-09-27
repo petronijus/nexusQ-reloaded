@@ -121,11 +121,13 @@ class TestZoneLocation(unittest.TestCase):
 
 
 class FakeNexusqd:
-    def __init__(self, ok=True):
-        self.sent, self.ok = [], ok
+    def __init__(self, ok=True, fades=True):
+        self.sent, self.ok, self.fades = [], ok, fades
 
     def __call__(self, line):
         self.sent.append(line)
+        if not self.fades and len(line.split()) > 2:
+            return False                  # nexusqd before r24: `brightness N` only
         return self.ok
 
 
@@ -149,7 +151,7 @@ class TestBrightness(unittest.TestCase):
         b.set_max(180)
         self.now = utc(2026, 9, 22, 23)          # night: still 180
         b.tick()
-        self.assertEqual(self.nq.sent[-1], "brightness 180")
+        self.assertEqual(self.nq.sent[-1], "brightness 180 2000")
         self.assertEqual(self.events, [])
 
     def test_the_slider_is_persistent(self):
@@ -165,7 +167,7 @@ class TestBrightness(unittest.TestCase):
         self.assertEqual(b.set_ambient({"enabled": True})["level"], 200)   # midday
         self.now = utc(2026, 9, 22, 22)          # well after dusk
         b.tick()
-        self.assertEqual(self.nq.sent[-1], "brightness 50")
+        self.assertEqual(self.nq.sent[-1], "brightness 50 2000")
         self.assertEqual(self.events[-1]["level"], 50)
         # moving the slider at night moves the MAXIMUM, the level follows
         mx, snap = b.set_max(100)
@@ -216,7 +218,37 @@ class TestBrightness(unittest.TestCase):
         self.nq.sent.clear()
         b.tick()
         b.tick()
-        self.assertEqual(self.nq.sent, ["brightness 90", "brightness 90"])
+        self.assertEqual(self.nq.sent, ["brightness 90 2000", "brightness 90 2000"])
+
+    def test_switching_ambient_fades(self):
+        # Petr, 2026-09-27: switched on in the evening it jumped straight to
+        # the new level; it has to arrive through a transition, and going off
+        # again too
+        b = self.b()
+        b.set_max(200)
+        self.now = utc(2026, 9, 22, 22)          # night: ambient means 50
+        b.set_ambient({"enabled": True})
+        self.assertEqual(self.nq.sent[-1], "brightness 50 %d" % MOD.AMBIENT_TOGGLE_FADE_MS)
+        b.set_ambient({"enabled": False})
+        self.assertEqual(self.nq.sent[-1], "brightness 200 %d" % MOD.AMBIENT_TOGGLE_FADE_MS)
+
+    def test_the_slider_stays_immediate(self):
+        b = self.b()
+        b.set_ambient({"enabled": True})
+        b.set_max(120)
+        self.assertEqual(self.nq.sent[-1], "brightness 120")
+
+    def test_an_old_nexusqd_still_gets_the_level(self):
+        self.nq.fades = False
+        b = self.b()
+        b.set_max(200)
+        self.now = utc(2026, 9, 22, 22)
+        snap = b.set_ambient({"enabled": True})
+        self.assertEqual(self.nq.sent[-2:], ["brightness 50 %d" % MOD.AMBIENT_TOGGLE_FADE_MS,
+                                             "brightness 50"])
+        self.assertEqual(snap["level"], 50)
+        with open(self.path) as f:
+            self.assertTrue(json.load(f)["ambient"])
 
     def test_torn_file_reads_as_default(self):
         for body in ('{"max": 300}', '{"max": "x", "ambient": 1}', '[', ''):

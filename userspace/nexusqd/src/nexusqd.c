@@ -15,6 +15,7 @@
 #include "audiocap.h"
 #include "music.h"
 #include "sdnotify.h"
+#include "brightfade.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -224,8 +225,9 @@ int main(void) {
      * turn direction; the main loop applies it at most once per VOL_APPLY_S, which
      * coalesces a detent's event burst and rate-limits a fast continuous turn. */
     int vol_dir = 0; double vol_apply_next = 0.0;
-    int brightness = 255;       /* global ring brightness 0..255, scales the packed frame
-                                 * (companion `brightness N` over the control socket) */
+    /* global ring brightness 0..255, scales the packed frame (companion
+     * `brightness N [ms]` over the control socket, with an optional transition) */
+    struct brightfade bright; brightfade_init(&bright, 255);
     int dark = 0, attend = 0;   /* ring-off gate + setup's hold on it (CTL_DARK/CTL_ATTEND);
                                  * the gate is effective while dark && !attend */
 
@@ -490,11 +492,7 @@ int main(void) {
                         /* nexusq-control re-asserts the level every minute (ambient
                          * brightness, and to restore it after a nexusqd restart);
                          * an unchanged one is a no-op, like an unchanged `dark`. */
-                        if (cmd.value == brightness) quiet = 1;
-                        else {
-                            brightness = cmd.value;
-                            memset(lastpk, 0xFF, sizeof(lastpk));   /* force a re-push at the new brightness */
-                        }
+                        if (!brightfade_set(&bright, cmd.value, cmd.ms, now_s())) quiet = 1;
                     }
                     else if (cmd.kind == CTL_BREATHE) {
                         /* companion color theme: a BREATHING solid-color override at
@@ -759,6 +757,7 @@ int main(void) {
         frame_pack(&f, pk);
         /* global ring brightness: scale the packed frame (255 = unchanged). The
          * dedicated mute LED is written separately and is not dimmed here. */
+        int brightness = brightfade_level(&bright, now);
         if (brightness < 255)
             for (int i = 0; i < RING*3; i++) pk[i] = (uint8_t)(pk[i] * brightness / 255);
         /* Push to the AVR on any change, and additionally re-push the unchanged
@@ -785,8 +784,12 @@ int main(void) {
          * the next frame is due; audio/input arriving sooner just wakes us to
          * drain, then we loop and re-sleep. */
         int ovl = reaction_overlay_active(&rx, now);
+        /* A brightness transition renders at the music cadence: at 20 fps the
+         * low end of a fade (a step of one level is a large step in lightness
+         * there) shows as a staircase. */
+        int fading = brightfade_active(&bright, now);
         frame_int = ovl ? 0.016
-                  : ((child_alpha > 0.0f || (!ring_dark && comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
+                  : ((child_alpha > 0.0f || fading || (!ring_dark && comp.layers[manual_idx].active && manual.spin)) ? 0.030 : 0.050);
         /* r13 idle stretch (see IDLE_FRAME_S at the top). Two conditions must BOTH
          * hold, because neither alone is sound:
          *   - INTENT: nothing on the ring is meant to be animating — no volume
@@ -812,7 +815,7 @@ int main(void) {
          * paused->playing transition, which arrives as audio data too. */
         /* A dark ring hides the manual layer and the screensaver, so neither
          * can be "meant to animate" — the ring-off state idles at 1 Hz. */
-        int animating = ovl || child_alpha > 0.0f
+        int animating = ovl || child_alpha > 0.0f || fading
                      || (!ring_dark && comp.layers[manual_idx].active && (manual.breathe || manual.spin))
                      || (!ring_dark && !(ss.elapsed_no_audio > SS_LOCK_S || screensaver_brightness(&ss) <= 0.0));
         last_animating = animating;

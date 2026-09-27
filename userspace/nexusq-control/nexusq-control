@@ -486,6 +486,15 @@ AMBIENT_NIGHT_FACTOR = 0.25
 # into the AVR's lowest PWM steps.
 AMBIENT_MIN_LEVEL = 8
 AMBIENT_TICK_S = 60
+# Transitions, run by nexusqd (`brightness N MS`, nexusqd r24+) in perceived
+# lightness. Switching ambient on or off moves the ring by up to three
+# quarters of its range at once, which reads as a jump unless it fades (Petr,
+# 2026-09-27: "hned skoci na jinou hodnotu, ale ja to chci pres transition").
+# The minute steps through twilight are small, and a short fade hides the one
+# PWM level they move by. The slider stays immediate: the app sends it on
+# every move of the finger, and a fade would lag behind it.
+AMBIENT_TOGGLE_FADE_MS = 3000
+AMBIENT_TICK_FADE_MS = 2000
 
 
 def sun_elevation(lat, lon, when_utc):
@@ -669,12 +678,20 @@ class Brightness:
         with self.lock:
             return self.conf["max"]
 
-    def _commit(self, new_conf):
+    def _send_level(self, fade_ms=0):
+        """Tell nexusqd the level, over `fade_ms`. A nexusqd older than r24
+        refuses the fade argument; the level itself still matters more than
+        the transition, so it is then sent without one."""
+        if fade_ms and self.send("brightness %d %d" % (self._level, fade_ms)):
+            return True
+        return self.send("brightness %d" % self._level)
+
+    def _commit(self, new_conf, fade_ms=0):
         """nexusqd first, file second (the theme's and the ring's rule)."""
         old, old_level = self.conf, self._level
         self.conf = new_conf
         self._level = self._compute()
-        if not self.send("brightness %d" % self._level):
+        if not self._send_level(fade_ms):
             self.conf, self._level = old, old_level
             raise Err("unavailable", "nexusqd rejected brightness")
         self._save()
@@ -695,7 +712,8 @@ class Brightness:
                 raise Err("unavailable",
                           "the Nexus Q's time zone has no known location")
             self._last_synced = self.synced()
-            self._commit(dict(self.conf, ambient=enabled))
+            self._commit(dict(self.conf, ambient=enabled),
+                         fade_ms=AMBIENT_TOGGLE_FADE_MS)
             return self._snapshot()
 
     # --- the scheduler ----------------------------------------------------
@@ -706,7 +724,7 @@ class Brightness:
             before = (self._level, self._last_synced)
             self._last_synced = self.synced()
             self._level = self._compute()
-            self.send("brightness %d" % self._level)
+            self._send_level(AMBIENT_TICK_FADE_MS)
             snap = self._snapshot() if (self._level, self._last_synced) != before else None
         if snap is not None:
             self.on_change(snap)
@@ -874,6 +892,15 @@ class Pulse:
             _pactl("set-default-sink", sink)
         except Exception as e:  # noqa: BLE001
             log("pactl set-default-sink failed:", e)
+
+    def default_source(self):
+        try:
+            r = _pactl("get-default-source")
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception as e:  # noqa: BLE001
+            log("pactl get-default-source failed:", e)
+        return None
 
     def set_default_source(self, source):
         """Point PA's default SOURCE at `source` (we use `<sink>.monitor` of the
@@ -2997,9 +3024,16 @@ class Bridge:
         # auto-track the default sink — we keep it steered here and on every switch.
         if init_sink:
             self.pulse.set_default_source(init_sink + ".monitor")
+        # The bridge starts well before the user session's PulseAudio, so on a
+        # boot the sink usually cannot be read yet. Then the level is UNKNOWN
+        # (null), not a made-up 50: a client that asked early (nexusq-mqtt does,
+        # within seconds) would show the made-up number, and nothing corrected it
+        # until the next real volume change, because pa_watch_thread only ever
+        # compared the sink against it. It is filled in by _reconcile_volume the
+        # moment PulseAudio answers.
         self.state = {
-            "volume": vol if vol is not None else 50,
-            "muted": bool(muted),
+            "volume": vol,
+            "muted": bool(muted) if vol is not None else None,
             "brightness": 255,
             "theme": _theme_load() or THEME_DEFAULT,
             "scene": "waveform",
@@ -3009,28 +3043,7 @@ class Bridge:
                            "transport": "none"},
             "name": DEVICE_NAME,
         }
-        # Boot default OUTPUT: on a fresh boot PA's default is just its first
-        # sink (probe-order dependent — often the SPDIF), but this appliance's
-        # canonical output is the speaker. Steer to BOOT_OUTPUT once PA is up:
-        # the bridge is a system service that starts well before the user
-        # session's PulseAudio, so retry in the background (~90 s), then give
-        # up quietly (setOutput from the app still works). Applying via
-        # _set_output keeps everything consistent (streams moved, amp toggle,
-        # LED-tap monitor source, tray-icon link, state + no clients yet).
-        def _boot_output():
-            if BOOT_OUTPUT not in OUTPUT_BY_ID:
-                return
-            for _ in range(45):
-                try:
-                    if self._sink_for_output(BOOT_OUTPUT):
-                        self._set_output({"output": BOOT_OUTPUT})
-                        log("boot output ->", BOOT_OUTPUT)
-                        return
-                except Exception:  # noqa: BLE001 - PA not up yet; retry
-                    pass
-                time.sleep(2)
-            log("boot output: PA never became ready, leaving PA's default")
-        threading.Thread(target=_boot_output, daemon=True).start()
+        threading.Thread(target=self._boot_output, daemon=True).start()
         threading.Thread(target=self._hdmi_watch, daemon=True).start()
         # The LED ring switch + schedule; its scheduler thread is started by
         # main(), like the other restore threads, so a test can build a Bridge
@@ -3040,6 +3053,35 @@ class Bridge:
         self.brightness = Brightness(
             on_change=lambda snap: self.broadcast("ambientChanged", snap))
         self.state["brightness"] = self.brightness.maximum()
+
+    def _boot_output(self, attempts=45, pause_s=2):
+        """Boot default OUTPUT: on a fresh boot PA's default is just its first
+        sink (probe-order dependent -- often the SPDIF), but this appliance's
+        canonical output is the speaker. Steer to BOOT_OUTPUT once PA is up:
+        the bridge is a system service that starts well before the user
+        session's PulseAudio, so retry in the background (~90 s), then give up
+        quietly (setOutput from the app still works).
+
+        Applying via _set_output keeps everything consistent (streams moved,
+        amp toggle, LED-tap monitor source, tray-icon link, state), and its
+        events are broadcast: by now there ARE clients -- nexusq-mqtt connects
+        within seconds of boot, the app whenever it likes -- and until r55 they
+        kept the output and volume they had read before the switch.
+        """
+        if BOOT_OUTPUT not in OUTPUT_BY_ID:
+            return
+        for _ in range(attempts):
+            try:
+                if self._sink_for_output(BOOT_OUTPUT):
+                    _, events = self._set_output({"output": BOOT_OUTPUT})
+                    for event, data in events:
+                        self.broadcast(event, data)
+                    log("boot output ->", BOOT_OUTPUT)
+                    return
+            except Exception:  # noqa: BLE001 - PA not up yet; retry
+                pass
+            time.sleep(pause_s)
+        log("boot output: PA never became ready, leaving PA's default")
 
     def _source_busy(self, sid):
         """Is this source playing, or holding a paused track? Either way a
@@ -3145,6 +3187,59 @@ class Bridge:
         with self.lock:
             oid = self.state.get("output")
         return (self._sink_for_output(oid) if oid else None) or self.pulse.default_sink()
+
+    def _reconcile_source(self):
+        """Keep PA's default SOURCE on the active output's monitor: that is
+        what the LED ring's visualiser records (`arecord -D pulse`), and PA
+        moves the tap along with the default. The bridge sets it on every
+        output switch, but it can also be changed behind the bridge's back:
+        PA restores whatever default it saved last when it starts, and until
+        device r118 module-switch-on-connect handed it to every loopback input
+        that appeared (usb_in, roon_in). The ring then watched an idle input
+        while the speaker played (Prague Q, 2026-09-27). Returns whether it
+        had to be moved.
+
+        The monitor of PA's DEFAULT sink, not of state["output"]: _set_output
+        sets the default sink first and state["output"] last, so a server
+        event in between would otherwise steer the tap back to the output
+        being left."""
+        sink = self.pulse.default_sink()
+        if not sink:
+            return False
+        want = sink + ".monitor"
+        have = self.pulse.default_source()
+        if have is None or have == want:
+            return False
+        self.pulse.set_default_source(want)
+        log("default source was", have, "-> back to", want)
+        return True
+
+    def _reconcile_volume(self):
+        """Re-read the active sink; when its level or mute differs from what
+        this bridge last told its clients, take it and tell them. Returns
+        whether it moved.
+
+        Called for every sink event (the knob, the panel applet, a player
+        driving nexusq_vol) and whenever pa_watch_thread (re)subscribes -- the
+        first PulseAudio of a boot and any PulseAudio restart -- because a
+        change made while nobody was subscribed produces no event of its own.
+        """
+        sink = self._active_sink()
+        if not sink:
+            return False
+        vol, muted = self.mixer.get(sink)
+        if vol is None:
+            return False
+        muted = bool(muted)
+        with self.lock:
+            moved = (vol != self.state["volume"] or muted != self.state["muted"])
+            if moved:
+                self.state["volume"] = vol
+                self.state["muted"] = muted
+        if moved:
+            self.broadcast("volumeChanged", {"volume": vol, "muted": muted})
+            self.airplay_volume.volume_changed(vol, muted)
+        return moved
 
     # --- client registry / broadcast ------------------------------------
     def add_client(self, sock):
@@ -3564,6 +3659,14 @@ class Bridge:
         with self.lock:
             vol = self.state["volume"]
             muted = self.state["muted"]
+        if vol is None:
+            # Not read yet (PulseAudio was not up when the bridge started, and
+            # pa_watch_thread has not caught up). adjustVolume and toggleMute are
+            # relative, so they need the real level, not a guess.
+            vol, muted = self.mixer.get(sink)
+            if vol is None:
+                raise Err("unavailable", "PulseAudio is not ready yet")
+            muted = bool(muted)
         if method == "setVolume":
             vol = max(0, min(100, int(p.get("volume", vol))))
             muted = False
@@ -3696,8 +3799,11 @@ class Bridge:
                 self.state["muted"] = bool(muted)
             vol_out = self.state["volume"]
             muted_out = self.state["muted"]
-        events = [("outputChanged", {"output": oid}),
-                  ("volumeChanged", {"volume": vol_out, "muted": muted_out})]
+        events = [("outputChanged", {"output": oid})]
+        # No volumeChanged while the level is still unknown: an event is a
+        # statement of the Q's volume, and null is not one.
+        if vol_out is not None:
+            events.append(("volumeChanged", {"volume": vol_out, "muted": muted_out}))
         return {"output": oid}, events
 
     # --- transport routing (PROTOCOL §5) --------------------------------
@@ -4200,6 +4306,11 @@ def pa_watch_thread(bridge):
             proc = subprocess.Popen(
                 ["pactl", "subscribe"], stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+            # AFTER subscribing, so nothing can fall between the read and the
+            # first event. Before PulseAudio is up this reads nothing and the
+            # subscribe exits at once; the loop comes round again in a second.
+            bridge._reconcile_volume()
+            bridge._reconcile_source()
             for line in proc.stdout:
                 if "on sink-input #" in line:
                     # AirPlay's play/pause lives here: shairport's sink-input
@@ -4210,24 +4321,13 @@ def pa_watch_thread(bridge):
                     except Exception as e:
                         log("airplay: sync failed:", e)
                     continue
+                if "on server" in line:
+                    # the default sink or source changed
+                    bridge._reconcile_source()
+                    continue
                 if "on sink #" not in line:
                     continue
-                sink = bridge._active_sink()
-                if not sink:
-                    continue
-                vol, muted = bridge.mixer.get(sink)
-                if vol is None:
-                    continue
-                with bridge.lock:
-                    moved = (vol != bridge.state["volume"]
-                             or bool(muted) != bridge.state["muted"])
-                    if moved:
-                        bridge.state["volume"] = vol
-                        bridge.state["muted"] = bool(muted)
-                if moved:
-                    bridge.broadcast("volumeChanged",
-                                     {"volume": vol, "muted": bool(muted)})
-                    bridge.airplay_volume.volume_changed(vol, bool(muted))
+                bridge._reconcile_volume()
         except FileNotFoundError:
             log("pactl not found; dome-dial -> app volume sync disabled")
             return
