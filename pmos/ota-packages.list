@@ -26,6 +26,7 @@ nexusqd
 nexusq-btagent
 nexusq-setupd
 nexusq-mqtt
+nexusq-alsa-vol
 nexusq-kernel-ota
 nexusq-rootfs-ab
 

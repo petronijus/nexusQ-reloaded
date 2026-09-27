@@ -318,6 +318,29 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     _client.notify('setVolume', {'volume': state.volume});
   }
 
+  /// The slider was let go at [v]. The Q already has it (setVolume while
+  /// dragging); when Spotify is what plays here, Spotify is told too, so its
+  /// apps show the Q's volume. librespot cannot learn it any other way: it
+  /// has no local control interface, and it re-reads its mixer only at the
+  /// next play. The knob and Home Assistant do not reach Spotify until then.
+  void commitVolume(int v) {
+    if (transportRoute != TransportRoute.spotifyWeb ||
+        state.nowPlaying.source != 'spotify') {
+      return;
+    }
+    final name = state.deviceName;
+    final player = _player;
+    unawaited(() async {
+      try {
+        await player.setVolume(name, v.clamp(0, 100));
+      } catch (e) {
+        // The Q's volume is set either way; only Spotify's display lags until
+        // the next play, so this is a log line, not a notice.
+        AppLog.add('spotify', 'volume mirror failed: $e', warn: true);
+      }
+    }());
+  }
+
   void toggleMute() {
     state.muted = !state.muted;
     notifyListeners();

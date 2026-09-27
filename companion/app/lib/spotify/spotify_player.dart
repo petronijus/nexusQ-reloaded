@@ -13,6 +13,7 @@
 //   PUT  /v1/me/player/pause?device_id=…     pauses  (204)
 //   POST /v1/me/player/next|previous?device_id=…  (204)
 //   PUT  /v1/me/player  {device_ids:[id], play:true}  transfers playback
+//   PUT  /v1/me/player/volume?volume_percent=N&device_id=…  (204)
 //   404 NO_ACTIVE_DEVICE when nothing is playing anywhere → transfer first
 //   403 PREMIUM_REQUIRED — playback control is a Premium feature, full stop
 //   401 — token expired/revoked → SpotifyLink refreshes, one retry
@@ -240,6 +241,18 @@ class SpotifyPlayer {
   Future<void> previous(String qName) async {
     final d = await qDevice(qName);
     await _call('POST', '/me/player/previous?device_id=${Uri.encodeQueryComponent(d.id)}');
+  }
+
+  /// Tell Spotify the Q's volume, so the Spotify apps show what the room
+  /// hears. Since device r117 librespot drives the Q's one volume (the
+  /// PulseAudio sink) and Spotify's N % IS the app's N %, so this is the same
+  /// number, not a second stage; librespot applies it as a no-op. Only on the
+  /// user's own slider release, never in answer to a volumeChanged event --
+  /// that is what keeps the two from ringing.
+  Future<void> setVolume(String qName, int percent) async {
+    final d = await qDevice(qName);
+    final v = percent.clamp(0, 100);
+    await _call('PUT', '/me/player/volume?volume_percent=$v&device_id=${Uri.encodeQueryComponent(d.id)}');
   }
 
   /// What is playing and what comes next. Deliberately NOT aimed at a

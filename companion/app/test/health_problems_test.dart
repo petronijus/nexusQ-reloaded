@@ -33,6 +33,25 @@ void main() {
         contains('Crash dump present (pstore)'));
   });
 
+  test('deep idle: only the device verdict raises it, absent is healthy', () {
+    expect(healthProblems({'deep_idle_blocked': true}),
+        contains('Deep idle is blocked (CPU latency limit)'));
+    expect(healthProblems({'deep_idle_blocked': false, 'deep_idle_blocked_pct': 40}), isEmpty);
+    expect(healthProblems({'deep_idle_blocked_pct': 100}), isEmpty);
+  });
+
+  test('idle depth rows: C-states plus the busy remainder', () {
+    final rows = idleDepthRows({'idle_c1_pct': 2.0, 'idle_c2_pct': 0.5, 'idle_c3_pct': 95.0});
+    expect(rows.map((r) => r.$1), ['C1', 'C2', 'C3', 'Busy']);
+    expect(rows.last.$2, closeTo(2.5, 1e-9));
+    // older device: no C-states, no card
+    expect(idleDepthRows({'opp350_pct': 99.0}), isEmpty);
+    // garbage never throws; a state the device lacks is simply not a row
+    expect(idleDepthRows({'idle_c1_pct': 'x', 'idle_c3_pct': 50}).map((r) => r.$1), ['C3', 'Busy']);
+    // a clamped overshoot (first publish after boot) never shows negative busy
+    expect(idleDepthRows({'idle_c1_pct': 10, 'idle_c3_pct': 100}).last.$2, 0);
+  });
+
   test('sub-threshold and wrong-typed values are ignored', () {
     expect(healthProblems({'pstore': 0, 'nexusqd_alive': true}), isEmpty);
     // hostile/garbage payload must never throw

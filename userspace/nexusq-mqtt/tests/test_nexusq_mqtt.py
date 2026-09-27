@@ -786,8 +786,11 @@ class TestDiscovery(unittest.TestCase):
 
     def test_expected_entities_present(self):
         keys = {t.split("/")[2] for t, _ in self.configs}
+        # "volume" is no longer a telemetry sensor: since r10 it is VolumeLink's
+        # writable number (tests/test_volume_ha.py)
+        self.assertNotIn("volume", {t.split("/")[2] for t, _ in self.configs})
         for expected in ("temp", "cpu_freq", "governor", "load1",
-                         "mem_avail", "uptime", "wifi_rssi", "volume",
+                         "mem_avail", "uptime", "wifi_rssi",
                          "opp350", "opp700", "opp920", "opp1200",
                          "spotify", "airplay", "roon", "usbaudio",
                          "nexusqd", "healthd", "wifi_repairs",

@@ -227,6 +227,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               value: s.volume.toDouble(),
                               max: 100,
                               onChanged: (v) => controller.setVolume(v.round()),
+                              onChangeEnd: (v) => controller.commitVolume(v.round()),
                             ),
                           ),
                           SizedBox(

@@ -126,5 +126,20 @@ class TestNowPlayingStopped(unittest.TestCase):
         self.assertTrue(np["playing"])
 
 
+class TestSpotifyVolumeHook(unittest.TestCase):
+    """Since device r117 librespot moves the PulseAudio sink itself (the
+    nexusq_vol control), so its `volume` hook is no news: the sink change
+    reaches the app through pa_watch_thread like the knob's. The hook used to
+    write Spotify's own software level into state["volume"], a number the room
+    did not hear."""
+
+    def test_volume_hook_leaves_the_state_alone(self):
+        mod = load_daemon()
+        b = _Bridge(mod)
+        b.on_hook({"kind": "volume", "volume": 65535})
+        self.assertEqual(b.state["volume"], 30)
+        self.assertEqual(b.sent, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1144,10 +1144,6 @@ def discovery_configs(node_id, display_name, prefix):
           "state_class": "measurement", "entity_category": "diagnostic",
           "value_template":
               "{{ value_json.wifi_rssi_dbm | default('unknown') }}"}),
-        ("volume", "Volume",
-         {"unit_of_measurement": "%", "icon": "mdi:volume-high",
-          "value_template":
-              "{{ value_json.volume_pct | default('unknown') }}"}),
         # Repairs nexusq-wifi-watchdog had to make this boot. total_increasing:
         # the drop to 0 at a reboot is a counter reset, not a decrease, and an
         # automation can trigger on any rise.
@@ -1448,6 +1444,197 @@ class ControlError(Exception):
         self.code = code
 
 
+# --------------------------------------------------------------------------
+# system update from Home Assistant (the app's "Update system", PROTOCOL §12b)
+# --------------------------------------------------------------------------
+
+UPDATE_ENABLED = os.environ.get("NQMQTT_UPDATE", "1") != "0"
+# A check is `apk update` against the OTA repo: cheap, but network and flash
+# work, so not on every publish. The first one comes 30 s after start: soon,
+# because a reboot that finished an install left "rebooting" retained on the
+# broker, and the check is what replaces it with the new versions. Then every
+# six hours, and whenever HA's "Check for updates" button is pressed.
+UPDATE_FIRST_CHECK_S = int(os.environ.get("NQMQTT_UPDATE_FIRST_S", "30"))
+UPDATE_CHECK_EVERY_S = int(os.environ.get("NQMQTT_UPDATE_EVERY_S", str(6 * 3600)))
+# installSystemUpdate returns when apk is done; a full-system upgrade has been
+# measured at several minutes on this CPU.
+UPDATE_INSTALL_TIMEOUT_S = 900
+DEVICE_PKG = "device-google-steelhead"
+# HA shows at most 255 characters of release_summary.
+HA_SUMMARY_MAX = 255
+
+
+def update_topics(prefix, node_id):
+    base = f"{prefix}/{node_id}/update"
+    return {"state": f"{base}/state", "install": f"{base}/install",
+            "check": f"{base}/check"}
+
+
+def read_device_version():
+    """The installed device package's version ("1.0-r116"), the closest thing
+    this system has to a version of the whole: every image and most OTAs move
+    it. None when apk cannot say."""
+    out = _run(["apk", "info", "-e", "-v", DEVICE_PKG], timeout=10).strip()
+    pre = DEVICE_PKG + "-"
+    return out[len(pre):] if out.startswith(pre) else None
+
+
+def update_state_payload(installed, check, phase=None):
+    """Home Assistant's MQTT `update` JSON for a checkSystemUpdate result.
+
+    HA calls it an update when latest_version differs from installed_version
+    and is not older by its version comparison. With no upgradable package the
+    two are equal. Otherwise latest_version is the device package's new version
+    when it moves, and in any case carries "+ N updates" when other packages
+    move too. That string is deliberately not a version (it has spaces): HA
+    cannot order it, and an unorderable pair that differs reads as an update.
+    `phase`: None, "installing" or "rebooting" -- both of the latter set
+    in_progress, which HA shows as a spinner on the entity."""
+    installed = installed or "unknown"
+    pkgs = [p for p in (check or {}).get("packages", [])
+            if isinstance(p, dict) and isinstance(p.get("name"), str)]
+    busy = bool((check or {}).get("busy"))
+    latest = installed
+    dev = next((p for p in pkgs if p["name"] == DEVICE_PKG), None)
+    if dev is not None and isinstance(dev.get("available"), str):
+        latest = dev["available"]
+    others = len(pkgs) - (1 if dev is not None else 0)
+    if others:
+        latest = f"{latest} + {others} update{'s' if others != 1 else ''}"
+    if phase == "rebooting":
+        summary = "Installed. The Q is rebooting to finish."
+    elif phase == "installing" or busy:
+        summary = "Installing. Services restart when it is done; the Q may reboot."
+    elif pkgs:
+        summary = ", ".join(
+            f"{p['name']} {p.get('installed', '?')} → {p.get('available', '?')}"
+            for p in pkgs)
+        if len(summary) > HA_SUMMARY_MAX:
+            summary = summary[:HA_SUMMARY_MAX - 1] + "…"
+    else:
+        summary = "Up to date."
+    return {"installed_version": installed, "latest_version": latest,
+            "title": "Nexus Q system", "release_summary": summary,
+            "in_progress": phase is not None or busy}
+
+
+def update_discovery_configs(node_id, display_name, prefix):
+    topics = update_topics(prefix, node_id)
+    _, status_topic = device_topics(prefix, node_id)
+    device = {"identifiers": [node_id], "name": display_name,
+              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
+              "sw_version": os.uname().release}
+    return [
+        (f"update/{node_id}/system/config", {
+            "name": "System update", "unique_id": f"{node_id}_system_update",
+            "device_class": "firmware", "entity_category": "config",
+            "state_topic": topics["state"],
+            "command_topic": topics["install"], "payload_install": "install",
+            "availability_topic": status_topic, "device": device}),
+        (f"button/{node_id}/update_check/config", {
+            "name": "Check for updates", "unique_id": f"{node_id}_update_check",
+            "entity_category": "config", "icon": "mdi:refresh",
+            "command_topic": topics["check"], "payload_press": "PRESS",
+            "availability_topic": status_topic, "device": device}),
+    ]
+
+
+class UpdateLink:
+    """HA's System update entity: checks on a timer or on request, installs on
+    request, and says honestly what is happening -- including that the Q is
+    about to reboot, after which this process is gone and the next one
+    publishes the new versions.
+
+    `publish(topic, payload, retain)`, `call(method, params, timeout)`,
+    `version()` and `clock()` are injected, so it runs in tests without a
+    broker, a bridge or apk."""
+
+    def __init__(self, prefix, node_id, publish, call=control_call,
+                 version=read_device_version, clock=time.monotonic):
+        self.topics = update_topics(prefix, node_id)
+        self.publish, self.call = publish, call
+        self.version, self.clock = version, clock
+        self._cv = threading.Condition()
+        self._queue = []
+        self._last = None               # the last payload published
+        self._next_check = clock() + UPDATE_FIRST_CHECK_S
+
+    def submit(self, topic, payload):
+        """From the MQTT receive path: queue, never block it on apk."""
+        kind = {self.topics["install"]: "install",
+                self.topics["check"]: "check"}.get(topic)
+        if kind is None:
+            return False
+        if kind == "install" and payload.strip() != "install":
+            log("update: ignored install payload", payload[:40])
+            return True
+        with self._cv:
+            if kind not in self._queue:
+                self._queue.append(kind)
+            self._cv.notify()
+        return True
+
+    def _put(self, payload):
+        self._last = payload
+        self.publish(self.topics["state"], json.dumps(payload), True)
+
+    def republish(self):
+        """After a broker (re)connect."""
+        if self._last is not None:
+            self.publish(self.topics["state"], json.dumps(self._last), True)
+
+    def check(self):
+        try:
+            r = self.call("checkSystemUpdate", {}, timeout=180)
+        except (OSError, ValueError, ControlError) as e:
+            log("update: check failed:", e)
+            return None
+        self._put(update_state_payload(self.version(), r))
+        return r
+
+    def install(self):
+        installed = self.version()
+        self._put(update_state_payload(installed, None, "installing"))
+        try:
+            r = self.call("installSystemUpdate", {},
+                          timeout=UPDATE_INSTALL_TIMEOUT_S)
+        except (OSError, ValueError, ControlError) as e:
+            # `busy` = the app is installing right now: say so; the next check
+            # shows the outcome. Anything else: back to what a check says.
+            log("update: install failed:", e)
+            if isinstance(e, ControlError) and e.code == "busy":
+                self._put(update_state_payload(installed, {"busy": True}))
+            else:
+                self.check()
+            return
+        if r.get("rebootRecommended"):
+            self._put(update_state_payload(self.version(), None, "rebooting"))
+            return
+        # This process may be among the daemons the bridge now restarts; if it
+        # survives, the check shows the new versions.
+        self.check()
+
+    def step(self):
+        """One pass of the worker: a queued command, or the timed check.
+        Returns how long to wait for the next command."""
+        with self._cv:
+            kind = self._queue.pop(0) if self._queue else None
+        if kind == "install":
+            self.install()
+            self._next_check = self.clock() + UPDATE_CHECK_EVERY_S
+        elif kind == "check" or self.clock() >= self._next_check:
+            self.check()
+            self._next_check = self.clock() + UPDATE_CHECK_EVERY_S
+        return max(1.0, self._next_check - self.clock())
+
+    def worker(self):
+        while not _shutdown:
+            wait = self.step()
+            with self._cv:
+                if not self._queue and not _shutdown:
+                    self._cv.wait(min(wait, 60))
+
+
 class RingLink:
     """The ring's picture from the bridge, published to MQTT, and HA commands
     turned into bridge calls.
@@ -1580,7 +1767,21 @@ class RingLink:
 
     # --- the bridge listener ------------------------------------------------
     def listen(self):
-        """Hold a connection to the bridge: getState once, then its events."""
+        """Alone on a bridge connection (tests); run() shares one BridgeFeed
+        between the ring and the volume."""
+        BridgeFeed([self]).listen()
+
+
+class BridgeFeed:
+    """ONE connection to the bridge's TCP API -- getState once, then its event
+    broadcasts -- fanned out to every consumer (the ring, the volume). A
+    consumer has set_state(full), apply_event(event, data) and bridge_down().
+    Blocks in recv(): no cost while nothing changes."""
+
+    def __init__(self, consumers):
+        self.consumers = list(consumers)
+
+    def listen(self):
         while not _shutdown:
             try:
                 with socket.create_connection((CONTROL_HOST, CONTROL_PORT), 3) as s:
@@ -1597,8 +1798,9 @@ class RingLink:
                             if line.strip():
                                 self.handle_line(line)
             except (OSError, ValueError) as e:
-                log("ring: bridge link down:", e)
-            self.bridge_down()
+                log("bridge link down:", e)
+            for c in self.consumers:
+                c.bridge_down()
             for _ in range(RING_RETRY_S):
                 if _shutdown:
                     return
@@ -1612,9 +1814,169 @@ class RingLink:
         if not isinstance(obj, dict):
             return
         if obj.get("id") == 1 and isinstance(obj.get("result"), dict):
-            self.set_state(obj["result"])
+            for c in self.consumers:
+                c.set_state(obj["result"])
         elif isinstance(obj.get("event"), str):
-            self.apply_event(obj["event"], obj.get("data"))
+            for c in self.consumers:
+                c.apply_event(obj["event"], obj.get("data"))
+
+
+# --------------------------------------------------------------------------
+# the volume from Home Assistant (one volume: the PulseAudio sink, device r117)
+# --------------------------------------------------------------------------
+
+VOLUME_ENABLED = os.environ.get("NQMQTT_VOLUME", "1") != "0"
+
+
+def volume_topics(prefix, node_id):
+    base = f"{prefix}/{node_id}/volume"
+    return {"state": f"{base}/state", "available": f"{base}/available",
+            "level": f"{base}/set", "mute": f"{base}/mute/set"}
+
+
+def volume_commands(kind, payload):
+    """One HA command -> [(method, params)]. The number entity sends its
+    value as text ("37" or "37.0"), the switch ON/OFF. Anything else maps to
+    nothing."""
+    try:
+        text = payload.decode("utf-8").strip() if isinstance(payload, bytes) else str(payload).strip()
+    except UnicodeDecodeError:
+        return []
+    if kind == "level":
+        try:
+            v = float(text)
+        except ValueError:
+            return []
+        if not (v == v) or v < 0 or v > 100:        # NaN, out of range
+            return []
+        return [("setVolume", {"volume": int(round(v))})]
+    if kind == "mute" and text in ("ON", "OFF"):
+        return [("setMuted", {"muted": text == "ON"})]
+    return []
+
+
+def volume_discovery_configs(node_id, display_name, prefix):
+    """[(suffix, config-or-None)]: the Volume number and the Mute switch, and
+    the retirement of the read-only Volume sensor (None = empty retained
+    config, which deletes it). That sensor showed the same number, but only
+    every telemetry tick and with nothing to set."""
+    topics = volume_topics(prefix, node_id)
+    _, status_topic = device_topics(prefix, node_id)
+    device = {"identifiers": [node_id], "name": display_name,
+              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
+              "sw_version": os.uname().release}
+    base = {"state_topic": topics["state"], "device": device,
+            "availability": [{"topic": status_topic}, {"topic": topics["available"]}],
+            "availability_mode": "all"}
+    return [
+        (f"number/{node_id}/volume_level/config", {
+            **base, "name": "Volume", "unique_id": f"{node_id}_volume_level",
+            "command_topic": topics["level"], "min": 0, "max": 100, "step": 1,
+            "mode": "slider", "unit_of_measurement": "%", "icon": "mdi:volume-high",
+            "value_template": "{{ value_json.volume }}"}),
+        (f"switch/{node_id}/mute/config", {
+            **base, "name": "Mute", "unique_id": f"{node_id}_mute",
+            "command_topic": topics["mute"], "icon": "mdi:volume-off",
+            "value_template": "{{ 'ON' if value_json.muted else 'OFF' }}"}),
+        (f"sensor/{node_id}/volume/config", None),
+    ]
+
+
+class VolumeLink:
+    """The Q's volume and mute in Home Assistant, pushed from the bridge's
+    volumeChanged broadcasts and set through setVolume / setMuted -- the app's
+    own methods, so HA is one more front end on the one volume. A consumer of
+    the BridgeFeed; `publish` and `call` are injected, as in RingLink."""
+
+    def __init__(self, node_id, display_name, prefix, discovery_prefix,
+                 publish, call=control_call):
+        self.node_id, self.display_name = node_id, display_name
+        self.prefix, self.discovery_prefix = prefix, discovery_prefix
+        self.topics = volume_topics(prefix, node_id)
+        self.publish, self.call = publish, call
+        self.lock = threading.Lock()
+        self.st = None
+        self._queue = []
+        self._cv = threading.Condition()
+
+    def set_state(self, full):
+        v, m = full.get("volume"), full.get("muted")
+        if isinstance(v, int) and not isinstance(v, bool) and isinstance(m, bool):
+            with self.lock:
+                self.st = {"volume": v, "muted": m}
+            self.publish_state()
+
+    def apply_event(self, event, data):
+        if event != "volumeChanged" or not isinstance(data, dict):
+            return False
+        v, m = data.get("volume"), data.get("muted")
+        if not (isinstance(v, int) and not isinstance(v, bool) and isinstance(m, bool)):
+            return False
+        with self.lock:
+            if self.st == {"volume": v, "muted": m}:
+                return False
+            self.st = {"volume": v, "muted": m}
+        self.publish_state()
+        return True
+
+    def bridge_down(self):
+        with self.lock:
+            self.st = None
+        self.publish(self.topics["available"], "offline", True)
+
+    def publish_state(self):
+        with self.lock:
+            st = dict(self.st) if self.st else None
+        if st is None:
+            return
+        self.publish(self.topics["available"], "online", True)
+        self.publish(self.topics["state"], json.dumps(st), True)
+
+    def on_mqtt_connect(self):
+        for suffix, cfg in volume_discovery_configs(
+                self.node_id, self.display_name, self.prefix):
+            self.publish(f"{self.discovery_prefix}/{suffix}",
+                         json.dumps(cfg) if cfg is not None else "", True)
+        with self.lock:
+            up = self.st is not None
+        if up:
+            self.publish_state()
+        else:
+            self.publish(self.topics["available"], "offline", True)
+
+    def submit(self, topic, payload):
+        kind = {self.topics["level"]: "level", self.topics["mute"]: "mute"}.get(topic)
+        if kind is None:
+            return False
+        with self._cv:
+            # A slider dragged in HA sends a burst; only the last level counts.
+            self._queue = [q for q in self._queue if q[0] != kind]
+            self._queue.append((kind, payload))
+            self._cv.notify()
+        return True
+
+    def execute(self, kind, payload):
+        calls = volume_commands(kind, payload)
+        if not calls:
+            log("volume: ignored malformed", kind, "command")
+            self.publish_state()
+        for method, params in calls:
+            try:
+                self.call(method, params)
+            except (OSError, ValueError, ControlError) as e:
+                log("volume:", method, "failed:", e)
+                self.publish_state()        # HA shows the truth, not the wish
+                return
+
+    def worker(self):
+        while not _shutdown:
+            with self._cv:
+                while not self._queue and not _shutdown:
+                    self._cv.wait(1)
+                if _shutdown:
+                    return
+                kind, payload = self._queue.pop(0)
+            self.execute(kind, payload)
 
 
 # --------------------------------------------------------------------------
@@ -1670,14 +2032,32 @@ def run():
             pass
 
     ring = None
+    vol = None
+    feed = []
     if RING_ENABLED:
         ring = RingLink(node_id, display_name, prefix, conf["discovery_prefix"],
                         safe_publish)
-        threading.Thread(target=ring.listen, daemon=True).start()
+        feed.append(ring)
         threading.Thread(target=ring.worker, daemon=True).start()
+    if VOLUME_ENABLED:
+        vol = VolumeLink(node_id, display_name, prefix, conf["discovery_prefix"],
+                         safe_publish)
+        feed.append(vol)
+        threading.Thread(target=vol.worker, daemon=True).start()
+    if feed:
+        threading.Thread(target=BridgeFeed(feed).listen, daemon=True).start()
+
+    upd = None
+    if UPDATE_ENABLED:
+        upd = UpdateLink(prefix, node_id, safe_publish)
+        threading.Thread(target=upd.worker, daemon=True).start()
 
     def on_message(topic, payload):
         if ring is not None and ring.submit(topic, payload):
+            return
+        if vol is not None and vol.submit(topic, payload):
+            return
+        if upd is not None and upd.submit(topic, payload):
             return
         if ROON_ENABLED:
             roon_forward(topic, payload)
@@ -1713,6 +2093,10 @@ def run():
             if ring is not None:
                 client.subscribe([ring.topics[k] for k in
                                   ("light", "schedule", "off_at", "on_at", "ambient")])
+            if vol is not None:
+                client.subscribe([vol.topics["level"], vol.topics["mute"]])
+            if upd is not None:
+                client.subscribe([upd.topics["install"], upd.topics["check"]])
             client.publish(status_topic, "online", retain=True)
             client.publish(legacy_status_topic, "online", retain=True)
             for suffix, cfg in discovery_configs(
@@ -1721,6 +2105,14 @@ def run():
                                json.dumps(cfg), retain=True)
             if ring is not None:
                 ring.on_mqtt_connect()
+            if vol is not None:
+                vol.on_mqtt_connect()
+            if upd is not None:
+                for suffix, cfg in update_discovery_configs(
+                        node_id, display_name, prefix):
+                    client.publish(f"{conf['discovery_prefix']}/{suffix}",
+                                   json.dumps(cfg), retain=True)
+                upd.republish()
             while not _shutdown:
                 state = collect(win)
                 payload = json.dumps(state)

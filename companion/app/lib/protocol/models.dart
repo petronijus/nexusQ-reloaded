@@ -207,6 +207,70 @@ class AmbientState {
       );
 }
 
+/// The diagnostics mode (PROTOCOL §16): verbose logs on the Q for a limited
+/// time, ending by itself. Separate from the app's own debug log.
+class DiagnosticsState {
+  const DiagnosticsState({
+    this.enabled = false,
+    this.until,
+    this.remaining = Duration.zero,
+    this.maxHours = 72,
+    this.pending = const [],
+    this.serviceNames = const {},
+  });
+
+  final bool enabled;
+  /// When it ends (the Q's wall clock), null while off.
+  final DateTime? until;
+  final Duration remaining;
+  final int maxHours;
+  /// Running services not yet switched to the current mode: the Q restarts
+  /// each one only when it is not playing.
+  final List<String> pending;
+  final Map<String, String> serviceNames;
+
+  factory DiagnosticsState.fromJson(Map<String, dynamic> j) {
+    final names = <String, String>{};
+    if (j['services'] is List) {
+      for (final s in j['services'] as List) {
+        if (s is Map && s['id'] is String) {
+          names[s['id'] as String] = s['name'] is String ? s['name'] as String : s['id'] as String;
+        }
+      }
+    }
+    return DiagnosticsState(
+      enabled: j['enabled'] is bool ? j['enabled'] as bool : false,
+      until: j['until'] is num
+          ? DateTime.fromMillisecondsSinceEpoch((j['until'] as num).toInt() * 1000, isUtc: true)
+          : null,
+      remaining: Duration(seconds: j['remainingS'] is num ? (j['remainingS'] as num).toInt() : 0),
+      maxHours: j['maxHours'] is num ? (j['maxHours'] as num).toInt() : 72,
+      pending: j['pending'] is List ? [for (final p in j['pending'] as List) if (p is String) p] : const [],
+      serviceNames: names,
+    );
+  }
+
+  /// One line for the switch's subtitle.
+  String get summary {
+    if (!enabled) {
+      return 'Verbose Spotify and AirPlay logs on the Q for 24 h, for a bug report. '
+          'Switches itself off.';
+    }
+    final h = remaining.inHours;
+    final m = remaining.inMinutes % 60;
+    final left = h > 0 ? '$h h ${m.toString().padLeft(2, '0')} min' : '$m min';
+    return 'On — ends in $left.';
+  }
+
+  /// Null when nothing waits; otherwise which services change when their
+  /// playback stops.
+  String? get pendingNote {
+    if (pending.isEmpty) return null;
+    final names = [for (final p in pending) serviceNames[p] ?? p].join(' and ');
+    return 'Applies to $names when playback stops.';
+  }
+}
+
 /// The full device state mirrored from the bridge (`getState` / events).
 class DeviceState {
   DeviceState({

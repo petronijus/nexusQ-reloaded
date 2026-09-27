@@ -1,0 +1,33 @@
+# ALSA control plugin `nexusq_vol`: the Nexus Q's one volume (the PulseAudio
+# default sink) as a mixer control WITH a dB scale, so librespot (`--mixer alsa`)
+# and shairport-sync (`mixer_control_name`) drive PulseAudio's volume instead of
+# attenuating in software first. Source: userspace/nexusq-alsa-vol, staged flat
+# next to this APKBUILD by docker-build.sh. docs/2026-09-27-one-volume.md.
+pkgname=nexusq-alsa-vol
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Nexus Q: the PulseAudio default sink as an ALSA mixer control with a dB scale"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="armv7"
+license="GPL-2.0-only"
+depends="alsa-lib libpulse"
+makedepends="alsa-lib-dev pulseaudio-dev"
+options="!check"   # the host/container tests are tests/run-integration.sh
+source="
+	ctl_nexusq_vol.c
+	nexusq_vol_scale.h
+	Makefile
+	60-nexusq-vol.conf
+"
+builddir="$srcdir"
+
+build() {
+	make CC="${CC:-cc}" CFLAGS="$CFLAGS"
+}
+
+package() {
+	make install DESTDIR="$pkgdir" PLUGINDIR=/usr/lib/alsa-lib
+	install -Dm644 60-nexusq-vol.conf "$pkgdir"/etc/alsa/conf.d/60-nexusq-vol.conf
+}
+
+sha512sums="SKIP"

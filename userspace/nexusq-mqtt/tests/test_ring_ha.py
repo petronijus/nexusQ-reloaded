@@ -220,6 +220,12 @@ class FakeBridge:
         if m == "setAmbient":
             self.st["ambient"]["enabled"] = p["enabled"]
             return "ambientChanged", self.st["ambient"]
+        if m == "setVolume":
+            self.st["volume"], self.st["muted"] = p["volume"], False
+            return "volumeChanged", {"volume": self.st["volume"], "muted": False}
+        if m == "setMuted":
+            self.st["muted"] = p["muted"]
+            return "volumeChanged", {"volume": self.st["volume"], "muted": p["muted"]}
         raise AssertionError(m)
 
     def close(self):

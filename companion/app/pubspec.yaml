@@ -59,7 +59,15 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          r23): the slider becomes the maximum and the Q dims the ring through
 #          dusk to a quarter of it, by the sun at its time zone's location.
 #          Hidden on a Q whose bridge reports no `ambient` state.
-version: 1.24.0+62
+# 1.25.0 — Device diagnostics (Developer → "Device diagnostics (24 h)",
+#          get/setDiagnostics, needs nexusq-control r51): verbose Spotify and
+#          AirPlay logs on the Q for a bug report, switching themselves off;
+#          hidden on an older bridge. Health → "Idle depth": the C-state share
+#          over the hour plus busy time, and "Deep idle is blocked" as a
+#          problem (nexusq-mqtt r8). One volume (device r117): letting go of
+#          the volume slider while Spotify plays here also tells Spotify
+#          (Web API), so its apps show the Q's volume.
+version: 1.25.0+63
 
 environment:
   sdk: ^3.12.0

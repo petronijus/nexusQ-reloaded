@@ -94,6 +94,26 @@ class MockClient implements NexusQClient {
         'treble_db': _eqBands[_eqShelf('highshelf')]['gain_db'],
       };
 
+  // diagnostics mode (PROTOCOL §16): the wall-clock end, null while off
+  DateTime? _diagUntil;
+
+  Map<String, dynamic> get _diagnostics {
+    final now = DateTime.now().toUtc();
+    final on = _diagUntil != null && _diagUntil!.isAfter(now);
+    return {
+      'enabled': on,
+      'until': on ? _diagUntil!.millisecondsSinceEpoch ~/ 1000 : null,
+      'remainingS': on ? _diagUntil!.difference(now).inSeconds : 0,
+      'endedAt': null,
+      'maxHours': 72,
+      'services': [
+        {'id': 'spotify', 'name': 'Spotify Connect', 'running': true, 'verbose': on},
+        {'id': 'airplay', 'name': 'AirPlay', 'running': false, 'verbose': false},
+      ],
+      'pending': <String>[],
+    };
+  }
+
   static const _outputs = [
     {'id': 'speaker', 'label': 'Reproduktor', 'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback', 'available': true},
     {'id': 'spdif', 'label': 'Optický výstup', 'sink': 'alsa_output.platform-sound-spdif.stereo-fallback', 'available': true},
@@ -227,6 +247,19 @@ class MockClient implements NexusQClient {
         final a = _ambientState;
         _events.add(NexusQEvent('ambientChanged', a));
         return a;
+      case 'getDiagnostics':
+        return _diagnostics;
+      case 'setDiagnostics':
+        final hours = p['hours'] ?? 24;
+        if (p['enabled'] is! bool || hours is! num || hours <= 0 || hours > 72) {
+          throw NexusQError('bad_request', 'enabled (bool) and hours in (0, 72] required');
+        }
+        _diagUntil = p['enabled'] as bool
+            ? DateTime.now().toUtc().add(Duration(seconds: (hours * 3600).round()))
+            : null;
+        final d = _diagnostics;
+        _events.add(NexusQEvent('diagnosticsChanged', d));
+        return d;
       case 'getRing':
         return _ring;
       case 'setRing':

@@ -156,6 +156,10 @@ back to the host over UAC2's interrupt endpoint — later, if wanted.
   of the same number, and cannot become a front end with its own idea of the
   level.
 
+> **Implemented 2026-09-27 (device r117), along §5's direction:** the
+> middleware is `userspace/nexusq-alsa-vol`, an ALSA control with an exact dB
+> scale, and neither player is patched. See `docs/2026-09-27-one-volume.md`.
+
 ## 5. Decision (2026-09-23): parked
 
 **Not implemented for now.** Petr's call on §3's Spotify options: patching

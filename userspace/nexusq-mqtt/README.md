@@ -141,7 +141,7 @@ Discovery creates one device ("Nexus Q" / the name from
 `/etc/nexusq/device.json`, keyed by the factory WiFi MAC) with:
 
 - sensors: die temperature, CPU frequency, governor, load, memory available,
-  uptime, WiFi RSSI, volume, 4× per-OPP residency, 3× C-state residency
+  uptime, WiFi RSSI, 4× per-OPP residency, 3× C-state residency
   (**Time in C1/C2/C3**), **CPU latency limit**, **Deep idle blocked** (%),
   **WiFi repairs**
   (`total_increasing`, so a reboot's reset to 0 is not a decrease and an
@@ -200,6 +200,56 @@ gets entities Home Assistant can **drive**:
   to a fixed set of calls; a malformed payload maps to nothing. A refused call
   republishes the real state so the entity does not keep showing the wish.
 - Disable with `NQMQTT_RING=0`.
+
+### Volume and mute (r10, 2026-09-27) — writable entities
+
+| Entity | Topic (`<prefix>/<node_id>/volume/…`) | Bridge call |
+|---|---|---|
+| `number` **Volume** (0–100 %, slider) | `set` | `setVolume` |
+| `switch` **Mute** | `mute/set` | `setMuted` |
+
+- **The Q's one volume** (device r117): the PulseAudio sink, which the app,
+  the knob, Spotify and AirPlay all move. HA calls the app's own methods, so it
+  is one more front end, and it hears every change from the bridge's
+  `volumeChanged` broadcast within a second.
+- **One bridge connection for the ring and the volume** (`BridgeFeed`): a
+  single `getState`, then the broadcasts fanned out to both links.
+- A slider drag in HA is a burst of commands; only the last value is sent.
+- The read-only **Volume** sensor (`sensor.*_volume`, from the telemetry tick)
+  is retired with an empty retained config: it showed the same number every
+  30 s and could not set anything. `volume_pct` stays in the telemetry payload
+  for the app.
+- Disable with `NQMQTT_VOLUME=0`.
+
+### System update (r10, 2026-09-27) — install from Home Assistant
+
+| Entity | Topic (`<prefix>/<node_id>/update/…`) | Bridge call |
+|---|---|---|
+| `update` **System update** (config, `device_class: firmware`) | `state` (JSON), `install` | `checkSystemUpdate`, `installSystemUpdate` |
+| `button` **Check for updates** (config) | `check` | `checkSystemUpdate` |
+
+- **The app's own "Update system"**, PROTOCOL §12b: the same bridge methods, so
+  the same rules. apk upgrades everything except the kernel, the bridge restarts
+  what changed and reboots when libc/init changed. The kernel OTA stays with
+  `nq-kernel-ota`.
+- **Versions.** This system has no single version, so `installed_version` is
+  the device package's (`1.0-r116`), which every image and most OTAs move.
+  `latest_version` is the device package's new version when it moves, with
+  ` + N updates` when other packages move too. That string is deliberately not
+  a version: HA cannot order it, and it reads a differing pair it cannot order
+  as an update. `release_summary` lists each package's `installed → available`.
+- **Honest progress.** `in_progress` goes true before apk starts, and stays true
+  while the app is installing (the bridge answers `busy`). When the bridge
+  reports that a reboot follows, the summary says the Q is rebooting and stays
+  in progress. The Will then marks the device offline, and the new process
+  publishes the new versions 30 s after start.
+- **Cost.** A check is `apk update` against the OTA repo. It runs 30 s after
+  start, then every 6 h (`NQMQTT_UPDATE_EVERY_S`), and on the button, never on
+  the telemetry tick.
+- Only this node's `update/install` with the payload `install` installs.
+  Anyone who can publish there can update the Q, exactly as anyone who can
+  reach the bridge's port can; the broker's credentials are the gate.
+- Disable with `NQMQTT_UPDATE=0`.
 
 ## Configuration (NOT baked into the image — provisioned by the companion app)
 
@@ -309,5 +359,8 @@ discovery payload contract (unique_ids, shared topics, device block),
 identity fallbacks, WiFi-repair state (recency, unset clock, garbage, the HA
 entity contract), deep idle and the diagnostics mode (r8), and (r9) the LED ring
 control: command mapping, state/discovery payloads, the bridge link against a
-fake bridge (`tests/test_ring_ha.py`). 28 tests as of r1, 58 as of r7, 69 as of
-r8, 86 as of r9.
+fake bridge (`tests/test_ring_ha.py`), and (r10) the system update: payload
+versions and summary, check timing, install/reboot/busy/failure paths,
+discovery (`tests/test_update_ha.py`), and the volume entities over the shared
+bridge connection (`tests/test_volume_ha.py`). 28 tests as of r1, 58 as of r7,
+69 as of r8, 86 as of r9, 110 as of r10.

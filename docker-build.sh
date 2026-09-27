@@ -49,6 +49,7 @@ for apkbuild in \
     "$SRC/pmos/nexusq-setupd/APKBUILD" \
     "$SRC/pmos/nexusq-btagent/APKBUILD" \
     "$SRC/pmos/nexusq-mqtt/APKBUILD" \
+    "$SRC/pmos/nexusq-alsa-vol/APKBUILD" \
     "$SRC/pmos/nexusq-kernel-ota/APKBUILD" \
     "$SRC/pmos/nexusq-rootfs-ab/APKBUILD" \
     "$SRC/pmos/speexdsp/APKBUILD" \
@@ -408,6 +409,16 @@ cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt"               "$NEXUSQMQTT_DIR/"
 cp "$SRC/userspace/nexusq-mqtt/nexusq-mqtt.service"       "$NEXUSQMQTT_DIR/"
 cp "$SRC/userspace/nexusq-mqtt/96-nexusq-mqtt.preset"     "$NEXUSQMQTT_DIR/"
 echo "  Installed: nexusq-mqtt (aport + daemon -> main/nexusq-mqtt)"
+
+# nexusq-alsa-vol: the `nexusq_vol` ALSA control plugin (C, armv7), staged flat.
+NEXUSQVOL_DIR="$PMAPORTS/main/nexusq-alsa-vol"
+mkdir -p "$NEXUSQVOL_DIR"
+cp "$SRC/pmos/nexusq-alsa-vol/APKBUILD"                     "$NEXUSQVOL_DIR/"
+cp "$SRC/userspace/nexusq-alsa-vol/ctl_nexusq_vol.c"        "$NEXUSQVOL_DIR/"
+cp "$SRC/userspace/nexusq-alsa-vol/nexusq_vol_scale.h"      "$NEXUSQVOL_DIR/"
+cp "$SRC/userspace/nexusq-alsa-vol/Makefile"                "$NEXUSQVOL_DIR/"
+cp "$SRC/userspace/nexusq-alsa-vol/60-nexusq-vol.conf"      "$NEXUSQVOL_DIR/"
+echo "  Installed: nexusq-alsa-vol (aport + C source -> main/nexusq-alsa-vol)"
 
 # speexdsp: an OVERRIDE of Alpine's package, rebuilt with NEON. Not one of ours in
 # the usual sense — no payload files, just the APKBUILD. It exists because
@@ -1350,6 +1361,34 @@ fi
 echo ""
 
 echo ""
+echo "=== Phase 7c5b: Build nexusq-alsa-vol (the one-volume ALSA control plugin) ==="
+set +e
+# C, armv7. device-google-steelhead `depends=` it, so it is built here, --force,
+# before the device package pulls it in; a stale one from the warm repo would
+# ship an old plugin under green gates.
+pmbootstrap $_ucross build nexusq-alsa-vol --arch armv7 --force 2>&1
+NEXUSQVOL_RC=$?
+set -e
+echo "=== nexusq-alsa-vol build exit code: $NEXUSQVOL_RC ==="
+if [ $NEXUSQVOL_RC -eq 0 ]; then
+    _nqv_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/nexusq-alsa-vol/APKBUILD" | head -1)
+    _nqv_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/nexusq-alsa-vol/APKBUILD" | head -1)
+    NEXUSQVOL_APK=$(find "$WORK/packages" -name "nexusq-alsa-vol-${_nqv_pv}-r${_nqv_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$NEXUSQVOL_APK" ]; then
+        cp "$NEXUSQVOL_APK" /tmp/output/ && echo "  Exported: $(basename "$NEXUSQVOL_APK")"
+    else
+        echo "  FATAL: nexusq-alsa-vol built but the pkgrel-exact apk is not under $WORK/packages."
+        exit 1
+    fi
+else
+    echo "  FATAL: nexusq-alsa-vol build failed -- key log lines:"
+    grep -n "ERROR\|error:\|FAILED" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo "  Refusing to continue: the rootfs would install a stale plugin (see 7c5)."
+    exit 1
+fi
+
+echo ""
+
 echo "=== Phase 7c6: Build speexdsp (NEON override of Alpine's scalar build) ==="
 set +e
 # MUST run before Phase 8: device-google-steelhead -> pulseaudio -> speexdsp, so

@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=116
+pkgrel=117
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -24,6 +24,9 @@ options="!check !archcheck !fhs !tracedeps"
 # slots, the switch is a 512-byte write to p7 "misc", and the choice is made by
 # an initramfs in the boot image; a boot image without it just mounts p13, which
 # is slot A (docs/2026-08-20-rescue-initramfs-and-ramdisk-address.md).
+# r117 depends on nexusq-alsa-vol (the nexusq_vol ALSA control): librespot and
+# shairport-sync drive the PulseAudio sink through it -- one volume, no second
+# software stage in the players (docs/2026-09-27-one-volume.md).
 # r116 moves theme/ring/eq/eq-presets/brightness.json into the persist store and needs
 # nexusq-control >= 0.1.0-r53 and nexusq-setupd >= 0.1.0-r6, the revisions that
 # write THROUGH the new links (an older bridge would replace a link with a
@@ -56,6 +59,7 @@ depends="
 	nexusq-setupd
 	nexusq-btagent
 	nexusq-mqtt
+	nexusq-alsa-vol
 	nexusq-kernel-ota
 	nexusq-rootfs-ab
 	librespot
@@ -135,6 +139,7 @@ source="
 	librespot.service
 	librespot-nexusq
 	nq-diag
+	nq-pulse.sh
 	85-nexusq-zeroconf-rebind
 	shairport-sync.service
 	shairport-nexusq
@@ -549,6 +554,9 @@ package() {
 	# Reading side of the diagnostics mode (nexusq-control, PROTOCOL §16): the
 	# launchers ask it whether to start verbose.
 	install -Dm755 "$srcdir"/nq-diag "$pkgdir"/usr/bin/nq-diag
+	# PulseAudio helpers the launchers source (roon-nexusq, librespot-nexusq):
+	# the wait for PA to answer, and the sink's current volume (r117).
+	install -Dm644 "$srcdir"/nq-pulse.sh "$pkgdir"/usr/lib/nexusq/nq-pulse.sh
 	# librespot 0.8.0 takes only an ADDRESS for --zeroconf-interface, captured
 	# once at start, so a DHCP move leaves it announcing on an address that no
 	# longer exists -- alive, listening, and invisible to every Spotify client,
@@ -822,6 +830,7 @@ SKIP  nexusq-wifi-watchdog.service
 SKIP  librespot.service
 SKIP  librespot-nexusq
 SKIP  nq-diag
+SKIP  nq-pulse.sh
 SKIP  85-nexusq-zeroconf-rebind
 SKIP  shairport-sync.service
 SKIP  shairport-nexusq

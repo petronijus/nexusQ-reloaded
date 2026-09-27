@@ -36,7 +36,29 @@ List<String> healthProblems(Map<String, dynamic> s) {
   if (s['led_stalled'] == true) out.add('LED ring is stalled');
   final pstore = s['pstore'];
   if (pstore is num && pstore > 0) out.add('Crash dump present (pstore)');
+  // The device's verdict (nexusq-mqtt r8): no deep C-state could run in >= 90 %
+  // of the last hour. A short block (Bluetooth streaming) is ordinary and never
+  // reaches this; absent means healthy.
+  if (s['deep_idle_blocked'] == true) {
+    out.add('Deep idle is blocked (CPU latency limit)');
+  }
   return out;
+}
+
+/// The idle-depth rows: share of wall time per C-state over the device's
+/// rolling hour, plus what is left, the time the CPUs were busy. Empty when
+/// the device does not publish C-states (nexusq-mqtt older than r8).
+List<(String, double)> idleDepthRows(Map<String, dynamic> s) {
+  const states = [('C1', 'idle_c1_pct'), ('C2', 'idle_c2_pct'), ('C3', 'idle_c3_pct')];
+  final rows = <(String, double)>[];
+  for (final (label, key) in states) {
+    final v = s[key];
+    if (v is num) rows.add((label, v.toDouble()));
+  }
+  if (rows.isEmpty) return rows;
+  final idle = rows.fold<double>(0, (a, r) => a + r.$2);
+  rows.add(('Busy', (100 - idle).clamp(0, 100).toDouble()));
+  return rows;
 }
 
 /// "Health": the live device-health panel fed by the MQTT telemetry the
@@ -175,6 +197,10 @@ class _HealthScreenState extends State<HealthScreen> {
           const SizedBox(height: 12),
           _oppCard(s),
           const SizedBox(height: 12),
+          if (idleDepthRows(s).isNotEmpty) ...[
+            _idleCard(s),
+            const SizedBox(height: 12),
+          ],
           _servicesCard(s),
           const SizedBox(height: 12),
           _linkCard(s),
@@ -358,6 +384,67 @@ class _HealthScreenState extends State<HealthScreen> {
                               color: NexusQColors.dim, fontSize: 12))),
                 ]),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// How deep the CPUs sleep — C1 is WFI, C2 both cores off, C3 the MPU off
+  /// too — over the same hour as the frequency share.
+  Widget _idleCard(Map<String, dynamic> s) {
+    final rows = idleDepthRows(s);
+    final limit = s['cpu_latency_limit_us'] as num?;
+    final blocked = (s['deep_idle_blocked_pct'] as num?)?.toDouble();
+    final notes = [
+      if (limit != null) 'CPU latency limit ${limit.toInt()} µs',
+      if (blocked != null && blocked > 0) 'deep idle blocked ${blocked.toStringAsFixed(0)} % of the hour',
+    ];
+    return Card(
+      color: NexusQColors.surface,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Idle depth',
+                style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+            const SizedBox(height: 8),
+            for (final (label, pct) in rows)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(children: [
+                  SizedBox(
+                      width: 70,
+                      child: Text(label,
+                          style: const TextStyle(
+                              color: NexusQColors.white, fontSize: 12))),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: pct / 100.0,
+                        minHeight: 6,
+                        backgroundColor: NexusQColors.canvas,
+                        color: label == 'Busy'
+                            ? NexusQColors.ledOrange
+                            : NexusQColors.accent,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                      width: 52,
+                      child: Text('${pct.toStringAsFixed(1)}%',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                              color: NexusQColors.dim, fontSize: 12))),
+                ]),
+              ),
+            if (notes.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(notes.join('  ·  '),
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
+            ],
           ],
         ),
       ),

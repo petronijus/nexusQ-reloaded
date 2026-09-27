@@ -75,6 +75,27 @@ _used_kib=$(du -sk "$CACHE_DIR" 2>/dev/null | cut -f1)
 CACHE_LIMIT="$(cache_limit_mib "${_free_kib:-0}" "${_used_kib:-0}")M"
 echo "librespot-nexusq: audio cache cap $CACHE_LIMIT (free ${_free_kib:-?} KiB, cache ${_used_kib:-?} KiB)" >&2
 
+# One volume (2026-09-27, docs/2026-09-27-one-volume.md): librespot drives the
+# PulseAudio default sink through the nexusq_vol ALSA control instead of
+# attenuating samples itself before PulseAudio. So the Spotify slider, the app,
+# the dome knob and Home Assistant all move the same volume, and Spotify at N %
+# is the app's N % (--volume-ctrl cubic over the control's dB scale, which is
+# PulseAudio's own; the range comes from the control).
+#
+# --initial-volume is the sink's CURRENT volume, and it has to be given: without
+# it librespot 0.8.0 sets the mixer to 50 % at every start (its help says "the
+# current volume", its code uses the 50 % default). A boot, or the restart the
+# diagnostics mode does, would move the Q's volume. PulseAudio must answer
+# first -- for that read, and for the control, which librespot opens at start.
+. /usr/lib/nexusq/nq-pulse.sh
+wait_for_pulse || { echo "librespot-nexusq: PulseAudio is not answering after 30 s" >&2; exit 1; }
+# An unreadable volume is a failed start, never a guess: any number given here
+# is SET, and a guess of 100 would be the loudest mistake available. Above
+# 100 % (PulseAudio allows it) is capped; the control stops at 0 dB.
+VOL="$(pulse_volume_percent)" || { echo "librespot-nexusq: cannot read the sink volume" >&2; exit 1; }
+[ "$VOL" -le 100 ] || VOL=100
+echo "librespot-nexusq: mixer nexusq_vol, starting at the sink's ${VOL}%" >&2
+
 # Diagnostics mode (switched on from the app, off again by itself; PROTOCOL §16):
 # debug logging for every librespot crate -- enough to see a Connect session's
 # dealer websocket and re-authentication, which is what the mode was built for.
@@ -98,7 +119,9 @@ fi
 exec /usr/bin/librespot \
 	--name "$NQ_NAME" \
 	--backend alsa --device pulse \
-	--bitrate 320 --format S16 --initial-volume 60 \
+	--bitrate 320 --format S16 \
+	--mixer alsa --alsa-mixer-device nexusq_vol --alsa-mixer-control Master \
+	--volume-ctrl cubic --initial-volume "$VOL" \
 	--ap-port 443 \
 	--zeroconf-port 37879 --zeroconf-interface "$WIP" \
 	--cache "$CACHE_DIR" --cache-size-limit "$CACHE_LIMIT" --disable-credential-cache \

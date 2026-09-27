@@ -15,6 +15,11 @@
 # (the Alpine build has none).
 set -e
 
+# PulseAudio first: shairport's volume goes through the nexusq_vol control
+# (device r117), which needs PA answering when the mixer is opened.
+. /usr/lib/nexusq/nq-pulse.sh
+wait_for_pulse || { echo "shairport-nexusq: PulseAudio is not answering after 30 s" >&2; exit 1; }
+
 # Read the device name; never let a missing/corrupt identity file block AirPlay.
 NQ_NAME="$(python3 - <<'EOF' 2>/dev/null || echo "Nexus Q"
 import json

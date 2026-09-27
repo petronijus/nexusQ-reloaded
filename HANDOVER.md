@@ -8,7 +8,85 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published
+## Desktop (petronijus-PC) — 2026-09-27: the v1.20.0 work is all in `main`, NOTHING is published
+
+Done on the MacBook; the user asked to stop here and hand over. **Nothing below
+is released**: no gh-pages publish, no GitHub release, no app release. v1.20.0
+waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
+
+| package | rev | what |
+|---|---|---|
+| device-google-steelhead | **r117** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume |
+| nexusq-alsa-vol | **r1 (new aport)** | the `ctl.nexusq_vol` ALSA control: one volume (`docs/2026-09-27-one-volume.md`) |
+| nexusq-control | **r54** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54) |
+| nexusq-mqtt | **r10** | C-states + diagnostics (r8), ring in HA (r9), HA system update + volume/mute (r10) |
+| nexusqd / nexusq-setupd | r23 / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda) |
+| nexusq-kernel-ota / nexusq-rootfs-ab | r8 / r5 | per-unit identity at boot; storage check per OTA |
+| shairport-sync | 5.1-r100 | no idle polling (new to `ota-packages.list`) |
+| app | **1.25.0+63** | ring (1.23), ambient (1.24), device diagnostics + Idle depth + Spotify volume mirror (1.25) |
+
+**On this PC:**
+
+1. `git pull`. Nothing machine-specific changed; the fleet key and the build
+   volume work as before.
+2. Optional, once: the plugin's integration test pulls Alpine packages on
+   every run; a local image saves that (`userspace/nexusq-alsa-vol/README.md`,
+   Tests). `sh userspace/nexusq-alsa-vol/tests/run-integration.sh` must print
+   `plugin: PIC, entry point exported` and `test_player_mappings: ok`.
+3. **When Petr says release (v1.20.0):** the full image build as usual. The
+   gates changed:
+   - `verify-rootfs.sh` has a **section 9 (one volume)**: the plugin, its
+     `/etc/alsa/conf.d` entry, `nq-pulse.sh`, and librespot/shairport pointed at
+     `nexusq_vol`;
+   - `nexusq-alsa-vol` is in `pmos/ota-packages.list` and gets built in
+     Phase 7c5b;
+   - `publish-ota-repo.sh` must carry both `nexusq-alsa-vol` and
+     `shairport-sync`.
+
+   The device r117 `depends=` the plugin, so an OTA without it would be held
+   back.
+4. **App 1.25.0 on both tracks**, also on Petr's word:
+   - Android from here (`build-apk.sh`, `gh release` `app-v1.25.0`,
+     `companion/app-release.json`);
+   - iOS through the `nexusq-ios-release` agent (VM 108).
+
+   1.23/1.24 were never released either, so this one release carries all three.
+5. **Prague Q after the publish:**
+   - the app's system update;
+   - then switch **Developer → Device diagnostics (24 h)** on (or
+     `setDiagnostics {enabled:true, hours:72}`), so the next librespot
+     re-auth loop is caught at debug level (CHANGELOG Known issues, update
+     2026-09-27: it does NOT match upstream #1716);
+   - in Roon, set the zone to **Fixed volume**.
+
+**Needs a phone at a Q** (not testable from a desk, never run yet):
+- Spotify: the slider moves the app's number exactly and the other way round
+  (app release → Spotify via the Web API; knob → Spotify at the next play).
+- AirPlay from an iPhone: the iPhone slider moves the Q; then move the app's
+  slider during the session and check that the iPhone's slider follows after
+  ~1 s (MPRIS SetVolume → DACP) and the Q does NOT move on the echo. Expected
+  log line if not: `airplay: SetVolume failed` in `journalctl -u
+  nexusq-control`.
+- To reproduce the librespot loop on purpose: play Spotify on a Q with
+  diagnostics on, then drop its dealer socket with an nft rule that rejects
+  (tcp reset) the dealer's address for a minute. `ss -K` does not work here:
+  the kernel has `CONFIG_INET_DIAG_DESTROY` off. Then read `journalctl
+  _SYSTEMD_USER_UNIT=librespot.service`.
+
+**The cottage Q** already runs everything above except the kernel/rootfs
+parts it had (installed 2026-09-26/27 from local apks: device r117, control
+r54, mqtt r10, alsa-vol r1, nexusqd r23, setupd r6). Diagnostics mode is on
+there until **2026-09-29 22:21 UTC**. Verified on it: volume unchanged over
+restarts, player/knob/HA paths exact, C-states and diagnostics in MQTT, the
+HA update entity (it lists 9 pending systemd 262-r2 updates — not installed).
+After the publish its apk simply agrees; nothing to reinstall.
+
+**Todoist:** the nexusq feature tasks in AI-handover (LED ring toggle +
+schedule, ring in HA, unified volume, volume in HA, updates from HA,
+diagnostics mode + C-states) are done in code. Complete them when v1.20.0 and
+app 1.25.0 are out.
+
+## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published — ⏩ superseded by the section above
 
 Current: device-google-steelhead **r113** (r112 + the static enable link for
 nexusq-resize-rootfs, which now runs every boot) and `nexusq-rootfs-ab` **r4**

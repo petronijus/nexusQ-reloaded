@@ -1567,6 +1567,132 @@ class AirPlayTransport:
         return {"ok": True}
 
 
+# --- AirPlay: the Q's volume back to the sender (device r117) -----------------
+# Since r117 the sender's slider moves the Q's one volume (shairport-sync drives
+# the PulseAudio sink through the nexusq_vol control). The other direction --
+# the app, the knob or Home Assistant moving the volume during an AirPlay
+# session -- has to be told to the sender, or its slider shows a level the Q
+# left behind. shairport-sync does that on request: its MPRIS SetVolume (0..1)
+# sends the sender DACP `setproperty?dmcp.device-volume=<a>`, a being the
+# AirPlay volume, -30..0. The sender then echoes it back as its new volume,
+# and shairport applies it through the control -- so the mapping from the Q's
+# percent to `a` must be the exact inverse of shairport's own, or every push
+# would move the Q a little. That mapping is shairport 5.1's "standard" profile
+# (vol2attn in common.c) over the top AIRPLAY_RANGE_CDB of the control -- the
+# `volume_range_db` in /etc/nexusq/shairport-sync.conf -- then the control's
+# dB, which is PulseAudio's: dB = 60 log10(percent / 100).
+AIRPLAY_RANGE_CDB = 6000
+# Settle time before a push: a knob turn is a burst of sink changes, and the
+# sender's echo of an early value would otherwise land after a later one and
+# drag the Q back.
+AIRPLAY_VOLUME_SETTLE_S = float(os.environ.get("NEXUSQ_AIRPLAY_VOL_SETTLE_S", "0.7"))
+
+
+def airplay_attn_cdb(a, max_cdb=0, min_cdb=-AIRPLAY_RANGE_CDB):
+    """shairport-sync 5.1 vol2attn(): AirPlay volume (-30..0) -> the mixer's
+    dB, in hundredths. Three lines through the range; the result is the lowest
+    of them -- ported line by line, because the inverse below is only as exact
+    as this copy."""
+    if not -30.0 <= a <= 0.0:
+        return float(min_cdb)
+    range_db = max_cdb - min_cdb
+    first = -range_db / 2
+    if -range_db > first:
+        first = range_db
+    lines = ((0.0, first), (-5.0, first - (range_db + first) / 2), (-17.0, -range_db))
+    setting = 0.0
+    for x0, y30 in lines:
+        if a <= x0:
+            t = y30 * (a - x0) / (-30.0 - x0)
+            if t < setting:
+                setting = t
+    return setting + max_cdb
+
+
+def airplay_volume_for_percent(percent):
+    """The AirPlay volume whose attenuation is the Q's `percent`, or None when
+    the sender cannot express it: below the range's floor (10 % for 60 dB) the
+    sender's minimum would come back as 10 % and RAISE the Q."""
+    if not isinstance(percent, (int, float)) or percent <= 0:
+        return None
+    target = 6000.0 * math.log10(min(percent, 100) / 100.0)   # cdB, <= 0
+    if target < -AIRPLAY_RANGE_CDB - 1e-9:
+        return None
+    lo, hi = -30.0, 0.0                 # attn is non-decreasing in a
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if airplay_attn_cdb(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+class AirPlayVolumeFollow:
+    """Push a settled Q volume to the AirPlay sender (see above).
+
+    Injected, so it is testable without D-Bus:
+      session()          -> an AirPlay session is up (Playing or Paused)
+      sender_volume()    -> the sender's AirPlay volume now, or None
+      push(a)            -> MPRIS SetVolume for AirPlay volume `a`
+    A change that came FROM the sender (its slider) already matches what it
+    shows and is not pushed back."""
+
+    def __init__(self, session, sender_volume, push, settle_s=None):
+        self.session, self.sender_volume, self.push = session, sender_volume, push
+        self.settle_s = AIRPLAY_VOLUME_SETTLE_S if settle_s is None else settle_s
+        self._lock = threading.Lock()
+        self._timer = None
+        self._target = None
+
+    def volume_changed(self, percent, muted=False):
+        if muted:
+            return          # mute is the Q's; the sender's slider stays
+        with self._lock:
+            self._target = percent
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(self.settle_s, self.settled)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def settled(self):
+        with self._lock:
+            percent, self._timer = self._target, None
+        if percent is None or not self.session():
+            return None
+        a = airplay_volume_for_percent(percent)
+        if a is None:
+            log(f"airplay: {percent}% is below what the sender can show; not pushed")
+            return None
+        cur = self.sender_volume()
+        if cur is not None and abs(airplay_attn_cdb(cur) - airplay_attn_cdb(a)) < 5:
+            return None     # the sender is there already (it moved the Q)
+        self.push(a)
+        return a
+
+
+def _airplay_sender_volume():
+    """The sender's AirPlay volume from shairport's MPRIS Volume (0..1 maps
+    to -30..0), or None."""
+    r = _as_user(["busctl", "--user", "get-property", MPRIS_NAME, MPRIS_PATH,
+                  MPRIS_IFACE, "Volume"], timeout=6)
+    parts = (r.stdout or "").split()
+    if r.returncode != 0 or len(parts) != 2 or parts[0] != "d":
+        return None
+    try:
+        return (float(parts[1]) - 1.0) * 30.0
+    except ValueError:
+        return None
+
+
+def _airplay_push_volume(a):
+    r = _as_user(["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE,
+                  "SetVolume", "d", f"{a / 30.0 + 1.0:.6f}"], timeout=6)
+    if r.returncode != 0:
+        log("airplay: SetVolume failed:", (r.stderr or "").strip()[:120])
+
+
 # A user unit runs under this cgroup; it is ACTIVE iff its cgroup has processes.
 # We read that directly instead of asking systemctl: even now that the call no
 # longer opens a session (see _systemctl_user), it is a process spawn, and it
@@ -2847,6 +2973,9 @@ class Bridge:
         # backend must report `none`, not a promise it cannot keep.
         self.transports = {"airplay": AirPlayTransport(),
                            "roon": RoonTransport(self)}
+        self.airplay_volume = AirPlayVolumeFollow(
+            session=self.transports["airplay"].can_control,
+            sender_volume=_airplay_sender_volume, push=_airplay_push_volume)
         #: zone name -> {field: value}, fed by nexusq-mqtt from the Core's
         #: extension. Only ever READ for the zone that is playing to us.
         self.roon = {}
@@ -3454,6 +3583,10 @@ class Bridge:
         # drive nexusqd's dedicated mute LED so app mute has a device-side indicator
         # (idempotent set, same LED the hardware mute key lights)
         nexusqd_send(f"muted {1 if muted else 0}")
+        # The state moved here first, so pa_watch_thread will see no change and
+        # will not tell an AirPlay sender; this path has to.
+        if method in ("setVolume", "adjustVolume"):
+            self.airplay_volume.volume_changed(vol, muted)
         return {"volume": vol, "muted": muted}, [("volumeChanged", {"volume": vol, "muted": muted})]
 
     def _list_outputs(self):
@@ -3791,13 +3924,12 @@ class Bridge:
                         "source": "", "playing": False})
             np = cur
         elif kind == "volume":
-            # librespot volume is 0..65535; convert to 0..100
-            raw = int(obj.get("volume", 0))
-            vol = round(raw * 100 / 65535)
-            with self.lock:
-                self.state["volume"] = vol
-            self.broadcast("volumeChanged",
-                           {"volume": vol, "muted": self.state["muted"]})
+            # Not a volume of its own any more (device r117): librespot drives
+            # the PulseAudio sink through the nexusq_vol control, so a Spotify
+            # slider move reaches the app as a sink change, via pa_watch_thread,
+            # like the knob. Until r116 this wrote Spotify's own software level
+            # into state["volume"] -- a number the room did not hear (it was
+            # Spotify x sink), overwritten again by the next sink event.
             return
         if np is not None:
             self._apply_transport(np)
@@ -4095,6 +4227,7 @@ def pa_watch_thread(bridge):
                 if moved:
                     bridge.broadcast("volumeChanged",
                                      {"volume": vol, "muted": bool(muted)})
+                    bridge.airplay_volume.volume_changed(vol, bool(muted))
         except FileNotFoundError:
             log("pactl not found; dome-dial -> app volume sync disabled")
             return

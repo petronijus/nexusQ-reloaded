@@ -308,5 +308,33 @@ chk_has usr/lib/nexusq-rootfs-ab/make-ab-initramfs.py                "OTA split:
 chk_has usr/lib/systemd/system/timers.target.wants/nexusq-storage-check.timer "storage check after every OTA: timer enabled"
 
 say ""
+say "=== 9. one volume: the players drive the PulseAudio sink (device r117) ==="
+# librespot and shairport-sync move the Q's volume through the nexusq_vol ALSA
+# control. Every way this breaks is quiet: without the plugin or its conf.d
+# entry librespot fails to open its mixer and Spotify disappears; without the
+# mixer arguments the players fall back to their own software volume -- the
+# two-stage volume this replaced -- and nothing reports it. And librespot
+# started with a fixed --initial-volume would reset the Q's volume at every
+# boot. docs/2026-09-27-one-volume.md.
+chk_has usr/lib/alsa-lib/libasound_module_ctl_nexusq_vol.so          "nexusq_vol ALSA control plugin"
+if grep -qs '^ctl\.nexusq_vol' "$MNT/etc/alsa/conf.d/60-nexusq-vol.conf"; then
+    ok "ctl.nexusq_vol is defined for alsa-lib"
+else
+    bad "ctl.nexusq_vol is defined for alsa-lib" "no /etc/alsa/conf.d/60-nexusq-vol.conf -- librespot cannot open its mixer"
+fi
+chk_has usr/lib/nexusq/nq-pulse.sh                                   "launchers' PulseAudio helper"
+if grep -qs -- '--mixer alsa --alsa-mixer-device nexusq_vol' "$MNT/usr/bin/librespot-nexusq" \
+   && grep -qs -- '--initial-volume "\$VOL"' "$MNT/usr/bin/librespot-nexusq"; then
+    ok "librespot drives nexusq_vol, starting at the sink's volume"
+else
+    bad "librespot drives nexusq_vol, starting at the sink's volume" "librespot-nexusq attenuates on its own or resets the volume"
+fi
+if grep -qs '^[[:space:]]*mixer_device = "nexusq_vol";' "$MNT/etc/nexusq/shairport-sync.conf"; then
+    ok "shairport-sync drives nexusq_vol"
+else
+    bad "shairport-sync drives nexusq_vol" "AirPlay attenuates on its own again"
+fi
+
+say ""
 say "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

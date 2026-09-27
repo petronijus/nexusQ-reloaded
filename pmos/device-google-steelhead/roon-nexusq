@@ -113,18 +113,8 @@ NQ_HOST="$(printf '%s' "$NQ_NAME" | tr -c 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$
 # forked, not listening -- and at boot the pactl calls below met "Connection
 # refused", the unit failed and was restarted 10 s later (CHANGELOG known issue
 # since v1.19.0). nexusq-uac2-in has always waited like this; Roon did not.
-# TESTABLE:wait_for_pulse
-# wait_for_pulse [tries]: 0 once `pactl info` answers, 1 after <tries> half-second
-# attempts (default 60 = 30 s), so systemd's Restart= takes over.
-wait_for_pulse() {
-	_n=0
-	while [ "$_n" -lt "${1:-60}" ]; do
-		pactl info >/dev/null 2>&1 && return 0
-		_n=$((_n + 1))
-		sleep 0.5
-	done
-	return 1
-}
+# The wait lives in the shared helper (nq-pulse.sh), with librespot-nexusq's.
+. /usr/lib/nexusq/nq-pulse.sh
 wait_for_pulse || { echo "roon-nexusq: PulseAudio is not answering after 30 s" >&2; exit 1; }
 
 pactl list short sources 2>/dev/null | grep -q "^[0-9]*[[:space:]]*roon_in" || {

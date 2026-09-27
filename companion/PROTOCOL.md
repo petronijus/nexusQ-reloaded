@@ -101,6 +101,23 @@ vocabulary (`setMasterVolume`/`getMasterMute`/`setBrightness`/`setTheme`/`getPla
 Volume/mute act on the **currently-active output's PA sink** (input-agnostic —
 follows the selected output, and applies to any input feeding it).
 
+**One volume (device r117, control r54).** That sink volume is the Q's only
+volume. librespot and shairport-sync drive it through the `nexusq_vol` ALSA
+control (`userspace/nexusq-alsa-vol`) and no longer attenuate in software
+first. So:
+- a Spotify or iPhone slider move arrives here as `volumeChanged`, exactly like
+  the knob. Spotify's N % is the app's N %.
+- `volume` is never a player's own level. Until r116 the librespot hook wrote
+  Spotify's software level into it.
+- when the app (or HA, or the knob) moves the volume during an **AirPlay**
+  session, the bridge pushes the settled value to the sender. It goes through
+  shairport's MPRIS `SetVolume` → DACP, through the exact inverse of
+  shairport's curve, so the sender's echo lands where the Q already is. Below
+  10 % (the floor of the sender's 60 dB range) nothing is pushed.
+- **Spotify** learns the Q's volume at its next play (librespot re-reads its
+  mixer then). The app also sends its own slider value through the Spotify Web
+  API on release (`PUT /me/player/volume`), while Spotify plays here.
+
 ### Audio output  (→ PulseAudio default sink + move-sink-input, see §6)
 | Method | params | result | Event emitted |
 |---|---|---|---|

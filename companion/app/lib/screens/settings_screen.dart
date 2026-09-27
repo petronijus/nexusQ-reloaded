@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:simple_icons/simple_icons.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
+import '../protocol/models.dart';
 import '../spotify/spotify_auth.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
@@ -34,6 +35,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _error;
   Timer? _poll;
 
+  // --- the Q's diagnostics mode (PROTOCOL §16); null = not known yet, or a
+  // bridge too old to have it (then the switch is not shown) ---
+  DiagnosticsState? _diag;
+  bool _diagSupported = true;
+  bool _diagBusy = false;
+  StreamSubscription<NexusQEvent>? _events;
+
   // --- device identity (name / room) ---
   String _deviceName = '';
   String _deviceRoom = '';
@@ -51,6 +59,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
     _upd.addListener(_onUpdate);
+    // The expiry and a pending service being switched arrive as events, so the
+    // switch does not wait for the next poll.
+    _events = widget.client.events.listen((e) {
+      if (e.event == 'diagnosticsChanged' && mounted) {
+        setState(() => _diag = DiagnosticsState.fromJson(e.data));
+      }
+    });
     // Silent auto-check on open (app track + device track — else the section
     // reads empty until you tap Check). A flow already in flight from a previous
     // visit simply keeps going; its state is what this screen now shows.
@@ -63,6 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _events?.cancel();
     _upd.removeListener(_onUpdate);
     super.dispose();
   }
@@ -88,8 +104,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final services = await _call('listServices');
     final desktop = await _call('getDesktop');
     final info = await _call('getDeviceInfo');
+    final diag = await _getDiagnostics();
     if (!mounted) return;
     setState(() {
+      if (diag != null && !_diagBusy) _diag = diag;
       // A poll must never clobber the field the user is typing into.
       if (info != null && !_renaming) {
         _deviceName = info['name'] as String? ?? _deviceName;
@@ -108,6 +126,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ];
       }
       if (desktop != null) _desktop = desktop['desktop'] == true;
+    });
+  }
+
+  /// Asked once per poll. A bridge older than nexusq-control r51 answers
+  /// `unknown_method`: stop asking and hide the switch, without a log line
+  /// every three seconds.
+  Future<DiagnosticsState?> _getDiagnostics() async {
+    if (!_diagSupported) return null;
+    try {
+      return DiagnosticsState.fromJson(await widget.client.call('getDiagnostics'));
+    } on NexusQError catch (e) {
+      if (e.code == 'unknown_method') {
+        _diagSupported = false;
+      } else {
+        AppLog.add('settings', 'getDiagnostics failed: $e', warn: true);
+      }
+      return null;
+    } catch (e) {
+      AppLog.add('settings', 'getDiagnostics failed: $e', warn: true);
+      return null;
+    }
+  }
+
+  Future<void> _setDiagnostics(bool on) async {
+    setState(() => _diagBusy = true);
+    final r = await _call('setDiagnostics', {'enabled': on, 'hours': 24}, false);
+    if (!mounted) return;
+    setState(() {
+      _diagBusy = false;
+      if (r != null) _diag = DiagnosticsState.fromJson(r);
     });
   }
 
@@ -590,6 +638,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(color: NexusQColors.dim, fontSize: 12),
                       ),
                     ),
+                    if (_diagSupported && _diag != null)
+                      _diagnosticsTile(_diag!),
                     if (on)
                       ListTile(
                         leading: const Icon(Icons.receipt_long,
@@ -608,6 +658,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// The Q's own verbose logging, for a bug report: it runs for 24 h and
+  /// switches itself off, so nobody has to remember it.
+  Widget _diagnosticsTile(DiagnosticsState d) {
+    final note = d.pendingNote;
+    return SwitchListTile(
+      value: d.enabled,
+      onChanged: _diagBusy ? null : _setDiagnostics,
+      secondary: Icon(Icons.manage_search,
+          color: d.enabled ? NexusQColors.accent : NexusQColors.dim),
+      title: const Text('Device diagnostics (24 h)',
+          style: TextStyle(color: NexusQColors.white)),
+      subtitle: Text(
+        note == null ? d.summary : '${d.summary} $note',
+        style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
       ),
     );
   }

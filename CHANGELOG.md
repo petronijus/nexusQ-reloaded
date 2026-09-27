@@ -6,7 +6,77 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Added — diagnostics mode: verbose device logs that switch themselves off (`nexusq-control` **r51**, device **r115**)
+### Added — one volume: Spotify, AirPlay, the app, the knob and Home Assistant move the same one (device **r117**, `nexusq-alsa-vol` **r1**, `nexusq-control` **r54**, `nexusq-mqtt` **r10**, app **1.25.0**)
+
+The Q had two volumes in series for Spotify and AirPlay: the player's own
+software attenuation, then the PulseAudio sink that the app, the knob and Home
+Assistant move. The room heard their product, and the app showed only one
+factor. It now has one: the sink.
+
+- **`nexusq-alsa-vol`**, a new ALSA control plugin (`ctl.nexusq_vol`). It
+  exposes the PulseAudio default sink as `Master` with an exact dB scale, which
+  is what both players need before they drive a mixer. The stock `ctl_pulse`
+  has none: librespot refuses to start on it, and shairport keeps its software
+  volume. The control's integer is linear in amplitude over 2^30 steps, so its
+  TLV is PulseAudio's own dB, and it follows the current default sink.
+  Neither player is patched (the direction the 2026-09-23 investigation set).
+- **librespot**: `--mixer alsa --alsa-mixer-device nexusq_vol
+  --volume-ctrl cubic`. Spotify's N % is the app's N %.
+  - Two traps in librespot 0.8.0's source shaped this. Without
+    `--initial-volume` it sets the mixer to 50 % at every start, although its
+    help says "the current volume". The launcher therefore passes the sink's
+    current volume and refuses to start rather than guess one.
+  - It also switches a mixer's mute switch on at every start. The control
+    therefore has no switch, and mute stays the Q's.
+  - librespot re-reads the mixer at every play, so the knob reaches Spotify
+    then. The app also mirrors its own slider to Spotify's Web API on release.
+- **shairport-sync**: `mixer_device = "nexusq_vol"`. The iPhone's slider
+  spans the top 60 dB (10–100 %), and its half-way point is the app's 50 %.
+  When the Q's volume moves during an AirPlay session, the bridge pushes the
+  settled value back to the sender (MPRIS `SetVolume` → DACP). It uses the
+  exact inverse of shairport's `vol2attn`, so the echo lands where the Q
+  already is. Nothing is pushed below 10 %.
+- **The bridge** takes `volume` only from the sink. The librespot hook no
+  longer writes Spotify's software level into it.
+- **Home Assistant** gets a **Volume** number and a **Mute** switch that call
+  the app's methods. They share one bridge connection with the LED ring
+  (`BridgeFeed`). The read-only Volume sensor is retired.
+- The launchers share `/usr/lib/nexusq/nq-pulse.sh` (`wait_for_pulse`,
+  `pulse_volume_percent`). librespot and shairport-sync now wait for
+  PulseAudio as Roon does, since the control needs it when it opens.
+
+Tests:
+- `nexusq-alsa-vol/tests/run-integration.sh`: a real PulseAudio in Alpine,
+  with librespot's mapping reproduced step for step (every percent both ways,
+  no drift on the re-set, mute left alone, events, following the default sink);
+- `test_nq_pulse.sh` (22);
+- `test_airplay_volume.py` (10);
+- `test_volume_ha.py` (8);
+- `volume_spotify_mirror_test.dart` (4);
+- `verify-rootfs.sh` section 9.
+
+**Roon:** set the zone to *Fixed volume* in Roon (a Core setting), so Roon adds
+no stage of its own. USB audio keeps the host's volume, as with any DAC.
+
+### Added — update the Q from Home Assistant (`nexusq-mqtt` **r10**)
+
+The Q's HA device gets a native **System update** entity and a **Check for
+updates** button. They call the same bridge methods as the app's "Update
+system" (`checkSystemUpdate`, `installSystemUpdate`), so the rules are the same:
+the kernel is excluded, the bridge restarts the changed daemons, and it reboots
+when libc or init changed.
+
+- `in_progress` is set before apk starts and while the app installs.
+- When a reboot follows, the entity says so and stays in progress until the
+  rebooted unit publishes its new versions, 30 s after its start.
+- `installed_version` is the device package's version. `latest_version` names
+  the new one plus how many other packages move, and `release_summary` lists
+  them.
+- A check runs 30 s after start, every 6 h, and on the button, never on the
+  telemetry tick.
+- `tests/test_update_ha.py` (16 tests).
+
+### Added — diagnostics mode: verbose device logs that switch themselves off (`nexusq-control` **r51**, device **r115**, app **1.25.0**)
 
 `setDiagnostics {enabled, hours}` (PROTOCOL §16) turns the streaming services'
 logging up for a set time, 24 h by default and at most 72. librespot runs with
@@ -22,13 +92,16 @@ expiry at 3 a.m., never cuts a song off. Until then the service is listed as
 launcher exports `NEXUSQ_DIAG=1`), not remembered, so a bridge restart or a
 reboot cannot leave the two disagreeing. A launcher still waiting for a WiFi
 address is never restarted for it. `tests/test_diagnostics.py` (12 tests).
-Home Assistant shows the mode as **Diagnostics mode** (nexusq-mqtt r8).
+Home Assistant shows the mode as **Diagnostics mode** (nexusq-mqtt r8). In the
+app it is **Developer → Device diagnostics (24 h)**, with the time left and a
+note when a service will switch once its playback stops; it is hidden on a Q
+whose bridge does not know the method.
 
 The first use is the librespot 0.8.0 re-authentication loop (known issue
 below): the next time it happens on a unit with the mode on, the journal has
 the dealer websocket's side of it.
 
-### Added — deep idle in Home Assistant (`nexusq-mqtt` **r8**)
+### Added — deep idle in Home Assistant and the app (`nexusq-mqtt` **r8**, app **1.25.0**)
 
 The C-states now appear in Home Assistant next to the OPP residency:
 
@@ -42,6 +115,10 @@ The C-states now appear in Home Assistant next to the OPP residency:
   `nq-health-report` applies to a capture. A short block is ordinary (the BT
   UART pins 170 µs while it streams), and no verdict is given until the window
   spans 10 min.
+
+The app's Health panel shows the same as **Idle depth** (C1/C2/C3 and busy
+time, the latency limit, the blocked share) and lists "Deep idle is blocked"
+among its problems when the device's verdict says so.
 
 `collect()` now carries its rolling histories in one `Windows` object. 69
 tests.
@@ -548,6 +625,20 @@ minute, and was promoted by the health gate.
   with debug logging by dropping the dealer socket, with and without C2/C3,
   then carry the smallest fix that matches as `librespot 0.8.0-r100`, with a
   build gate so a newer upstream release still replaces it.
+  **Update 2026-09-27:** the 15:28 loop was on the Prague Q. The dealer socket
+  failed at 13:28:47Z ("Sending after closing is not allowed"). After that,
+  each new spirc saw another device active, logged "couldn't load context
+  info" ~5 s later and ended, and the main loop reconnected. It never logged
+  #1716's "failed handling connection id update", which is at ERROR level and
+  would have shown. So the loop ends another way, most likely the session
+  being invalidated (`while !session.is_invalid()`). #1716 does not match what
+  was seen, and it is not carried blind. The diagnostics mode (above) now
+  keeps a `librespot=debug` capture running for exactly this.
+  - It is on on the cottage Q until 2026-09-29.
+  - It should be switched on on the Prague Q once that unit runs r115+.
+  - To reproduce on purpose: play Spotify on a Q in the mode, then drop its
+    dealer socket with a temporary nft reject. `ss -K` is unavailable, because
+    `CONFIG_INET_DIAG_DESTROY` is off.
 - **`nq-kernel-ota` cannot reconcile the package database for a kernel staged
   from a local apk that the OTA repo does not carry yet.** `reconcile` only
   runs `apk add --upgrade` against the repo. Seen on 2026-09-17 and again with
