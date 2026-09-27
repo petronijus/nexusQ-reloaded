@@ -60,6 +60,17 @@ class RingBase(unittest.TestCase):
             return json.load(f)
 
 
+class TestBeat(RingBase):
+    def test_every_step_beats(self):
+        # ambient brightness re-asserts on this beat instead of its own timer
+        beats = []
+        r = self.mod.Ring(path=self.path, send=self.nq, clock=lambda: self.now,
+                          synced=lambda: self.is_synced, on_beat=lambda: beats.append(1))
+        r.tick()
+        r.tick()
+        self.assertEqual(len(beats), 2)
+
+
 class TestScheduleWindow(RingBase):
     def wants(self, off, on, now):
         return self.mod.ring_schedule_wants_on({"off": off, "on": on}, now)

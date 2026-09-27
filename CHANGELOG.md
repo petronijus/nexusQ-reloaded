@@ -52,6 +52,96 @@ idle USB input.
   moved to the speaker's monitor, the pinned loopbacks stayed on
   `usb_in`/`roon_in`, and Petr confirmed the visualisation was back.
 
+### Added — health.jsonl says what the idle box spends, per service (device **r119**, `nexusq-control` **r58**)
+
+Petr, 2026-09-28: measure overnight how often the ambient scheduler really
+wakes, and whether today's new code costs anything at idle, with the
+diagnostic tools we already have, adding whatever metric they lack. They
+lacked all of it. health.jsonl had residency (OPP, C-states), temperature and
+liveness, but nothing about what the CPU was spent on.
+
+- **nq-healthd** appends these fields; the schema only grows:
+  - `busy_ms`, `forks` and `irqs` per 5 s interval, from `/proc/stat`. Forks
+    catch processes that live for milliseconds and exist in no snapshot (how
+    the WiFi watchdog's cost hid until 2026-09-26). Interrupts are the wakeup
+    proxy.
+  - `unit_us`, the CPU of 18 services and the two slices from each cgroup's
+    `cpu.stat`. That includes the children a unit waited for, so the bridge's
+    `pactl` calls land on the bridge. It is written **once a minute** (every
+    12th sample, as the delta over that minute): ~500 bytes on every sample
+    would rotate the 4 MB log twice a night and lose the start of an
+    overnight window.
+  - `nq_renders` and `nq_ctl`, nexusqd's own cumulative counters, asked once
+    a minute with `debug`. Every question wakes nexusqd, and at idle it
+    draws once a second.
+  - `ambient_wakes` and `tap_fixes`, which nexusq-control r58 counts in its
+    RuntimeDirectory (`/run/nexusq-control/stats`, tmpfs, rewritten
+    atomically on each change; `ControlStats`).
+- **nq-collect** fetches `health.jsonl.1` before `health.jsonl`, so a window
+  across a rotation is whole.
+- **nq-health-report**:
+  - takes `--since`/`--until`, to cut the ssh sessions at either end out of
+    a soak;
+  - reports busy % of both cores, forks/min and interrupts/s;
+  - lists the top services in % of one core;
+  - reports nexusqd renders/s and commands/min, and the ambient wakes per
+    hour;
+  - warns when audio flowed in the window (librespot, shairport or
+    PulseAudio ≥ 2 % of a core), because that window is not an idle
+    measurement;
+  - counts a cumulative counter across a daemon restart in both of its
+    lives.
+- Tests:
+  - `userspace/nq-healthd/tests/test_accounting.c`, against a fixture
+    `/proc/stat`, a cgroup tree and a fake nexusqd. First sample and reset are
+    gaps, a stopped unit is absent rather than 0, and only ` ctl=` is parsed.
+    Four mutations seen failing.
+  - `scripts/diag/tests/test_health_report_accounting.py` (7): three
+    mutations seen failing.
+  - nexusq-control `test_control_stats.py` (3) and the wake and fix counting
+    in `test_ambient.py` / `test_tap_source.py`: three mutations seen failing.
+- On the Prague Q since 01:06 CEST the first samples read busy 170–520 ms per
+  5 s (the ssh session included), about 3 500–4 600 interrupts per 5 s, and
+  nexusqd at ~20 renders/s. That is the breathing theme, which animates by
+  design.
+
+### Changed — ambient brightness wakes only when its level changes (`nexusq-control` **r57**)
+
+Petr, 2026-09-28: checking the sun every minute is more than the job needs.
+He first asked for every 30 minutes; that would have turned dusk into three
+visible steps of ~50 levels, and fading each one over half an hour would keep
+nexusqd rendering at 33 fps the whole time. So the scheduler now sleeps until
+the level next changes.
+
+- `Brightness._seconds_to_next_change` steps ahead a minute at a time, then
+  bisects to one second. That cannot skip a change: the elevation moves under
+  a quarter of a degree a minute, and only one way between noon and
+  midnight. The sleep is capped at **30 min** (`AMBIENT_MAX_SLEEP_S`) as the
+  safety net for a stepped clock.
+- In Prague in September: **422 wakes a day instead of 1440**. The day and the
+  night wake twice an hour; each twilight wakes once per level.
+- The sleep is an `Event`, so a new maximum or the ambient switch wakes it at
+  once.
+- Measured on the Prague Q (Cortex-A9): a whole 30-minute scan costs 3.0 ms,
+  and a step in twilight 0.7 ms.
+- Restoring the level after a nexusqd restart, and noticing NTP having set
+  the clock, moved to `Brightness.reassert()`. It runs on the LED ring's 30 s
+  beat (`Ring(on_beat=)`), which already wakes the bridge.
+- The scheduler's one-level steps are sent **without** a fade. nexusqd's
+  levels are integers, so between two neighbours there is nothing to fade
+  through, and a 2 s fade only rendered the same frame 66 times (~25 000
+  renders a day). A larger step, after the cap or a stepped clock, still
+  fades.
+- Tests (`test_ambient.py` +6, `test_ring.py` +1):
+  - the cap in day, night and with ambient off;
+  - waking within a second of the next level;
+  - a whole dusk walked the way `run()` walks it, never skipping a level and
+    sending no one-level fade;
+  - the wake on a setting;
+  - the re-assert and its NTP wake;
+  - the ring's beat.
+  Each was seen failing under its own mutation.
+
 ### Changed — ambient brightness fades instead of jumping (`nexusqd` **r24**, `nexusq-control` **r56**)
 
 Petr, 2026-09-27: switched on in the evening, ambient brightness jumped
@@ -74,7 +164,8 @@ straight to the night level. He wants a transition.
     shows as a staircase.
 - **The bridge**:
   - switching ambient on or off fades over **3 s**;
-  - the minute steps through twilight fade over **2 s**;
+  - a larger step of the scheduler fades over **2 s** (one-level steps go at
+    once since r57, see above);
   - the brightness slider stays **immediate**, because the app sends it on
     every move of the finger.
   - A nexusqd older than r24 refuses the fade argument, and the level is then

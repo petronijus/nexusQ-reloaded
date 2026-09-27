@@ -10,10 +10,16 @@ It produces a human-readable report AND a machine summary (--json) of findings,
 so an agent can act on the conclusion without re-parsing raw logs. Stdlib only.
 
 Usage:
-  nq-health-report CAPTURE_DIR [--json]
-  nq-health-report health.jsonl [--json]
+  nq-health-report CAPTURE_DIR [--json] [--since=TIME] [--until=TIME]
+  nq-health-report health.jsonl [--json] [--since=TIME] [--until=TIME]
+
+--since/--until restrict the analysis to a wall-clock window, e.g. an
+overnight soak without the ssh sessions at either end (a session is itself
+the largest load an idle Q sees). TIME is ISO 8601; without a zone it is the
+host's local time: --since=2026-09-28T01:30 --until=2026-09-28T07:45
 """
 import sys, os, json, statistics
+from datetime import datetime, timezone
 
 # --- OPP voltage table (uV), mirrors nq-healthd / the DTS -------------------
 OPP = {350000: 1025000, 700000: 1203000, 920000: 1317000, 1200000: 1380000}
@@ -74,6 +80,88 @@ def snapshot_block(text, section, sub):
             continue
         if in_sub and st:
             out.append(st)
+    return out
+
+
+def parse_when(text):
+    """ISO 8601 -> aware UTC datetime; no zone means the host's local time."""
+    t = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        t = t.astimezone()
+    return t.astimezone(timezone.utc)
+
+
+def in_window(rows, since=None, until=None):
+    """The samples whose `wall` falls inside [since, until)."""
+    if since is None and until is None:
+        return rows
+    out = []
+    for r in rows:
+        try:
+            w = parse_when(r["wall"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (since is None or w >= since) and (until is None or w < until):
+            out.append(r)
+    return out
+
+
+# Services whose CPU means the window was NOT idle: audio was flowing.
+PLAYBACK_UNITS = ("librespot", "shairport-sync", "pulseaudio")
+PLAYBACK_PCT = 2.0    # % of one core, averaged; PulseAudio idles at ~0.2 %
+
+
+def counter_delta(rows, key, pid_key=None):
+    """Sum of a cumulative counter's increases across the rows, restarting at
+    every reset (the counter going down, or pid_key changing): a daemon that
+    restarted mid-window is counted in both of its lives, never negative."""
+    total, prev, prev_pid, seen = 0, None, None, False
+    for r in rows:
+        v = r.get(key)
+        if not isinstance(v, int) or v < 0:
+            continue
+        pid = r.get(pid_key) if pid_key else None
+        if prev is not None and v >= prev and pid == prev_pid:
+            total += v - prev
+            seen = True
+        prev, prev_pid = v, pid
+    return total if seen else None
+
+
+def accounting(rows, interval):
+    """What the window cost, from healthd >= device r119's accounting fields.
+    Returns None when no sample carries them."""
+    acc = [r for r in rows if isinstance(r.get("busy_ms"), int) and r["busy_ms"] >= 0]
+    if not acc:
+        return None
+    span_s = len(acc) * interval
+    out = {"span_s": span_s}
+    out["busy_pct_of_2_cores"] = 100.0 * sum(r["busy_ms"] for r in acc) / (span_s * 1000 * 2)
+    fk = [r["forks"] for r in acc if isinstance(r.get("forks"), int) and r["forks"] >= 0]
+    iq = [r["irqs"] for r in acc if isinstance(r.get("irqs"), int) and r["irqs"] >= 0]
+    out["forks_per_min"] = 60.0 * sum(fk) / (len(fk) * interval) if fk else None
+    out["irqs_per_s"] = sum(iq) / (len(iq) * interval) if iq else None
+
+    # unit_us is the delta over one minute, on every 12th sample
+    unit_rows = [r for r in rows if isinstance(r.get("unit_us"), dict) and r["unit_us"]]
+    units = {}
+    for r in unit_rows:
+        for k, v in r["unit_us"].items():
+            units[k] = units.get(k, 0) + v
+    unit_span_s = 60.0 * len(unit_rows)
+    out["unit_pct_of_1_core"] = ({k: 100.0 * v / (unit_span_s * 1e6)
+                                  for k, v in sorted(units.items(), key=lambda kv: -kv[1])}
+                                 if unit_rows else {})
+
+    renders = counter_delta(rows, "nq_renders", "nq_pid")
+    ctl = counter_delta(rows, "nq_ctl", "nq_pid")
+    out["nexusqd_renders_per_s"] = renders / span_s if renders is not None else None
+    out["nexusqd_ctl_per_min"] = 60.0 * ctl / span_s if ctl is not None else None
+    wakes = counter_delta(rows, "ambient_wakes")
+    fixes = counter_delta(rows, "tap_fixes")
+    out["ambient_wakes"] = wakes
+    out["ambient_wakes_per_h"] = 3600.0 * wakes / span_s if wakes is not None else None
+    out["tap_fixes"] = fixes
     return out
 
 
@@ -250,6 +338,34 @@ def analyze(rows, events, snap_text):
                     detail + " — transient (e.g. Bluetooth streaming), deep idle resumes after",
                     ex.get("t_mono"))
 
+    # ---- CPU accounting (healthd >= device r119) ----
+    acc = accounting(rows, interval)
+    if acc:
+        top = ", ".join(f"{k} {v:.2f}%" for k, v in list(acc["unit_pct_of_1_core"].items())[:8])
+        add("info", "cpu_busy",
+            f"busy {acc['busy_pct_of_2_cores']:.2f}% of both cores; "
+            f"forks {acc['forks_per_min']:.1f}/min; interrupts {acc['irqs_per_s']:.0f}/s"
+            if acc["forks_per_min"] is not None and acc["irqs_per_s"] is not None
+            else f"busy {acc['busy_pct_of_2_cores']:.2f}% of both cores")
+        if top:
+            add("info", "cpu_by_unit", f"% of one core: {top}")
+        if acc["nexusqd_renders_per_s"] is not None:
+            add("info", "nexusqd_cadence",
+                f"nexusqd {acc['nexusqd_renders_per_s']:.2f} renders/s, "
+                f"{acc['nexusqd_ctl_per_min']:.2f} commands/min")
+        if acc["ambient_wakes"] is not None:
+            add("info", "ambient_wakes",
+                f"ambient scheduler woke {acc['ambient_wakes']} time(s) "
+                f"({acc['ambient_wakes_per_h']:.1f}/h); the LED tap's source was "
+                f"put back {acc['tap_fixes'] or 0} time(s)")
+        busy_audio = {k: v for k, v in acc["unit_pct_of_1_core"].items()
+                      if k in PLAYBACK_UNITS and v >= PLAYBACK_PCT}
+        if busy_audio:
+            add("warn", "window_not_idle",
+                "audio was flowing in this window (" +
+                ", ".join(f"{k} {v:.1f}%" for k, v in busy_audio.items()) +
+                ") — it is not an idle measurement; narrow it with --since/--until")
+
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):
         n = sum(r.get("dmesg_err_new", 0) for r in rows)
@@ -271,6 +387,7 @@ def analyze(rows, events, snap_text):
             add("warn", "failed_unit", f"systemd failed unit: {line[:120]}")
 
     summary = {
+        "accounting": acc,
         "samples": len(rows),
         "span_s": span,
         "interval_s": interval,
@@ -299,6 +416,10 @@ def timeline_around(rows, t, window=4):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     as_json = "--json" in sys.argv
+    opts = dict(a[2:].split("=", 1) for a in sys.argv[1:]
+                if a.startswith("--") and "=" in a)
+    since = parse_when(opts["since"]) if "since" in opts else None
+    until = parse_when(opts["until"]) if "until" in opts else None
     if not args:
         print(__doc__)
         sys.exit(2)
@@ -310,7 +431,7 @@ def main():
     else:
         health, events, snap = target, None, None
 
-    rows = load_jsonl(health)
+    rows = in_window(load_jsonl(health), since, until)
     evs = load_jsonl(events)
     snap_text = ""
     if snap and os.path.exists(snap):

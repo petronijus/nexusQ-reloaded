@@ -323,9 +323,12 @@ class Ring:
     says whether that clock can be trusted, `on_change` broadcasts."""
 
     def __init__(self, path=None, send=None, clock=None, synced=None,
-                 on_change=None):
+                 on_change=None, on_beat=None):
         import datetime
         self.path = path or RING_CONF_PATH
+        # Called after every scheduler step: other settings nexusqd holds only
+        # in memory re-assert on this same beat instead of waking on their own.
+        self.on_beat = on_beat or (lambda: None)
         self.send = send or nexusqd_send
         self.clock = clock or datetime.datetime.now
         self.synced = synced or (lambda: os.path.exists(TIME_SYNC_FLAG))
@@ -444,6 +447,7 @@ class Ring:
                 sleep = min(sleep, ring_seconds_to_boundary(sched, now) + 0.5)
         if snap is not None:
             self.on_change(snap)
+        self.on_beat()
         return sleep
 
     def run(self):
@@ -454,6 +458,43 @@ class Ring:
                 log("ring scheduler step failed:", e)
                 delay = RING_REASSERT_S
             time.sleep(delay)
+
+
+# --- counters for nq-healthd ------------------------------------------------
+# What the bridge does on its own, counted where nq-healthd can read it without
+# talking to the bridge: health.jsonl records them as `ambient_wakes` and
+# `tap_fixes` (device r119), so an overnight soak answers "how often did it
+# wake" from the log alone. tmpfs (the unit's RuntimeDirectory), rewritten
+# atomically on each change -- a few hundred times a day at most.
+CONTROL_STATS_PATH = os.environ.get("NEXUSQ_CONTROL_STATS", "/run/nexusq-control/stats")
+
+
+class ControlStats:
+    KEYS = ("ambient_wakes", "tap_fixes")
+
+    def __init__(self, path=None):
+        self.path = path or CONTROL_STATS_PATH
+        self.lock = threading.Lock()
+        self.counts = dict.fromkeys(self.KEYS, 0)
+        self._warned = False
+        with self.lock:
+            self._write()
+
+    def bump(self, key):
+        with self.lock:
+            self.counts[key] += 1
+            self._write()
+
+    def _write(self):
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                f.write("".join("%s %d\n" % (k, self.counts[k]) for k in self.KEYS))
+            os.replace(tmp, self.path)
+        except OSError as e:
+            if not self._warned:          # a counter must never cost the bridge
+                log("control stats not written:", e)
+                self._warned = True
 
 
 # --- LED brightness + ambient brightness ----------------------------------
@@ -485,13 +526,24 @@ AMBIENT_NIGHT_FACTOR = 0.25
 # Never below this, whatever the maximum: under it the ring's colours break up
 # into the AVR's lowest PWM steps.
 AMBIENT_MIN_LEVEL = 8
-AMBIENT_TICK_S = 60
+# The scheduler sleeps until the level next changes (Petr, 2026-09-28: a
+# check every minute was more than the job needs). It finds that moment by
+# stepping ahead AMBIENT_SCAN_STEP_S at a time, then bisecting to a second, and
+# never sleeps longer than AMBIENT_MAX_SLEEP_S: in full day or night nothing
+# changes for hours, and the cap is the safety net for a clock that was
+# stepped. Restoring the level after a nexusqd restart, and noticing NTP, ride
+# on the ring's RING_REASSERT_S beat instead (Brightness.reassert), which
+# already wakes the bridge.
+AMBIENT_SCAN_STEP_S = 60
+AMBIENT_MAX_SLEEP_S = 1800
 # Transitions, run by nexusqd (`brightness N MS`, nexusqd r24+) in perceived
 # lightness. Switching ambient on or off moves the ring by up to three
 # quarters of its range at once, which reads as a jump unless it fades (Petr,
 # 2026-09-27: "hned skoci na jinou hodnotu, ale ja to chci pres transition").
-# The minute steps through twilight are small, and a short fade hides the one
-# PWM level they move by. The slider stays immediate: the app sends it on
+# The scheduler's own steps are one level each (it wakes at every change) and
+# go at once, since between two neighbouring levels there is nothing to fade
+# through; a larger step (after AMBIENT_MAX_SLEEP_S, or a stepped clock) fades
+# over AMBIENT_TICK_FADE_MS. The slider stays immediate: the app sends it on
 # every move of the finger, and a fade would lag behind it.
 AMBIENT_TOGGLE_FADE_MS = 3000
 AMBIENT_TICK_FADE_MS = 2000
@@ -607,9 +659,10 @@ class Brightness:
     the clock can be trusted, `location` is (zone, lat, lon) or None."""
 
     def __init__(self, path=None, send=None, clock=None, synced=None,
-                 location=None, on_change=None):
+                 location=None, on_change=None, on_wake=None):
         import datetime
         self.path = path or BRIGHTNESS_CONF_PATH
+        self.on_wake = on_wake or (lambda: None)   # counted for nq-healthd
         self.send = send or nexusqd_send
         self.clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
         self.synced = synced or (lambda: os.path.exists(TIME_SYNC_FLAG))
@@ -623,6 +676,9 @@ class Brightness:
         self.conf = self._load()
         self._last_synced = self.synced()
         self._level = self._compute()
+        # Set by anything that moves the next change: a new maximum, the
+        # switch, NTP setting the clock. The scheduler's sleep ends on it.
+        self._wake = threading.Event()
 
     # --- persistence ------------------------------------------------------
     def _load(self):
@@ -653,12 +709,43 @@ class Brightness:
             return None
         return sun_elevation(self.location[1], self.location[2], self.clock())
 
+    def _ambient_active(self):
+        return bool(self.conf["ambient"] and self.location and self._last_synced)
+
+    def _level_at(self, when):
+        return ambient_level(self.conf["max"],
+                             sun_elevation(self.location[1], self.location[2], when))
+
+    def _seconds_to_next_change(self):
+        """Seconds until the level differs from the one running now, at most
+        AMBIENT_MAX_SLEEP_S. Stepping a minute at a time cannot skip a change
+        that matters: the elevation moves under a quarter of a degree a minute,
+        and between noon and midnight it only moves one way."""
+        import datetime
+        if not self._ambient_active():
+            return AMBIENT_MAX_SLEEP_S
+        now, cur = self.clock(), self._level
+        prev = now
+        for k in range(1, AMBIENT_MAX_SLEEP_S // AMBIENT_SCAN_STEP_S + 1):
+            t = now + datetime.timedelta(seconds=k * AMBIENT_SCAN_STEP_S)
+            if self._level_at(t) != cur:
+                lo, hi = prev, t
+                while (hi - lo).total_seconds() > 1.0:
+                    mid = lo + (hi - lo) / 2
+                    if self._level_at(mid) == cur:
+                        lo = mid
+                    else:
+                        hi = mid
+                return max(1.0, (hi - now).total_seconds())
+            prev = t
+        return AMBIENT_MAX_SLEEP_S
+
     def _compute(self):
         """What nexusqd should run at now. Ambient needs a location AND a
         trusted clock; without either it holds the maximum — it never dims on
         a guess."""
         m = self.conf["max"]
-        if not (self.conf["ambient"] and self.location and self._last_synced):
+        if not self._ambient_active():
             return m
         return ambient_level(m, self._elevation())
 
@@ -701,6 +788,7 @@ class Brightness:
         with self.lock:
             self._last_synced = self.synced()
             self._commit(dict(self.conf, max=max(0, min(255, int(value)))))
+            self._wake.set()
             return self.conf["max"], self._snapshot()
 
     def set_ambient(self, p):
@@ -714,30 +802,52 @@ class Brightness:
             self._last_synced = self.synced()
             self._commit(dict(self.conf, ambient=enabled),
                          fade_ms=AMBIENT_TOGGLE_FADE_MS)
+            self._wake.set()
             return self._snapshot()
 
     # --- the scheduler ----------------------------------------------------
     def tick(self):
-        """Recompute, re-assert to nexusqd (which also restores the level
-        after a nexusqd restart or at boot), report a change to the app."""
+        """Recompute, send the level (over AMBIENT_TICK_FADE_MS), report a
+        change to the app. Returns the seconds until the level next changes."""
         with self.lock:
             before = (self._level, self._last_synced)
             self._last_synced = self.synced()
             self._level = self._compute()
-            self._send_level(AMBIENT_TICK_FADE_MS)
+            # A step of one level has nothing to fade through (nexusqd's
+            # levels are integers), and a 2 s fade would only render the same
+            # frame 66 times. The scheduler wakes at every change, so that is
+            # nearly every step; larger ones (after the cap, a stepped clock)
+            # still fade.
+            self._send_level(AMBIENT_TICK_FADE_MS if abs(self._level - before[0]) > 1 else 0)
             snap = self._snapshot() if (self._level, self._last_synced) != before else None
+            delay = self._seconds_to_next_change()
         if snap is not None:
             self.on_change(snap)
-        return AMBIENT_TICK_S
+        return delay
+
+    def reassert(self):
+        """On the ring's RING_REASSERT_S beat. nexusqd holds the level in
+        memory only, so this is what restores it after a nexusqd restart
+        (nexusqd treats an unchanged level as a no-op). It also notices NTP
+        having set the clock, which ambient waits for, and wakes the
+        scheduler for it."""
+        with self.lock:
+            if self.synced() != self._last_synced:
+                self._wake.set()
+            level = self._level
+        self.send("brightness %d" % level)
 
     def run(self):
         while True:
+            # cleared BEFORE the step, so a wake that lands during it is kept
+            self._wake.clear()
+            self.on_wake()
             try:
                 delay = self.tick()
             except Exception as e:  # noqa: BLE001 - the scheduler must never die
                 log("brightness scheduler step failed:", e)
-                delay = AMBIENT_TICK_S
-            time.sleep(delay)
+                delay = AMBIENT_SCAN_STEP_S
+            self._wake.wait(delay)
 
 
 # The 5 audio-reactive music visualisations, in nexusqd's RenderEngine order
@@ -3011,6 +3121,7 @@ class Bridge:
             proc_diag=_proc_diag, busy=self._source_busy,
             restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
             notify=lambda v: self.broadcast("diagnosticsChanged", v))
+        self.stats = ControlStats()
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -3048,10 +3159,12 @@ class Bridge:
         # The LED ring switch + schedule; its scheduler thread is started by
         # main(), like the other restore threads, so a test can build a Bridge
         # without one.
-        self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap))
+        self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap),
+                         on_beat=lambda: self.brightness.reassert())
         # The brightness slider (persistent since r53) and ambient brightness.
         self.brightness = Brightness(
-            on_change=lambda snap: self.broadcast("ambientChanged", snap))
+            on_change=lambda snap: self.broadcast("ambientChanged", snap),
+            on_wake=lambda: self.stats.bump("ambient_wakes"))
         self.state["brightness"] = self.brightness.maximum()
 
     def _boot_output(self, attempts=45, pause_s=2):
@@ -3212,6 +3325,7 @@ class Bridge:
             return False
         self.pulse.set_default_source(want)
         log("default source was", have, "-> back to", want)
+        self.stats.bump("tap_fixes")
         return True
 
     def _reconcile_volume(self):

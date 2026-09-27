@@ -52,7 +52,9 @@
 #define COOL0     "/sys/class/thermal/cooling_device0"
 #define NQ_CGROUP "/sys/fs/cgroup/system.slice/nexusqd.service"
 #define LS_CGROUP "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice/librespot.service"
+#ifndef NQ_SOCK
 #define NQ_SOCK   "/run/nexusqd.sock"
+#endif
 /* Crash dumps. `/sys/fs/pstore` is NOT where to look: systemd-pstore.service
  * copies every record into the archive below at boot and then UNLINKS it from
  * pstorefs (Unlink=yes, the default), so pstorefs is empty within a second of
@@ -427,6 +429,182 @@ static int nexusqd_responds(void)
     }
     close(fd);
     return ok;
+}
+
+/* ---------- CPU accounting (device r119) ---------------------------------
+ * "Did this change cost anything at idle?" needs more than the OPP and C-state
+ * residency: what the whole box spent (busy_ms, both CPUs summed), how often it
+ * forked (a process that lives for milliseconds is in no per-process snapshot
+ * -- the WiFi watchdog's ~15 forks per check hid that way until 2026-09-26),
+ * how many interrupts it took (the wakeup proxy), and what each of our services
+ * spent. The last comes from each unit's cgroup cpu.stat, which also counts
+ * the children the unit waited for, so the bridge's `pactl` calls land on the
+ * bridge. All of them per interval, `{}`/-1 on a first sample or a reset: an
+ * honest gap, like opp_ms. */
+#ifndef PROC_STAT
+#define PROC_STAT "/proc/stat"
+#endif
+#ifndef CG_ROOT
+#define CG_ROOT "/sys/fs/cgroup"
+#endif
+#define CG_SYS CG_ROOT "/system.slice/"
+#define CG_APP CG_ROOT "/user.slice/user-10000.slice/user@10000.service/app.slice/"
+
+static long long prev_busy = -1, prev_forks = -1, prev_irqs = -1;
+
+static void cpu_sample(long long *busy_ms, long long *forks, long long *irqs)
+{
+    *busy_ms = *forks = *irqs = -1;
+    FILE *f = fopen(PROC_STAT, "re");
+    if (!f)
+        return;
+    long long busy = -1, fk = -1, iq = -1;
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, f) > 0) {
+        long long u, n, sy, id, io, hi, si, st;
+        if (!strncmp(line, "cpu ", 4)
+            && sscanf(line + 4, "%lld %lld %lld %lld %lld %lld %lld %lld",
+                      &u, &n, &sy, &id, &io, &hi, &si, &st) == 8)
+            busy = u + n + sy + hi + si + st;
+        else if (!strncmp(line, "intr ", 5))
+            iq = atoll(line + 5);            /* the first number is the total */
+        else if (!strncmp(line, "processes ", 10))
+            fk = atoll(line + 10);
+    }
+    free(line);
+    fclose(f);
+
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0)
+        hz = 100;
+    if (busy >= 0 && prev_busy >= 0 && busy >= prev_busy)
+        *busy_ms = (busy - prev_busy) * 1000 / hz;
+    if (fk >= 0 && prev_forks >= 0 && fk >= prev_forks)
+        *forks = fk - prev_forks;
+    if (iq >= 0 && prev_irqs >= 0 && iq >= prev_irqs)
+        *irqs = iq - prev_irqs;
+    prev_busy = busy;
+    prev_forks = fk;
+    prev_irqs = iq;
+}
+
+/* Our services and the system ones that share the idle budget with them.
+ * The two slices are there so the report can show what no unit accounts for
+ * (kernel threads, IRQ): busy_ms minus the slices. */
+static const struct { const char *name, *dir; } units[] = {
+    { "nexusq-control",       CG_SYS "nexusq-control.service" },
+    { "nexusqd",              CG_SYS "nexusqd.service" },
+    { "nexusq-mqtt",          CG_SYS "nexusq-mqtt.service" },
+    { "nq-healthd",           CG_SYS "nq-healthd.service" },
+    { "nexusq-btagent",       CG_SYS "nexusq-btagent.service" },
+    { "nexusq-wifi-watchdog", CG_SYS "nexusq-wifi-watchdog.service" },
+    { "nexusq-nfc",           CG_SYS "nexusq-nfc.service" },
+    { "NetworkManager",       CG_SYS "NetworkManager.service" },
+    { "wpa_supplicant",       CG_SYS "wpa_supplicant.service" },
+    { "bluetooth",            CG_SYS "bluetooth.service" },
+    { "avahi-daemon",         CG_SYS "avahi-daemon.service" },
+    { "systemd-journald",     CG_SYS "systemd-journald.service" },
+    { "pulseaudio",           CG_APP "pulseaudio.service" },
+    { "librespot",            CG_APP "librespot.service" },
+    { "shairport-sync",       CG_APP "shairport-sync.service" },
+    { "roon",                 CG_APP "roon.service" },
+    { "nexusq-uac2-in",       CG_APP "nexusq-uac2-in.service" },
+    { "nexusq-roon-idle",     CG_APP "nexusq-roon-idle.service" },
+    { "system.slice",         CG_ROOT "/system.slice" },
+    { "user.slice",           CG_ROOT "/user.slice" },
+};
+#define N_UNITS (sizeof units / sizeof units[0])
+static long long prev_unit_us[N_UNITS];
+static int unit_primed;
+
+static long long cg_usage_us(const char *dir)
+{
+    char path[300], buf[512];
+    snprintf(path, sizeof path, "%s/cpu.stat", dir);
+    if (slurp(path, buf, sizeof buf) <= 0)
+        return -1;
+    const char *p = strstr(buf, "usage_usec ");
+    return p ? atoll(p + 11) : -1;
+}
+
+static void unit_sample(char *out, size_t n)
+{
+    char json[1024];
+    size_t jo = 0;
+    for (size_t i = 0; i < N_UNITS; i++) {
+        long long cur = cg_usage_us(units[i].dir);
+        long long p = unit_primed ? prev_unit_us[i] : -1;
+        /* a unit that is not running has no cgroup: left out, not zero */
+        if (cur >= 0 && p >= 0 && cur >= p && jo < sizeof json)
+            jo += (size_t)snprintf(json + jo, sizeof json - jo, "%s\"%s\":%lld",
+                                   jo ? "," : "", units[i].name, cur - p);
+        prev_unit_us[i] = cur;
+    }
+    unit_primed = 1;
+    snprintf(out, n, "{%s}", jo < sizeof json ? json : "");
+}
+
+/* nexusqd's own counters, cumulative since it started (the report diffs them
+ * and uses nq_pid to see a restart): renders = frames computed, ctl = control
+ * commands received, this probe's own `debug` included. Asked once a minute,
+ * not every sample: every question wakes nexusqd, and at idle it draws once a
+ * second. */
+static long long nq_renders = -1, nq_ctl = -1;
+
+static void nexusqd_counters(void)
+{
+    nq_renders = nq_ctl = -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+    struct sockaddr_un sa = { .sun_family = AF_UNIX };
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", NQ_SOCK);
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    char buf[1024];
+    ssize_t got = 0;
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) == 0
+        && write(fd, "debug\n", 6) == 6) {
+        ssize_t r;
+        while (got < (ssize_t)sizeof buf - 1
+               && (r = read(fd, buf + got, sizeof buf - 1 - (size_t)got)) > 0) {
+            got += r;
+            if (memchr(buf, '\n', (size_t)got))
+                break;
+        }
+    }
+    close(fd);
+    if (got <= 0)
+        return;
+    buf[got] = '\0';
+    const char *p;
+    if ((p = strstr(buf, " renders=")))
+        nq_renders = atoll(p + 9);
+    if ((p = strstr(buf, " ctl=")))
+        nq_ctl = atoll(p + 5);
+}
+
+/* nexusq-control's counters (control r58+): cumulative since the bridge
+ * started, kept in its RuntimeDirectory (tmpfs). ambient_wakes = the ambient scheduler's
+ * steps, tap_fixes = the LED visualiser's source put back on the monitor. -1
+ * when the bridge does not write them. */
+#ifndef CONTROL_STATS
+#define CONTROL_STATS "/run/nexusq-control/stats"
+#endif
+
+static void control_stats(long long *wakes, long long *fixes)
+{
+    *wakes = *fixes = -1;
+    char buf[256];
+    if (slurp(CONTROL_STATS, buf, sizeof buf) <= 0)
+        return;
+    const char *p;
+    if ((p = strstr(buf, "ambient_wakes ")))
+        *wakes = atoll(p + 14);
+    if ((p = strstr(buf, "tap_fixes ")))
+        *fixes = atoll(p + 10);
 }
 
 /* ---------- AVR interrupt counter --------------------------------------- */
@@ -970,6 +1148,20 @@ int main(int argc, char **argv)
                       cst_armed, sizeof cst_armed);
         long long qos_us = qos_limit_us();
 
+        long long busy_ms, forks, irqs;
+        cpu_sample(&busy_ms, &forks, &irqs);
+        /* Per-unit CPU and nexusqd's counters once a minute, not every 5 s:
+         * the unit map is ~500 bytes, and at every sample it would rotate
+         * health.jsonl (4 MB) twice a night, losing the start of an
+         * overnight soak. unit_us is then the delta over that minute. */
+        char unit_us[1100] = "";
+        if (tickn % 12 == 0) {
+            unit_sample(unit_us, sizeof unit_us);
+            nexusqd_counters();
+        }
+        long long amb_wakes, tap_fixes;
+        control_stats(&amb_wakes, &tap_fixes);
+
         long long temp = slurp_ll(TZ0 "/temp", 0);
         long long cool = slurp_ll(COOL0 "/cur_state", -1);
 
@@ -1132,7 +1324,9 @@ int main(int argc, char **argv)
         }
 
         /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it.
-         * Fields are only ever APPENDED (cstate_*, qos_us since device r106). */
+         * Fields are only ever APPENDED (cstate_*, qos_us since device r106; busy_ms,
+         * forks, irqs, unit_us, nq_renders, nq_ctl, ambient_wakes, tap_fixes
+         * since r119 -- unit_us only on every 12th sample, see above). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -1157,14 +1351,21 @@ int main(int argc, char **argv)
                 "\"dmesg_err\":%lld,\"dmesg_err_new\":%lld,\"pstore\":%ld,"
                 "\"load1\":%s,\"mem_avail_kB\":%lld,"
                 "\"cstate_ms\":%s,\"cstate_n\":%s,\"cstate_armed\":\"%s\","
-                "\"qos_us\":%lld}\n",
+                "\"qos_us\":%lld,"
+                "\"busy_ms\":%lld,\"forks\":%lld,\"irqs\":%lld,%s%s%s"
+                "\"nq_renders\":%lld,\"nq_ctl\":%lld,"
+                "\"ambient_wakes\":%lld,\"tap_fixes\":%lld}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
                 lsa, ls_restarts, avr_irq,
                 led_sum, led_changed, led_stall,
                 derr, derr_new, pstore, loadbuf, memav,
-                cst_ms, cst_n, cst_armed, qos_us);
+                cst_ms, cst_n, cst_armed, qos_us,
+                busy_ms, forks, irqs,
+                *unit_us ? "\"unit_us\":" : "", unit_us, *unit_us ? "," : "",
+                nq_renders, nq_ctl,
+                amb_wakes, tap_fixes);
         fflush(dst);
 
         if (once)

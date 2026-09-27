@@ -151,7 +151,7 @@ class TestBrightness(unittest.TestCase):
         b.set_max(180)
         self.now = utc(2026, 9, 22, 23)          # night: still 180
         b.tick()
-        self.assertEqual(self.nq.sent[-1], "brightness 180 2000")
+        self.assertEqual(self.nq.sent[-1], "brightness 180")
         self.assertEqual(self.events, [])
 
     def test_the_slider_is_persistent(self):
@@ -166,8 +166,8 @@ class TestBrightness(unittest.TestCase):
         b.set_max(200)
         self.assertEqual(b.set_ambient({"enabled": True})["level"], 200)   # midday
         self.now = utc(2026, 9, 22, 22)          # well after dusk
-        b.tick()
-        self.assertEqual(self.nq.sent[-1], "brightness 50 2000")
+        b.tick()                                 # a jump of 150: it fades
+        self.assertEqual(self.nq.sent[-1], "brightness 50 %d" % MOD.AMBIENT_TICK_FADE_MS)
         self.assertEqual(self.events[-1]["level"], 50)
         # moving the slider at night moves the MAXIMUM, the level follows
         mx, snap = b.set_max(100)
@@ -218,7 +218,7 @@ class TestBrightness(unittest.TestCase):
         self.nq.sent.clear()
         b.tick()
         b.tick()
-        self.assertEqual(self.nq.sent, ["brightness 90 2000", "brightness 90 2000"])
+        self.assertEqual(self.nq.sent, ["brightness 90", "brightness 90"])
 
     def test_switching_ambient_fades(self):
         # Petr, 2026-09-27: switched on in the evening it jumped straight to
@@ -249,6 +249,94 @@ class TestBrightness(unittest.TestCase):
         self.assertEqual(snap["level"], 50)
         with open(self.path) as f:
             self.assertTrue(json.load(f)["ambient"])
+
+    # --- sleeping until the next change (2026-09-28) -----------------------
+    def test_day_and_night_sleep_the_whole_cap(self):
+        b = self.b()
+        b.set_ambient({"enabled": True})
+        self.assertEqual(b.tick(), MOD.AMBIENT_MAX_SLEEP_S)      # midday
+        self.now = utc(2026, 9, 22, 23)                         # deep night
+        self.assertEqual(b.tick(), MOD.AMBIENT_MAX_SLEEP_S)
+
+    def test_off_sleeps_the_whole_cap(self):
+        self.now = utc(2026, 9, 22, 17)                         # dusk, but ambient off
+        self.assertEqual(self.b().tick(), MOD.AMBIENT_MAX_SLEEP_S)
+
+    def test_dusk_wakes_exactly_at_the_next_level(self):
+        b = self.b()
+        b.set_ambient({"enabled": True})
+        self.now = utc(2026, 9, 22, 17, 30)                     # mid-twilight
+        delay = b.tick()
+        level = int(self.nq.sent[-1].split()[1])
+        self.assertLess(delay, MOD.AMBIENT_SCAN_STEP_S * 3)
+        at = self.now + datetime.timedelta(seconds=delay)
+        before = self.now + datetime.timedelta(seconds=delay - 1.5)
+        self.assertNotEqual(b._level_at(at), level)            # it has changed by then
+        self.assertEqual(b._level_at(before), level)           # and not a second earlier
+
+    def test_following_the_delays_misses_no_level(self):
+        # walk a whole dusk the way run() does; every level between day and
+        # night must be passed through one step at a time, never skipped
+        b = self.b()
+        b.set_ambient({"enabled": True})
+        self.now = utc(2026, 9, 22, 15)
+        self.nq.sent.clear()                     # the switch itself fades; the walk follows
+        levels, wakes = [], 0
+        while self.now < utc(2026, 9, 22, 20):
+            delay = b.tick()
+            levels.append(int(self.nq.sent[-1].split()[1]))
+            self.now += datetime.timedelta(seconds=delay)
+            wakes += 1
+        self.assertEqual((levels[0], levels[-1]), (255, 64))
+        steps = [a - c for a, c in zip(levels, levels[1:]) if a != c]
+        self.assertTrue(steps and max(steps) <= 2, steps)
+        self.assertLess(wakes, 5 * 60, "fewer wakes than a tick every minute")
+        # one-level steps are sent at once: nothing to fade through
+        one_level = [ln for ln in self.nq.sent if len(ln.split()) == 3]
+        self.assertEqual(one_level, [], one_level)
+
+    def test_a_new_setting_wakes_the_scheduler(self):
+        b = self.b()
+        b._wake.clear()
+        b.set_ambient({"enabled": True})
+        self.assertTrue(b._wake.is_set())
+        b._wake.clear()
+        b.set_max(100)
+        self.assertTrue(b._wake.is_set())
+
+    def test_reassert_restores_the_level_and_notices_ntp(self):
+        self.is_synced = False
+        b = self.b()
+        b.set_max(90)
+        b._wake.clear()
+        self.nq.sent.clear()
+        b.reassert()
+        self.assertEqual(self.nq.sent, ["brightness 90"])       # no fade: a restore
+        self.assertFalse(b._wake.is_set())
+        self.is_synced = True                                   # timesyncd set the clock
+        b.reassert()
+        self.assertTrue(b._wake.is_set())
+
+    def test_every_scheduler_wake_is_counted(self):
+        wakes = []
+        b = MOD.Brightness(path=self.path, send=self.nq, clock=lambda: self.now,
+                           synced=lambda: self.is_synced, location=PRAGUE,
+                           on_wake=lambda: wakes.append(1))
+
+        class Stop(Exception):
+            pass
+
+        waits = []
+
+        def wait(delay):
+            waits.append(delay)
+            if len(waits) == 3:
+                raise Stop
+        b._wake.wait = wait
+        with self.assertRaises(Stop):
+            b.run()
+        self.assertEqual(len(wakes), 3)
+        self.assertEqual(waits, [MOD.AMBIENT_MAX_SLEEP_S] * 3)
 
     def test_torn_file_reads_as_default(self):
         for body in ('{"max": 300}', '{"max": "x", "ambient": 1}', '[', ''):

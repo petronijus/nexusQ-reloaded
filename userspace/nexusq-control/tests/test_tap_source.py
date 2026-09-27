@@ -60,9 +60,18 @@ class FakePulse:
         self.source = source
 
 
+class FakeStats:
+    def __init__(self):
+        self.bumped = []
+
+    def bump(self, key):
+        self.bumped.append(key)
+
+
 class Bridge:
     def __init__(self, pulse, output="speaker"):
         self.lock = threading.Lock()
+        self.stats = FakeStats()
         self.pulse = pulse
         self.state = {"output": output, "volume": 30, "muted": False}
         self.volume_reconciles = 0
@@ -101,13 +110,17 @@ def run_one_subscribe(b, lines=()):
 class TestReconcileSource(unittest.TestCase):
     def test_a_stolen_default_is_put_back(self):
         pulse = FakePulse(default_source="usb_in")
-        self.assertTrue(Bridge(pulse)._reconcile_source())
+        b = Bridge(pulse)
+        self.assertTrue(b._reconcile_source())
         self.assertEqual(pulse.source, SPEAKER + ".monitor")
+        self.assertEqual(b.stats.bumped, ["tap_fixes"])     # counted for nq-healthd
 
     def test_nothing_to_do_when_it_is_right(self):
         pulse = FakePulse(default_source=SPEAKER + ".monitor")
-        self.assertFalse(Bridge(pulse)._reconcile_source())
+        b = Bridge(pulse)
+        self.assertFalse(b._reconcile_source())
         self.assertEqual(pulse.source_writes, [])
+        self.assertEqual(b.stats.bumped, [])
 
     def test_nothing_while_pulseaudio_is_down(self):
         pulse = FakePulse(up=False)

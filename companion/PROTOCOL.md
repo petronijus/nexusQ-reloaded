@@ -180,7 +180,7 @@ switched off for `spdif`/`hdmi`.
 | Method | params | result | Event |
 |---|---|---|---|
 | `getAmbient` | — | ambient object | — |
-| `setAmbient` | `{ "enabled": bool }` | ambient object | `ambientChanged` — also broadcast by the bridge whenever the level moves (checked every 60 s) |
+| `setAmbient` | `{ "enabled": bool }` | ambient object | `ambientChanged` — also broadcast by the bridge whenever the level moves (at the moment it changes, r57+) |
 
 Ambient object: `{ "enabled": bool, "level": 0..255, "location": { "zone", "lat", "lon" } | null, "clockSynced": bool }` — `level` is what nexusqd runs right now.
 
@@ -196,13 +196,18 @@ Ambient object: `{ "enabled": bool, "level": 0..255, "location": { "zone", "lat"
   `setAmbient {enabled: true}` answers `unavailable`.
 - **Clock**: until timesyncd has set the clock (`clockSynced: false`) ambient
   holds the maximum — it never dims on a guess.
-- The bridge **re-asserts** `brightness N` every 60 s, which also restores the
-  level at boot and after a nexusqd restart; nexusqd r23 treats an unchanged
-  level as a no-op.
+- **When** (control r57): the scheduler computes the moment the level next
+  changes and sleeps until then, at most 30 min: through the day and the night
+  it wakes twice an hour, through twilight once per level (about 420 wakes a
+  day in Prague in September, against 1440 with the old minute tick). The
+  level is **re-asserted** on the LED ring's 30 s beat, which restores it
+  after a nexusqd restart and notices NTP setting the clock; nexusqd treats an
+  unchanged level as a no-op.
 - **Transitions** (nexusqd r24 + control r56): nexusqd takes
   `brightness N [ms]` and fades in perceived lightness. Switching ambient on
-  or off fades over 3 s and the minute steps over 2 s; `setBrightness` (the
-  slider) stays immediate. The first level after a nexusqd start is applied at
+  or off fades over 3 s; the scheduler's one-level steps go at once (there is
+  nothing between two neighbouring levels to fade through) and a larger step
+  fades over 2 s; `setBrightness` (the slider) stays immediate. The first level after a nexusqd start is applied at
   once, and an older nexusqd that refuses the argument gets the level without
   it.
 - Errors: `bad_request` (non-bool `enabled`, non-number `brightness`);

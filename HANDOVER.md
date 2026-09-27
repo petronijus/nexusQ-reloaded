@@ -16,9 +16,9 @@ waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
 
 | package | rev | what |
 |---|---|---|
-| device-google-steelhead | **r118** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap) |
+| device-google-steelhead | **r119** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap), CPU accounting in health.jsonl (r119) |
 | nexusq-alsa-vol | **r1 (new aport)** | the `ctl.nexusq_vol` ALSA control: one volume (`docs/2026-09-27-one-volume.md`) |
-| nexusq-control | **r56** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54), no made-up volume at boot (r55), ambient fades + the tap's source kept on the monitor (r56) |
+| nexusq-control | **r58** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54), no made-up volume at boot (r55), ambient fades + the tap's source kept on the monitor (r56), ambient wakes only when its level changes (r57), counters for nq-healthd (r58) |
 | nexusq-mqtt | **r10** | C-states + diagnostics (r8), ring in HA (r9), HA system update + volume/mute (r10) |
 | nexusqd / nexusq-setupd | **r24** / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda); `brightness N [ms]` fades (r24) |
 | nexusq-kernel-ota / nexusq-rootfs-ab | r8 / r5 | per-unit identity at boot; storage check per OTA |
@@ -92,6 +92,35 @@ After the publish its apk simply agrees; nothing to reinstall.
 schedule, ring in HA, unified volume, volume in HA, updates from HA,
 diagnostics mode + C-states) are done in code. Complete them when v1.20.0 and
 app 1.25.0 are out.
+
+## Any machine — 2026-09-28 morning: read the overnight soak on the Prague Q
+
+Started 01:06 CEST on the Prague Q (device r119, control r58, nexusqd r24),
+with nothing playing and nobody on the box. It asks whether the ambient
+scheduler wakes as designed, and whether the day's new code (one volume, the
+tap's source reconcile, the fades, the scheduler) costs anything at idle.
+
+```sh
+scripts/diag/nq-collect                         # pulls health.jsonl.1 + health.jsonl
+scripts/diag/nq-health-report nq-captures/latest \
+    --since=2026-09-28T01:15 --until=<the first ssh of the morning, local time>
+```
+
+- **Ambient wakes**: the model (the same code, maximum 208) expects **2 an
+  hour through the night and ~156 through the dawn**, mostly 06:00–07:00
+  local: 170 from 01:06 to 10:00. `ambient_wakes` in the report should agree
+  to within a few.
+- **Cost**:
+  - `busy_pct_of_2_cores` against the cottage's 2.1 % idle night
+    (docs/2026-09-26-idle-audit-five-pollers.md §1, r109). The Prague box
+    runs RoonBridge and a breathing LED theme (~20 renders/s by design), so
+    expect it somewhat higher; the per-service split says where.
+  - `nexusq-control` should sit well under the 0.1 % of a core its old
+    minute tick implied.
+  - `nexusqd` renders/s should equal the theme's cadence; fades add only at
+    the ambient switch.
+- If `window_not_idle` fires, someone played music: narrow the window.
+- Record the result in CHANGELOG and delete this section.
 
 ## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published — ⏩ superseded by the section above
 

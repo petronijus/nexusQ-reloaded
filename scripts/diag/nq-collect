@@ -68,7 +68,9 @@ dev "$SNAPCMD" > "$DIR/snapshot.txt" 2>&1
 say "[collect] snapshot: $(wc -l < "$DIR/snapshot.txt") lines"
 
 # --- 4. health time-series --------------------------------------------------
-dev 'cat /var/log/nq-health/health.jsonl 2>/dev/null' > "$DIR/health.jsonl" 2>/dev/null || true
+# The rotated generation first: nq-healthd renames health.jsonl to .1 at 4 MB,
+# and without it an overnight window loses its start (2026-09-28).
+dev 'cat /var/log/nq-health/health.jsonl.1 /var/log/nq-health/health.jsonl 2>/dev/null' > "$DIR/health.jsonl" 2>/dev/null || true
 dev 'cat /var/log/nq-health/events.jsonl 2>/dev/null' > "$DIR/events.jsonl" 2>/dev/null || true
 
 if [ ! -s "$DIR/health.jsonl" ]; then
