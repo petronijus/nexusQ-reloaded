@@ -177,6 +177,8 @@ gets entities Home Assistant can **drive**:
 | `text` **LED ring off at** / **on at** (config, `HH:MM`) | `off_at/set`, `on_at/set` | `setRingSchedule {enabled: current, off\|on}` |
 | `switch` **Ambient brightness** (config, bridge r53+) | `ambient/set` | `setAmbient` |
 | `sensor` **LED ring level** (diagnostic, % of the maximum) | — | — |
+| `select` **LED ring theme** _(r11, 2026-09-28)_ — options = the bridge's `listThemes` labels (Blue, Warm, Cool, Rose, Smoke, Off) | `theme/set` | `setTheme` (a label, or the bridge's name typed in an automation) |
+| `select` **LED ring visualization** _(r11)_ — options = `listScenes` labels (Waveform, Solid Wave, Circles, Morph, Starfield) | `scene/set` | `setScene` |
 
 - **One mechanism, two front ends.** Every command is one of the bridge's own
   methods — the ones the app calls — so HA gets the app's rules: a manual
@@ -193,6 +195,12 @@ gets entities Home Assistant can **drive**:
 - **Availability** is `all` of the Q's status topic and `ring/available`, which
   goes `offline` while the bridge link is down (restart, OTA) — HA greys the
   controls instead of accepting commands nothing will carry out.
+- **Theme and visualisation for automations** (r11, Petr 2026-09-28). The
+  selects' options are fetched from the bridge (`listThemes` / `listScenes`) once
+  per bridge connection, on the ring's worker thread — never on the shared
+  BridgeFeed thread, where a slow answer would hold up the volume's state too.
+  Without the lists there are no selects, rather than options the Q may not
+  have. `themeChanged` / `sceneChanged` push a choice made in the app at once.
 - **Only what the bridge supports is announced.** The entities appear with the
   first `getState` that carries `ring` (and the ambient pair with `ambient`);
   missing ones are deleted with an empty retained config.

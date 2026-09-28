@@ -1261,8 +1261,22 @@ def discovery_configs(node_id, display_name, prefix):
 # persistent connection to the bridge receives its ringChanged /
 # ambientChanged / brightnessChanged broadcasts, so a change made in the app,
 # or by the schedule at 23:00, reaches Home Assistant at once.
+#
+# The light theme and the visualisation joined them on 2026-09-28 (Petr: so
+# Home Assistant automations can pick them) as two `select` entities. Their
+# options are the bridge's own lists (listThemes / listScenes), shown by label,
+# so HA can never offer a theme the Q does not have.
 RING_ENABLED = os.environ.get("NQMQTT_RING", "1") != "0"
 RING_RETRY_S = 5
+
+#: The process's stop signal (SIGTERM sets it). Every worker and listener takes
+#: its own `stop` Event, defaulting to this one, and has a close() that wakes it
+#: at once. Up to r11 they all polled a module-level bool: the tests flipped it
+#: on for 50 ms and back off, no thread ever saw it, and each test left a
+#: listener reconnecting forever -- to the REAL bridge port, once the test's
+#: patch was undone -- and a worker behind; one of them printing at interpreter
+#: exit aborted the suite (SIGABRT in _enter_buffered_busy, 2026-09-28).
+_STOP = threading.Event()
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -1276,10 +1290,29 @@ def ring_topics(prefix, node_id):
         "off_at": f"{base}/off_at/set",
         "on_at": f"{base}/on_at/set",
         "ambient": f"{base}/ambient/set",
+        "theme": f"{base}/theme/set",
+        "scene": f"{base}/scene/set",
     }
 
 
-def ring_state_payload(st):
+def _label_of(options, name):
+    """The label of `name` in a bridge list [{name, label}], or None."""
+    for o in options or ():
+        if isinstance(o, dict) and o.get("name") == name:
+            return o.get("label")
+    return None
+
+
+def _name_of(options, text):
+    """What HA sent (a label, or a name typed in an automation) -> the
+    bridge's name, or None when it is neither."""
+    for o in options or ():
+        if isinstance(o, dict) and text in (o.get("label"), o.get("name")):
+            return o.get("name")
+    return None
+
+
+def ring_state_payload(st, themes=None, scenes=None):
     """The ring's picture as Home Assistant reads it (one retained JSON for all
     the ring entities; the light entity uses the json schema, which reads
     `state`/`brightness`/`color_mode` and ignores the rest). None when the
@@ -1302,10 +1335,16 @@ def ring_state_payload(st):
         level = amb.get("level") if isinstance(amb.get("level"), int) else mx
         out["ambient"] = bool(amb.get("enabled"))
         out["level_pct"] = round(level * 100 / mx) if mx > 0 else 0
+    theme = _label_of(themes, st.get("theme"))
+    if theme is not None:
+        out["theme"] = theme
+    scene = _label_of(scenes, st.get("scene"))
+    if scene is not None:
+        out["scene"] = scene
     return out
 
 
-def ring_commands(kind, payload, st):
+def ring_commands(kind, payload, st, themes=None, scenes=None):
     """Translate one Home Assistant command into bridge calls, [(method,
     params)], given the current state `st`. Pure, so the mapping is testable
     without a broker or a bridge. Anything malformed maps to nothing: the
@@ -1349,10 +1388,16 @@ def ring_commands(kind, payload, st):
         key = "off" if kind == "off_at" else "on"
         return [("setRingSchedule",
                  {"enabled": bool(sched.get("enabled")), key: text})]
+    if kind == "theme":
+        name = _name_of(themes, text)
+        return [("setTheme", {"theme": name})] if name else []
+    if kind == "scene":
+        name = _name_of(scenes, text)
+        return [("setScene", {"scene": name})] if name else []
     return []
 
 
-def ring_discovery_configs(node_id, display_name, prefix, st):
+def ring_discovery_configs(node_id, display_name, prefix, st, themes=None, scenes=None):
     """HA discovery for the ring entities this bridge supports: the ring ones
     when `st` carries `ring`, the ambient ones when it carries `ambient`.
     Returns [(suffix, config-or-None)]: None = delete a stale entity (a bridge
@@ -1371,6 +1416,10 @@ def ring_discovery_configs(node_id, display_name, prefix, st):
     }
     has_ring = isinstance(st.get("ring"), dict)
     has_amb = has_ring and isinstance(st.get("ambient"), dict)
+    theme_opts = [o["label"] for o in themes or () if isinstance(o, dict) and o.get("label")]
+    scene_opts = [o["label"] for o in scenes or () if isinstance(o, dict) and o.get("label")]
+    has_theme = has_ring and bool(theme_opts) and isinstance(st.get("theme"), str)
+    has_scene = has_ring and bool(scene_opts) and isinstance(st.get("scene"), str)
     hhmm = r"^([01]\d|2[0-3]):[0-5]\d$"
     entries = [
         ("light", "ring", has_ring, {
@@ -1401,6 +1450,16 @@ def ring_discovery_configs(node_id, display_name, prefix, st):
             "state_class": "measurement", "entity_category": "diagnostic",
             "value_template": "{{ value_json.level_pct | default('unknown') }}",
             "icon": "mdi:brightness-6"}),
+        ("select", "ring_theme", has_theme, {
+            "name": "LED ring theme", "command_topic": topics["theme"],
+            "options": theme_opts,
+            "value_template": "{{ value_json.theme | default(None) }}",
+            "icon": "mdi:palette"}),
+        ("select", "ring_scene", has_scene, {
+            "name": "LED ring visualization", "command_topic": topics["scene"],
+            "options": scene_opts,
+            "value_template": "{{ value_json.scene | default(None) }}",
+            "icon": "mdi:waveform"}),
     ]
     out = []
     for component, key, supported, extra in entries:
@@ -1550,10 +1609,11 @@ class UpdateLink:
     broker, a bridge or apk."""
 
     def __init__(self, prefix, node_id, publish, call=control_call,
-                 version=read_device_version, clock=time.monotonic):
+                 version=read_device_version, clock=time.monotonic, stop=None):
         self.topics = update_topics(prefix, node_id)
         self.publish, self.call = publish, call
         self.version, self.clock = version, clock
+        self.stop = stop or _STOP
         self._cv = threading.Condition()
         self._queue = []
         self._last = None               # the last payload published
@@ -1628,11 +1688,16 @@ class UpdateLink:
         return max(1.0, self._next_check - self.clock())
 
     def worker(self):
-        while not _shutdown:
+        while not self.stop.is_set():
             wait = self.step()
             with self._cv:
-                if not self._queue and not _shutdown:
+                if not self._queue and not self.stop.is_set():
                     self._cv.wait(min(wait, 60))
+
+    def close(self):
+        self.stop.set()
+        with self._cv:
+            self._cv.notify_all()
 
 
 class RingLink:
@@ -1645,17 +1710,25 @@ class RingLink:
     so the whole thing runs in tests without a broker or a bridge."""
 
     #: the getState fields that make up the ring's picture
-    FIELDS = ("brightness", "ring", "ambient")
+    FIELDS = ("brightness", "ring", "ambient", "theme", "scene")
+    #: the command topics HA writes to
+    KINDS = ("light", "schedule", "off_at", "on_at", "ambient", "theme", "scene")
+    #: what the theme and visualisation selects offer, fetched from the bridge
+    #: once per bridge connection (listThemes / listScenes)
+    LISTS = (("themes", "listThemes"), ("scenes", "listScenes"))
 
     def __init__(self, node_id, display_name, prefix, discovery_prefix,
-                 publish, call=control_call):
+                 publish, call=control_call, stop=None):
         self.node_id, self.display_name = node_id, display_name
         self.prefix, self.discovery_prefix = prefix, discovery_prefix
         self.topics = ring_topics(prefix, node_id)
         self.publish = publish
         self.call = call
+        self.stop = stop or _STOP
+        self._feed = None
         self.lock = threading.Lock()
         self.st = {}
+        self.lists = {"themes": None, "scenes": None}
         self.bridge_up = False
         self._announced = None      # which entity set HA was last told about
         self._queue = []
@@ -1668,14 +1741,35 @@ class RingLink:
             self.bridge_up = True
         self.announce()
         self.publish_state()
+        # The option lists are two more requests to the bridge. They go to the
+        # worker: this runs on the shared BridgeFeed thread, and a slow answer
+        # here would hold up the volume's state as well.
+        with self._cv:
+            self._queue.append(("_lists", None))
+            self._cv.notify()
+
+    def refresh_lists(self):
+        lists = {}
+        for key, method in self.LISTS:
+            try:
+                got = self.call(method, {}).get(key)
+            except (OSError, ValueError, ControlError) as e:
+                log("ring:", method, "failed:", e)
+                got = None
+            lists[key] = got if isinstance(got, list) else None
+        with self.lock:
+            self.lists = lists
+        self.announce()
+        self.publish_state()
 
     def apply_event(self, event, data):
         key = {"ringChanged": "ring", "ambientChanged": "ambient",
-               "brightnessChanged": "brightness"}.get(event)
+               "brightnessChanged": "brightness", "themeChanged": "theme",
+               "sceneChanged": "scene"}.get(event)
         if key is None or not isinstance(data, dict):
             return False
         with self.lock:
-            value = data.get("brightness") if key == "brightness" else data
+            value = data.get(key) if key in ("brightness", "theme", "scene") else data
             if self.st.get(key) == value:
                 return False
             self.st[key] = value
@@ -1694,18 +1788,22 @@ class RingLink:
         """(Re)publish discovery for exactly the entities this bridge supports."""
         with self.lock:
             st = dict(self.st)
-        shape = (isinstance(st.get("ring"), dict), isinstance(st.get("ambient"), dict))
+            themes, scenes = self.lists["themes"], self.lists["scenes"]
+        shape = (isinstance(st.get("ring"), dict), isinstance(st.get("ambient"), dict),
+                 json.dumps(themes), json.dumps(scenes),
+                 isinstance(st.get("theme"), str), isinstance(st.get("scene"), str))
         if not force and shape == self._announced:
             return
         self._announced = shape
         for suffix, cfg in ring_discovery_configs(
-                self.node_id, self.display_name, self.prefix, st):
+                self.node_id, self.display_name, self.prefix, st, themes, scenes):
             self.publish(f"{self.discovery_prefix}/{suffix}",
                          json.dumps(cfg) if cfg is not None else "", True)
 
     def publish_state(self):
         with self.lock:
-            payload = ring_state_payload(self.st) if self.bridge_up else None
+            payload = (ring_state_payload(self.st, self.lists["themes"], self.lists["scenes"])
+                       if self.bridge_up else None)
         if payload is None:
             return
         self.publish(self.topics["available"], "online", True)
@@ -1724,7 +1822,7 @@ class RingLink:
 
     # --- commands in --------------------------------------------------------
     def kind_of(self, topic):
-        for kind in ("light", "schedule", "off_at", "on_at", "ambient"):
+        for kind in self.KINDS:
             if topic == self.topics[kind]:
                 return kind
         return None
@@ -1740,9 +1838,13 @@ class RingLink:
         return True
 
     def execute(self, kind, payload):
+        if kind == "_lists":
+            self.refresh_lists()
+            return
         with self.lock:
             st = dict(self.st)
-        calls = ring_commands(kind, payload, st)
+            themes, scenes = self.lists["themes"], self.lists["scenes"]
+        calls = ring_commands(kind, payload, st, themes, scenes)
         if not calls:
             log("ring: ignored malformed", kind, "command")
         for method, params in calls:
@@ -1756,20 +1858,31 @@ class RingLink:
                 return
 
     def worker(self):
-        while not _shutdown:
+        while not self.stop.is_set():
             with self._cv:
-                while not self._queue and not _shutdown:
+                while not self._queue and not self.stop.is_set():
                     self._cv.wait(1)
-                if _shutdown:
+                if self.stop.is_set():
                     return
                 kind, payload = self._queue.pop(0)
             self.execute(kind, payload)
+
+    def close(self):
+        """Stop the worker (and a listener of its own) now, not at the next
+        poll."""
+        self.stop.set()
+        with self._cv:
+            self._cv.notify_all()
+        feed = getattr(self, "_feed", None)
+        if feed is not None:
+            feed.close()
 
     # --- the bridge listener ------------------------------------------------
     def listen(self):
         """Alone on a bridge connection (tests); run() shares one BridgeFeed
         between the ring and the volume."""
-        BridgeFeed([self]).listen()
+        self._feed = BridgeFeed([self], stop=self.stop)
+        self._feed.listen()
 
 
 class BridgeFeed:
@@ -1778,17 +1891,36 @@ class BridgeFeed:
     consumer has set_state(full), apply_event(event, data) and bridge_down().
     Blocks in recv(): no cost while nothing changes."""
 
-    def __init__(self, consumers):
+    def __init__(self, consumers, stop=None):
         self.consumers = list(consumers)
+        self.stop = stop or _STOP
+        self._sock = None
+        self._sock_lock = threading.Lock()
+
+    def close(self):
+        """Stop listening now: a recv() blocked on a quiet bridge would
+        otherwise wait for the bridge's next event."""
+        self.stop.set()
+        with self._sock_lock:
+            s = self._sock
+        if s is not None:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def listen(self):
-        while not _shutdown:
+        while not self.stop.is_set():
             try:
                 with socket.create_connection((CONTROL_HOST, CONTROL_PORT), 3) as s:
+                    with self._sock_lock:
+                        self._sock = s
+                    if self.stop.is_set():
+                        return
                     s.settimeout(None)
                     s.sendall(json.dumps({"id": 1, "method": "getState"}).encode() + b"\n")
                     buf = b""
-                    while not _shutdown:
+                    while not self.stop.is_set():
                         chunk = s.recv(4096)
                         if not chunk:
                             raise OSError("bridge closed the connection")
@@ -1798,13 +1930,18 @@ class BridgeFeed:
                             if line.strip():
                                 self.handle_line(line)
             except (OSError, ValueError) as e:
+                if self.stop.is_set():
+                    return
                 log("bridge link down:", e)
+            finally:
+                with self._sock_lock:
+                    self._sock = None
+            if self.stop.is_set():
+                return
             for c in self.consumers:
                 c.bridge_down()
-            for _ in range(RING_RETRY_S):
-                if _shutdown:
-                    return
-                time.sleep(1)
+            if self.stop.wait(RING_RETRY_S):
+                return
 
     def handle_line(self, line):
         try:
@@ -1889,11 +2026,12 @@ class VolumeLink:
     the BridgeFeed; `publish` and `call` are injected, as in RingLink."""
 
     def __init__(self, node_id, display_name, prefix, discovery_prefix,
-                 publish, call=control_call):
+                 publish, call=control_call, stop=None):
         self.node_id, self.display_name = node_id, display_name
         self.prefix, self.discovery_prefix = prefix, discovery_prefix
         self.topics = volume_topics(prefix, node_id)
         self.publish, self.call = publish, call
+        self.stop = stop or _STOP
         self.lock = threading.Lock()
         self.st = None
         self._queue = []
@@ -1969,26 +2107,32 @@ class VolumeLink:
                 return
 
     def worker(self):
-        while not _shutdown:
+        while not self.stop.is_set():
             with self._cv:
-                while not self._queue and not _shutdown:
+                while not self._queue and not self.stop.is_set():
                     self._cv.wait(1)
-                if _shutdown:
+                if self.stop.is_set():
                     return
                 kind, payload = self._queue.pop(0)
             self.execute(kind, payload)
+
+    def close(self):
+        """Stop the worker (and a listener of its own) now, not at the next
+        poll."""
+        self.stop.set()
+        with self._cv:
+            self._cv.notify_all()
+        feed = getattr(self, "_feed", None)
+        if feed is not None:
+            feed.close()
 
 
 # --------------------------------------------------------------------------
 # main loop
 # --------------------------------------------------------------------------
 
-_shutdown = False
-
-
 def _on_sigterm(signum, frame):
-    global _shutdown
-    _shutdown = True
+    _STOP.set()
 
 
 def run():
@@ -2067,7 +2211,7 @@ def run():
         # and a captured reference would publish into a dead socket forever.
         threading.Thread(target=publish_server, args=(lambda: client,),
                          daemon=True).start()
-    while not _shutdown:
+    while not _STOP.is_set():
         try:
             client = MqttClient(
                 conf["host"], conf["port"], client_id=node_id,
@@ -2091,8 +2235,7 @@ def run():
                 client.subscribe(ROON_FILTERS)
                 log(f"subscribed to {ROON_ROOT}/… for Roon now-playing")
             if ring is not None:
-                client.subscribe([ring.topics[k] for k in
-                                  ("light", "schedule", "off_at", "on_at", "ambient")])
+                client.subscribe([ring.topics[k] for k in RingLink.KINDS])
             if vol is not None:
                 client.subscribe([vol.topics["level"], vol.topics["mute"]])
             if upd is not None:
@@ -2113,13 +2256,13 @@ def run():
                     client.publish(f"{conf['discovery_prefix']}/{suffix}",
                                    json.dumps(cfg), retain=True)
                 upd.republish()
-            while not _shutdown:
+            while not _STOP.is_set():
                 state = collect(win)
                 payload = json.dumps(state)
                 client.publish(state_topic, payload, retain=True)
                 client.publish(legacy_state_topic, payload, retain=True)
                 deadline = time.monotonic() + conf["interval_s"]
-                while not _shutdown and time.monotonic() < deadline:
+                while not _STOP.is_set() and time.monotonic() < deadline:
                     client.maintain()
                     time.sleep(1)
         except (MqttError, OSError) as e:
@@ -2129,7 +2272,7 @@ def run():
                 client = None
             # interruptible backoff sleep
             for _ in range(backoff):
-                if _shutdown:
+                if _STOP.is_set():
                     break
                 time.sleep(1)
             backoff = min(backoff * 2, 60)

@@ -6,6 +6,63 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the light theme and the visualisation in Home Assistant (`nexusq-mqtt` **r11**)
+
+Petr, 2026-09-28, after testing the rest in Home Assistant: the theme and the
+visualisation belong there too, so automations can pick them.
+
+- Two `select` entities on the Q's device, **LED ring theme** and **LED ring
+  visualization**.
+  - Their options are the bridge's own lists (`listThemes` / `listScenes`), shown
+    by label (Blue, Warm, … / Waveform, Solid Wave, …). HA can therefore never
+    offer something the Q lacks.
+  - A command is `setTheme` / `setScene`, the app's methods. It accepts a label,
+    or the bridge's name typed into an automation; anything else maps to
+    nothing.
+  - `themeChanged` / `sceneChanged` push a choice made in the app into the
+    retained `ring/state` at once.
+- The lists are fetched once per bridge connection, on the ring's worker
+  thread. The first version fetched them on the shared BridgeFeed thread, and
+  the volume tests caught the cost: a bridge that is slow to answer held up the
+  volume's state as well. Without the lists there are no selects.
+- Tests (`tests/test_ring_ha.py`, +9):
+  - the command mapping and the state payload;
+  - discovery with and without the lists;
+  - the whole path against the fake bridge on a real TCP socket: HA → bridge
+    → echo, and a change made in the app → HA.
+
+  Five mutations were each seen failing: the app's event ignored, any text
+  passed through, lists never fetched, commands not routed, the theme missing
+  from the state. Suite 119/119.
+- **The test suite aborted at interpreter exit** (four SIGABRT cores,
+  2026-09-28 22:35–22:38, diagnosed by a crash-diagnosis session): CPython's
+  `_enter_buffered_busy` with 29 threads parked.
+  - The HA link tests stopped their threads by setting the module-level
+    `_shutdown` for 50 ms and clearing it again. No thread saw it:
+    - the worker polls once a second;
+    - the listener sits in `recv()`, and by the time it returned the test's
+      port patch had been undone.
+  - So every test left a worker and a listener behind, the listener
+    reconnecting forever to the **real** bridge port on localhost. One of them
+    printing at exit aborted the run.
+  - Now every worker and listener has its own `stop` Event, defaulting to the
+    process's `_STOP`, which SIGTERM sets. Each has a `close()` that wakes it
+    at once; `BridgeFeed.close()` shuts its socket down, so a quiet `recv()`
+    returns, and the retry wait is `stop.wait()`.
+  - The tests close and **join** their threads before the patches are undone
+    and fail on any thread that survives. The fake bridge's accept thread is
+    woken by `shutdown()`, since `close()` alone does not wake `accept()` on
+    Linux.
+  - New tests: `close()` ends both threads on a quiet bridge and during the
+    retry wait. Each was seen failing, with the socket left open and with
+    `time.sleep` in the retry wait.
+  - Result: 121/121 in eight consecutive runs, no abort, no connection
+    attempt to the real port, and 0 threads alive after the suite (14 before
+    the accept fix).
+- **Verified by Petr in Home Assistant, 2026-09-28** (Prague Q), before this
+  change: the Volume number, and the LED ring's on/off (nexusq-mqtt r9/r10,
+  whose entries above still say "not yet run against the real broker").
+
 ### Added — the connection chime: the Q greets whatever takes it (`nexusq-control` **r59**)
 
 Petr, 2026-09-28: when something connects, the Q should make a sound. It uses
@@ -877,6 +934,16 @@ Record: `docs/2026-09-26-idle-audit-five-pollers.md`, captures in
     whose `apk update` reads the whole Alpine edge index as the bridge's child.
     nexusq-mqtt rises in the same minutes.
   - About 25 s a day, ~0.03 % of a core on average.
+- (2026-09-28) **The visualisation is not persisted.** The bridge holds it in
+  memory and reports `waveform` after every start (`state["scene"]`).
+  - A reboot loses the user's choice.
+  - A restart of the bridge alone, as every OTA of it does, makes the app and
+    Home Assistant show Waveform while the ring still runs the scene picked
+    before.
+  - The theme has been persisted since r37 (`theme.json`, a symlink into the
+    persist store since r116). The scene needs the same: a `scene.json`
+    through `write_json_through`, its persist-store link in the device
+    package, and a restore at boot.
 - A 4 MB health.jsonl lasts ~9.3 h at the r119 schema, so the two files hold
   ~18.7 h. Read an overnight soak before noon or lose its start.
 - (from Todoist, 2026-07-07) The HDMI desktop session is a second permanent

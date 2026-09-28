@@ -15,7 +15,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_ring_ha import MOD, NODE, PREFIX, DISC, FakeBridge, bridge_state  # noqa: E402
+from test_ring_ha import (MOD, NODE, PREFIX, DISC, FakeBridge, bridge_state,  # noqa: E402
+                          join_or_fail, start)
 
 
 def wait_for(pred, timeout=5):
@@ -74,16 +75,18 @@ class TestOneConnection(unittest.TestCase):
                   mock.patch.object(MOD, "RING_RETRY_S", 1)):
             p.start()
             self.addCleanup(p.stop)
-        self.ring = MOD.RingLink(NODE, "Obývák", PREFIX, DISC, pub)
-        self.vol = MOD.VolumeLink(NODE, "Obývák", PREFIX, DISC, pub)
-        threading.Thread(target=MOD.BridgeFeed([self.ring, self.vol]).listen, daemon=True).start()
-        threading.Thread(target=self.vol.worker, daemon=True).start()
-        self.addCleanup(self._stop)
+        self.stop = threading.Event()
+        self.ring = MOD.RingLink(NODE, "Obývák", PREFIX, DISC, pub, stop=self.stop)
+        self.vol = MOD.VolumeLink(NODE, "Obývák", PREFIX, DISC, pub, stop=self.stop)
+        self.feed = MOD.BridgeFeed([self.ring, self.vol], stop=self.stop)
+        self.threads = start(self, self.feed.listen, self.vol.worker)
+        self.addCleanup(self._stop)       # last registered, runs first
 
     def _stop(self):
-        MOD._shutdown = True
-        time.sleep(0.05)
-        MOD._shutdown = False
+        self.feed.close()
+        self.vol.close()
+        self.bridge.close()
+        join_or_fail(self, self.threads)
 
     def vol_state(self):
         for t, p, _ in reversed(self.published):

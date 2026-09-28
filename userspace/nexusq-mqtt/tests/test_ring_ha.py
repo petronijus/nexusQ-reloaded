@@ -31,14 +31,43 @@ MOD = load_daemon()
 NODE, PREFIX, DISC = "nexusq_f88fca2048e1", "nexusq", "homeassistant"
 
 
+#: the bridge's own lists (nexusq-control THEMES / SCENES)
+THEMES = [{"name": "blue", "label": "Blue"}, {"name": "warm", "label": "Warm"},
+          {"name": "cool", "label": "Cool"}, {"name": "rose", "label": "Rose"},
+          {"name": "smoke", "label": "Smoke"}, {"name": "off", "label": "Off"}]
+SCENES = [{"name": "waveform", "label": "Waveform", "index": 0},
+          {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
+          {"name": "circles", "label": "Circles", "index": 2},
+          {"name": "pointmorph", "label": "Morph", "index": 3},
+          {"name": "starfield", "label": "Starfield", "index": 4}]
+
+
 def bridge_state(on=True, schedule=False, ambient=True, level=200, brightness=200):
-    st = {"brightness": brightness,
+    st = {"brightness": brightness, "theme": "blue", "scene": "waveform",
           "ring": {"on": on, "clockSynced": True,
                    "schedule": {"enabled": schedule, "off": "23:00", "on": "07:00"}}}
     if ambient is not None:
         st["ambient"] = {"enabled": ambient, "level": level, "clockSynced": True,
                          "location": {"zone": "Europe/Prague", "lat": 50.08, "lon": 14.43}}
     return st
+
+
+def start(testcase, *targets):
+    """Run each target on a daemon thread; the test must stop them itself."""
+    threads = [threading.Thread(target=t, daemon=True) for t in targets]
+    for t in threads:
+        t.start()
+    return threads
+
+
+def join_or_fail(testcase, threads, timeout=5):
+    """A thread still alive after its stop is a leak: it outlives the test's
+    patches and, at interpreter exit, can abort the whole run."""
+    for t in threads:
+        t.join(timeout)
+    alive = [t for t in threads if t.is_alive()]
+    if alive:
+        testcase.fail(f"{len(alive)} thread(s) did not stop: {alive}")
 
 
 def wait_for(pred, timeout=5):
@@ -52,7 +81,20 @@ def wait_for(pred, timeout=5):
 
 class TestCommands(unittest.TestCase):
     def cmds(self, kind, payload, st=None):
-        return MOD.ring_commands(kind, payload, st or bridge_state())
+        return MOD.ring_commands(kind, payload, st or bridge_state(), THEMES, SCENES)
+
+    def test_a_theme_by_label_or_by_name(self):
+        self.assertEqual(self.cmds("theme", b"Warm"), [("setTheme", {"theme": "warm"})])
+        self.assertEqual(self.cmds("theme", b"warm"), [("setTheme", {"theme": "warm"})])
+
+    def test_a_visualization_by_label_or_by_name(self):
+        self.assertEqual(self.cmds("scene", b"Solid Wave"), [("setScene", {"scene": "waveformsolid"})])
+        self.assertEqual(self.cmds("scene", b"starfield"), [("setScene", {"scene": "starfield"})])
+
+    def test_an_unknown_option_reaches_nothing(self):
+        self.assertEqual(self.cmds("theme", b"Purple"), [])
+        self.assertEqual(self.cmds("scene", b"Blue"), [])    # a theme is not a scene
+        self.assertEqual(MOD.ring_commands("theme", b"Warm", bridge_state()), [])  # no list yet
 
     def test_a_brightness_move_is_not_a_switch(self):
         # HA sends state ON with every brightness move. Passing that on as
@@ -89,6 +131,16 @@ class TestCommands(unittest.TestCase):
 
 
 class TestStatePayload(unittest.TestCase):
+    def test_theme_and_scene_by_label(self):
+        out = MOD.ring_state_payload(dict(bridge_state(), theme="rose", scene="circles"),
+                                     THEMES, SCENES)
+        self.assertEqual((out["theme"], out["scene"]), ("Rose", "Circles"))
+
+    def test_an_unknown_theme_is_left_out_not_invented(self):
+        out = MOD.ring_state_payload(dict(bridge_state(), theme="purple"), THEMES, SCENES)
+        self.assertNotIn("theme", out)
+        self.assertEqual(out["scene"], "Waveform")
+
     def test_shape(self):
         p = MOD.ring_state_payload(bridge_state(on=False, schedule=True, level=50))
         self.assertEqual(p, {"state": "OFF", "brightness": 200, "color_mode": "brightness",
@@ -105,15 +157,33 @@ class TestStatePayload(unittest.TestCase):
 
 
 class TestDiscovery(unittest.TestCase):
-    def configs(self, st):
-        return dict(MOD.ring_discovery_configs(NODE, "Obývák", PREFIX, st))
+    def configs(self, st, themes=THEMES, scenes=SCENES):
+        return dict(MOD.ring_discovery_configs(NODE, "Obývák", PREFIX, st, themes, scenes))
+
+    def test_theme_and_visualization_are_selects_with_the_bridges_labels(self):
+        c = self.configs(bridge_state())
+        theme = c[f"select/{NODE}/ring_theme/config"]
+        scene = c[f"select/{NODE}/ring_scene/config"]
+        self.assertEqual(theme["options"], ["Blue", "Warm", "Cool", "Rose", "Smoke", "Off"])
+        self.assertEqual(scene["options"], ["Waveform", "Solid Wave", "Circles", "Morph", "Starfield"])
+        self.assertEqual(theme["command_topic"], f"{PREFIX}/{NODE}/ring/theme/set")
+        self.assertEqual(scene["command_topic"], f"{PREFIX}/{NODE}/ring/scene/set")
+
+    def test_no_lists_no_selects(self):
+        # the bridge did not answer listThemes/listScenes: offer nothing rather
+        # than options the Q may not have
+        c = self.configs(bridge_state(), themes=None, scenes=None)
+        self.assertIsNone(c[f"select/{NODE}/ring_theme/config"])
+        self.assertIsNone(c[f"select/{NODE}/ring_scene/config"])
+        self.assertIsNotNone(c[f"light/{NODE}/ring/config"])
 
     def test_every_entity_with_a_full_bridge(self):
         c = self.configs(bridge_state())
         self.assertEqual(sorted(c), sorted([
             f"light/{NODE}/ring/config", f"switch/{NODE}/ring_schedule/config",
             f"text/{NODE}/ring_off_at/config", f"text/{NODE}/ring_on_at/config",
-            f"switch/{NODE}/ambient/config", f"sensor/{NODE}/ring_level/config"]))
+            f"switch/{NODE}/ambient/config", f"sensor/{NODE}/ring_level/config",
+            f"select/{NODE}/ring_theme/config", f"select/{NODE}/ring_scene/config"]))
         ids = [cfg["unique_id"] for cfg in c.values()]
         self.assertEqual(len(ids), len(set(ids)))
         light = c[f"light/{NODE}/ring/config"]
@@ -195,6 +265,10 @@ class FakeBridge:
                 if m == "getState":
                     self._send(c, {"id": rid, "ok": True, "result": self.st})
                     continue
+                if m in ("listThemes", "listScenes"):
+                    result = ({"themes": THEMES} if m == "listThemes" else {"scenes": SCENES})
+                    self._send(c, {"id": rid, "ok": True, "result": result})
+                    continue
                 self.calls.append((m, p))
                 if m in self.refuse:
                     self._send(c, {"id": rid, "ok": False,
@@ -220,6 +294,12 @@ class FakeBridge:
         if m == "setAmbient":
             self.st["ambient"]["enabled"] = p["enabled"]
             return "ambientChanged", self.st["ambient"]
+        if m == "setTheme":
+            self.st["theme"] = p["theme"]
+            return "themeChanged", {"theme": p["theme"]}
+        if m == "setScene":
+            self.st["scene"] = p["scene"]
+            return "sceneChanged", {"scene": p["scene"]}
         if m == "setVolume":
             self.st["volume"], self.st["muted"] = p["volume"], False
             return "volumeChanged", {"volume": self.st["volume"], "muted": False}
@@ -237,6 +317,12 @@ class FakeBridge:
             except OSError:
                 pass
             c.close()
+        # close() alone does not wake a thread blocked in accept() on Linux;
+        # shutdown() does, so the accept thread ends with the bridge
+        try:
+            self.srv.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.srv.close()
 
 
@@ -251,16 +337,30 @@ class TestLinkAgainstABridge(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+        self.stop = threading.Event()
         self.link = MOD.RingLink(NODE, "Obývák", PREFIX, DISC,
-                                 lambda t, p, r: self.published.append((t, p, r)))
-        threading.Thread(target=self.link.listen, daemon=True).start()
-        threading.Thread(target=self.link.worker, daemon=True).start()
+                                 lambda t, p, r: self.published.append((t, p, r)),
+                                 stop=self.stop)
+        self.threads = start(self, self.link.listen, self.link.worker)
+        # registered last, so it runs first: the threads are stopped and
+        # joined while the test's port patch is still in place
         self.addCleanup(self._stop)
 
     def _stop(self):
-        MOD._shutdown = True
-        time.sleep(0.05)
-        MOD._shutdown = False
+        self.link.close()
+        self.bridge.close()
+        join_or_fail(self, self.threads)
+
+    def test_close_stops_both_threads_on_a_quiet_bridge(self):
+        # nothing is sent after getState: the listener sits in recv(). close()
+        # alone -- the bridge stays up -- must end it and the worker promptly
+        self.assertTrue(wait_for(lambda: self.last_state() is not None))
+        t0 = time.monotonic()
+        self.link.close()
+        for t in self.threads:
+            t.join(3)
+        self.assertFalse(any(t.is_alive() for t in self.threads))
+        self.assertLess(time.monotonic() - t0, 2)
 
     def last_state(self):
         for t, p, _ in reversed(self.published):
@@ -299,6 +399,39 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.assertTrue(wait_for(lambda: any(
             t == f"{PREFIX}/{NODE}/ring/state" for t, _, _ in self.published[n:])))
         self.assertTrue(self.last_state()["ambient"])
+
+    def test_theme_and_visualization_from_ha_and_back(self):
+        self.assertTrue(wait_for(lambda: (self.last_state() or {}).get("theme") == "Blue"))
+        topics = [t for t, _, _ in self.published]
+        self.assertIn(f"{DISC}/select/{NODE}/ring_theme/config", topics)
+        self.link.submit(f"{PREFIX}/{NODE}/ring/theme/set", b"Warm")
+        self.assertTrue(wait_for(lambda: self.last_state()["theme"] == "Warm"))
+        self.link.submit(f"{PREFIX}/{NODE}/ring/scene/set", b"Starfield")
+        self.assertTrue(wait_for(lambda: self.last_state()["scene"] == "Starfield"))
+        self.assertEqual(self.bridge.calls, [("setTheme", {"theme": "warm"}),
+                                             ("setScene", {"scene": "starfield"})])
+
+    def test_a_theme_picked_in_the_app_reaches_ha(self):
+        self.assertTrue(wait_for(lambda: (self.last_state() or {}).get("theme") == "Blue"))
+        self.bridge.broadcast("themeChanged", {"theme": "smoke"})
+        self.assertTrue(wait_for(lambda: self.last_state()["theme"] == "Smoke"))
+        self.bridge.broadcast("sceneChanged", {"scene": "pointmorph"})
+        self.assertTrue(wait_for(lambda: self.last_state()["scene"] == "Morph"))
+
+    def test_close_stops_a_listener_waiting_to_reconnect(self):
+        # the bridge is gone and the listener sits in its retry wait: close()
+        # must end it now, not after RING_RETRY_S
+        self.assertTrue(wait_for(lambda: self.last_state() is not None))
+        with mock.patch.object(MOD, "RING_RETRY_S", 30):
+            self.bridge.close()
+            self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/ring/available", "offline", True)
+                                     in self.published))
+            t0 = time.monotonic()
+            self.link.close()
+            for t in self.threads:
+                t.join(5)
+        self.assertFalse(any(t.is_alive() for t in self.threads))
+        self.assertLess(time.monotonic() - t0, 2)
 
     def test_foreign_topics_are_not_ours(self):
         self.assertFalse(self.link.submit("roon/Obyvak/state", b"playing"))
