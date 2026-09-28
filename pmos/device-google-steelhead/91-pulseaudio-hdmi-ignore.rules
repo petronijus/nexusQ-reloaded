@@ -53,3 +53,17 @@ SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="snd_aloop.0", ENV{PULSE_IGNORE}="
 # on it and HOLDS the playback substream — RAATServer then gets EBUSY and reports
 # DeviceOpenFailed for every enable attempt (hit live 2026-07-17).
 SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="snd_aloop.1", ENV{PULSE_IGNORE}="1"
+
+# And the UAC2 gadget card (UAC2Gadget, the "USB Audio" input: a host playing
+# into the Q over the micro-USB cable). Its ONLY reader is nexusq-uac2-in's
+# alsaloop, which carries it into PA through the aloop hop (usb_in); PA must not
+# open it directly. Without this, module-udev-detect loads module-alsa-card on it
+# at boot (source alsa_input.platform-musb-hdrc.0.auto.stereo-fallback, read by
+# nobody), and on at least two boots (2026-09-19, 2026-09-28) alsaloop's first
+# open of hw:UAC2Gadget failed EBUSY and USB Audio came up ~6 s late, healing
+# only when PA's suspend-on-idle let go. Any client un-suspending that source
+# would steal the gadget from alsaloop outright.
+# Matched by the parent SUBSYSTEM: the card hangs off the configfs gadget
+# (gadget.0 under musb-hdrc.0.auto), the only USB gadget on this board, so no
+# card index or instance name is involved.
+SUBSYSTEM=="sound", KERNEL=="card*", SUBSYSTEMS=="gadget", ENV{PULSE_IGNORE}="1"

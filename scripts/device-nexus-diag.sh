@@ -28,7 +28,8 @@ echo "--- pstore (archive) ---"; ls /var/lib/systemd/pstore/ 2>/dev/null || echo
 } > $LOG 2>&1
 fi
 
-# USB gadget network (RNDIS) + sshd on 172.16.42.1
+# USB gadget network (RNDIS) + sshd on 172.16.43.1 (the running system's
+# address since device r120; see pmos/device-google-steelhead/unudhcpd.conf)
 {
 modprobe libcomposite 2>/dev/null
 mount -t configfs none /sys/kernel/config 2>/dev/null
@@ -75,7 +76,7 @@ UDC=$(ls /sys/class/udc | head -1)
 echo "$UDC" > $CG/g1/UDC
 sleep 1
 IF=$(cat $CG/g1/functions/$FN/ifname 2>/dev/null)
-[ -n "$IF" ] && { ip link set "$IF" up; ip addr add 172.16.42.1/24 dev "$IF"; }
+[ -n "$IF" ] && { ip link set "$IF" up; ip addr add 172.16.43.1/24 dev "$IF"; }
 mkdir -p /var/empty
 /usr/sbin/sshd 2>>$LOG
 echo "gadget: UDC=$UDC fn=$FN if=$IF" >> $LOG
@@ -86,7 +87,7 @@ echo "########## NEXUS DIAG v3 ##########"
 grep -E "gpio-(1|62)\b" /sys/kernel/debug/gpio
 echo "auxclk3: $(cat /sys/kernel/debug/clk/auxclk3_ck/clk_rate 2>/dev/null) Hz, en=$(cat /sys/kernel/debug/clk/auxclk3_ck/clk_enable_count 2>/dev/null)"
 ls /sys/bus/usb/devices/
-echo "USB-GADGET: $(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null), IP 172.16.42.1"
+echo "USB-GADGET: $(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null), IP 172.16.43.1"
 pgrep -x sshd >/dev/null && echo "sshd: BEZI" || echo "sshd: NEBEZI"
 C=/sys/devices/system/cpu/cpu0/cpufreq
 echo "CPU: $(cat $C/scaling_cur_freq 2>/dev/null)kHz/$(cat $C/scaling_governor 2>/dev/null) x$(nproc)  temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)mC"

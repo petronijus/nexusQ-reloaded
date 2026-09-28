@@ -1,6 +1,6 @@
 #!/bin/sh
 # Nexus Q (steelhead): deterministically bring up the micro-USB gadget as a
-# COMPOSITE RNDIS network (172.16.42.1 + sshd) + ACM serial console, every boot,
+# COMPOSITE RNDIS network (172.16.43.1 + sshd) + ACM serial console, every boot,
 # straight from configfs.
 #
 # Why this exists: relying on pmOS's RNDIS bringup followed by the RNDIS->ACM
@@ -132,11 +132,18 @@ if ! echo "$UDC" > "$G/UDC" 2>/dev/null; then
 fi
 sleep 1
 
-# Bring the RNDIS net device up with the well-known pmOS USB-net address.
+# Bring the RNDIS net device up. The address is the one unudhcpd@usb0 serves
+# from (/etc/unudhcpd.conf): 172.16.43.1, deliberately NOT pmOS's default subnet,
+# which every other pmOS gadget on the same host also claims (see that file).
+UNUDHCPD_SERVER=172.16.43.1
+[ -r /etc/unudhcpd.conf ] && . /etc/unudhcpd.conf
+ADDR="$UNUDHCPD_SERVER"
 IF="$(cat "$G/functions/rndis.usb0/ifname" 2>/dev/null)"
 [ -n "$IF" ] || IF=usb0
 ip link set "$IF" up 2>/dev/null || true
-ip addr add 172.16.42.1/24 dev "$IF" 2>/dev/null || true
+# A re-run after an address change must not leave the old one behind.
+ip -4 addr flush dev "$IF" 2>/dev/null || true
+ip addr add "$ADDR/24" dev "$IF" 2>/dev/null || true
 
 # Make sure ssh is reachable over it, and offer a login on the ACM port.
 mkdir -p /var/empty
@@ -144,5 +151,5 @@ systemctl start sshd.service 2>/dev/null || systemctl start ssh.service 2>/dev/n
 	|| { command -v sshd >/dev/null 2>&1 && /usr/sbin/sshd 2>/dev/null; } || true
 systemctl start serial-getty@ttyGS0.service 2>/dev/null || true
 
-log "UP: UDC=$UDC iface=$IF ip=172.16.42.1/24 (rndis+acm) — ssh root@172.16.42.1"
+log "UP: UDC=$UDC iface=$IF ip=$ADDR/24 (rndis+acm) — ssh root@$ADDR"
 exit 0

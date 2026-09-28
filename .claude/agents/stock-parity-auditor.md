@@ -73,9 +73,9 @@ RE toolkit (Bash + python + capstone; `pip install capstone` if missing):
   `0006-*ehci*` ULPI/keepalive, `0007-clk-ti-composite*` amp MCLK).
 
 ### C. Live device (optional confirmation; ask/za only if reachable)
-Prefer the **USB gadget** link (WiFi is unstable): `NEXUS_HOST=172.16.42.1`.
+Prefer the **USB gadget** link (WiFi is unstable): `NEXUS_HOST=172.16.43.1` (device r120+; never `172.16.42.1`, that is the Lumia).
 Recipe (Git Bash): `export NEXUS_PW="$(tr -d '\r\n' < .nexus_pw)"; export
-MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' NEXUS_HOST=172.16.42.1` then
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' NEXUS_HOST=172.16.43.1` then
 `python scripts/nexus_ssh.py "<cmd>"`. Useful live reads: `/proc/cmdline`,
 `/sys/kernel/debug/clk/clk_summary`, `/sys/class/regulator/*/{name,state}`,
 `/sys/kernel/debug/usb/devices`, `dmesg`. devmem on suspended EHCI is

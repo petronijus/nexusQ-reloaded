@@ -36,14 +36,17 @@ Start-Sleep -Seconds 6
 L "=== devices after ==="
 Get-PnpDevice | Where-Object { $_.InstanceId -like '*VID_18D1&PID_4EE2*' } | Select-Object Status, Class, FriendlyName, InstanceId | Format-Table -AutoSize | Out-String | ForEach-Object { L $_ }
 
-$nic = Get-NetAdapter | Where-Object { $_.InterfaceDescription -match 'RNDIS|Remote NDIS' } | Select-Object -First 1
+# The Q's gadget by its fixed host-side MAC (nexusq-usb-gadget.sh rndis host_addr),
+# not the first RNDIS adapter: the Lumia 1020's gadget is RNDIS too.
+$nic = Get-NetAdapter | Where-Object { $_.MacAddress -eq '02-1A-11-00-00-02' } | Select-Object -First 1
 if ($nic) {
     L "RNDIS NIC: $($nic.Name) [$($nic.InterfaceDescription)] status=$($nic.Status)"
-    # 5) assign host gadget-net IP 172.16.42.2/24 (device side is 172.16.42.1)
-    Get-NetIPAddress -InterfaceAlias $nic.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '172.16.42.2' } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    # 5) assign host gadget-net IP 172.16.43.2/24 (device side is 172.16.43.1, off
+    #    pmOS's shared 172.16.42.0/24 since device r120)
+    Get-NetIPAddress -InterfaceAlias $nic.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '172.16.43.2' } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
     try {
-        New-NetIPAddress -InterfaceAlias $nic.Name -IPAddress 172.16.42.2 -PrefixLength 24 -ErrorAction Stop | Out-Null
-        L "assigned 172.16.42.2/24 to $($nic.Name)"
+        New-NetIPAddress -InterfaceAlias $nic.Name -IPAddress 172.16.43.2 -PrefixLength 24 -ErrorAction Stop | Out-Null
+        L "assigned 172.16.43.2/24 to $($nic.Name)"
     } catch {
         L "IP assign note: $($_.Exception.Message)"
     }

@@ -644,6 +644,45 @@ static long long avr_irq_count(void)
 }
 
 /* ---------- LED frame fingerprint --------------------------------------- */
+/* Where the committed frame lives. The attribute sits on the AVR's i2c device
+ * (1-0020 on this board); the LED class devices the driver registers are
+ * `steelhead:rgb:ring-<n>` and `steelhead:rgb:mute` (kernel patch 0005), all
+ * children of that device. Up to device r120 this looked for
+ * `steelhead:rgb:ring/device/frame` -- a name the driver never had -- and a
+ * platform path that does not exist, so from the C rewrite (r77) on led_sum
+ * was 0 and led_changed never set: led_static fired forever and led_frozen
+ * rested on nexusqd's own liveness alone. The shell healthd before it scanned
+ * the i2c bus for `frame`, which is the fallback here. */
+#ifndef LEDS_ROOT
+#define LEDS_ROOT "/sys/class/leds"
+#endif
+#ifndef I2C_DEVS
+#define I2C_DEVS "/sys/bus/i2c/devices"
+#endif
+
+static int find_frame_attr(char *out, size_t n)
+{
+    snprintf(out, n, "%s/steelhead:rgb:ring-0/device/frame", LEDS_ROOT);
+    if (access(out, R_OK) == 0)
+        return 1;
+    DIR *d = opendir(I2C_DEVS);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.')
+                continue;
+            snprintf(out, n, "%s/%s/frame", I2C_DEVS, e->d_name);
+            if (access(out, R_OK) == 0) {
+                closedir(d);
+                return 1;
+            }
+        }
+        closedir(d);
+    }
+    *out = '\0';
+    return 0;
+}
+
 /* The driver's committed frame (kernel patch 0029) is authoritative. One read
  * yields both the brightness sum and a change-sensitive rolling hash; the hash
  * only ever feeds an equality test, so a cryptographic digest would buy
@@ -1102,11 +1141,10 @@ int main(int argc, char **argv)
     reg_dir("abb_mpu", abb_dir, sizeof abb_dir);
 
     /* The committed-frame attr (patch 0029) if the kernel exposes it. */
-    const char *frame_attr = NULL;
-    if (access("/sys/class/leds/steelhead:rgb:ring/device/frame", R_OK) == 0)
-        frame_attr = "/sys/class/leds/steelhead:rgb:ring/device/frame";
-    else if (access("/sys/devices/platform/steelhead-avr/frame", R_OK) == 0)
-        frame_attr = "/sys/devices/platform/steelhead-avr/frame";
+    char frame_buf[512];
+    const char *frame_attr = find_frame_attr(frame_buf, sizeof frame_buf) ? frame_buf : NULL;
+    if (!frame_attr)
+        fprintf(stderr, "nq-healthd: no LED frame attribute; led_sum stays 0\n");
 
     /* cached unit state — see unit_probe() */
     long nq_pid = 0, nq_restarts = 0, ls_pid = 0, ls_restarts = 0;

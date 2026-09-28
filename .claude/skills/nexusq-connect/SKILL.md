@@ -39,8 +39,9 @@ intermittency" was an unmuxed `gpio_1` NENABLE pad, fixed by a DTS pad mux); on
 a **pre-`#33`** image `eth0` may be absent on a cold boot (that unmuxed pad, not
 a profile fault) — `ls /sys/class/net` for `eth0` first, get onto `#33`; device
 eth0's hw MAC is random per boot — no MAC EEPROM),
-**USB gadget** (RNDIS `172.16.42.1` — re-discover the `enx*` iface whose MAC/name
-changes each reboot, mark it unmanaged, assign `172.16.42.2`; plus the `/dev/ttyACM*`
+**USB gadget** (RNDIS `172.16.43.1` since device r120 — never `172.16.42.1`, which is
+the Lumia 1020; the host iface is the one with MAC `02:1a:11:00:00:02`, given
+`172.16.43.2` by the NM profile `nexusq-usb` or by hand; plus the `/dev/ttyACM*`
 serial console as a fallback), and **WiFi** (last-known lease
 **`192.168.20.246`** as of 2026-08-10 — the factory-MAC pin does NOT freeze the
 lease; it has moved `.195`→`.184`→`.164`→`.246` (`.246` = a fresh lease after the

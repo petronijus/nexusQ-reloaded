@@ -1,11 +1,16 @@
 # nq_gadget_up <product-string>
 #
-# Bring up the RNDIS gadget and a telnet server on 172.16.42.1. This board has
+# Bring up the RNDIS gadget and a telnet server on 172.16.43.1. This board has
 # NO serial console, so an initramfs without this is a black box: if something
 # goes wrong there is no way to ask it what, and the only move left is a power
 # cycle. Everything here mirrors what nexusq-usb-gadget.sh does on the running
 # system, including the wireless-RNDIS class and the MS OS descriptors, so the
 # host binds its inbox driver with no .inf dance.
+#
+# The address is the running system's (pmos/device-google-steelhead/
+# unudhcpd.conf), off pmOS's shared 172.16.42.0/24: a rescue with the Lumia
+# plugged into the same host would otherwise reach the wrong device. There is
+# no DHCP here; the host takes 172.16.43.2 itself.
 #
 # The shell it serves is unauthenticated by design: it exists only in RAM, only
 # reaches the machine holding the USB cable, and only runs when somebody
@@ -49,8 +54,8 @@ nq_gadget_up() {
     say "gadget bound to $_udc"
 
     sleep 2
-    ip addr add 172.16.42.1/24 dev usb0 2>/dev/null \
-        || ifconfig usb0 172.16.42.1 netmask 255.255.255.0
+    ip addr add 172.16.43.1/24 dev usb0 2>/dev/null \
+        || ifconfig usb0 172.16.43.1 netmask 255.255.255.0
     ip link set usb0 up 2>/dev/null || ifconfig usb0 up
 
     # telnetd allocates a pty per connection; without devpts it accepts and then
@@ -59,7 +64,7 @@ nq_gadget_up() {
     mount -t devpts none /dev/pts 2>/dev/null || true
     telnetd -l /bin/sh -p 23 2>/dev/null || { say "telnetd failed to start"; return 1; }
 
-    say "usb0 = 172.16.42.1, telnet is up"
+    say "usb0 = 172.16.43.1, telnet is up"
     say "(use nc, not the telnet client -- it drops piped stdin immediately)"
     return 0
 }

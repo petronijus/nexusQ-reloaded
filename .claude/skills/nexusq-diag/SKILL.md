@@ -31,7 +31,7 @@ scripts/diag/nq-collect
 
 `nq-collect` will, on its own:
 1. find a working link to the device (`nqctl`: prefers the stable USB-net
-   `172.16.42.1`, falls back to WiFi `<device-wifi-ip>`; if nothing is up it tries
+   `172.16.43.1`, falls back to WiFi `<device-wifi-ip>`; if nothing is up it tries
    `nqctl net-usb up` to bring the RNDIS gadget + host NAT online),
 2. run the comprehensive `nq-diag-snapshot` on the device,
 3. pull the `nq-healthd` time-series + events — or, if the running image predates

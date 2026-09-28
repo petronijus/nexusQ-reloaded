@@ -336,5 +336,32 @@ else
 fi
 
 say ""
+say "=== 10. the USB-net gadget is off pmOS's shared subnet (device r120) ==="
+# Every pmOS gadget answers on 172.16.42.1, so with the Q and Petr's Lumia on one
+# host that address reaches whichever interface wins the route (2026-09-28). The
+# Q is 172.16.43.1. The gadget script takes its address from unudhcpd's own
+# config, so a missing or reverted file puts it back on .42 without a word.
+if grep -qs '^UNUDHCPD_SERVER=172\.16\.43\.1$' "$MNT/etc/unudhcpd.conf" \
+   && grep -qs '^UNUDHCPD_CLIENT=172\.16\.43\.2$' "$MNT/etc/unudhcpd.conf"; then
+    ok "unudhcpd serves 172.16.43.0/24"
+else
+    bad "unudhcpd serves 172.16.43.0/24" "/etc/unudhcpd.conf missing or not .43 -- the gadget falls back to pmOS's 172.16.42.1"
+fi
+if grep -qs '\. /etc/unudhcpd.conf' "$MNT/usr/bin/nexusq-usb-gadget.sh" \
+   && ! grep -qs '172\.16\.42\.' "$MNT/usr/bin/nexusq-usb-gadget.sh"; then
+    ok "the gadget script takes its address from unudhcpd.conf"
+else
+    bad "the gadget script takes its address from unudhcpd.conf" "it hardcodes an address or ignores the file"
+fi
+# PulseAudio must leave the UAC2 gadget card to nexusq-uac2-in's alsaloop, or the
+# first open at boot fails EBUSY and USB Audio starts late (2026-09-19, -28).
+if grep -qs '^SUBSYSTEM=="sound", KERNEL=="card\*", SUBSYSTEMS=="gadget", ENV{PULSE_IGNORE}="1"$' \
+        "$MNT/etc/udev/rules.d/91-pulseaudio-hdmi-ignore.rules"; then
+    ok "PulseAudio ignores the UAC2 gadget card"
+else
+    bad "PulseAudio ignores the UAC2 gadget card" "no gadget PULSE_IGNORE rule -- PA claims hw:UAC2Gadget at boot"
+fi
+
+say ""
 say "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

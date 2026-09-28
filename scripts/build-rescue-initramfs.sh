@@ -6,13 +6,14 @@
 # trial slot and selects it through the SAR reboot reason, so it needs no cable
 # and no fastboot. `reboot -f` from inside returns to the normal system.
 #
-# Reach the shell with `nc 172.16.42.1 23`, NOT the telnet client: telnet drops
+# Reach the shell with `nc 172.16.43.1 23` (the host takes 172.16.43.2/24 by
+# hand: the rescue has no DHCP), NOT the telnet client: telnet drops
 # piped stdin immediately. Keep stdin open a few seconds past the last command.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/nq-initramfs-lib.sh
 
-DEV="${NQ_DEV:-root@172.16.42.1}"
+DEV="${NQ_DEV:-root@172.16.43.1}"
 OUT="${NQ_OUT:-output/rescue}"
 mkdir -p "$OUT"
 
@@ -32,5 +33,5 @@ cat <<MSG
 
 Built $OUT/rescue-boot.img
   scp it to the device, then:  nq-kernel-ota rescue /tmp/rescue-boot.img
-  once it is up:               nc 172.16.42.1 23   (then run 'stay')
+  once it is up:               nc 172.16.43.1 23   (then run 'stay')
 MSG

@@ -8,6 +8,30 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Every host that plugs a Q in over USB — 2026-09-28: the gadget moved to 172.16.43.1
+
+The Q's USB-net gadget is off pmOS's shared `172.16.42.0/24`. Petr's Lumia 1020 sits
+there too, and with both plugged into omarchy, `172.16.42.1` always routed to the Q.
+Device **r120**: `/etc/unudhcpd.conf` = `172.16.43.1`/`.2`, the gadget script takes
+its address from it, and `verify-rootfs.sh` section 10 gates it. The initramfs and
+rescue gadget is on `.43` too, from the next flash or rescue build.
+
+- **Prague Q:** live since 2026-09-28 17:00. The r120 files were placed by hand and
+  survived a reboot. The apk agrees once r120 is built and installed; nothing to
+  undo.
+- **Cottage Q:** stays on `.42` until it takes r120 with the v1.20.0 publish.
+- **omarchy:** done. NM profile `nexusq-usb` (MAC `02:1A:11:00:00:02`, static
+  `172.16.43.2/24`, `ipv4.never-default`, autoconnect-priority 10).
+- **Ubuntu (petronijus-PC) and the MacBook**, the first time a Q on r120 is on the
+  cable:
+  - `git pull` (`nqctl` defaults to `.43` and finds the iface by MAC);
+  - on Ubuntu, the same `nmcli con add` as in INSTALL.md §4;
+  - on macOS, give the RNDIS/ECM interface `172.16.43.2/24` in Network settings
+    (or rely on the Q's DHCP);
+  - `ssh-keygen -R 172.16.42.1` if that entry was the Q's.
+- **Windows:** rerun `scripts/install-gadget-rndis.ps1` elevated. It now picks the
+  adapter by the Q's MAC and assigns `172.16.43.2`.
+
 ## Desktop (petronijus-PC) — 2026-09-27: the v1.20.0 work is all in `main`, NOTHING is published
 
 Done on the MacBook; the user asked to stop here and hand over. **Nothing below
@@ -16,12 +40,12 @@ waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
 
 | package | rev | what |
 |---|---|---|
-| device-google-steelhead | **r119** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap), CPU accounting in health.jsonl (r119) |
+| device-google-steelhead | **r120** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap), CPU accounting in health.jsonl (r119), USB gadget on 172.16.43.1, the LED fingerprint in health.jsonl, PA off the UAC2 gadget card (r120) |
 | nexusq-alsa-vol | **r1 (new aport)** | the `ctl.nexusq_vol` ALSA control: one volume (`docs/2026-09-27-one-volume.md`) |
 | nexusq-control | **r58** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54), no made-up volume at boot (r55), ambient fades + the tap's source kept on the monitor (r56), ambient wakes only when its level changes (r57), counters for nq-healthd (r58) |
 | nexusq-mqtt | **r10** | C-states + diagnostics (r8), ring in HA (r9), HA system update + volume/mute (r10) |
 | nexusqd / nexusq-setupd | **r24** / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda); `brightness N [ms]` fades (r24) |
-| nexusq-kernel-ota / nexusq-rootfs-ab | r8 / r5 | per-unit identity at boot; storage check per OTA |
+| nexusq-kernel-ota / nexusq-rootfs-ab | **r9** / r5 | per-unit identity at boot; storage check per OTA; rescue text says 172.16.43.1 (r9) |
 | shairport-sync | 5.1-r100 | no idle polling (new to `ota-packages.list`) |
 | app | **1.25.0+63** | ring (1.23), ambient (1.24), device diagnostics + Idle depth + Spotify volume mirror (1.25) |
 
@@ -88,39 +112,8 @@ restarts, player/knob/HA paths exact, C-states and diagnostics in MQTT, the
 HA update entity (it lists 9 pending systemd 262-r2 updates — not installed).
 After the publish its apk simply agrees; nothing to reinstall.
 
-**Todoist:** the nexusq feature tasks in AI-handover (LED ring toggle +
-schedule, ring in HA, unified volume, volume in HA, updates from HA,
-diagnostics mode + C-states) are done in code. Complete them when v1.20.0 and
-app 1.25.0 are out.
-
-## Any machine — 2026-09-28 morning: read the overnight soak on the Prague Q
-
-Started 01:06 CEST on the Prague Q (device r119, control r58, nexusqd r24),
-with nothing playing and nobody on the box. It asks whether the ambient
-scheduler wakes as designed, and whether the day's new code (one volume, the
-tap's source reconcile, the fades, the scheduler) costs anything at idle.
-
-```sh
-scripts/diag/nq-collect                         # pulls health.jsonl.1 + health.jsonl
-scripts/diag/nq-health-report nq-captures/latest \
-    --since=2026-09-28T01:15 --until=<the first ssh of the morning, local time>
-```
-
-- **Ambient wakes**: the model (the same code, maximum 208) expects **2 an
-  hour through the night and ~156 through the dawn**, mostly 06:00–07:00
-  local: 170 from 01:06 to 10:00. `ambient_wakes` in the report should agree
-  to within a few.
-- **Cost**:
-  - `busy_pct_of_2_cores` against the cottage's 2.1 % idle night
-    (docs/2026-09-26-idle-audit-five-pollers.md §1, r109). The Prague box
-    runs RoonBridge and a breathing LED theme (~20 renders/s by design), so
-    expect it somewhat higher; the per-service split says where.
-  - `nexusq-control` should sit well under the 0.1 % of a core its old
-    minute tick implied.
-  - `nexusqd` renders/s should equal the theme's cadence; fades add only at
-    the ambient switch.
-- If `window_not_idle` fires, someone played music: narrow the window.
-- Record the result in CHANGELOG and delete this section.
+**Todoist:** the nexusq feature tasks were completed on 2026-09-28 at Petr's
+request; their record is CHANGELOG [Unreleased]. Nothing more to tick after the release.
 
 ## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published — ⏩ superseded by the section above
 
@@ -524,8 +517,10 @@ collector's own ssh polling. Full record:
 
 **Two live traps worth keeping in front of anyone touching this:**
 
-- 🚨 **`172.16.42.1` is the Lumia, not the Q.** Both projects share the USB-gadget
-  subnet, and `nqctl` auto-mode tries USB *before* WiFi. It also reports the Q
+- 🚨 **`172.16.42.1` is the Lumia, not the Q.** Since 2026-09-28 (device r120,
+  live on the Prague Q) the Q's gadget is **`172.16.43.1`**, and `nqctl`
+  defaults to it. The cottage Q stays on `.42` until it takes r120, so still
+  check that `hostname` = steelhead. `nqctl` auto-mode tries USB *before* WiFi. It also reports the Q
   unreachable when OPNsense is down, because it resolves the WiFi lease through
   it. `hostname` first, always. The Q lives at **192.168.20.246**.
 - 🚨 **One build at a time on `nexusq-workdir`, across all sessions.** A second

@@ -325,7 +325,7 @@ are kept too, and so is the brightness slider with its ambient switch
 the store's `settings/`). The MQTT broker login (`mqtt.json`) is **not** — it
 still has to be re-provisioned from the app after a flash. Its ssh
 fingerprint does not change either: the old "**after any reflash** run
-`ssh-keygen -R 172.16.42.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
+`ssh-keygen -R 172.16.43.1` (and `10.42.0.2` / the WiFi IP)" applies only to a
 unit that has never run r103, whose keys still live on the rootfs.
 
 **What a flash keeps, since device r112 (2026-09-26):** the unit's **MQTT
@@ -392,12 +392,18 @@ on.
 
 ## 4. Getting a shell (no keyboard needed)
 
-The Q runs an RNDIS network gadget on its micro-USB port:
+The Q runs an RNDIS network gadget on its micro-USB port. Since v1.20.0
+(device r120) it lives at **172.16.43.1**, not postmarketOS's usual
+172.16.42.1: every other pmOS device's gadget uses that one too, and with two
+plugged into one PC the address reaches only one of them. Releases up to
+v1.19.0 still use 172.16.42.1 / .2 in the steps below.
 
-1. Connect micro-USB to your PC. A new network interface appears.
-2. Give your PC side a static IP:
-   `nmcli con add type ethernet ifname <iface> con-name nexusq ipv4.method manual ipv4.addresses 172.16.42.2/24`
-3. `ssh user@172.16.42.1`
+1. Connect micro-USB to your PC. A new network interface appears, with the
+   fixed MAC `02:1a:11:00:00:02`. The Q hands it 172.16.43.2 over DHCP.
+2. Better, give your PC side a static profile bound to that MAC, one that
+   never becomes the default route:
+   `nmcli con add type ethernet ifname '*' con-name nexusq-usb ethernet.mac-address 02:1A:11:00:00:02 ipv4.method manual ipv4.addresses 172.16.43.2/24 ipv4.never-default yes ipv6.method link-local`
+3. `ssh user@172.16.43.1`
 
 ## 5. WiFi
 
@@ -453,7 +459,7 @@ Still fully supported, and the only route if you have no phone, no NFC, or a
 dev image that self-provisioned:
 
 ```bash
-ssh user@172.16.42.1
+ssh user@172.16.43.1          # 172.16.42.1 on v1.19.0 and older
 sudo nmcli dev wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
 ```
 

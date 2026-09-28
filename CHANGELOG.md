@@ -6,6 +6,114 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — PulseAudio no longer takes the USB Audio input's card at boot (device **r120**)
+
+The known issue from 2026-09-19 happened again after the 2026-09-28 17:00
+reboot. PulseAudio's module-udev-detect loaded `module-alsa-card` on the UAC2
+gadget card. The result was a source,
+`alsa_input.platform-musb-hdrc.0.auto.stereo-fallback`, that nothing reads.
+nexusq-uac2-in's first `alsaloop` then failed to open `hw:UAC2Gadget` with
+`Resource busy`, and USB Audio came up ~6 s late. It healed only when PA's
+suspend-on-idle released the card. Any client that un-suspended that source
+would have taken the gadget from `alsaloop` for good.
+
+- `91-pulseaudio-hdmi-ignore.rules` gets a fourth `PULSE_IGNORE`, for any
+  sound card whose parent is the configfs gadget (`SUBSYSTEMS=="gadget"`).
+  It is the only USB gadget on the board, so the rule depends on no card
+  index or instance name. HDMI, Loopback and RoonLoop are unchanged; the
+  file's name is historical.
+- Nothing refers to PA's gadget source: the input reaches PA only through
+  the aloop hop (`usb_in`).
+- `verify-rootfs.sh` section 10 checks the rule. The r119 file fails it.
+- On the Prague Q: `udevadm test` tags only UAC2Gadget besides the three
+  cards it already tagged; the speaker and S/PDIF stay PA's. After a reboot:
+  - PA holds only the tas5713 and S/PDIF cards;
+  - `alsaloop` opened `hw:4` at the first try at 36 s, with no `Resource
+    busy` in the boot's journal;
+  - it parked 12 s later with no host streaming, as designed.
+
+### Fixed — health.jsonl could not see the LED ring move, since the C rewrite (device **r120**)
+
+Found by the full diag after the gadget move (2026-09-28). The live frame
+changed three times in a second, while `led_sum` was 0 in all 9 427 samples
+of the previous boot and `led_changed` had been set once.
+
+- **nq-healthd looked for the frame in two places that do not exist:**
+  - `/sys/class/leds/steelhead:rgb:ring/device/frame` — the driver registers
+    `steelhead:rgb:ring-0` … `ring-N` and `steelhead:rgb:mute`
+    (patch 0005), never a bare `ring`;
+  - `/sys/devices/platform/steelhead-avr/frame` — the AVR is an i2c device
+    (`1-0020`), not a platform one.
+
+  The shell daemon it replaced in r77 globbed `/sys/bus/i2c/devices/*/frame`,
+  which worked.
+- **What that broke:**
+  - `led_static` (info) fired on every idle stretch, breathing or not, and
+    `nq-collect` reported a breathing ring as "screensaver/blanked";
+  - the `led_frozen` crit and nexusq-mqtt's `led_stalled` rested on nexusqd's
+    own liveness alone. They still work, but the frame half of the check was
+    blind;
+  - `nq-opp-study.sh`'s "wait for a blanked ring" gate always passed at once.
+- `find_frame_attr()` now resolves the frame through the LED class device
+  (`ring-0/device/frame`), which follows the AVR wherever the bus numbers it,
+  and falls back to scanning the i2c devices, as the shell did. With neither,
+  it says so in the journal once, instead of reporting a silent 0.
+  - Reading the attribute is a `memcpy` from the driver's committed frame
+    (patch 0029), with no i2c transfer, so it costs nothing at idle.
+  - The consumers need no change. `led_stalled` still requires nexusqd's
+    distress signal, so a ring that is dark on purpose (the schedule, `dark`)
+    raises no alarm; it only reads `led_static`, which is now true.
+- Test `tests/test_led_frame.c`, against a fixture sysfs shaped like the
+  unit's. It covers:
+  - the class device path;
+  - the i2c scan without it;
+  - nothing found under the old name;
+  - the hash moving when pixels move at the same sum.
+
+  Seen failing with the old LED name and with the scan removed.
+- On the Prague Q, built for armv7 (Alpine edge, GCC 15.2) and swapped in
+  live (r119 binary kept as `/root/nq-healthd.r119`). The first samples read
+  `led_sum` 1216 ↔ 7136, `led_changed` 1 and `led_stall` 0: the breathing
+  theme, seen for the first time since r77.
+
+### Changed — the USB-net gadget moved to 172.16.43.1 (device **r120** · `nexusq-kernel-ota` **r9**)
+
+On 2026-09-28 Petr's Lumia 1020 and the Prague Q were both on omarchy over
+USB. Both device ends were `172.16.42.1`, postmarketOS's gadget default, and
+the host end was `.2` on both interfaces. The route sent `172.16.42.1` to the
+Q (metric 100 against 103), so the Lumia's tooling could not reach the Lumia;
+`ssh -o BindInterface` only picks the source address. Its pinned host key
+refused the Q, so nothing wrong ran. Petr agreed to move the Q.
+
+- **`/etc/unudhcpd.conf` is the one place the address lives**:
+  `UNUDHCPD_SERVER=172.16.43.1`, `UNUDHCPD_CLIENT=172.16.43.2`.
+  - postmarketOS's `unudhcpd@usb0` already reads that file as its
+    `EnvironmentFile`, which overrides the unit's built-in `172.16.42.x`.
+  - `nexusq-usb-gadget.sh` sources it for its own address, so the address the
+    Q takes and the one it hands the host cannot disagree.
+  - The script flushes the old IPv4 address first, so a re-run after a change
+    leaves nothing behind.
+- The initramfs gadget (`scripts/initramfs/nq-gadget.sh`) moved too. It comes
+  up only when A/B boot fails or in the rescue image, which is exactly when the
+  wrong device answering would hurt most. It has no DHCP; the host takes `.2`
+  by hand. The nq-kernel-ota rescue text says so (r9).
+- **Host side:**
+  - `nqctl` defaults to `.43`, derives the NAT subnet from the address, and
+    finds the host interface by the gadget's fixed MAC `02:1a:11:00:00:02`
+    instead of the first `enx*`. On omarchy the interface is `enp0s20f0u6` and
+    the old lookup found nothing; with the Lumia attached it could have found
+    the Lumia's.
+  - `install-gadget-rndis.ps1` picks the Windows adapter by the same MAC.
+  - INSTALL.md §4 gives an NM profile bound to it with `ipv4.never-default`.
+- `verify-rootfs.sh` **section 10** fails an image whose `unudhcpd.conf` is
+  missing or not `.43`, or whose gadget script hardcodes an address. Each of
+  those three was seen failing.
+- On the Prague Q since 16:55 CEST: the files were placed by hand from this
+  tree and the address switched live over WiFi. Then a reboot: the gadget came
+  up on `172.16.43.1` on its own, `unudhcpd` served `.43.2`, and nothing
+  answers on `172.16.42.1`. The host key is the same (verified against the
+  WiFi path before it was trusted under the new address).
+
 ### Fixed — the LED ring showed no visualisation while music played (device **r118**, `nexusq-control` **r56**)
 
 Prague Q, 2026-09-27, during the first listening test of the one-volume
@@ -100,10 +208,59 @@ liveness, but nothing about what the CPU was spent on.
     mutations seen failing.
   - nexusq-control `test_control_stats.py` (3) and the wake and fix counting
     in `test_ambient.py` / `test_tap_source.py`: three mutations seen failing.
-- On the Prague Q since 01:06 CEST the first samples read busy 170–520 ms per
-  5 s (the ssh session included), about 3 500–4 600 interrupts per 5 s, and
-  nexusqd at ~20 renders/s. That is the breathing theme, which animates by
-  design.
+- **The overnight soak** (Prague Q, device r119 · control r58 · nexusqd r24,
+  one boot, nothing playing; `nq-captures/20260928-163605/`). The soak started
+  at 01:06 CEST, but it was read at 16:36, and by then rotation had dropped
+  everything before 03:53 CEST. The two files hold about 18.7 h: one 4 MB log
+  lasts ~9.3 h at the new schema. The window is 03:54–16:01, 12.1 h. It ends at
+  the first ssh session of the day:
+  - **Ambient wakes: 176, and the model predicts 176.** The same `Brightness`
+    code, walked from the bridge's start (01:05:18) with the unit's maximum
+    (208), gives the same count, hour by hour: 04:2 · 05:7 · 06:105 · 07:46,
+    then 2 an hour. The counter's total since start is 184 and the model's is
+    183. `tap_fixes` is 0.
+  - **Busy 4.10 % of both cores**, 95 forks/min, 862 interrupts/s. C3 is
+    72.6 % of idle, C2 1.6 %, and 350 MHz 98 % of the samples. The peak was
+    73.2 °C and the average 51.7 °C.
+  - **By service, in % of one core:**
+
+    | service | % of one core |
+    |---|---|
+    | user.slice | 5.30 |
+    | nexusq-uac2-in | 3.17 |
+    | system.slice | 2.18 |
+    | roon | 0.99 |
+    | nexusqd | 0.89 |
+    | nexusq-roon-idle | 0.87 |
+    | nexusq-mqtt | 0.25 |
+    | avahi | 0.18 |
+    | pulseaudio | 0.17 |
+    | nexusq-control | ~0.09 |
+
+    The two slices add up to 3.74 % of both cores, so the kernel and IRQs
+    outside any cgroup take ~0.36 %.
+  - **Why Prague is double the cottage's 2.1 %**
+    (docs/2026-09-26-idle-audit-five-pollers.md) is almost entirely **USB
+    audio**. It is off by default and on in Prague: `nexusq-uac2-in` alone is
+    3.15 % of a core in every hour of the window. A 60 s per-thread read split
+    it into:
+    - `nq-uac2-silence`'s python, ~1.07 %;
+    - its `arecord` on the aloop, ~0.38 %;
+    - the supervisor shell, ~0.15 %;
+    - the rest, in children that exit before any snapshot: the loop's
+      `sleep 3` and its periodic `amixer`/`pactl` probes.
+
+    Both of those costs are deliberate trade-offs, measured and documented in
+    the script (`nexusq-uac2-in`, the `pactl` and `amixer cget` notes). RoonBridge
+    (`roon` + `nexusq-roon-idle`, ~1.9 %) and the breathing theme (nexusqd,
+    20.05 renders/s = its cadence, 5.25 commands/min) account for most of the
+    remainder.
+  - **nexusq-control** is at 0.09–0.10 % of a core in most hours. That is
+    **not** "well under" the 0.1 % the old minute tick implied, because the
+    scheduler was never the bridge's cost. A 60 s thread read shows 0 ticks
+    in every thread of the bridge's python, so what remains is its short-lived
+    children (`pactl`). The hours that read ~0.3 % are Home Assistant's 6-hourly
+    update check (`apk update` as the bridge's child); see Known issues.
 
 ### Changed — ambient brightness wakes only when its level changes (`nexusq-control` **r57**)
 
@@ -631,6 +788,28 @@ Record: `docs/2026-09-26-idle-audit-five-pollers.md`, captures in
 - `psimon` still wakes ~4×/s with oomd gone. PID 1, both user managers and
   journald hold cpu/io/memory PSI triggers (sd-event's pressure watches,
   checked in `/proc/*/fd`). Whether `CONFIG_PSI` is still worth having is open.
+- (2026-09-28 soak) With USB audio switched on, `nexusq-uac2-in` is the
+  largest idle consumer, at 3.15 % of a core: the silence watcher's python,
+  its `arecord`, and the supervisor's 3 s loop with its children. That
+  doubles Prague's idle against the cottage. The loop's probes are
+  deliberate trade-offs, but the watcher reading 192 kB/s of silence in
+  python has not been costed against an alternative.
+- ~~(2026-09-28 soak) `nexusq-control` read ~0.3 % of a core in three idle
+  hours against 0.09 % otherwise.~~ **Explained, by design.**
+  - The hours are two one-minute spikes, 04:54 (8.1 s of CPU) and 10:54
+    (7.6 s). The box booted at 22:53, so they are exactly 6 h and 12 h later.
+  - That is nexusq-mqtt r10's Home Assistant update check
+    (`UPDATE_CHECK_EVERY_S`, 6 h). It asks the bridge for `checkSystemUpdate`,
+    whose `apk update` reads the whole Alpine edge index as the bridge's child.
+    nexusq-mqtt rises in the same minutes.
+  - About 25 s a day, ~0.03 % of a core on average.
+- A 4 MB health.jsonl lasts ~9.3 h at the r119 schema, so the two files hold
+  ~18.7 h. Read an overnight soak before noon or lose its start.
+- (from Todoist, 2026-07-07) The HDMI desktop session is a second permanent
+  idle consumer: labwc, lxqt-panel, onboard (python), pcmanfm-qt, nm-tray and
+  goa-daemon. Whether the appliance should gate it while nothing uses the
+  desktop is a policy choice, not a bug, and it is not made. Not re-measured
+  since the idle audits.
 
 ### Added — the LED ring, its schedule and ambient brightness in Home Assistant (nexusq-mqtt r9)
 
@@ -1441,7 +1620,8 @@ mock at all (a stub `pactl` on `PATH`), and all four were seen failing against
 the r46 code. `hook_thread()` now logs one attributable line for a handler
 exception instead of letting it escape as a traceback per event.
 
-**Known issue, measured in the same sweep (not fixed):** PulseAudio auto-claims
+**Known issue, measured in the same sweep** (✅ fixed in device r120, see
+[Unreleased]): PulseAudio auto-claims
 the UAC2 gadget card (`alsa_card.platform-musb-hdrc.0.auto`, source
 `alsa_input.platform-musb-hdrc.0.auto.stereo-fallback`) — the 09-16 open item,
 now seen doing harm once: on this boot `alsaloop`'s first open of

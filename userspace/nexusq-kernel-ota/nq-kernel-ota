@@ -690,7 +690,8 @@ cmd_rescue() {
   UNMOUNTED, so it can be repaired, resized or replaced. Nothing has been
   written to p13 and nothing will be unless you do it from that shell.
 
-  It comes up as a telnet server on 172.16.42.1 over the USB gadget. There is
+  It comes up as a telnet server on 172.16.43.1 over the USB gadget (give the
+  host 172.16.43.2/24; there is no DHCP in the rescue). There is
   no serial console on this board, so if that gadget fails to enumerate you are
   blind and the way out is a power cycle.
 

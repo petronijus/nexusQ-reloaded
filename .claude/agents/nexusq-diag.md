@@ -27,23 +27,26 @@ running it, and reasoning about the findings + the hardware sweep.
 
 ## 1. Connect (links are flaky; the gadget renames every reboot)
 
-Reliable path is the **USB gadget RNDIS net `172.16.42.1`**, but its host iface
-NAME + MAC change on every reboot, so re-establish it each time. If the device was
+Reliable path is the **USB gadget RNDIS net `172.16.43.1`** (device r120+; ⚠️ never
+`172.16.42.1` — that is Petr's Lumia 1020, which takes the same key). The host iface
+is the one with the gadget's fixed MAC `02:1a:11:00:00:02`; its name depends on the
+distro, and on omarchy the NM profile `nexusq-usb` configures it with no action. If the device was
 just rebooted, BE PATIENT — it takes ~60–120 s to come up (and ~1-in-3 boots hit a
 black-screen U-Boot quirk and need another reboot).
 
 ```sh
-enx=$(ip -br link | awk '/enx/{print $1; exit}')          # find the new RNDIS iface
-sudo nmcli dev set "$enx" managed no                       # NM grabs it otherwise
-sudo ip addr add 172.16.42.2/24 dev "$enx"; sudo ip link set "$enx" up
-ping -c1 -W2 172.16.42.1
+enx=$(ip -o link | awk -F': ' 'tolower($0) ~ /02:1a:11:00:00:02/ {print $2; exit}')
+ip -br addr show "$enx"                                    # expect 172.16.43.2/24
+# only if it has no address (no NM profile on this host):
+sudo ip addr add 172.16.43.2/24 dev "$enx"; sudo ip link set "$enx" up
+ping -c1 -W2 172.16.43.1
 ```
 
 - SSH: since the 2026-07-03 flash (v1.6.6-candidate) **key-based `ssh
-  root@172.16.42.1` works** (baked authorized_keys) — use it. Fallback / older
+  root@172.16.43.1` works** (baked authorized_keys) — use it. Fallback / older
   v1.6.5 image: **`user` / `147147`** (root denied there; escalate with
   `echo 147147 | sudo -S <cmd>`):
-  `sshpass -p 147147 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@172.16.42.1`
+  `sshpass -p 147147 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@172.16.43.1`
   Pre-r103 a reflash regenerated the device host key (`ssh-keygen -R` the stale
   entries); **since device r103 (2026-09-19) the host keys live in the per-unit
   persist store on the `cache` partition and survive a flash** — a changed

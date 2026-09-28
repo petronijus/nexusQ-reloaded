@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=119
+pkgrel=120
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -128,6 +128,7 @@ source="
 	nexusq-usb-acm-console.service
 	nexusq-usb-gadget.sh
 	nexusq-usb-gadget.service
+	unudhcpd.conf
 	nq-healthd.c
 	nq-diag-snapshot
 	20-nexusq-journal-size.conf
@@ -447,7 +448,7 @@ package() {
 		"$pkgdir"/etc/modprobe.d/brcmfmac-roamoff.conf
 
 	# USB gadget: own it deterministically as a COMPOSITE RNDIS net
-	# (172.16.42.1 + ssh) + ACM console, every boot, from configfs. This replaces
+	# (172.16.43.1 + ssh) + ACM console, every boot, from configfs. This replaces
 	# the old pmOS-RNDIS + RNDIS->ACM-swap chain, which on the full-rootfs image
 	# left the gadget *unbound* (host saw nothing — no net, no console, no way in).
 	# Since the on-board ethernet regressed (v1.4.0), the USB net is the reliable
@@ -460,6 +461,10 @@ package() {
 	install -dm755 "$pkgdir"/etc/systemd/system/multi-user.target.wants
 	ln -sf ../nexusq-usb-gadget.service \
 		"$pkgdir"/etc/systemd/system/multi-user.target.wants/nexusq-usb-gadget.service
+	# The gadget's subnet, off pmOS's shared 172.16.42.0/24 (see the file).
+	# unudhcpd@usb0 reads it as its EnvironmentFile; the gadget script sources
+	# it for its own address.
+	install -Dm644 "$srcdir"/unudhcpd.conf "$pkgdir"/etc/unudhcpd.conf
 	# Keep the old ACM-swap script/unit available but NOT enabled (superseded).
 	install -Dm755 "$srcdir"/nexusq-usb-acm-console.sh \
 		"$pkgdir"/usr/bin/nexusq-usb-acm-console.sh
@@ -828,6 +833,7 @@ SKIP  nexusq-usb-acm-console.sh
 SKIP  nexusq-usb-acm-console.service
 SKIP  nexusq-usb-gadget.sh
 SKIP  nexusq-usb-gadget.service
+SKIP  unudhcpd.conf
 SKIP  nq-healthd.c
 SKIP  nq-diag-snapshot
 SKIP  20-nexusq-journal-size.conf

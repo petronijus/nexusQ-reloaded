@@ -86,8 +86,10 @@ Run these near-instant checks; the moment one `ssh` works, that is the answer:
    `eth-direct-host` profile. (If ssh still fails but another path works, the
    fallthrough may not have fired yet — `nmcli c up eth-direct` on the device forces
    it.)
-2. **USB net** `172.16.42.1` — if an `enx*` iface exists, it's local + sub-second.
-   (Composite RNDIS+ACM gadget; solid fallback, but its `enx*` name changes per boot.)
+2. **USB net** `172.16.43.1` — if the gadget's host iface exists, it's local + sub-second.
+   (Composite RNDIS+ACM gadget; the host iface is found by the gadget's fixed MAC `02:1a:11:00:00:02` (its name differs per distro: `enx021a11000002`, `enp0s20f0u6` on omarchy).
+   ⚠️ **Never** use `172.16.42.1`: since device r120 that is Petr's Lumia 1020, which
+   accepts the same key.)
 3. **last-known / caller-supplied WiFi IP** — instant ping+ssh. Last-known
    lease (2026-08-10): `192.168.20.246` (`ssh root@192.168.20.246`) — but the
    router CAN reassign it, so a miss here just means "look up the lease", not
@@ -146,7 +148,7 @@ link-local, mDNS, OPNsense lease lookup).
   no `/etc/ssh` keys yet, so `apply` generates the store's keys); an in-place
   apk upgrade to r103 seeds them from `/etc/ssh` and keeps the fingerprint.
   _(Pre-r103: a fresh rootfs flash wiped anything not baked and regenerated the
-  host key — `ssh-keygen -R 172.16.42.1; ssh-keygen -R <WiFi IP>; ssh-keygen -R
+  host key — `ssh-keygen -R 172.16.43.1; ssh-keygen -R <WiFi IP>; ssh-keygen -R
   10.42.0.2` before the first post-flash ssh.)_ Baked regardless of the store:
   `authorized_keys` + the private WiFi profile (since 2026-07-03) and the **eth0
   profiles (`eth-lan`/`eth-direct`/`no-auto-default`, device pkg r21, in the
@@ -214,12 +216,19 @@ INSTALL.md §1d) before handing back "in fastboot, ready to flash".
   lease/IP changes per boot and lease-matching by eth MAC is impossible
   (match hostname `steelhead` instead).
 
-## Transport B — USB gadget (RNDIS net `172.16.42.1` + ACM console)
-- Net: `ls /sys/class/net | grep -E '^enx'`. If an `enx*` iface exists (RNDIS),
-  NetworkManager usually grabs it — `nmcli dev set <iface> managed no` (sudo),
-  then `ip addr add 172.16.42.2/24 dev <iface>; ip link set <iface> up`, then
-  `ssh root@172.16.42.1`. The iface name + MAC change every reboot, so always
-  re-discover `enx*` rather than caching it.
+## Transport B — USB gadget (RNDIS net `172.16.43.1` + ACM console)
+- Off pmOS's shared `172.16.42.0/24` since device r120 (2026-09-28): the Lumia 1020's
+  gadget is `172.16.42.1` too, and with both on one host the route picked one of
+  them. **Never ssh to `172.16.42.1`** — it is the phone, and it takes the same key.
+- Net: the host iface is the one with MAC `02:1a:11:00:00:02` (fixed in
+  nexusq-usb-gadget.sh; the name is `enx021a11000002` or `enp0s20f0u<port>`
+  depending on the distro): `ip -o link | grep -i 02:1a:11:00:00:02`.
+  The Q's `unudhcpd` hands the host `172.16.43.2` over DHCP, and on omarchy the NM
+  profile `nexusq-usb` (bound to that MAC, static `172.16.43.2/24`,
+  `ipv4.never-default`) does it with no action. Elsewhere, set it by hand:
+  `ip addr add 172.16.43.2/24 dev <iface>; ip link set <iface> up`, then
+  `ssh root@172.16.43.1`. A unit still on device ≤ r119 is on `172.16.42.1` until
+  its next upgrade.
 - Serial fallback: `ls /dev/ttyACM*` — that's the ACM debug console
   (`steelhead login:`), a shell even when no network path exists. Report it as a
   fallback (the caller can `screen /dev/ttyACM0 115200`).
@@ -263,7 +272,7 @@ USB gadget first):
   autoconnect profile → on r103+ it lands in the persist store and survives a reflash;
   pre-r103 it lasted until the next flash). DHCP yields `192.168.20.x`.
 - If you set a USB-NAT default route to install packages, delete it afterwards so traffic
-  uses WiFi: `sudo ip route del default via 172.16.42.2 dev usb0`.
+  uses WiFi: `sudo ip route del default via 172.16.43.2 dev usb0`.
 
 ## Verify before reporting
 Confirm the winner with a real probe, e.g.
@@ -272,7 +281,7 @@ A path that pings but won't ssh is not a win — note it and keep trying.
 
 ## Return
 Return the **fast winner first and stop**: the single best connection command
-(e.g. `ssh root@172.16.42.1`), one line on which transport won and any host-side
+(e.g. `ssh root@172.16.43.1`), one line on which transport won and any host-side
 setup you performed, plus any fallbacks you noticed for free. That's the whole job
 on the happy path — speed beats completeness.
 

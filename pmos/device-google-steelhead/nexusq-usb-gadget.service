@@ -1,5 +1,5 @@
 [Unit]
-Description=Nexus Q: USB gadget = RNDIS net (172.16.42.1 + ssh) + ACM console
+Description=Nexus Q: USB gadget = RNDIS net (172.16.43.1 + ssh) + ACM console
 Documentation=file:///usr/bin/nexusq-usb-gadget.sh
 # Own the gadget ourselves rather than relying on pmOS's RNDIS bringup + the
 # fragile RNDIS->ACM swap (which could leave it unbound). Run after modules are

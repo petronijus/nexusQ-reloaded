@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/nq-initramfs-lib.sh
 
-DEV="${NQ_DEV:-root@172.16.42.1}"
+DEV="${NQ_DEV:-root@172.16.43.1}"
 OUT="${NQ_OUT:-output/ab}"
 mkdir -p "$OUT"
 
