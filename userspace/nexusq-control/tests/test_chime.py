@@ -167,6 +167,24 @@ class TestPlaying(unittest.TestCase):
             self.assertEqual(argv[-1], f.name)
             self.assertEqual(popen.call_args.kwargs["env"]["PULSE_SERVER"], MOD.PULSE_SERVER)
 
+    def test_it_sits_below_the_music(self):
+        # 100 % of the sink was "desne nahlas": the chime carries its own
+        # attenuation, and it is never a boost
+        with tempfile.NamedTemporaryFile(suffix=".ogg") as f:
+            c = MOD.Chime(path=f.name)
+            with mock.patch.object(MOD.subprocess, "Popen") as popen:
+                c.connected("spotify")
+            vol = [a for a in popen.call_args.args[0] if a.startswith("--volume=")]
+            self.assertEqual(vol, [f"--volume={MOD.pa_volume_from_db(MOD.CHIME_DB)}"])
+            self.assertLess(MOD.pa_volume_from_db(MOD.CHIME_DB), 65536)
+            self.assertLess(MOD.CHIME_DB, 0)
+
+    def test_pulseaudio_volume_is_cubic(self):
+        self.assertEqual(MOD.pa_volume_from_db(0), 65536)
+        self.assertEqual(MOD.pa_volume_from_db(-60), 6554)     # 10 % of 65536
+        self.assertEqual(MOD.pa_volume_from_db(-15), 36854)
+        self.assertEqual(MOD.pa_volume_from_db(+6), 65536)     # never a boost
+
     def test_a_missing_file_is_quiet(self):
         c = MOD.Chime(path="/nonexistent/polaris.ogg")
         with mock.patch.object(MOD.subprocess, "Popen") as popen:

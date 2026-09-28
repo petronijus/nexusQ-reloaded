@@ -501,9 +501,13 @@ class ControlStats:
 # The stock Nexus Q's own chime (HubBroker res/raw/polaris.ogg, its "pairing
 # complete" sound) plays when something takes the Q: a Spotify client selects
 # it, a phone connects over Bluetooth, an AirPlay sender or Roon starts sending
-# to it (Petr, 2026-09-28). It plays through PulseAudio's default sink at 100 %
-# of the sink, and flat-volumes is off, so it is exactly as loud as the music
-# at the current volume -- never louder -- and silent when the Q is muted.
+# to it (Petr, 2026-09-28). It plays through PulseAudio's default sink, so it
+# follows the Q's volume and is silent when the Q is muted; flat-volumes is off,
+# so it can never raise the sink. At 100 % of the sink it was "desne nahlas"
+# (Petr, first listening test): a bright bell out of silence, peaking at
+# -4.4 dBFS, sounds far louder than music at the same volume -- and stock
+# played it on Android's separate system-sound volume, not the music's. So it
+# sits CHIME_DB below the music (NEXUSQ_CHIME_DB tunes it without a release).
 #
 # Two kinds of source:
 #   - EXPLICIT: Spotify (librespot's session_connected, which 0.8 emits only
@@ -520,6 +524,14 @@ CHIME_PATH = os.environ.get("NEXUSQ_CHIME", "/usr/share/nexusq-control/polaris.o
 CHIME_DEDUPE_S = 10.0
 CHIME_GAP_S = 600.0
 CHIME_START_GRACE_S = 60.0
+CHIME_DB = float(os.environ.get("NEXUSQ_CHIME_DB", "-15"))
+
+
+def pa_volume_from_db(db):
+    """PulseAudio's pa_sw_volume_from_dB: its software volume is CUBIC (the
+    amplitude is (v / 65536) ** 3), so a dB figure is 65536 * 10 ** (dB / 60),
+    not / 20. Clamped to [0, 100 %]: the chime is never boosted."""
+    return max(0, min(65536, round(65536 * 10 ** (min(db, 0.0) / 60))))
 
 
 class Chime:
@@ -584,7 +596,8 @@ class Chime:
         try:
             self._proc = subprocess.Popen(
                 ["paplay", "--client-name=nexusq-chime",
-                 "--property=media.role=event", path],
+                 "--property=media.role=event",
+                 f"--volume={pa_volume_from_db(CHIME_DB)}", path],
                 env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL)

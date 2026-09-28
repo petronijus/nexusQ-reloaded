@@ -30,9 +30,19 @@ the stock Nexus Q's own chime, `polaris.ogg`. That file is HubBroker's
   - A source already running when the bridge starts is a restart, not a
     connection, and stays quiet. So do cards that exist when the watcher
     subscribes.
-- **How loud:** `paplay` into the default sink at 100 % of the sink. With
-  flat-volumes off (checked on the unit), that is exactly the music's level
-  at the current volume, never louder, and silent when muted.
+- **How loud:** `paplay` into the default sink, so the chime follows the Q's
+  volume and is silent when muted. With flat-volumes off (checked on the
+  unit) it can never raise the sink.
+  - The first version played at 100 % of the sink. In Petr's first listening
+    test (Spotify connect, sink at 30 %) it was "děsně nahlas": a bright bell
+    out of silence, peaking at −4.4 dBFS (mean −19.2 dB).
+  - Stock is no guide here. It played the chime at 1.0 on Android's separate
+    system-sound volume, not the music's.
+  - The chime now sits `CHIME_DB` = **−15 dB** under the sink: `paplay
+    --volume=36854`, because PulseAudio's software volume is cubic
+    (`pa_volume_from_db`, never a boost). `NEXUSQ_CHIME_DB` tunes it without
+    a release.
+  - Seen failing with the attenuation removed.
 - One chime at a time. A duplicate from the same source within 10 s is
   dropped.
 - Packaging: `sounds/polaris.ogg` →
