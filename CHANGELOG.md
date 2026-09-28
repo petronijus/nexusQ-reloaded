@@ -6,6 +6,26 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — the app's home screen has one LIGHTS category (app, unreleased)
+
+Petr, 2026-09-28: everything that decides what the LED ring shows belongs
+together. The four separate sections (BRIGHTNESS, LED RING, LIGHT THEME,
+VISUALIZATION) are now one LIGHTS category, in this order: LED ring,
+schedule, brightness, ambient brightness, light theme, visualisation.
+
+- The ring switch comes first because it overrides everything below it.
+- The ring controls lost their grey card and sit flat on the page, aligned
+  with the ambient switch.
+- The slider and the two pickers get a white row label, the same as the
+  switches, so they read as rows of the category rather than as categories
+  of their own.
+- `lib/widgets/lights_section.dart`. The ring and ambient rows still appear
+  only when the bridge reports them.
+- `test/lights_section_test.dart` covers the order, no grey background, and
+  a pre-ring bridge. The order check was seen failing with the ring moved
+  under brightness, and the background check with the card put back.
+- Full suite 191/191 and `flutter analyze` clean on Flutter 3.47.5.
+
 ### Fixed — PulseAudio no longer takes the USB Audio input's card at boot (device **r120**)
 
 The known issue from 2026-09-19 happened again after the 2026-09-28 17:00

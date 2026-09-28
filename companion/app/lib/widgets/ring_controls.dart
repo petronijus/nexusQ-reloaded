@@ -8,6 +8,9 @@ import '../theme/nexusq_theme.dart';
 /// visualiser and the volume-knob overlay. The schedule switches it by the
 /// Q's own clock; flipping the main switch by hand turns the schedule off
 /// (the bridge's rule, mirrored here so the UI never shows both "on").
+///
+/// Flat rows on the page background, aligned with the other LIGHTS rows
+/// (lights_section.dart) — no card behind them (Petr, 2026-09-28).
 class RingControls extends StatelessWidget {
   const RingControls({
     super.key,
@@ -27,69 +30,68 @@ class RingControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: NexusQColors.surface,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SwitchListTile(
-            key: const Key('ring-switch'),
-            value: ring.on,
-            onChanged: onRingChanged,
-            title: const Text('LED ring', style: _title),
-            subtitle: Text(
-                ring.on
-                    ? 'Idle light, theme and notifications'
-                    : 'Dark — lights only for music and the volume knob',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          key: const Key('ring-switch'),
+          contentPadding: EdgeInsets.zero,
+          value: ring.on,
+          onChanged: onRingChanged,
+          title: const Text('LED ring', style: _title),
+          subtitle: Text(
+              ring.on
+                  ? 'Idle light, theme and notifications'
+                  : 'Dark — lights only for music and the volume knob',
+              style: _hint),
+        ),
+        SwitchListTile(
+          key: const Key('ring-schedule-switch'),
+          contentPadding: EdgeInsets.zero,
+          value: ring.scheduleEnabled,
+          onChanged: (v) => onScheduleChanged(enabled: v),
+          title: const Text('Schedule', style: _title),
+          subtitle: Text('Off at ${ring.offAt}, on at ${ring.onAt}', style: _hint),
+        ),
+        if (ring.scheduleEnabled)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _TimeButton(
+                    key: const Key('ring-off-at'),
+                    label: 'Off at',
+                    value: ring.offAt,
+                    onPicked: (t) => onScheduleChanged(enabled: true, offAt: t),
+                  ),
+                ),
+                Expanded(
+                  child: _TimeButton(
+                    key: const Key('ring-on-at'),
+                    label: 'On at',
+                    value: ring.onAt,
+                    onPicked: (t) => onScheduleChanged(enabled: true, onAt: t),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (ring.scheduleEnabled && !ring.clockSynced)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: Text(
+                'Waiting for network time — the schedule starts once the '
+                'Nexus Q has set its clock.',
                 style: _hint),
           ),
-          SwitchListTile(
-            key: const Key('ring-schedule-switch'),
-            value: ring.scheduleEnabled,
-            onChanged: (v) => onScheduleChanged(enabled: v),
-            title: const Text('Schedule', style: _title),
-            subtitle: Text('Off at ${ring.offAt}, on at ${ring.onAt}', style: _hint),
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(error!,
+                style: const TextStyle(color: NexusQColors.ledOrange, fontSize: 13)),
           ),
-          if (ring.scheduleEnabled)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _TimeButton(
-                      key: const Key('ring-off-at'),
-                      label: 'Off at',
-                      value: ring.offAt,
-                      onPicked: (t) => onScheduleChanged(enabled: true, offAt: t),
-                    ),
-                  ),
-                  Expanded(
-                    child: _TimeButton(
-                      key: const Key('ring-on-at'),
-                      label: 'On at',
-                      value: ring.onAt,
-                      onPicked: (t) => onScheduleChanged(enabled: true, onAt: t),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (ring.scheduleEnabled && !ring.clockSynced)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text(
-                  'Waiting for network time — the schedule starts once the '
-                  'Nexus Q has set its clock.',
-                  style: _hint),
-            ),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text(error!,
-                  style: const TextStyle(color: NexusQColors.ledOrange, fontSize: 13)),
-            ),
-        ],
-      ),
+      ],
     );
   }
 }

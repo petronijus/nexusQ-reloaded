@@ -67,7 +67,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          problem (nexusq-mqtt r8). One volume (device r117): letting go of
 #          the volume slider while Spotify plays here also tells Spotify
 #          (Web API), so its apps show the Q's volume.
-version: 1.25.0+63
+version: 1.25.0+64
 
 environment:
   sdk: ^3.12.0

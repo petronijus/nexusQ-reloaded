@@ -9,8 +9,7 @@ import '../update/update_coordinator.dart';
 import '../spotify/spotify_player.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
-import '../widgets/ring_controls.dart';
-import '../widgets/ambient_brightness.dart';
+import '../widgets/lights_section.dart';
 import 'connect_gate.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
@@ -247,134 +246,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         onSelect: controller.setOutput,
                       ),
 
-                      // --- BRIGHTNESS ------------------------------------------
-                      const _SectionHeader('BRIGHTNESS'),
-                      Row(
-                        children: [
-                          const Icon(Icons.brightness_low, color: NexusQColors.dim, size: 20),
-                          Expanded(
-                            child: Slider(
-                              value: s.brightness.toDouble(),
-                              max: 255,
-                              onChanged: (v) => controller.setBrightness(v.round()),
-                            ),
-                          ),
-                          const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
-                        ],
-                      ),
-                      if (s.ambient != null)
-                        AmbientBrightnessTile(
-                          ambient: s.ambient!,
-                          maximum: s.brightness,
-                          error: controller.ambientError,
-                          onChanged: controller.setAmbient,
-                        ),
-
-                      // --- LED RING (on/off + schedule) -----------------------
-                      // Only when the bridge reports a ring state: an older Q
-                      // has no `dark` gate, and a switch it cannot honour
-                      // would only lie.
-                      if (s.ring != null) ...[
-                        const _SectionHeader('LED RING'),
-                        RingControls(
-                          ring: s.ring!,
-                          error: controller.ringError,
-                          onRingChanged: controller.setRingOn,
-                          onScheduleChanged: controller.setRingSchedule,
-                        ),
-                      ],
-
-                      // --- LIGHT THEME -----------------------------------------
-                      const _SectionHeader('LIGHT THEME'),
-                      SizedBox(
-                        height: 66,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: kLedThemes.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 12),
-                          itemBuilder: (context, i) {
-                            final t = kLedThemes[i];
-                            final selected = t.name == s.theme;
-                            return GestureDetector(
-                              onTap: () => controller.setTheme(t.name),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    width: 38,
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: t.colors.length > 1
-                                          ? SweepGradient(colors: [...t.colors, t.colors.first])
-                                          : null,
-                                      color: t.colors.length == 1 ? t.colors.first : null,
-                                      border: Border.all(
-                                        color: selected ? NexusQColors.accent : NexusQColors.divider,
-                                        width: selected ? 3 : 1,
-                                      ),
-                                      boxShadow: selected
-                                          ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
-                                          : null,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(t.label,
-                                      style: TextStyle(
-                                          fontSize: 10,
-                                          color: selected ? NexusQColors.accent : NexusQColors.dim)),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-
-                      // --- VISUALIZATION (music-reactive scenes) ---------------
-                      const _SectionHeader('VISUALIZATION'),
-                      SizedBox(
-                        height: 66,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: kVisualizations.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 12),
-                          itemBuilder: (context, i) {
-                            final v = kVisualizations[i];
-                            final selected = v.name == s.scene;
-                            return GestureDetector(
-                              onTap: () => controller.setScene(v.name),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    width: 38,
-                                    height: 38,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: selected ? NexusQColors.accent : NexusQColors.divider,
-                                        width: selected ? 3 : 1,
-                                      ),
-                                      boxShadow: selected
-                                          ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
-                                          : null,
-                                    ),
-                                    child: Icon(v.icon,
-                                        size: 20,
-                                        color: selected ? NexusQColors.accent : NexusQColors.dim),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(v.label,
-                                      style: TextStyle(
-                                          fontSize: 10,
-                                          color: selected ? NexusQColors.accent : NexusQColors.dim)),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                      // --- LIGHTS: ring, schedule, brightness, ambient, theme,
+                      // visualisation — one category (lights_section.dart).
+                      const _SectionHeader('LIGHTS'),
+                      LightsSection(controller: controller),
 
                       // --- NOW PLAYING -----------------------------------------
                       // The buttons follow nowPlaying.transport (PROTOCOL §5):
