@@ -8,6 +8,46 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-09-29 morning: read the second overnight soak on the Prague Q (r120)
+
+The Prague Q runs the fleet-signed apks built on omarchy from 0529c43 (`output/ota-r120/`):
+- device r120;
+- nexusq-control r59;
+- nexusq-mqtt r11;
+- nexusq-kernel-ota r9.
+
+It was rebooted at 23:29 CEST, and the full diag passed (`nq-captures/20260928-233959`). It
+sits at the TV now: its USB gadget is plugged into the TV, which holds the UAC2 stream open,
+so `nexusq-uac2-in` runs rather than parks. Nothing plays, nobody is on the box.
+
+**Read it BEFORE ~16:00.** One 4 MB health.jsonl lasts ~9.3 h, and the two files ~18.7 h.
+The first soak lost its first three hours by being read at 16:36.
+
+```sh
+NQ_WIFI_HOST=192.168.20.246 scripts/diag/nq-collect
+scripts/diag/nq-health-report nq-captures/latest --since=2026-09-28T23:48 \
+    --until=<the first ssh of the morning, local time; journalctl | grep Accepted>
+```
+
+Compare with the first soak (CHANGELOG, "The overnight soak"):
+- busy 4.10 % of both cores;
+- nexusq-uac2-in 3.15 % of a core (host = omarchy);
+- nexusq-control ~0.09 %;
+- nexusqd 20 renders/s;
+- ambient wakes: exactly the model's.
+
+New things this soak answers:
+- **Does the r120/r59 code cost anything at idle?** The VolumeStore should write nothing
+  (no volume changes overnight: `volume.json`'s mtime stays 23:29). The chime is idle. The
+  diag reads cost nothing (`led_sum` is a memcpy).
+- **healthd's LED fields are live now.** `led_static` should fire only if the ring really
+  freezes, not every idle stretch.
+- **The ambient model** again: re-run the scratchpad model or `Brightness` with max from
+  `brightness.json` over the window.
+- **uac2-in with the TV as host**, against omarchy's 3.15 %.
+
+Record the result in CHANGELOG and delete this section.
+
 ## Every host that plugs a Q in over USB — 2026-09-28: the gadget moved to 172.16.43.1
 
 The Q's USB-net gadget is off pmOS's shared `172.16.42.0/24`. Petr's Lumia 1020 sits

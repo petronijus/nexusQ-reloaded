@@ -48,6 +48,23 @@ still outside the persist store:
   one) into the store, keeping 0644;
 - `verify-rootfs.sh` section 11 checks all nine setting links.
 
+**On the Prague Q since 2026-09-28 23:28:** installed from apks, not hand-placed:
+- fleet-signed (`pmos@local-6a42e957`, verified against
+  `pmos/ota-signing-key.rsa.pub`), built on omarchy from 0529c43 in a fresh
+  `nexusq-workdir`, in `output/ota-r120/`;
+- `apk add`: device r120, control r59, mqtt r11, kernel-ota r9, with no
+  `.apk-new`.
+
+After a reboot the full diag passed (`nq-captures/20260928-233959`):
+- the links, and `volume.json` = the sink's 28 %;
+- the LED fingerprint live;
+- no musb card in PulseAudio, and alsaloop opened at the first try;
+- the HA selects;
+- no failed units, and dmesg err/warn empty.
+
+The unit has no Bluetooth bonds, since at least 2026-09-27 and not from this
+build. A second overnight soak runs from 23:48 (HANDOVER.md).
+
 Already in the store before this: the name and room, theme, ring and
 schedule, brightness and ambient, EQ and presets, MQTT, the source toggles,
 WiFi, Bluetooth bonds and Roon. The HDMI desktop switch stays out: it starts
