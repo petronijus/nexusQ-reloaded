@@ -289,6 +289,23 @@ rm -rf /fake/etc/nexusq
 run nq-persist apply
 check "a flash does not touch the stored theme" "grep -q warm /persist/settings/theme.json"
 umount /persist
+
+echo "=== 12. r120 pre-upgrade moves diagnostics.json and the new settings into the store ==="
+mkdir -p /var/lib/nexusq /etc/nexusq
+printf '{"until": 1790000000, "hours": 24}' > /var/lib/nexusq/diagnostics.json
+chmod 0644 /var/lib/nexusq/diagnostics.json
+echo '{"scene": "circles"}' > /etc/nexusq/scene.json               # a hand-placed r120 file
+ln -sfn /var/lib/nexusq/persist/settings/volume.json /etc/nexusq/volume.json   # already a link
+sh /pre >/dev/null 2>&1; rc=$?
+check "pre-upgrade exits 0 (rc=$rc)" "[ $rc -eq 0 ]"
+check "diagnostics moved to the link target path" "[ ! -e /var/lib/nexusq/diagnostics.json ] && grep -q 1790000000 /var/lib/nexusq/persist/settings/diagnostics.json"
+check "diagnostics keeps 0644 (the launchers read it as uid 10000)" "[ \"\$(stat -c %a /var/lib/nexusq/persist/settings/diagnostics.json)\" = 644 ]"
+check "a plain scene.json moved too" "[ ! -e /etc/nexusq/scene.json ] && grep -q circles /var/lib/nexusq/persist/settings/scene.json"
+check "an existing link is left alone" "[ -L /etc/nexusq/volume.json ]"
+ln -s /var/lib/nexusq/persist/settings/diagnostics.json /var/lib/nexusq/diagnostics.json   # what apk installs next
+check "the link serves the old mode" "grep -q 1790000000 /var/lib/nexusq/diagnostics.json"
+sh /pre >/dev/null 2>&1; rc=$?
+check "a second pre-upgrade leaves the link alone (rc=$rc)" "[ $rc -eq 0 ] && [ -L /var/lib/nexusq/diagnostics.json ]"
 EOF
 )
 rc=$?

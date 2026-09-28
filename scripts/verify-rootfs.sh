@@ -364,5 +364,21 @@ else
 fi
 
 say ""
+say "=== 11. everything the app sets lives in the persist store (device r116/r120) ==="
+# Each setting is a symlink into the store, so a flash keeps it (Petr,
+# 2026-09-28). A missing link means the bridge writes a plain rootfs file:
+# everything works until the next flash silently resets it.
+for f in etc/nexusq/theme.json etc/nexusq/ring.json etc/nexusq/eq.json \
+         etc/nexusq/eq-presets.json etc/nexusq/brightness.json etc/nexusq/scene.json \
+         etc/nexusq/output.json etc/nexusq/volume.json var/lib/nexusq/diagnostics.json; do
+    want="/var/lib/nexusq/persist/settings/$(basename "$f")"
+    if [ -L "$MNT/$f" ] && [ "$(readlink "$MNT/$f")" = "$want" ]; then
+        ok "/$f -> the store"
+    else
+        bad "/$f -> the store" "not a link to $want -- a flash would reset it"
+    fi
+done
+
+say ""
 say "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

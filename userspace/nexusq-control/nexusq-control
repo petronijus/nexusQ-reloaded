@@ -257,6 +257,147 @@ def theme_restore_thread(path=None):
         time.sleep(5)
     log("theme restore failed: nexusqd never accepted", name)
 
+
+# The visualisation and the output are per-unit settings like the theme (Petr,
+# 2026-09-28: "vsechno co je v appce za settings by melo jit do persistant").
+# Until r59 the scene lived only in memory -- a reboot lost it, and a restart of
+# the bridge alone (every OTA of it) reported "waveform" while the ring still ran
+# the scene picked before -- and the output went back to the speaker at every
+# boot. Both files are symlinks into the persist store (device r120), written
+# through them.
+SCENE_CONF_PATH = os.environ.get("NEXUSQ_SCENE_CONF", "/etc/nexusq/scene.json")
+SCENE_DEFAULT = "waveform"
+OUTPUT_CONF_PATH = os.environ.get("NEXUSQ_OUTPUT_CONF", "/etc/nexusq/output.json")
+
+
+def _scene_load(path=None):
+    """The persisted visualisation, or None (never chosen, unreadable, or a
+    scene this build does not know)."""
+    try:
+        with open(path or SCENE_CONF_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    name = data.get("scene") if isinstance(data, dict) else None
+    return name if name in SCENE_INDEX else None
+
+
+def _scene_save(name, path=None):
+    try:
+        write_json_through(path or SCENE_CONF_PATH, {"scene": name})
+    except OSError as e:
+        raise Err("unavailable", f"cannot persist visualization: {e}")
+
+
+def scene_restore_thread(path=None):
+    """Boot re-apply of the persisted visualisation: nexusqd holds the scene
+    in memory only. Retries while nexusqd's socket comes up, like the theme."""
+    name = _scene_load(path)
+    if name is None:
+        return
+    for _ in range(12):  # up to ~60 s
+        if nexusqd_send(f"scene {SCENE_INDEX[name]}"):
+            log("visualization restored from", path or SCENE_CONF_PATH, "->", name)
+            return
+        time.sleep(5)
+    log("visualization restore failed: nexusqd never accepted", name)
+
+
+def _output_load(path=None):
+    """The output the user last chose, or None."""
+    try:
+        with open(path or OUTPUT_CONF_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    oid = data.get("output") if isinstance(data, dict) else None
+    return oid if oid in OUTPUT_BY_ID else None
+
+
+def _output_save(oid, path=None):
+    """Logged, not raised: the switch itself has already happened, and
+    telling the app it failed would be the bigger lie."""
+    try:
+        write_json_through(path or OUTPUT_CONF_PATH, {"output": oid})
+    except OSError as e:
+        log("output not persisted:", e)
+
+
+# The volume and mute, per output. PulseAudio keeps them across a reboot in the
+# user's ~/.config/pulse, but that is the rootfs, and its files are named by the
+# machine-id, which a flash regenerates -- so after a flash every output came
+# back at PulseAudio's default. The bridge keeps its own copy in the store:
+# noted on every change from any front end (the app, the knob, a player, Home
+# Assistant), written at most once per VOLUME_SAVE_DELAY_S so a slider drag is
+# one write, and put back when the bridge first sees an output's sink. On a
+# normal reboot the sink already agrees and nothing is written to it.
+VOLUME_CONF_PATH = os.environ.get("NEXUSQ_VOLUME_CONF", "/etc/nexusq/volume.json")
+VOLUME_SAVE_DELAY_S = 2.0
+
+
+class VolumeStore:
+    def __init__(self, path=None, delay=VOLUME_SAVE_DELAY_S):
+        self.path = path or VOLUME_CONF_PATH
+        self.delay = delay
+        self.lock = threading.Lock()
+        self.levels = self._load()
+        # Outputs whose sink has been reconciled with the store since the
+        # bridge started. Until then a change is NOT noted: the first reading
+        # of a sink after a flash is PulseAudio's default, and noting it would
+        # overwrite the very value that is about to be put back.
+        self._settled = set()
+        self._timer = None
+
+    def _load(self):
+        try:
+            with open(self.path) as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        outs = raw.get("outputs") if isinstance(raw, dict) else None
+        levels = {}
+        for oid, v in (outs or {}).items():
+            if (oid in OUTPUT_BY_ID and isinstance(v, dict)
+                    and isinstance(v.get("volume"), int) and not isinstance(v.get("volume"), bool)
+                    and 0 <= v["volume"] <= 100 and isinstance(v.get("muted"), bool)):
+                levels[oid] = (v["volume"], v["muted"])
+        return levels
+
+    def get(self, oid):
+        with self.lock:
+            return self.levels.get(oid)
+
+    def settled(self, oid):
+        with self.lock:
+            return oid in self._settled
+
+    def settle(self, oid):
+        with self.lock:
+            self._settled.add(oid)
+
+    def note(self, oid, volume, muted):
+        if volume is None or oid not in OUTPUT_BY_ID:
+            return False
+        entry = (int(volume), bool(muted))
+        with self.lock:
+            if oid not in self._settled or self.levels.get(oid) == entry:
+                return False
+            self.levels[oid] = entry
+            if self._timer is None:
+                self._timer = threading.Timer(self.delay, self.flush)
+                self._timer.daemon = True
+                self._timer.start()
+        return True
+
+    def flush(self):
+        with self.lock:
+            self._timer = None
+            snap = {oid: {"volume": v, "muted": m} for oid, (v, m) in self.levels.items()}
+        try:
+            write_json_through(self.path, {"outputs": snap})
+        except OSError as e:
+            log("volume not persisted:", e)
+
 # --- LED ring on/off + its schedule ---------------------------------------
 # The app's "LED ring" switch. Off does not black the ring outright: nexusqd's
 # `dark 1` hides everything the ring does on its own (idle breath, theme,
@@ -2086,16 +2227,28 @@ def diag_load(path=None):
 
 
 def diag_write(st, path=None):
-    """Atomic write, 0644: the launchers read it as uid 10000."""
-    path = path or DIAG_PATH
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
-        json.dump(st, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)
+    """Atomic write, 0644: the launchers read it as uid 10000. Since device
+    r120 the path is a symlink into the persist store, so the temp file goes
+    beside the link's TARGET and is renamed over that -- an os.replace onto the
+    link itself would swap it for a plain file and the next flash would lose
+    the mode again (write_json_through's rule, with the fsync and mode this
+    file needs)."""
+    real = os.path.realpath(path or DIAG_PATH)
+    os.makedirs(os.path.dirname(real), exist_ok=True)
+    tmp = f"{real}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, real)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def diag_is_on(st, now):
@@ -3243,6 +3396,8 @@ class Bridge:
             restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
             notify=lambda v: self.broadcast("diagnosticsChanged", v))
         self.stats = ControlStats()
+        # The volume and mute per output, kept in the persist store.
+        self.volumes = VolumeStore()
         # The connection chime (Spotify, Bluetooth, AirPlay, Roon).
         self.chime = Chime()
         self.clients = {}          # id -> socket
@@ -3270,7 +3425,7 @@ class Bridge:
             "muted": bool(muted) if vol is not None else None,
             "brightness": 255,
             "theme": _theme_load() or THEME_DEFAULT,
-            "scene": "waveform",
+            "scene": _scene_load() or SCENE_DEFAULT,
             "output": output,
             "nowPlaying": {"playing": False, "artist": "", "track": "",
                            "album": "", "artUrl": "", "source": "",
@@ -3304,20 +3459,62 @@ class Bridge:
         within seconds of boot, the app whenever it likes -- and until r55 they
         kept the output and volume they had read before the switch.
         """
+        # Since r59 the output the user last chose comes back (output.json in
+        # the persist store); the speaker is the fallback when nothing was
+        # chosen or the choice is not available at boot (HDMI with the TV off).
+        saved = _output_load()
         if BOOT_OUTPUT not in OUTPUT_BY_ID:
             return
         for _ in range(attempts):
             try:
                 if self._sink_for_output(BOOT_OUTPUT):
-                    _, events = self._set_output({"output": BOOT_OUTPUT})
+                    oid = BOOT_OUTPUT
+                    if saved and saved != BOOT_OUTPUT and self._boot_available(saved):
+                        oid = saved
+                    try:
+                        _, events = self._set_output({"output": oid})
+                    except Err as e:
+                        if oid == BOOT_OUTPUT:
+                            raise
+                        log("boot output:", oid, "failed:", e.message, "- the speaker instead")
+                        oid = BOOT_OUTPUT
+                        _, events = self._set_output({"output": oid})
                     for event, data in events:
                         self.broadcast(event, data)
-                    log("boot output ->", BOOT_OUTPUT)
+                    log("boot output ->", oid)
                     return
             except Exception:  # noqa: BLE001 - PA not up yet; retry
                 pass
             time.sleep(pause_s)
         log("boot output: PA never became ready, leaving PA's default")
+
+    def _boot_available(self, oid):
+        """Can the saved output be selected at boot? The soldered-on ones when
+        their sink exists; HDMI when a sink that takes audio is on the cable --
+        the rule _list_outputs gives the app."""
+        if oid == "hdmi":
+            h = hdmi_probe()
+            return bool(h.get("connected") and h.get("audio"))
+        return self._sink_for_output(oid) is not None
+
+    def _restore_volume(self, oid, sink):
+        """Put the saved volume and mute back on `sink` if it disagrees, then
+        count the output as settled so later changes are noted. On a normal
+        reboot PulseAudio already restored the same values: nothing is set."""
+        saved = self.volumes.get(oid)
+        try:
+            if saved is not None:
+                vol, muted = self.mixer.get(sink)
+                if vol is not None and (vol, bool(muted)) != saved:
+                    self.mixer.set_volume(sink, saved[0])      # implies unmute
+                    self.mixer.set_muted(sink, saved[1])
+                    # this output is becoming the active one: its mute is
+                    # what the dome's mute LED shows
+                    nexusqd_send(f"muted {1 if saved[1] else 0}")
+                    log(f"volume restored for {oid}: {saved[0]}%{' muted' if saved[1] else ''}"
+                        f" (the sink said {vol}%{' muted' if muted else ''})")
+        finally:
+            self.volumes.settle(oid)
 
     def _source_busy(self, sid):
         """Is this source playing, or holding a paused track? Either way a
@@ -3473,6 +3670,10 @@ class Bridge:
             if moved:
                 self.state["volume"] = vol
                 self.state["muted"] = muted
+            oid = self.state["output"]
+        # Every front end that bypasses the bridge (the knob, a player through
+        # nexusq_vol, the panel applet) arrives here: keep the store's copy.
+        self.volumes.note(oid, vol, muted)
         if moved:
             self.broadcast("volumeChanged", {"volume": vol, "muted": muted})
             self.airplay_volume.volume_changed(vol, muted)
@@ -3541,7 +3742,12 @@ class Bridge:
         if method == "listOutputs":
             return self._list_outputs(), []
         if method == "setOutput":
-            return self._set_output(p)
+            result, events = self._set_output(p)
+            # Only the user's choice is remembered. _boot_output also goes
+            # through _set_output, and its fallback to the speaker (the saved
+            # output not available at boot) must not overwrite the choice.
+            _output_save(result["output"])
+            return result, events
         if method == "setTheme":
             name = str(p.get("theme", ""))
             cmds = THEME_CMDS.get(name)
@@ -3582,6 +3788,8 @@ class Bridge:
             # getState kept reporting the theme as set.
             if not nexusqd_send(f"scene {idx}"):
                 raise Err("unavailable", "nexusqd rejected scene")
+            # Ring first, file second -- the theme's rule.
+            _scene_save(name)
             with self.lock:
                 self.state["scene"] = name
             return {"scene": name}, [("sceneChanged", {"scene": name})]
@@ -3920,6 +4128,8 @@ class Bridge:
         with self.lock:
             self.state["volume"] = vol
             self.state["muted"] = muted
+            oid = self.state["output"]
+        self.volumes.note(oid, vol, muted)
         # drive nexusqd's dedicated mute LED so app mute has a device-side indicator
         # (idempotent set, same LED the hardware mute key lights)
         nexusqd_send(f"muted {1 if muted else 0}")
@@ -4027,6 +4237,10 @@ class Bridge:
             self.mixer.set_muted(sink, False)  # unmute the speaker sink
         else:
             _amixer("sset", AMP_CTRL, "off")
+        # First time this output's sink is seen since the bridge started: put
+        # back its saved volume and mute (a flash left PulseAudio's default).
+        if not self.volumes.settled(oid):
+            self._restore_volume(oid, sink)
         # reconcile volume/mute from the now-active sink so the UI reflects reality
         vol, muted = self.mixer.get(sink)
         with self.lock:
@@ -4611,6 +4825,7 @@ def main():
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
     threading.Thread(target=eq_restore_thread, daemon=True).start()
     threading.Thread(target=theme_restore_thread, daemon=True).start()
+    threading.Thread(target=scene_restore_thread, daemon=True).start()
     threading.Thread(target=bridge.diag.run, daemon=True).start()
     threading.Thread(target=bridge.ring.run, daemon=True).start()
     threading.Thread(target=bridge.brightness.run, daemon=True).start()

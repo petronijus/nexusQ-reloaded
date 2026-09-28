@@ -350,7 +350,9 @@ apply_mqtt() {
 
 apply_settings() {
 	# The app's per-unit settings (device r116): theme.json, ring.json, eq.json,
-	# eq-presets.json, brightness.json. Like device.json they arrive through
+	# eq-presets.json, brightness.json; since r120 also scene.json, output.json,
+	# volume.json and diagnostics.json (the last linked from /var/lib/nexusq,
+	# not /etc/nexusq). Like device.json they arrive through
 	# symlinks in /etc/nexusq that point here, written through by nexusq-control (>= r53)
 	# and nexusq-setupd (>= r6); a link with no file yet reads as "never set".
 	# Nothing to seed -- the r116 .pre-upgrade moved any existing plain file

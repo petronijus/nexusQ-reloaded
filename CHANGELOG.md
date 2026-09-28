@@ -6,6 +6,70 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — everything the app sets survives a flash (device **r120**, `nexusq-control` **r59**)
+
+Petr, 2026-09-28: "všechno co je v appce za settings by mělo jít do
+persistant". An audit of every setting the app changes on the Q found four
+still outside the persist store:
+
+- **The visualisation was not saved at all.** It is now `scene.json`,
+  written after nexusqd has taken it and re-sent at boot
+  (`scene_restore_thread`). A new bridge reports it from the file. Until now
+  a reboot lost it, and a restart of the bridge alone made the app and Home
+  Assistant show Waveform over another scene.
+- **The volume and mute, per output**, in `volume.json`.
+  - PulseAudio keeps them across a reboot, but on the rootfs and in files
+    named by the machine-id. The image ships no `/etc/machine-id` (checked in
+    the r109 rootfs), so a flash generates a new one, and PulseAudio would not
+    find the old files even in the store.
+  - The bridge notes each change from any front end: the app, the knob, a
+    player through `nexusq_vol`, Home Assistant.
+  - A drag is one write, at most every 2 s (`VolumeStore`, a `threading.Timer`).
+  - The saved value is put back when the bridge first sees an output's sink.
+    On a normal reboot the sink already agrees and nothing is written to it.
+  - Nothing is noted for an output before that. pa_watch_thread's first
+    reading can come before `_boot_output`, and after a flash it is
+    PulseAudio's default, which would overwrite the saved value just before
+    it is restored.
+  - Mute now survives a bridge restart too. Before, the switch to the speaker
+    at every start unmuted it.
+- **The output**, in `output.json`. Boot goes to the saved output when it is
+  available (HDMI: a sink that takes audio on the cable, `_list_outputs`'s
+  rule), else the speaker. Only the user's `setOutput` is saved; a boot
+  fallback (the TV off) keeps the choice.
+- **The diagnostics mode** (`/var/lib/nexusq/diagnostics.json`, read by the
+  launchers as uid 10000). `diag_write` replaced the path with `os.replace`;
+  it now writes through the link and keeps the fsync and 0644.
+
+**Device package r120:**
+- links `scene.json`, `output.json` and `volume.json` in `/etc/nexusq`, and
+  `/var/lib/nexusq/diagnostics.json`, into `persist/settings/`;
+- the `.pre-upgrade` moves a plain diagnostics file (and any hand-placed new
+  one) into the store, keeping 0644;
+- `verify-rootfs.sh` section 11 checks all nine setting links.
+
+Already in the store before this: the name and room, theme, ring and
+schedule, brightness and ambient, EQ and presets, MQTT, the source toggles,
+WiFi, Bluetooth bonds and Roon. The HDMI desktop switch stays out: it starts
+or stops the desktop for now, and off is the appliance's default.
+
+**Tests:**
+- `test_settings_persist.py` +19: each file written through its link, boot
+  restore of the output and the volume, fallback, debounce, garbage. Eight
+  mutations were each seen failing: scene not saved, output not saved, boot
+  ignoring it, no restore, noting before the restore, the knob not noted,
+  `diag_write` replacing the link, and every note writing. Bridge suite
+  323/323.
+- `test_persist.sh` section 12 (+7): four mutations of the `.pre-upgrade`
+  seen failing.
+- **On omarchy the harness's loop devices are grabbed by the desktop's
+  `udiskie --automount`**, which mounts each under `/run/media/…` on the
+  host. The devices stay attached after the container exits, the next run's
+  `nq-persist` finds the stale `nq-persist`-labelled image, and four
+  flash-scenario checks fail on an unchanged HEAD as well (71/75, twice).
+  Free them with `udisksctl unmount -b /dev/loopN` (they autoclear). Making
+  udiskie ignore loop devices is Petr's desktop decision.
+
 ### Added — the light theme and the visualisation in Home Assistant (`nexusq-mqtt` **r11**)
 
 Petr, 2026-09-28, after testing the rest in Home Assistant: the theme and the
@@ -59,6 +123,10 @@ visualisation belong there too, so automations can pick them.
   - Result: 121/121 in eight consecutive runs, no abort, no connection
     attempt to the real port, and 0 threads alive after the suite (14 before
     the accept fix).
+- On the Prague Q since 2026-09-28 evening, hand-placed; r10 was kept as
+  `/root/nexusq-mqtt.r10`. On the broker, both select configs are retained
+  with the bridge's options, and `ring/state` carries `theme` / `scene`.
+  Petr sees both entities in Home Assistant.
 - **Verified by Petr in Home Assistant, 2026-09-28** (Prague Q), before this
   change: the Volume number, and the LED ring's on/off (nexusq-mqtt r9/r10,
   whose entries above still say "not yet run against the real broker").

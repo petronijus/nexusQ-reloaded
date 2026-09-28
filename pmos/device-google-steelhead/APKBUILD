@@ -757,9 +757,16 @@ package() {
 	# packaged link: it holds the broker password, and the image/apk secret
 	# gates would (rightly) refuse a member of that name. It lives in the store
 	# as site/mqtt.json and `nq-persist apply` makes the link at boot (r112).
-	for f in theme.json ring.json eq.json eq-presets.json brightness.json; do
+	# r120 (Petr: everything the app sets survives a flash): the visualisation,
+	# the output, the volume + mute per output (nexusq-control r59), and the
+	# diagnostics mode, whose file the launchers read as uid 10000.
+	for f in theme.json ring.json eq.json eq-presets.json brightness.json \
+			scene.json output.json volume.json; do
 		ln -s "/var/lib/nexusq/persist/settings/$f" "$pkgdir/etc/nexusq/$f"
 	done
+	install -dm755 "$pkgdir"/var/lib/nexusq
+	ln -s /var/lib/nexusq/persist/settings/diagnostics.json \
+		"$pkgdir"/var/lib/nexusq/diagnostics.json
 
 	# Force-enable the companion control bridge. nexusq-control.service is a
 	# VENDOR unit (the nexusq-control aport ships it in /usr/lib/systemd/system),

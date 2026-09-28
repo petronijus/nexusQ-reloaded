@@ -106,6 +106,9 @@ class Bridge:
         self.mixer = FakeMixer()
         self.state = {"output": "speaker", "volume": 40, "muted": False}
         self.sent = []
+        # inert: persisting the volume has its own tests (test_settings_persist.py)
+        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False,
+                                 get=lambda oid: None)
 
     _sink_for_output = MOD.Bridge._sink_for_output
     _output_for_sink = MOD.Bridge._output_for_sink
@@ -113,6 +116,7 @@ class Bridge:
     _hdmi_sink_down = MOD.Bridge._hdmi_sink_down
     _list_outputs = MOD.Bridge._list_outputs
     _set_output = MOD.Bridge._set_output
+    _restore_volume = MOD.Bridge._restore_volume
     _hdmi_watch_step = MOD.Bridge._hdmi_watch_step
     # staticmethod() matters: read off the class it is already unwrapped, and
     # assigning the bare function here would turn it back into a bound method.

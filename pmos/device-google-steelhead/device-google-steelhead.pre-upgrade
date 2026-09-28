@@ -74,7 +74,8 @@ fi
 # on an older one it lands under the unmounted mountpoint and `nq-persist
 # prepare` parks it for `apply` to merge at the next boot.
 # Tested in tests/test_persist.sh ("r116 pre-upgrade moves plain settings").
-for name in theme.json ring.json eq.json eq-presets.json brightness.json; do
+for name in theme.json ring.json eq.json eq-presets.json brightness.json \
+		scene.json output.json volume.json; do
 	f=/etc/nexusq/$name
 	if [ -f "$f" ] && [ ! -L "$f" ]; then
 		mkdir -p /var/lib/nexusq/persist/settings
@@ -86,5 +87,23 @@ for name in theme.json ring.json eq.json eq-presets.json brightness.json; do
 		fi
 	fi
 done
+
+# --- r120: the diagnostics mode joins them ------------------------------------
+# /var/lib/nexusq/diagnostics.json becomes a symlink into the store too (the
+# app's Developer -> Device diagnostics, read by the launchers through nq-diag).
+# A unit that ever had the mode on carries it as a plain file; move it the same
+# way, keeping its 0644, or apk would install the link onto an unowned file.
+# scene/output/volume.json above are new in r120 and normally absent -- the
+# loop only guards a hand-placed file.
+f=/var/lib/nexusq/diagnostics.json
+if [ -f "$f" ] && [ ! -L "$f" ]; then
+	mkdir -p /var/lib/nexusq/persist/settings
+	if cp -p "$f" /var/lib/nexusq/persist/settings/diagnostics.json; then
+		rm -f "$f"
+		echo "nexusq: diagnostics.json moved into the persist store for r120" >&2
+	else
+		echo "nexusq: WARNING could not move $f for r120 -- apk may refuse the symlink" >&2
+	fi
+fi
 
 exit 0

@@ -111,6 +111,9 @@ class Bridge:
         self.state = {"output": output, "volume": volume, "muted": muted}
         self.airplay_volume = FakeFollow()
         self.sent = []
+        # inert: persisting the volume has its own tests (test_settings_persist.py)
+        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False,
+                                 get=lambda oid: None)
 
     _active_sink = MOD.Bridge._active_sink
     _sink_for_output = MOD.Bridge._sink_for_output
@@ -120,6 +123,8 @@ class Bridge:
     _boot_output = MOD.Bridge._boot_output
     _reconcile_volume = MOD.Bridge._reconcile_volume
     _volume_cmd = MOD.Bridge._volume_cmd
+    _restore_volume = MOD.Bridge._restore_volume
+    _boot_available = MOD.Bridge._boot_available
 
     def _reconcile_source(self):
         return False              # the tap's source: test_tap_source.py
@@ -131,7 +136,9 @@ class Bridge:
 def quiet():
     """The side effects _set_output and _volume_cmd reach outside the bridge."""
     return [mock.patch.object(MOD, name) for name in
-            ("hdmi_hold", "_sync_panel_applet", "_amixer", "nexusqd_send")]
+            ("hdmi_hold", "_sync_panel_applet", "_amixer", "nexusqd_send")] + [
+        # no saved output: the host's /etc must never steer a test
+        mock.patch.object(MOD, "OUTPUT_CONF_PATH", "/nonexistent/output.json")]
 
 
 class Patched(unittest.TestCase):
