@@ -6,6 +6,50 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the connection chime: the Q greets whatever takes it (`nexusq-control` **r59**)
+
+Petr, 2026-09-28: when something connects, the Q should make a sound. It uses
+the stock Nexus Q's own chime, `polaris.ogg`. That file is HubBroker's
+"pairing complete" sound (`BluetoothPairingMonitor2`, `mCompletionSoundId`),
+2.4 s long. It is Google's; Petr decided to ship it publicly.
+
+- **When:**
+  - **Spotify** — librespot's `session_connected`, which `nexusq-onevent` now
+    forwards. librespot 0.8.0 emits it from `handle_activate()` only (checked
+    in `connect/src/spirc.rs`): on a transfer, a Play, an Activate, or a
+    context load while inactive. Those all mean a client made the Q its
+    active device. It is not emitted when librespot re-authenticates on its
+    own; the journal shows that happening after a session ends (2026-09-28
+    00:05) and on dealer resets, and a chime there would sound at midnight.
+  - **Bluetooth** — a `bluez_card.*` appearing in PulseAudio (`pactl
+    subscribe` "'new' on card"), i.e. a phone connecting for A2DP.
+  - **AirPlay and Roon** announce no connection; all the Q sees is their
+    audio starting (shairport's sink-input, `roon_in` running) and stopping,
+    and a pause stops it too. So a start chimes only after 10 min
+    (`CHIME_GAP_S`) without that source.
+  - A source already running when the bridge starts is a restart, not a
+    connection, and stays quiet. So do cards that exist when the watcher
+    subscribes.
+- **How loud:** `paplay` into the default sink at 100 % of the sink. With
+  flat-volumes off (checked on the unit), that is exactly the music's level
+  at the current volume, never louder, and silent when muted.
+- One chime at a time. A duplicate from the same source within 10 s is
+  dropped.
+- Packaging: `sounds/polaris.ogg` →
+  `/usr/share/nexusq-control/polaris.ogg`, staged by `docker-build.sh`;
+  `verify-rootfs.sh` requires it.
+- Tests `tests/test_chime.py` (23) cover:
+  - the rules;
+  - `paplay` and the overlap guard;
+  - the wiring of all four sources;
+  - the hook script against a real socket.
+
+  Eight mutations were each seen failing: no gap, no dedupe, no start grace,
+  overlap allowed, AirPlay or Roon unwired, any card chiming, and the hook
+  dropping `session_connected`. The existing tests' fake bridges carry an
+  inert `Chime`. Suite 303/303.
+- Not yet on a unit; the listening test is Petr's.
+
 ### Changed — the app's home screen has one LIGHTS category (app, unreleased)
 
 Petr, 2026-09-28: everything that decides what the LED ring shows belongs

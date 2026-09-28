@@ -65,6 +65,8 @@ class _Bridge:
     def __init__(self, mod):
         self.lock = threading.Lock()
         self.transports = {"airplay": mod.AirPlayTransport()}
+        # inert: the connection chime has its own tests (test_chime.py)
+        self.chime = mod.Chime(play=lambda path: False)
         self.state = {"nowPlaying": {"playing": False, "artist": "", "track": "",
                                      "album": "", "artUrl": "", "source": "",
                                      "transport": "none"}}

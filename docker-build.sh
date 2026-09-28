@@ -381,6 +381,7 @@ cp "$SRC/pmos/nexusq-control/APKBUILD"             "$NEXUSQCTL_DIR/"
 cp "$SRC/userspace/nexusq-control/nexusq-control"  "$NEXUSQCTL_DIR/"
 cp "$SRC/userspace/nexusq-control/nexusq-onevent"  "$NEXUSQCTL_DIR/"
 cp "$SRC/userspace/nexusq-control/nexusq-control.service" "$NEXUSQCTL_DIR/"
+cp "$SRC/userspace/nexusq-control/sounds/polaris.ogg" "$NEXUSQCTL_DIR/"
 echo "  Installed: nexusq-control (aport + bridge -> main/nexusq-control)"
 
 # nexusq-setupd: the BT provisioning daemon (pure staging, like nexusq-control).

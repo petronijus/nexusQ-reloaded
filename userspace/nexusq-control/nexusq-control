@@ -497,6 +497,114 @@ class ControlStats:
                 self._warned = True
 
 
+# --- the connection chime ---------------------------------------------------
+# The stock Nexus Q's own chime (HubBroker res/raw/polaris.ogg, its "pairing
+# complete" sound) plays when something takes the Q: a Spotify client selects
+# it, a phone connects over Bluetooth, an AirPlay sender or Roon starts sending
+# to it (Petr, 2026-09-28). It plays through PulseAudio's default sink at 100 %
+# of the sink, and flat-volumes is off, so it is exactly as loud as the music
+# at the current volume -- never louder -- and silent when the Q is muted.
+#
+# Two kinds of source:
+#   - EXPLICIT: Spotify (librespot's session_connected, which 0.8 emits only
+#     from handle_activate(), i.e. when a client makes the Q the active Connect
+#     device -- not when librespot re-authenticates on its own) and Bluetooth
+#     (an A2DP card appearing in PulseAudio). Each is a real connection; only
+#     a duplicate within CHIME_DEDUPE_S is dropped.
+#   - DERIVED: AirPlay and Roon announce no connection; all the Q sees is
+#     their audio starting and stopping, and a pause stops it too. So a start
+#     counts as a new connection only after CHIME_GAP_S without that source,
+#     and a source already running when the bridge starts (a restart, not a
+#     connection) is not announced.
+CHIME_PATH = os.environ.get("NEXUSQ_CHIME", "/usr/share/nexusq-control/polaris.ogg")
+CHIME_DEDUPE_S = 10.0
+CHIME_GAP_S = 600.0
+CHIME_START_GRACE_S = 60.0
+
+
+class Chime:
+    def __init__(self, path=None, play=None, clock=None):
+        self.path = path or CHIME_PATH
+        self.play = play or self._paplay
+        self.clock = clock or time.monotonic
+        self.lock = threading.Lock()
+        self.started = self.clock()
+        self._last_chime = {}        # source -> when it last chimed
+        self._active = {}            # derived source -> last known activity
+        self._quiet_since = {}       # derived source -> when it went quiet
+        self._proc = None
+        self._warned = False
+
+    def connected(self, source):
+        """An EXPLICIT source connected. True if the chime was played."""
+        with self.lock:
+            now = self.clock()
+            last = self._last_chime.get(source)
+            if last is not None and now - last < CHIME_DEDUPE_S:
+                return False
+            return self._ring(source, now)
+
+    def activity(self, source, active):
+        """A DERIVED source's audio is (not) flowing. True if it chimed."""
+        with self.lock:
+            now = self.clock()
+            was = self._active.get(source)
+            self._active[source] = bool(active)
+            if not active:
+                if was:
+                    self._quiet_since[source] = now
+                return False
+            if was:
+                return False
+            if was is None and now - self.started < CHIME_START_GRACE_S:
+                return False         # running when the bridge started
+            quiet = self._quiet_since.get(source)
+            if quiet is not None and now - quiet < CHIME_GAP_S:
+                return False         # a pause, not a new connection
+            return self._ring(source, now)
+
+    def _ring(self, source, now):
+        self._last_chime[source] = now
+        played = self.play(self.path)
+        if played:
+            log("chime:", source, "connected")
+        return bool(played)
+
+    def _paplay(self, path):
+        """Fire and forget into the user session's PulseAudio. One at a time:
+        two sources connecting together make one chime, not two over each
+        other."""
+        if self._proc is not None and self._proc.poll() is None:
+            return False
+        if not os.path.exists(path):
+            if not self._warned:
+                log("chime: no sound file at", path)
+                self._warned = True
+            return False
+        try:
+            self._proc = subprocess.Popen(
+                ["paplay", "--client-name=nexusq-chime",
+                 "--property=media.role=event", path],
+                env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log("chime: paplay failed:", e)
+            return False
+        return True
+
+
+def bluez_card_for(index, short_cards):
+    """The name of PulseAudio card `index` if it is a Bluetooth one, else
+    None. `short_cards` is `pactl list short cards`: index<TAB>name<TAB>..."""
+    for line in short_cards.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].strip() == str(index):
+            name = parts[1].strip()
+            return name if name.startswith("bluez_card.") else None
+    return None
+
+
 # --- LED brightness + ambient brightness ----------------------------------
 # The brightness slider is persistent (it used to reset to 255 on every bridge
 # restart) and, with AMBIENT on, it is the MAXIMUM: the ring sits at it while
@@ -3122,6 +3230,8 @@ class Bridge:
             restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
             notify=lambda v: self.broadcast("diagnosticsChanged", v))
         self.stats = ControlStats()
+        # The connection chime (Spotify, Bluetooth, AirPlay, Roon).
+        self.chime = Chime()
         self.clients = {}          # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
@@ -3990,6 +4100,17 @@ class Bridge:
             events.append(("nowPlayingChanged", np))
         return (result if isinstance(result, dict) else {}), events
 
+    def on_pa_card_new(self, index):
+        """PulseAudio created card `index`. A Bluetooth one is a phone that
+        just connected for A2DP -- chime. Cards that exist when the watcher
+        subscribes produce no event, so a bridge restart stays quiet."""
+        try:
+            out = _pactl("list", "short", "cards").stdout
+        except (OSError, subprocess.SubprocessError):
+            return
+        if bluez_card_for(index, out):
+            self.chime.connected("bluetooth")
+
     def airplay_sync(self, state):
         """Apply an AirPlay state from PulseAudio: "playing", "paused" or None.
 
@@ -4000,6 +4121,9 @@ class Bridge:
         honest rendering of that, which is why the app trusts the transport
         rather than the title.
         """
+        # Whoever owns the screen, shairport's stream appearing is AirPlay
+        # arriving -- the chime's business, not the now-playing card's.
+        self.chime.activity("airplay", state is not None)
         with self.lock:
             cur = dict(self.state["nowPlaying"])
         owns = cur.get("source") in ("", "airplay")
@@ -4076,6 +4200,7 @@ class Bridge:
 
     def roon_sync(self):
         zone = self._roon_our_zone()
+        self.chime.activity("roon", zone is not None)
         with self.lock:
             cur = dict(self.state["nowPlaying"])
             self._roon_zone = zone
@@ -4114,6 +4239,10 @@ class Bridge:
         kind = obj.get("kind", "")
         if kind == "roon":
             self.on_roon(str(obj.get("topic", "")), str(obj.get("value", "")))
+            return
+        if kind == "session_connected":
+            # A Spotify client made the Q its active device.
+            self.chime.connected("spotify")
             return
         np = None
         with self.lock:
@@ -4426,6 +4555,13 @@ def pa_watch_thread(bridge):
             bridge._reconcile_volume()
             bridge._reconcile_source()
             for line in proc.stdout:
+                m = re.search(r"'new' on card #(\d+)", line)
+                if m:
+                    try:
+                        bridge.on_pa_card_new(int(m.group(1)))
+                    except Exception as e:
+                        log("chime: card check failed:", e)
+                    continue
                 if "on sink-input #" in line:
                     # AirPlay's play/pause lives here: shairport's sink-input
                     # corks and uncorks with the sender. Free to watch -- this

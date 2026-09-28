@@ -19,7 +19,7 @@ rescue gadget is on `.43` too, from the next flash or rescue build.
 - **Prague Q:** live since 2026-09-28 17:00. The r120 files were placed by hand and
   survived a reboot. The apk agrees once r120 is built and installed; nothing to
   undo.
-- **Cottage Q:** stays on `.42` until it takes r120 with the v1.20.0 publish.
+- **Cottage Q:** stays on `.42` until it takes r120 with the v2.0.0 publish.
 - **omarchy:** done. NM profile `nexusq-usb` (MAC `02:1A:11:00:00:02`, static
   `172.16.43.2/24`, `ipv4.never-default`, autoconnect-priority 10).
 - **Ubuntu (petronijus-PC) and the MacBook**, the first time a Q on r120 is on the
@@ -32,10 +32,13 @@ rescue gadget is on `.43` too, from the next flash or rescue build.
 - **Windows:** rerun `scripts/install-gadget-rndis.ps1` elevated. It now picks the
   adapter by the Q's MAC and assigns `172.16.43.2`.
 
-## Desktop (petronijus-PC) — 2026-09-27: the v1.20.0 work is all in `main`, NOTHING is published
+## Desktop (petronijus-PC) — 2026-09-27: the v2.0.0 work is all in `main`, NOTHING is published
+
+> **Version:** Petr, 2026-09-28: this is a big update, so the image release is
+> **v2.0.0**, not v1.20.0. The app keeps its own track (1.25.0 today).
 
 Done on the MacBook; the user asked to stop here and hand over. **Nothing below
-is released**: no gh-pages publish, no GitHub release, no app release. v1.20.0
+is released**: no gh-pages publish, no GitHub release, no app release. v2.0.0
 waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
 
 | package | rev | what |
@@ -57,7 +60,7 @@ waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
    every run; a local image saves that (`userspace/nexusq-alsa-vol/README.md`,
    Tests). `sh userspace/nexusq-alsa-vol/tests/run-integration.sh` must print
    `plugin: PIC, entry point exported` and `test_player_mappings: ok`.
-3. **When Petr says release (v1.20.0):** the full image build as usual. The
+3. **When Petr says release (v2.0.0):** the full image build as usual. The
    gates changed:
    - `verify-rootfs.sh` has a **section 9 (one volume)**: the plugin, its
      `/etc/alsa/conf.d` entry, `nq-pulse.sh`, and librespot/shairport pointed at

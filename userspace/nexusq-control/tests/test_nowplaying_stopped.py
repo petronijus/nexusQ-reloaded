@@ -46,6 +46,8 @@ class _Bridge:
         # the honest default here (no AirPlay/Roon backend exists yet), and it
         # is what makes a cleared source resolve to "none".
         self.transports = {}
+        # inert: the connection chime has its own tests (test_chime.py)
+        self.chime = mod.Chime(play=lambda path: False)
         self.sent = self.sent
         # on_hook routes through the real transport mapping, so borrow those
         # too rather than stubbing them — the point is the shipped behaviour.

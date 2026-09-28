@@ -48,6 +48,10 @@ elif event in ("paused",):
     obj = {"kind": "paused"}
 elif event in ("stopped", "end_of_track", "session_disconnected"):
     obj = {"kind": "stopped"}
+elif event == "session_connected":
+    # librespot 0.8 emits it from handle_activate() only: a client has just
+    # made the Q its active device (the bridge plays the connection chime).
+    obj = {"kind": "session_connected"}
 elif event in ("volume_changed", "volume_set"):
     obj = {"kind": "volume", "volume": int(os.environ.get("VOLUME", "0") or 0)}
 

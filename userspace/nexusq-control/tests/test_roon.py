@@ -56,6 +56,8 @@ class _Bridge:
         self.roon = {}
         self._roon_zone = None
         self.transports = {"roon": mod.RoonTransport(self)}
+        # inert: the connection chime has its own tests (test_chime.py)
+        self.chime = mod.Chime(play=lambda path: False)
         self.state = {"nowPlaying": {"playing": False, "artist": "", "track": "",
                                      "album": "", "artUrl": "", "source": "",
                                      "transport": "none"}}

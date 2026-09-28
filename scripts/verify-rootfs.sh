@@ -73,6 +73,7 @@ chk_has usr/bin/nq-healthd                                           "nq-healthd
 chk_has etc/systemd/system/nq-healthd.service                        "nq-healthd unit"
 chk_has usr/bin/nexusq-control                                       "nexusq-control"
 chk_has usr/bin/nexusq-mqtt                                          "nexusq-mqtt"
+chk_has usr/share/nexusq-control/polaris.ogg                        "connection chime (nexusq-control r59)"
 
 say ""
 say "=== 3. idle-power set (device r73, 2026-08-16) ==="
