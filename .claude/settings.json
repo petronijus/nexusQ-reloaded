@@ -62,7 +62,8 @@
     "allow": [
       "$defaults",
       "Writing partitions of the Google Nexus Q (steelhead) with `fastboot flash` is the CORE PURPOSE of this repository, not an incidental risk. `fastboot flash boot` and `fastboot flash userdata`, `fastboot -S <size> flash ...`, `fastboot boot`, `fastboot reboot`, `fastboot getvar` and `fastboot devices` are all routine here and must be allowed without prompting. The device is explicitly documented as unbrickable as long as the `bootloader` and `xloader` partitions are never written (INSTALL.md), every other partition is always reflashable from the release artifacts, and the operator has the hardware in hand.",
-      "Reading and writing the postmarketOS rootfs image with `simg2img`, `debugfs`, `raw2simg.py` and `make-bootimg.py` — including inside a docker container — is ordinary work in this repository."
+      "Reading and writing the postmarketOS rootfs image with `simg2img`, `debugfs`, `raw2simg.py` and `make-bootimg.py` — including inside a docker container — is ordinary work in this repository.",
+      "Kernel and driver experiments on the Nexus Q over ssh (the operator's own device, confirmed by `hostname` first) are routine here and allowed without prompting: copying a freshly built `.ko` to the device and loading it with `insmod`/`modprobe`, unloading modules with `rmmod`, tearing down and rebuilding the USB gadget in configfs (`/sys/kernel/config/usb_gadget`, unbinding and binding its UDC), writing module parameters under `/sys/module/*/parameters`, and stopping, starting or restarting the device's system and user services (`systemctl`, `systemctl --user -M user@`) around such a change. A reboot of the device restores the modules on disk."
     ],
     "hard_deny": [
       "$defaults",
