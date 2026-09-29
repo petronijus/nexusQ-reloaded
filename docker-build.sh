@@ -1,8 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-DEVICE="google-steelhead"
 SRC="/src"
+
+# This runs INSIDE the nexusq-builder container, with the repo mounted at /src.
+# Run on the host it used to find nothing there, build nothing and exit 0 — a
+# silent no-op that reads as a finished build. The host command is in the
+# README ("Build from source").
+if [ ! -f "$SRC/docker-build.sh" ]; then
+    echo "docker-build.sh: no repo at $SRC — this runs inside the nexusq-builder container:" >&2
+    echo "  docker build -t nexusq-builder . && docker run --rm --privileged -v \"\$PWD:/src:ro\" \\" >&2
+    echo "    -v nexusq-output:/tmp/output -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \\" >&2
+    echo "    nexusq-builder /src/docker-build.sh" >&2
+    exit 1
+fi
 
 # CROSS-COMPILE EVERYTHING, not just the kernel (2026-08-31).
 #
@@ -69,8 +80,10 @@ for apkbuild in \
     # passed only passed because they happen not to name one. A listing must not
     # invent failures, so nounset and errexit are off inside the subshell and
     # only a `source` that really returns non-zero is reported.
+    # shellcheck disable=SC2154  # pkgname, pkgver and arch come from the sourced APKBUILD
     (
         set +eu
+        # shellcheck source=/dev/null  # an APKBUILD, chosen at run time
         source "$apkbuild" 2>/dev/null
         rc=$?
         if [ $rc -ne 0 ]; then
@@ -491,7 +504,6 @@ echo "=== Phase 6b: Patch pmbootstrap for Docker compatibility ==="
 
 APK_PY="/usr/lib/python3.12/site-packages/pmb/helpers/apk.py"
 PART_PY="/usr/lib/python3.12/site-packages/pmb/install/partition.py"
-LOSETUP_PY="/usr/lib/python3.12/site-packages/pmb/install/losetup.py"
 BACKEND_PY="/usr/lib/python3.12/site-packages/pmb/build/backend.py"
 BLOCKDEV_PY="/usr/lib/python3.12/site-packages/pmb/install/blockdevice.py"
 

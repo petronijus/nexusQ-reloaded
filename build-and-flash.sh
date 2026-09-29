@@ -13,7 +13,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEVICE="google-steelhead"
 
 echo "=== Nexus Q postmarketOS Build & Flash ==="
 echo ""

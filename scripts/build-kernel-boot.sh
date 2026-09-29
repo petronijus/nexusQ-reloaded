@@ -136,7 +136,7 @@ device = google-steelhead
 # reuse a chroot built for the other channel -- so alternating between the two
 # scripts recreated every chroot each time, and the kernel apk this script built
 # landed in packages/edge where the full build (systemd-edge) could never see it.
-# `systemd = default` was ALSO the pre-3.11 key name, silently ignored since, which
+# 'systemd = default' was ALSO the pre-3.11 key name, silently ignored since, which
 # is how this script quietly ended up on openrc/edge in the first place.
 ui = lxqt
 build_pkgs_on_install = True

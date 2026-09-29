@@ -174,11 +174,19 @@ Then open Spotify on the same WiFi and cast to **"Nexus Q"** 🎶. Full walkthro
 
 ## 🛠 Build from source
 
-One command, fully dockerized (pmbootstrap under the hood):
+Fully dockerized (pmbootstrap under the hood); `docker-build.sh` runs inside the
+builder container and refuses to run on the host:
 
 ```bash
-./docker-build.sh        # → output/boot.img + output/google-steelhead.img
+docker build -t nexusq-builder .
+docker run --rm --privileged -v "$PWD:/src:ro" \
+  -v nexusq-output:/tmp/output -v nexusq-workdir:/home/pmos/.local/var/pmbootstrap \
+  nexusq-builder /src/docker-build.sh     # → nexusq-output volume: boot.img + google-steelhead.img
 ```
+
+One build at a time: the work volume is single-writer. Working on the code
+itself — `just check`, the tests, the git hooks, the toolchain — is
+[docs/development.md](docs/development.md).
 
 It builds the kernel (mainline 6.18.48 + **44 patches** in `kernel/patches/`), the
 device daemons (`nexusqd` · `nexusq-control` · `nexusq-btagent` · `nexusq-setupd` ·
