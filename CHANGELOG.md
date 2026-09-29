@@ -111,7 +111,47 @@ After a reboot the full diag passed (`nq-captures/20260928-233959`):
 - no failed units, and dmesg err/warn empty.
 
 The unit has no Bluetooth bonds, since at least 2026-09-27 and not from this
-build. A second overnight soak runs from 23:48 (HANDOVER.md).
+build.
+
+**The second soak** (Prague Q, r120 / control r59 / mqtt r11, one boot from
+2026-09-28 23:29; `nq-captures/20260929-225353/`). It was idle from 23:48 until
+the TV box's app connected at 20:21 the next evening, but it was read at 22:53,
+and health.jsonl held only 09:30 onwards. The window is therefore 09:30–20:21,
+10.8 h of daytime idle; the night itself is gone.
+
+- **Retention shrank.** A row carries ~790 bytes since r120 (the LED fields),
+  so the two 4 MB files hold ~13.4 h, not the 18.7 h of r119. Read a soak
+  within ~13 h of its start.
+- **Whole box: busy 4.98 % of both cores, 129 forks/min, 2983 interrupts/s,
+  C3 15.2 % of idle** (first soak: 4.10 %, 95, 862, 72.6 %). 350 MHz is 98 % of
+  the samples, 1.2 GHz is reached (24 samples), peak 71.0 °C, average 55.5 °C.
+- **The difference is the TV as the USB audio host.** The TV keeps the UAC2
+  stream running, so the gadget's two musb interrupts fire 1001/s each; omarchy,
+  the host in the first soak, let it idle. That is +2000 interrupts/s, and a
+  wakeup every millisecond also keeps cpuidle out of C3 (83 % of idle in C1).
+  `nexusq-uac2-in` costs 3.87 % of a core (3.17 % with omarchy). The other
+  services match the first soak: user.slice 5.82 %, system.slice 2.08 %,
+  nexusqd 0.93 % at 20.01 renders/s, roon + roon-idle 1.75 %, mqtt 0.23 %,
+  nq-healthd 0.14 %; nexusq-control stays under the list's cut-off.
+- **The r120/r59 code costs nothing at idle.** nexusq-control logged nothing
+  in the window, and `volume.json` was last written at 20:22, by the TV box's
+  change after the window.
+- **The LED ring:** its frame did not change for ~15.8 h with nexusqd healthy,
+  so healthd reported `led_static` (info) every 5 minutes and never
+  `led_frozen`. That is the design, but 190 info events a day is noise in
+  events.jsonl.
+- **Ambient:** switched off on 2026-09-28 22:32 (`brightness.json`: max 151).
+  Off, the scheduler sleeps its 1800 s cap, so the model is 2 wakes an hour;
+  the counter shows 21 in 10.8 h (1.94/h). `tap_fixes` is 0.
+- **One `vdd_mismatch` at 01:35 (outside the retained window):** 1.025 V at
+  700 MHz. Every retained sample matches its OPP. It is a sampling race, not an
+  undervolt. healthd reads `scaling_cur_freq`, the regulator, then the
+  frequency again, and judges only when the two frequencies agree. But
+  `policy->cur` changes only at the end of a transition, after both the clock
+  and the regulator have moved. A step down lowers the voltage while both reads
+  still say 700 MHz. The earlier boots' opposite reports (1.203 V at 350 MHz)
+  are the same race on the way up. The fix is to report a mismatch only when it
+  holds on two consecutive samples.
 
 Already in the store before this: the name and room, theme, ring and
 schedule, brightness and ambient, EQ and presets, MQTT, the source toggles,
