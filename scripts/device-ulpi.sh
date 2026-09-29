@@ -7,17 +7,17 @@ I5=0x4A064CA4          # EHCI INSNREG05_ULPI (regs base 0x4A064C00 + 0xA4)
 PORTSC=0x4A064C54      # port_status[0]
 PORT=1
 
-_poll() { for i in $(seq 1 200); do v=$($DM $I5 32); [ $(( (v >> 31) & 1 )) -eq 0 ] && return 0; done; echo "TIMEOUT"; }
+_poll() { for _ in $(seq 1 200); do v=$($DM $I5 32); [ $(( (v >> 31) & 1 )) -eq 0 ] && return 0; done; echo "TIMEOUT"; }
 
 ulpi_rd() {  # $1=reg
   w=$(( (1<<31) | ($PORT<<24) | (3<<22) | ($1<<16) ))
-  $DM $I5 32 $(printf 0x%X $w) >/dev/null
+  $DM $I5 32 "$(printf 0x%X $w)" >/dev/null
   _poll
   printf "0x%02x" $(( $($DM $I5 32) & 0xff ))
 }
 ulpi_wr() {  # $1=set-reg-addr $2=val
   w=$(( (1<<31) | ($PORT<<24) | (2<<22) | ($1<<16) | $2 ))
-  $DM $I5 32 $(printf 0x%X $w) >/dev/null
+  $DM $I5 32 "$(printf 0x%X $w)" >/dev/null
   _poll
 }
 

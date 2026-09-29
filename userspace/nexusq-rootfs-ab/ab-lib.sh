@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not run: no shebang
 # ab-lib.sh -- the A/B rootfs layout, in one place (nexusq-rootfs-ab, 2026-09-26).
 #
 # Sourced by the two things that split the eMMC into slot A (p13 "userdata") and

@@ -97,6 +97,7 @@ while [ ! -b "$A" ] && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
 
 disk_sectors=$(cat /sys/class/block/$DISK/size)
 a_start=$(cat /sys/class/block/${DISK}p13/start)
+# shellcheck disable=SC2046  # split into the positional parameters on purpose
 set -- $(ab_layout "$disk_sectors" "$a_start")
 A_SECTORS=$1; B_START=$2; B_SECTORS=$3
 say "layout: p13 $a_start +$A_SECTORS, p14 $B_START +$B_SECTORS"

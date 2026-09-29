@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC3045  # runs on the Q, whose /bin/sh is busybox ash: read -t exists there
 # nq-opp-study2 — second round of idle-OPP A/B arms, parameterised.
 #
 # Round 1 (nq-opp-study.sh) A/B'd the governor's sampling cadence and

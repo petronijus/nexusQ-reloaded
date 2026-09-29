@@ -40,6 +40,7 @@ BACKUP="$STATE_DIR/slot-a-backup.img"
 # The apk the staged kernel came from, kept until the package database agrees
 # with it: reconcile falls back to it when the OTA repo does not carry it yet.
 STAGED_APK_DIR="$STATE_DIR/staged-apk"
+# shellcheck disable=SC2034  # reference only: sar()'s embedded Python carries its own copy
 SAR_ADDR=0x4A326A0C               # reboot-reason string, read by stock u-boot
 DT_ROOT=${NQ_KOTA_DT_ROOT:-/sys/firmware/devicetree/base}
 PERSIST_MNT=${NQ_KOTA_PERSIST_MNT:-/var/lib/nexusq/persist}

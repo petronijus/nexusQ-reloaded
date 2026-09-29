@@ -1,3 +1,4 @@
+# shellcheck shell=bash  # sourced by the bash build scripts, not run: no shebang
 # Shared host-side helpers for building Nexus Q initramfs boot images.
 #
 # Both images this repo builds -- the offline rescue environment and the A/B

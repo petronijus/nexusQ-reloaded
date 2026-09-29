@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not run: no shebang
 # nq_gadget_up <product-string>
 #
 # Bring up the RNDIS gadget and a telnet server on 172.16.43.1. This board has

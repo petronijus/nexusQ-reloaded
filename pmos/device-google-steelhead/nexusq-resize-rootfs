@@ -79,6 +79,7 @@ root_device() {
 # the same table.
 AB_LIB="${NQ_AB_LIB:-/usr/lib/nexusq-rootfs-ab/ab-lib.sh}"
 if [ -r "$AB_LIB" ]; then
+	# shellcheck source=../../userspace/nexusq-rootfs-ab/ab-lib.sh
 	. "$AB_LIB"
 	HAVE_AB_LIB=1
 else
@@ -116,6 +117,7 @@ split_ab() {  # split_ab <disk name> <A part name> <A partno> <fs bytes>
 	_b="${_disk}p${_bnr}"
 	_disk_sectors=$(sectors_of "$_disk")
 	_a_start=$(cat "/sys/class/block/$_a/start")
+	# shellcheck disable=SC2046  # split into the positional parameters on purpose
 	set -- $(ab_layout "$_disk_sectors" "$_a_start")
 	_asz=$1; _bst=$2; _bsz=$3
 
@@ -160,6 +162,7 @@ split_ab() {  # split_ab <disk name> <A part name> <A partno> <fs bytes>
 
 mkdir -p "$STATE_DIR"
 
+# shellcheck disable=SC2046  # split into the positional parameters on purpose
 set -- $(root_device "$(mountpoint -d "$ROOT_MNT")") || {
 	log "cannot tell which partition / is on"
 	exit 1

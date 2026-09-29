@@ -78,6 +78,7 @@ put() {
     rm -f "$_tmp"
 }
 
+# shellcheck disable=SC2154  # slot and try are set by eval "$(get)"
 case "${1:-show}" in
 show)
     eval "$(get)"

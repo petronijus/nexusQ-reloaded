@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not run: no shebang
 # nq-pulse.sh -- PulseAudio helpers shared by the Nexus Q's service launchers
 # (roon-nexusq, librespot-nexusq). Sourced, not run: `. /usr/lib/nexusq/nq-pulse.sh`.
 # The functions are pure shell over `pactl`, so tests stub pactl on PATH

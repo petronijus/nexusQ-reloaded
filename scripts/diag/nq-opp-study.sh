@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC3045  # runs on the Q, whose /bin/sh is busybox ash: read -t exists there
 # nq-opp-study — why does an idle Nexus Q spend 22.6 % of its time at 700 MHz?
 #
 # Runs DETACHED (no ssh session open) because an open session heats the die to

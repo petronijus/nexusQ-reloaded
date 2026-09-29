@@ -79,6 +79,7 @@ cmd_populate() {
     # shellcheck disable=SC2064
     trap "umount '$MNT' 2>/dev/null || true" EXIT
 
+    # shellcheck disable=SC2010  # ls -A sees dotfiles, which a portable glob does not
     if [ -n "$(ls -A "$MNT" 2>/dev/null | grep -v '^lost+found$' || true)" ]; then
         [ "${NQ_AB_OVERWRITE:-}" = 1 ] \
             || die "slot $_tgt is not empty; set NQ_AB_OVERWRITE=1 to replace it"
@@ -300,6 +301,7 @@ cmd_split() {
     fi
 
     . "$LIBDIR/ab-lib.sh"
+    # shellcheck disable=SC2046  # split into the positional parameters on purpose
     set -- $(ab_layout "$(cat "$SYSBLOCK/mmcblk0/size")" "$(cat "$SYSBLOCK/mmcblk0p13/start")")
     _asz=$1
 

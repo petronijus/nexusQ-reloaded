@@ -25,6 +25,7 @@ set -e
 # The user unit's After=network-online.target does not help here: at the USER
 # manager level that target is not wired to real connectivity, so this poll IS
 # the gate. exit 1 stays for a genuinely dead radio.
+# shellcheck disable=SC2034  # i only counts the polls
 for i in $(seq 1 180); do
 	WIP=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
 	[ -n "$WIP" ] && break

@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not run: no shebang
 # Nexus Q (steelhead): no GPU driver — the PowerVR SGX540 has no mainline GLES
 # driver (see docs/2026-06-19-gpu-sgx540-acceleration-research.md). Force the
 # wlroots software (Pixman) renderer for labwc / LXQt-Wayland. Without this,
