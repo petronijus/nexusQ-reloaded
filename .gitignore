@@ -46,3 +46,11 @@ scratchpad/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# nq-healthd host build (`make -C userspace/nq-healthd`; the aport builds its own)
+userspace/nq-healthd/nq-healthd
+
+# Personal overrides: Claude Code, lefthook (the shared config is committed)
+.claude/settings.local.json
+CLAUDE.local.md
+lefthook-local.yml

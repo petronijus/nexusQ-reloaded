@@ -1,0 +1,35 @@
+# Ruff — Python formatter and linter (https://docs.astral.sh/ruff/).
+# Run through tools/dev/format.sh (`just fmt`, the pre-commit hook and the
+# Claude Code edit hook); the version is pinned there, not here.
+
+# The oldest interpreter any of this meets, not the device's: the daemons run
+# on Alpine's 3.14, but the flash and diag helpers also run on hosts, where
+# macOS's /usr/bin/python3 is 3.9. The target is what the formatter may emit —
+# at "py314" it rewrote 59 `except (A, B):` into PEP 758's `except A, B:`,
+# a SyntaxError on anything older than 3.14.
+target-version = "py39"
+# 120 changed the fewest lines of the hand-formatted code when the repo was
+# converted (2026-09-29); the daemons carry long protocol and log strings.
+line-length = 120
+
+# The daemons and device tools are extensionless executables.
+extend-include = [
+  "pmos/device-google-steelhead/nexusq-nfc-send",
+  "pmos/device-google-steelhead/nq-cec",
+  "pmos/device-google-steelhead/nq-diag",
+  "pmos/device-google-steelhead/nq-hdmi",
+  "pmos/device-google-steelhead/nq-uac2-silence",
+  "scripts/diag/nq-health-report",
+  "userspace/nexusq-btagent/nexusq-btagent",
+  "userspace/nexusq-control/nexusq-control",
+  "userspace/nexusq-control/nexusq-onevent",
+  "userspace/nexusq-mqtt/nexusq-mqtt",
+  "userspace/nexusq-setupd/nexusq-setupd",
+]
+# Never ours to format: extracted Google material and working scratch.
+# Markdown too: ruff formats the Python blocks in it, and docs/ is a dated record.
+extend-exclude = ["reverse-eng", "scratchpad", "private", "output", "nq-captures", "*.md"]
+
+[lint]
+# pycodestyle, pyflakes, bugbear: real defects, not taste.
+select = ["E", "F", "W", "B"]

@@ -85,6 +85,13 @@ Our docs:
   `docs/<YYYY-MM-DD>-<topic>.md` capturing the finding, the evidence, and the
   outcome (mirror the style of the existing dated notes). Update a living topic doc
   (e.g. `ethernet-bringup-procedure.md`, `SMP-second-core.md`) when its subject moved.
+- **AGENTS.md** (rules every coding agent follows, commands, layout, pins),
+  **CLAUDE.md** (`@AGENTS.md` + the Claude-only hooks/agents/skills) and
+  **docs/development.md** (toolchain, machines × lanes, checks, git hooks,
+  troubleshooting). Update them when a command, pin, hook, lane or hard rule
+  changes. AGENTS.md and CLAUDE.md stay under 200 lines each; detail goes to
+  docs/ or `.claude/rules/`. Every command they name must exist: check with
+  `just --list` and `ls tools/dev/`.
 - **.claude/agents/*.md + .claude/skills/*/SKILL.md** — the agent/skill briefs.
   Keep their failure-mode catalogs, procedures, and "device facts" matching what
   the build/device actually does now (a fix that changes a failure mode must be

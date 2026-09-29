@@ -1,0 +1,28 @@
+# Git hooks — https://lefthook.dev. Installed per clone by `just setup`.
+# Personal overrides go to lefthook-local.yml (gitignored).
+#
+# ai-config's project-sync commits and pushes this repo at the end of a
+# session, and these hooks run for it too: commit-msg accepts its
+# `autosync(<branch>): …` subject, and a failing hook stops the autosync
+# (it says so) rather than pushing a broken tree.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      # No glob: the daemons and device tools are extensionless, and
+      # format.sh classifies every file by extension or shebang itself.
+      run: tools/dev/format.sh {staged_files}
+      stage_fixed: true
+    - name: secrets
+      run: gitleaks git --pre-commit --staged --no-banner --redact
+
+commit-msg:
+  jobs:
+    - name: conventional commit
+      run: tools/dev/commit-msg.sh {1}
+
+pre-push:
+  jobs:
+    - name: fast lane
+      run: just check

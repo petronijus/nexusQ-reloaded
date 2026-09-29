@@ -1,0 +1,4 @@
+# ShellCheck (https://www.shellcheck.net), run on every shell script by
+# tools/dev/format.sh. `# shellcheck source=` paths are relative to the script.
+source-path=SCRIPTDIR
+external-sources=true

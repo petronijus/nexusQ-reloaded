@@ -1,0 +1,50 @@
+# Editor defaults for every file type in the repo (https://editorconfig.org).
+# Formatters read the language sections: ktlint reads [*.{kt,kts}]; ruff and
+# dart format have their own config (ruff.toml, analysis_options.yaml).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# abuild and make need tabs; the device's sh scripts and aports use them too.
+[{APKBUILD,Makefile,*.mk,*.post-install,*.post-upgrade,*.pre-install,*.pre-upgrade,*.trigger}]
+indent_style = tab
+
+[*.{dart,yaml,yml,json,xml,plist,gradle}]
+indent_size = 2
+
+[*.{kt,kts}]
+max_line_length = 120
+# android_studio had the fewest violations on the existing code (98, against
+# 106 for intellij_idea and 170 for ktlint_official) when it was converted.
+ktlint_code_style = android_studio
+ktlint_function_naming_ignore_when_annotated_with = Test
+# The package is org.nexusq.nexusq_companion because Flutter derives it from
+# the Dart package name; renaming it would change the installed app's id.
+ktlint_standard_package-name = disabled
+
+[*.py]
+max_line_length = 120
+
+[*.swift]
+indent_size = 2
+
+# Byte-exact: patches, captured command output and binary-ish formats.
+[{*.patch,*.diff,**/tests/fixtures/**,*.cpio}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset
+
+[*.md]
+trim_trailing_whitespace = false
+
+[justfile]
+indent_size = 4
