@@ -753,6 +753,29 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > actually read may not have carried the value f_uac2 was given. Neither was
 > chased, because by then the change was being reverted.
 >
+> ✅ **Resolved 2026-09-29 — bInterval 5 breaks on the HOST, not in musb.** The
+> inference above was wrong. Linux's `snd-usb-audio` (the TV box's Android
+> kernel, and any Linux host) accepts a high-speed data interval of bInterval
+> 1-4 only: `snd_usb_parse_datainterval()` (sound/usb/helper.c) returns 0 for
+> anything else, which is also why it printed `Data packet interval: 125 us`
+> (`125 * (1 << datainterval)`, sound/usb/proc.c). The host then sizes every
+> packet for 125 µs — 6 frames at 48 kHz — while the endpoint delivers one
+> packet per 2 ms: 500 × 6 = **3000 frames/s**, the number measured. So the
+> 1 ms interval is the floor any Linux or Android host imposes on a
+> high-speed UAC2 device, and upstream f_uac2's own 1-4 cap mirrors it. No
+> change on the Q can lengthen it. What is left on the Q's side is how many
+> times it wakes per packet: musb's Inventra DMA runs RX in mode 0, an
+> endpoint IRQ and then a DMA IRQ per packet (drivers/usb/musb/musb_gadget.c,
+> `rxstate()`); mode 1 batches only fixed-size bulk transfers. With a packet
+> every 1 ms, C3 (target residency 1100 µs) stays out of reach either way.
+>
+> ✅ **Done 2026-09-30 — the Q stops taking the packets instead.** Kernel patch
+> **0059** (6.18.48-r18) makes u_audio doze after 5 s of exact zeros: no
+> requests queued, so musb drops the host's packets without interrupting; the
+> capture gets synthesized zeros; a 50 ms probe wakes it on the first sound.
+> Prague Q with the TV as host: 2008 → 101 musb interrupts/s, C3 14.6 % →
+> 56.5 % of idle; Petr heard the sound start cleanly. `docs/2026-09-30-usb-audio-doze.md`.
+>
 > 🚨 **A landmine this created, and the lesson in it.** r83 shipped a gadget
 > script that *set* bInterval 6 at every boot. On the old kernel that write was
 > refused and fell back to auto — which is why it looked safe to ship in either

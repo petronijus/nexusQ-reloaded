@@ -6,6 +6,84 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the USB audio input dozes while the host sends silence (kernel **6.18.48-r18**, device **r121**)
+
+With the TV box as the USB audio host, the Q took ~2000 musb interrupts a
+second around the clock and spent 13-15 % of its idle time in C3 (below). New
+kernel patch **0059** lets the UAC2 gadget doze instead:
+
+- After `doze_idle_ms` of exact digital zeros, `u_audio` stops queueing its
+  isochronous requests and the feedback request. musb then keeps the packet it
+  holds and drops the host's next ones without interrupting (MUSB datasheet
+  24.1.2: OverRun set, no interrupt); isochronous OUT has no handshake, so the
+  host cannot tell, and snd-usb-audio keeps its last feedback value.
+- A soft hrtimer, every `doze_probe_ms`, writes the zeros the host would have
+  sent into the capture ring at the stream's rate, so `nexusq-uac2-in`,
+  alsaloop and PulseAudio see an unbroken stream (a stalled `hw_ptr` is
+  exactly what their wedge handling treats as a dead host), and lets the
+  held-back requests through once. The first packet that is not all zeros
+  wakes the stream; at most one probe period of the sound's start is lost.
+- Off in the kernel by default. `nexusq-usb-gadget.sh` (device r121) sets
+  5000 ms and 50 ms at boot when the kernel has the parameters, and logs once
+  that it does not otherwise.
+- **Measured on the Prague Q**, TV as host, the r18 module loaded into the
+  running r17 kernel (its `usb_f_uac2.ko` is byte-identical to the unit's):
+
+  | | musb interrupts | C3 share of idle |
+  |---|---|---|
+  | stock u_audio | 2004/s | 13.1 % |
+  | patched, doze off | 2008/s | 14.6 % |
+  | doze, 20 ms probe | 251/s | 41.6 % |
+  | doze, 50 ms probe | 101/s | 56.5-58.3 % |
+
+  The gadget capture kept its 48 kHz throughout. Petr played sound on the TV
+  twice: `nq-uac2-silence` saw it return in 2-3 ms, he heard nothing wrong,
+  and 5 s after it stopped the stream dozed again. No kernel message.
+- The decisions (when to doze, when to wake, how many frames of silence) live
+  in `u_audio_doze.h`, free of kernel headers: `tests/test_u_audio_doze.py`
+  extracts it from the patch and runs `tests/u_audio_doze_test.c` against it.
+  Five mutations were each seen failing. The patch is `checkpatch`-clean and
+  builds without warnings at `W=1`; the series applies with GNU patch.
+- `set_alt` stops the stream in interrupt context, so the stop never cancels
+  the timer synchronously: the tick queues each probe with interrupts off
+  under a flag the stop waits on, and ends itself once the stream is
+  stopping; `g_audio_cleanup()` cancels it for good.
+- Details: `docs/2026-09-30-usb-audio-doze.md`.
+
+### Found — the 1 ms USB audio interval is the host's floor, not musb's (2026-09-29)
+
+The second soak showed what the TV as USB audio host costs: 2 × 1001 musb
+interrupts/s around the clock, and C3 down from 72.6 % to 15.2 % of idle. The
+lever that looked obvious, a longer isochronous interval, was closed on
+2026-08-26 with bInterval 5 (2 ms) collapsing the stream to ~3000 of 48 000
+frames/s, and blamed on musb's ISO scheduling. That cause was an inference
+(PLAN.md said so), and it was wrong:
+
+- Linux `snd-usb-audio`, which the TV box's Android runs as well, accepts a
+  high-speed data interval of bInterval 1-4 only: `snd_usb_parse_datainterval()`
+  returns 0 for anything else. The host then sizes each packet for 125 µs,
+  6 frames at 48 kHz, while the endpoint carries one packet per 2 ms:
+  500 × 6 = 3000 frames/s, exactly what was measured. The `Data packet
+  interval: 125 us` the host printed in August was this same fallback.
+- So 1 ms is the floor any Linux or Android host sets for a high-speed UAC2
+  device; upstream f_uac2 caps the interval at 4 for the same reason. Nothing
+  on the Q can lengthen it, and with a packet every 1 ms C3 (target residency
+  1100 µs) stays out of reach -- unless the Q stops taking the packets, which
+  is the doze above.
+- On the Q's side musb's Inventra DMA handles each packet with two interrupts
+  (the endpoint's, then the DMA's). Its multi-packet mode 1 batches only
+  fixed-size bulk transfers; the isochronous packets vary (192/196 B). PIO for
+  that one endpoint would save the DMA interrupt but copy the packet through
+  32-bit FIFO reads instead, which costs about the same: not pursued.
+- The part that is still ours to decide is userspace: `nexusq-uac2-in` costs
+  3.87 % of a core with the TV as host, mostly `nq-uac2-silence` and its
+  `arecord`, kept running for the wake latency (the R0 latency budget in
+  docs/2026-09-20-sleep-states-design.md).
+
+The August closure in PLAN.md Step 6 and the comment in
+`nexusq-usb-gadget.sh` now name the host as the cause (comment only, no
+behaviour change).
+
 ### Fixed — healthd reports a mismatch or a static ring once, not every sample (device **r121**)
 
 From reading the second soak (below, under r120):

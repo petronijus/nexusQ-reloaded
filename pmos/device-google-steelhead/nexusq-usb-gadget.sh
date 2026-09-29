@@ -86,6 +86,22 @@ mkdir -p "$G/functions/acm.usb0" 2>/dev/null || true
 # Needs the kernel's UAC2 configfs function (CONFIG_USB_CONFIGFS_F_UAC2, module
 # usb_f_uac2). If it's unavailable the gadget still comes up as rndis+acm.
 modprobe usb_f_uac2 2>/dev/null || true
+# Doze the USB audio input while the host streams digital silence (kernel patch
+# 0059, from linux-google-steelhead 6.18.48-r18). A host that never closes the
+# stream -- the Android TV box -- costs ~2000 musb interrupts/s, which keeps both
+# cores out of C3. After 5 s of exact zeros u_audio stops taking the packets,
+# feeds the capture the same zeros itself, and looks at the host's stream every
+# 50 ms; the first sound wakes it, losing at most 50 ms of its start. Measured on
+# the Prague Q with the TV as host (2026-09-30): 2008 -> 101 interrupts/s, C3
+# 14.6 % -> 56.5 % of idle. Set here rather than in modprobe.d: a kernel without
+# the patch would log "unknown parameter" at every boot.
+UAC_DOZE=/sys/module/u_audio/parameters
+if [ -w "$UAC_DOZE/doze_idle_ms" ]; then
+	echo 50 > "$UAC_DOZE/doze_probe_ms"
+	echo 5000 > "$UAC_DOZE/doze_idle_ms"
+elif [ -d /sys/module/u_audio ]; then
+	log "u_audio has no doze (kernel before 6.18.48-r18): USB audio takes every packet"
+fi
 if [ ! -d "$G/functions/uac2.0" ]; then
 	if mkdir -p "$G/functions/uac2.0" 2>/dev/null; then
 		echo 3     > "$G/functions/uac2.0/c_chmask" 2>/dev/null || true  # stereo, host->device
@@ -97,7 +113,7 @@ if [ ! -d "$G/functions/uac2.0" ]; then
 		# at the default 1 ms musb takes ~2000 IRQ/s around the clock (an endpoint
 		# interrupt AND a DMA completion per packet), about 3 % of a core, and it
 		# keeps cpu0 out of deep idle. A longer interval would cut that
-		# proportionally. It does not work on THIS hardware, measured 2026-08-26:
+		# proportionally. It cannot be lengthened, measured 2026-08-26:
 		#
 		#   bInterval 4 (1 ms)  packet 196 B  -- works, and is what auto picks
 		#   bInterval 5 (2 ms)  packet 388 B  -- endpoint enables, but the stream
@@ -105,15 +121,17 @@ if [ ! -d "$G/functions/uac2.0" ]; then
 		#   bInterval 6 (4 ms)  packet 772 B  -- refused outright:
 		#       usb_ep_enable failed for out_ep (-22)
 		#
-		# The ceiling is not the USB spec's 1024 B but musb's per-endpoint FIFO,
-		# 512 B in the default config, checked in musb_gadget_enable():
+		# 6 exceeds musb's per-endpoint FIFO, 512 B in the default config, checked
+		# in musb_gadget_enable():
 		#       if (tmp > hw_ep->max_packet_sz_rx) -> "packet size beyond hardware
 		#       FIFO size" -> -EINVAL
-		# and 5, which does fit, still breaks -- so musb's ISO scheduling will not
-		# carry an interval longer than one frame either way. Kernel patch 0047
-		# (which lifts f_uac2's own 1-4 cap) is therefore inert here; it was written
-		# before this was known and is harmless only because nothing sets the value.
-		# Leaving it unset means auto, which walks 4 down to 1 and lands on 4.
+		# 5 fits, and breaks on the HOST (root-caused 2026-09-29, PLAN.md Step 6):
+		# Linux snd-usb-audio, the TV box's too, takes a high-speed data interval
+		# of bInterval 1-4 only (snd_usb_parse_datainterval() returns 0 otherwise),
+		# sizes each packet for 125 us (6 frames) and so fills a 2 ms packet with
+		# 6 frames: 500 x 6 = 3000 frames/s. 1 ms is the host's floor, and f_uac2's
+		# own 1-4 cap mirrors it. Leaving it unset means auto, which walks 4 down
+		# to 1 and lands on 4.
 	else
 		log "uac2 function unavailable (no CONFIG_USB_CONFIGFS_F_UAC2?) — rndis+acm only"
 	fi

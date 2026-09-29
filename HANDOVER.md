@@ -8,6 +8,24 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-09-30: USB audio doze — kernel 6.18.48-r18 + device r121 are NOT built or published
+
+Kernel patch 0059 (u_audio doze, `docs/2026-09-30-usb-audio-doze.md`) is in
+the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
+**device r121** switches it on. Neither is built or published.
+
+- **The Prague Q runs the r18 `u_audio.ko` by hand**, loaded with `insmod` into
+  its r17 kernel on 2026-09-30 with `doze_idle_ms=5000`, `doze_probe_ms=50`.
+  The module on disk is the stock one: a reboot undoes it.
+- To ship: build the kernel (r18) and the image or the OTA packages; publish
+  both (the kernel goes to the units through `nexusq-kernel-ota`, device r121
+  through `apk upgrade`). A unit that gets r121 before r18 logs once that
+  u_audio has no doze, and works as before.
+- On the Prague Q after the update: `cat /sys/module/u_audio/parameters/doze_idle_ms`
+  reads 5000; with the TV idle, `awk '/musb-hdrc/' /proc/interrupts` grows by
+  ~100/s, not ~2000/s; sound from the TV starts normally; then the full
+  nexusq-diag sweep. Keep the cottage Q off r18/r121 until Prague has passed.
+
 ## Every clone — 2026-09-29: the developer harness (`just`, git hooks)
 
 The repo now has `just check` / `just ci`, lefthook git hooks and Claude Code
