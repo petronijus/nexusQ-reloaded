@@ -39,6 +39,7 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
 
     private val main = Handler(Looper.getMainLooper())
     private var events: EventChannel.EventSink? = null
+
     @Volatile private var socket: BluetoothSocket? = null
     private var scanReceiver: BroadcastReceiver? = null
     private var pendingPermissionResult: MethodChannel.Result? = null
@@ -50,44 +51,71 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
         MethodChannel(messenger, "nexusq/btsetup").setMethodCallHandler { call, result ->
             when (call.method) {
                 "ensurePermissions" -> ensurePermissions(result)
-                "startScan" -> { startScan(); result.success(null) }
-                "stopScan" -> { stopScan(); result.success(null) }
+
+                "startScan" -> {
+                    startScan()
+                    result.success(null)
+                }
+
+                "stopScan" -> {
+                    stopScan()
+                    result.success(null)
+                }
+
                 "connect" -> {
                     val mac = call.argument<String>("mac")
-                    if (mac == null) result.error("bad_args", "missing mac|line", null)
-                    else connect(mac, result)
+                    if (mac == null) {
+                        result.error("bad_args", "missing mac|line", null)
+                    } else {
+                        connect(mac, result)
+                    }
                 }
+
                 "sendLine" -> {
                     val line = call.argument<String>("line")
-                    if (line == null) result.error("bad_args", "missing mac|line", null)
-                    else sendLine(line, result)
+                    if (line == null) {
+                        result.error("bad_args", "missing mac|line", null)
+                    } else {
+                        sendLine(line, result)
+                    }
                 }
-                "disconnect" -> { disconnect(); result.success(null) }
+
+                "disconnect" -> {
+                    disconnect()
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }
-        EventChannel(messenger, "nexusq/btsetup/events").setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(args: Any?, sink: EventChannel.EventSink) { events = sink }
-                override fun onCancel(args: Any?) { events = null }
-            })
+        EventChannel(messenger, "nexusq/btsetup/events").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(args: Any?, sink: EventChannel.EventSink) {
+                events = sink
+            }
+            override fun onCancel(args: Any?) {
+                events = null
+            }
+        })
     }
 
     private fun emit(map: Map<String, Any?>) = main.post { events?.success(map) }
 
     // --- permissions -----------------------------------------------------
-    private fun neededPermissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        else
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    private fun neededPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
 
     private fun hasPermissions() = neededPermissions().all {
         ActivityCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun ensurePermissions(result: MethodChannel.Result) {
-        if (hasPermissions()) { result.success(true); return }
+        if (hasPermissions()) {
+            result.success(true)
+            return
+        }
         if (pendingPermissionResult != null) {
             result.error("permission_request_pending", "a permission request is already in flight", null)
             return
@@ -130,7 +158,7 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
     }
 
     // --- connection ------------------------------------------------------
-    @SuppressLint("MissingPermission")
+
     /**
      * Bond BEFORE opening the socket, and wait for it to actually complete.
      *
@@ -150,6 +178,7 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
      *
      * Returns true once bonded. Safe to call when already bonded (no-op).
      */
+    @SuppressLint("MissingPermission")
     private fun ensureBonded(dev: BluetoothDevice, timeoutMs: Long = 30_000): Boolean {
         if (dev.bondState == BluetoothDevice.BOND_BONDED) return true
 
@@ -162,7 +191,11 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
                 val d = i?.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                 if (d?.address != dev.address) return
                 when (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)) {
-                    BluetoothDevice.BOND_BONDED -> { bonded.set(true); done.countDown() }
+                    BluetoothDevice.BOND_BONDED -> {
+                        bonded.set(true)
+                        done.countDown()
+                    }
+
                     // BOND_NONE after BOND_BONDING is a failure, not "not started".
                     BluetoothDevice.BOND_NONE -> done.countDown()
                 }
@@ -187,18 +220,24 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
 
     private fun connect(mac: String, result: MethodChannel.Result) {
         val ad = adapter
-        if (ad == null) { result.error("no_bt", "Bluetooth unavailable", null); return }
+        if (ad == null) {
+            result.error("no_bt", "Bluetooth unavailable", null)
+            return
+        }
         disconnect()
-        stopScan()   // discovery kills RFCOMM connect reliability
+        stopScan() // discovery kills RFCOMM connect reliability
         thread(name = "bt-setup-connect") {
             try {
                 val dev = ad.getRemoteDevice(mac)
                 if (!ensureBonded(dev)) {
                     emit(mapOf("type" to "state", "connected" to false))
                     main.post {
-                        result.error("pair_failed",
+                        result.error(
+                            "pair_failed",
                             "Could not pair with the Nexus Q. If it was paired before, " +
-                            "forget it in Bluetooth settings and try again.", null)
+                                "forget it in Bluetooth settings and try again.",
+                            null
+                        )
                     }
                     return@thread
                 }
@@ -250,7 +289,10 @@ class BtSetupChannel(private val activity: Activity, messenger: BinaryMessenger)
 
     private fun sendLine(line: String, result: MethodChannel.Result) {
         val sock = socket
-        if (sock == null) { result.error("not_connected", "no RFCOMM connection", null); return }
+        if (sock == null) {
+            result.error("not_connected", "no RFCOMM connection", null)
+            return
+        }
         thread(name = "bt-setup-send") {
             try {
                 sock.outputStream.write((line + "\n").toByteArray(Charsets.UTF_8))

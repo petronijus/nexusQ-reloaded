@@ -3,8 +3,8 @@ package org.nexusq.nexusq_companion
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import android.nfc.cardemulation.CardEmulation
 import android.nfc.NfcAdapter
+import android.nfc.cardemulation.CardEmulation
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -90,16 +90,22 @@ class MainActivity : FlutterActivity() {
                     val text = prefs.getString(HceBridge.KEY_LAST, null)
                     val ts = prefs.getLong(HceBridge.KEY_LAST_TS, 0L)
                     result.success(
-                        if (text == null) null
-                        else mapOf("text" to text, "timestamp" to ts)
+                        if (text == null) {
+                            null
+                        } else {
+                            mapOf("text" to text, "timestamp" to ts)
+                        }
                     )
                 }
+
                 "clearLastMessage" -> {
                     getSharedPreferences(HceBridge.PREFS, Context.MODE_PRIVATE)
                         .edit().remove(HceBridge.KEY_LAST).remove(HceBridge.KEY_LAST_TS).apply()
                     result.success(null)
                 }
+
                 "isNfcAvailable" -> result.success(NfcAdapter.getDefaultAdapter(this) != null)
+
                 // Dart tells us when a tap is actually expected (a screen that
                 // asks the user to touch the phone to the dome). We claim NFC
                 // priority only for that window — never for "the app is open".
@@ -107,6 +113,7 @@ class MainActivity : FlutterActivity() {
                     setTapCapture(call.arguments as? Boolean ?: false)
                     result.success(null)
                 }
+
                 else -> result.notImplemented()
             }
         }
@@ -114,9 +121,7 @@ class MainActivity : FlutterActivity() {
         btSetup = BtSetupChannel(this, messenger)
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         btSetup?.onPermissionResult(requestCode)
     }
@@ -209,7 +214,9 @@ class MainActivity : FlutterActivity() {
         try {
             if (packageManager.getComponentEnabledSetting(component) == target) return
             packageManager.setComponentEnabledSetting(
-                component, target, PackageManager.DONT_KILL_APP
+                component,
+                target,
+                PackageManager.DONT_KILL_APP
             )
             Log.d(TAG, "HCE service ${if (enabled) "enabled" else "disabled"}")
         } catch (e: Exception) {

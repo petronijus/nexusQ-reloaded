@@ -28,7 +28,13 @@ class NqHceService : HostApduService() {
 
         /** Custom application identifier, 7 bytes: F0 01 02 03 04 05 06. */
         private val AID = byteArrayOf(
-            0xF0.toByte(), 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
+            0xF0.toByte(),
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06
         )
 
         // Instruction class/codes we understand.
@@ -39,9 +45,9 @@ class NqHceService : HostApduService() {
         private const val INS_PAYLOAD: Byte = 0x10
 
         // ISO 7816-4 status words.
-        private val SW_OK = byteArrayOf(0x90.toByte(), 0x00)               // success
-        private val SW_FILE_NOT_FOUND = byteArrayOf(0x6A, 0x82.toByte())   // AID/data not found
-        private val SW_INS_NOT_SUPPORTED = byteArrayOf(0x6D, 0x00)         // unknown INS
+        private val SW_OK = byteArrayOf(0x90.toByte(), 0x00) // success
+        private val SW_FILE_NOT_FOUND = byteArrayOf(0x6A, 0x82.toByte()) // AID/data not found
+        private val SW_INS_NOT_SUPPORTED = byteArrayOf(0x6D, 0x00) // unknown INS
     }
 
     override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray {
@@ -112,8 +118,7 @@ class NqHceService : HostApduService() {
     }
 
     // --- hex helpers (debug logging) -----------------------------------------
-    private fun ByteArray.toHex(): String =
-        joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+    private fun ByteArray.toHex(): String = joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
 
     private fun Byte.hex(): String = "%02X".format(toInt() and 0xFF)
 }
