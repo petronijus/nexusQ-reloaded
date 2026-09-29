@@ -34,9 +34,14 @@ just setup      # uv Python 3.14, lefthook install, blame ignore list, flutter p
 - **Windows** — nothing: the checks are not set up there.
 
 The seven packages bumped for the reformat (device r121, control r60, mqtt r12,
-btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6 — no behaviour change) are
-**not built or published**. When they are: `apk upgrade` on the Prague Q, then
-the full nexusq-diag sweep.
+btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6) are **not built or
+published**. Six carry no behaviour change; device r121 also carries the
+nq-healthd fix (a VDD mismatch is re-read after 50 ms before it counts; LED
+events once per stretch). When they are built: `apk upgrade` on the Prague Q,
+the full nexusq-diag sweep (CPU frequency and VDD_MPU against the OPP), then on
+the unit: `led_static` once per idle stretch in `/var/log/nq-health/events.jsonl`,
+no `vdd_mismatch` through OPP changes, and `systemctl restart nq-healthd` comes
+back clean. Keep the cottage Q off r121 until Prague has passed.
 
 ## Every host that plugs a Q in over USB — 2026-09-28: the gadget moved to 172.16.43.1
 

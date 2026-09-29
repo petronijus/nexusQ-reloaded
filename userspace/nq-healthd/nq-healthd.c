@@ -1105,6 +1105,107 @@ static void rotate_if_big(FILE **outp)
     }
 }
 
+/* ---------- judgements that must not repeat every sample ---------- */
+
+/* VDD_MPU against the OPP, confirmed within the sample. healthd reads
+ * scaling_cur_freq, the regulator, then scaling_cur_freq again, and judges
+ * only when both reads agree -- but policy->cur moves only at the END of a
+ * transition, after the clock and the regulator have both changed. A step
+ * down lowers the voltage while both reads still name the old OPP (1.025 V
+ * "at 700 MHz", 2026-09-29); a step up raises it first (1.203 V "at
+ * 350 MHz", earlier boots). Neither is a fault, and one reading cannot tell
+ * them from one. So a mismatching reading is taken again after a pause far
+ * longer than any transition (it completes in milliseconds): a race is gone
+ * by then, a real undervolt or overvolt is still there. This catches a fault
+ * at any OPP, including the short bursts at 1.2 GHz that a two-sample rule
+ * would miss, works for `--once`, and costs nothing while the voltage is
+ * right. The readers are injected so the test can play a transition. */
+static int vdd_raw_mismatch(long long vdd, long long vexp, long long freq, long long freq2)
+{
+    if (freq2 != freq || vexp <= 0 || vdd <= 0)
+        return 0;
+    long long d = vdd - vexp;
+    if (d < 0)
+        d = -d;
+    return d > 20000;
+}
+
+struct vdd_io {
+    long long (*freq)(void); /* scaling_cur_freq, kHz; -1 when unreadable */
+    long long (*vdd)(void);  /* the regulator, uV; 0 when unknown */
+    void (*settle)(void);    /* wait out any transition in progress */
+};
+
+struct vdd_reading { long long freq, vdd, vexp; };
+
+static int vdd_read(const struct vdd_io *io, struct vdd_reading *r)
+{
+    long long f1 = io->freq();
+    r->vdd = io->vdd();
+    long long f2 = io->freq();
+    r->freq = f1;
+    r->vexp = opp_voltage(f1);
+    return vdd_raw_mismatch(r->vdd, r->vexp, f1, f2);
+}
+
+/* 1 when the voltage disagrees with the OPP on two readings `settle` apart;
+ * *r holds the reading the verdict rests on. */
+static int vdd_check(const struct vdd_io *io, struct vdd_reading *r)
+{
+    if (!vdd_read(io, r))
+        return 0;
+    io->settle();
+    return vdd_read(io, r);
+}
+
+/* Report a mismatch once per run of mismatching samples, at its onset. */
+static int vdd_onset(int mismatch, int *prev)
+{
+    int onset = mismatch && !*prev;
+    *prev = mismatch;
+    return onset;
+}
+
+static char vdd_uv_path[600];
+static long long vdd_io_freq(void) { return slurp_ll(CPUFREQ "/scaling_cur_freq", -1); }
+static long long vdd_io_vdd(void) { return *vdd_uv_path ? slurp_ll(vdd_uv_path, 0) : 0; }
+static void vdd_io_settle(void)
+{
+    struct timespec ts = { 0, 50L * 1000 * 1000 };
+    nanosleep(&ts, NULL);
+}
+
+/* What to report about an unchanged LED frame: once per stretch, never every
+ * sample. A static frame with a healthy nexusqd is the screensaver or a blanked
+ * ring (info, once it has lasted 60 samples = 5 min); with a distressed
+ * nexusqd (unresponsive socket or no CPU progress) it is a hang (crit, once per
+ * distress episode, after 6 samples). Until 2026-09-29 led_static repeated
+ * every 5 min of an idle day (~190 events) and led_frozen every 5 s. */
+enum led_verdict { LED_QUIET, LED_STATIC, LED_FROZEN };
+struct led_watch { int static_said, frozen_said; };
+
+static enum led_verdict led_judge(struct led_watch *w, long long stall, int distressed)
+{
+    if (stall == 0) {
+        w->static_said = w->frozen_said = 0;
+        return LED_QUIET;
+    }
+    if (stall < 6)
+        return LED_QUIET;
+    if (distressed) {
+        if (w->frozen_said)
+            return LED_QUIET;
+        w->frozen_said = 1;
+        return LED_FROZEN;
+    }
+    w->frozen_said = 0; /* the distress passed: a new episode is news again */
+    if (stall >= 60 && !w->static_said) {
+        w->static_said = 1;
+        return LED_STATIC;
+    }
+    return LED_QUIET;
+}
+
 static void emit_event(FILE *ev, long long mono, const char *sev,
                        const char *kind, const char *fmt, ...)
 {
@@ -1139,6 +1240,8 @@ int main(int argc, char **argv)
     char vdd_dir[512] = "", abb_dir[512] = "";
     reg_dir("vdd_mpu", vdd_dir, sizeof vdd_dir);
     reg_dir("abb_mpu", abb_dir, sizeof abb_dir);
+    if (*vdd_dir)
+        snprintf(vdd_uv_path, sizeof vdd_uv_path, "%s/microvolts", vdd_dir);
 
     /* The committed-frame attr (patch 0029) if the kernel exposes it. */
     char frame_buf[512];
@@ -1152,6 +1255,9 @@ int main(int argc, char **argv)
     long long nq_last_show = -1, ls_last_show = -1;
 
     long long prev_led_hash = -1, led_stall = 0, tickn = 0;
+    struct led_watch led_watch = {0, 0};
+    int vdd_prev = 0;
+    const struct vdd_io vdd_sys = { vdd_io_freq, vdd_io_vdd, vdd_io_settle };
     long long prev_nq_ticks = -1, nq_last_tick_move = -1;
     int prev_nq_resp = 1;
     long long prev_pstore = -1, prev_derr = -1, derr_cache = -1;
@@ -1203,27 +1309,17 @@ int main(int argc, char **argv)
         long long temp = slurp_ll(TZ0 "/temp", 0);
         long long cool = slurp_ll(COOL0 "/cur_state", -1);
 
-        long long vdd = 0, abb = 0;
-        if (*vdd_dir) {
-            char p[600];
-            snprintf(p, sizeof p, "%s/microvolts", vdd_dir);
-            vdd = slurp_ll(p, 0);
-        }
+        long long abb = 0;
         if (*abb_dir) {
             char p[600];
             snprintf(p, sizeof p, "%s/microvolts", abb_dir);
             abb = slurp_ll(p, 0);
         }
-        long long vexp = opp_voltage(freq);
-        /* Re-read freq and only judge if it did not move under us — a mismatch
-         * reported across an OPP change is an artefact, not a fault. */
-        long long freq2 = slurp_ll(CPUFREQ "/scaling_cur_freq", -1);
-        int vmismatch = 0;
-        if (freq2 == freq && vexp > 0 && vdd > 0) {
-            long long d = vdd - vexp;
-            if (d < 0) d = -d;
-            vmismatch = (d > 20000);
-        }
+        /* A mismatching reading is taken again before it counts (vdd_check). */
+        struct vdd_reading vr;
+        int vmismatch = vdd_check(&vdd_sys, &vr);
+        long long vdd = vr.vdd, vexp = vr.vexp;
+        int vdd_report = vdd_onset(vmismatch, &vdd_prev);
 
         /* --- nexusqd: crash AND hang detection, process-first --- */
         int nq_alive = 0, nq_refresh = 0;
@@ -1416,22 +1512,26 @@ int main(int argc, char **argv)
                        nq_pid, nq_state, nq_progress);
         prev_nq_resp = nq_resp;
 
-        if (led_stall >= 6) {
-            /* The distress co-signal decides crit vs info: a locked/blanked ring
-             * re-commits identical bytes by design, so a stalled frame alone is
-             * NOT a fault. */
-            if (!nq_resp || !nq_progress)
-                emit_event(ev, mono, "crit", "led_frozen",
-                           "LED frame unchanged for %lld samples with distressed nexusqd (resp=%d progress=%d) - ring/AVR/nexusqd hang",
-                           led_stall, nq_resp, nq_progress);
-            else if (led_stall % 60 == 0)
-                emit_event(ev, mono, "info", "led_static",
-                           "LED frame unchanged for %lld samples, nexusqd healthy (resp=1) - screensaver/blanked",
-                           led_stall);
+        /* The distress co-signal decides crit vs info: a locked/blanked ring
+         * re-commits identical bytes by design, so a stalled frame alone is
+         * NOT a fault. */
+        switch (led_judge(&led_watch, led_stall, !nq_resp || !nq_progress)) {
+        case LED_FROZEN:
+            emit_event(ev, mono, "crit", "led_frozen",
+                       "LED frame unchanged for %lld samples with distressed nexusqd (resp=%d progress=%d) - ring/AVR/nexusqd hang",
+                       led_stall, nq_resp, nq_progress);
+            break;
+        case LED_STATIC:
+            emit_event(ev, mono, "info", "led_static",
+                       "LED frame unchanged for %lld samples, nexusqd healthy (resp=1) - screensaver/blanked",
+                       led_stall);
+            break;
+        case LED_QUIET:
+            break;
         }
-        if (vmismatch)
+        if (vdd_report)
             emit_event(ev, mono, "warn", "vdd_mismatch",
-                       "vdd_mpu %lld uV vs expected %lld uV at %lld kHz", vdd, vexp, freq);
+                       "vdd_mpu %lld uV vs expected %lld uV at %lld kHz, confirmed after 50 ms", vdd, vexp, vr.freq);
         if (prev_pstore >= 0 && pstore > prev_pstore)
             emit_event(ev, mono, "crit", "pstore_new",
                        "%ld new crash dump(s) in " PSTORE, pstore - prev_pstore);

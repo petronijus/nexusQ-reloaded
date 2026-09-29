@@ -6,6 +6,32 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — healthd reports a mismatch or a static ring once, not every sample (device **r121**)
+
+From reading the second soak (below, under r120):
+
+- **`vdd_mismatch` is confirmed before it is recorded.** A single reading can
+  straddle an OPP transition: `policy->cur` changes only after the clock and
+  the regulator have both moved, so two equal frequency reads can bracket the
+  next OPP's voltage. A mismatching reading is now taken again 50 ms later,
+  and only a mismatch that is still there counts. That catches a real fault at
+  any OPP, including a 1.2 GHz burst shorter than one 5 s sample (a first
+  version that waited for two consecutive samples would have missed it; the
+  fleet-safety review caught that). It works for `--once` too, and costs
+  nothing while the voltage is right. The event is written once per run of
+  mismatching samples.
+- **`led_static` once per static stretch**, after 5 minutes, instead of every
+  5 minutes: an idle day logged ~190 of them.
+- **`led_frozen` once per distress episode**, instead of every 5 s for as long
+  as nexusqd hangs; the header of that block already promised "never every
+  sample".
+- `userspace/nq-healthd/tests/test_judgements.c`: the soak's racing sample,
+  alternating races, a held mismatch, a day-long static frame, a hang, and a
+  hang that clears and returns; the VDD readers are injected, so the test
+  plays both transition races, a held undervolt and a 1.2 GHz one. Six
+  mutations were each seen failing: no re-check, the re-check ignored, no
+  pause, a report every sample, the old every-60, a crit every sample.
+
 ### Added — a developer harness: `just check`, git hooks, agent rules (device **r121**, `nexusq-control` **r60**, `nexusq-mqtt` **r12**, `nexusq-btagent` **r7**, `nexusq-setupd` **r7**, `nexusq-kernel-ota` **r10**, `nexusq-rootfs-ab` **r6**)
 
 The repo gets the standard harness (`/project-setup`, harness version 2):
@@ -20,7 +46,8 @@ toolchain, lanes and troubleshooting. The guard hook refuses any write to the
 `bootloader` or `xloader` partition outright, since `Bash(fastboot *)` is allowed.
 
 **The seven revisions carry no behaviour change** — only the reformat below,
-explicit exception chaining and shellcheck comments. They are bumped anyway
+explicit exception chaining and shellcheck comments (device r121 also carries
+the healthd fix above). They are bumped anyway
 because `docker-build.sh` rebuilds every OTA package with `--force`: the new
 bytes would otherwise ship under the old revision, and `apk upgrade
 --available` (the app's System update) would reinstall them on units that
@@ -150,8 +177,8 @@ and health.jsonl held only 09:30 onwards. The window is therefore 09:30–20:21,
   `policy->cur` changes only at the end of a transition, after both the clock
   and the regulator have moved. A step down lowers the voltage while both reads
   still say 700 MHz. The earlier boots' opposite reports (1.203 V at 350 MHz)
-  are the same race on the way up. The fix is to report a mismatch only when it
-  holds on two consecutive samples.
+  are the same race on the way up. Fixed in device r121: a mismatching reading
+  is taken again 50 ms later before it counts.
 
 Already in the store before this: the name and room, theme, ring and
 schedule, brightness and ambient, EQ and presets, MQTT, the source toggles,
