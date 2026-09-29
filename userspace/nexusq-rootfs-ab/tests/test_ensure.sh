@@ -1,4 +1,5 @@
 #!/bin/sh
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # Tests for `nq-rootfs-ab ensure --auto`, the storage check after every OTA
 # (nexusq-rootfs-ab r4, 2026-09-26).
 #
@@ -65,7 +66,7 @@ rmdir "$T/sys/mmcblk0p14"
 out=$(sh "$AB" ensure --auto 2>&1)
 check "$(calls)" 4 "the online half runs first"
 check "$([ -f "$T/state/storage-ok" ] && echo recorded || echo none)" none "storage is NOT recorded as ok"
-case "$out" in *"cannot tell which slot"*|*"not running from slot A"*) r=split ;; *) r="$out" ;; esac
+case "$out" in *"cannot tell which slot"*|*"not running from slot A"*) r="split" ;; *) r="$out" ;; esac
 check "$r" split "and it goes on into split (which, off-device, stops at its own slot check)"
 
 echo

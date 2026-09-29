@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # Tests for nq-persist (device r103): the per-unit state store on the `cache`
 # partition, and the r103 .pre-upgrade step that moves the identity file under
 # it.

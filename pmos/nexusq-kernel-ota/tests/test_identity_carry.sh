@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # check() evals its quoted conditions, which read $out, $rc and the fixtures
 # Tests for `nq-kernel-ota carry-identity` / `identity` — the per-unit identity
 # carry-over that stage-apk performs before packing a new kernel.
 #
@@ -91,7 +92,10 @@ check '[ $rc -eq 0 ]' "exit 0"
 check 'echo "$out" | grep -q "local-mac-address carried over: f8:8f:ca:20:48:e1 -> f8:8f:ca:05:1f:11"' "says what it did to the WiFi MAC"
 check 'echo "$out" | grep -q "local-bd-address carried over: f8:8f:ca:20:49:e5 -> f8:8f:ca:73:ac:9c"' "and to the BT address, in reading order"
 check '[ "$(sh "$TOOL" identity "$T/apk.dtb")" = "wifi=f8:8f:ca:05:1f:11 bt=f8:8f:ca:73:ac:9c" ]' "the DTB now reads as the cottage unit"
-check '[ "$(stat -f %z "$T/apk.dtb" 2>/dev/null || stat -c %s "$T/apk.dtb")" = "$(stat -f %z "$T/apk.orig.dtb" 2>/dev/null || stat -c %s "$T/apk.orig.dtb")" ]' "blob length unchanged (byte patch, not re-serialised)"
+# wc -c, not `stat -f %z || stat -c %s`: GNU `stat -f` is --file-system, which
+# prints the filesystem's free-block counts before failing on the BSD format,
+# so on Linux both sides carried numbers that change between the two calls.
+check '[ "$(wc -c <"$T/apk.dtb")" -eq "$(wc -c <"$T/apk.orig.dtb")" ]' "blob length unchanged (byte patch, not re-serialised)"
 diffbytes=$(cmp -l "$T/apk.orig.dtb" "$T/apk.dtb" | wc -l | tr -d ' ')
 # Both units share the f8:8f:ca OUI, so of the 12 payload bytes only 3 + 3 move —
 # the same "expect exactly 6" the flash-time recipe checks by hand.

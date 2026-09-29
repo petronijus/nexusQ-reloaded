@@ -11,6 +11,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 eval "$(sed -n '/^# TESTABLE:cache_limit_mib$/,/^}/p' "$HERE/../librespot-nexusq")"
 command -v cache_limit_mib >/dev/null 2>&1 || { echo "could not extract cache_limit_mib" >&2; exit 2; }
+# shellcheck disable=SC2034  # read by the eval'd cache_limit_mib
 CACHE_MAX_MIB=5120 CACHE_RESERVE_MIB=1536 CACHE_MIN_MIB=128
 PASS=0; FAIL=0
 check() {

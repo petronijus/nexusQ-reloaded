@@ -64,8 +64,13 @@ mk_rootfs() {  # mk_rootfs <out.img> <key|-> <pkg=ver>...
 
 # The real package list drives the fixtures, so adding a package to
 # pmos/ota-packages.list cannot quietly leave these tests testing a subset.
-mapfile -t PKGS < <(sed 's/#.*//' "$HERE/../../pmos/ota-packages.list" | tr -d '[:blank:]' | grep -v '^$')
-matched() { local out=(); for p in "${PKGS[@]}"; do out+=("$p=1.0-r87"); done; printf '%s\n' "${out[@]}"; }
+# `while read`, not mapfile: macOS's /bin/bash is 3.2, which has no mapfile.
+lines_into() {  # lines_into <array-name>: read stdin, one element per line
+    local _l; eval "$1=()"
+    while IFS= read -r _l; do eval "$1+=(\"\$_l\")"; done
+}
+lines_into PKGS < <(sed 's/#.*//' "$HERE/../../pmos/ota-packages.list" | tr -d '[:blank:]' | grep -v '^$')
+matched() { local lines=(); for p in "${PKGS[@]}"; do lines+=("$p=1.0-r87"); done; printf '%s\n' "${lines[@]}"; }
 
 run_gate() {  # run_gate <img> <index.tar.gz> -> prints output, returns exit code
     OTA_INDEX_URL="file://$2" "$GATE" "$1" 2>&1
@@ -74,7 +79,7 @@ run_gate() {  # run_gate <img> <index.tar.gz> -> prints output, returns exit cod
 # --- cases -------------------------------------------------------------------
 
 echo "=== 1. everything matches -> exit 0 ==="
-mapfile -t M < <(matched)
+lines_into M < <(matched)
 mk_rootfs "$WORK/happy.img" "$KEY_A" "${M[@]}"
 mk_published_index "$WORK/happy.tar.gz" "$KEY_A" "${M[@]}"
 out="$(run_gate "$WORK/happy.img" "$WORK/happy.tar.gz")"; rc=$?
@@ -91,7 +96,7 @@ if [ "$rc" -ne 0 ] && grep -q "publish-ota-repo.sh" <<<"$out"; then
 else bad "version drift fails" "exit $rc"; fi
 
 echo "=== 3. package missing from the repo entirely -> nonzero ==="
-mapfile -t SHORT < <(matched); unset 'SHORT[0]'
+lines_into SHORT < <(matched); unset 'SHORT[0]'
 mk_published_index "$WORK/short.tar.gz" "$KEY_A" "${SHORT[@]}"
 out="$(run_gate "$WORK/happy.img" "$WORK/short.tar.gz")"; rc=$?
 if [ "$rc" -ne 0 ] && grep -q "can never receive it" <<<"$out"; then

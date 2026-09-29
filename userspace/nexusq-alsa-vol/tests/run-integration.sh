@@ -1,4 +1,5 @@
 #!/bin/sh
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # Build ctl_nexusq_vol and test it against a real PulseAudio, in an Alpine
 # container (the same libc, alsa-lib and PulseAudio the Q runs). No device.
 #
@@ -30,6 +31,7 @@ echo "plugin: PIC, entry point exported"
 make -s install PLUGINDIR=/usr/lib/alsa-lib
 # the definition as the package ships it
 install -Dm644 60-nexusq-vol.conf /etc/alsa/conf.d/60-nexusq-vol.conf
+# shellcheck disable=SC2046  # pkg-config's flags must split into words
 cc -O2 -Wall -Wextra -Werror -o /w/test_player_mappings tests/test_player_mappings.c \
 	$(pkg-config --cflags --libs alsa) -lm
 

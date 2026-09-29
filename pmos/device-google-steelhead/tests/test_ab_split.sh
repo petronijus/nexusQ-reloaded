@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # Tests for the first-boot A/B split in nexusq-resize-rootfs (device r112).
 #
 # What is being protected: the script repartitions the eMMC while slot A is
@@ -28,7 +29,9 @@ command -v docker >/dev/null || { echo "docker required" >&2; exit 2; }
 
 PASS=0; FAIL=0
 check() {  # check <name> <output> <expected-marker (ERE)>
-    if printf '%s' "$2" | grep -qE "$3"; then
+    # A here-string, not a pipe: under pipefail, grep -q quitting at the first
+    # match SIGPIPEs a printf still writing a large output, and the check fails.
+    if grep -qE -e "$3" <<<"$2"; then
         PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"
     else
         FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m  %s\n' "$1"

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # check() evals its quoted conditions, which read $out, $rc and the fixtures
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # Tests for `nq-kernel-ota personalize` (nexusq-kernel-ota r8, 2026-09-26): one
 # generic boot image, every unit its own WiFi MAC and BT address.
 #

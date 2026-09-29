@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2319  # check() is handed the status of the test just run
 # Both PulseAudio loopbacks must have a CEILING on their latency.
 #
 # PulseAudio's module-loopback raises its own buffer whenever it underruns and

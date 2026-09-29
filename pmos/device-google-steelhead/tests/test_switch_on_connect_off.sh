@@ -1,4 +1,5 @@
 #!/bin/sh
+# needs: docker  (tools/dev/test-shell.sh runs it in the docker lane, `just test-sh-docker`)
 # PulseAudio on the Q must come up WITHOUT module-switch-on-connect.
 #
 # 2026-09-27, Prague Q: music played and the LED ring showed no visualisation.
