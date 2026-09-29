@@ -77,10 +77,11 @@ boot.
 
 ## Measured
 
-Prague Q, TV as host, 2026-09-29/30. The r18 `u_audio.ko` was loaded into the
-running r17 kernel for the experiment: the build reproduced r17 exactly
-(`usb_f_uac2.ko` byte-identical to the unit's, same vermagic), and the module
-on disk was left alone, so a reboot returned the stock one. 30 s windows:
+Prague Q, TV as host, 2026-09-29/30. For the experiment the patch's first
+version was built as r17, so its `u_audio.ko` carries the running kernel's
+vermagic (the build reproduced r17 exactly: `usb_f_uac2.ko` byte-identical to
+the unit's), and loaded into the running kernel with `insmod`; the module on
+disk was left alone, so a reboot returns the stock one. 30 s windows:
 
 | | musb interrupts/s | C1 / C2 / C3 of idle | capture frames/s |
 |---|---|---|---|
@@ -92,7 +93,23 @@ on disk was left alone, so a reboot returned the stock one. 30 s windows:
 Petr played sound on the TV twice with the 50 ms probe. `nq-uac2-silence`
 logged `audio returned` both times (00:26:35, 00:26:58), he heard nothing
 wrong, and after `silent` at 00:27:43 the stream was dozing again: 101/s,
-C3 58.3 %. No kernel message at any point.
+C3 58.3 %. No kernel message on that path.
+
+## Review, and what has not run yet
+
+The fleet-safety review of that first version found no blocker, and five
+things the patch now does differently: the stop frees the held-back requests
+itself (musb logged "request not queued" for each when a host closed a dozing
+stream); the doze state is reset only after the endpoint is enabled (a
+repeated SET_INTERFACE of a running alt setting stranded every request); the
+stop does nothing in a configuration without capture (its timer is never set
+up); the request that starts a doze is held back only after its data is
+copied out; and `doze_idle_ms=0` wakes a dozing stream.
+
+Not exercised on a unit yet, each to be checked with dmesg: the fixed version
+itself; a host that plays zeros for more than 5 s and then closes the stream
+(a Linux host with PipeWire does exactly that); the cable pulled while dozing;
+the gadget unbound and rebound while the timer is armed.
 
 The remaining C1 share comes from the rest of the idle path (alsaloop and
 `nq-uac2-silence` on the aloop, PulseAudio, the other daemons); the first

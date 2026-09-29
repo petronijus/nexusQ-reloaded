@@ -24,9 +24,14 @@ wakes the stream; at most one probe period of the start of the sound is
 lost.
 
 u_audio_stop_capture() runs from set_alt, in interrupt context, so it
-does not cancel the timer synchronously: the tick queues each probe with
-interrupts off under a flag the stop waits on, and ends itself once the
-stream is stopping. g_audio_cleanup() cancels it for good.
+does not cancel the timer synchronously: requests are taken off the
+held-back list and queued with interrupts off under a flag the stop waits
+on, the tick ends itself once the stream is stopping, and
+g_audio_cleanup() cancels it for good. The stop frees the held-back
+requests itself (they are not queued, so usb_ep_dequeue() would fail and
+musb would log each one), and the doze state is reset only after the
+endpoint is enabled, so a repeated SET_INTERFACE of a running alt setting
+leaves it alone. Setting doze_idle_ms to 0 wakes a dozing stream.
 
 The decisions live in u_audio_doze.h, free of kernel headers, so they are
 tested on the host (tests/test_u_audio_doze.py in nexusQ-reloaded).
@@ -34,13 +39,13 @@ tested on the host (tests/test_u_audio_doze.py in nexusQ-reloaded).
 Off by default: doze_idle_ms=0. Both parameters can be changed at run
 time through /sys/module/u_audio/parameters.
 ---
- drivers/usb/gadget/function/u_audio.c      | 285 +++++++++++++++++++++
- drivers/usb/gadget/function/u_audio_doze.h |  93 +++++++
- 2 files changed, 378 insertions(+)
+ drivers/usb/gadget/function/u_audio.c      | 383 +++++++++++++++++++++
+ drivers/usb/gadget/function/u_audio_doze.h |  93 +++++
+ 2 files changed, 476 insertions(+)
  create mode 100644 drivers/usb/gadget/function/u_audio_doze.h
 
 diff --git a/drivers/usb/gadget/function/u_audio.c b/drivers/usb/gadget/function/u_audio.c
-index ca8dbec..4bdadf2 100644
+index ca8dbec..96545a3 100644
 --- a/drivers/usb/gadget/function/u_audio.c
 +++ b/drivers/usb/gadget/function/u_audio.c
 @@ -12,8 +12,10 @@
@@ -100,11 +105,25 @@ index ca8dbec..4bdadf2 100644
    /* Volume/Mute controls and their state */
    int fu_id; /* Feature Unit ID */
    struct snd_ctl_elem_id snd_kctl_volume_id;
-@@ -146,6 +175,226 @@ static void u_audio_set_fback_frequency(enum usb_device_speed speed,
+@@ -146,6 +175,320 @@ static void u_audio_set_fback_frequency(enum usb_device_speed speed,
  	*(__le32 *)buf = cpu_to_le32(ff);
  }
  
 +/* ---- doze: the capture stream while the host sends only silence ---- */
++
++/*
++ * Concurrency. Capture completions run in interrupt context (musb gives
++ * requests back from its IRQ handler), the tick in softirq, and
++ * u_audio_stop_capture() from set_alt, in interrupt context too. doze_lock
++ * guards the doze state and the list of held-back requests; it is taken
++ * inside the ALSA stream lock, never around it, and never held across
++ * usb_ep_queue(), which can give a request back synchronously. The tick
++ * queues each request with interrupts off and doze_queueing set, so the stop
++ * can neither interleave with it on this CPU nor free the request under it on
++ * another. The wake path re-queues from a completion; like the re-queue at
++ * the end of u_audio_iso_complete() it relies on completions and set_alt
++ * being serialized, which holds while musb's interrupts stay on one CPU.
++ */
 +
 +enum { UAC_DOZE_RUN, UAC_DOZE_ENTER, UAC_DOZE_HOLD };
 +
@@ -114,22 +133,78 @@ index ca8dbec..4bdadf2 100644
 +}
 +
 +/*
++ * Queue every held-back request, one at a time: each is taken off the list
++ * and doze_queueing set in one step, with interrupts off, so
++ * u_audio_doze_stop() never finds a request that is neither held back nor
++ * queued, and waits (on another CPU) until the queueing is done.
++ */
++static void u_audio_doze_queue_parked(struct uac_rtd_params *prm)
++{
++	struct usb_ep *ep = prm->uac->audio_dev->out_ep;
++	struct usb_request *req;
++	unsigned long flags;
++
++	for (;;) {
++		local_irq_save(flags);
++		spin_lock(&prm->doze_lock);
++		if (prm->doze_stopping || list_empty(&prm->doze_parked)) {
++			spin_unlock(&prm->doze_lock);
++			local_irq_restore(flags);
++			return;
++		}
++		req = list_first_entry(&prm->doze_parked, struct usb_request, list);
++		list_del_init(&req->list);
++		prm->doze_queueing = true;
++		spin_unlock(&prm->doze_lock);
++
++		if (usb_ep_queue(ep, req, GFP_ATOMIC))
++			dev_err(prm->uac->card->dev, "%s: queue failed\n", __func__);
++
++		spin_lock(&prm->doze_lock);
++		prm->doze_queueing = false;
++		spin_unlock(&prm->doze_lock);
++		local_irq_restore(flags);
++	}
++}
++
++/* Queue the feedback request that was held back, under the same handshake. */
++static void u_audio_doze_queue_fb(struct uac_rtd_params *prm)
++{
++	struct usb_ep *ep = prm->uac->audio_dev->in_ep_fback;
++	struct usb_request *req;
++	unsigned long flags;
++
++	local_irq_save(flags);
++	spin_lock(&prm->doze_lock);
++	req = prm->doze_stopping ? NULL : prm->req_fback;
++	prm->doze_queueing = !!req;
++	spin_unlock(&prm->doze_lock);
++	if (req) {
++		if (usb_ep_queue(ep, req, GFP_ATOMIC))
++			dev_err(prm->uac->card->dev, "%s: queue failed\n", __func__);
++		spin_lock(&prm->doze_lock);
++		prm->doze_queueing = false;
++		spin_unlock(&prm->doze_lock);
++	}
++	local_irq_restore(flags);
++}
++
++/*
 + * Account one completed capture request. RUN: deliver and re-queue it as
-+ * usual. ENTER: the stream just dozed; deliver it, then hold it back. HOLD:
-+ * a silent probe while dozing; hold it back without delivering (the zeros are
-+ * synthesized by the tick). A probe that is not silent wakes the stream: it is
-+ * delivered and re-queued, with every request held back and the feedback.
++ * usual. ENTER: the stream just dozed; deliver it, then hold it back with
++ * u_audio_doze_park(). HOLD: a silent probe while dozing, now held back; do
++ * not deliver it (the tick writes the zeros). A probe that is not silent
++ * wakes the stream: it is delivered and re-queued, and every request held
++ * back and the feedback go back into circulation.
 + */
 +static int u_audio_doze_packet(struct uac_rtd_params *prm, struct usb_request *req)
 +{
 +	struct g_audio *audio_dev = prm->uac->audio_dev;
 +	bool silent = !memchr_inv(req->buf, 0, req->actual);
 +	u64 idle = (u64)READ_ONCE(doze_idle_ms) * NSEC_PER_MSEC;
-+	struct usb_request *r, *n;
 +	bool woke = false, wake_fb = false;
 +	int ret = UAC_DOZE_RUN;
 +	unsigned long flags;
-+	LIST_HEAD(wake);
 +
 +	spin_lock_irqsave(&prm->doze_lock, flags);
 +	if (prm->doze_stopping || req->status == -ECONNRESET) {
@@ -140,12 +215,10 @@ index ca8dbec..4bdadf2 100644
 +			ret = UAC_DOZE_HOLD;
 +		} else {
 +			woke = true;
-+			list_splice_init(&prm->doze_parked, &wake);
 +			wake_fb = prm->fb_parked;
 +			prm->fb_parked = false;
 +		}
 +	} else if (uac_doze_on_packet(&prm->doze, silent, ktime_get_ns(), idle)) {
-+		list_add_tail(&req->list, &prm->doze_parked);
 +		prm->doze_last = ktime_get();
 +		prm->doze_rem = 0;
 +		hrtimer_start(&prm->doze_timer, u_audio_doze_period(),
@@ -156,20 +229,33 @@ index ca8dbec..4bdadf2 100644
 +
 +	if (ret == UAC_DOZE_ENTER)
 +		dev_dbg(&audio_dev->gadget->dev, "capture: silent, dozing\n");
-+	if (!woke)
-+		return ret;
-+
-+	dev_dbg(&audio_dev->gadget->dev, "capture: sound, awake\n");
-+	hrtimer_try_to_cancel(&prm->doze_timer);
-+	list_for_each_entry_safe(r, n, &wake, list) {
-+		list_del_init(&r->list);
-+		if (usb_ep_queue(audio_dev->out_ep, r, GFP_ATOMIC))
-+			dev_err(prm->uac->card->dev, "%s: re-queue failed\n", __func__);
++	if (woke) {
++		dev_dbg(&audio_dev->gadget->dev, "capture: sound, awake\n");
++		hrtimer_try_to_cancel(&prm->doze_timer);
++		u_audio_doze_queue_parked(prm);
++		if (wake_fb)
++			u_audio_doze_queue_fb(prm);
 +	}
-+	if (wake_fb && prm->req_fback &&
-+	    usb_ep_queue(audio_dev->in_ep_fback, prm->req_fback, GFP_ATOMIC))
-+		dev_err(prm->uac->card->dev, "%s: feedback re-queue failed\n", __func__);
 +	return ret;
++}
++
++/*
++ * After delivering the request that put the stream to sleep: hold it back.
++ * Parked only now, not when the decision was made, so the tick cannot queue
++ * it while its data is still being copied out. Returns false when the stream
++ * woke or stopped in between; then the caller re-queues it as usual.
++ */
++static bool u_audio_doze_park(struct uac_rtd_params *prm, struct usb_request *req)
++{
++	unsigned long flags;
++	bool parked;
++
++	spin_lock_irqsave(&prm->doze_lock, flags);
++	parked = prm->doze.dozing && !prm->doze_stopping;
++	if (parked)
++		list_add_tail(&req->list, &prm->doze_parked);
++	spin_unlock_irqrestore(&prm->doze_lock, flags);
++	return parked;
 +}
 +
 +/* The feedback request completed: hold it back while the capture dozes? */
@@ -233,53 +319,42 @@ index ca8dbec..4bdadf2 100644
 +/*
 + * Every doze_probe_ms while dozing: synthesize the silence since the last
 + * tick, and send the held-back requests out to look at the host's stream.
-+ * Each request is queued with interrupts off and doze_queueing set, so
-+ * u_audio_doze_stop() -- which runs from set_alt, in interrupt context --
-+ * can neither interleave with it on this CPU nor free it under it on another.
++ * doze_idle_ms set to 0 while dozing wakes the stream here.
 + */
 +static enum hrtimer_restart u_audio_doze_tick(struct hrtimer *t)
 +{
 +	struct uac_rtd_params *prm = container_of(t, struct uac_rtd_params, doze_timer);
-+	struct g_audio *audio_dev = prm->uac->audio_dev;
-+	struct usb_request *req;
++	bool off, fb = false;
 +	unsigned long flags;
++	u32 frames = 0;
 +	ktime_t now;
-+	u32 frames;
 +
 +	spin_lock_irqsave(&prm->doze_lock, flags);
 +	if (!prm->doze.dozing || prm->doze_stopping) {
 +		spin_unlock_irqrestore(&prm->doze_lock, flags);
 +		return HRTIMER_NORESTART;
 +	}
-+	now = ktime_get();
-+	frames = uac_doze_frames(ktime_to_ns(ktime_sub(now, prm->doze_last)),
-+				 prm->srate, &prm->doze_rem);
-+	prm->doze_last = now;
++	off = !READ_ONCE(doze_idle_ms);
++	if (off) {
++		prm->doze.dozing = 0;
++		fb = prm->fb_parked;
++		prm->fb_parked = false;
++	} else {
++		now = ktime_get();
++		frames = uac_doze_frames(ktime_to_ns(ktime_sub(now, prm->doze_last)),
++					 prm->srate, &prm->doze_rem);
++		prm->doze_last = now;
++	}
 +	spin_unlock_irqrestore(&prm->doze_lock, flags);
 +
-+	u_audio_doze_fill(prm, frames);
-+
-+	for (;;) {
-+		local_irq_save(flags);
-+		spin_lock(&prm->doze_lock);
-+		if (!prm->doze.dozing || prm->doze_stopping ||
-+		    list_empty(&prm->doze_parked)) {
-+			spin_unlock(&prm->doze_lock);
-+			local_irq_restore(flags);
-+			break;
-+		}
-+		req = list_first_entry(&prm->doze_parked, struct usb_request, list);
-+		list_del_init(&req->list);
-+		prm->doze_queueing = true;
-+		spin_unlock(&prm->doze_lock);
-+
-+		if (usb_ep_queue(audio_dev->out_ep, req, GFP_ATOMIC))
-+			dev_err(prm->uac->card->dev, "%s: probe queue failed\n", __func__);
-+
-+		spin_lock(&prm->doze_lock);
-+		prm->doze_queueing = false;
-+		spin_unlock(&prm->doze_lock);
-+		local_irq_restore(flags);
++	if (!off)
++		u_audio_doze_fill(prm, frames);
++	/* A probe, or with the doze switched off the whole stream back. */
++	u_audio_doze_queue_parked(prm);
++	if (off) {
++		if (fb)
++			u_audio_doze_queue_fb(prm);
++		return HRTIMER_NORESTART;
 +	}
 +
 +	hrtimer_forward_now(t, u_audio_doze_period());
@@ -302,11 +377,23 @@ index ca8dbec..4bdadf2 100644
 +/*
 + * Called from set_alt (interrupt context): no blocking cancel. The tick sees
 + * doze_stopping and ends itself; g_audio_cleanup() cancels it for good.
++ *
++ * The requests held back are not queued, so usb_ep_dequeue() in free_ep()
++ * would fail on them -- and musb logs "request not queued" for each. They are
++ * freed here instead, and their slots cleared, so free_ep*() skips them.
 + */
 +static void u_audio_doze_stop(struct uac_rtd_params *prm)
 +{
++	struct g_audio *audio_dev;
 +	struct usb_request *req, *n;
 +	unsigned long flags;
++	bool free_fb;
++	LIST_HEAD(held);
++	int i;
++
++	if (!prm->uac)	/* no capture stream in this configuration */
++		return;
++	audio_dev = prm->uac->audio_dev;
 +
 +	spin_lock_irqsave(&prm->doze_lock, flags);
 +	prm->doze_stopping = true;
@@ -316,18 +403,30 @@ index ca8dbec..4bdadf2 100644
 +		cpu_relax();
 +		spin_lock_irqsave(&prm->doze_lock, flags);
 +	}
-+	/* free_ep() frees these: they are not queued, so they cannot be dequeued */
-+	list_for_each_entry_safe(req, n, &prm->doze_parked, list)
-+		list_del_init(&req->list);
++	list_splice_init(&prm->doze_parked, &held);
++	free_fb = prm->fb_parked;
 +	prm->fb_parked = false;
 +	spin_unlock_irqrestore(&prm->doze_lock, flags);
 +	hrtimer_try_to_cancel(&prm->doze_timer);
++
++	list_for_each_entry_safe(req, n, &held, list) {
++		list_del_init(&req->list);
++		for (i = 0; i < audio_dev->params.req_number; i++)
++			if (prm->reqs[i] == req)
++				prm->reqs[i] = NULL;
++		usb_ep_free_request(audio_dev->out_ep, req);
++	}
++	if (free_fb && prm->req_fback) {
++		kfree(prm->req_fback->buf);
++		usb_ep_free_request(audio_dev->in_ep_fback, prm->req_fback);
++		prm->req_fback = NULL;
++	}
 +}
 +
  static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
  {
  	unsigned int pending;
-@@ -158,6 +407,7 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
+@@ -158,6 +501,7 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
  	unsigned int frames, p_pktsize;
  	unsigned long long pitched_rate_mil, p_pktsize_residue_mil,
  			residue_frames_mil, div_result;
@@ -335,7 +434,7 @@ index ca8dbec..4bdadf2 100644
  
  	/* i/f shutting down */
  	if (!prm->ep_enabled) {
-@@ -176,6 +426,18 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
+@@ -176,6 +520,18 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
  		pr_debug("%s: iso_complete status(%d) %d/%d\n",
  			__func__, status, req->actual, req->length);
  
@@ -354,16 +453,16 @@ index ca8dbec..4bdadf2 100644
  	substream = prm->ss;
  
  	/* Do nothing if ALSA isn't active */
-@@ -273,6 +535,8 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
+@@ -273,6 +629,8 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
  		snd_pcm_period_elapsed(substream);
  
  exit:
-+	if (park)
-+		return;	/* the first request held back: u_audio_doze_packet() parked it */
++	if (park && u_audio_doze_park(prm, req))
++		return;	/* the request that put the stream to sleep: held back */
  	if (usb_ep_queue(ep, req, GFP_ATOMIC))
  		dev_err(uac->card->dev, "%d Error!\n", __LINE__);
  }
-@@ -303,6 +567,14 @@ static void u_audio_iso_fback_complete(struct usb_ep *ep,
+@@ -303,6 +661,14 @@ static void u_audio_iso_fback_complete(struct usb_ep *ep,
  		pr_debug("%s: iso_complete status(%d) %d/%d\n",
  			__func__, status, req->actual, req->length);
  
@@ -378,15 +477,19 @@ index ca8dbec..4bdadf2 100644
  	u_audio_set_fback_frequency(audio_dev->gadget->speed, audio_dev->out_ep,
  				    prm->srate, prm->pitch,
  				    req->buf);
-@@ -605,6 +877,7 @@ int u_audio_start_capture(struct g_audio *audio_dev)
- 
- 	req_len = ep->maxpacket;
- 
+@@ -611,6 +977,11 @@ int u_audio_start_capture(struct g_audio *audio_dev)
+ 		dev_err(dev, "usb_ep_enable failed for out_ep (%d)\n", ret);
+ 		return ret;
+ 	}
++	/*
++	 * Only now: a repeated SET_INTERFACE of an alt that is already running
++	 * ends above with -EBUSY and must not reset the doze of that stream.
++	 */
 +	u_audio_doze_start(prm);
- 	prm->ep_enabled = true;
- 	ret = usb_ep_enable(ep);
- 	if (ret < 0) {
-@@ -688,6 +961,7 @@ void u_audio_stop_capture(struct g_audio *audio_dev)
+ 
+ 	for (i = 0; i < params->req_number; i++) {
+ 		if (!prm->reqs[i]) {
+@@ -688,6 +1059,7 @@ void u_audio_stop_capture(struct g_audio *audio_dev)
  	struct snd_uac_chip *uac = audio_dev->uac;
  
  	set_active(&uac->c_prm, false);
@@ -394,7 +497,7 @@ index ca8dbec..4bdadf2 100644
  	if (audio_dev->in_ep_fback)
  		free_ep_fback(&uac->c_prm, audio_dev->in_ep_fback);
  	free_ep(&uac->c_prm, audio_dev->out_ep);
-@@ -1205,6 +1479,10 @@ int g_audio_setup(struct g_audio *g_audio, const char *pcm_name,
+@@ -1205,6 +1577,10 @@ int g_audio_setup(struct g_audio *g_audio, const char *pcm_name,
  		struct uac_rtd_params *prm = &uac->c_prm;
  
  		spin_lock_init(&prm->lock);
@@ -405,7 +508,7 @@ index ca8dbec..4bdadf2 100644
  		uac->c_prm.uac = uac;
  		prm->max_psize = g_audio->out_ep_maxpsize;
  		prm->srate = params->c_srates[0];
-@@ -1448,6 +1726,13 @@ void g_audio_cleanup(struct g_audio *g_audio)
+@@ -1448,6 +1824,13 @@ void g_audio_cleanup(struct g_audio *g_audio)
  	uac = g_audio->uac;
  	g_audio->uac = NULL;
  

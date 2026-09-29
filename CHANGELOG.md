@@ -26,8 +26,9 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
 - Off in the kernel by default. `nexusq-usb-gadget.sh` (device r121) sets
   5000 ms and 50 ms at boot when the kernel has the parameters, and logs once
   that it does not otherwise.
-- **Measured on the Prague Q**, TV as host, the r18 module loaded into the
-  running r17 kernel (its `usb_f_uac2.ko` is byte-identical to the unit's):
+- **Measured on the Prague Q**, TV as host, with the patch's first version
+  built as r17 (same vermagic; its `usb_f_uac2.ko` byte-identical to the
+  unit's) and its `u_audio.ko` loaded into the running kernel:
 
   | | musb interrupts | C3 share of idle |
   |---|---|---|
@@ -38,16 +39,29 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
 
   The gadget capture kept its 48 kHz throughout. Petr played sound on the TV
   twice: `nq-uac2-silence` saw it return in 2-3 ms, he heard nothing wrong,
-  and 5 s after it stopped the stream dozed again. No kernel message.
+  and 5 s after it stopped the stream dozed again. No kernel message on that
+  path.
 - The decisions (when to doze, when to wake, how many frames of silence) live
   in `u_audio_doze.h`, free of kernel headers: `tests/test_u_audio_doze.py`
   extracts it from the patch and runs `tests/u_audio_doze_test.c` against it.
   Five mutations were each seen failing. The patch is `checkpatch`-clean and
   builds without warnings at `W=1`; the series applies with GNU patch.
 - `set_alt` stops the stream in interrupt context, so the stop never cancels
-  the timer synchronously: the tick queues each probe with interrupts off
-  under a flag the stop waits on, and ends itself once the stream is
-  stopping; `g_audio_cleanup()` cancels it for good.
+  the timer synchronously: held-back requests are taken off their list and
+  queued with interrupts off under a flag the stop waits on, the tick ends
+  itself once the stream is stopping, and `g_audio_cleanup()` cancels it for
+  good.
+- **The fleet-safety review of the first version** (no blocker) found, and
+  the patch now fixes: a stream closed while dozing made musb log "request
+  not queued" three times (the stop now frees the held-back requests itself);
+  a repeated SET_INTERFACE of a running alt setting reset the doze and left
+  every request stranded (the reset now follows a successful endpoint enable);
+  a configuration without capture would have cancelled an uninitialized
+  timer; the request that starts a doze was held back before its data was
+  copied out; and `doze_idle_ms=0` did not wake a dozing stream.
+- **Not yet exercised on a unit:** a host that closes the stream while it
+  dozes, the cable pulled while dozing, the gadget unbound with the timer
+  armed, and the fixed version at all -- the overnight soak runs the first.
 - Details: `docs/2026-09-30-usb-audio-doze.md`.
 
 ### Found — the 1 ms USB audio interval is the host's floor, not musb's (2026-09-29)
