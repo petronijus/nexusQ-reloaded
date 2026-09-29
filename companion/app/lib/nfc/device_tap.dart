@@ -2,7 +2,12 @@ import 'dart:convert';
 
 /// Parsed NFC tap payload (PROTOCOL.md §7): the Q's connection info.
 class DeviceTap {
-  DeviceTap({required this.btMac, required this.host, this.ip, required this.provisioned});
+  DeviceTap({
+    required this.btMac,
+    required this.host,
+    this.ip,
+    required this.provisioned,
+  });
 
   final String btMac;
   final String host;

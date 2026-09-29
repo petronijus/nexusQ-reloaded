@@ -5,8 +5,12 @@ import '../setup_flow.dart';
 import '../stock_assets.dart';
 
 class WifiScreen extends StatefulWidget {
-  const WifiScreen(
-      {super.key, required this.flow, required this.onNext, required this.onBack});
+  const WifiScreen({
+    super.key,
+    required this.flow,
+    required this.onNext,
+    required this.onBack,
+  });
   final SetupFlowState flow;
   final VoidCallback onNext;
   final VoidCallback onBack;
@@ -34,7 +38,9 @@ class _WifiScreenState extends State<WifiScreen> {
     try {
       final r = await widget.flow.client.call('scanNetworks');
       if (!mounted) return;
-      setState(() => _networks = (r['networks'] as List).cast<Map<String, dynamic>>());
+      setState(
+        () => _networks = (r['networks'] as List).cast<Map<String, dynamic>>(),
+      );
     } on BtSetupError catch (e) {
       if (!mounted) return;
       setState(() => _error = 'Scan failed: ${e.message}');
@@ -44,8 +50,16 @@ class _WifiScreenState extends State<WifiScreen> {
   }
 
   String _iconFor(int signal, bool locked) {
-    final level = signal > 75 ? 4 : signal > 50 ? 3 : signal > 25 ? 2 : 1;
-    return locked ? 'ic_wifi_lock_signal_$level.png' : 'ic_wifi_signal_$level.png';
+    final level = signal > 75
+        ? 4
+        : signal > 50
+        ? 3
+        : signal > 25
+        ? 2
+        : 1;
+    return locked
+        ? 'ic_wifi_lock_signal_$level.png'
+        : 'ic_wifi_signal_$level.png';
   }
 
   Future<void> _join(Map<String, dynamic> net) async {
@@ -76,12 +90,14 @@ class _WifiScreenState extends State<WifiScreen> {
       widget.onNext();
     } on BtSetupError catch (e) {
       if (!mounted) return;
-      setState(() => _error = switch (e.code) {
-            'wrong_password' => 'Wrong password — try again.',
-            'not_found' => 'Network not found. Is it 2.4 GHz and in range?',
-            'timeout' => 'Joining timed out. Try again.',
-            _ => 'Join failed: ${e.message}',
-          });
+      setState(
+        () => _error = switch (e.code) {
+          'wrong_password' => 'Wrong password — try again.',
+          'not_found' => 'Network not found. Is it 2.4 GHz and in range?',
+          'timeout' => 'Joining timed out. Try again.',
+          _ => 'Join failed: ${e.message}',
+        },
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -94,12 +110,22 @@ class _WifiScreenState extends State<WifiScreen> {
       child: Column(
         children: [
           const SizedBox(height: 16),
-          const Text('Choose a WiFi network',
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          const Text(
+            'Choose a WiFi network',
+            style: TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 8),
-          Text(_error ?? 'The Q will join this network.',
-              style: TextStyle(
-                  color: _error != null ? Colors.redAccent : NexusQColors.dim, fontSize: 13)),
+          Text(
+            _error ?? 'The Q will join this network.',
+            style: TextStyle(
+              color: _error != null ? Colors.redAccent : NexusQColors.dim,
+              fontSize: 13,
+            ),
+          ),
           const SizedBox(height: 12),
           if (_busy) const LinearProgressIndicator(minHeight: 2),
           Expanded(
@@ -108,13 +134,20 @@ class _WifiScreenState extends State<WifiScreen> {
                 for (final n in _networks)
                   ListTile(
                     leading: stockImage(
-                        _iconFor(n['signal'] as int, n['security'] == 'wpa-psk'),
-                        width: 28,
-                        fallback: n['security'] == 'wpa-psk' ? Icons.wifi_lock : Icons.wifi),
-                    title: Text(n['ssid'] as String,
-                        style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text('${n['signal']}%',
-                        style: const TextStyle(color: NexusQColors.dim)),
+                      _iconFor(n['signal'] as int, n['security'] == 'wpa-psk'),
+                      width: 28,
+                      fallback: n['security'] == 'wpa-psk'
+                          ? Icons.wifi_lock
+                          : Icons.wifi,
+                    ),
+                    title: Text(
+                      n['ssid'] as String,
+                      style: const TextStyle(color: NexusQColors.white),
+                    ),
+                    subtitle: Text(
+                      '${n['signal']}%',
+                      style: const TextStyle(color: NexusQColors.dim),
+                    ),
                     enabled: !_busy,
                     onTap: () => _join(n),
                   ),
@@ -125,7 +158,10 @@ class _WifiScreenState extends State<WifiScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               TextButton(onPressed: widget.onBack, child: const Text('Back')),
-              TextButton(onPressed: _busy ? null : _scan, child: const Text('Rescan')),
+              TextButton(
+                onPressed: _busy ? null : _scan,
+                child: const Text('Rescan'),
+              ),
             ],
           ),
         ],
@@ -156,13 +192,19 @@ class _PasswordSheetState extends State<_PasswordSheet> {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.only(
-          left: 24, right: 24, top: 24, bottom: MediaQuery.of(context).viewInsets.bottom + 24),
+        left: 24,
+        right: 24,
+        top: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Password for ${widget.ssid}',
-              style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
+          Text(
+            'Password for ${widget.ssid}',
+            style: const TextStyle(color: NexusQColors.white, fontSize: 16),
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: _ctrl,
@@ -171,8 +213,10 @@ class _PasswordSheetState extends State<_PasswordSheet> {
             style: const TextStyle(color: NexusQColors.white),
             decoration: InputDecoration(
               suffixIcon: IconButton(
-                icon: Icon(_show ? Icons.visibility_off : Icons.visibility,
-                    color: NexusQColors.dim),
+                icon: Icon(
+                  _show ? Icons.visibility_off : Icons.visibility,
+                  color: NexusQColors.dim,
+                ),
                 onPressed: () => setState(() => _show = !_show),
               ),
             ),

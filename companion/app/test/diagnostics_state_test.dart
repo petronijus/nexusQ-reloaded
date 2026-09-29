@@ -31,10 +31,16 @@ void main() {
       'pending': ['spotify'],
     });
     expect(d.enabled, isTrue);
-    expect(d.until, DateTime.fromMillisecondsSinceEpoch(1790086400 * 1000, isUtc: true));
+    expect(
+      d.until,
+      DateTime.fromMillisecondsSinceEpoch(1790086400 * 1000, isUtc: true),
+    );
     expect(d.summary, 'On — ends in 23 h 07 min.');
     expect(d.pendingNote, 'Applies to Spotify Connect when playback stops.');
-    expect(DiagnosticsState.fromJson({'enabled': true, 'remainingS': 300}).summary, 'On — ends in 5 min.');
+    expect(
+      DiagnosticsState.fromJson({'enabled': true, 'remainingS': 300}).summary,
+      'On — ends in 5 min.',
+    );
   });
 
   test('mock: set on/off round-trips and pushes diagnosticsChanged', () async {
@@ -42,11 +48,19 @@ void main() {
     final events = <NexusQEvent>[];
     final sub = c.events.listen(events.add);
     expect((await c.call('getDiagnostics'))['enabled'], isFalse);
-    final on = DiagnosticsState.fromJson(await c.call('setDiagnostics', {'enabled': true, 'hours': 24}));
+    final on = DiagnosticsState.fromJson(
+      await c.call('setDiagnostics', {'enabled': true, 'hours': 24}),
+    );
     expect(on.enabled, isTrue);
     expect(on.remaining.inHours, anyOf(23, 24));
-    expect((await c.call('setDiagnostics', {'enabled': false}))['enabled'], isFalse);
-    await expectLater(c.call('setDiagnostics', {'enabled': true, 'hours': 100}), throwsA(isA<NexusQError>()));
+    expect(
+      (await c.call('setDiagnostics', {'enabled': false}))['enabled'],
+      isFalse,
+    );
+    await expectLater(
+      c.call('setDiagnostics', {'enabled': true, 'hours': 100}),
+      throwsA(isA<NexusQError>()),
+    );
     await Future<void>.delayed(Duration.zero);
     expect(events.where((e) => e.event == 'diagnosticsChanged').length, 2);
     await sub.cancel();

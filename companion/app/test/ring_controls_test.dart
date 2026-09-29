@@ -11,9 +11,14 @@ import 'package:nexusq_companion/widgets/ring_controls.dart';
 /// A Q whose nexusqd predates `dark`: the bridge answers `unavailable`.
 class _OldNexusqdClient extends MockClient {
   @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) {
     if (method == 'setRing' || method == 'setRingSchedule') {
-      return Future.error(NexusQError('unavailable', 'nexusqd rejected the ring setting'));
+      return Future.error(
+        NexusQError('unavailable', 'nexusqd rejected the ring setting'),
+      );
     }
     return super.call(method, params);
   }
@@ -22,7 +27,10 @@ class _OldNexusqdClient extends MockClient {
 /// A bridge from before the ring switch: its state has no `ring`.
 class _PreRingClient extends MockClient {
   @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) async {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
     final r = await super.call(method, params);
     if (method == 'getState') return Map.of(r)..remove('ring');
     return r;
@@ -35,10 +43,13 @@ Future<DeviceController> _started(NexusQClient c) async {
   final ctl = DeviceController(c);
   final hydrated = Completer<void>();
   void check() {
-    if (ctl.state.connected && ctl.state.deviceName != 'Nexus Q' && !hydrated.isCompleted) {
+    if (ctl.state.connected &&
+        ctl.state.deviceName != 'Nexus Q' &&
+        !hydrated.isCompleted) {
       hydrated.complete();
     }
   }
+
   ctl.addListener(check);
   await ctl.start();
   await hydrated.future.timeout(const Duration(seconds: 2));
@@ -55,13 +66,16 @@ void main() {
       ctl.dispose();
     });
 
-    test('a pre-ring bridge leaves no ring state, so no control is offered', () async {
-      final ctl = await _started(_PreRingClient());
-      expect(ctl.state.ring, isNull);
-      await ctl.setRingOn(false); // must be a harmless no-op
-      expect(ctl.state.ring, isNull);
-      ctl.dispose();
-    });
+    test(
+      'a pre-ring bridge leaves no ring state, so no control is offered',
+      () async {
+        final ctl = await _started(_PreRingClient());
+        expect(ctl.state.ring, isNull);
+        await ctl.setRingOn(false); // must be a harmless no-op
+        expect(ctl.state.ring, isNull);
+        ctl.dispose();
+      },
+    );
 
     test('switching by hand turns the schedule off', () async {
       final ctl = await _started(MockClient());
@@ -99,35 +113,51 @@ void main() {
   });
 
   group('widget', () {
-    Future<void> pump(WidgetTester t, RingState ring,
-        {ValueChanged<bool>? onRing,
-        void Function({required bool enabled, String? offAt, String? onAt})? onSchedule,
-        String? error}) {
-      return t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: RingControls(
-            ring: ring,
-            error: error,
-            onRingChanged: onRing ?? (_) {},
-            onScheduleChanged: onSchedule ?? ({required bool enabled, String? offAt, String? onAt}) {},
+    Future<void> pump(
+      WidgetTester t,
+      RingState ring, {
+      ValueChanged<bool>? onRing,
+      void Function({required bool enabled, String? offAt, String? onAt})?
+      onSchedule,
+      String? error,
+    }) {
+      return t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RingControls(
+              ring: ring,
+              error: error,
+              onRingChanged: onRing ?? (_) {},
+              onScheduleChanged:
+                  onSchedule ??
+                  ({required bool enabled, String? offAt, String? onAt}) {},
+            ),
           ),
         ),
-      ));
+      );
     }
 
     testWidgets('the time pickers only appear with the schedule on', (t) async {
       await pump(t, const RingState());
       expect(find.byKey(const Key('ring-off-at')), findsNothing);
-      await pump(t, const RingState(scheduleEnabled: true, offAt: '22:15', onAt: '06:45'));
+      await pump(
+        t,
+        const RingState(scheduleEnabled: true, offAt: '22:15', onAt: '06:45'),
+      );
       expect(find.byKey(const Key('ring-off-at')), findsOneWidget);
       expect(find.text('22:15'), findsOneWidget);
       expect(find.text('06:45'), findsOneWidget);
     });
 
-    testWidgets('an unsynced clock is explained, not silently ignored', (t) async {
+    testWidgets('an unsynced clock is explained, not silently ignored', (
+      t,
+    ) async {
       await pump(t, const RingState(scheduleEnabled: true, clockSynced: false));
       expect(find.textContaining('Waiting for network time'), findsOneWidget);
-      await pump(t, const RingState(scheduleEnabled: false, clockSynced: false));
+      await pump(
+        t,
+        const RingState(scheduleEnabled: false, clockSynced: false),
+      );
       expect(find.textContaining('Waiting for network time'), findsNothing);
     });
 
@@ -138,10 +168,16 @@ void main() {
       expect(got, isFalse);
     });
 
-    testWidgets('the picker is 24 h and an unchanged time sends nothing', (t) async {
+    testWidgets('the picker is 24 h and an unchanged time sends nothing', (
+      t,
+    ) async {
       var sent = 0;
-      await pump(t, const RingState(scheduleEnabled: true),
-          onSchedule: ({required bool enabled, String? offAt, String? onAt}) => sent++);
+      await pump(
+        t,
+        const RingState(scheduleEnabled: true),
+        onSchedule: ({required bool enabled, String? offAt, String? onAt}) =>
+            sent++,
+      );
       await t.tap(find.byKey(const Key('ring-off-at')));
       await t.pumpAndSettle();
       expect(find.text('AM'), findsNothing, reason: 'the Q keeps 24 h time');

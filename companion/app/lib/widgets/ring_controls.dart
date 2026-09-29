@@ -22,7 +22,8 @@ class RingControls extends StatelessWidget {
 
   final RingState ring;
   final ValueChanged<bool> onRingChanged;
-  final void Function({required bool enabled, String? offAt, String? onAt}) onScheduleChanged;
+  final void Function({required bool enabled, String? offAt, String? onAt})
+  onScheduleChanged;
   final String? error;
 
   static const _title = TextStyle(color: NexusQColors.white);
@@ -40,10 +41,11 @@ class RingControls extends StatelessWidget {
           onChanged: onRingChanged,
           title: const Text('LED ring', style: _title),
           subtitle: Text(
-              ring.on
-                  ? 'Idle light, theme and notifications'
-                  : 'Dark — lights only for music and the volume knob',
-              style: _hint),
+            ring.on
+                ? 'Idle light, theme and notifications'
+                : 'Dark — lights only for music and the volume knob',
+            style: _hint,
+          ),
         ),
         SwitchListTile(
           key: const Key('ring-schedule-switch'),
@@ -51,7 +53,10 @@ class RingControls extends StatelessWidget {
           value: ring.scheduleEnabled,
           onChanged: (v) => onScheduleChanged(enabled: v),
           title: const Text('Schedule', style: _title),
-          subtitle: Text('Off at ${ring.offAt}, on at ${ring.onAt}', style: _hint),
+          subtitle: Text(
+            'Off at ${ring.offAt}, on at ${ring.onAt}',
+            style: _hint,
+          ),
         ),
         if (ring.scheduleEnabled)
           Padding(
@@ -81,15 +86,21 @@ class RingControls extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
             child: Text(
-                'Waiting for network time — the schedule starts once the '
-                'Nexus Q has set its clock.',
-                style: _hint),
+              'Waiting for network time — the schedule starts once the '
+              'Nexus Q has set its clock.',
+              style: _hint,
+            ),
           ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Text(error!,
-                style: const TextStyle(color: NexusQColors.ledOrange, fontSize: 13)),
+            child: Text(
+              error!,
+              style: const TextStyle(
+                color: NexusQColors.ledOrange,
+                fontSize: 13,
+              ),
+            ),
           ),
       ],
     );
@@ -108,7 +119,12 @@ String formatRingTime(TimeOfDay t) =>
 /// One end of the schedule: shows 'HH:MM' and opens a 24-hour picker. The
 /// times are the Nexus Q's local time, so the picker never shows AM/PM.
 class _TimeButton extends StatelessWidget {
-  const _TimeButton({super.key, required this.label, required this.value, required this.onPicked});
+  const _TimeButton({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onPicked,
+  });
 
   final String label;
   final String value;
@@ -137,10 +153,18 @@ class _TimeButton extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
-          Text(value,
-              style: const TextStyle(
-                  color: NexusQColors.accent, fontSize: 22, fontWeight: FontWeight.w300)),
+          Text(
+            label,
+            style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              color: NexusQColors.accent,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
         ],
       ),
     );

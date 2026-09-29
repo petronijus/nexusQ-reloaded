@@ -29,8 +29,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../debug/app_log.dart';
 
 /// Injected at build time; empty means "not configured" (see file header).
-const String kSpotifyClientId =
-    String.fromEnvironment('SPOTIFY_CLIENT_ID', defaultValue: '');
+const String kSpotifyClientId = String.fromEnvironment(
+  'SPOTIFY_CLIENT_ID',
+  defaultValue: '',
+);
 
 /// Registered on the Spotify developer app AND as the app's URL scheme
 /// (AndroidManifest intent-filter, iOS CFBundleURLTypes). Custom scheme, not
@@ -56,9 +58,9 @@ String pkceVerifier([Random? rng]) {
 }
 
 /// RFC 7636 §4.2: BASE64URL(SHA256(ASCII(verifier))), no padding.
-String pkceChallenge(String verifier) =>
-    base64UrlEncode(sha256.convert(ascii.encode(verifier)).bytes)
-        .replaceAll('=', '');
+String pkceChallenge(String verifier) => base64UrlEncode(
+  sha256.convert(ascii.encode(verifier)).bytes,
+).replaceAll('=', '');
 
 /// The URL the browser is sent to. `state` ties the redirect back to THIS
 /// attempt, so a stale or forged callback cannot complete a login.
@@ -68,16 +70,17 @@ Uri spotifyAuthorizeUrl({
   required String state,
   String redirectUri = kSpotifyRedirectUri,
   String scopes = kSpotifyScopes,
-}) =>
-    Uri.parse(_authorizeEndpoint).replace(queryParameters: {
-      'response_type': 'code',
-      'client_id': clientId,
-      'redirect_uri': redirectUri,
-      'scope': scopes,
-      'code_challenge_method': 'S256',
-      'code_challenge': challenge,
-      'state': state,
-    });
+}) => Uri.parse(_authorizeEndpoint).replace(
+  queryParameters: {
+    'response_type': 'code',
+    'client_id': clientId,
+    'redirect_uri': redirectUri,
+    'scope': scopes,
+    'code_challenge_method': 'S256',
+    'code_challenge': challenge,
+    'state': state,
+  },
+);
 
 /// Outcome of parsing the redirect Spotify sends back.
 class SpotifyRedirect {
@@ -90,7 +93,10 @@ class SpotifyRedirect {
 /// Accept only OUR callback for OUR pending attempt. Anything else — a
 /// different URI, a mismatched state, Spotify's `error=` — is reported, never
 /// exchanged. Returns null for URIs that are simply not a Spotify callback.
-SpotifyRedirect? parseSpotifyRedirect(Uri uri, {required String expectedState}) {
+SpotifyRedirect? parseSpotifyRedirect(
+  Uri uri, {
+  required String expectedState,
+}) {
   final expected = Uri.parse(kSpotifyRedirectUri);
   if (uri.scheme != expected.scheme || uri.host != expected.host) return null;
   final q = uri.queryParameters;
@@ -169,19 +175,23 @@ class SpotifyLink extends ChangeNotifier {
   Future<void> beginLogin() async {
     if (!isConfigured) {
       throw SpotifyAuthException(
-          'Spotify is not configured in this build (no client ID).');
+        'Spotify is not configured in this build (no client ID).',
+      );
     }
     final verifier = pkceVerifier();
     final state = pkceVerifier().substring(0, 32);
     await store.write(key: _Keys.pendingVerifier, value: verifier);
     await store.write(key: _Keys.pendingState, value: state);
     final url = spotifyAuthorizeUrl(
-        clientId: kSpotifyClientId,
-        challenge: pkceChallenge(verifier),
-        state: state);
+      clientId: kSpotifyClientId,
+      challenge: pkceChallenge(verifier),
+      state: state,
+    );
     AppLog.add('spotify', 'opening authorize URL');
     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      throw SpotifyAuthException('Could not open the browser for Spotify login.');
+      throw SpotifyAuthException(
+        'Could not open the browser for Spotify login.',
+      );
     }
   }
 
@@ -230,8 +240,13 @@ class SpotifyLink extends ChangeNotifier {
     final verifier = await store.read(key: _Keys.pendingVerifier);
     await store.delete(key: _Keys.pendingVerifier);
     if (!r.ok || verifier == null) {
-      AppLog.add('spotify', 'spotify: login rejected: ${r.error ?? 'no verifier'}');
-      throw SpotifyAuthException('Spotify login failed: ${r.error ?? 'no verifier'}');
+      AppLog.add(
+        'spotify',
+        'spotify: login rejected: ${r.error ?? 'no verifier'}',
+      );
+      throw SpotifyAuthException(
+        'Spotify login failed: ${r.error ?? 'no verifier'}',
+      );
     }
     await _exchange({
       'grant_type': 'authorization_code',
@@ -287,7 +302,12 @@ class SpotifyLink extends ChangeNotifier {
       store.write(key: _Keys.expiresAt, value: '0');
 
   Future<void> unlink() async {
-    for (final k in [_Keys.refresh, _Keys.access, _Keys.expiresAt, _Keys.user]) {
+    for (final k in [
+      _Keys.refresh,
+      _Keys.access,
+      _Keys.expiresAt,
+      _Keys.user,
+    ]) {
       await store.delete(key: k);
     }
     _linked = false;
@@ -309,21 +329,25 @@ class SpotifyLink extends ChangeNotifier {
       String why = 'HTTP ${res.statusCode}';
       try {
         final j = jsonDecode(res.body);
-        if (j is Map && j['error_description'] != null) why = '${j['error_description']}';
+        if (j is Map && j['error_description'] != null) {
+          why = '${j['error_description']}';
+        }
       } catch (_) {}
       throw SpotifyAuthException('Spotify token request refused: $why');
     }
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     final access = j['access_token'] as String?;
     if (access == null || access.isEmpty) {
-      throw SpotifyAuthException('Spotify token response carried no access token.');
+      throw SpotifyAuthException(
+        'Spotify token response carried no access token.',
+      );
     }
     final expiresIn = (j['expires_in'] as num?)?.toInt() ?? 3600;
     await store.write(key: _Keys.access, value: access);
     await store.write(
-        key: _Keys.expiresAt,
-        value:
-            '${DateTime.now().millisecondsSinceEpoch + expiresIn * 1000}');
+      key: _Keys.expiresAt,
+      value: '${DateTime.now().millisecondsSinceEpoch + expiresIn * 1000}',
+    );
     // A refresh response MAY rotate the refresh token; keep whichever is newest.
     final refresh = j['refresh_token'] as String?;
     if (refresh != null && refresh.isNotEmpty) {
@@ -334,8 +358,12 @@ class SpotifyLink extends ChangeNotifier {
   Future<void> _fetchDisplayName() async {
     try {
       final token = await store.read(key: _Keys.access);
-      final res = await httpClient.get(Uri.parse('https://api.spotify.com/v1/me'),
-          headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 10));
+      final res = await httpClient
+          .get(
+            Uri.parse('https://api.spotify.com/v1/me'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final j = jsonDecode(res.body) as Map<String, dynamic>;
         _user = (j['display_name'] as String?)?.trim() ?? '';

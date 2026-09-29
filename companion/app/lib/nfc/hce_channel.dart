@@ -34,7 +34,8 @@ class HceChannel {
 
   Stream<HceMessage>? _stream;
 
-  bool get _supported => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  bool get _supported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// Live texts as they arrive. Native forwards a plain [String]; we stamp the
   /// arrival time on the Dart side.
@@ -50,7 +51,9 @@ class HceChannel {
   Future<HceMessage?> takeLast() async {
     if (!_supported) return null;
     try {
-      final res = await _methods.invokeMapMethod<String, Object?>('getLastMessage');
+      final res = await _methods.invokeMapMethod<String, Object?>(
+        'getLastMessage',
+      );
       if (res == null) return null;
       final text = res['text'] as String?;
       if (text == null) return null;
@@ -58,7 +61,9 @@ class HceChannel {
       await _methods.invokeMethod<void>('clearLastMessage');
       return HceMessage(
         text,
-        DateTime.fromMillisecondsSinceEpoch(ts == 0 ? DateTime.now().millisecondsSinceEpoch : ts),
+        DateTime.fromMillisecondsSinceEpoch(
+          ts == 0 ? DateTime.now().millisecondsSinceEpoch : ts,
+        ),
       );
     } on PlatformException catch (e) {
       debugPrint('HceChannel.takeLast failed: $e');

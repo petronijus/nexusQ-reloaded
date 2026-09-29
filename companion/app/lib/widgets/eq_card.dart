@@ -98,16 +98,19 @@ class _EqCardState extends State<EqCard> {
     if (s.isParametric || !s.supported) return s;
     final bass = (d['bass_db'] as num?)?.toDouble() ?? 0;
     final treble = (d['treble_db'] as num?)?.toDouble() ?? 0;
-    return s.copyWith(bands: [
-      EqBand(type: 'lowshelf', freqHz: 100, gainDb: bass, q: 1),
-      EqBand(type: 'highshelf', freqHz: 8000, gainDb: treble, q: 1),
-    ]);
+    return s.copyWith(
+      bands: [
+        EqBand(type: 'lowshelf', freqHz: 100, gainDb: bass, q: 1),
+        EqBand(type: 'highshelf', freqHz: 8000, gainDb: treble, q: 1),
+      ],
+    );
   }
 
   /// True when the daemon answered `getEq` without a `bands` array — the
   /// pre-parametric build. Drives both the hint and the commit shape.
   bool _legacyDaemon = false;
-  late final ValueNotifier<int?> _armed = widget.armed ?? ValueNotifier<int?>(null);
+  late final ValueNotifier<int?> _armed =
+      widget.armed ?? ValueNotifier<int?>(null);
 
   /// A `presets` payload -> models, or null when it carries none. Also decides
   /// whether this daemon can save: it can exactly when it bothered to tell us
@@ -116,7 +119,9 @@ class _EqCardState extends State<EqCard> {
     final raw = (d['presets'] as List?)?.whereType<Map>().toList();
     if (raw == null) return null;
     _presetsEditable = raw.any((m) => m.containsKey('builtin'));
-    return raw.map((m) => EqPreset.fromJson(m.cast<String, dynamic>())).toList();
+    return raw
+        .map((m) => EqPreset.fromJson(m.cast<String, dynamic>()))
+        .toList();
   }
 
   Future<void> _load() async {
@@ -128,7 +133,8 @@ class _EqCardState extends State<EqCard> {
       _presetsEditable = false;
       try {
         presets =
-            _parsePresets(await widget.client.call('listEqPresets')) ?? const [];
+            _parsePresets(await widget.client.call('listEqPresets')) ??
+            const [];
       } catch (_) {
         // Old daemon: no presets. Not an error — the EQ still works.
       }
@@ -207,8 +213,9 @@ class _EqCardState extends State<EqCard> {
   String _fmtDb(double v) =>
       '${v >= 0 ? '+' : '−'}${v.abs().toStringAsFixed(1)} dB';
 
-  String _fmtHz(double f) =>
-      f >= 1000 ? '${(f / 1000).toStringAsFixed(f >= 10000 ? 0 : 1)} kHz' : '${f.round()} Hz';
+  String _fmtHz(double f) => f >= 1000
+      ? '${(f / 1000).toStringAsFixed(f >= 10000 ? 0 : 1)} kHz'
+      : '${f.round()} Hz';
 
   /// Problems only. The line used to explain, permanently, that the EQ runs in
   /// the amplifier — true, but it is a fact you read once, and it sat under the
@@ -221,13 +228,16 @@ class _EqCardState extends State<EqCard> {
       text = _error!;
       color = Colors.orangeAccent;
     } else if (!_st.supported) {
-      text = 'Needs a device system update (kernel r50+) — run Update in '
+      text =
+          'Needs a device system update (kernel r50+) — run Update in '
           'Settings, then reboot the Q.';
     } else if (_legacyDaemon) {
-      text = 'Device software predates the parametric EQ — bass and treble only. '
+      text =
+          'Device software predates the parametric EQ — bass and treble only. '
           'Update the Q for all seven bands.';
     } else if (clipping) {
-      text = 'Boosted by ${_fmtDb(_st.headroomDb)} overall — loud material can '
+      text =
+          'Boosted by ${_fmtDb(_st.headroomDb)} overall — loud material can '
           'clip. Tap auto to pull the preamp down.';
       color = Colors.orangeAccent;
     } else {
@@ -243,9 +253,12 @@ class _EqCardState extends State<EqCard> {
   /// that also threw away tuned Q values would be a bigger hammer than the
   /// button reads as.
   void _resetFlat() {
-    setState(() => _st = _st.copyWith(
+    setState(
+      () => _st = _st.copyWith(
         bands: _st.bands.map((b) => b.copyWith(gainDb: 0)).toList(),
-        preampDb: 0));
+        preampDb: 0,
+      ),
+    );
     _commit();
   }
 
@@ -281,10 +294,12 @@ class _EqCardState extends State<EqCard> {
   Future<void> _savePreset() async {
     final name = await showDialog<String>(
       context: context,
-      builder: (ctx) => _SavePresetDialog(existingUserIds: {
-        for (final p in _presets)
-          if (!p.builtin) p.id,
-      }),
+      builder: (ctx) => _SavePresetDialog(
+        existingUserIds: {
+          for (final p in _presets)
+            if (!p.builtin) p.id,
+        },
+      ),
     );
     if (name == null || !mounted) return;
     await _presetCall('saveEqPreset', {
@@ -299,19 +314,24 @@ class _EqCardState extends State<EqCard> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: NexusQColors.surface,
-        title: Text('Delete "${p.label}"?',
-            style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
+        title: Text(
+          'Delete "${p.label}"?',
+          style: const TextStyle(color: NexusQColors.white, fontSize: 16),
+        ),
         content: const Text(
-            'The preset is stored on the Q, so this removes it for every phone.',
-            style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+          'The preset is stored on the Q, so this removes it for every phone.',
+          style: TextStyle(color: NexusQColors.dim, fontSize: 13),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              style: TextButton.styleFrom(foregroundColor: Colors.orangeAccent),
-              child: const Text('Delete')),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.orangeAccent),
+            child: const Text('Delete'),
+          ),
         ],
       ),
     );
@@ -329,20 +349,25 @@ class _EqCardState extends State<EqCard> {
     // need it most is when you already have several.
     return SizedBox(
       height: 40,
-      child: Row(children: [
-        Expanded(child: _presetScroller(side, enabled)),
-        if (canSave) ...[
-          const SizedBox(width: 6),
-          ActionChip(
-            avatar:
-                const Icon(Icons.add, size: 16, color: NexusQColors.accent),
-            label: const Text('Save', style: TextStyle(fontSize: 12)),
-            backgroundColor: NexusQColors.surface,
-            side: side,
-            onPressed: _savePreset,
-          ),
+      child: Row(
+        children: [
+          Expanded(child: _presetScroller(side, enabled)),
+          if (canSave) ...[
+            const SizedBox(width: 6),
+            ActionChip(
+              avatar: const Icon(
+                Icons.add,
+                size: 16,
+                color: NexusQColors.accent,
+              ),
+              label: const Text('Save', style: TextStyle(fontSize: 12)),
+              backgroundColor: NexusQColors.surface,
+              side: side,
+              onPressed: _savePreset,
+            ),
+          ],
         ],
-      ]),
+      ),
     );
   }
 
@@ -392,28 +417,34 @@ class _EqCardState extends State<EqCard> {
             // Flexible + ellipsis: the label is a band name plus a frequency and
             // the gain is beside it, which overflows a narrow phone outright.
             Flexible(
-              child: Text('$label · ${_fmtHz(b.freqHz)}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      const TextStyle(color: NexusQColors.white, fontSize: 13)),
+              child: Text(
+                '$label · ${_fmtHz(b.freqHz)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: NexusQColors.white, fontSize: 13),
+              ),
             ),
             const SizedBox(width: 8),
-            Text(_fmtDb(b.gainDb),
-                style: TextStyle(
-                    color: b.isFlat ? NexusQColors.dim : NexusQColors.white,
-                    fontSize: 12,
-                    fontFeatures: const [FontFeature.tabularFigures()])),
+            Text(
+              _fmtDb(b.gainDb),
+              style: TextStyle(
+                color: b.isFlat ? NexusQColors.dim : NexusQColors.white,
+                fontSize: 12,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
           ],
         ),
         Row(
           children: [
             SizedBox(
               width: 52,
-              child: Text(b.isShelf ? 'Slope' : 'Width',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+              child: Text(
+                b.isShelf ? 'Slope' : 'Width',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+              ),
             ),
             Expanded(
               child: Slider(
@@ -426,12 +457,15 @@ class _EqCardState extends State<EqCard> {
             ),
             SizedBox(
               width: 40,
-              child: Text(b.q.toStringAsFixed(2),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                      color: NexusQColors.dim,
-                      fontSize: 11,
-                      fontFeatures: [FontFeature.tabularFigures()])),
+              child: Text(
+                b.q.toStringAsFixed(2),
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  color: NexusQColors.dim,
+                  fontSize: 11,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
             ),
           ],
         ),
@@ -445,42 +479,49 @@ class _EqCardState extends State<EqCard> {
       children: [
         const SizedBox(
           width: 52,
-          child: Text('Preamp',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+          child: Text(
+            'Preamp',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+          ),
         ),
         Expanded(
           child: Slider(
             value: _st.preampDb.clamp(_st.minPreampDb, 0),
             min: _st.minPreampDb,
             max: 0,
-            onChanged:
-                enabled ? (v) => setState(() => _st = _st.copyWith(preampDb: v)) : null,
+            onChanged: enabled
+                ? (v) => setState(() => _st = _st.copyWith(preampDb: v))
+                : null,
             onChangeEnd: enabled ? (_) => _commit() : null,
           ),
         ),
         SizedBox(
           width: 52,
-          child: Text(_fmtDb(_st.preampDb),
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                  color: NexusQColors.dim,
-                  fontSize: 11,
-                  fontFeatures: [FontFeature.tabularFigures()])),
+          child: Text(
+            _fmtDb(_st.preampDb),
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: NexusQColors.dim,
+              fontSize: 11,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
         ),
         TextButton(
           onPressed: enabled && _st.headroomDb > 0.1
               ? () => _send({
-                    'bands': _st.bands.map((b) => b.toJson()).toList(),
-                    'auto_preamp': true,
-                  })
+                  'bands': _st.bands.map((b) => b.toJson()).toList(),
+                  'auto_preamp': true,
+                })
               : null,
           style: TextButton.styleFrom(
-              foregroundColor: NexusQColors.accent,
-              minimumSize: const Size(0, 32),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            foregroundColor: NexusQColors.accent,
+            minimumSize: const Size(0, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
           child: const Text('auto'),
         ),
       ],
@@ -518,7 +559,10 @@ class _EqCardState extends State<EqCard> {
                   visualDensity: VisualDensity.compact,
                   color: NexusQColors.accent,
                   disabledColor: NexusQColors.dim.withValues(alpha: 0.4),
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 32,
+                  ),
                   padding: EdgeInsets.zero,
                 ),
               ],
@@ -526,8 +570,10 @@ class _EqCardState extends State<EqCard> {
             if (!_loaded)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('Waiting for the Q…',
-                    style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+                child: Text(
+                  'Waiting for the Q…',
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 13),
+                ),
               )
             else ...[
               EqCurve(
@@ -591,8 +637,10 @@ class _SavePresetDialogState extends State<_SavePresetDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: NexusQColors.surface,
-      title: const Text('Save preset',
-          style: TextStyle(color: NexusQColors.white, fontSize: 16)),
+      title: const Text(
+        'Save preset',
+        style: TextStyle(color: NexusQColors.white, fontSize: 16),
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -607,7 +655,9 @@ class _SavePresetDialogState extends State<_SavePresetDialog> {
             onSubmitted: (_) => _submit(),
             style: const TextStyle(color: NexusQColors.white),
             decoration: const InputDecoration(
-                hintText: 'Vinyl, Night, Kitchen…', counterText: ''),
+              hintText: 'Vinyl, Night, Kitchen…',
+              counterText: '',
+            ),
           ),
           const SizedBox(height: 4),
           Text(
@@ -615,19 +665,22 @@ class _SavePresetDialogState extends State<_SavePresetDialog> {
                 ? 'Replaces the preset you already saved under this name.'
                 : 'Stored on the Q, so it is there on every phone.',
             style: TextStyle(
-                color: _replaces ? Colors.orangeAccent : NexusQColors.dim,
-                fontSize: 11),
+              color: _replaces ? Colors.orangeAccent : NexusQColors.dim,
+              fontSize: 11,
+            ),
           ),
         ],
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
         TextButton(
-            onPressed: _valid ? _submit : null,
-            style: TextButton.styleFrom(foregroundColor: NexusQColors.accent),
-            child: Text(_replaces ? 'Replace' : 'Save')),
+          onPressed: _valid ? _submit : null,
+          style: TextButton.styleFrom(foregroundColor: NexusQColors.accent),
+          child: Text(_replaces ? 'Replace' : 'Save'),
+        ),
       ],
     );
   }

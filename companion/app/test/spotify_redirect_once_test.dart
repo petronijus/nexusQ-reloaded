@@ -85,20 +85,34 @@ void main() {
     final readsAfterFirst = store.reads.length;
     final second = await link.handleRedirect(uri);
 
-    expect(first, isTrue, reason: 'our scheme, so it is handled (and swallowed)');
-    expect(second, isFalse, reason: 'the repeat must not be reported a second time');
-    expect(store.reads.length, readsAfterFirst,
-        reason: 'the repeat must not even look at the pending attempt');
+    expect(
+      first,
+      isTrue,
+      reason: 'our scheme, so it is handled (and swallowed)',
+    );
+    expect(
+      second,
+      isFalse,
+      reason: 'the repeat must not be reported a second time',
+    );
+    expect(
+      store.reads.length,
+      readsAfterFirst,
+      reason: 'the repeat must not even look at the pending attempt',
+    );
   });
 
   test('a different redirect afterwards is still processed', () async {
     final link = SpotifyLink.instance;
     link.store = _CountingStore({});
-    await link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=one&state=s'));
+    await link.handleRedirect(
+      Uri.parse('nexusq://spotify-callback?code=one&state=s'),
+    );
     // A second, genuinely different login attempt must not be swallowed by the
     // memory of the first — that would make re-linking impossible.
-    final again =
-        await link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=two&state=s'));
+    final again = await link.handleRedirect(
+      Uri.parse('nexusq://spotify-callback?code=two&state=s'),
+    );
     expect(again, isTrue);
   });
 
@@ -108,8 +122,12 @@ void main() {
     link.store = store;
 
     // Fired together, exactly as the stream and the initial-link future do.
-    final a = link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=x&state=s'));
-    final b = link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=x&state=s'));
+    final a = link.handleRedirect(
+      Uri.parse('nexusq://spotify-callback?code=x&state=s'),
+    );
+    final b = link.handleRedirect(
+      Uri.parse('nexusq://spotify-callback?code=x&state=s'),
+    );
     final results = await Future.wait([a, b]);
 
     // Exactly one of them owns the redirect; the other reports nothing, so the
@@ -122,14 +140,17 @@ void main() {
     // A pending state with no verifier is the shape that used to throw.
     link.store = _CountingStore({'spotify.pending_state': 's'});
     await expectLater(
-      link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=c&state=s')),
+      link.handleRedirect(
+        Uri.parse('nexusq://spotify-callback?code=c&state=s'),
+      ),
       throwsA(isA<SpotifyAuthException>()),
     );
     // The chain must still run: without the error-swallowing continuation this
     // second call would never complete.
     link.store = _CountingStore({});
-    final later =
-        await link.handleRedirect(Uri.parse('nexusq://spotify-callback?code=d&state=s'));
+    final later = await link.handleRedirect(
+      Uri.parse('nexusq://spotify-callback?code=d&state=s'),
+    );
     expect(later, isTrue);
   });
 }

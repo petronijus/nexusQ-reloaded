@@ -28,11 +28,13 @@ void main() async {
   // brightness, but the full-screen no-AppBar screens (ConnectGate — the first
   // thing shown — and the setup wizard) would otherwise fall to the iOS default
   // dark icons on the dark background. This global default covers them too.
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light, // Android
-    statusBarBrightness: Brightness.dark, // iOS
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light, // Android
+      statusBarBrightness: Brightness.dark, // iOS
+    ),
+  );
   await StockAssets.init();
   NexusQClient? initial;
   if (_host.isNotEmpty) {
@@ -95,13 +97,20 @@ class _NexusQAppState extends State<NexusQApp> {
     try {
       final handled = await SpotifyLink.instance.handleRedirect(uri);
       if (handled) {
-        _messengerKey.currentState?.showSnackBar(SnackBar(
-            content: Text(SpotifyLink.instance.isLinked
-                ? 'Spotify connected as ${SpotifyLink.instance.userDisplayName}'
-                : 'Spotify login did not complete')));
+        _messengerKey.currentState?.showSnackBar(
+          SnackBar(
+            content: Text(
+              SpotifyLink.instance.isLinked
+                  ? 'Spotify connected as ${SpotifyLink.instance.userDisplayName}'
+                  : 'Spotify login did not complete',
+            ),
+          ),
+        );
       }
     } on SpotifyAuthException catch (e) {
-      _messengerKey.currentState?.showSnackBar(SnackBar(content: Text(e.message)));
+      _messengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
     }
   }
 
@@ -112,16 +121,18 @@ class _NexusQAppState extends State<NexusQApp> {
       if (_activeSetupMac == tap.btMac) return; // already setting this one up
       _activeSetupMac = tap.btMac;
       nav
-          .push(MaterialPageRoute(
-              builder: (_) => SetupFlow(initialMac: tap.btMac)))
+          .push(
+            MaterialPageRoute(builder: (_) => SetupFlow(initialMac: tap.btMac)),
+          )
           .whenComplete(() {
-        if (_activeSetupMac == tap.btMac) _activeSetupMac = null;
-      });
+            if (_activeSetupMac == tap.btMac) _activeSetupMac = null;
+          });
     } else {
       final host = tap.ip ?? '${tap.host}.local';
       nav.pushAndRemoveUntil(
         MaterialPageRoute(
-            builder: (_) => ConnectGate(initialClient: TcpClient(host: host))),
+          builder: (_) => ConnectGate(initialClient: TcpClient(host: host)),
+        ),
         (route) => false,
       );
     }

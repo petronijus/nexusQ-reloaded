@@ -36,9 +36,10 @@ class BtSetupClient {
     // error event as soon as the stream is subscribed. That's expected and
     // harmless here (tests drive events via handleEventForTest instead) —
     // swallow it so it doesn't surface as an unhandled error in the zone.
-    _sub = _events
-        .receiveBroadcastStream()
-        .listen((e) => _onEvent((e as Map).cast<String, dynamic>()), onError: (Object _) {});
+    _sub = _events.receiveBroadcastStream().listen(
+      (e) => _onEvent((e as Map).cast<String, dynamic>()),
+      onError: (Object _) {},
+    );
   }
 
   StreamSubscription? _sub;
@@ -62,8 +63,9 @@ class BtSetupClient {
     // and connecting without them is a SecurityException on Android 12+.
     if (!await ensurePermissions()) {
       throw PlatformException(
-          code: 'permission_denied',
-          message: 'Bluetooth permission is required');
+        code: 'permission_denied',
+        message: 'Bluetooth permission is required',
+      );
     }
     await _method.invokeMethod('connect', {'mac': mac});
   }
@@ -72,30 +74,36 @@ class BtSetupClient {
     await _method.invokeMethod('disconnect');
   }
 
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) {
     final id = _nextId++;
     final completer = Completer<Map<String, dynamic>>();
     _pending[id] = completer;
-    final line = jsonEncode({
-      'id': id,
-      'method': method,
-      'params': ?params,
-    });
+    final line = jsonEncode({'id': id, 'method': method, 'params': ?params});
     _method.invokeMethod('sendLine', {'line': line}).catchError((Object e) {
       _pending.remove(id)?.completeError(BtSetupError('send_failed', '$e'));
     });
     // setWifi legitimately takes up to ~90 s on the device (nmcli --wait).
-    final timeout = method == 'setWifi' ? const Duration(seconds: 100) : const Duration(seconds: 30);
-    return completer.future.timeout(timeout, onTimeout: () {
-      _pending.remove(id);
-      throw BtSetupError('timeout', '$method timed out');
-    });
+    final timeout = method == 'setWifi'
+        ? const Duration(seconds: 100)
+        : const Duration(seconds: 30);
+    return completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        _pending.remove(id);
+        throw BtSetupError('timeout', '$method timed out');
+      },
+    );
   }
 
   void _onEvent(Map<String, dynamic> e) {
     switch (e['type']) {
       case 'scan':
-        _scan.add(BtScanResult((e['name'] as String?) ?? '', e['mac'] as String));
+        _scan.add(
+          BtScanResult((e['name'] as String?) ?? '', e['mac'] as String),
+        );
       case 'state':
         _connected.add(e['connected'] == true);
       case 'line':
@@ -116,11 +124,17 @@ class BtSetupClient {
     final completer = _pending.remove(id);
     if (completer == null) return;
     if (obj['ok'] == true) {
-      completer.complete((obj['result'] as Map?)?.cast<String, dynamic>() ?? const {});
+      completer.complete(
+        (obj['result'] as Map?)?.cast<String, dynamic>() ?? const {},
+      );
     } else {
       final err = (obj['error'] as Map?)?.cast<String, dynamic>() ?? const {};
-      completer.completeError(BtSetupError(
-          (err['code'] as String?) ?? 'internal', (err['message'] as String?) ?? ''));
+      completer.completeError(
+        BtSetupError(
+          (err['code'] as String?) ?? 'internal',
+          (err['message'] as String?) ?? '',
+        ),
+      );
     }
   }
 

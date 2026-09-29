@@ -32,9 +32,9 @@ class DeviceGlance {
   LedTheme get ledTheme => themeByName(theme);
 
   factory DeviceGlance.fromJson(Map<String, dynamic> j) => DeviceGlance(
-        theme: j['theme'] is String ? j['theme'] as String : 'blue',
-        muted: j['muted'] == true,
-      );
+    theme: j['theme'] is String ? j['theme'] as String : 'blue',
+    muted: j['muted'] == true,
+  );
 }
 
 /// How long the gate waits for one box to answer. Well under the 4 s browse,

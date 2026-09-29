@@ -36,20 +36,20 @@ class EqBand {
       );
 
   static EqBand fromJson(Map<String, dynamic> j) => EqBand(
-        type: j['type'] as String? ?? 'peaking',
-        freqHz: (j['freq_hz'] as num?)?.toDouble() ?? 1000,
-        gainDb: (j['gain_db'] as num?)?.toDouble() ?? 0,
-        q: (j['q'] as num?)?.toDouble() ?? 0.707,
-        enabled: j['enabled'] as bool? ?? true,
-      );
+    type: j['type'] as String? ?? 'peaking',
+    freqHz: (j['freq_hz'] as num?)?.toDouble() ?? 1000,
+    gainDb: (j['gain_db'] as num?)?.toDouble() ?? 0,
+    q: (j['q'] as num?)?.toDouble() ?? 0.707,
+    enabled: j['enabled'] as bool? ?? true,
+  );
 
   Map<String, dynamic> toJson() => {
-        'type': type,
-        'freq_hz': freqHz,
-        'gain_db': gainDb,
-        'q': q,
-        'enabled': enabled,
-      };
+    'type': type,
+    'freq_hz': freqHz,
+    'gain_db': gainDb,
+    'q': q,
+    'enabled': enabled,
+  };
 
   /// |H(f)| in dB for this band alone. Returns 0 for a flat/disabled band
   /// rather than evaluating a unity filter — that is what the device writes.
@@ -143,8 +143,7 @@ class EqState {
     minPreampDb: -24,
   );
 
-  bool get isFlat =>
-      preampDb.abs() < 0.05 && bands.every((b) => b.isFlat);
+  bool get isFlat => preampDb.abs() < 0.05 && bands.every((b) => b.isFlat);
 
   /// True when the daemon predates the parametric verbs — it answers `getEq`
   /// but without a `bands` array. The card then falls back to bass/treble.
@@ -182,7 +181,8 @@ class EqState {
     final pre = pair('preamp_db', -24, 0);
     return EqState(
       supported: j['supported'] as bool? ?? false,
-      bands: (j['bands'] as List?)
+      bands:
+          (j['bands'] as List?)
               ?.whereType<Map>()
               .map((m) => EqBand.fromJson(m.cast<String, dynamic>()))
               .toList() ??
@@ -221,8 +221,13 @@ class EqState {
 }
 
 class EqPreset {
-  const EqPreset({required this.id, required this.label, required this.bands,
-      required this.preampDb, this.builtin = true});
+  const EqPreset({
+    required this.id,
+    required this.label,
+    required this.bands,
+    required this.preampDb,
+    this.builtin = true,
+  });
   final String id;
   final String label;
   final List<EqBand> bands;
@@ -244,21 +249,25 @@ class EqPreset {
     for (final c in name.trim().toLowerCase().split('')) {
       buf.write(_alnum.hasMatch(c) ? c : '-');
     }
-    final slug =
-        buf.toString().split('-').where((part) => part.isNotEmpty).join('-');
+    final slug = buf
+        .toString()
+        .split('-')
+        .where((part) => part.isNotEmpty)
+        .join('-');
     final cut = slug.length > 32 ? slug.substring(0, 32) : slug;
     return cut.isEmpty ? '' : 'u:$cut';
   }
 
   static EqPreset fromJson(Map<String, dynamic> j) => EqPreset(
-        id: j['id'] as String? ?? '',
-        label: j['label'] as String? ?? '',
-        bands: (j['bands'] as List?)
-                ?.whereType<Map>()
-                .map((m) => EqBand.fromJson(m.cast<String, dynamic>()))
-                .toList() ??
-            const [],
-        preampDb: (j['preamp_db'] as num?)?.toDouble() ?? 0,
-        builtin: j['builtin'] as bool? ?? true,
-      );
+    id: j['id'] as String? ?? '',
+    label: j['label'] as String? ?? '',
+    bands:
+        (j['bands'] as List?)
+            ?.whereType<Map>()
+            .map((m) => EqBand.fromJson(m.cast<String, dynamic>()))
+            .toList() ??
+        const [],
+    preampDb: (j['preamp_db'] as num?)?.toDouble() ?? 0,
+    builtin: j['builtin'] as bool? ?? true,
+  );
 }

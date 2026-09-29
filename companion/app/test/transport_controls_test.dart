@@ -35,7 +35,13 @@ void main() {
   });
 
   test('NowPlaying.fromJson: transport parsed, absent means none', () {
-    expect(NowPlaying.fromJson({'playing': true, 'transport': 'spotify-web'}).transport, 'spotify-web');
+    expect(
+      NowPlaying.fromJson({
+        'playing': true,
+        'transport': 'spotify-web',
+      }).transport,
+      'spotify-web',
+    );
     expect(NowPlaying.fromJson({'playing': true}).transport, 'none');
   });
 

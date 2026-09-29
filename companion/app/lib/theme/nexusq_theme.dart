@@ -84,7 +84,10 @@ ThemeData buildNexusQTheme() {
       ),
     ),
     textTheme: const TextTheme(
-      headlineSmall: TextStyle(color: NexusQColors.white, fontWeight: FontWeight.w300),
+      headlineSmall: TextStyle(
+        color: NexusQColors.white,
+        fontWeight: FontWeight.w300,
+      ),
       titleMedium: TextStyle(color: NexusQColors.white),
       bodyMedium: TextStyle(color: NexusQColors.dim),
     ),

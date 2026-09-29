@@ -13,8 +13,16 @@ void main() {
   group('band response', () {
     test('a flat or disabled band contributes nothing', () {
       expect(peak(1000, 0).responseDb(1000), 0);
-      expect(EqBand(type: 'peaking', freqHz: 1000, gainDb: 9, q: 1, enabled: false)
-          .responseDb(1000), 0);
+      expect(
+        EqBand(
+          type: 'peaking',
+          freqHz: 1000,
+          gainDb: 9,
+          q: 1,
+          enabled: false,
+        ).responseDb(1000),
+        0,
+      );
     });
 
     test('peaking hits its gain at f0 and fades away from it', () {
@@ -64,8 +72,10 @@ void main() {
 
     test('preamp shifts the whole curve by exactly its value', () {
       for (final f in [50.0, 1000.0, 12000.0]) {
-        expect(EqState.responseDb(bands, f, -6) - EqState.responseDb(bands, f, 0),
-            closeTo(-6, 1e-9));
+        expect(
+          EqState.responseDb(bands, f, -6) - EqState.responseDb(bands, f, 0),
+          closeTo(-6, 1e-9),
+        );
       }
     });
 
@@ -85,7 +95,13 @@ void main() {
       final s = EqState.fromJson({
         'supported': true,
         'bands': [
-          {'type': 'lowshelf', 'freq_hz': 100, 'gain_db': 3, 'q': 1, 'enabled': true},
+          {
+            'type': 'lowshelf',
+            'freq_hz': 100,
+            'gain_db': 3,
+            'q': 1,
+            'enabled': true,
+          },
         ],
         'preamp_db': -2.0,
         'headroom_db': 1.0,
@@ -104,13 +120,19 @@ void main() {
       expect(s.minPreampDb, -24);
     });
 
-    test('an old daemon reply parses as non-parametric rather than throwing', () {
-      final s = EqState.fromJson(
-          {'supported': true, 'bass_db': 4.0, 'treble_db': -2.0});
-      expect(s.isParametric, isFalse);
-      expect(s.bands, isEmpty);
-      expect(s.maxGainDb, 12); // falls back to sane limits
-    });
+    test(
+      'an old daemon reply parses as non-parametric rather than throwing',
+      () {
+        final s = EqState.fromJson({
+          'supported': true,
+          'bass_db': 4.0,
+          'treble_db': -2.0,
+        });
+        expect(s.isParametric, isFalse);
+        expect(s.bands, isEmpty);
+        expect(s.maxGainDb, 12); // falls back to sane limits
+      },
+    );
 
     test('round-trips a band through json', () {
       final b = peak(1234, -5.5, 2.25);

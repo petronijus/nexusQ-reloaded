@@ -24,8 +24,10 @@ void main() {
   group('challenge', () {
     test('matches the RFC 7636 appendix B vector', () {
       // https://www.rfc-editor.org/rfc/rfc7636#appendix-B
-      expect(pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'),
-          'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+      expect(
+        pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'),
+        'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+      );
     });
     test('carries no base64 padding', () {
       for (var i = 0; i < 20; i++) {
@@ -36,7 +38,11 @@ void main() {
 
   group('authorize URL', () {
     test('carries exactly the PKCE + scope parameters', () {
-      final u = spotifyAuthorizeUrl(clientId: 'cid', challenge: 'chal', state: 'st8');
+      final u = spotifyAuthorizeUrl(
+        clientId: 'cid',
+        challenge: 'chal',
+        state: 'st8',
+      );
       expect(u.scheme, 'https');
       expect(u.host, 'accounts.spotify.com');
       expect(u.path, '/authorize');
@@ -54,32 +60,52 @@ void main() {
 
   group('redirect parsing', () {
     test('our callback with the right state yields the code', () {
-      final r = parseSpotifyRedirect(Uri.parse('nexusq://spotify-callback?code=abc&state=s1'),
-          expectedState: 's1');
+      final r = parseSpotifyRedirect(
+        Uri.parse('nexusq://spotify-callback?code=abc&state=s1'),
+        expectedState: 's1',
+      );
       expect(r, isNotNull);
       expect(r!.ok, isTrue);
       expect(r.code, 'abc');
     });
     test('a mismatched state is refused, code and all', () {
-      final r = parseSpotifyRedirect(Uri.parse('nexusq://spotify-callback?code=abc&state=OTHER'),
-          expectedState: 's1');
+      final r = parseSpotifyRedirect(
+        Uri.parse('nexusq://spotify-callback?code=abc&state=OTHER'),
+        expectedState: 's1',
+      );
       expect(r!.ok, isFalse);
       expect(r.error, 'state mismatch');
       expect(r.code, isNull);
     });
     test("Spotify's error= is surfaced, not exchanged", () {
       final r = parseSpotifyRedirect(
-          Uri.parse('nexusq://spotify-callback?error=access_denied&state=s1'),
-          expectedState: 's1');
+        Uri.parse('nexusq://spotify-callback?error=access_denied&state=s1'),
+        expectedState: 's1',
+      );
       expect(r!.ok, isFalse);
       expect(r.error, 'access_denied');
     });
     test('a foreign URI is not a Spotify callback at all', () {
-      expect(parseSpotifyRedirect(Uri.parse('nexusq://something-else?code=x&state=s1'), expectedState: 's1'), isNull);
-      expect(parseSpotifyRedirect(Uri.parse('https://evil.example/spotify-callback?code=x&state=s1'), expectedState: 's1'), isNull);
+      expect(
+        parseSpotifyRedirect(
+          Uri.parse('nexusq://something-else?code=x&state=s1'),
+          expectedState: 's1',
+        ),
+        isNull,
+      );
+      expect(
+        parseSpotifyRedirect(
+          Uri.parse('https://evil.example/spotify-callback?code=x&state=s1'),
+          expectedState: 's1',
+        ),
+        isNull,
+      );
     });
     test('a callback without a code is an error', () {
-      final r = parseSpotifyRedirect(Uri.parse('nexusq://spotify-callback?state=s1'), expectedState: 's1');
+      final r = parseSpotifyRedirect(
+        Uri.parse('nexusq://spotify-callback?state=s1'),
+        expectedState: 's1',
+      );
       expect(r!.ok, isFalse);
       expect(r.error, 'no code');
     });

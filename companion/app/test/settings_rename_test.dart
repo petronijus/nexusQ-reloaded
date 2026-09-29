@@ -48,8 +48,10 @@ class _FakeClient implements NexusQClient {
   }
 
   @override
-  Future<Map<String, dynamic>> call(String method,
-      [Map<String, dynamic>? params]) async {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
     calls.add((method, params));
     if (latency != Duration.zero) await Future.delayed(latency);
     switch (method) {
@@ -137,8 +139,9 @@ void main() {
     expect(find.text('Nexus Q'), findsOneWidget);
   });
 
-  testWidgets('a refused rename shows an error and keeps the old name',
-      (t) async {
+  testWidgets('a refused rename shows an error and keeps the old name', (
+    t,
+  ) async {
     final c = _FakeClient(failSetName: true);
     await _pump(t, c);
 

@@ -42,14 +42,20 @@ class TcpClient implements NexusQClient {
 
   @override
   Future<void> connect() {
-    if (_closed) return Future.error(NexusQError('unavailable', 'client closed'));
+    if (_closed) {
+      return Future.error(NexusQError('unavailable', 'client closed'));
+    }
     if (_socket != null) return Future.value(); // already connected
     return _dialing ??= _dial().whenComplete(() => _dialing = null);
   }
 
   Future<void> _dial() async {
     AppLog.add('tcp', 'dial $host:$port');
-    final s = await Socket.connect(host, port, timeout: const Duration(seconds: 5));
+    final s = await Socket.connect(
+      host,
+      port,
+      timeout: const Duration(seconds: 5),
+    );
     if (_closed) {
       s.destroy();
       return;
@@ -65,13 +71,17 @@ class TcpClient implements NexusQClient {
         .transform(const LineSplitter())
         // Guard on THIS socket: after a drop + reconnect, the stale socket's
         // late onDone/onError must not tear down the fresh connection.
-        .listen(_onLine,
-            onError: (e) => _dropIf(s, 'socket error: $e'),
-            onDone: () => _dropIf(s, 'peer closed the socket (onDone)'));
+        .listen(
+          _onLine,
+          onError: (e) => _dropIf(s, 'socket error: $e'),
+          onDone: () => _dropIf(s, 'peer closed the socket (onDone)'),
+        );
     // hydrate the event channel: subscribe to all events. If this fails the
     // link is not actually usable — tear it down so the caller retries cleanly.
     try {
-      await call('subscribe', {'events': ['*']});
+      await call('subscribe', {
+        'events': ['*'],
+      });
     } catch (e) {
       AppLog.add('tcp', 'subscribe failed: $e', warn: true);
       _drop('subscribe failed');
@@ -90,26 +100,38 @@ class TcpClient implements NexusQClient {
     if (msg.containsKey('event')) {
       final name = msg['event'] as String;
       _eventCounts.update(name, (v) => v + 1, ifAbsent: () => 1);
-      _events.add(NexusQEvent(
-        name,
-        (msg['data'] as Map?)?.cast<String, dynamic>() ?? const {},
-      ));
+      _events.add(
+        NexusQEvent(
+          name,
+          (msg['data'] as Map?)?.cast<String, dynamic>() ?? const {},
+        ),
+      );
       return;
     }
     final id = msg['id'];
     if (id is int && _pending.containsKey(id)) {
       final c = _pending.remove(id)!;
       if (msg['ok'] == true) {
-        c.complete((msg['result'] as Map?)?.cast<String, dynamic>() ?? const {});
+        c.complete(
+          (msg['result'] as Map?)?.cast<String, dynamic>() ?? const {},
+        );
       } else {
         final e = (msg['error'] as Map?)?.cast<String, dynamic>() ?? const {};
-        c.completeError(NexusQError(e['code'] as String? ?? 'internal', e['message'] as String? ?? ''));
+        c.completeError(
+          NexusQError(
+            e['code'] as String? ?? 'internal',
+            e['message'] as String? ?? '',
+          ),
+        );
       }
     } else if (id is int) {
       // A response whose caller already timed out and gave up. If these show up
       // right after a "timeout" entry, the link was never dead — just slow.
-      AppLog.add('tcp', 'late response id=$id arrived after its caller timed out',
-          warn: true);
+      AppLog.add(
+        'tcp',
+        'late response id=$id arrived after its caller timed out',
+        warn: true,
+      );
     }
   }
 
@@ -124,7 +146,10 @@ class TcpClient implements NexusQClient {
   // so a slow call no longer head-of-line-blocks these fast ones.)
   static const _slowMethods = <String>{
     'setService', 'serviceLog', 'setDesktop',
-    'pairBtDevice', 'connectBtDevice', 'disconnectBtDevice', 'removePairedDevice',
+    'pairBtDevice',
+    'connectBtDevice',
+    'disconnectBtDevice',
+    'removePairedDevice',
     'startPairing', 'stopPairing',
     'scanNetworks', 'setWifi', 'finishSetup',
     // system OTA: apk update/upgrade over the network takes many seconds
@@ -133,34 +158,50 @@ class TcpClient implements NexusQClient {
   };
 
   @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) {
     final s = _socket;
-    if (s == null) return Future.error(NexusQError('unavailable', 'not connected'));
+    if (s == null) {
+      return Future.error(NexusQError('unavailable', 'not connected'));
+    }
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
     _pending[id] = c;
     // NB the log gets the METHOD NAME ONLY, never params — setWifi carries the
     // WiFi PSK, and credentials never reach any log (standing rule).
     final sw = Stopwatch()..start();
-    final timeout =
-        _slowMethods.contains(method) ? const Duration(seconds: 60) : const Duration(seconds: 5);
+    final timeout = _slowMethods.contains(method)
+        ? const Duration(seconds: 60)
+        : const Duration(seconds: 5);
     s.write('${jsonEncode({'id': id, 'method': method, 'params': ?params})}\n');
-    return c.future.timeout(timeout, onTimeout: () {
-      _pending.remove(id);
-      AppLog.add('tcp',
-          '$method timeout after ${timeout.inSeconds}s (id $id, ${_pending.length} still pending)',
-          warn: true);
-      throw NexusQError('internal', 'timeout');
-    }).then((r) {
-      // Successes are logged only when slow: a healthy call is ~100 ms, so
-      // anything near the probe timeout deserves a trace without flooding the
-      // ring on every poll.
-      if (sw.elapsedMilliseconds >= 1000) {
-        AppLog.add('tcp', 'slow: $method took ${sw.elapsedMilliseconds}ms',
-            warn: true);
-      }
-      return r;
-    });
+    return c.future
+        .timeout(
+          timeout,
+          onTimeout: () {
+            _pending.remove(id);
+            AppLog.add(
+              'tcp',
+              '$method timeout after ${timeout.inSeconds}s (id $id, ${_pending.length} still pending)',
+              warn: true,
+            );
+            throw NexusQError('internal', 'timeout');
+          },
+        )
+        .then((r) {
+          // Successes are logged only when slow: a healthy call is ~100 ms, so
+          // anything near the probe timeout deserves a trace without flooding the
+          // ring on every poll.
+          if (sw.elapsedMilliseconds >= 1000) {
+            AppLog.add(
+              'tcp',
+              'slow: $method took ${sw.elapsedMilliseconds}ms',
+              warn: true,
+            );
+          }
+          return r;
+        });
   }
 
   @override
@@ -184,11 +225,13 @@ class TcpClient implements NexusQClient {
     final age = _connectedAt == null
         ? '?'
         : '${DateTime.now().difference(_connectedAt!).inSeconds}s';
-    AppLog.add('tcp',
-        'DROP: $cause — connection age $age, '
-        '${_pending.length} calls in flight, events received: '
-        '${_eventCounts.isEmpty ? 'none' : _eventCounts.toString()}',
-        warn: true);
+    AppLog.add(
+      'tcp',
+      'DROP: $cause — connection age $age, '
+          '${_pending.length} calls in flight, events received: '
+          '${_eventCounts.isEmpty ? 'none' : _eventCounts.toString()}',
+      warn: true,
+    );
     _connectedAt = null;
     _socket = null;
     s.destroy();
@@ -205,7 +248,9 @@ class TcpClient implements NexusQClient {
     _closed = true;
     try {
       await _socket?.flush(); // let queued notifies out before tearing down
-    } catch (_) {/* dropping anyway */}
+    } catch (_) {
+      /* dropping anyway */
+    }
     _drop('client closed');
     await _events.close();
     await _conn.close();

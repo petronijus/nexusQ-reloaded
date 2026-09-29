@@ -70,6 +70,7 @@ class _SpotifyBridge implements NexusQClient {
     await _events.close();
     await _conn.close();
   }
+
   @override
   void disconnect() {}
   @override
@@ -111,8 +112,7 @@ class _LinkedStore extends FlutterSecureStorage {
     WebOptions? webOptions,
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async =>
-      key == 'spotify.refresh_token' ? 'a-refresh-token' : null;
+  }) async => key == 'spotify.refresh_token' ? 'a-refresh-token' : null;
 }
 
 Future<void> pretendLinked() async {
@@ -130,8 +130,11 @@ void main() {
     final player = _CountingPlayer();
     c.playerFactory = (_) => player;
     await c.refreshQueue();
-    expect(player.queueCalls, 0,
-        reason: 'no transport known yet, so there is nothing to ask about');
+    expect(
+      player.queueCalls,
+      0,
+      reason: 'no transport known yet, so there is nothing to ask about',
+    );
     c.dispose();
   });
 
@@ -148,7 +151,7 @@ void main() {
         'artist': 'Les Baxter',
         'source': 'spotify',
         'transport': 'spotify-web',
-      }
+      },
     });
     await c.refreshQueue();
     expect(player.queueCalls, 1);
@@ -157,23 +160,28 @@ void main() {
     c.dispose();
   });
 
-  test('THE fix: the queue arrives with the first screen, not one song later',
-      () async {
-    // start() hydrates, and hydration is the first moment the transport is
-    // known. Before the fix nothing fetched here and the timeline and UP NEXT
-    // appeared only on the next track change.
-    final c = DeviceController(_SpotifyBridge());
-    final player = _CountingPlayer();
-    c.playerFactory = (_) => player;
-    c.start();
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+  test(
+    'THE fix: the queue arrives with the first screen, not one song later',
+    () async {
+      // start() hydrates, and hydration is the first moment the transport is
+      // known. Before the fix nothing fetched here and the timeline and UP NEXT
+      // appeared only on the next track change.
+      final c = DeviceController(_SpotifyBridge());
+      final player = _CountingPlayer();
+      c.playerFactory = (_) => player;
+      c.start();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
 
-    expect(player.queueCalls, greaterThan(0),
-        reason: 'hydration must trigger the first refresh');
-    expect(c.queue?.upNext, isNotEmpty);
-    expect(c.progress, isNotNull);
-    c.dispose();
-  });
+      expect(
+        player.queueCalls,
+        greaterThan(0),
+        reason: 'hydration must trigger the first refresh',
+      );
+      expect(c.queue?.upNext, isNotEmpty);
+      expect(c.progress, isNotNull);
+      c.dispose();
+    },
+  );
 
   // Pause does not change the track, so the old rule refreshed nothing and the
   // position sample kept saying `playing: true` — the bar ran on while the
@@ -189,43 +197,56 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 60));
     final before = player.queueCalls;
 
-    bridge.push(NexusQEvent('nowPlayingChanged', {
-      'playing': false, // the ONLY change
-      'track': 'Kinkajou',
-      'artist': 'Les Baxter',
-      'source': 'spotify',
-      'transport': 'spotify-web',
-    }));
+    bridge.push(
+      NexusQEvent('nowPlayingChanged', {
+        'playing': false, // the ONLY change
+        'track': 'Kinkajou',
+        'artist': 'Les Baxter',
+        'source': 'spotify',
+        'transport': 'spotify-web',
+      }),
+    );
     await Future<void>.delayed(const Duration(milliseconds: 60));
 
-    expect(player.queueCalls, greaterThan(before),
-        reason: 'play/pause must renew the position sample');
+    expect(
+      player.queueCalls,
+      greaterThan(before),
+      reason: 'play/pause must renew the position sample',
+    );
     c.dispose();
   });
 
-  test('the transport becoming actionable triggers a refresh on its own',
-      () async {
-    // none -> spotify-web with the SAME track: the old rule looked only at the
-    // track, so a box that gained a backend mid-song waited for the next one.
-    final bridge = _SpotifyBridge(transport: 'none');
-    final c = DeviceController(bridge);
-    final player = _CountingPlayer();
-    c.playerFactory = (_) => player;
-    c.start();
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    final before = player.queueCalls;
+  test(
+    'the transport becoming actionable triggers a refresh on its own',
+    () async {
+      // none -> spotify-web with the SAME track: the old rule looked only at the
+      // track, so a box that gained a backend mid-song waited for the next one.
+      final bridge = _SpotifyBridge(transport: 'none');
+      final c = DeviceController(bridge);
+      final player = _CountingPlayer();
+      c.playerFactory = (_) => player;
+      c.start();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      final before = player.queueCalls;
 
-    bridge.push(NexusQEvent('nowPlayingChanged', {
-      'playing': true,
-      'track': 'Kinkajou',
-      'artist': 'Les Baxter',
-      'source': 'spotify',
-      'transport': 'spotify-web',
-    }));
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+      bridge.push(
+        NexusQEvent('nowPlayingChanged', {
+          'playing': true,
+          'track': 'Kinkajou',
+          'artist': 'Les Baxter',
+          'source': 'spotify',
+          'transport': 'spotify-web',
+        }),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
 
-    expect(player.queueCalls, greaterThan(before),
-        reason: 'the route just became fetchable, even though the track did not change');
-    c.dispose();
-  });
+      expect(
+        player.queueCalls,
+        greaterThan(before),
+        reason:
+            'the route just became fetchable, even though the track did not change',
+      );
+      c.dispose();
+    },
+  );
 }

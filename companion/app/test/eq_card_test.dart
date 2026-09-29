@@ -13,9 +13,12 @@ import 'package:nexusq_companion/widgets/eq_curve.dart';
 /// is the request shape, because a wrong one writes wrong coefficients into a
 /// 25 W amplifier.
 class _RecordingClient implements NexusQClient {
-  _RecordingClient(
-      {this.supported = true, this.parametric = true, this.connected = true,
-       this.latency = Duration.zero});
+  _RecordingClient({
+    this.supported = true,
+    this.parametric = true,
+    this.connected = true,
+    this.latency = Duration.zero,
+  });
 
   /// A real setEq is ~300 ms: fourteen I2C coefficient writes. Modelling that
   /// matters — with zero latency the card is never in its "sending" state, so a
@@ -26,14 +29,14 @@ class _RecordingClient implements NexusQClient {
   final bool parametric;
   bool connected;
 
-  List<EqBand> get bandsModel =>
-      bands.map((b) => EqBand.fromJson(b)).toList();
+  List<EqBand> get bandsModel => bands.map((b) => EqBand.fromJson(b)).toList();
 
   /// Bring the link up the way the real client does: a `connection` event.
   void goOnline() {
     connected = true;
     _conn.add(true);
   }
+
   final List<(String, Map<String, dynamic>?)> calls = [];
   final _events = StreamController<NexusQEvent>.broadcast();
   final _conn = StreamController<bool>.broadcast();
@@ -41,11 +44,21 @@ class _RecordingClient implements NexusQClient {
   double bass = 0, treble = 0;
   List<Map<String, dynamic>> bands = [
     for (final d in const [
-      ['lowshelf', 100.0], ['peaking', 200.0], ['peaking', 430.0],
-      ['peaking', 900.0], ['peaking', 1800.0], ['peaking', 3800.0],
+      ['lowshelf', 100.0],
+      ['peaking', 200.0],
+      ['peaking', 430.0],
+      ['peaking', 900.0],
+      ['peaking', 1800.0],
+      ['peaking', 3800.0],
       ['highshelf', 8000.0],
     ])
-      {'type': d[0], 'freq_hz': d[1], 'gain_db': 0.0, 'q': 1.0, 'enabled': true}
+      {
+        'type': d[0],
+        'freq_hz': d[1],
+        'gain_db': 0.0,
+        'q': 1.0,
+        'enabled': true,
+      },
   ];
 
   /// Same idea as the device: the peak of what the bands ask for. Hardcoding 0
@@ -57,22 +70,22 @@ class _RecordingClient implements NexusQClient {
       .fold(0.0, (a, b) => b > a ? b : a);
 
   Map<String, dynamic> get _state => {
-        'supported': supported,
-        if (parametric) ...{
-          'bands': bands,
-          'preamp_db': 0.0,
-          'headroom_db': _headroom,
-          'max_bands': 7,
-          'limits': {
-            'gain_db': 12.0,
-            'freq_hz': [20.0, 20000.0],
-            'q': [0.3, 8.0],
-            'preamp_db': [-24.0, 0.0],
-          },
-        },
-        'bass_db': bass,
-        'treble_db': treble,
-      };
+    'supported': supported,
+    if (parametric) ...{
+      'bands': bands,
+      'preamp_db': 0.0,
+      'headroom_db': _headroom,
+      'max_bands': 7,
+      'limits': {
+        'gain_db': 12.0,
+        'freq_hz': [20.0, 20000.0],
+        'q': [0.3, 8.0],
+        'preamp_db': [-24.0, 0.0],
+      },
+    },
+    'bass_db': bass,
+    'treble_db': treble,
+  };
 
   @override
   Stream<NexusQEvent> get events => _events.stream;
@@ -91,8 +104,10 @@ class _RecordingClient implements NexusQClient {
   }
 
   @override
-  Future<Map<String, dynamic>> call(String method,
-      [Map<String, dynamic>? params]) async {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
     calls.add((method, params));
     if (!connected) throw NexusQError('unavailable', 'not connected');
     if (latency > Duration.zero) await Future<void>.delayed(latency);
@@ -144,7 +159,7 @@ class _RecordingClient implements NexusQClient {
                 ...bands[i],
                 ...?((params?['bands'] as List?)?.elementAtOrNull(i) as Map?)
                     ?.cast<String, dynamic>(),
-              }
+              },
           ],
         };
         final at = userPresets.indexWhere((e) => e['id'] == id);
@@ -182,27 +197,29 @@ class _RecordingClient implements NexusQClient {
   bool presetsVerb = true;
 
   Map<String, dynamic> get presetList => {
-        'presets': [
-          {
-            'id': 'flat',
-            'label': 'Flat',
-            'preamp_db': 0.0,
-            if (savePresets) 'builtin': true,
-            'bands': [for (final b in bands) {...b, 'gain_db': 0.0}],
-          },
-          {
-            'id': 'bass',
-            'label': 'Bass boost',
-            'preamp_db': -6.0,
-            if (savePresets) 'builtin': true,
-            'bands': [
-              for (var i = 0; i < bands.length; i++)
-                {...bands[i], 'gain_db': i == 0 ? 6.0 : 0.0}
-            ],
-          },
-          ...userPresets,
-        ]
-      };
+    'presets': [
+      {
+        'id': 'flat',
+        'label': 'Flat',
+        'preamp_db': 0.0,
+        if (savePresets) 'builtin': true,
+        'bands': [
+          for (final b in bands) {...b, 'gain_db': 0.0},
+        ],
+      },
+      {
+        'id': 'bass',
+        'label': 'Bass boost',
+        'preamp_db': -6.0,
+        if (savePresets) 'builtin': true,
+        'bands': [
+          for (var i = 0; i < bands.length; i++)
+            {...bands[i], 'gain_db': i == 0 ? 6.0 : 0.0},
+        ],
+      },
+      ...userPresets,
+    ],
+  };
 
   @override
   void notify(String method, [Map<String, dynamic>? params]) {}
@@ -217,27 +234,30 @@ class _RecordingClient implements NexusQClient {
 final _scroll = ScrollController();
 
 Widget _host(NexusQClient client) => MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          controller: _scroll,
-          child: SizedBox(
-            width: 380,
-            child: Column(children: [
-              EqCard(client: client),
-              const SizedBox(height: 2000), // makes the page actually scroll
-            ]),
-          ),
+  home: Scaffold(
+    body: SingleChildScrollView(
+      controller: _scroll,
+      child: SizedBox(
+        width: 380,
+        child: Column(
+          children: [
+            EqCard(client: client),
+            const SizedBox(height: 2000), // makes the page actually scroll
+          ],
         ),
       ),
-    );
+    ),
+  ),
+);
 
 void main() {
   setUp(() {
     if (_scroll.hasClients) _scroll.jumpTo(0);
   });
 
-  testWidgets('dragging outside the curve still scrolls the page',
-      (tester) async {
+  testWidgets('dragging outside the curve still scrolls the page', (
+    tester,
+  ) async {
     final client = _RecordingClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -246,7 +266,9 @@ void main() {
     // there must still scroll or the EQ has made the screen unusable.
     final curve = tester.getRect(find.byType(EqCurve));
     await tester.dragFrom(
-        Offset(curve.center.dx, curve.bottom + 300), const Offset(0, -120));
+      Offset(curve.center.dx, curve.bottom + 300),
+      const Offset(0, -120),
+    );
     await tester.pumpAndSettle();
 
     expect(_scroll.offset, greaterThan(0));
@@ -267,8 +289,9 @@ void main() {
     expect(find.byType(Slider), findsNWidgets(2));
   });
 
-  testWidgets('dragging a handle commits bands, not bass/treble',
-      (tester) async {
+  testWidgets('dragging a handle commits bands, not bass/treble', (
+    tester,
+  ) async {
     final client = _RecordingClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -283,8 +306,11 @@ void main() {
     // THE assertion this file was missing: dragging a handle must not also
     // scroll the page. The first fix made the curve respond while the scroll
     // kept running underneath, and a test that only checked setEq was happy.
-    expect(_scroll.offset, before,
-        reason: 'the page scrolled while a handle was dragged');
+    expect(
+      _scroll.offset,
+      before,
+      reason: 'the page scrolled while a handle was dragged',
+    );
 
     final sets = client.calls.where((c) => c.$1 == 'setEq').toList();
     expect(sets, isNotEmpty);
@@ -297,8 +323,9 @@ void main() {
     expect(asked.any((g) => g > 0.5), isTrue);
   });
 
-  testWidgets('drags keep working while a slow write is in flight',
-      (tester) async {
+  testWidgets('drags keep working while a slow write is in flight', (
+    tester,
+  ) async {
     // The real device takes ~300 ms per setEq. If the card goes dead for that
     // window, a normal person dragging one band after another finds that
     // "nothing can be grabbed any more".
@@ -315,21 +342,28 @@ void main() {
     await tester.tapAt(curve.center);
     await tester.pump();
     await tester.dragFrom(curve.center, const Offset(0, -25));
-    await tester.pump(const Duration(milliseconds: 50)); // write still in flight
+    await tester.pump(
+      const Duration(milliseconds: 50),
+    ); // write still in flight
 
     final before = client.calls.where((c) => c.$1 == 'setEq').length;
-    await tester.tapAt(Offset(curve.left + curve.width * 0.23, curve.center.dy));
+    await tester.tapAt(
+      Offset(curve.left + curve.width * 0.23, curve.center.dy),
+    );
     await tester.pump();
     await tester.dragFrom(
-        Offset(curve.left + curve.width * 0.23, curve.center.dy),
-        const Offset(0, -25));
+      Offset(curve.left + curve.width * 0.23, curve.center.dy),
+      const Offset(0, -25),
+    );
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 400));
     }
 
-    expect(client.calls.where((c) => c.$1 == 'setEq').length,
-        greaterThan(before),
-        reason: 'a drag during an in-flight write was swallowed');
+    expect(
+      client.calls.where((c) => c.$1 == 'setEq').length,
+      greaterThan(before),
+      reason: 'a drag during an in-flight write was swallowed',
+    );
   });
 
   testWidgets('a second drag still grabs a handle', (tester) async {
@@ -341,22 +375,28 @@ void main() {
 
     final curve = tester.getRect(find.byType(EqCurve));
     // band 3 (900 Hz) is near the middle of a log axis; band 0 (100 Hz) at ~23 %
-    final targets = [curve.center, Offset(curve.left + curve.width * 0.23, curve.center.dy)];
+    final targets = [
+      curve.center,
+      Offset(curve.left + curve.width * 0.23, curve.center.dy),
+    ];
 
     for (var n = 0; n < targets.length; n++) {
       final before = client.calls.where((c) => c.$1 == 'setEq').length;
-      await tester.tapAt(targets[n]);        // arm this band
+      await tester.tapAt(targets[n]); // arm this band
       await tester.pumpAndSettle();
       await tester.dragFrom(targets[n], const Offset(0, -25));
       await tester.pumpAndSettle();
-      expect(client.calls.where((c) => c.$1 == 'setEq').length,
-          greaterThan(before),
-          reason: 'drag #${n + 1} did not reach the device');
+      expect(
+        client.calls.where((c) => c.$1 == 'setEq').length,
+        greaterThan(before),
+        reason: 'drag #${n + 1} did not reach the device',
+      );
     }
   });
 
-  testWidgets('a drag changes gain only — never the band frequency',
-      (tester) async {
+  testWidgets('a drag changes gain only — never the band frequency', (
+    tester,
+  ) async {
     // Handles used to move in both axes, which silently retuned bands nobody
     // asked to retune. Petr: "jenom vertikálně nahoru a dolu by mely jit tahat".
     final client = _RecordingClient();
@@ -364,8 +404,9 @@ void main() {
     await tester.pumpAndSettle();
 
     final curve = tester.getRect(find.byType(EqCurve));
-    final freqsBefore =
-        client.bands.map((b) => (b['freq_hz'] as num).toDouble()).toList();
+    final freqsBefore = client.bands
+        .map((b) => (b['freq_hz'] as num).toDouble())
+        .toList();
 
     await tester.tapAt(curve.center);
     await tester.pumpAndSettle();
@@ -378,14 +419,17 @@ void main() {
         .toList();
     expect(sent, freqsBefore, reason: 'a drag retuned a band');
     expect(
-        (client.calls.last.$2!['bands'] as List)
-            .any((b) => ((b as Map)['gain_db'] as num) > 0.5),
-        isTrue,
-        reason: 'the vertical part of the drag was ignored too');
+      (client.calls.last.$2!['bands'] as List).any(
+        (b) => ((b as Map)['gain_db'] as num) > 0.5,
+      ),
+      isTrue,
+      reason: 'the vertical part of the drag was ignored too',
+    );
   });
 
-  testWidgets('the whole column grabs a band, not just the dot',
-      (tester) async {
+  testWidgets('the whole column grabs a band, not just the dot', (
+    tester,
+  ) async {
     // "ty hit arey jsou hodne maly" — with fixed frequencies the entire
     // vertical strip belongs to one band, so a touch near the top of the plot
     // must still grab it.
@@ -397,11 +441,16 @@ void main() {
     await tester.tapAt(Offset(curve.center.dx, curve.top + 8));
     await tester.pumpAndSettle();
     await tester.dragFrom(
-        Offset(curve.center.dx, curve.top + 8), const Offset(0, 40));
+      Offset(curve.center.dx, curve.top + 8),
+      const Offset(0, 40),
+    );
     await tester.pumpAndSettle();
 
-    expect(client.calls.where((c) => c.$1 == 'setEq'), isNotEmpty,
-        reason: 'a touch away from the dot did not grab the band');
+    expect(
+      client.calls.where((c) => c.$1 == 'setEq'),
+      isNotEmpty,
+      reason: 'a touch away from the dot did not grab the band',
+    );
   });
 
   testWidgets('the outer handles sit on the edges of the plot', (tester) async {
@@ -412,14 +461,19 @@ void main() {
 
     final curve = tester.getRect(find.byType(EqCurve));
     final w = curve.width;
-    expect(plotX(client.bandsModel, client.bandsModel.first.freqHz, w),
-        lessThan(w * 0.1));
-    expect(plotX(client.bandsModel, client.bandsModel.last.freqHz, w),
-        greaterThan(w * 0.9));
+    expect(
+      plotX(client.bandsModel, client.bandsModel.first.freqHz, w),
+      lessThan(w * 0.1),
+    );
+    expect(
+      plotX(client.bandsModel, client.bandsModel.last.freqHz, w),
+      greaterThan(w * 0.9),
+    );
   });
 
-  testWidgets('an un-armed curve does not swallow the drag — the page scrolls',
-      (tester) async {
+  testWidgets('an un-armed curve does not swallow the drag — the page scrolls', (
+    tester,
+  ) async {
     // The contract Petr asked for: until you tap a point, the curve is inert and
     // the page behaves normally.
     final client = _RecordingClient();
@@ -430,23 +484,31 @@ void main() {
     await tester.dragFrom(curve.center, const Offset(0, -120));
     await tester.pumpAndSettle();
 
-    expect(_scroll.offset, greaterThan(0), reason: 'the page should have scrolled');
+    expect(
+      _scroll.offset,
+      greaterThan(0),
+      reason: 'the page should have scrolled',
+    );
     expect(client.calls.where((c) => c.$1 == 'setEq'), isEmpty);
   });
 
-  testWidgets('arming one band then another moves the second, not the first',
-      (tester) async {
+  testWidgets('arming one band then another moves the second, not the first', (
+    tester,
+  ) async {
     final client = _RecordingClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
 
     final curve = tester.getRect(find.byType(EqCurve));
-    final firstX = curve.left + curve.width * 0.02;   // band 0, on the left edge
-    final lastX = curve.right - curve.width * 0.02;   // band 6, on the right edge
+    final firstX = curve.left + curve.width * 0.02; // band 0, on the left edge
+    final lastX = curve.right - curve.width * 0.02; // band 6, on the right edge
 
     await tester.tapAt(Offset(firstX, curve.center.dy));
     await tester.pumpAndSettle();
-    await tester.dragFrom(Offset(firstX, curve.center.dy), const Offset(0, -30));
+    await tester.dragFrom(
+      Offset(firstX, curve.center.dy),
+      const Offset(0, -30),
+    );
     await tester.pumpAndSettle();
 
     await tester.tapAt(Offset(lastX, curve.center.dy));
@@ -457,8 +519,16 @@ void main() {
     final sent = (client.calls.last.$2!['bands'] as List)
         .map((b) => ((b as Map)['gain_db'] as num).toDouble())
         .toList();
-    expect(sent.first, greaterThan(0.5), reason: 'the first band lost its gain');
-    expect(sent.last, greaterThan(0.5), reason: 'the second arming did not take');
+    expect(
+      sent.first,
+      greaterThan(0.5),
+      reason: 'the first band lost its gain',
+    );
+    expect(
+      sent.last,
+      greaterThan(0.5),
+      reason: 'the second arming did not take',
+    );
   });
 
   testWidgets('lays out without overflowing a narrow phone', (tester) async {
@@ -472,9 +542,13 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(child: EqCard(client: client))),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: EqCard(client: client)),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     // widest labels: a shelf name, a kHz frequency and a two-digit dB value
@@ -485,8 +559,9 @@ void main() {
     expect(find.byType(EqCurve), findsOneWidget);
   });
 
-  testWidgets('armed, a drag starting outside the plot scrolls immediately',
-      (tester) async {
+  testWidgets('armed, a drag starting outside the plot scrolls immediately', (
+    tester,
+  ) async {
     // Petr: "kdyz se tapne a rovnou draguje mimo ten equalizer, tak uz to zacne
     // scrollovat" — it used to take one tap to disarm and a second gesture to
     // scroll, because the whole list had been frozen. The claim is now scoped to
@@ -501,15 +576,21 @@ void main() {
 
     final before = _scroll.offset;
     await tester.dragFrom(
-        Offset(curve.center.dx, curve.bottom + 300), const Offset(0, -120));
+      Offset(curve.center.dx, curve.bottom + 300),
+      const Offset(0, -120),
+    );
     await tester.pumpAndSettle();
 
-    expect(_scroll.offset, greaterThan(before),
-        reason: 'an armed EQ froze the whole page instead of just its plot');
+    expect(
+      _scroll.offset,
+      greaterThan(before),
+      reason: 'an armed EQ froze the whole page instead of just its plot',
+    );
   });
 
-  testWidgets('armed, a drag switches to whatever band it started on',
-      (tester) async {
+  testWidgets('armed, a drag switches to whatever band it started on', (
+    tester,
+  ) async {
     final client = _RecordingClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -520,20 +601,29 @@ void main() {
 
     // now drag the LAST band directly, without tapping it first
     await tester.dragFrom(
-        Offset(curve.right - 4, curve.center.dy), const Offset(0, -30));
+      Offset(curve.right - 4, curve.center.dy),
+      const Offset(0, -30),
+    );
     await tester.pumpAndSettle();
 
     final sent = (client.calls.last.$2!['bands'] as List)
         .map((b) => ((b as Map)['gain_db'] as num).toDouble())
         .toList();
-    expect(sent.last, greaterThan(0.5),
-        reason: 'the drag did not move the band it started on');
-    expect(sent.first, closeTo(0, 0.05),
-        reason: 'it moved the previously armed band instead');
+    expect(
+      sent.last,
+      greaterThan(0.5),
+      reason: 'the drag did not move the band it started on',
+    );
+    expect(
+      sent.first,
+      closeTo(0, 0.05),
+      reason: 'it moved the previously armed band instead',
+    );
   });
 
-  testWidgets('a preset is applied as one setEq with its bands and preamp',
-      (tester) async {
+  testWidgets('a preset is applied as one setEq with its bands and preamp', (
+    tester,
+  ) async {
     final client = _RecordingClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -569,8 +659,9 @@ void main() {
     expect(find.textContaining('clip'), findsOneWidget);
   });
 
-  testWidgets('an old kernel disables the card but keeps it discoverable',
-      (tester) async {
+  testWidgets('an old kernel disables the card but keeps it discoverable', (
+    tester,
+  ) async {
     final client = _RecordingClient(supported: false, parametric: false);
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -585,8 +676,9 @@ void main() {
     expect(client.calls.where((c) => c.$1 == 'setEq'), isEmpty);
   });
 
-  testWidgets('an old daemon falls back to two shelves and the v1 shape',
-      (tester) async {
+  testWidgets('an old daemon falls back to two shelves and the v1 shape', (
+    tester,
+  ) async {
     final client = _RecordingClient(parametric: false);
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -599,7 +691,9 @@ void main() {
     await tester.tapAt(Offset(r.left + r.width * 0.23, r.center.dy));
     await tester.pumpAndSettle();
     await tester.dragFrom(
-        Offset(r.left + r.width * 0.23, r.center.dy), const Offset(0, -30));
+      Offset(r.left + r.width * 0.23, r.center.dy),
+      const Offset(0, -30),
+    );
     await tester.pumpAndSettle();
 
     final sets = client.calls.where((c) => c.$1 == 'setEq').toList();
@@ -608,27 +702,30 @@ void main() {
     expect(sets.last.$2!.containsKey('bass_db'), isTrue);
   });
 
-  testWidgets('a cold mount before the link is up waits, it does not accuse the EQ',
-      (tester) async {
-    // Regression: the card used to render "EQ unavailable: NexusQError not
-    // connected" because it loads in initState, before the client connects.
-    final client = _RecordingClient(connected: false);
-    await tester.pumpWidget(_host(client));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'a cold mount before the link is up waits, it does not accuse the EQ',
+    (tester) async {
+      // Regression: the card used to render "EQ unavailable: NexusQError not
+      // connected" because it loads in initState, before the client connects.
+      final client = _RecordingClient(connected: false);
+      await tester.pumpWidget(_host(client));
+      await tester.pumpAndSettle();
 
-    expect(find.textContaining('unavailable'), findsNothing);
-    expect(find.textContaining('not connected'), findsNothing);
-    expect(find.text('Waiting for the Q…'), findsOneWidget);
+      expect(find.textContaining('unavailable'), findsNothing);
+      expect(find.textContaining('not connected'), findsNothing);
+      expect(find.text('Waiting for the Q…'), findsOneWidget);
 
-    client.goOnline();
-    await tester.pumpAndSettle();
+      client.goOnline();
+      await tester.pumpAndSettle();
 
-    expect(find.text('Waiting for the Q…'), findsNothing);
-    expect(find.byType(EqCurve), findsOneWidget);
-  });
+      expect(find.text('Waiting for the Q…'), findsNothing);
+      expect(find.byType(EqCurve), findsOneWidget);
+    },
+  );
 
-  testWidgets('reconciles from an eqChanged pushed by another client',
-      (tester) async {
+  testWidgets('reconciles from an eqChanged pushed by another client', (
+    tester,
+  ) async {
     final client = MockClient();
     await tester.pumpWidget(_host(client));
     await tester.pumpAndSettle();
@@ -662,27 +759,35 @@ void main() {
       final x = tester.getRect(find.byType(EqCurve)).center.dx;
       await tester.tapAt(Offset(x, yFor(tester, 0)));
       await tester.pumpAndSettle();
-      await tester.dragFrom(Offset(x, yFor(tester, fromDb)),
-          Offset(0, yFor(tester, toDb) - yFor(tester, fromDb)));
+      await tester.dragFrom(
+        Offset(x, yFor(tester, fromDb)),
+        Offset(0, yFor(tester, toDb) - yFor(tester, fromDb)),
+      );
       await tester.pumpAndSettle();
     }
 
-    testWidgets('a band released near flat lands exactly on flat',
-        (tester) async {
+    testWidgets('a band released near flat lands exactly on flat', (
+      tester,
+    ) async {
       final client = _RecordingClient();
       await tester.pumpWidget(_host(client));
       await tester.pumpAndSettle();
 
       await dragTo(tester, 0, 6);
-      expect(movedGain(client), closeTo(6, 0.3), reason: 'the drag did nothing');
+      expect(
+        movedGain(client),
+        closeTo(6, 0.3),
+        reason: 'the drag did nothing',
+      );
 
       await dragTo(tester, 6, 0.5);
       // 0.5 dB is ~4 px on this plot — inside the detent
       expect(client.bands.map((b) => b['gain_db']), everyElement(0.0));
     });
 
-    testWidgets('the detent does not swallow a deliberate small boost',
-        (tester) async {
+    testWidgets('the detent does not swallow a deliberate small boost', (
+      tester,
+    ) async {
       final client = _RecordingClient();
       await tester.pumpWidget(_host(client));
       await tester.pumpAndSettle();
@@ -692,18 +797,25 @@ void main() {
       expect(movedGain(client), closeTo(2, 0.3));
     });
 
-    testWidgets('the detent clicks on the way in, once per entry',
-        (tester) async {
+    testWidgets('the detent clicks on the way in, once per entry', (
+      tester,
+    ) async {
       final haptics = <String>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform, (call) async {
-        if (call.method == 'HapticFeedback.vibrate') {
-          haptics.add('${call.arguments}');
-        }
-        return null;
-      });
-      addTearDown(() => tester.binding.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null));
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'HapticFeedback.vibrate') {
+            haptics.add('${call.arguments}');
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
 
       final client = _RecordingClient();
       await tester.pumpWidget(_host(client));
@@ -721,13 +833,18 @@ void main() {
       await tester.pumpAndSettle();
 
       // entered at +0.3, stayed through −0.3, left at −4, entered again at −0.2
-      expect(haptics, ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.selectionClick']);
+      expect(haptics, [
+        'HapticFeedbackType.selectionClick',
+        'HapticFeedbackType.selectionClick',
+      ]);
     });
   });
 
   group('saved presets', () {
-    Future<_RecordingClient> pumpCard(WidgetTester tester,
-        {bool savePresets = true}) async {
+    Future<_RecordingClient> pumpCard(
+      WidgetTester tester, {
+      bool savePresets = true,
+    }) async {
       final client = _RecordingClient()..savePresets = savePresets;
       await tester.pumpWidget(_host(client));
       await tester.pumpAndSettle();
@@ -750,7 +867,8 @@ void main() {
     /// reveal it the way a person would — by scrolling that row — before
     /// asserting on it or touching it.
     final chipRow = find.byWidgetPredicate(
-        (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
+      (w) => w is Scrollable && w.axisDirection == AxisDirection.right,
+    );
 
     Future<void> reveal(WidgetTester tester, Finder f) async {
       if (tester.any(f)) {
@@ -770,8 +888,9 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('sends the whole curve on screen, not just a name',
-        (tester) async {
+    testWidgets('sends the whole curve on screen, not just a name', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       await armAndDrag(tester, -30);
       await saveAs(tester, 'Vinyl');
@@ -782,34 +901,46 @@ void main() {
       expect(sent.length, 7);
       final shown = tester.widget<EqCurve>(find.byType(EqCurve)).state.bands;
       for (var i = 0; i < 7; i++) {
-        expect(sent[i]['gain_db'], closeTo(shown[i].gainDb, 1e-9),
-            reason: 'band $i');
+        expect(
+          sent[i]['gain_db'],
+          closeTo(shown[i].gainDb, 1e-9),
+          reason: 'band $i',
+        );
       }
       expect(save.$2!.containsKey('preamp_db'), isTrue);
     });
 
-    testWidgets('reset flattens every band and the preamp with them',
-        (tester) async {
+    testWidgets('reset flattens every band and the preamp with them', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       await armAndDrag(tester, -40);
-      expect(client.bands.any((b) => (b['gain_db'] as double).abs() > 0.05),
-          isTrue,
-          reason: 'the drag never moved anything');
+      expect(
+        client.bands.any((b) => (b['gain_db'] as double).abs() > 0.05),
+        isTrue,
+        reason: 'the drag never moved anything',
+      );
 
       await tester.tap(find.byTooltip('Reset to flat'));
       await tester.pumpAndSettle();
       final last = client.calls.lastWhere((c) => c.$1 == 'setEq').$2!;
-      expect((last['bands'] as List).map((b) => (b as Map)['gain_db']),
-          everyElement(closeTo(0, 1e-9)));
+      expect(
+        (last['bands'] as List).map((b) => (b as Map)['gain_db']),
+        everyElement(closeTo(0, 1e-9)),
+      );
       expect(last['preamp_db'], closeTo(0, 1e-9));
       // the bands are still all there — it flattens, it does not drop tuning
       expect((last['bands'] as List).length, 7);
-      expect(_resetButton(tester).onPressed, isNull,
-          reason: 'still offers reset');
+      expect(
+        _resetButton(tester).onPressed,
+        isNull,
+        reason: 'still offers reset',
+      );
     });
 
-    testWidgets('the saved preset shows up as a chip you can apply back',
-        (tester) async {
+    testWidgets('the saved preset shows up as a chip you can apply back', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       await armAndDrag(tester, -40);
       await saveAs(tester, 'Vinyl');
@@ -846,8 +977,9 @@ void main() {
       expect(find.widgetWithText(InputChip, 'Vinyl'), findsNothing);
     });
 
-    testWidgets('a name with nothing to slug cannot be submitted',
-        (tester) async {
+    testWidgets('a name with nothing to slug cannot be submitted', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       await tester.tap(find.widgetWithText(ActionChip, 'Save'));
       await tester.pumpAndSettle();
@@ -855,19 +987,21 @@ void main() {
         await tester.enterText(find.byType(TextField), bad);
         await tester.pumpAndSettle();
         expect(
-            tester
-                .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
-                .onPressed,
-            isNull,
-            reason: 'accepted "$bad"');
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
+              .onPressed,
+          isNull,
+          reason: 'accepted "$bad"',
+        );
       }
       await tester.enterText(find.byType(TextField), 'Kuchyň');
       await tester.pumpAndSettle();
       expect(
-          tester
-              .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
-              .onPressed,
-          isNotNull);
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
+            .onPressed,
+        isNotNull,
+      );
       await tester.tap(find.widgetWithText(TextButton, 'Save'));
       await tester.pumpAndSettle();
       // Czech letters survive the slug — the daemon uses Python's isalnum(), so
@@ -876,7 +1010,9 @@ void main() {
       expect(client.userPresets.single['id'], 'u:kuchyň');
     });
 
-    testWidgets('delete asks first, then removes it everywhere', (tester) async {
+    testWidgets('delete asks first, then removes it everywhere', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       await saveAs(tester, 'Vinyl');
 
@@ -897,8 +1033,9 @@ void main() {
       expect(find.widgetWithText(InputChip, 'Vinyl'), findsNothing);
     });
 
-    testWidgets('save stays reachable however many presets you have',
-        (tester) async {
+    testWidgets('save stays reachable however many presets you have', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       for (var i = 0; i < 8; i++) {
         client.userPresets.add({
@@ -906,7 +1043,9 @@ void main() {
           'label': 'Preset number $i',
           'builtin': false,
           'preamp_db': 0.0,
-          'bands': [for (final b in client.bands) {...b, 'gain_db': 0.0}],
+          'bands': [
+            for (final b in client.bands) {...b, 'gain_db': 0.0},
+          ],
         });
       }
       client._events.add(NexusQEvent('eqPresetsChanged', client.presetList));
@@ -924,15 +1063,17 @@ void main() {
       expect(find.byTooltip('Delete Bass boost'), findsNothing);
     });
 
-    testWidgets('a daemon that cannot save presets shows no save button',
-        (tester) async {
+    testWidgets('a daemon that cannot save presets shows no save button', (
+      tester,
+    ) async {
       await pumpCard(tester, savePresets: false);
       expect(find.widgetWithText(ActionChip, 'Flat'), findsOneWidget);
       expect(find.widgetWithText(ActionChip, 'Save'), findsNothing);
     });
 
-    testWidgets('a device downgraded past presets withdraws the save button',
-        (tester) async {
+    testWidgets('a device downgraded past presets withdraws the save button', (
+      tester,
+    ) async {
       final client = await pumpCard(tester);
       expect(find.widgetWithText(ActionChip, 'Save'), findsOneWidget);
       // downgraded underneath us to a daemon with no preset verbs at all, then
@@ -952,7 +1093,9 @@ void main() {
         'label': 'Night',
         'builtin': false,
         'preamp_db': 0.0,
-        'bands': [for (final b in client.bands) {...b, 'gain_db': 0.0}],
+        'bands': [
+          for (final b in client.bands) {...b, 'gain_db': 0.0},
+        ],
       });
       client._events.add(NexusQEvent('eqPresetsChanged', client.presetList));
       await tester.pumpAndSettle();
@@ -972,5 +1115,8 @@ void main() {
 /// The reset control is an icon, so there is no text to find it by — the
 /// tooltip is its name, for this test and for a screen reader alike.
 IconButton _resetButton(WidgetTester tester) => tester.widget<IconButton>(
-    find.ancestor(
-        of: find.byTooltip('Reset to flat'), matching: find.byType(IconButton)));
+  find.ancestor(
+    of: find.byTooltip('Reset to flat'),
+    matching: find.byType(IconButton),
+  ),
+);

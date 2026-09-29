@@ -32,35 +32,43 @@ class FakeBridge {
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) {
-      if (_silenced.contains(s)) return; // half-open: swallow everything
-      final msg = jsonDecode(line) as Map<String, dynamic>;
-      final id = msg['id'];
-      if (id == null) return; // notify — no response
-      final result = switch (msg['method'] as String) {
-        'subscribe' => (() {
-            subscribeCount++;
-            return {'subscribed': ['*']};
-          })(),
-        'getState' => {
-            'volume': volume,
-            'muted': false,
-            'brightness': 100,
-            'theme': 'blue',
-            'scene': 'waveform',
-            'output': 'speaker',
-            'name': 'Nexus Q (fake)',
+        .listen(
+          (line) {
+            if (_silenced.contains(s)) return; // half-open: swallow everything
+            final msg = jsonDecode(line) as Map<String, dynamic>;
+            final id = msg['id'];
+            if (id == null) return; // notify — no response
+            final result = switch (msg['method'] as String) {
+              'subscribe' => (() {
+                subscribeCount++;
+                return {
+                  'subscribed': ['*'],
+                };
+              })(),
+              'getState' => {
+                'volume': volume,
+                'muted': false,
+                'brightness': 100,
+                'theme': 'blue',
+                'scene': 'waveform',
+                'output': 'speaker',
+                'name': 'Nexus Q (fake)',
+              },
+              'listOutputs' => {
+                'outputs': [
+                  {'id': 'speaker', 'label': 'Speaker', 'available': true},
+                ],
+                'active': 'speaker',
+              },
+              _ => const <String, dynamic>{},
+            };
+            s.write(
+              '${jsonEncode({'id': id, 'ok': true, 'result': result})}\n',
+            );
           },
-        'listOutputs' => {
-            'outputs': [
-              {'id': 'speaker', 'label': 'Speaker', 'available': true},
-            ],
-            'active': 'speaker',
-          },
-        _ => const <String, dynamic>{},
-      };
-      s.write('${jsonEncode({'id': id, 'ok': true, 'result': result})}\n');
-    }, onError: (_) {}, onDone: () {});
+          onError: (_) {},
+          onDone: () {},
+        );
   }
 
   /// Clean drop: FIN/RST reaches the app (device reboot / WiFi blip).
@@ -81,8 +89,10 @@ class FakeBridge {
   }
 }
 
-Future<void> until(bool Function() cond,
-    {Duration timeout = const Duration(seconds: 8)}) async {
+Future<void> until(
+  bool Function() cond, {
+  Duration timeout = const Duration(seconds: 8),
+}) async {
   final deadline = DateTime.now().add(timeout);
   while (!cond()) {
     if (DateTime.now().isAfter(deadline)) {
@@ -108,8 +118,10 @@ void main() {
     expect(c.state.reconnecting, true);
 
     // backoff reconnect + re-hydration picks up the new state
-    await until(() => c.state.connected && c.state.volume == 55,
-        timeout: const Duration(seconds: 10));
+    await until(
+      () => c.state.connected && c.state.volume == 55,
+      timeout: const Duration(seconds: 10),
+    );
     expect(bridge.subscribeCount, 2); // re-subscribed on the new socket
     expect(c.state.reconnecting, false);
 
@@ -117,31 +129,37 @@ void main() {
     await bridge.close();
   });
 
-  test('resume probe detects a half-open link and reconnects immediately',
-      () async {
-    final bridge = await FakeBridge.start();
-    final c = DeviceController(TcpClient(host: '127.0.0.1', port: bridge.port));
-    // The disconnected window is tiny (failed probe → immediate redial), so a
-    // polling loop can miss it — observe the transient drop via the notifier.
-    var sawDrop = false;
-    c.addListener(() => sawDrop |= !c.state.connected);
-    await c.start();
-    await until(() => c.state.connected);
+  test(
+    'resume probe detects a half-open link and reconnects immediately',
+    () async {
+      final bridge = await FakeBridge.start();
+      final c = DeviceController(
+        TcpClient(host: '127.0.0.1', port: bridge.port),
+      );
+      // The disconnected window is tiny (failed probe → immediate redial), so a
+      // polling loop can miss it — observe the transient drop via the notifier.
+      var sawDrop = false;
+      c.addListener(() => sawDrop |= !c.state.connected);
+      await c.start();
+      await until(() => c.state.connected);
 
-    // Background the app, then break the link doze-style: no FIN/RST, the
-    // socket still looks connected — only a write can expose it.
-    c.didChangeAppLifecycleState(AppLifecycleState.paused);
-    bridge.silenceCurrent();
-    sawDrop = false;
+      // Background the app, then break the link doze-style: no FIN/RST, the
+      // socket still looks connected — only a write can expose it.
+      c.didChangeAppLifecycleState(AppLifecycleState.paused);
+      bridge.silenceCurrent();
+      sawDrop = false;
 
-    c.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    // The active getState probe (3s timeout) must flag the dead link and the
-    // immediate reconnect must land on a fresh, responsive socket.
-    await until(() => sawDrop && c.state.connected,
-        timeout: const Duration(seconds: 10));
-    expect(bridge.subscribeCount, 2);
+      c.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      // The active getState probe (3s timeout) must flag the dead link and the
+      // immediate reconnect must land on a fresh, responsive socket.
+      await until(
+        () => sawDrop && c.state.connected,
+        timeout: const Duration(seconds: 10),
+      );
+      expect(bridge.subscribeCount, 2);
 
-    c.dispose();
-    await bridge.close();
-  });
+      c.dispose();
+      await bridge.close();
+    },
+  );
 }

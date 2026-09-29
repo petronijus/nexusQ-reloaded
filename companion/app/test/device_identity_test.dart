@@ -41,26 +41,38 @@ class IdentityBridge {
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) {
-      final msg = jsonDecode(line) as Map<String, dynamic>;
-      final id = msg['id'];
-      if (id == null) return;
-      final result = switch (msg['method'] as String) {
-        'subscribe' => {'subscribed': ['*']},
-        'getState' => {'volume': 10, 'name': staleStateName},
-        'getDeviceInfo' => {'name': name, 'model': 'steelhead'},
-        'listOutputs' => {'outputs': [], 'active': 'speaker'},
-        _ => const <String, dynamic>{},
-      };
-      s.write('${jsonEncode({'id': id, 'ok': true, 'result': result})}\n');
-    }, onError: (_) {}, onDone: () {});
+        .listen(
+          (line) {
+            final msg = jsonDecode(line) as Map<String, dynamic>;
+            final id = msg['id'];
+            if (id == null) return;
+            final result = switch (msg['method'] as String) {
+              'subscribe' => {
+                'subscribed': ['*'],
+              },
+              'getState' => {'volume': 10, 'name': staleStateName},
+              'getDeviceInfo' => {'name': name, 'model': 'steelhead'},
+              'listOutputs' => {'outputs': [], 'active': 'speaker'},
+              _ => const <String, dynamic>{},
+            };
+            s.write(
+              '${jsonEncode({'id': id, 'ok': true, 'result': result})}\n',
+            );
+          },
+          onError: (_) {},
+          onDone: () {},
+        );
   }
 
   /// The rename event the device broadcasts to every connected client.
   void renameTo(String n) {
     name = n;
     _current?.write(
-        '${jsonEncode({'event': 'deviceInfoChanged', 'data': {'name': n, 'room': ''}})}\n');
+      '${jsonEncode({
+        'event': 'deviceInfoChanged',
+        'data': {'name': n, 'room': ''},
+      })}\n',
+    );
   }
 
   Future<void> close() async {
@@ -100,7 +112,9 @@ void main() {
     // Prove the source: only getDeviceInfo moves, and a freshly connected app
     // must follow it even while getState keeps insisting on the boot-time name.
     bridge.name = 'Šumperák';
-    final second = DeviceController(TcpClient(host: '127.0.0.1', port: bridge.port));
+    final second = DeviceController(
+      TcpClient(host: '127.0.0.1', port: bridge.port),
+    );
     await second.start();
     await _settle();
     expect(second.state.deviceName, 'Šumperák');

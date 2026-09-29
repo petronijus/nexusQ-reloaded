@@ -36,7 +36,10 @@ class FakeBridge implements NexusQClient {
   final _events = StreamController<NexusQEvent>.broadcast();
   final _conn = StreamController<bool>.broadcast();
   @override
-  Future<Map<String, dynamic>> call(String m, [Map<String, dynamic>? p]) async => {};
+  Future<Map<String, dynamic>> call(
+    String m, [
+    Map<String, dynamic>? p,
+  ]) async => {};
   @override
   Stream<NexusQEvent> get events => _events.stream;
   @override
@@ -50,6 +53,7 @@ class FakeBridge implements NexusQClient {
     await _events.close();
     await _conn.close();
   }
+
   @override
   void disconnect() {}
   @override
@@ -59,7 +63,8 @@ class FakeBridge implements NexusQClient {
 class FakePlayer implements SpotifyPlayer {
   final volumes = <(String, int)>[];
   @override
-  Future<void> setVolume(String qName, int percent) async => volumes.add((qName, percent));
+  Future<void> setVolume(String qName, int percent) async =>
+      volumes.add((qName, percent));
   @override
   noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
@@ -77,37 +82,60 @@ Future<(DeviceController, FakeBridge, FakePlayer)> mirrorController({
   c.playerFactory = (_) => player;
   c.state.applyIdentity({'name': 'Obývák Q'});
   c.state.applyJson({
-    'nowPlaying': {'playing': true, 'track': 'Kinkajou', 'source': source, 'transport': transport},
+    'nowPlaying': {
+      'playing': true,
+      'track': 'Kinkajou',
+      'source': source,
+      'transport': transport,
+    },
   });
   return (c, bridge, player);
 }
 
 void main() {
-  test('Spotify playing here: the released value goes to Spotify too', () async {
-    final (c, bridge, player) = await mirrorController(linked: true, source: 'spotify', transport: 'spotify-web');
-    c.setVolume(37);                  // dragging: the Q only
-    c.setVolume(41);
-    expect(player.volumes, isEmpty);
-    c.commitVolume(41);               // released
-    await Future<void>.delayed(Duration.zero);
-    expect(player.volumes, [('Obývák Q', 41)]);
-    expect(bridge.notified, ['setVolume', 'setVolume']);
-    c.dispose();
-  });
+  test(
+    'Spotify playing here: the released value goes to Spotify too',
+    () async {
+      final (c, bridge, player) = await mirrorController(
+        linked: true,
+        source: 'spotify',
+        transport: 'spotify-web',
+      );
+      c.setVolume(37); // dragging: the Q only
+      c.setVolume(41);
+      expect(player.volumes, isEmpty);
+      c.commitVolume(41); // released
+      await Future<void>.delayed(Duration.zero);
+      expect(player.volumes, [('Obývák Q', 41)]);
+      expect(bridge.notified, ['setVolume', 'setVolume']);
+      c.dispose();
+    },
+  );
 
   test('another source (AirPlay, Roon): Spotify is not told', () async {
-    final (c, _, player) = await mirrorController(linked: true, source: 'airplay', transport: 'device');
+    final (c, _, player) = await mirrorController(
+      linked: true,
+      source: 'airplay',
+      transport: 'device',
+    );
     c.commitVolume(50);
     await Future<void>.delayed(Duration.zero);
     expect(player.volumes, isEmpty);
     c.dispose();
   });
 
-  test('a volume event from the Q never reaches Spotify (no ringing)', () async {
-    final (c, _, player) = await mirrorController(linked: true, source: 'spotify', transport: 'spotify-web');
-    c.state.applyJson({'volume': 60});
-    await Future<void>.delayed(Duration.zero);
-    expect(player.volumes, isEmpty);
-    c.dispose();
-  });
+  test(
+    'a volume event from the Q never reaches Spotify (no ringing)',
+    () async {
+      final (c, _, player) = await mirrorController(
+        linked: true,
+        source: 'spotify',
+        transport: 'spotify-web',
+      );
+      c.state.applyJson({'volume': 60});
+      await Future<void>.delayed(Duration.zero);
+      expect(player.volumes, isEmpty);
+      c.dispose();
+    },
+  );
 }

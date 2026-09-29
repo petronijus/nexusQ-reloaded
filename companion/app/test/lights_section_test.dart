@@ -16,7 +16,10 @@ import 'package:nexusq_companion/widgets/lights_section.dart';
 /// A bridge from before the ring switch: its state has no `ring`.
 class _PreRingClient extends MockClient {
   @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) async {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
     final r = await super.call(method, params);
     if (method == 'getState') return Map.of(r)..remove('ring');
     return r;
@@ -27,10 +30,13 @@ Future<DeviceController> _started(NexusQClient c) async {
   final ctl = DeviceController(c);
   final hydrated = Completer<void>();
   void check() {
-    if (ctl.state.connected && ctl.state.deviceName != 'Nexus Q' && !hydrated.isCompleted) {
+    if (ctl.state.connected &&
+        ctl.state.deviceName != 'Nexus Q' &&
+        !hydrated.isCompleted) {
       hydrated.complete();
     }
   }
+
   ctl.addListener(check);
   await ctl.start();
   await hydrated.future.timeout(const Duration(seconds: 2));
@@ -43,14 +49,17 @@ Future<void> _pump(WidgetTester t, DeviceController ctl) async {
   t.view.physicalSize = const Size(1080, 4000);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.reset);
-  await t.pumpWidget(MaterialApp(
-    home: Scaffold(
-      body: SingleChildScrollView(child: LightsSection(controller: ctl)),
+  await t.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(child: LightsSection(controller: ctl)),
+      ),
     ),
-  ));
+  );
 }
 
-double _top(WidgetTester t, String key) => t.getTopLeft(find.byKey(Key(key))).dy;
+double _top(WidgetTester t, String key) =>
+    t.getTopLeft(find.byKey(Key(key))).dy;
 
 void main() {
   testWidgets('the rows come in the agreed order, the ring first', (t) async {
@@ -67,8 +76,11 @@ void main() {
       'lights-visualization',
     ];
     for (var i = 0; i + 1 < order.length; i++) {
-      expect(_top(t, order[i]), lessThan(_top(t, order[i + 1])),
-          reason: '${order[i]} must sit above ${order[i + 1]}');
+      expect(
+        _top(t, order[i]),
+        lessThan(_top(t, order[i + 1])),
+        reason: '${order[i]} must sit above ${order[i + 1]}',
+      );
     }
     ctl.dispose();
   });
@@ -78,16 +90,20 @@ void main() {
     await _pump(t, ctl!);
     final grey = find.descendant(
       of: find.byType(LightsSection),
-      matching: find.byWidgetPredicate((w) =>
-          w is Card ||
-          (w is Container && w.color == NexusQColors.surface) ||
-          (w is Material && w.color == NexusQColors.surface)),
+      matching: find.byWidgetPredicate(
+        (w) =>
+            w is Card ||
+            (w is Container && w.color == NexusQColors.surface) ||
+            (w is Material && w.color == NexusQColors.surface),
+      ),
     );
     expect(grey, findsNothing);
     ctl.dispose();
   });
 
-  testWidgets('without a ring state the rest of LIGHTS is still there', (t) async {
+  testWidgets('without a ring state the rest of LIGHTS is still there', (
+    t,
+  ) async {
     final ctl = await t.runAsync(() => _started(_PreRingClient()));
     await _pump(t, ctl!);
     expect(find.byKey(const Key('ring-switch')), findsNothing);

@@ -46,7 +46,11 @@ class LightsSection extends StatelessWidget {
                 onChanged: (v) => controller.setBrightness(v.round()),
               ),
             ),
-            const Icon(Icons.brightness_high, color: NexusQColors.dim, size: 20),
+            const Icon(
+              Icons.brightness_high,
+              color: NexusQColors.dim,
+              size: 20,
+            ),
           ],
         ),
         if (s.ambient != null)
@@ -79,23 +83,39 @@ class LightsSection extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         gradient: t.colors.length > 1
-                            ? SweepGradient(colors: [...t.colors, t.colors.first])
+                            ? SweepGradient(
+                                colors: [...t.colors, t.colors.first],
+                              )
                             : null,
                         color: t.colors.length == 1 ? t.colors.first : null,
                         border: Border.all(
-                          color: selected ? NexusQColors.accent : NexusQColors.divider,
+                          color: selected
+                              ? NexusQColors.accent
+                              : NexusQColors.divider,
                           width: selected ? 3 : 1,
                         ),
                         boxShadow: selected
-                            ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                            ? [
+                                BoxShadow(
+                                  color: NexusQColors.accent.withValues(
+                                    alpha: 0.6,
+                                  ),
+                                  blurRadius: 8,
+                                ),
+                              ]
                             : null,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(t.label,
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                    Text(
+                      t.label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: selected
+                            ? NexusQColors.accent
+                            : NexusQColors.dim,
+                      ),
+                    ),
                   ],
                 ),
               );
@@ -126,22 +146,40 @@ class LightsSection extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: selected ? NexusQColors.accent : NexusQColors.divider,
+                          color: selected
+                              ? NexusQColors.accent
+                              : NexusQColors.divider,
                           width: selected ? 3 : 1,
                         ),
                         boxShadow: selected
-                            ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                            ? [
+                                BoxShadow(
+                                  color: NexusQColors.accent.withValues(
+                                    alpha: 0.6,
+                                  ),
+                                  blurRadius: 8,
+                                ),
+                              ]
                             : null,
                       ),
-                      child: Icon(v.icon,
-                          size: 20,
-                          color: selected ? NexusQColors.accent : NexusQColors.dim),
+                      child: Icon(
+                        v.icon,
+                        size: 20,
+                        color: selected
+                            ? NexusQColors.accent
+                            : NexusQColors.dim,
+                      ),
                     ),
                     const SizedBox(height: 4),
-                    Text(v.label,
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: selected ? NexusQColors.accent : NexusQColors.dim)),
+                    Text(
+                      v.label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: selected
+                            ? NexusQColors.accent
+                            : NexusQColors.dim,
+                      ),
+                    ),
                   ],
                 ),
               );
@@ -162,7 +200,10 @@ class _RowLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 12, bottom: 2),
-        child: Text(text, style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
-      );
+    padding: const EdgeInsets.only(top: 12, bottom: 2),
+    child: Text(
+      text,
+      style: const TextStyle(color: NexusQColors.white, fontSize: 16),
+    ),
+  );
 }

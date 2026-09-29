@@ -37,16 +37,24 @@ Future<Discovered?> discoverNexusQ({
   final client = MDnsClient();
   try {
     await client.start();
-    await for (final ptr in client
-        .lookup<PtrResourceRecord>(ResourceRecordQuery.serverPointer(_serviceType))
-        .timeout(timeout, onTimeout: (sink) => sink.close())) {
-      await for (final srv in client
-          .lookup<SrvResourceRecord>(ResourceRecordQuery.service(ptr.domainName))
-          .timeout(timeout, onTimeout: (sink) => sink.close())) {
-        await for (final ip in client
-            .lookup<IPAddressResourceRecord>(
-                ResourceRecordQuery.addressIPv4(srv.target))
+    await for (final ptr
+        in client
+            .lookup<PtrResourceRecord>(
+              ResourceRecordQuery.serverPointer(_serviceType),
+            )
             .timeout(timeout, onTimeout: (sink) => sink.close())) {
+      await for (final srv
+          in client
+              .lookup<SrvResourceRecord>(
+                ResourceRecordQuery.service(ptr.domainName),
+              )
+              .timeout(timeout, onTimeout: (sink) => sink.close())) {
+        await for (final ip
+            in client
+                .lookup<IPAddressResourceRecord>(
+                  ResourceRecordQuery.addressIPv4(srv.target),
+                )
+                .timeout(timeout, onTimeout: (sink) => sink.close())) {
           final name = ptr.domainName.split('.').first.replaceAll('\\032', ' ');
           return Discovered(name, ip.address.address, srv.port);
         }
@@ -65,10 +73,11 @@ Future<Discovered?> discoverNexusQ({
 /// channel itself wedging (it then reads as "nothing found", never a throw).
 Future<Discovered?> _discoverNative(Duration timeout) async {
   try {
-    final r = await _bonjourChannel.invokeMapMethod<String, dynamic>(
-      'discover',
-      {'timeoutMs': timeout.inMilliseconds},
-    ).timeout(timeout + const Duration(seconds: 2));
+    final r = await _bonjourChannel
+        .invokeMapMethod<String, dynamic>('discover', {
+          'timeoutMs': timeout.inMilliseconds,
+        })
+        .timeout(timeout + const Duration(seconds: 2));
     final host = r?['host'] as String?;
     final port = r?['port'] as int?;
     if (host == null || host.isEmpty || port == null) return null;
@@ -104,16 +113,29 @@ Stream<Discovered> discoverNexusQAll({
         final d = deadline.difference(DateTime.now());
         return d.isNegative ? Duration.zero : d;
       }
-      await for (final ptr in client
-          .lookup<PtrResourceRecord>(ResourceRecordQuery.serverPointer(_serviceType))
-          .timeout(timeout, onTimeout: (sink) => sink.close())) {
-        await for (final srv in client
-            .lookup<SrvResourceRecord>(ResourceRecordQuery.service(ptr.domainName))
-            .timeout(left(), onTimeout: (sink) => sink.close())) {
-          await for (final ip in client
-              .lookup<IPAddressResourceRecord>(ResourceRecordQuery.addressIPv4(srv.target))
-              .timeout(left(), onTimeout: (sink) => sink.close())) {
-            final name = ptr.domainName.split('.').first.replaceAll('\\032', ' ');
+
+      await for (final ptr
+          in client
+              .lookup<PtrResourceRecord>(
+                ResourceRecordQuery.serverPointer(_serviceType),
+              )
+              .timeout(timeout, onTimeout: (sink) => sink.close())) {
+        await for (final srv
+            in client
+                .lookup<SrvResourceRecord>(
+                  ResourceRecordQuery.service(ptr.domainName),
+                )
+                .timeout(left(), onTimeout: (sink) => sink.close())) {
+          await for (final ip
+              in client
+                  .lookup<IPAddressResourceRecord>(
+                    ResourceRecordQuery.addressIPv4(srv.target),
+                  )
+                  .timeout(left(), onTimeout: (sink) => sink.close())) {
+            final name = ptr.domainName
+                .split('.')
+                .first
+                .replaceAll('\\032', ' ');
             final d = Discovered(name, ip.address.address, srv.port);
             if (seen.add(d.key) && !out.isClosed) out.add(d);
             break; // one address per bridge is enough
@@ -135,10 +157,11 @@ Stream<Discovered> _discoverAllNative(Duration timeout) {
   final out = StreamController<Discovered>();
   () async {
     try {
-      final list = await _bonjourChannel.invokeListMethod<dynamic>(
-        'discoverAll',
-        {'timeoutMs': timeout.inMilliseconds},
-      ).timeout(timeout + const Duration(seconds: 2));
+      final list = await _bonjourChannel
+          .invokeListMethod<dynamic>('discoverAll', {
+            'timeoutMs': timeout.inMilliseconds,
+          })
+          .timeout(timeout + const Duration(seconds: 2));
       final seen = <String>{};
       for (final r in list ?? const []) {
         if (r is! Map) continue;

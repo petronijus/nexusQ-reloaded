@@ -26,7 +26,7 @@ import 'app_update.dart';
 
 class UpdateCoordinator extends ChangeNotifier {
   UpdateCoordinator(this.client, {Future<void> Function(Duration)? sleep})
-      : _sleep = sleep ?? ((d) => Future<void>.delayed(d));
+    : _sleep = sleep ?? ((d) => Future<void>.delayed(d));
 
   final NexusQClient client;
   final Future<void> Function(Duration) _sleep;
@@ -128,7 +128,8 @@ class UpdateCoordinator extends ChangeNotifier {
         // A build with no APP_VERSION cannot compare itself to anything. Saying
         // so beats offering an update it would install forever (see AppUpdate).
         _update = null;
-        _updateError = 'This build has no version stamp — build with '
+        _updateError =
+            'This build has no version stamp — build with '
             'build-apk.sh to enable update checks.';
       } else if (rel.versionCode <= AppUpdate.currentVersionCode!) {
         _update = null; // genuinely up to date
@@ -206,7 +207,9 @@ class UpdateCoordinator extends ChangeNotifier {
         _set(() {
           _installingNexus = false;
           _nexusCheck = r;
-          _nexusError = stillPending ? 'Device update failed. Try again.' : null;
+          _nexusError = stillPending
+              ? 'Device update failed. Try again.'
+              : null;
         });
         return;
       }
@@ -251,16 +254,20 @@ class UpdateCoordinator extends ChangeNotifier {
     // libc/init churn) — so the call's disconnect is EXPECTED. apk exposes no
     // percentage, so the phases we DO know are narrated instead.
     await _call('installSystemUpdate');
-    _set(() => _systemProgress = 'Applying updates — the Q may restart to finish…');
+    _set(
+      () => _systemProgress = 'Applying updates — the Q may restart to finish…',
+    );
     await _sleep(const Duration(seconds: 12));
     await _verifySystemInstall();
   }
 
   Future<void> _verifySystemInstall() async {
     for (var attempt = 0; attempt < 8; attempt++) {
-      _set(() => _systemProgress = attempt == 0
-          ? 'Reconnecting to the Q…'
-          : 'Reconnecting to the Q… (${attempt + 1}/8)');
+      _set(
+        () => _systemProgress = attempt == 0
+            ? 'Reconnecting to the Q…'
+            : 'Reconnecting to the Q… (${attempt + 1}/8)',
+      );
       final r = await _call('checkSystemUpdate');
       // Wait past a transient disconnect (reboot) OR a busy reply (control still
       // finishing its install lock) before judging.
@@ -274,7 +281,7 @@ class UpdateCoordinator extends ChangeNotifier {
           // the device came back) — only nudge the user to run it again.
           _systemError = stillPending
               ? 'Installed — a few packages still pending; tap Update system '
-                  'again to finish them.'
+                    'again to finish them.'
               : null;
         });
         return;
@@ -290,7 +297,8 @@ class UpdateCoordinator extends ChangeNotifier {
 
   // --- the merged "App update" (phone app + device daemons) ------------------
 
-  Future<void> checkCompanion() => Future.wait([checkUpdate(), checkNexusUpdate()]);
+  Future<void> checkCompanion() =>
+      Future.wait([checkUpdate(), checkNexusUpdate()]);
 
   /// One "Update" action for the whole companion: device daemons FIRST, then
   /// the phone app. Whichever side has no update is simply skipped.
@@ -303,21 +311,34 @@ class UpdateCoordinator extends ChangeNotifier {
   String companionStatusLine() {
     final parts = <String>[];
     if (_update != null) {
-      parts.add(_update!.notes.isNotEmpty
-          ? 'App v${_update!.version} — ${_update!.notes}'
-          : 'App v${_update!.version}');
+      parts.add(
+        _update!.notes.isNotEmpty
+            ? 'App v${_update!.version} — ${_update!.notes}'
+            : 'App v${_update!.version}',
+      );
     }
     if (nexusUpdateAvailable) {
-      final pkgs = (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      final up = pkgs.where((p) => p['upgradable'] == true).map((p) => '${p['name']} → ${p['available']}');
+      final pkgs =
+          (_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ??
+          [];
+      final up = pkgs
+          .where((p) => p['upgradable'] == true)
+          .map((p) => '${p['name']} → ${p['available']}');
       parts.add('Device software: ${up.join(', ')}');
     }
     if (parts.isNotEmpty) return parts.join('\n');
-    final ctrl = ((_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ?? [])
-        .firstWhere((p) => p['name'] == 'nexusq-control', orElse: () => {'installed': '?'});
+    final ctrl =
+        ((_nexusCheck?['packages'] as List?)?.cast<Map<String, dynamic>>() ??
+                [])
+            .firstWhere(
+              (p) => p['name'] == 'nexusq-control',
+              orElse: () => {'installed': '?'},
+            );
     // On iOS the app binary is App Store/TestFlight-managed and never fetched
     // for comparison here, so qualify it rather than implying a completed check.
-    final app = AppUpdate.selfUpdateSupported ? 'App v$kAppVersion' : 'App v$kAppVersion (App Store)';
+    final app = AppUpdate.selfUpdateSupported
+        ? 'App v$kAppVersion'
+        : 'App v$kAppVersion (App Store)';
     return '$app · device nexusq-control ${ctrl['installed']}';
   }
 

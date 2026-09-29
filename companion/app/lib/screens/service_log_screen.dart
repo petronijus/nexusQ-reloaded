@@ -8,8 +8,12 @@ import '../theme/nexusq_theme.dart';
 /// service actually doing" window next to its on/off switch. Newest lines are at
 /// the bottom (journal order); the view starts scrolled there.
 class ServiceLogScreen extends StatefulWidget {
-  const ServiceLogScreen(
-      {super.key, required this.client, required this.id, required this.name});
+  const ServiceLogScreen({
+    super.key,
+    required this.client,
+    required this.id,
+    required this.name,
+  });
   final NexusQClient client;
   final String id;
   final String name;
@@ -39,8 +43,10 @@ class _ServiceLogScreenState extends State<ServiceLogScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final r = await widget.client
-          .call('serviceLog', {'id': widget.id, 'lines': 300});
+      final r = await widget.client.call('serviceLog', {
+        'id': widget.id,
+        'lines': 300,
+      });
       if (!mounted) return;
       setState(() {
         _lines = (r['lines'] as List? ?? []).map((e) => '$e').toList();
@@ -76,10 +82,14 @@ class _ServiceLogScreenState extends State<ServiceLogScreen> {
                 ? null
                 : () async {
                     await Clipboard.setData(
-                        ClipboardData(text: _lines.join('\n')));
+                      ClipboardData(text: _lines.join('\n')),
+                    );
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text('Log copied to clipboard')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Log copied to clipboard'),
+                        ),
+                      );
                     }
                   },
           ),
@@ -100,13 +110,16 @@ class _ServiceLogScreenState extends State<ServiceLogScreen> {
     }
     if (_error != null) {
       return Center(
-          child: Text(_error!,
-              style: const TextStyle(color: NexusQColors.dim)));
+        child: Text(_error!, style: const TextStyle(color: NexusQColors.dim)),
+      );
     }
     if (_lines.isEmpty) {
       return const Center(
-          child: Text('No log entries yet',
-              style: TextStyle(color: NexusQColors.dim)));
+        child: Text(
+          'No log entries yet',
+          style: TextStyle(color: NexusQColors.dim),
+        ),
+      );
     }
     return ListView.builder(
       controller: _scroll,
@@ -114,7 +127,8 @@ class _ServiceLogScreenState extends State<ServiceLogScreen> {
       itemCount: _lines.length,
       itemBuilder: (_, i) {
         final l = _lines[i];
-        final warn = l.contains('Warn') ||
+        final warn =
+            l.contains('Warn') ||
             l.contains('Error') ||
             l.contains('error') ||
             l.contains('failed');

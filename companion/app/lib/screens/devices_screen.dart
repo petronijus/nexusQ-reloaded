@@ -27,9 +27,9 @@ class DevicesScreen extends StatefulWidget {
 class _DevicesScreenState extends State<DevicesScreen> {
   List<Map<String, dynamic>> _paired = [];
   List<Map<String, dynamic>> _found = [];
-  bool _pairing = false;      // an inbound window is open
+  bool _pairing = false; // an inbound window is open
   bool _scanning = false;
-  String? _busyMac;           // a pair/forget is in flight for this device
+  String? _busyMac; // a pair/forget is in flight for this device
   String? _error;
   Timer? _poll;
 
@@ -53,16 +53,22 @@ class _DevicesScreenState extends State<DevicesScreen> {
   /// error bar. Only user-initiated actions (pair, forget, toggle) deserve a
   /// visible error; a 3 s poll blipping on a transient network hiccup should not
   /// scream red. This alone stops the flicker; the log tells us why it blipped.
-  Future<T?> _call<T>(String method,
-      [Map<String, dynamic>? params, bool silent = false]) async {
+  Future<T?> _call<T>(
+    String method, [
+    Map<String, dynamic>? params,
+    bool silent = false,
+  ]) async {
     final sw = Stopwatch()..start();
     try {
       final r = await widget.client.call(method, params);
       if (mounted && !silent) setState(() => _error = null);
       return r as T?;
     } catch (e) {
-      AppLog.add('devices', '$method failed after ${sw.elapsedMilliseconds}ms: $e',
-          warn: true);
+      AppLog.add(
+        'devices',
+        '$method failed after ${sw.elapsedMilliseconds}ms: $e',
+        warn: true,
+      );
       if (mounted && !silent) setState(() => _error = _humanError(e));
       return null;
     }
@@ -75,12 +81,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
       return 'Device not found — is it still in pairing mode?';
     }
     if (s.contains('AlreadyExists') || s.contains('already')) {
-      return 'Already paired.';  // not a failure — it is the outcome they wanted
+      return 'Already paired.'; // not a failure — it is the outcome they wanted
     }
     if (s.contains('pair_failed')) {
       return 'Pairing failed. Put the device back in pairing mode and retry.';
     }
-    if (s.contains('unavailable')) return 'The Q\'s Bluetooth is not responding.';
+    if (s.contains('unavailable')) {
+      return 'The Q\'s Bluetooth is not responding.';
+    }
     return 'Something went wrong. Try again.';
   }
 
@@ -90,22 +98,37 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   Future<void> _refreshQuiet() async {
     // silent: this is the 3 s background poll — errors go to the log, not the bar.
-    final paired = await _call<Map<String, dynamic>>('listPairedDevices', null, true);
-    final pairing = await _call<Map<String, dynamic>>('getPairingState', null, true);
+    final paired = await _call<Map<String, dynamic>>(
+      'listPairedDevices',
+      null,
+      true,
+    );
+    final pairing = await _call<Map<String, dynamic>>(
+      'getPairingState',
+      null,
+      true,
+    );
     if (!mounted) return;
     setState(() {
       if (paired != null) {
-        _paired = (paired['devices'] as List? ?? []).cast<Map<String, dynamic>>();
+        _paired = (paired['devices'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
       }
       if (pairing != null) _pairing = pairing['pairing'] == true;
     });
     if (_scanning) {
-      final r = await _call<Map<String, dynamic>>('listBtScanResults', null, true);
+      final r = await _call<Map<String, dynamic>>(
+        'listBtScanResults',
+        null,
+        true,
+      );
       if (r != null && mounted) {
-        setState(() => _found = (r['devices'] as List? ?? [])
-            .cast<Map<String, dynamic>>()
-            .where((d) => d['paired'] != true)
-            .toList());
+        setState(
+          () => _found = (r['devices'] as List? ?? [])
+              .cast<Map<String, dynamic>>()
+              .where((d) => d['paired'] != true)
+              .toList(),
+        );
       }
     }
   }
@@ -116,7 +139,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   Future<void> _scan() async {
-    setState(() { _scanning = true; _found = []; });
+    setState(() {
+      _scanning = true;
+      _found = [];
+    });
     await _call('startBtScan', {'secs': 25});
     // The scan self-stops on the device; mirror that here so the UI does not
     // claim to be searching after the radio has stopped.
@@ -127,7 +153,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   Future<void> _pair(Map<String, dynamic> d) async {
     setState(() => _busyMac = d['mac'] as String?);
-    final r = await _call<Map<String, dynamic>>('pairBtDevice', {'mac': d['mac']});
+    final r = await _call<Map<String, dynamic>>('pairBtDevice', {
+      'mac': d['mac'],
+    });
     if (!mounted) return;
     setState(() => _busyMac = null);
     if (r != null) {
@@ -143,9 +171,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
       // `paired` alone lies: a session-only pairing reports paired and then
       // evaporates on the next reboot. Say so rather than quietly promise.
       final bonded = r['bonded'] == true;
-      _toast(bonded
-          ? '${d['name']} paired'
-          : '${d['name']} connected, but the pairing will not survive a restart');
+      _toast(
+        bonded
+            ? '${d['name']} paired'
+            : '${d['name']} connected, but the pairing will not survive a restart',
+      );
     }
     await _refresh();
   }
@@ -155,8 +185,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
       context: context,
       builder: (c) => AlertDialog(
         backgroundColor: NexusQColors.surface,
-        title: Text('Forget ${d['name']}?',
-            style: const TextStyle(color: NexusQColors.white)),
+        title: Text(
+          'Forget ${d['name']}?',
+          style: const TextStyle(color: NexusQColors.white),
+        ),
         content: Text(
           d['connected'] == true
               ? 'It is connected now — this will disconnect it.'
@@ -164,8 +196,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
           style: const TextStyle(color: NexusQColors.dim),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Forget')),
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Forget'),
+          ),
         ],
       ),
     );
@@ -182,15 +220,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   IconData _icon(String? kind) => switch (kind) {
-        'mouse' => Icons.mouse,
-        'keyboard' => Icons.keyboard,
-        'phone' => Icons.smartphone,
-        'headphones' => Icons.headphones,
-        'audio' => Icons.speaker,
-        'computer' => Icons.computer,
-        'input' => Icons.videogame_asset,
-        _ => Icons.bluetooth,
-      };
+    'mouse' => Icons.mouse,
+    'keyboard' => Icons.keyboard,
+    'phone' => Icons.smartphone,
+    'headphones' => Icons.headphones,
+    'audio' => Icons.speaker,
+    'computer' => Icons.computer,
+    'input' => Icons.videogame_asset,
+    _ => Icons.bluetooth,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -209,16 +247,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
           Card(
             color: NexusQColors.surface,
             child: ListTile(
-              leading: Icon(_pairing ? Icons.bluetooth_searching : Icons.bluetooth,
-                  color: _pairing ? NexusQColors.accent : NexusQColors.dim),
-              title: Text(_pairing ? 'Ready to pair' : 'Pair a phone',
-                  style: const TextStyle(color: NexusQColors.white)),
+              leading: Icon(
+                _pairing ? Icons.bluetooth_searching : Icons.bluetooth,
+                color: _pairing ? NexusQColors.accent : NexusQColors.dim,
+              ),
+              title: Text(
+                _pairing ? 'Ready to pair' : 'Pair a phone',
+                style: const TextStyle(color: NexusQColors.white),
+              ),
               subtitle: Text(
                 _pairing
                     // The ring is the device-side half of this message; say the
                     // same thing the user is looking at.
                     ? 'The ring is spinning blue. Pick the Q in your phone\'s '
-                        'Bluetooth settings. Closes itself after 2 minutes.'
+                          'Bluetooth settings. Closes itself after 2 minutes.'
                     : 'Opens a 2-minute window so a phone can pair for music.',
                 style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
               ),
@@ -238,8 +280,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
               children: [
                 ListTile(
                   leading: const Icon(Icons.search, color: NexusQColors.dim),
-                  title: Text(_scanning ? 'Searching…' : 'Search for devices',
-                      style: const TextStyle(color: NexusQColors.white)),
+                  title: Text(
+                    _scanning ? 'Searching…' : 'Search for devices',
+                    style: const TextStyle(color: NexusQColors.white),
+                  ),
                   subtitle: const Text(
                     'Put the device in pairing mode first (usually hold its '
                     'button until it blinks).',
@@ -247,16 +291,23 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   ),
                   trailing: _scanning
                       ? const SizedBox(
-                          width: 18, height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : TextButton(onPressed: _scan, child: const Text('Search')),
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : TextButton(
+                          onPressed: _scan,
+                          child: const Text('Search'),
+                        ),
                 ),
                 for (final d in _found) _deviceTile(d, paired: false),
                 if (_scanning && _found.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(bottom: 12),
-                    child: Text('Nothing yet…',
-                        style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+                    child: Text(
+                      'Nothing yet…',
+                      style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+                    ),
                   ),
               ],
             ),
@@ -269,9 +320,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
             color: NexusQColors.surface,
             child: _paired.isEmpty
                 ? const ListTile(
-                    title: Text('Nothing paired yet',
-                        style: TextStyle(color: NexusQColors.dim)))
-                : Column(children: [for (final d in _paired) _deviceTile(d, paired: true)]),
+                    title: Text(
+                      'Nothing paired yet',
+                      style: TextStyle(color: NexusQColors.dim),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (final d in _paired) _deviceTile(d, paired: true),
+                    ],
+                  ),
           ),
 
           const SizedBox(height: 24),
@@ -281,24 +339,31 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   Widget _sectionTitle(String s) => Padding(
-        padding: const EdgeInsets.only(left: 4, bottom: 6),
-        child: Text(s,
-            style: const TextStyle(
-                color: NexusQColors.white, fontSize: 15, fontWeight: FontWeight.w300)),
-      );
+    padding: const EdgeInsets.only(left: 4, bottom: 6),
+    child: Text(
+      s,
+      style: const TextStyle(
+        color: NexusQColors.white,
+        fontSize: 15,
+        fontWeight: FontWeight.w300,
+      ),
+    ),
+  );
 
   Widget _errorBar() => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.red.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(_error!,
-              style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        _error!,
+        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+      ),
+    ),
+  );
 
   Widget _deviceTile(Map<String, dynamic> d, {required bool paired}) {
     final busy = _busyMac == d['mac'];
@@ -307,10 +372,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
     // reboot. Surface it rather than let the user rediscover it the hard way.
     final flaky = paired && d['bonded'] != true;
     return ListTile(
-      leading: Icon(_icon(d['kind'] as String?),
-          color: connected ? NexusQColors.accent : NexusQColors.dim),
-      title: Text(d['name'] as String? ?? d['mac'] as String? ?? '?',
-          style: const TextStyle(color: NexusQColors.white)),
+      leading: Icon(
+        _icon(d['kind'] as String?),
+        color: connected ? NexusQColors.accent : NexusQColors.dim,
+      ),
+      title: Text(
+        d['name'] as String? ?? d['mac'] as String? ?? '?',
+        style: const TextStyle(color: NexusQColors.white),
+      ),
       subtitle: Text(
         [
           if (connected) 'Connected',
@@ -318,14 +387,19 @@ class _DevicesScreenState extends State<DevicesScreen> {
           if (!connected && !flaky && paired) 'Paired',
         ].join(' · '),
         style: TextStyle(
-            color: flaky ? Colors.orangeAccent : NexusQColors.dim, fontSize: 12),
+          color: flaky ? Colors.orangeAccent : NexusQColors.dim,
+          fontSize: 12,
+        ),
       ),
       trailing: busy
           ? const SizedBox(
-              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
           : paired
-              ? TextButton(onPressed: () => _forget(d), child: const Text('Forget'))
-              : FilledButton(onPressed: () => _pair(d), child: const Text('Pair')),
+          ? TextButton(onPressed: () => _forget(d), child: const Text('Forget'))
+          : FilledButton(onPressed: () => _pair(d), child: const Text('Pair')),
     );
   }
 }

@@ -32,19 +32,25 @@ import '../debug/app_log.dart';
 import 'spotify_auth.dart';
 
 class SpotifyDevice {
-  const SpotifyDevice({required this.id, required this.name, required this.type, this.isActive = false});
+  const SpotifyDevice({
+    required this.id,
+    required this.name,
+    required this.type,
+    this.isActive = false,
+  });
   final String id, name, type;
   final bool isActive;
 
   factory SpotifyDevice.fromJson(Map<String, dynamic> j) => SpotifyDevice(
-        id: j['id'] as String? ?? '',
-        name: j['name'] as String? ?? '',
-        type: j['type'] as String? ?? '',
-        isActive: j['is_active'] == true,
-      );
+    id: j['id'] as String? ?? '',
+    name: j['name'] as String? ?? '',
+    type: j['type'] as String? ?? '',
+    isActive: j['is_active'] == true,
+  );
 }
 
-String _fold(String s) => s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+String _fold(String s) =>
+    s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
 /// Which of the user's Connect devices is THIS Q. Exact name match first
 /// (case and whitespace folded — Spotify returns the name as librespot sent
@@ -58,7 +64,10 @@ SpotifyDevice? matchQDevice(List<SpotifyDevice> devices, String qName) {
     if (_fold(d.name) == want) return d;
   }
   final speakers = devices
-      .where((d) => d.type.toLowerCase() == 'speaker' && _fold(d.name).contains(want))
+      .where(
+        (d) =>
+            d.type.toLowerCase() == 'speaker' && _fold(d.name).contains(want),
+      )
       .toList();
   return speakers.length == 1 ? speakers.first : null;
 }
@@ -87,11 +96,15 @@ class SpotifyTrack {
     for (final i in images) {
       if (i is! Map) continue;
       final h = (i['height'] as num?)?.toInt() ?? 0;
-      if (h >= 160 && (best == null || h < ((best['height'] as num?)?.toInt() ?? 1 << 30))) {
+      if (h >= 160 &&
+          (best == null ||
+              h < ((best['height'] as num?)?.toInt() ?? 1 << 30))) {
         best = i;
       }
     }
-    best ??= images.isNotEmpty && images.first is Map ? images.first as Map : null;
+    best ??= images.isNotEmpty && images.first is Map
+        ? images.first as Map
+        : null;
     return best?['url'] as String? ?? '';
   }
 
@@ -154,7 +167,10 @@ class SpotifyProgress {
   /// which the bar draws as nothing rather than as "at the start".
   double? fractionAt(DateTime now, {bool? playing}) => durationMs <= 0
       ? null
-      : (positionAt(now, playing: playing).inMilliseconds / durationMs).clamp(0.0, 1.0);
+      : (positionAt(now, playing: playing).inMilliseconds / durationMs).clamp(
+          0.0,
+          1.0,
+        );
 }
 
 /// What Spotify is playing and what follows it.
@@ -171,11 +187,15 @@ class SpotifyQueue {
     final cur = j['currently_playing'];
     final list = <SpotifyTrack>[];
     for (final t in (j['queue'] as List? ?? const [])) {
-      if (t is Map) list.add(SpotifyTrack.fromJson(Map<String, dynamic>.from(t)));
+      if (t is Map) {
+        list.add(SpotifyTrack.fromJson(Map<String, dynamic>.from(t)));
+      }
       if (list.length >= max) break;
     }
     return SpotifyQueue(
-      current: cur is Map ? SpotifyTrack.fromJson(Map<String, dynamic>.from(cur)) : null,
+      current: cur is Map
+          ? SpotifyTrack.fromJson(Map<String, dynamic>.from(cur))
+          : null,
       upNext: list,
     );
   }
@@ -189,7 +209,8 @@ class SpotifyPlayerException implements Exception {
 }
 
 class SpotifyPlayer {
-  SpotifyPlayer(this.link, {http.Client? httpClient}) : _http = httpClient ?? http.Client();
+  SpotifyPlayer(this.link, {http.Client? httpClient})
+    : _http = httpClient ?? http.Client();
   final SpotifyLink link;
   final http.Client _http;
 
@@ -211,10 +232,12 @@ class SpotifyPlayer {
     if (d == null) {
       if (list.isEmpty) {
         throw SpotifyPlayerException(
-            'Spotify lists no devices for this account. Start playing something to "$qName" from the Spotify app once, then try again.');
+          'Spotify lists no devices for this account. Start playing something to "$qName" from the Spotify app once, then try again.',
+        );
       }
       throw SpotifyPlayerException(
-          '"$qName" is not among this account\'s Spotify devices (${list.map((d) => d.name).join(', ')}).');
+        '"$qName" is not among this account\'s Spotify devices (${list.map((d) => d.name).join(', ')}).',
+      );
     }
     return d;
   }
@@ -229,18 +252,31 @@ class SpotifyPlayer {
       await _call('PUT', '$path?device_id=${Uri.encodeQueryComponent(d.id)}');
     } on _NoActiveDevice {
       if (!playing) return; // nothing to pause
-      await _call('PUT', '/me/player', body: {'device_ids': [d.id], 'play': true});
+      await _call(
+        'PUT',
+        '/me/player',
+        body: {
+          'device_ids': [d.id],
+          'play': true,
+        },
+      );
     }
   }
 
   Future<void> next(String qName) async {
     final d = await qDevice(qName);
-    await _call('POST', '/me/player/next?device_id=${Uri.encodeQueryComponent(d.id)}');
+    await _call(
+      'POST',
+      '/me/player/next?device_id=${Uri.encodeQueryComponent(d.id)}',
+    );
   }
 
   Future<void> previous(String qName) async {
     final d = await qDevice(qName);
-    await _call('POST', '/me/player/previous?device_id=${Uri.encodeQueryComponent(d.id)}');
+    await _call(
+      'POST',
+      '/me/player/previous?device_id=${Uri.encodeQueryComponent(d.id)}',
+    );
   }
 
   /// Tell Spotify the Q's volume, so the Spotify apps show what the room
@@ -252,7 +288,10 @@ class SpotifyPlayer {
   Future<void> setVolume(String qName, int percent) async {
     final d = await qDevice(qName);
     final v = percent.clamp(0, 100);
-    await _call('PUT', '/me/player/volume?volume_percent=$v&device_id=${Uri.encodeQueryComponent(d.id)}');
+    await _call(
+      'PUT',
+      '/me/player/volume?volume_percent=$v&device_id=${Uri.encodeQueryComponent(d.id)}',
+    );
   }
 
   /// What is playing and what comes next. Deliberately NOT aimed at a
@@ -262,7 +301,9 @@ class SpotifyPlayer {
   /// rather than throwing when Spotify says 204 (nothing playing anywhere).
   Future<SpotifyQueue> queue() async {
     final res = await _call('GET', '/me/player/queue');
-    if (res.statusCode == 204 || res.body.trim().isEmpty) return const SpotifyQueue();
+    if (res.statusCode == 204 || res.body.trim().isEmpty) {
+      return const SpotifyQueue();
+    }
     final j = jsonDecode(res.body);
     if (j is! Map) return const SpotifyQueue();
     return SpotifyQueue.fromJson(Map<String, dynamic>.from(j));
@@ -284,19 +325,33 @@ class SpotifyPlayer {
     );
   }
 
-  Future<http.Response> _call(String method, String path, {Object? body, bool retried = false}) async {
+  Future<http.Response> _call(
+    String method,
+    String path, {
+    Object? body,
+    bool retried = false,
+  }) async {
     final token = await link.accessToken();
     final uri = Uri.parse('$_base$path');
-    final headers = {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'};
+    final headers = {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    };
     final http.Response res;
     try {
       final req = http.Request(method, uri)..headers.addAll(headers);
       if (body != null) req.body = jsonEncode(body);
-      res = await http.Response.fromStream(await _http.send(req)).timeout(const Duration(seconds: 12));
+      res = await http.Response.fromStream(
+        await _http.send(req),
+      ).timeout(const Duration(seconds: 12));
     } catch (e) {
       throw SpotifyPlayerException('Spotify did not answer: $e');
     }
-    if (res.statusCode == 200 || res.statusCode == 202 || res.statusCode == 204) return res;
+    if (res.statusCode == 200 ||
+        res.statusCode == 202 ||
+        res.statusCode == 204) {
+      return res;
+    }
     if (res.statusCode == 401 && !retried) {
       // Expired between our check and their clock; SpotifyLink refreshes on the
       // next accessToken() because the stored expiry is now in the past.
@@ -307,21 +362,28 @@ class SpotifyPlayer {
     try {
       final j = jsonDecode(res.body);
       if (j is Map && j['error'] is Map) {
-        reason = (j['error']['reason'] ?? j['error']['message'] ?? '').toString();
+        reason = (j['error']['reason'] ?? j['error']['message'] ?? '')
+            .toString();
       }
     } catch (_) {}
     AppLog.add('spotify', '$method $path -> ${res.statusCode} $reason');
-    if (res.statusCode == 404 && (reason == 'NO_ACTIVE_DEVICE' || reason.isEmpty)) {
+    if (res.statusCode == 404 &&
+        (reason == 'NO_ACTIVE_DEVICE' || reason.isEmpty)) {
       throw _NoActiveDevice();
     }
     if (res.statusCode == 403 && reason == 'PREMIUM_REQUIRED') {
-      throw SpotifyPlayerException('Spotify Premium is required to control playback.');
+      throw SpotifyPlayerException(
+        'Spotify Premium is required to control playback.',
+      );
     }
     if (res.statusCode == 429) {
-      throw SpotifyPlayerException('Spotify is rate-limiting; try again in a moment.');
+      throw SpotifyPlayerException(
+        'Spotify is rate-limiting; try again in a moment.',
+      );
     }
     throw SpotifyPlayerException(
-        'Spotify refused ($method ${uri.path}): HTTP ${res.statusCode}${reason.isEmpty ? '' : ' $reason'}');
+      'Spotify refused ($method ${uri.path}): HTTP ${res.statusCode}${reason.isEmpty ? '' : ' $reason'}',
+    );
   }
 }
 

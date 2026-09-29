@@ -30,7 +30,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     _precached = true;
     Future.wait([
       for (var i = 0; i < _frameCount; i++)
-        precacheImage(AssetImage('assets/stock/drawable/${_frameName(i)}'), context),
+        precacheImage(
+          AssetImage('assets/stock/drawable/${_frameName(i)}'),
+          context,
+        ),
     ]).whenComplete(() {
       if (!mounted) return;
       _timer = Timer.periodic(const Duration(milliseconds: 83), (_) {
@@ -58,14 +61,23 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           Center(
             child: SizedBox(
               height: 220,
-              child: stockImage(_frameName(_frame),
-                  height: 220, fallback: Icons.circle_outlined),
+              child: stockImage(
+                _frameName(_frame),
+                height: 220,
+                fallback: Icons.circle_outlined,
+              ),
             ),
           ),
           const SizedBox(height: 40),
-          const Text('Set up your Nexus Q',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          const Text(
+            'Set up your Nexus Q',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 12),
           const Text(
             'A few steps and your sphere is on the network and ready to play.',
@@ -73,12 +85,17 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             style: TextStyle(color: NexusQColors.dim, fontSize: 14),
           ),
           const SizedBox(height: 48),
-          FilledButton(onPressed: widget.onNext, child: const Text('Get started')),
+          FilledButton(
+            onPressed: widget.onNext,
+            child: const Text('Get started'),
+          ),
           const Spacer(),
           // Version + build stamp — lets us confirm at a glance exactly which
           // apk is on the phone (the version alone was stuck at 1.0.0 for ages).
-          const Text(kBuildLabel,
-              style: TextStyle(color: NexusQColors.dim, fontSize: 10)),
+          const Text(
+            kBuildLabel,
+            style: TextStyle(color: NexusQColors.dim, fontSize: 10),
+          ),
         ],
       ),
     );

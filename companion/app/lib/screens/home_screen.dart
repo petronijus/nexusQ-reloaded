@@ -52,12 +52,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   StreamSubscription<String>? _noticeSub;
 
-  Future<void> _connectSpotify(BuildContext context, DeviceController controller) async {
+  Future<void> _connectSpotify(
+    BuildContext context,
+    DeviceController controller,
+  ) async {
     try {
       await controller.spotify.beginLogin();
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e'.replaceFirst('SpotifyAuthException: ', ''))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$e'.replaceFirst('SpotifyAuthException: ', '')),
+        ),
+      );
     }
   }
 
@@ -107,14 +114,24 @@ class _HomeScreenState extends State<HomeScreen> {
               // closed (UpdateCoordinator); say so here, and lead back to it.
               ListenableBuilder(
                 listenable: UpdateCoordinator.forClient(controller.client),
-                builder: (context, _) => UpdateCoordinator.forClient(controller.client).busy
+                builder: (context, _) =>
+                    UpdateCoordinator.forClient(controller.client).busy
                     ? IconButton(
                         tooltip: 'Update in progress',
                         icon: const SizedBox(
-                            width: 18, height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: NexusQColors.accent)),
-                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => SettingsScreen(client: controller.client))),
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: NexusQColors.accent,
+                          ),
+                        ),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                SettingsScreen(client: controller.client),
+                          ),
+                        ),
                       )
                     : const SizedBox.shrink(),
               ),
@@ -128,7 +145,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: const Icon(Icons.bug_report_outlined),
                         tooltip: 'Debug log',
                         onPressed: () => Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => const DebugLogScreen())),
+                          MaterialPageRoute(
+                            builder: (_) => const DebugLogScreen(),
+                          ),
+                        ),
                       )
                     : const SizedBox.shrink(),
               ),
@@ -139,8 +159,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.swap_horiz),
                 tooltip: 'Switch Nexus Q',
                 onPressed: () => Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (_) => const ConnectGate(pickerOnly: true)),
-                    (route) => false),
+                  MaterialPageRoute(
+                    builder: (_) => const ConnectGate(pickerOnly: true),
+                  ),
+                  (route) => false,
+                ),
               ),
               // Bluetooth pairing. The app is the Q's only input device, so this
               // is its Bluetooth settings panel — there is no other way to pair a
@@ -148,20 +171,31 @@ class _HomeScreenState extends State<HomeScreen> {
               IconButton(
                 icon: const Icon(Icons.devices_other),
                 tooltip: 'Devices',
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => DevicesScreen(client: controller.client))),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DevicesScreen(client: controller.client),
+                  ),
+                ),
               ),
               // Settings: streaming-service toggles, the HDMI desktop, debug mode.
               IconButton(
                 icon: const Icon(Icons.settings_outlined),
                 tooltip: 'Settings',
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => SettingsScreen(client: controller.client))),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SettingsScreen(client: controller.client),
+                  ),
+                ),
               ),
               Padding(
-                padding: const EdgeInsets.only(right: NexusQSpace.standardMargin),
-                child: Icon(Icons.circle,
-                    size: 10, color: s.connected ? NexusQColors.accent : NexusQColors.dim),
+                padding: const EdgeInsets.only(
+                  right: NexusQSpace.standardMargin,
+                ),
+                child: Icon(
+                  Icons.circle,
+                  size: 10,
+                  color: s.connected ? NexusQColors.accent : NexusQColors.dim,
+                ),
               ),
             ],
           ),
@@ -171,194 +205,251 @@ class _HomeScreenState extends State<HomeScreen> {
           body: Listener(
             onPointerDown: (e) => _disarmIfOutside(e.position),
             child: SafeArea(
-            child: Column(
-              children: [
-                if (!s.connected)
-                  _ConnectionBanner(
-                    reconnecting: s.reconnecting,
-                    onRetry: controller.reconnectNow,
-                  ),
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(NexusQSpace.standardMargin,
-                        8, NexusQSpace.standardMargin, 24),
-                    children: [
-                      // --- the device, as the original showed it ----------------
-                      const SizedBox(height: 12),
-                      Center(
-                        child: DeviceSphere(
-                          on: !s.muted && s.theme != 'off' && s.ring?.on != false,
-                          colors: theme.colors, // base glow reflects the LED theme palette
-                          size: 184,
+              child: Column(
+                children: [
+                  if (!s.connected)
+                    _ConnectionBanner(
+                      reconnecting: s.reconnecting,
+                      onRetry: controller.reconnectNow,
+                    ),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(
+                        NexusQSpace.standardMargin,
+                        8,
+                        NexusQSpace.standardMargin,
+                        24,
+                      ),
+                      children: [
+                        // --- the device, as the original showed it ----------------
+                        const SizedBox(height: 12),
+                        Center(
+                          child: DeviceSphere(
+                            on:
+                                !s.muted &&
+                                s.theme != 'off' &&
+                                s.ring?.on != false,
+                            colors: theme
+                                .colors, // base glow reflects the LED theme palette
+                            size: 184,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      Center(
-                        child: Text(s.deviceName,
+                        const SizedBox(height: 14),
+                        Center(
+                          child: Text(
+                            s.deviceName,
                             style: TextStyle(
-                                color: nameColorFor(theme),
-                                fontSize: 20,
-                                fontWeight: FontWeight.w300)),
-                      ),
-                      if (!np.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Center(
-                            child: Text('${np.track} · ${np.artist}',
+                              color: nameColorFor(theme),
+                              fontSize: 20,
+                              fontWeight: FontWeight.w300,
+                            ),
+                          ),
+                        ),
+                        if (!np.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Center(
+                              child: Text(
+                                '${np.track} · ${np.artist}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
-                          ),
-                        ),
-                      const SizedBox(height: 20),
-
-                      // --- VOLUME ----------------------------------------------
-                      const _SectionHeader('VOLUME'),
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: controller.toggleMute,
-                            icon: Icon(s.muted ? Icons.volume_off : Icons.volume_up),
-                            color: s.muted ? NexusQColors.dim : NexusQColors.accent,
-                          ),
-                          Expanded(
-                            child: Slider(
-                              value: s.volume.toDouble(),
-                              max: 100,
-                              onChanged: (v) => controller.setVolume(v.round()),
-                              onChangeEnd: (v) => controller.commitVolume(v.round()),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 36,
-                            child: Text('${s.volume}',
-                                textAlign: TextAlign.right,
-                                style: const TextStyle(color: NexusQColors.dim)),
-                          ),
-                        ],
-                      ),
-
-                      // --- OUTPUT (PulseAudio sink routing) --------------------
-                      const _SectionHeader('OUTPUT'),
-                      _OutputSelector(
-                        outputs: s.outputs,
-                        active: s.output,
-                        onSelect: controller.setOutput,
-                      ),
-
-                      // --- LIGHTS: ring, schedule, brightness, ambient, theme,
-                      // visualisation — one category (lights_section.dart).
-                      const _SectionHeader('LIGHTS'),
-                      LightsSection(controller: controller),
-
-                      // --- NOW PLAYING -----------------------------------------
-                      // The buttons follow nowPlaying.transport (PROTOCOL §5):
-                      // enabled only when someone can actually act on a tap —
-                      // the bridge (`device`) or this phone via Spotify's Web
-                      // API (`spotify-web` + a linked account). Dead-but-
-                      // enabled buttons were the state of this row until 1.18.
-                      const _SectionHeader('NOW PLAYING'),
-                      Builder(builder: (context) {
-                        final route = controller.transportRoute;
-                        // Enabled needs BOTH a route that can act and something
-                        // to act on: at the end of a queue every button is a
-                        // no-op that reports a Spotify error instead.
-                        final enabled =
-                            controlsEnabled(route) && !controller.nothingToPlay;
-                        final dimColor = enabled ? NexusQColors.white : NexusQColors.dim;
-                        final q = controller.queue;
-                        return Column(children: [
-                          // What is playing, with its cover. The bridge knows
-                          // the track (librespot's hook) but never the artwork
-                          // in practice, and it cannot know the queue at all —
-                          // so when Spotify is linked its answer is the better
-                          // one and is preferred here (Petr, 2026-09-07: "nevidim
-                          // vubec tam nazev toho co hraje ani artwork").
-                          // Nothing loaded → nothing drawn. Not a title over a
-                          // placeholder square for a song that ended minutes
-                          // ago (Petr: "proste tam nic neni").
-                          if (!controller.nothingToPlay)
-                            _NowPlayingCard(
-                              title: q?.current?.title.isNotEmpty == true ? q!.current!.title : np.track,
-                              subtitle: q?.current?.artist.isNotEmpty == true ? q!.current!.artist : np.artist,
-                              detail: q?.current?.album ?? np.album,
-                              artUrl: q?.current?.artUrl.isNotEmpty == true ? q!.current!.artUrl : np.artUrl,
-                              progress: controller.progress,
-                              // The LIVE flag, straight off the bridge: the
-                              // sampled one inside `progress` is as old as the
-                              // last fetch.
-                              playing: np.playing,
-                            ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                  onPressed: enabled ? controller.previous : null,
-                                  icon: const Icon(Icons.skip_previous),
-                                  color: dimColor,
-                                  disabledColor: NexusQColors.dim),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                iconSize: 40,
-                                onPressed: enabled ? controller.playPause : null,
-                                icon: Icon(np.playing
-                                    ? Icons.pause_circle_filled
-                                    : Icons.play_circle_filled),
-                                color: NexusQColors.accent,
-                                disabledColor: NexusQColors.dim,
+                                style: const TextStyle(
+                                  color: NexusQColors.dim,
+                                  fontSize: 13,
+                                ),
                               ),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                  onPressed: enabled ? controller.next : null,
-                                  icon: const Icon(Icons.skip_next),
-                                  color: dimColor,
-                                  disabledColor: NexusQColors.dim),
-                            ],
+                            ),
                           ),
-                          if (route == TransportRoute.spotifyUnlinked)
-                            TextButton.icon(
-                              onPressed: () => _connectSpotify(context, controller),
-                              icon: const Icon(Icons.link, size: 16),
-                              label: Text(
-                                  controller.spotify.isConfigured
-                                      ? 'Connect Spotify to control playback'
-                                      : 'Spotify control is not configured in this build',
-                                  style: const TextStyle(fontSize: 12)),
-                            ),
-                          if (route == TransportRoute.none && !np.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 2),
-                              child: Text('This source can only be controlled from its own app',
-                                  style: TextStyle(fontSize: 11, color: NexusQColors.dim)),
-                            ),
-                          // Only Spotify can say what follows; there is nothing
-                          // to show for the other sources, so the header is not
-                          // drawn either rather than standing over a blank.
-                          if (q != null && q.upNext.isNotEmpty) ...[
-                            const SizedBox(height: 14),
-                            const _SectionHeader('UP NEXT'),
-                            for (final t in q.upNext) _UpNextRow(track: t),
-                          ],
-                        ]);
-                      }),
+                        const SizedBox(height: 20),
 
-                      // --- EQ --------------------------------------------------
-                      // Last, and the ONLY place it lives: it is the tallest
-                      // control here and the least often touched, and a drag
-                      // inside the curve has to win over the page scroll, so it
-                      // does not belong in the middle of the list.
-                      const _SectionHeader('EQUALIZER'),
-                      EqCard(
-                        client: controller.client,
-                        armed: _eqArmed,
-                        curveKey: _eqCurveKey,
-                      ),
-                    ],
+                        // --- VOLUME ----------------------------------------------
+                        const _SectionHeader('VOLUME'),
+                        Row(
+                          children: [
+                            IconButton(
+                              onPressed: controller.toggleMute,
+                              icon: Icon(
+                                s.muted ? Icons.volume_off : Icons.volume_up,
+                              ),
+                              color: s.muted
+                                  ? NexusQColors.dim
+                                  : NexusQColors.accent,
+                            ),
+                            Expanded(
+                              child: Slider(
+                                value: s.volume.toDouble(),
+                                max: 100,
+                                onChanged: (v) =>
+                                    controller.setVolume(v.round()),
+                                onChangeEnd: (v) =>
+                                    controller.commitVolume(v.round()),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 36,
+                              child: Text(
+                                '${s.volume}',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(color: NexusQColors.dim),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        // --- OUTPUT (PulseAudio sink routing) --------------------
+                        const _SectionHeader('OUTPUT'),
+                        _OutputSelector(
+                          outputs: s.outputs,
+                          active: s.output,
+                          onSelect: controller.setOutput,
+                        ),
+
+                        // --- LIGHTS: ring, schedule, brightness, ambient, theme,
+                        // visualisation — one category (lights_section.dart).
+                        const _SectionHeader('LIGHTS'),
+                        LightsSection(controller: controller),
+
+                        // --- NOW PLAYING -----------------------------------------
+                        // The buttons follow nowPlaying.transport (PROTOCOL §5):
+                        // enabled only when someone can actually act on a tap —
+                        // the bridge (`device`) or this phone via Spotify's Web
+                        // API (`spotify-web` + a linked account). Dead-but-
+                        // enabled buttons were the state of this row until 1.18.
+                        const _SectionHeader('NOW PLAYING'),
+                        Builder(
+                          builder: (context) {
+                            final route = controller.transportRoute;
+                            // Enabled needs BOTH a route that can act and something
+                            // to act on: at the end of a queue every button is a
+                            // no-op that reports a Spotify error instead.
+                            final enabled =
+                                controlsEnabled(route) &&
+                                !controller.nothingToPlay;
+                            final dimColor = enabled
+                                ? NexusQColors.white
+                                : NexusQColors.dim;
+                            final q = controller.queue;
+                            return Column(
+                              children: [
+                                // What is playing, with its cover. The bridge knows
+                                // the track (librespot's hook) but never the artwork
+                                // in practice, and it cannot know the queue at all —
+                                // so when Spotify is linked its answer is the better
+                                // one and is preferred here (Petr, 2026-09-07: "nevidim
+                                // vubec tam nazev toho co hraje ani artwork").
+                                // Nothing loaded → nothing drawn. Not a title over a
+                                // placeholder square for a song that ended minutes
+                                // ago (Petr: "proste tam nic neni").
+                                if (!controller.nothingToPlay)
+                                  _NowPlayingCard(
+                                    title: q?.current?.title.isNotEmpty == true
+                                        ? q!.current!.title
+                                        : np.track,
+                                    subtitle:
+                                        q?.current?.artist.isNotEmpty == true
+                                        ? q!.current!.artist
+                                        : np.artist,
+                                    detail: q?.current?.album ?? np.album,
+                                    artUrl:
+                                        q?.current?.artUrl.isNotEmpty == true
+                                        ? q!.current!.artUrl
+                                        : np.artUrl,
+                                    progress: controller.progress,
+                                    // The LIVE flag, straight off the bridge: the
+                                    // sampled one inside `progress` is as old as the
+                                    // last fetch.
+                                    playing: np.playing,
+                                  ),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    IconButton(
+                                      onPressed: enabled
+                                          ? controller.previous
+                                          : null,
+                                      icon: const Icon(Icons.skip_previous),
+                                      color: dimColor,
+                                      disabledColor: NexusQColors.dim,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      iconSize: 40,
+                                      onPressed: enabled
+                                          ? controller.playPause
+                                          : null,
+                                      icon: Icon(
+                                        np.playing
+                                            ? Icons.pause_circle_filled
+                                            : Icons.play_circle_filled,
+                                      ),
+                                      color: NexusQColors.accent,
+                                      disabledColor: NexusQColors.dim,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      onPressed: enabled
+                                          ? controller.next
+                                          : null,
+                                      icon: const Icon(Icons.skip_next),
+                                      color: dimColor,
+                                      disabledColor: NexusQColors.dim,
+                                    ),
+                                  ],
+                                ),
+                                if (route == TransportRoute.spotifyUnlinked)
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        _connectSpotify(context, controller),
+                                    icon: const Icon(Icons.link, size: 16),
+                                    label: Text(
+                                      controller.spotify.isConfigured
+                                          ? 'Connect Spotify to control playback'
+                                          : 'Spotify control is not configured in this build',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                if (route == TransportRoute.none && !np.isEmpty)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Text(
+                                      'This source can only be controlled from its own app',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: NexusQColors.dim,
+                                      ),
+                                    ),
+                                  ),
+                                // Only Spotify can say what follows; there is nothing
+                                // to show for the other sources, so the header is not
+                                // drawn either rather than standing over a blank.
+                                if (q != null && q.upNext.isNotEmpty) ...[
+                                  const SizedBox(height: 14),
+                                  const _SectionHeader('UP NEXT'),
+                                  for (final t in q.upNext)
+                                    _UpNextRow(track: t),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
+
+                        // --- EQ --------------------------------------------------
+                        // Last, and the ONLY place it lives: it is the tallest
+                        // control here and the least often touched, and a drag
+                        // inside the curve has to win over the page scroll, so it
+                        // does not belong in the middle of the list.
+                        const _SectionHeader('EQUALIZER'),
+                        EqCard(
+                          client: controller.client,
+                          armed: _eqArmed,
+                          curveKey: _eqCurveKey,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           ),
         );
       },
@@ -380,7 +471,9 @@ class _ConnectionBanner extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(
-          horizontal: NexusQSpace.standardMargin, vertical: 6),
+        horizontal: NexusQSpace.standardMargin,
+        vertical: 6,
+      ),
       decoration: const BoxDecoration(
         color: NexusQColors.surface,
         border: Border(bottom: BorderSide(color: NexusQColors.divider)),
@@ -392,7 +485,9 @@ class _ConnectionBanner extends StatelessWidget {
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
-                  strokeWidth: 2, color: NexusQColors.accent),
+                strokeWidth: 2,
+                color: NexusQColors.accent,
+              ),
             )
           else
             const Icon(Icons.wifi_off, size: 16, color: NexusQColors.dim),
@@ -455,8 +550,8 @@ class _OutputPill extends StatelessWidget {
     final fg = !enabled
         ? NexusQColors.divider
         : selected
-            ? NexusQColors.accent
-            : NexusQColors.dim;
+        ? NexusQColors.accent
+        : NexusQColors.dim;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -469,7 +564,12 @@ class _OutputPill extends StatelessWidget {
             width: selected ? 2 : 1,
           ),
           boxShadow: selected
-              ? [BoxShadow(color: NexusQColors.accent.withValues(alpha: 0.5), blurRadius: 8)]
+              ? [
+                  BoxShadow(
+                    color: NexusQColors.accent.withValues(alpha: 0.5),
+                    blurRadius: 8,
+                  ),
+                ]
               : null,
         ),
         child: Column(
@@ -503,12 +603,15 @@ class _SectionHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  color: NexusQColors.accent,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 1.2)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: NexusQColors.accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 1.2,
+            ),
+          ),
           const SizedBox(height: 4),
           Container(height: 1, color: NexusQColors.divider),
         ],
@@ -546,42 +649,52 @@ class _NowPlayingCard extends StatelessWidget {
     // caller already skips the card when nothing is loaded.
     if (title.isEmpty && subtitle.isEmpty) return const SizedBox.shrink();
     final row = Row(
-        children: [
-          _Cover(url: artUrl, size: 64),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: NexusQColors.white, fontSize: 16)),
-                if (subtitle.isNotEmpty)
-                  Text(subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
-                if (detail.isNotEmpty)
-                  Text(detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
-              ],
-            ),
+      children: [
+        _Cover(url: artUrl, size: 64),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: NexusQColors.white, fontSize: 16),
+              ),
+              if (subtitle.isNotEmpty)
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 13),
+                ),
+              if (detail.isNotEmpty)
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 11),
+                ),
+            ],
           ),
-        ],
+        ),
+      ],
     );
     final p = progress;
-    if (p == null) return Padding(padding: const EdgeInsets.only(bottom: 10), child: row);
+    if (p == null) {
+      return Padding(padding: const EdgeInsets.only(bottom: 10), child: row);
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Column(children: [
-        row,
-        const SizedBox(height: 8),
-        _ProgressBar(progress: p, playing: playing),
-      ]),
+      child: Column(
+        children: [
+          row,
+          const SizedBox(height: 8),
+          _ProgressBar(progress: p, playing: playing),
+        ],
+      ),
     );
   }
 }
@@ -678,9 +791,15 @@ class _ProgressBarState extends State<_ProgressBar> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(_mmss(pos), style: const TextStyle(color: NexusQColors.dim, fontSize: 10)),
+            Text(
+              _mmss(pos),
+              style: const TextStyle(color: NexusQColors.dim, fontSize: 10),
+            ),
             if (widget.progress.durationMs > 0)
-              Text(_mmss(total), style: const TextStyle(color: NexusQColors.dim, fontSize: 10)),
+              Text(
+                _mmss(total),
+                style: const TextStyle(color: NexusQColors.dim, fontSize: 10),
+              ),
           ],
         ),
       ],
@@ -694,31 +813,35 @@ class _UpNextRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            _Cover(url: track.artUrl, size: 36),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(track.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: NexusQColors.white, fontSize: 13)),
-                  if (track.artist.isNotEmpty)
-                    Text(track.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
-                ],
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        _Cover(url: track.artUrl, size: 36),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                track.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: NexusQColors.white, fontSize: 13),
               ),
-            ),
-          ],
+              if (track.artist.isNotEmpty)
+                Text(
+                  track.artist,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: NexusQColors.dim, fontSize: 11),
+                ),
+            ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 }
 
 /// A cover thumbnail. Network images fail routinely — no artwork on the

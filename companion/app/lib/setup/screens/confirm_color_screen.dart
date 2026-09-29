@@ -5,8 +5,12 @@ import '../pairing_color.dart';
 import '../setup_flow.dart';
 
 class ConfirmColorScreen extends StatefulWidget {
-  const ConfirmColorScreen(
-      {super.key, required this.flow, required this.onNext, required this.onBack});
+  const ConfirmColorScreen({
+    super.key,
+    required this.flow,
+    required this.onNext,
+    required this.onBack,
+  });
   final SetupFlowState flow;
   final VoidCallback onNext;
   final VoidCallback onBack;
@@ -47,7 +51,7 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
         _status = (e is PlatformException && e.code == 'permission_denied')
             ? 'Bluetooth permission is required to reach the Q.'
             : 'Could not connect to the Q over Bluetooth ($e). '
-                'Make sure the ring is spinning blue, then try again.';
+                  'Make sure the ring is spinning blue, then try again.';
       });
       return;
     }
@@ -76,9 +80,15 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text('Is your sphere glowing this color?',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          const Text(
+            'Is your sphere glowing this color?',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 40),
           Container(
             width: 160,
@@ -88,15 +98,21 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
               color: _color ?? Colors.transparent,
               boxShadow: [
                 if (_color != null)
-                  BoxShadow(color: _color!.withValues(alpha: 0.6), blurRadius: 48, spreadRadius: 8),
+                  BoxShadow(
+                    color: _color!.withValues(alpha: 0.6),
+                    blurRadius: 48,
+                    spreadRadius: 8,
+                  ),
               ],
             ),
           ),
           const SizedBox(height: 32),
           if (_status != null)
-            Text(_status!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
+            Text(
+              _status!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: NexusQColors.dim, fontSize: 13),
+            ),
           const SizedBox(height: 32),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -105,10 +121,16 @@ class _ConfirmColorScreenState extends State<ConfirmColorScreen> {
               FilledButton(
                 onPressed: _retryable
                     ? _connect
-                    : (_status == null || _ledUnavailable) ? widget.onNext : null,
-                child: Text(_retryable
-                    ? 'Try again'
-                    : _ledUnavailable ? 'Continue anyway' : "Yes, that's it"),
+                    : (_status == null || _ledUnavailable)
+                    ? widget.onNext
+                    : null,
+                child: Text(
+                  _retryable
+                      ? 'Try again'
+                      : _ledUnavailable
+                      ? 'Continue anyway'
+                      : "Yes, that's it",
+                ),
               ),
             ],
           ),

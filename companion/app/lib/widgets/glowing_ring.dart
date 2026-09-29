@@ -27,9 +27,12 @@ class GlowingRing extends StatefulWidget {
   State<GlowingRing> createState() => _GlowingRingState();
 }
 
-class _GlowingRingState extends State<GlowingRing> with SingleTickerProviderStateMixin {
-  late final AnimationController _spin =
-      AnimationController(vsync: this, duration: const Duration(seconds: 12))..repeat();
+class _GlowingRingState extends State<GlowingRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 12),
+  )..repeat();
 
   @override
   void dispose() {
@@ -39,7 +42,9 @@ class _GlowingRingState extends State<GlowingRing> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.muted ? NexusQColors.dim.withValues(alpha: 0.25) : widget.color;
+    final color = widget.muted
+        ? NexusQColors.dim.withValues(alpha: 0.25)
+        : widget.color;
     return AspectRatio(
       aspectRatio: 1,
       child: AnimatedBuilder(
@@ -119,5 +124,8 @@ class _RingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RingPainter old) =>
-      old.volume != volume || old.color != color || old.phase != phase || old.muted != muted;
+      old.volume != volume ||
+      old.color != color ||
+      old.phase != phase ||
+      old.muted != muted;
 }

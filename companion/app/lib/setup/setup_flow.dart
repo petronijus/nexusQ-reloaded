@@ -38,34 +38,43 @@ class SetupFlow extends StatefulWidget {
 }
 
 class SetupFlowScreenState extends State<SetupFlow> {
-  late final SetupFlowState flow = SetupFlowState(initialMac: widget.initialMac);
+  late final SetupFlowState flow = SetupFlowState(
+    initialMac: widget.initialMac,
+  );
   final _page = PageController();
   int _index = 0;
 
   List<Widget> get _pages => [
-        WelcomeScreen(onNext: next),
-        CablesScreen(onNext: next, onBack: back),
-        if (widget.initialMac == null) FindDeviceScreen(flow: flow, onNext: next, onBack: back),
-        ConfirmColorScreen(flow: flow, onNext: next, onBack: back),
-        WifiScreen(flow: flow, onNext: next, onBack: back),
-        NameRoomScreen(flow: flow, onNext: next, onBack: back),
-        ThemeScreen(flow: flow, onNext: next, onBack: back),
-        OutroScreen(flow: flow),
-      ];
+    WelcomeScreen(onNext: next),
+    CablesScreen(onNext: next, onBack: back),
+    if (widget.initialMac == null)
+      FindDeviceScreen(flow: flow, onNext: next, onBack: back),
+    ConfirmColorScreen(flow: flow, onNext: next, onBack: back),
+    WifiScreen(flow: flow, onNext: next, onBack: back),
+    NameRoomScreen(flow: flow, onNext: next, onBack: back),
+    ThemeScreen(flow: flow, onNext: next, onBack: back),
+    OutroScreen(flow: flow),
+  ];
 
   void next() {
     if (_index < _pages.length - 1) {
       setState(() => _index++);
-      _page.animateToPage(_index,
-          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      _page.animateToPage(
+        _index,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
     }
   }
 
   void back() {
     if (_index > 0) {
       setState(() => _index--);
-      _page.animateToPage(_index,
-          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      _page.animateToPage(
+        _index,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
     }
   }
 

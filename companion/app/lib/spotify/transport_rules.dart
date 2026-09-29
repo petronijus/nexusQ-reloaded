@@ -28,7 +28,9 @@ TransportRoute transportRoute(String transport, {required bool spotifyLinked}) {
     case 'device':
       return TransportRoute.device;
     case 'spotify-web':
-      return spotifyLinked ? TransportRoute.spotifyWeb : TransportRoute.spotifyUnlinked;
+      return spotifyLinked
+          ? TransportRoute.spotifyWeb
+          : TransportRoute.spotifyUnlinked;
     default:
       return TransportRoute.none;
   }

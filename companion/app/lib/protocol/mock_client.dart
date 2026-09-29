@@ -21,21 +21,34 @@ class MockClient implements NexusQClient {
   bool _ringOn = true;
   // Ambient brightness: the mock is always at midday, so the level is the max.
   bool _ambient = false;
-  Map<String, dynamic> _ringSchedule = {'enabled': false, 'off': '23:00', 'on': '07:00'};
+  Map<String, dynamic> _ringSchedule = {
+    'enabled': false,
+    'off': '23:00',
+    'on': '07:00',
+  };
   bool _playing = true;
   int _trackIdx = 0;
   // Mirrors the device's 7-band parametric EQ (PROTOCOL §14) closely enough that
   // widget tests exercise the real shapes: bands in, bands out, plus the
   // bass_db/treble_db compatibility view.
   static const _eqDefaults = [
-    ['lowshelf', 100.0], ['peaking', 200.0], ['peaking', 430.0],
-    ['peaking', 900.0], ['peaking', 1800.0], ['peaking', 3800.0],
+    ['lowshelf', 100.0],
+    ['peaking', 200.0],
+    ['peaking', 430.0],
+    ['peaking', 900.0],
+    ['peaking', 1800.0],
+    ['peaking', 3800.0],
     ['highshelf', 8000.0],
   ];
   late final List<Map<String, dynamic>> _eqBands = [
     for (final d in _eqDefaults)
-      {'type': d[0], 'freq_hz': d[1], 'gain_db': 0.0,
-       'q': d[0] == 'peaking' ? 0.707 : 1.0, 'enabled': true}
+      {
+        'type': d[0],
+        'freq_hz': d[1],
+        'gain_db': 0.0,
+        'q': d[0] == 'peaking' ? 0.707 : 1.0,
+        'enabled': true,
+      },
   ];
   double _eqPreamp = 0.0;
 
@@ -57,42 +70,61 @@ class MockClient implements NexusQClient {
   final List<Map<String, dynamic>> _eqUserPresets = [];
 
   List<Map<String, dynamic>> get _eqBuiltinPresets => [
-        {'id': 'flat', 'label': 'Flat', 'preamp_db': 0.0, 'builtin': true,
-         'bands': [for (final b in _eqBands) {...b, 'gain_db': 0.0}]},
-        {'id': 'bass', 'label': 'Bass boost', 'preamp_db': -6.0, 'builtin': true,
-         'bands': [for (var i = 0; i < _eqBands.length; i++)
-           {..._eqBands[i], 'gain_db': i == 0 ? 6.0 : 0.0}]},
-      ];
+    {
+      'id': 'flat',
+      'label': 'Flat',
+      'preamp_db': 0.0,
+      'builtin': true,
+      'bands': [
+        for (final b in _eqBands) {...b, 'gain_db': 0.0},
+      ],
+    },
+    {
+      'id': 'bass',
+      'label': 'Bass boost',
+      'preamp_db': -6.0,
+      'builtin': true,
+      'bands': [
+        for (var i = 0; i < _eqBands.length; i++)
+          {..._eqBands[i], 'gain_db': i == 0 ? 6.0 : 0.0},
+      ],
+    },
+  ];
 
-  Map<String, dynamic> get _eqPresets =>
-      {'presets': [..._eqBuiltinPresets, ..._eqUserPresets]};
+  Map<String, dynamic> get _eqPresets => {
+    'presets': [..._eqBuiltinPresets, ..._eqUserPresets],
+  };
 
   /// Same derivation as the daemon: unicode-alnum kept, everything else a
   /// separator, collapsed and trimmed.
   static String _userPresetId(String name) {
     final alnum = RegExp(r'[\p{L}\p{N}]', unicode: true);
-    final raw = name.trim().toLowerCase().split('')
-        .map((c) => alnum.hasMatch(c) ? c : '-').join();
+    final raw = name
+        .trim()
+        .toLowerCase()
+        .split('')
+        .map((c) => alnum.hasMatch(c) ? c : '-')
+        .join();
     final slug = raw.split('-').where((x) => x.isNotEmpty).join('-');
     if (slug.isEmpty) return '';
     return 'u:${slug.length > 32 ? slug.substring(0, 32) : slug}';
   }
 
   Map<String, dynamic> get _eqState => {
-        'supported': true,
-        'bands': [for (final b in _eqBands) Map<String, dynamic>.from(b)],
-        'preamp_db': _eqPreamp,
-        'headroom_db': _eqHeadroom,
-        'max_bands': _eqBands.length,
-        'limits': {
-          'gain_db': 12.0,
-          'freq_hz': [20.0, 20000.0],
-          'q': [0.3, 8.0],
-          'preamp_db': [-24.0, 0.0],
-        },
-        'bass_db': _eqBands[_eqShelf('lowshelf')]['gain_db'],
-        'treble_db': _eqBands[_eqShelf('highshelf')]['gain_db'],
-      };
+    'supported': true,
+    'bands': [for (final b in _eqBands) Map<String, dynamic>.from(b)],
+    'preamp_db': _eqPreamp,
+    'headroom_db': _eqHeadroom,
+    'max_bands': _eqBands.length,
+    'limits': {
+      'gain_db': 12.0,
+      'freq_hz': [20.0, 20000.0],
+      'q': [0.3, 8.0],
+      'preamp_db': [-24.0, 0.0],
+    },
+    'bass_db': _eqBands[_eqShelf('lowshelf')]['gain_db'],
+    'treble_db': _eqBands[_eqShelf('highshelf')]['gain_db'],
+  };
 
   // diagnostics mode (PROTOCOL §16): the wall-clock end, null while off
   DateTime? _diagUntil;
@@ -107,20 +139,44 @@ class MockClient implements NexusQClient {
       'endedAt': null,
       'maxHours': 72,
       'services': [
-        {'id': 'spotify', 'name': 'Spotify Connect', 'running': true, 'verbose': on},
-        {'id': 'airplay', 'name': 'AirPlay', 'running': false, 'verbose': false},
+        {
+          'id': 'spotify',
+          'name': 'Spotify Connect',
+          'running': true,
+          'verbose': on,
+        },
+        {
+          'id': 'airplay',
+          'name': 'AirPlay',
+          'running': false,
+          'verbose': false,
+        },
       ],
       'pending': <String>[],
     };
   }
 
   static const _outputs = [
-    {'id': 'speaker', 'label': 'Reproduktor', 'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback', 'available': true},
-    {'id': 'spdif', 'label': 'Optický výstup', 'sink': 'alsa_output.platform-sound-spdif.stereo-fallback', 'available': true},
+    {
+      'id': 'speaker',
+      'label': 'Reproduktor',
+      'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback',
+      'available': true,
+    },
+    {
+      'id': 'spdif',
+      'label': 'Optický výstup',
+      'sink': 'alsa_output.platform-sound-spdif.stereo-fallback',
+      'available': true,
+    },
   ];
 
   static const _tracks = [
-    {'artist': 'Boards of Canada', 'track': 'Roygbiv', 'album': 'Music Has the Right to Children'},
+    {
+      'artist': 'Boards of Canada',
+      'track': 'Roygbiv',
+      'album': 'Music Has the Right to Children',
+    },
     {'artist': 'Tycho', 'track': 'Awake', 'album': 'Awake'},
     {'artist': 'Jon Hopkins', 'track': 'Open Eye Signal', 'album': 'Immunity'},
     {'artist': 'Bonobo', 'track': 'Kerala', 'album': 'Migration'},
@@ -137,7 +193,9 @@ class MockClient implements NexusQClient {
   bool get needsSupervision => false;
 
   @override
-  void disconnect() {/* nothing to tear down — the mock link is permanent */}
+  void disconnect() {
+    /* nothing to tear down — the mock link is permanent */
+  }
 
   @override
   Future<void> connect() async {
@@ -153,35 +211,38 @@ class MockClient implements NexusQClient {
   }
 
   Map<String, dynamic> get _nowPlaying => {
-        'playing': _playing,
-        ..._tracks[_trackIdx],
-        'artUrl': '',
-        'source': 'spotify',
-        'transport': 'spotify-web',
-      };
+    'playing': _playing,
+    ..._tracks[_trackIdx],
+    'artUrl': '',
+    'source': 'spotify',
+    'transport': 'spotify-web',
+  };
 
   Map<String, dynamic> get _state => {
-        'volume': _volume,
-        'muted': _muted,
-        'brightness': _brightness,
-        'theme': _theme,
-        'scene': _scene,
-        'output': _output,
-        'nowPlaying': _nowPlaying,
-        'name': 'Nexus Q (mock)',
-        'ring': _ring,
-        'ambient': _ambientState,
-      };
+    'volume': _volume,
+    'muted': _muted,
+    'brightness': _brightness,
+    'theme': _theme,
+    'scene': _scene,
+    'output': _output,
+    'nowPlaying': _nowPlaying,
+    'name': 'Nexus Q (mock)',
+    'ring': _ring,
+    'ambient': _ambientState,
+  };
 
   Map<String, dynamic> get _ambientState => {
-        'enabled': _ambient,
-        'level': _brightness,
-        'location': {'zone': 'Europe/Prague', 'lat': 50.08, 'lon': 14.43},
-        'clockSynced': true,
-      };
+    'enabled': _ambient,
+    'level': _brightness,
+    'location': {'zone': 'Europe/Prague', 'lat': 50.08, 'lon': 14.43},
+    'clockSynced': true,
+  };
 
-  Map<String, dynamic> get _ring =>
-      {'on': _ringOn, 'schedule': Map<String, dynamic>.from(_ringSchedule), 'clockSynced': true};
+  Map<String, dynamic> get _ring => {
+    'on': _ringOn,
+    'schedule': Map<String, dynamic>.from(_ringSchedule),
+    'clockSynced': true,
+  };
 
   Map<String, dynamic> _emitRing() {
     final r = _ring;
@@ -191,19 +252,32 @@ class MockClient implements NexusQClient {
 
   static final _hhmm = RegExp(r'^([01]\d|2[0-3]):[0-5]\d$');
 
-  void _emitVolume() => _events.add(NexusQEvent('volumeChanged', {'volume': _volume, 'muted': _muted}));
-  void _emitNowPlaying() => _events.add(NexusQEvent('nowPlayingChanged', _nowPlaying));
+  void _emitVolume() => _events.add(
+    NexusQEvent('volumeChanged', {'volume': _volume, 'muted': _muted}),
+  );
+  void _emitNowPlaying() =>
+      _events.add(NexusQEvent('nowPlayingChanged', _nowPlaying));
 
   @override
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]) async {
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
     final p = params ?? const {};
     switch (method) {
       case 'subscribe':
-        return {'subscribed': ['*']};
+        return {
+          'subscribed': ['*'],
+        };
       case 'getState':
         return _state;
       case 'getDeviceInfo':
-        return {'name': 'Nexus Q (mock)', 'model': 'steelhead', 'serial': 'MOCK0001', 'swVersion': 'dev'};
+        return {
+          'name': 'Nexus Q (mock)',
+          'model': 'steelhead',
+          'serial': 'MOCK0001',
+          'swVersion': 'dev',
+        };
       case 'setVolume':
         _volume = (p['volume'] as num).round().clamp(0, 100);
         _muted = false;
@@ -242,7 +316,9 @@ class MockClient implements NexusQClient {
       case 'getAmbient':
         return _ambientState;
       case 'setAmbient':
-        if (p['enabled'] is! bool) throw NexusQError('bad_request', 'enabled must be a boolean');
+        if (p['enabled'] is! bool) {
+          throw NexusQError('bad_request', 'enabled must be a boolean');
+        }
         _ambient = p['enabled'] as bool;
         final a = _ambientState;
         _events.add(NexusQEvent('ambientChanged', a));
@@ -251,11 +327,19 @@ class MockClient implements NexusQClient {
         return _diagnostics;
       case 'setDiagnostics':
         final hours = p['hours'] ?? 24;
-        if (p['enabled'] is! bool || hours is! num || hours <= 0 || hours > 72) {
-          throw NexusQError('bad_request', 'enabled (bool) and hours in (0, 72] required');
+        if (p['enabled'] is! bool ||
+            hours is! num ||
+            hours <= 0 ||
+            hours > 72) {
+          throw NexusQError(
+            'bad_request',
+            'enabled (bool) and hours in (0, 72] required',
+          );
         }
         _diagUntil = p['enabled'] as bool
-            ? DateTime.now().toUtc().add(Duration(seconds: (hours * 3600).round()))
+            ? DateTime.now().toUtc().add(
+                Duration(seconds: (hours * 3600).round()),
+              )
             : null;
         final d = _diagnostics;
         _events.add(NexusQEvent('diagnosticsChanged', d));
@@ -263,15 +347,21 @@ class MockClient implements NexusQClient {
       case 'getRing':
         return _ring;
       case 'setRing':
-        if (p['on'] is! bool) throw NexusQError('bad_request', 'on must be a boolean');
+        if (p['on'] is! bool) {
+          throw NexusQError('bad_request', 'on must be a boolean');
+        }
         _ringOn = p['on'] as bool;
         _ringSchedule = {..._ringSchedule, 'enabled': false};
         return _emitRing();
       case 'setRingSchedule':
         final off = p['off'] ?? _ringSchedule['off'];
         final on = p['on'] ?? _ringSchedule['on'];
-        if (p['enabled'] is! bool || off is! String || on is! String ||
-            !_hhmm.hasMatch(off) || !_hhmm.hasMatch(on) || off == on) {
+        if (p['enabled'] is! bool ||
+            off is! String ||
+            on is! String ||
+            !_hhmm.hasMatch(off) ||
+            !_hhmm.hasMatch(on) ||
+            off == on) {
           throw NexusQError('bad_request', 'bad schedule');
         }
         _ringSchedule = {'enabled': p['enabled'], 'off': off, 'on': on};
@@ -279,7 +369,9 @@ class MockClient implements NexusQClient {
         return _emitRing();
       case 'setBrightness':
         _brightness = (p['brightness'] as num).round().clamp(0, 255);
-        _events.add(NexusQEvent('brightnessChanged', {'brightness': _brightness}));
+        _events.add(
+          NexusQEvent('brightnessChanged', {'brightness': _brightness}),
+        );
         return {'brightness': _brightness};
       case 'playPause':
         _playing = !_playing;
@@ -298,7 +390,9 @@ class MockClient implements NexusQClient {
       case 'setEq':
         final bands = p['bands'];
         if (bands != null) {
-          if (bands is! List) throw NexusQError('bad_params', 'bands must be a list');
+          if (bands is! List) {
+            throw NexusQError('bad_params', 'bands must be a list');
+          }
           for (var i = 0; i < bands.length && i < _eqBands.length; i++) {
             final b = bands[i];
             if (b is! Map) continue;
@@ -309,11 +403,19 @@ class MockClient implements NexusQClient {
             if (b['enabled'] is bool) _eqBands[i]['enabled'] = b['enabled'];
           }
         }
-        for (final e in [['bass_db', 'lowshelf'], ['treble_db', 'highshelf']]) {
+        for (final e in [
+          ['bass_db', 'lowshelf'],
+          ['treble_db', 'highshelf'],
+        ]) {
           final v = p[e[0]];
           if (v != null) {
-            if (v is! num) throw NexusQError('bad_params', '${e[0]} must be a number');
-            _eqBands[_eqShelf(e[1])]['gain_db'] = v.toDouble().clamp(-12.0, 12.0);
+            if (v is! num) {
+              throw NexusQError('bad_params', '${e[0]} must be a number');
+            }
+            _eqBands[_eqShelf(e[1])]['gain_db'] = v.toDouble().clamp(
+              -12.0,
+              12.0,
+            );
           }
         }
         if (p['preamp_db'] is num) {
@@ -344,7 +446,7 @@ class MockClient implements NexusQClient {
                 ..._eqBands[i],
                 ...?((p['bands'] as List?)?.elementAtOrNull(i) as Map?)
                     ?.cast<String, dynamic>(),
-              }
+              },
           ],
         };
         // Saving the same name replaces, exactly as the daemon does (§14.6).

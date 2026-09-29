@@ -12,27 +12,41 @@ import 'package:nexusq_companion/spotify/spotify_player.dart';
 final _t0 = DateTime(2026, 9, 7, 14, 0, 0);
 
 SpotifyProgress at({int pos = 30000, int dur = 180000, bool playing = true}) =>
-    SpotifyProgress(positionMs: pos, durationMs: dur, playing: playing, sampledAt: _t0);
+    SpotifyProgress(
+      positionMs: pos,
+      durationMs: dur,
+      playing: playing,
+      sampledAt: _t0,
+    );
 
 void main() {
   test('a playing track advances with the wall clock', () {
     final p = at();
     expect(p.positionAt(_t0), const Duration(seconds: 30));
-    expect(p.positionAt(_t0.add(const Duration(seconds: 5))), const Duration(seconds: 35));
+    expect(
+      p.positionAt(_t0.add(const Duration(seconds: 5))),
+      const Duration(seconds: 35),
+    );
   });
 
   test('a paused track does not creep', () {
     // The bar must sit still while paused; interpolating regardless would walk
     // it across the song while nothing plays.
     final p = at(playing: false);
-    expect(p.positionAt(_t0.add(const Duration(minutes: 2))), const Duration(seconds: 30));
+    expect(
+      p.positionAt(_t0.add(const Duration(minutes: 2))),
+      const Duration(seconds: 30),
+    );
   });
 
   test('a stale sample cannot run past the end of the track', () {
     // The refresh is 30 s and a track can end between two of them; without the
     // clamp the bar would report more than the song is long.
     final p = at(pos: 170000, dur: 180000);
-    expect(p.positionAt(_t0.add(const Duration(minutes: 5))), const Duration(milliseconds: 180000));
+    expect(
+      p.positionAt(_t0.add(const Duration(minutes: 5))),
+      const Duration(milliseconds: 180000),
+    );
     expect(p.fractionAt(_t0.add(const Duration(minutes: 5))), 1.0);
   });
 
@@ -59,26 +73,38 @@ void main() {
   // is moving now.
   test('the caller can override a stale sampled flag', () {
     final stale = at(pos: 30000, playing: false); // Spotify had not caught up
-    expect(stale.positionAt(_t0.add(const Duration(seconds: 10))),
-        const Duration(seconds: 30),
-        reason: 'the sample on its own says frozen');
-    expect(stale.positionAt(_t0.add(const Duration(seconds: 10)), playing: true),
-        const Duration(seconds: 40),
-        reason: 'the live flag wins, which is what the bar passes');
-    expect(stale.fractionAt(_t0.add(const Duration(seconds: 10)), playing: true),
-        closeTo(40000 / 180000, 0.0001));
+    expect(
+      stale.positionAt(_t0.add(const Duration(seconds: 10))),
+      const Duration(seconds: 30),
+      reason: 'the sample on its own says frozen',
+    );
+    expect(
+      stale.positionAt(_t0.add(const Duration(seconds: 10)), playing: true),
+      const Duration(seconds: 40),
+      reason: 'the live flag wins, which is what the bar passes',
+    );
+    expect(
+      stale.fractionAt(_t0.add(const Duration(seconds: 10)), playing: true),
+      closeTo(40000 / 180000, 0.0001),
+    );
   });
 
   test('a clock that went backwards does not produce a negative position', () {
     // Wall-clock time can step (NTP, a resume from sleep). A negative position
     // would render as a bar drawn from the wrong end.
     final p = at(pos: 1000);
-    expect(p.positionAt(_t0.subtract(const Duration(seconds: 30)), playing: true),
-        Duration.zero);
+    expect(
+      p.positionAt(_t0.subtract(const Duration(seconds: 30)), playing: true),
+      Duration.zero,
+    );
   });
 
   test('sampledAt defaults to now, so a fresh sample starts where it says', () {
-    final p = SpotifyProgress(positionMs: 1000, durationMs: 2000, playing: false);
+    final p = SpotifyProgress(
+      positionMs: 1000,
+      durationMs: 2000,
+      playing: false,
+    );
     expect(p.positionAt(DateTime.now()).inMilliseconds, closeTo(1000, 50));
   });
 }

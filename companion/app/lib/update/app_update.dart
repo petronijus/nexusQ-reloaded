@@ -88,7 +88,8 @@ class AppUpdate {
   /// Fetch the manifest. Returns the release, or null on any failure (offline,
   /// malformed) — an update check must never throw into the UI.
   static Future<AppRelease?> fetchLatest() async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
       // Cache-bust: raw.githubusercontent is fronted by Fastly with max-age=300,
       // so a freshly-pushed manifest can read as stale for up to 5 min — which
@@ -122,18 +123,24 @@ class AppUpdate {
     if (rel == null) return null;
     final mine = currentVersionCode;
     if (mine == null) {
-      AppLog.add('update',
-          'build does not know its own version (APP_VERSION="$kAppVersion") — '
-          'not offering ${rel.versionCode}; build with build-apk.sh');
+      AppLog.add(
+        'update',
+        'build does not know its own version (APP_VERSION="$kAppVersion") — '
+            'not offering ${rel.versionCode}; build with build-apk.sh',
+      );
       return null;
     }
     if (rel.versionCode <= mine) {
       AppLog.add(
-          'update', 'up to date (installed $mine, latest ${rel.versionCode})');
+        'update',
+        'up to date (installed $mine, latest ${rel.versionCode})',
+      );
       return null;
     }
-    AppLog.add('update',
-        'update available: v${rel.version} (${rel.versionCode} > $currentVersionCode)');
+    AppLog.add(
+      'update',
+      'update available: v${rel.version} (${rel.versionCode} > $currentVersionCode)',
+    );
     return rel;
   }
 
@@ -145,10 +152,13 @@ class AppUpdate {
   /// live, so the UI can show an indeterminate bar with a running MB counter.
   /// Returns the file path, or throws on failure (the caller shows the error).
   static Future<String> downloadApk(
-      AppRelease rel, void Function(double? fraction, int received) onProgress) async {
+    AppRelease rel,
+    void Function(double? fraction, int received) onProgress,
+  ) async {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/nexusq-companion-${rel.version}.apk');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
     try {
       final req = await client.getUrl(Uri.parse(rel.apkUrl));
       req.followRedirects = true; // github.com -> objects.githubusercontent.com
@@ -159,7 +169,10 @@ class AppUpdate {
       final total = resp.contentLength; // -1 when unknown (redirected asset)
       AppLog.add('update', 'download start: contentLength=$total');
       var received = 0;
-      onProgress(total > 0 ? 0.0 : null, 0); // prime the bar (0 % or indeterminate)
+      onProgress(
+        total > 0 ? 0.0 : null,
+        0,
+      ); // prime the bar (0 % or indeterminate)
       final sink = file.openWrite();
       // THROTTLE: a 54 MB apk arrives in ~10 000 chunks; firing setState on every
       // one pegs the UI thread rebuilding so the bar only ever paints once, at the
@@ -193,8 +206,14 @@ class AppUpdate {
   /// Hand the downloaded apk to the OS: Android opens the package installer
   /// (needs REQUEST_INSTALL_PACKAGES). The user confirms; the app is replaced.
   static Future<void> install(String apkPath) async {
-    final r = await OpenFilex.open(apkPath, type: 'application/vnd.android.package-archive');
-    AppLog.add('update', 'install intent: ${r.type} ${r.message}',
-        warn: r.type != ResultType.done);
+    final r = await OpenFilex.open(
+      apkPath,
+      type: 'application/vnd.android.package-archive',
+    );
+    AppLog.add(
+      'update',
+      'install intent: ${r.type} ${r.message}',
+      warn: r.type != ResultType.done,
+    );
   }
 }

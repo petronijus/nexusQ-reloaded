@@ -9,20 +9,29 @@ SpotifyDevice d(String id, String name, {String type = 'Speaker'}) =>
 
 void main() {
   test('exact name wins, case and whitespace folded', () {
-    final list = [d('1', 'Petr’s iPhone', type: 'Smartphone'), d('2', 'Nexus  Q Šumperák')];
+    final list = [
+      d('1', 'Petr’s iPhone', type: 'Smartphone'),
+      d('2', 'Nexus  Q Šumperák'),
+    ];
     expect(matchQDevice(list, 'nexus q šumperák')?.id, '2');
     expect(matchQDevice(list, ' Nexus Q Šumperák ')?.id, '2');
   });
 
-  test('a phone with the same name is still an exact match (names are the contract)', () {
-    // If the user names two Connect devices identically the first exact hit is
-    // used; this is documented behaviour, not a bug to paper over.
-    final list = [d('p', 'Nexus Q', type: 'Smartphone'), d('q', 'Nexus Q')];
-    expect(matchQDevice(list, 'Nexus Q')?.id, 'p');
-  });
+  test(
+    'a phone with the same name is still an exact match (names are the contract)',
+    () {
+      // If the user names two Connect devices identically the first exact hit is
+      // used; this is documented behaviour, not a bug to paper over.
+      final list = [d('p', 'Nexus Q', type: 'Smartphone'), d('q', 'Nexus Q')];
+      expect(matchQDevice(list, 'Nexus Q')?.id, 'p');
+    },
+  );
 
   test('falls back to the ONE speaker whose name contains the Q name', () {
-    final list = [d('1', 'MacBook', type: 'Computer'), d('2', 'Nexus Q (living room)')];
+    final list = [
+      d('1', 'MacBook', type: 'Computer'),
+      d('2', 'Nexus Q (living room)'),
+    ];
     expect(matchQDevice(list, 'Nexus Q')?.id, '2');
   });
 
@@ -42,7 +51,12 @@ void main() {
   });
 
   test('fromJson reads the Web API shape', () {
-    final dev = SpotifyDevice.fromJson({'id': 'x', 'name': 'Q', 'type': 'Speaker', 'is_active': true});
+    final dev = SpotifyDevice.fromJson({
+      'id': 'x',
+      'name': 'Q',
+      'type': 'Speaker',
+      'is_active': true,
+    });
     expect(dev.id, 'x');
     expect(dev.isActive, isTrue);
   });

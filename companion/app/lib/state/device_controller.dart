@@ -53,7 +53,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     // Queue edits made in the Spotify app itself raise no event here, so a slow
     // tick catches them. 30 s is far below any rate limit and far above what a
     // person notices.
-    _queueTimer = Timer.periodic(const Duration(seconds: 30), (_) => refreshQueue());
+    _queueTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => refreshQueue(),
+    );
     // NOT refreshed here: `transportRoute` reads nowPlaying.transport, which is
     // still the default `none` until the first getState lands, so a refresh at
     // construction always takes the early return. _hydrate() does it instead,
@@ -75,8 +78,11 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     // This is THE banner switch: connected=false is the exact moment the UI
     // shows "Disconnected". Everything above it in the log is the why.
-    AppLog.add('ctrl', up ? 'connection UP' : 'connection DOWN → banner shows',
-        warn: !up);
+    AppLog.add(
+      'ctrl',
+      up ? 'connection UP' : 'connection DOWN → banner shows',
+      warn: !up,
+    );
     state.connected = up;
     if (up) {
       _attempt = 0;
@@ -122,7 +128,8 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     if (_retryTimer != null || _connectInFlight) return;
     // 1, 2, 4, 8 then capped at 15 seconds — forever, until the link is back.
     final delay = Duration(
-        seconds: math.min(1 << math.min(_attempt, 4), _maxBackoff.inSeconds));
+      seconds: math.min(1 << math.min(_attempt, 4), _maxBackoff.inSeconds),
+    );
     _attempt++;
     AppLog.add('ctrl', 'reconnect in ${delay.inSeconds}s (attempt $_attempt)');
     _retryTimer = Timer(delay, () {
@@ -160,9 +167,11 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       // A probe failure is the app UNILATERALLY declaring the link dead — the
       // subsequent DROP/DOWN entries are consequences of this line, not causes.
-      AppLog.add('ctrl',
-          'probe FAILED after ${sw.elapsedMilliseconds}ms ($e) → tearing the link down',
-          warn: true);
+      AppLog.add(
+        'ctrl',
+        'probe FAILED after ${sw.elapsedMilliseconds}ms ($e) → tearing the link down',
+        warn: true,
+      );
       if (!_disposed) _client.disconnect();
       return false;
     } finally {
@@ -235,34 +244,46 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       // (2026-09-07: "nejdriv tam je artwork a playpause a pak kdyz dam dalsi
       // song, pribyde timeline a fronta").
       unawaited(refreshQueue());
-    } catch (_) {/* stays on defaults until first event */}
+    } catch (_) {
+      /* stays on defaults until first event */
+    }
     try {
       final o = await _client.call('listOutputs');
       state.applyOutputs(o);
       notifyListeners();
-    } catch (_) {/* keep the default output set until it's available */}
+    } catch (_) {
+      /* keep the default output set until it's available */
+    }
     try {
       // Identity is asked for separately because `getState`'s copy of the name
       // goes stale on rename (see DeviceState.applyJson).
       final i = await _client.call('getDeviceInfo');
       state.applyIdentity(i);
       notifyListeners();
-    } catch (_) {/* keep the last known name */}
+    } catch (_) {
+      /* keep the last known name */
+    }
   }
 
   void _onEvent(NexusQEvent e) {
     switch (e.event) {
       case 'volumeChanged':
-        if (e.data['volume'] is num) state.volume = (e.data['volume'] as num).round();
+        if (e.data['volume'] is num) {
+          state.volume = (e.data['volume'] as num).round();
+        }
         if (e.data['muted'] is bool) state.muted = e.data['muted'] as bool;
       case 'themeChanged':
         if (e.data['theme'] is String) state.theme = e.data['theme'] as String;
       case 'sceneChanged':
         if (e.data['scene'] is String) state.scene = e.data['scene'] as String;
       case 'brightnessChanged':
-        if (e.data['brightness'] is num) state.brightness = (e.data['brightness'] as num).round();
+        if (e.data['brightness'] is num) {
+          state.brightness = (e.data['brightness'] as num).round();
+        }
       case 'outputChanged':
-        if (e.data['output'] is String) state.output = e.data['output'] as String;
+        if (e.data['output'] is String) {
+          state.output = e.data['output'] as String;
+        }
       case 'outputsChanged':
         // The SET of outputs changed, not just which one is active. Only HDMI
         // can do this: a receiver switched off (or one that dozed off once the
@@ -373,23 +394,42 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     final before = state.ring;
     if (before == null) return Future.value();
     // Optimistic, and with the bridge's rule: a manual switch ends the schedule.
-    return _ringRequest(before, before.copyWith(on: on, scheduleEnabled: false),
-        'setRing', {'on': on});
+    return _ringRequest(
+      before,
+      before.copyWith(on: on, scheduleEnabled: false),
+      'setRing',
+      {'on': on},
+    );
   }
 
-  Future<void> setRingSchedule({required bool enabled, String? offAt, String? onAt}) {
+  Future<void> setRingSchedule({
+    required bool enabled,
+    String? offAt,
+    String? onAt,
+  }) {
     final before = state.ring;
     if (before == null) return Future.value();
-    final next = before.copyWith(scheduleEnabled: enabled, offAt: offAt, onAt: onAt);
-    return _ringRequest(before, next, 'setRingSchedule',
-        {'enabled': enabled, 'off': next.offAt, 'on': next.onAt});
+    final next = before.copyWith(
+      scheduleEnabled: enabled,
+      offAt: offAt,
+      onAt: onAt,
+    );
+    return _ringRequest(before, next, 'setRingSchedule', {
+      'enabled': enabled,
+      'off': next.offAt,
+      'on': next.onAt,
+    });
   }
 
   /// A `call`, not a `notify`: the answer is the ring's real state (enabling a
   /// schedule can switch the ring at once), and a refusal has to undo the
   /// optimistic update instead of leaving the switch lying.
-  Future<void> _ringRequest(RingState before, RingState optimistic, String method,
-      Map<String, dynamic> params) async {
+  Future<void> _ringRequest(
+    RingState before,
+    RingState optimistic,
+    String method,
+    Map<String, dynamic> params,
+  ) async {
     state.ring = optimistic;
     notifyListeners();
     try {
@@ -536,8 +576,10 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
   Stream<String> get notices => _notices.stream;
   final _notices = StreamController<String>.broadcast();
 
-  TransportRoute get transportRoute =>
-      rules.transportRoute(state.nowPlaying.transport, spotifyLinked: spotify.isLinked);
+  TransportRoute get transportRoute => rules.transportRoute(
+    state.nowPlaying.transport,
+    spotifyLinked: spotify.isLinked,
+  );
 
   void playPause() {
     final np = state.nowPlaying;
@@ -551,34 +593,48 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
         // event corrects it within a second either way.
         state.nowPlaying = np.copyWith(playing: !np.playing);
         notifyListeners();
-        _spotify((p) => p.setPlaying(state.deviceName, !np.playing), revert: () {
-          state.nowPlaying = np;
-          notifyListeners();
-        });
+        _spotify(
+          (p) => p.setPlaying(state.deviceName, !np.playing),
+          revert: () {
+            state.nowPlaying = np;
+            notifyListeners();
+          },
+        );
       case TransportRoute.spotifyUnlinked:
-        _notices.add('Connect your Spotify account in Settings to control playback.');
+        _notices.add(
+          'Connect your Spotify account in Settings to control playback.',
+        );
       case TransportRoute.none:
         _notices.add('Nothing is playing that this app can control.');
     }
   }
 
   void next() => _transport('next', (p) => p.next(state.deviceName));
-  void previous() => _transport('previous', (p) => p.previous(state.deviceName));
+  void previous() =>
+      _transport('previous', (p) => p.previous(state.deviceName));
 
-  void _transport(String method, Future<void> Function(SpotifyPlayer) viaSpotify) {
+  void _transport(
+    String method,
+    Future<void> Function(SpotifyPlayer) viaSpotify,
+  ) {
     switch (transportRoute) {
       case TransportRoute.device:
         _client.notify(method);
       case TransportRoute.spotifyWeb:
         _spotify(viaSpotify);
       case TransportRoute.spotifyUnlinked:
-        _notices.add('Connect your Spotify account in Settings to control playback.');
+        _notices.add(
+          'Connect your Spotify account in Settings to control playback.',
+        );
       case TransportRoute.none:
         _notices.add('Nothing is playing that this app can control.');
     }
   }
 
-  void _spotify(Future<void> Function(SpotifyPlayer) op, {void Function()? revert}) {
+  void _spotify(
+    Future<void> Function(SpotifyPlayer) op, {
+    void Function()? revert,
+  }) {
     unawaited(() async {
       try {
         await op(SpotifyPlayer(spotify));

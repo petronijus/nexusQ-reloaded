@@ -70,8 +70,11 @@ void main() {
     test('an unstamped build offers NOTHING — the endless-loop regression', () {
       // Before the fix every one of these was true.
       for (final code in [1, 49, 50, 9999]) {
-        expect(offersUpdate(appVersion: 'dev', manifestCode: code), isFalse,
-            reason: 'a build that does not know its version must not offer $code');
+        expect(
+          offersUpdate(appVersion: 'dev', manifestCode: code),
+          isFalse,
+          reason: 'a build that does not know its version must not offer $code',
+        );
       }
     });
   });

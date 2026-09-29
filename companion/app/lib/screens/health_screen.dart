@@ -49,7 +49,11 @@ List<String> healthProblems(Map<String, dynamic> s) {
 /// rolling hour, plus what is left, the time the CPUs were busy. Empty when
 /// the device does not publish C-states (nexusq-mqtt older than r8).
 List<(String, double)> idleDepthRows(Map<String, dynamic> s) {
-  const states = [('C1', 'idle_c1_pct'), ('C2', 'idle_c2_pct'), ('C3', 'idle_c3_pct')];
+  const states = [
+    ('C1', 'idle_c1_pct'),
+    ('C2', 'idle_c2_pct'),
+    ('C3', 'idle_c3_pct'),
+  ];
   final rows = <(String, double)>[];
   for (final (label, key) in states) {
     final v = s[key];
@@ -95,7 +99,9 @@ class _HealthScreenState extends State<HealthScreen> {
     _mqtt.addListener(_onMqtt);
     // repaint the "updated Ns ago" line while the screen is open
     _ageTicker = Timer.periodic(
-        const Duration(seconds: 5), (_) => setState(() {}));
+      const Duration(seconds: 5),
+      (_) => setState(() {}),
+    );
     _init();
   }
 
@@ -141,8 +147,8 @@ class _HealthScreenState extends State<HealthScreen> {
       body: _loadingSettings
           ? const Center(child: CircularProgressIndicator())
           : _settings == null
-              ? _connectPrompt()
-              : _panel(),
+          ? _connectPrompt()
+          : _panel(),
     );
   }
 
@@ -152,8 +158,11 @@ class _HealthScreenState extends State<HealthScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.monitor_heart_outlined,
-              size: 56, color: NexusQColors.dim),
+          const Icon(
+            Icons.monitor_heart_outlined,
+            size: 56,
+            color: NexusQColors.dim,
+          ),
           const SizedBox(height: 16),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 40),
@@ -212,25 +221,25 @@ class _HealthScreenState extends State<HealthScreen> {
   Widget _statusCard() {
     final (icon, color, text) = switch (_mqtt.link) {
       HealthLink.connecting => (
-          Icons.sync,
-          NexusQColors.ledYellow,
-          'Connecting to broker…'
-        ),
+        Icons.sync,
+        NexusQColors.ledYellow,
+        'Connecting to broker…',
+      ),
       HealthLink.error => (
-          Icons.error_outline,
-          NexusQColors.ledRed,
-          _mqtt.errorText ?? 'Connection failed'
-        ),
+        Icons.error_outline,
+        NexusQColors.ledRed,
+        _mqtt.errorText ?? 'Connection failed',
+      ),
       HealthLink.connected when _mqtt.deviceOnline == false => (
-          Icons.cloud_off,
-          NexusQColors.ledOrange,
-          'Broker OK — device is offline'
-        ),
+        Icons.cloud_off,
+        NexusQColors.ledOrange,
+        'Broker OK — device is offline',
+      ),
       HealthLink.connected => (
-          Icons.check_circle_outline,
-          NexusQColors.ledGreen,
-          'Live'
-        ),
+        Icons.check_circle_outline,
+        NexusQColors.ledGreen,
+        'Live',
+      ),
       _ => (Icons.link_off, NexusQColors.dim, 'Not connected'),
     };
     final age = _lastUpdateAge();
@@ -252,7 +261,8 @@ class _HealthScreenState extends State<HealthScreen> {
                 onPressed: () {
                   final st = _settings;
                   if (st != null) _mqtt.connect(st);
-                })
+                },
+              )
             : null,
       ),
     );
@@ -271,15 +281,25 @@ class _HealthScreenState extends State<HealthScreen> {
             for (final p in problems)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: NexusQColors.ledOrange, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: Text(p,
-                          style: const TextStyle(
-                              color: NexusQColors.white, fontSize: 13))),
-                ]),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: NexusQColors.ledOrange,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        p,
+                        style: const TextStyle(
+                          color: NexusQColors.white,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
           ],
         ),
@@ -292,46 +312,60 @@ class _HealthScreenState extends State<HealthScreen> {
     final tempColor = temp == null
         ? NexusQColors.dim
         : temp >= 95
-            ? NexusQColors.ledRed
-            : temp >= 80
-                ? NexusQColors.ledOrange
-                : NexusQColors.ledGreen;
+        ? NexusQColors.ledRed
+        : temp >= 80
+        ? NexusQColors.ledOrange
+        : NexusQColors.ledGreen;
     return Card(
       color: NexusQColors.surface,
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Column(children: [
-          Row(children: [
-            Expanded(
-                child: _bigStat('Die temp',
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _bigStat(
+                    'Die temp',
                     temp != null ? '${temp.toStringAsFixed(1)} °C' : '—',
-                    color: tempColor)),
-            Expanded(
-                child: _bigStat(
+                    color: tempColor,
+                  ),
+                ),
+                Expanded(
+                  child: _bigStat(
                     'CPU',
                     s['freq_mhz'] != null ? '${s['freq_mhz']} MHz' : '—',
-                    sub: s['governor'] as String?)),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _smallStat('Load', '${s['load1'] ?? '—'}')),
-            Expanded(
-                child: _smallStat(
+                    sub: s['governor'] as String?,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: _smallStat('Load', '${s['load1'] ?? '—'}')),
+                Expanded(
+                  child: _smallStat(
                     'Mem free',
-                    s['mem_avail_mb'] != null
-                        ? '${s['mem_avail_mb']} MB'
-                        : '—')),
-            Expanded(
-                child: _smallStat(
+                    s['mem_avail_mb'] != null ? '${s['mem_avail_mb']} MB' : '—',
+                  ),
+                ),
+                Expanded(
+                  child: _smallStat(
                     'Volume',
                     s['volume_pct'] != null
                         ? '${s['volume_pct']}%'
-                            '${s['muted'] == true ? ' 🔇' : ''}'
-                        : '—')),
-            Expanded(
-                child: _smallStat('Up', _fmtUptime(s['uptime_s'] as num?))),
-          ]),
-        ]),
+                              '${s['muted'] == true ? ' 🔇' : ''}'
+                        : '—',
+                  ),
+                ),
+                Expanded(
+                  child: _smallStat('Up', _fmtUptime(s['uptime_s'] as num?)),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -340,7 +374,7 @@ class _HealthScreenState extends State<HealthScreen> {
   Widget _oppCard(Map<String, dynamic> s) {
     const opps = [350, 700, 920, 1200];
     final values = [
-      for (final mhz in opps) (s['opp${mhz}_pct'] as num?)?.toDouble()
+      for (final mhz in opps) (s['opp${mhz}_pct'] as num?)?.toDouble(),
     ];
     if (values.every((v) => v == null)) return const SizedBox.shrink();
     return Card(
@@ -350,39 +384,52 @@ class _HealthScreenState extends State<HealthScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('CPU frequency share',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+            const Text(
+              'CPU frequency share',
+              style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+            ),
             const SizedBox(height: 8),
             for (var i = 0; i < opps.length; i++)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(children: [
-                  SizedBox(
+                child: Row(
+                  children: [
+                    SizedBox(
                       width: 70,
-                      child: Text('${opps[i]} MHz',
-                          style: const TextStyle(
-                              color: NexusQColors.white, fontSize: 12))),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: LinearProgressIndicator(
-                        value: (values[i] ?? 0) / 100.0,
-                        minHeight: 6,
-                        backgroundColor: NexusQColors.canvas,
-                        color: NexusQColors.accent,
+                      child: Text(
+                        '${opps[i]} MHz',
+                        style: const TextStyle(
+                          color: NexusQColors.white,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
-                  ),
-                  SizedBox(
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: (values[i] ?? 0) / 100.0,
+                          minHeight: 6,
+                          backgroundColor: NexusQColors.canvas,
+                          color: NexusQColors.accent,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
                       width: 52,
                       child: Text(
-                          values[i] != null
-                              ? '${values[i]!.toStringAsFixed(1)}%'
-                              : '—',
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(
-                              color: NexusQColors.dim, fontSize: 12))),
-                ]),
+                        values[i] != null
+                            ? '${values[i]!.toStringAsFixed(1)}%'
+                            : '—',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          color: NexusQColors.dim,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
           ],
         ),
@@ -398,7 +445,8 @@ class _HealthScreenState extends State<HealthScreen> {
     final blocked = (s['deep_idle_blocked_pct'] as num?)?.toDouble();
     final notes = [
       if (limit != null) 'CPU latency limit ${limit.toInt()} µs',
-      if (blocked != null && blocked > 0) 'deep idle blocked ${blocked.toStringAsFixed(0)} % of the hour',
+      if (blocked != null && blocked > 0)
+        'deep idle blocked ${blocked.toStringAsFixed(0)} % of the hour',
     ];
     return Card(
       color: NexusQColors.surface,
@@ -407,43 +455,59 @@ class _HealthScreenState extends State<HealthScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Idle depth',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+            const Text(
+              'Idle depth',
+              style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+            ),
             const SizedBox(height: 8),
             for (final (label, pct) in rows)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(children: [
-                  SizedBox(
+                child: Row(
+                  children: [
+                    SizedBox(
                       width: 70,
-                      child: Text(label,
-                          style: const TextStyle(
-                              color: NexusQColors.white, fontSize: 12))),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: LinearProgressIndicator(
-                        value: pct / 100.0,
-                        minHeight: 6,
-                        backgroundColor: NexusQColors.canvas,
-                        color: label == 'Busy'
-                            ? NexusQColors.ledOrange
-                            : NexusQColors.accent,
+                      child: Text(
+                        label,
+                        style: const TextStyle(
+                          color: NexusQColors.white,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
-                  ),
-                  SizedBox(
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: pct / 100.0,
+                          minHeight: 6,
+                          backgroundColor: NexusQColors.canvas,
+                          color: label == 'Busy'
+                              ? NexusQColors.ledOrange
+                              : NexusQColors.accent,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
                       width: 52,
-                      child: Text('${pct.toStringAsFixed(1)}%',
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(
-                              color: NexusQColors.dim, fontSize: 12))),
-                ]),
+                      child: Text(
+                        '${pct.toStringAsFixed(1)}%',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          color: NexusQColors.dim,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             if (notes.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(notes.join('  ·  '),
-                  style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
+              Text(
+                notes.join('  ·  '),
+                style: const TextStyle(color: NexusQColors.dim, fontSize: 11),
+              ),
             ],
           ],
         ),
@@ -467,8 +531,10 @@ class _HealthScreenState extends State<HealthScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Streaming services',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 12)),
+            const Text(
+              'Streaming services',
+              style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+            ),
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
@@ -476,22 +542,28 @@ class _HealthScreenState extends State<HealthScreen> {
               children: [
                 for (final (id, label, icon) in meta)
                   Chip(
-                    avatar: Icon(icon,
-                        size: 16,
+                    avatar: Icon(
+                      icon,
+                      size: 16,
+                      color: services[id] == true
+                          ? NexusQColors.accent
+                          : NexusQColors.dim,
+                    ),
+                    label: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 12,
                         color: services[id] == true
-                            ? NexusQColors.accent
-                            : NexusQColors.dim),
-                    label: Text(label,
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: services[id] == true
-                                ? NexusQColors.white
-                                : NexusQColors.dim)),
+                            ? NexusQColors.white
+                            : NexusQColors.dim,
+                      ),
+                    ),
                     backgroundColor: NexusQColors.canvas,
                     side: BorderSide(
-                        color: services[id] == true
-                            ? NexusQColors.accent
-                            : NexusQColors.divider),
+                      color: services[id] == true
+                          ? NexusQColors.accent
+                          : NexusQColors.divider,
+                    ),
                   ),
               ],
             ),
@@ -506,46 +578,67 @@ class _HealthScreenState extends State<HealthScreen> {
     return Card(
       color: NexusQColors.surface,
       child: ListTile(
-        leading: Icon(Icons.wifi,
-            color: rssi == null
-                ? NexusQColors.dim
-                : rssi >= -60
-                    ? NexusQColors.ledGreen
-                    : rssi >= -75
-                        ? NexusQColors.ledYellow
-                        : NexusQColors.ledOrange),
-        title: Text(rssi != null ? '$rssi dBm' : 'WiFi —',
-            style: const TextStyle(color: NexusQColors.white)),
-        subtitle: Text(s['wifi_ssid'] as String? ?? '',
-            style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+        leading: Icon(
+          Icons.wifi,
+          color: rssi == null
+              ? NexusQColors.dim
+              : rssi >= -60
+              ? NexusQColors.ledGreen
+              : rssi >= -75
+              ? NexusQColors.ledYellow
+              : NexusQColors.ledOrange,
+        ),
+        title: Text(
+          rssi != null ? '$rssi dBm' : 'WiFi —',
+          style: const TextStyle(color: NexusQColors.white),
+        ),
+        subtitle: Text(
+          s['wifi_ssid'] as String? ?? '',
+          style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+        ),
       ),
     );
   }
 
   Widget _bigStat(String label, String value, {Color? color, String? sub}) {
-    return Column(children: [
-      Text(label,
-          style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
-      const SizedBox(height: 2),
-      Text(value,
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
           style: TextStyle(
-              color: color ?? NexusQColors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w300)),
-      if (sub != null)
-        Text(sub,
-            style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
-    ]);
+            color: color ?? NexusQColors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.w300,
+          ),
+        ),
+        if (sub != null)
+          Text(
+            sub,
+            style: const TextStyle(color: NexusQColors.dim, fontSize: 11),
+          ),
+      ],
+    );
   }
 
   Widget _smallStat(String label, String value) {
-    return Column(children: [
-      Text(label,
-          style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
-      const SizedBox(height: 2),
-      Text(value,
-          style: const TextStyle(color: NexusQColors.white, fontSize: 14)),
-    ]);
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: NexusQColors.dim, fontSize: 11),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(color: NexusQColors.white, fontSize: 14),
+        ),
+      ],
+    );
   }
 
   String? _lastUpdateAge() {
@@ -582,8 +675,10 @@ class _HealthScreenState extends State<HealthScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: NexusQColors.surface,
-        title: const Text('Connect to MQTT',
-            style: TextStyle(color: NexusQColors.white)),
+        title: const Text(
+          'Connect to MQTT',
+          style: TextStyle(color: NexusQColors.white),
+        ),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -598,11 +693,13 @@ class _HealthScreenState extends State<HealthScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Save & connect')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save & connect'),
+          ),
         ],
       ),
     );
@@ -617,8 +714,11 @@ class _HealthScreenState extends State<HealthScreen> {
     );
     if (!settings.isComplete) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Host, username and password are required')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Host, username and password are required'),
+          ),
+        );
       }
       return;
     }
@@ -651,13 +751,14 @@ class _HealthScreenState extends State<HealthScreen> {
     } catch (e) {
       // An old device build (control < r28) answers bad_request/unknown — say
       // so instead of a generic failure.
-      final old = e.toString().contains('bad_request') ||
+      final old =
+          e.toString().contains('bad_request') ||
           e.toString().contains('unknown');
       msg = old
           ? 'Saved on phone. The Q needs a software update before the app '
-              'can provision it (Settings → Update).'
+                'can provision it (Settings → Update).'
           : 'Saved on phone, but provisioning the Q failed: '
-              '${e.toString().replaceFirst('Exception: ', '')}';
+                '${e.toString().replaceFirst('Exception: ', '')}';
       AppLog.add('mqtt', 'device provisioning failed: $e', warn: true);
     }
     if (mounted) {
@@ -665,8 +766,13 @@ class _HealthScreenState extends State<HealthScreen> {
     }
   }
 
-  Widget _field(TextEditingController c, String label,
-      {String? hint, bool obscure = false, TextInputType? keyboard}) {
+  Widget _field(
+    TextEditingController c,
+    String label, {
+    String? hint,
+    bool obscure = false,
+    TextInputType? keyboard,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(

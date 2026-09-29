@@ -31,7 +31,10 @@ abstract class NexusQClient {
   Future<void> close();
 
   /// Send a request and await its correlated response `result` (or throw on error).
-  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic>? params]);
+  Future<Map<String, dynamic>> call(
+    String method, [
+    Map<String, dynamic>? params,
+  ]);
 
   /// Fire-and-forget (no id, no awaited response).
   void notify(String method, [Map<String, dynamic>? params]);

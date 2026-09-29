@@ -4,7 +4,8 @@ import 'package:flutter/foundation.dart';
 /// One diagnostic log line. [warn] marks the interesting ones (drops, timeouts,
 /// failures) so the UI can colour them without parsing the text.
 class AppLogEntry {
-  AppLogEntry(this.tag, this.message, {this.warn = false}) : time = DateTime.now();
+  AppLogEntry(this.tag, this.message, {this.warn = false})
+    : time = DateTime.now();
   final DateTime time;
   final String tag;
   final String message;

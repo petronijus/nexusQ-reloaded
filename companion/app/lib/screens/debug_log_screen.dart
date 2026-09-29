@@ -26,7 +26,8 @@ class DebugLogScreen extends StatelessWidget {
               await Clipboard.setData(ClipboardData(text: AppLog.dump()));
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Log copied to clipboard')));
+                  const SnackBar(content: Text('Log copied to clipboard')),
+                );
               }
             },
           ),
@@ -43,13 +44,20 @@ class DebugLogScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               children: [
-                const Text(kBuildLabel,
-                    style: TextStyle(color: NexusQColors.dim, fontSize: 11)),
+                const Text(
+                  kBuildLabel,
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 11),
+                ),
                 const Spacer(),
                 ValueListenableBuilder<int>(
                   valueListenable: AppLog.revision,
-                  builder: (_, _, _) => Text('${AppLog.snapshot().length} entries',
-                      style: const TextStyle(color: NexusQColors.dim, fontSize: 11)),
+                  builder: (_, _, _) => Text(
+                    '${AppLog.snapshot().length} entries',
+                    style: const TextStyle(
+                      color: NexusQColors.dim,
+                      fontSize: 11,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -62,19 +70,27 @@ class DebugLogScreen extends StatelessWidget {
                 final items = AppLog.snapshot().reversed.toList();
                 if (items.isEmpty) {
                   return const Center(
-                      child: Text('Nothing logged yet',
-                          style: TextStyle(color: NexusQColors.dim)));
+                    child: Text(
+                      'Nothing logged yet',
+                      style: TextStyle(color: NexusQColors.dim),
+                    ),
+                  );
                 }
                 return ListView.builder(
                   itemCount: items.length,
                   itemBuilder: (_, i) {
                     final e = items[i];
                     return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 2,
+                      ),
                       child: Text(
                         e.format(),
                         style: TextStyle(
-                          color: e.warn ? Colors.orangeAccent : NexusQColors.dim,
+                          color: e.warn
+                              ? Colors.orangeAccent
+                              : NexusQColors.dim,
                           fontSize: 11,
                           fontFamily: 'monospace',
                         ),

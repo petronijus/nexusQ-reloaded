@@ -18,6 +18,7 @@ class AmbientBrightnessTile extends StatelessWidget {
   });
 
   final AmbientState ambient;
+
   /// The slider's value, 0..255 — the ceiling ambient dims under.
   final int maximum;
   final ValueChanged<bool> onChanged;
@@ -35,7 +36,9 @@ class AmbientBrightnessTile extends StatelessWidget {
     if (!ambient.clockSynced) {
       return 'Waiting for network time — full brightness until then';
     }
-    final pct = maximum <= 0 ? 100 : (ambient.level * 100 / maximum).round().clamp(0, 100);
+    final pct = maximum <= 0
+        ? 100
+        : (ambient.level * 100 / maximum).round().clamp(0, 100);
     return pct >= 100
         ? 'Daylight: at the slider maximum'
         : 'Dimmed for the time of day: $pct % of the slider maximum';
@@ -51,13 +54,22 @@ class AmbientBrightnessTile extends StatelessWidget {
           contentPadding: EdgeInsets.zero,
           value: ambient.enabled,
           onChanged: ambient.available ? onChanged : null,
-          title: const Text('Ambient brightness', style: TextStyle(color: NexusQColors.white)),
+          title: const Text(
+            'Ambient brightness',
+            style: TextStyle(color: NexusQColors.white),
+          ),
           subtitle: Text(_subtitle(), style: _hint),
         ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text(error!, style: const TextStyle(color: NexusQColors.ledOrange, fontSize: 13)),
+            child: Text(
+              error!,
+              style: const TextStyle(
+                color: NexusQColors.ledOrange,
+                fontSize: 13,
+              ),
+            ),
           ),
       ],
     );

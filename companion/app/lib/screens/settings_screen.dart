@@ -48,7 +48,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _renaming = false;
 
   // --- the update flows live in UpdateCoordinator (they survive this screen) ---
-  late final UpdateCoordinator _upd = UpdateCoordinator.forClient(widget.client);
+  late final UpdateCoordinator _upd = UpdateCoordinator.forClient(
+    widget.client,
+  );
   void _onUpdate() {
     if (mounted) setState(() {});
   }
@@ -85,8 +87,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Poll failures go to the log, not the red bar; only a user action (a toggle)
   /// shows a visible error.
-  Future<Map<String, dynamic>?> _call(String method,
-      [Map<String, dynamic>? params, bool silent = true]) async {
+  Future<Map<String, dynamic>?> _call(
+    String method, [
+    Map<String, dynamic>? params,
+    bool silent = true,
+  ]) async {
     try {
       final r = await widget.client.call(method, params);
       if (mounted && !silent) setState(() => _error = null);
@@ -114,15 +119,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _deviceRoom = info['room'] as String? ?? _deviceRoom;
       }
       if (services != null) {
-        final fresh =
-            (services['services'] as List? ?? []).cast<Map<String, dynamic>>();
+        final fresh = (services['services'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
         // Don't let a poll clobber a service the user is mid-toggle on.
         _services = [
           for (final s in fresh)
             _busyService.contains(s['id'])
-                ? _services.firstWhere((o) => o['id'] == s['id'],
-                    orElse: () => s)
-                : s
+                ? _services.firstWhere(
+                    (o) => o['id'] == s['id'],
+                    orElse: () => s,
+                  )
+                : s,
         ];
       }
       if (desktop != null) _desktop = desktop['desktop'] == true;
@@ -135,7 +142,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<DiagnosticsState?> _getDiagnostics() async {
     if (!_diagSupported) return null;
     try {
-      return DiagnosticsState.fromJson(await widget.client.call('getDiagnostics'));
+      return DiagnosticsState.fromJson(
+        await widget.client.call('getDiagnostics'),
+      );
     } on NexusQError catch (e) {
       if (e.code == 'unknown_method') {
         _diagSupported = false;
@@ -151,7 +160,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _setDiagnostics(bool on) async {
     setState(() => _diagBusy = true);
-    final r = await _call('setDiagnostics', {'enabled': on, 'hours': 24}, false);
+    final r = await _call('setDiagnostics', {
+      'enabled': on,
+      'hours': 24,
+    }, false);
     if (!mounted) return;
     setState(() {
       _diagBusy = false;
@@ -177,20 +189,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _openLog(Map<String, dynamic> s) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ServiceLogScreen(
-        client: widget.client,
-        id: s['id'] as String,
-        name: s['name'] as String? ?? s['id'] as String,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ServiceLogScreen(
+          client: widget.client,
+          id: s['id'] as String,
+          name: s['name'] as String? ?? s['id'] as String,
+        ),
       ),
-    ));
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-          title: const Text('Settings'), backgroundColor: Colors.transparent),
+        title: const Text('Settings'),
+        backgroundColor: Colors.transparent,
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -198,8 +214,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!,
-                    style: const TextStyle(color: Colors.orangeAccent)),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: Colors.orangeAccent),
+                ),
               ),
 
             // --- this device -------------------------------------------------
@@ -207,14 +225,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Card(
               color: NexusQColors.surface,
               child: ListTile(
-                leading: const Icon(Icons.label_outline,
-                    color: NexusQColors.dim),
-                title: Text(_deviceName.isEmpty ? 'Nexus Q' : _deviceName,
-                    style: const TextStyle(color: NexusQColors.white)),
+                leading: const Icon(
+                  Icons.label_outline,
+                  color: NexusQColors.dim,
+                ),
+                title: Text(
+                  _deviceName.isEmpty ? 'Nexus Q' : _deviceName,
+                  style: const TextStyle(color: NexusQColors.white),
+                ),
                 subtitle: Text(
                   _deviceRoom.isEmpty
                       ? 'Tap to rename. The name is what you see when the app '
-                          'finds it on the network, and what Spotify Connect shows.'
+                            'finds it on the network, and what Spotify Connect shows.'
                       : 'In $_deviceRoom · tap to rename',
                   style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
                 ),
@@ -222,7 +244,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Icon(Icons.edit_outlined, color: NexusQColors.dim),
                 onTap: _renaming ? null : _promptRename,
               ),
@@ -234,8 +257,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_services.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(12),
-                child: Text('Loading…',
-                    style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+                child: Text(
+                  'Loading…',
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 13),
+                ),
               )
             else
               Card(
@@ -250,30 +275,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             : (v) => _toggleService(s['id'] as String, v),
                         // Official brand mark, in the brand colour when on and
                         // greyed when off.
-                        secondary: Icon(_serviceIcon(s['id'] as String?),
-                            color: s['on'] == true
-                                ? _serviceColor(s['id'] as String?)
-                                : NexusQColors.dim),
-                        title: Text(s['name'] as String? ?? s['id'] as String,
-                            style: const TextStyle(color: NexusQColors.white)),
+                        secondary: Icon(
+                          _serviceIcon(s['id'] as String?),
+                          color: s['on'] == true
+                              ? _serviceColor(s['id'] as String?)
+                              : NexusQColors.dim,
+                        ),
+                        title: Text(
+                          s['name'] as String? ?? s['id'] as String,
+                          style: const TextStyle(color: NexusQColors.white),
+                        ),
                         subtitle: Row(
                           children: [
                             Expanded(
-                              child: Text(_serviceHint(s['id'] as String?),
-                                  style: const TextStyle(
-                                      color: NexusQColors.dim, fontSize: 12)),
+                              child: Text(
+                                _serviceHint(s['id'] as String?),
+                                style: const TextStyle(
+                                  color: NexusQColors.dim,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
                             TextButton.icon(
                               onPressed: () => _openLog(s),
-                              icon: const Icon(Icons.article_outlined, size: 16),
+                              icon: const Icon(
+                                Icons.article_outlined,
+                                size: 16,
+                              ),
                               label: const Text('Log'),
                               style: TextButton.styleFrom(
-                                  foregroundColor: NexusQColors.accent,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8),
-                                  minimumSize: const Size(0, 32),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap),
+                                foregroundColor: NexusQColors.accent,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                minimumSize: const Size(0, 32),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
                             ),
                           ],
                         ),
@@ -302,14 +339,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: SwitchListTile(
                 value: _desktop,
                 onChanged: (v) async {
-                  setState(() => _desktop = v); // optimistic; the poll corrects us
+                  setState(
+                    () => _desktop = v,
+                  ); // optimistic; the poll corrects us
                   await _call('setDesktop', {'on': v}, false);
                   await _refresh();
                 },
-                secondary: Icon(Icons.desktop_windows_outlined,
-                    color: _desktop ? NexusQColors.accent : NexusQColors.dim),
-                title: const Text('Show the desktop on HDMI',
-                    style: TextStyle(color: NexusQColors.white)),
+                secondary: Icon(
+                  Icons.desktop_windows_outlined,
+                  color: _desktop ? NexusQColors.accent : NexusQColors.dim,
+                ),
+                title: const Text(
+                  'Show the desktop on HDMI',
+                  style: TextStyle(color: NexusQColors.white),
+                ),
                 subtitle: const Text(
                   'Off by default — it costs power and heat with nothing plugged '
                   'in. Pair a mouse and keyboard (Devices) to actually use it. '
@@ -333,24 +376,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 final link = SpotifyLink.instance;
                 final String subtitle;
                 if (!link.isConfigured) {
-                  subtitle = 'Not configured in this build (no Spotify client ID). '
+                  subtitle =
+                      'Not configured in this build (no Spotify client ID). '
                       'Spotify playback can still be controlled from the Spotify app.';
                 } else if (link.isLinked) {
-                  subtitle = 'Connected${link.userDisplayName.isEmpty ? '' : ' as ${link.userDisplayName}'} — '
+                  subtitle =
+                      'Connected${link.userDisplayName.isEmpty ? '' : ' as ${link.userDisplayName}'} — '
                       'the Now Playing buttons drive Spotify on this Nexus Q.';
                 } else {
-                  subtitle = 'Not connected. Needed for the Now Playing buttons while '
+                  subtitle =
+                      'Not connected. Needed for the Now Playing buttons while '
                       'Spotify plays; the device itself cannot control Spotify.';
                 }
                 return Card(
                   color: NexusQColors.surface,
                   child: ListTile(
-                    leading: Icon(SimpleIcons.spotify,
-                        color: link.isLinked ? NexusQColors.accent : NexusQColors.dim),
-                    title: const Text('Spotify account',
-                        style: TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(subtitle,
-                        style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+                    leading: Icon(
+                      SimpleIcons.spotify,
+                      color: link.isLinked
+                          ? NexusQColors.accent
+                          : NexusQColors.dim,
+                    ),
+                    title: const Text(
+                      'Spotify account',
+                      style: TextStyle(color: NexusQColors.white),
+                    ),
+                    subtitle: Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: NexusQColors.dim,
+                        fontSize: 12,
+                      ),
+                    ),
                     trailing: !link.isConfigured
                         ? null
                         : TextButton(
@@ -363,11 +420,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   await link.beginLogin();
                                 }
                               } catch (e) {
-                                messenger.showSnackBar(SnackBar(
-                                    content: Text('$e'.replaceFirst('SpotifyAuthException: ', ''))));
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      '$e'.replaceFirst(
+                                        'SpotifyAuthException: ',
+                                        '',
+                                      ),
+                                    ),
+                                  ),
+                                );
                               }
                             },
-                            child: Text(link.isLinked ? 'Disconnect' : 'Connect'),
+                            child: Text(
+                              link.isLinked ? 'Disconnect' : 'Connect',
+                            ),
                           ),
                   ),
                 );
@@ -380,20 +447,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Card(
               color: NexusQColors.surface,
               child: ListTile(
-                leading: const Icon(Icons.monitor_heart_outlined,
-                    color: NexusQColors.dim),
-                title: const Text('Device health',
-                    style: TextStyle(color: NexusQColors.white)),
+                leading: const Icon(
+                  Icons.monitor_heart_outlined,
+                  color: NexusQColors.dim,
+                ),
+                title: const Text(
+                  'Device health',
+                  style: TextStyle(color: NexusQColors.white),
+                ),
                 subtitle: const Text(
                   'Live telemetry over your home MQTT broker — temperature, '
                   'CPU, WiFi, services. Works even when the direct link to '
                   'the Q is down.',
                   style: TextStyle(color: NexusQColors.dim, fontSize: 12),
                 ),
-                trailing:
-                    const Icon(Icons.chevron_right, color: NexusQColors.dim),
-                onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => HealthScreen(client: widget.client))),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: NexusQColors.dim,
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => HealthScreen(client: widget.client),
+                  ),
+                ),
               ),
             ),
 
@@ -406,50 +482,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _upd.companionBusy
-                            ? Icons.downloading
-                            : (_upd.companionUpdateAvailable
+                      _upd.companionBusy
+                          ? Icons.downloading
+                          : (_upd.companionUpdateAvailable
                                 ? Icons.system_update
                                 : Icons.check_circle_outline),
-                        color: (_upd.companionUpdateAvailable || _upd.companionBusy)
-                            ? NexusQColors.accent
-                            : NexusQColors.dim),
+                      color:
+                          (_upd.companionUpdateAvailable || _upd.companionBusy)
+                          ? NexusQColors.accent
+                          : NexusQColors.dim,
+                    ),
                     title: Text(
-                        _upd.companionBusy
-                            ? 'Updating…'
-                            : (_upd.companionUpdateAvailable
+                      _upd.companionBusy
+                          ? 'Updating…'
+                          : (_upd.companionUpdateAvailable
                                 // On iOS the phone-app track is never checked
                                 // (App Store-managed), so the card speaks only
                                 // for the device software it actually verified.
                                 ? (AppUpdate.selfUpdateSupported
-                                    ? 'App update available'
-                                    : 'Device update available')
+                                      ? 'App update available'
+                                      : 'Device update available')
                                 : (AppUpdate.selfUpdateSupported
-                                    ? 'App is up to date'
-                                    : 'Device software is up to date')),
-                        style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(_upd.companionStatusLine(),
-                        style: const TextStyle(
-                            color: NexusQColors.dim, fontSize: 12)),
-                    trailing: (_upd.checkingUpdate ||
+                                      ? 'App is up to date'
+                                      : 'Device software is up to date')),
+                      style: const TextStyle(color: NexusQColors.white),
+                    ),
+                    subtitle: Text(
+                      _upd.companionStatusLine(),
+                      style: const TextStyle(
+                        color: NexusQColors.dim,
+                        fontSize: 12,
+                      ),
+                    ),
+                    trailing:
+                        (_upd.checkingUpdate ||
                             _upd.checkingNexus ||
                             _upd.companionBusy)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : IconButton(
-                            icon: const Icon(Icons.refresh,
-                                color: NexusQColors.dim),
+                            icon: const Icon(
+                              Icons.refresh,
+                              color: NexusQColors.dim,
+                            ),
                             tooltip: 'Check for updates',
-                            onPressed: _upd.checkCompanion),
+                            onPressed: _upd.checkCompanion,
+                          ),
                   ),
                   if (_upd.updateError != null || _upd.nexusError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_upd.updateError ?? _upd.nexusError!,
-                          style: const TextStyle(
-                              color: Colors.orangeAccent, fontSize: 12)),
+                      child: Text(
+                        _upd.updateError ?? _upd.nexusError!,
+                        style: const TextStyle(
+                          color: Colors.orangeAccent,
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
                   // Progress area — device daemons first (activity bar), then the
                   // phone app download (determinate bar), then the Update button.
@@ -471,8 +563,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Text(
                             'Updating the device — the Q restarts its services '
                             'and the app reconnects. This is normal.',
-                            style:
-                                TextStyle(color: NexusQColors.dim, fontSize: 11),
+                            style: TextStyle(
+                              color: NexusQColors.dim,
+                              fontSize: 11,
+                            ),
                           ),
                         ],
                       ),
@@ -498,11 +592,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                              _upd.downloadProgress != null
-                                  ? 'Downloading app… ${(_upd.downloadProgress! * 100).round()}%'
-                                  : 'Downloading app… ${(_upd.downloadBytes / 1048576).toStringAsFixed(1)} MB',
-                              style: const TextStyle(
-                                  color: NexusQColors.dim, fontSize: 11)),
+                            _upd.downloadProgress != null
+                                ? 'Downloading app… ${(_upd.downloadProgress! * 100).round()}%'
+                                : 'Downloading app… ${(_upd.downloadBytes / 1048576).toStringAsFixed(1)} MB',
+                            style: const TextStyle(
+                              color: NexusQColors.dim,
+                              fontSize: 11,
+                            ),
+                          ),
                         ],
                       ),
                     )
@@ -530,41 +627,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   ListTile(
                     leading: Icon(
-                        _upd.installingSystem
-                            ? Icons.downloading
-                            : (_upd.systemUpdateAvailable
+                      _upd.installingSystem
+                          ? Icons.downloading
+                          : (_upd.systemUpdateAvailable
                                 ? Icons.system_update_alt
                                 : Icons.dns),
-                        color: (_upd.installingSystem || _upd.systemUpdateAvailable)
-                            ? NexusQColors.accent
-                            : NexusQColors.dim),
+                      color:
+                          (_upd.installingSystem || _upd.systemUpdateAvailable)
+                          ? NexusQColors.accent
+                          : NexusQColors.dim,
+                    ),
                     title: Text(
-                        _upd.installingSystem
-                            ? 'Installing system update…'
-                            : (_upd.systemUpdateAvailable
+                      _upd.installingSystem
+                          ? 'Installing system update…'
+                          : (_upd.systemUpdateAvailable
                                 ? 'System update available'
                                 : 'System software'),
-                        style: const TextStyle(color: NexusQColors.white)),
-                    subtitle: Text(_upd.systemStatusLine(),
-                        style: const TextStyle(
-                            color: NexusQColors.dim, fontSize: 12)),
+                      style: const TextStyle(color: NexusQColors.white),
+                    ),
+                    subtitle: Text(
+                      _upd.systemStatusLine(),
+                      style: const TextStyle(
+                        color: NexusQColors.dim,
+                        fontSize: 12,
+                      ),
+                    ),
                     trailing: (_upd.checkingSystem || _upd.installingSystem)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : IconButton(
-                            icon: const Icon(Icons.refresh,
-                                color: NexusQColors.dim),
+                            icon: const Icon(
+                              Icons.refresh,
+                              color: NexusQColors.dim,
+                            ),
                             tooltip: 'Check for system updates',
-                            onPressed: _upd.checkSystemUpdate),
+                            onPressed: _upd.checkSystemUpdate,
+                          ),
                   ),
                   if (_upd.systemError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(_upd.systemError!,
-                          style: const TextStyle(
-                              color: Colors.orangeAccent, fontSize: 12)),
+                      child: Text(
+                        _upd.systemError!,
+                        style: const TextStyle(
+                          color: Colors.orangeAccent,
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
                   if (_upd.installingSystem)
                     Padding(
@@ -588,14 +700,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             _upd.systemProgress ??
                                 'Upgrading all packages on the device.',
                             style: const TextStyle(
-                                color: NexusQColors.white, fontSize: 12),
+                              color: NexusQColors.white,
+                              fontSize: 12,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           const Text(
                             'The Q may restart services or reboot to finish; the '
                             'app reconnects when it is back.',
-                            style:
-                                TextStyle(color: NexusQColors.dim, fontSize: 11),
+                            style: TextStyle(
+                              color: NexusQColors.dim,
+                              fontSize: 11,
+                            ),
                           ),
                         ],
                       ),
@@ -628,10 +744,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile(
                       value: on,
                       onChanged: (v) => AppLog.enabled.value = v,
-                      secondary: Icon(Icons.bug_report_outlined,
-                          color: on ? NexusQColors.accent : NexusQColors.dim),
-                      title: const Text('Debug mode',
-                          style: TextStyle(color: NexusQColors.white)),
+                      secondary: Icon(
+                        Icons.bug_report_outlined,
+                        color: on ? NexusQColors.accent : NexusQColors.dim,
+                      ),
+                      title: const Text(
+                        'Debug mode',
+                        style: TextStyle(color: NexusQColors.white),
+                      ),
                       subtitle: const Text(
                         'Shows the connection log (recording is always on, this '
                         'just unlocks the viewer).',
@@ -642,15 +762,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _diagnosticsTile(_diag!),
                     if (on)
                       ListTile(
-                        leading: const Icon(Icons.receipt_long,
-                            color: NexusQColors.dim),
-                        title: const Text('View connection log',
-                            style: TextStyle(color: NexusQColors.white)),
-                        trailing: const Icon(Icons.chevron_right,
-                            color: NexusQColors.dim),
+                        leading: const Icon(
+                          Icons.receipt_long,
+                          color: NexusQColors.dim,
+                        ),
+                        title: const Text(
+                          'View connection log',
+                          style: TextStyle(color: NexusQColors.white),
+                        ),
+                        trailing: const Icon(
+                          Icons.chevron_right,
+                          color: NexusQColors.dim,
+                        ),
                         onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                                builder: (_) => const DebugLogScreen())),
+                          MaterialPageRoute(
+                            builder: (_) => const DebugLogScreen(),
+                          ),
+                        ),
                       ),
                   ],
                 ),
@@ -669,10 +797,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return SwitchListTile(
       value: d.enabled,
       onChanged: _diagBusy ? null : _setDiagnostics,
-      secondary: Icon(Icons.manage_search,
-          color: d.enabled ? NexusQColors.accent : NexusQColors.dim),
-      title: const Text('Device diagnostics (24 h)',
-          style: TextStyle(color: NexusQColors.white)),
+      secondary: Icon(
+        Icons.manage_search,
+        color: d.enabled ? NexusQColors.accent : NexusQColors.dim,
+      ),
+      title: const Text(
+        'Device diagnostics (24 h)',
+        style: TextStyle(color: NexusQColors.white),
+      ),
       subtitle: Text(
         note == null ? d.summary : '${d.summary} $note',
         style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
@@ -710,13 +842,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _sectionTitle(String s) => Padding(
-        padding: const EdgeInsets.only(left: 4, bottom: 6),
-        child: Text(s,
-            style: const TextStyle(
-                color: NexusQColors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w300)),
-      );
+    padding: const EdgeInsets.only(left: 4, bottom: 6),
+    child: Text(
+      s,
+      style: const TextStyle(
+        color: NexusQColors.white,
+        fontSize: 15,
+        fontWeight: FontWeight.w300,
+      ),
+    ),
+  );
 
   // Official service marks. Spotify + Roon come from simple_icons (a CC0 brand-icon
   // set); AirPlay is Material's own `Icons.airplay` (the standard AirPlay glyph —
@@ -742,11 +877,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case 'spotify':
         return SimpleIconColors.spotify; // Spotify green — reads fine on dark
       case 'roon':
-        return NexusQColors.white;       // Roon blue reads too dark on the theme
+        return NexusQColors.white; // Roon blue reads too dark on the theme
       case 'airplay':
-        return NexusQColors.white;       // AirPlay has no signature colour
+        return NexusQColors.white; // AirPlay has no signature colour
       case 'usbaudio':
-        return NexusQColors.white;       // generic USB input, no brand colour
+        return NexusQColors.white; // generic USB input, no brand colour
       default:
         return NexusQColors.accent;
     }
@@ -787,10 +922,12 @@ class _RenameDialog extends StatefulWidget {
 }
 
 class _RenameDialogState extends State<_RenameDialog> {
-  late final TextEditingController _name =
-      TextEditingController(text: widget.name);
-  late final TextEditingController _room =
-      TextEditingController(text: widget.room);
+  late final TextEditingController _name = TextEditingController(
+    text: widget.name,
+  );
+  late final TextEditingController _room = TextEditingController(
+    text: widget.room,
+  );
 
   @override
   void dispose() {
@@ -806,8 +943,10 @@ class _RenameDialogState extends State<_RenameDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: NexusQColors.surface,
-      title: const Text('Rename this Nexus Q',
-          style: TextStyle(color: NexusQColors.white)),
+      title: const Text(
+        'Rename this Nexus Q',
+        style: TextStyle(color: NexusQColors.white),
+      ),
       // Scrollable: with a software keyboard up (or a short test viewport) two
       // TextFields plus their counters do not fit, and an AlertDialog gives its
       // content a tight height — an unscrollable Column just overflows.
@@ -843,8 +982,9 @@ class _RenameDialogState extends State<_RenameDialog> {
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
         TextButton(onPressed: _submit, child: const Text('Save')),
       ],
     );

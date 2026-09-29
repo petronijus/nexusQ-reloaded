@@ -21,21 +21,23 @@ Map<String, dynamic> track({
   String album = 'Ritual of the Savage',
   List<Map<String, dynamic>>? images,
   int ms = 143000,
-}) =>
-    {
-      'name': name,
-      'artists': [for (final a in artists) {'name': a}],
-      'album': {
-        'name': album,
-        'images': images ??
-            [
-              {'url': 'https://i.example/640', 'height': 640, 'width': 640},
-              {'url': 'https://i.example/300', 'height': 300, 'width': 300},
-              {'url': 'https://i.example/64', 'height': 64, 'width': 64},
-            ],
-      },
-      'duration_ms': ms,
-    };
+}) => {
+  'name': name,
+  'artists': [
+    for (final a in artists) {'name': a},
+  ],
+  'album': {
+    'name': album,
+    'images':
+        images ??
+        [
+          {'url': 'https://i.example/640', 'height': 640, 'width': 640},
+          {'url': 'https://i.example/300', 'height': 300, 'width': 300},
+          {'url': 'https://i.example/64', 'height': 64, 'width': 64},
+        ],
+  },
+  'duration_ms': ms,
+};
 
 void main() {
   test('current track and the next few come out of one payload', () {
@@ -52,16 +54,21 @@ void main() {
   });
 
   test('artwork is the smallest image still big enough for a thumbnail', () {
-    final q = SpotifyQueue.fromJson({'currently_playing': track(), 'queue': const []});
+    final q = SpotifyQueue.fromJson({
+      'currently_playing': track(),
+      'queue': const [],
+    });
     // 300 over 640: a thumbnail does not need 640, and over 64: that is mush.
     expect(q.current!.artUrl, 'https://i.example/300');
   });
 
   test('an album with only a tiny image still yields that one, not blank', () {
     final q = SpotifyQueue.fromJson({
-      'currently_playing': track(images: [
-        {'url': 'https://i.example/64', 'height': 64, 'width': 64},
-      ]),
+      'currently_playing': track(
+        images: [
+          {'url': 'https://i.example/64', 'height': 64, 'width': 64},
+        ],
+      ),
       'queue': const [],
     });
     expect(q.current!.artUrl, 'https://i.example/64');
@@ -78,7 +85,9 @@ void main() {
 
   test('several artists read as one line', () {
     final q = SpotifyQueue.fromJson({
-      'currently_playing': track(artists: const ['Massive Attack', 'Tracey Thorn']),
+      'currently_playing': track(
+        artists: const ['Massive Attack', 'Tracey Thorn'],
+      ),
       'queue': const [],
     });
     expect(q.current!.artist, 'Massive Attack, Tracey Thorn');
@@ -93,7 +102,7 @@ void main() {
         'show': {
           'name': 'Some Show',
           'images': [
-            {'url': 'https://i.example/show300', 'height': 300, 'width': 300}
+            {'url': 'https://i.example/show300', 'height': 300, 'width': 300},
           ],
         },
         'duration_ms': 2400000,

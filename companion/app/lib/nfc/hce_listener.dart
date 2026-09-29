@@ -67,7 +67,9 @@ class _HceListenerState extends State<HceListener> with WidgetsBindingObserver {
   }
 
   void _show(HceMessage msg) {
-    debugPrint('[HCE] show "${msg.text}" (messenger=${widget.messengerKey.currentState != null})');
+    debugPrint(
+      '[HCE] show "${msg.text}" (messenger=${widget.messengerKey.currentState != null})',
+    );
     final tap = DeviceTap.tryParse(msg.text);
     if (tap != null && widget.onDeviceTap != null) {
       widget.onDeviceTap!(tap);
@@ -103,7 +105,10 @@ class _HceListenerState extends State<HceListener> with WidgetsBindingObserver {
                     const SizedBox(height: 2),
                     Text(
                       msg.text,
-                      style: const TextStyle(color: NexusQColors.white, fontSize: 15),
+                      style: const TextStyle(
+                        color: NexusQColors.white,
+                        fontSize: 15,
+                      ),
                     ),
                   ],
                 ),

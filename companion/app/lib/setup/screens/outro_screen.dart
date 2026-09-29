@@ -74,13 +74,16 @@ class _OutroScreenState extends State<OutroScreen> {
   void _done() {
     if (_navigated) return;
     _navigated = true;
-    final host = (widget.flow.wifiResult?['ip'] as String?) ??
+    final host =
+        (widget.flow.wifiResult?['ip'] as String?) ??
         (widget.flow.wifiResult?['mdns'] as String?) ??
         '';
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
-          builder: (_) => ConnectGate(
-              initialClient: host.isEmpty ? null : TcpClient(host: host))),
+        builder: (_) => ConnectGate(
+          initialClient: host.isEmpty ? null : TcpClient(host: host),
+        ),
+      ),
       (route) => false,
     );
   }
@@ -110,16 +113,25 @@ class _OutroScreenState extends State<OutroScreen> {
                   ? AspectRatio(
                       key: const ValueKey('video'),
                       aspectRatio: v.value.aspectRatio,
-                      child: VideoPlayer(v))
-                  : stockImage('setup_static.png',
+                      child: VideoPlayer(v),
+                    )
+                  : stockImage(
+                      'setup_static.png',
                       key: const ValueKey('static'),
                       height: 200,
-                      fallback: Icons.check_circle_outline),
+                      fallback: Icons.check_circle_outline,
+                    ),
             ),
           ),
           const SizedBox(height: 32),
-          Text('${widget.flow.deviceName} is ready',
-              style: const TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          Text(
+            '${widget.flow.deviceName} is ready',
+            style: const TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 40),
           FilledButton(onPressed: _done, child: const Text('Start listening')),
         ],

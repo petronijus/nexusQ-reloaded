@@ -47,11 +47,12 @@ class HealthMqtt extends ChangeNotifier {
     notifyListeners();
 
     final client = MqttServerClient.withPort(
-        settings.host,
-        // Unique per phone-ish: broker drops the OLDER session on a client-id
-        // collision, so a fixed id would let two phones kick each other off.
-        'nexusq-app-${DateTime.now().millisecondsSinceEpoch % 100000}',
-        settings.port);
+      settings.host,
+      // Unique per phone-ish: broker drops the OLDER session on a client-id
+      // collision, so a fixed id would let two phones kick each other off.
+      'nexusq-app-${DateTime.now().millisecondsSinceEpoch % 100000}',
+      settings.port,
+    );
     client.logging(on: false);
     client.keepAlivePeriod = 60;
     client.autoReconnect = true;
@@ -62,8 +63,7 @@ class HealthMqtt extends ChangeNotifier {
     _client = client;
 
     try {
-      final status =
-          await client.connect(settings.username, settings.password);
+      final status = await client.connect(settings.username, settings.password);
       if (status?.state != MqttConnectionState.connected) {
         throw Exception(status?.returnCode?.name ?? 'connection failed');
       }
@@ -73,7 +73,8 @@ class HealthMqtt extends ChangeNotifier {
       link = HealthLink.error;
       // mqtt_client wraps a broker auth refusal in a NoConnectionException
       // whose text is noise; show something a human can act on.
-      errorText = e.toString().contains('not authorized') ||
+      errorText =
+          e.toString().contains('not authorized') ||
               e.toString().contains('badUsernameOrPassword') ||
               e.toString().contains('notAuthorized')
           ? 'Broker refused the username/password'
@@ -106,8 +107,9 @@ class HealthMqtt extends ChangeNotifier {
     for (final msg in batch) {
       final payload = msg.payload;
       if (payload is! MqttPublishMessage) continue;
-      final text =
-          MqttPublishPayload.bytesToStringAsString(payload.payload.message);
+      final text = MqttPublishPayload.bytesToStringAsString(
+        payload.payload.message,
+      );
       if (msg.topic == '$prefix/status') {
         deviceOnline = text == 'online';
       } else if (msg.topic == '$prefix/health/state') {

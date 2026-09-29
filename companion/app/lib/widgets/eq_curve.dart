@@ -131,102 +131,105 @@ class _EqCurveState extends State<EqCurve> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, c) {
-      final size = Size(c.maxWidth, widget.height);
-      final enabled = widget.enabled;
+    return LayoutBuilder(
+      builder: (context, c) {
+        final size = Size(c.maxWidth, widget.height);
+        final enabled = widget.enabled;
 
-      void start(DragStartDetails d) {
-        // Re-arm on whatever the gesture started on, so moving to another band
-        // is a single drag rather than tap-then-drag.
-        final i = _nearest(d.localPosition, size);
-        if (i < 0) return;
-        _dragging = i;
-        _inDetent = false;
-        if (widget.armed.value != i) {
-          widget.armed.value = i;
-          widget.onSelect(i);
+        void start(DragStartDetails d) {
+          // Re-arm on whatever the gesture started on, so moving to another band
+          // is a single drag rather than tap-then-drag.
+          final i = _nearest(d.localPosition, size);
+          if (i < 0) return;
+          _dragging = i;
+          _inDetent = false;
+          if (widget.armed.value != i) {
+            widget.armed.value = i;
+            widget.onSelect(i);
+          }
         }
-      }
 
-      void update(DragUpdateDetails d) {
-        if (_dragging < 0) return;
-        final db = _detent(_dbOf(d.localPosition.dy, size.height));
-        final nowFlat = db == 0.0;
-        if (nowFlat != _inDetent) {
-          _inDetent = nowFlat;
-          // A click on the way in only: the detent should be felt, not buzzed
-          // at, and leaving it is already obvious from the curve moving.
-          if (nowFlat) HapticFeedback.selectionClick();
+        void update(DragUpdateDetails d) {
+          if (_dragging < 0) return;
+          final db = _detent(_dbOf(d.localPosition.dy, size.height));
+          final nowFlat = db == 0.0;
+          if (nowFlat != _inDetent) {
+            _inDetent = nowFlat;
+            // A click on the way in only: the detent should be felt, not buzzed
+            // at, and leaving it is already obvious from the curve moving.
+            if (nowFlat) HapticFeedback.selectionClick();
+          }
+          widget.onChanged(_dragging, db);
         }
-        widget.onChanged(_dragging, db);
-      }
 
-      void end(DragEndDetails d) {
-        if (_dragging < 0) return;
-        _dragging = -1;
-        _inDetent = false;
-        widget.onCommit();
-      }
+        void end(DragEndDetails d) {
+          if (_dragging < 0) return;
+          _dragging = -1;
+          _inDetent = false;
+          widget.onCommit();
+        }
 
-      return RawGestureDetector(
-        behavior: HitTestBehavior.opaque,
-        gestures: {
-          if (enabled && widget.armed.value != null)
-            _ClaimingDragRecognizer:
-                GestureRecognizerFactoryWithHandlers<_ClaimingDragRecognizer>(
-              () => _ClaimingDragRecognizer(debugOwner: this),
-              (r) {
-                r.onStart = start;
-                r.onUpdate = update;
-                r.onEnd = end;
-              },
+        return RawGestureDetector(
+          behavior: HitTestBehavior.opaque,
+          gestures: {
+            if (enabled && widget.armed.value != null)
+              _ClaimingDragRecognizer:
+                  GestureRecognizerFactoryWithHandlers<_ClaimingDragRecognizer>(
+                    () => _ClaimingDragRecognizer(debugOwner: this),
+                    (r) {
+                      r.onStart = start;
+                      r.onUpdate = update;
+                      r.onEnd = end;
+                    },
+                  ),
+            TapGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                  () => TapGestureRecognizer(debugOwner: this),
+                  (r) {
+                    r.onTapDown = !enabled
+                        ? null
+                        : (d) {
+                            final i = _nearest(d.localPosition, size);
+                            if (i < 0) return;
+                            widget.onSelect(i);
+                            widget.armed.value =
+                                i; // arm: the page stops scrolling
+                          };
+                  },
+                ),
+          },
+          child: SizedBox(
+            // `height` stays the height of the PLOT; the axis strip is extra, so
+            // making room for the labels never shrinks the curve.
+            height: widget.height + _axisGutter,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _EqPainter(
+                state: widget.state,
+                selected: widget.selected,
+                armed: widget.armed.value,
+                enabled: widget.enabled,
+              ),
             ),
-          TapGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-            () => TapGestureRecognizer(debugOwner: this),
-            (r) {
-              r.onTapDown = !enabled
-                  ? null
-                  : (d) {
-                      final i = _nearest(d.localPosition, size);
-                      if (i < 0) return;
-                      widget.onSelect(i);
-                      widget.armed.value = i;   // arm: the page stops scrolling
-                    };
-            },
           ),
-        },
-        child: SizedBox(
-          // `height` stays the height of the PLOT; the axis strip is extra, so
-          // making room for the labels never shrinks the curve.
-          height: widget.height + _axisGutter,
-          width: double.infinity,
-          child: CustomPaint(
-            painter: _EqPainter(
-              state: widget.state,
-              selected: widget.selected,
-              armed: widget.armed.value,
-              enabled: widget.enabled,
-            ),
-          ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
 }
 
 class _EqPainter extends CustomPainter {
-  _EqPainter(
-      {required this.state,
-      required this.selected,
-      required this.armed,
-      required this.enabled});
+  _EqPainter({
+    required this.state,
+    required this.selected,
+    required this.armed,
+    required this.enabled,
+  });
 
   final EqState state;
   final int selected;
   final int? armed;
   final bool enabled;
-
 
   double _x(double f, double w) => plotX(state.bands, f, w);
 
@@ -238,7 +241,9 @@ class _EqPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height - _axisGutter;
-    final dim = enabled ? NexusQColors.dim : NexusQColors.dim.withValues(alpha: 0.4);
+    final dim = enabled
+        ? NexusQColors.dim
+        : NexusQColors.dim.withValues(alpha: 0.4);
 
     final fine = Paint()
       ..color = dim.withValues(alpha: 0.13)
@@ -253,20 +258,28 @@ class _EqPainter extends CustomPainter {
     for (var db = -maxDb; db <= maxDb + 0.01; db += 3) {
       if (db.abs() < 0.01) continue;
       final labelled = (db.abs() % 6).abs() < 0.01;
-      canvas.drawLine(Offset(0, _y(db, h)), Offset(w, _y(db, h)),
-          labelled ? coarse : fine);
+      canvas.drawLine(
+        Offset(0, _y(db, h)),
+        Offset(w, _y(db, h)),
+        labelled ? coarse : fine,
+      );
       if (labelled) {
-        _label(canvas, '${db > 0 ? '+' : '−'}${db.abs().toInt()}',
-            Offset(2, _y(db, h) - 11), dim);
+        _label(
+          canvas,
+          '${db > 0 ? '+' : '−'}${db.abs().toInt()}',
+          Offset(2, _y(db, h) - 11),
+          dim,
+        );
       }
     }
     // 0 dB is the reference, so it reads heavier than the rest.
     canvas.drawLine(
-        Offset(0, _y(0, h)),
-        Offset(w, _y(0, h)),
-        Paint()
-          ..color = dim.withValues(alpha: 0.55)
-          ..strokeWidth = 1);
+      Offset(0, _y(0, h)),
+      Offset(w, _y(0, h)),
+      Paint()
+        ..color = dim.withValues(alpha: 0.55)
+        ..strokeWidth = 1,
+    );
 
     // A line and a label at EVERY band frequency: those are the only points that
     // can be moved, so "which kHz am I raising" should never need guessing.
@@ -274,15 +287,24 @@ class _EqPainter extends CustomPainter {
       for (var i = 0; i < state.bands.length; i++) {
         final f = state.bands[i].freqHz;
         final gx = _x(f, w);
-        canvas.drawLine(Offset(gx, 0), Offset(gx, h),
-            i == armed ? coarse : fine);
+        canvas.drawLine(
+          Offset(gx, 0),
+          Offset(gx, h),
+          i == armed ? coarse : fine,
+        );
         final text = f >= 10000
             ? '${(f / 1000).toStringAsFixed(0)}k'
             : (f >= 1000
-                ? '${(f / 1000).toStringAsFixed(1)}k'
-                : '${f.round()}');
-        _labelCentred(canvas, text, gx, h + 5,
-            i == armed ? NexusQColors.accent : dim, w);
+                  ? '${(f / 1000).toStringAsFixed(1)}k'
+                  : '${f.round()}');
+        _labelCentred(
+          canvas,
+          text,
+          gx,
+          h + 5,
+          i == armed ? NexusQColors.accent : dim,
+          w,
+        );
       }
     }
 
@@ -295,8 +317,9 @@ class _EqPainter extends CustomPainter {
       final p = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = i == selected ? 1.4 : 1.0
-        ..color = (i == selected ? NexusQColors.accent : dim)
-            .withValues(alpha: i == selected ? 0.55 : 0.28);
+        ..color = (i == selected ? NexusQColors.accent : dim).withValues(
+          alpha: i == selected ? 0.55 : 0.28,
+        );
       canvas.drawPath(_path(size, (f) => b.responseDb(f)), p);
     }
 
@@ -318,31 +341,38 @@ class _EqPainter extends CustomPainter {
       if (isArmed) {
         // The armed band owns the gestures and the page has stopped scrolling —
         // that has to be visible, or the frozen page looks like a bug.
-        canvas.drawCircle(c, 18,
-            Paint()..color = NexusQColors.accent.withValues(alpha: 0.16));
         canvas.drawCircle(
-            c,
-            14,
-            Paint()
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 2
-              ..color = NexusQColors.accent.withValues(alpha: 0.7));
-      }
-      canvas.drawCircle(
           c,
-          sel ? 9 : 6,
-          Paint()
-            ..color = (enabled ? NexusQColors.accent : dim)
-                .withValues(alpha: b.isFlat ? 0.45 : 1.0));
-      canvas.drawCircle(
+          18,
+          Paint()..color = NexusQColors.accent.withValues(alpha: 0.16),
+        );
+        canvas.drawCircle(
           c,
-          sel ? 9 : 6,
+          14,
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2
-            // Reads as a cut-out of the card behind it, so it has to be the
-            // card's colour — the EQ card is the black one.
-            ..color = NexusQColors.canvas);
+            ..color = NexusQColors.accent.withValues(alpha: 0.7),
+        );
+      }
+      canvas.drawCircle(
+        c,
+        sel ? 9 : 6,
+        Paint()
+          ..color = (enabled ? NexusQColors.accent : dim).withValues(
+            alpha: b.isFlat ? 0.45 : 1.0,
+          ),
+      );
+      canvas.drawCircle(
+        c,
+        sel ? 9 : 6,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          // Reads as a cut-out of the card behind it, so it has to be the
+          // card's colour — the EQ card is the black one.
+          ..color = NexusQColors.canvas,
+      );
     }
 
     // What the armed band is actually set to, pinned to the top of the plot:
@@ -355,8 +385,14 @@ class _EqPainter extends CustomPainter {
           : '${b.freqHz.round()} Hz';
       final db =
           '${b.gainDb >= 0 ? '+' : '−'}${b.gainDb.abs().toStringAsFixed(1)} dB';
-      _label(canvas, '$hz   $db', const Offset(4, 3), NexusQColors.accent,
-          size: 12, bold: true);
+      _label(
+        canvas,
+        '$hz   $db',
+        const Offset(4, 3),
+        NexusQColors.accent,
+        size: 12,
+        bold: true,
+      );
     }
   }
 
@@ -372,15 +408,27 @@ class _EqPainter extends CustomPainter {
     return path;
   }
 
-  void _label(Canvas canvas, String s, Offset at, Color color,
-      {double size = 10, bool bold = false}) {
+  void _label(
+    Canvas canvas,
+    String s,
+    Offset at,
+    Color color, {
+    double size = 10,
+    bool bold = false,
+  }) {
     _painter(s, color, size, bold).paint(canvas, at);
   }
 
   /// Centred on [cx] but nudged so an edge label is not clipped — the outermost
   /// band frequencies sit right on the edges of the plot.
   void _labelCentred(
-      Canvas canvas, String s, double cx, double top, Color color, double w) {
+    Canvas canvas,
+    String s,
+    double cx,
+    double top,
+    Color color,
+    double w,
+  ) {
     final tp = _painter(s, color, 10, false);
     final x = (cx - tp.width / 2).clamp(1.0, w - tp.width - 1);
     tp.paint(canvas, Offset(x, top));
@@ -389,11 +437,13 @@ class _EqPainter extends CustomPainter {
   TextPainter _painter(String s, Color color, double size, bool bold) =>
       TextPainter(
         text: TextSpan(
-            text: s,
-            style: TextStyle(
-                color: color,
-                fontSize: size,
-                fontWeight: bold ? FontWeight.w600 : FontWeight.normal)),
+          text: s,
+          style: TextStyle(
+            color: color,
+            fontSize: size,
+            fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
         textDirection: TextDirection.ltr,
       )..layout();
 
@@ -423,8 +473,7 @@ double plotX(List<EqBand> bands, double f, double w) {
   final lo = math.log(bands.first.freqHz), hi = math.log(bands.last.freqHz);
   final span = w - 2 * _edgeInset;
   if (hi <= lo || span <= 0) return w / 2;
-  return _edgeInset +
-      ((math.log(f) - lo) / (hi - lo)).clamp(0.0, 1.0) * span;
+  return _edgeInset + ((math.log(f) - lo) / (hi - lo)).clamp(0.0, 1.0) * span;
 }
 
 double plotFreq(List<EqBand> bands, double x, double w) {

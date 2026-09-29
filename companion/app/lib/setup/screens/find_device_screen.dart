@@ -6,8 +6,12 @@ import '../bt_setup_client.dart';
 import '../setup_flow.dart';
 
 class FindDeviceScreen extends StatefulWidget {
-  const FindDeviceScreen(
-      {super.key, required this.flow, required this.onNext, required this.onBack});
+  const FindDeviceScreen({
+    super.key,
+    required this.flow,
+    required this.onNext,
+    required this.onBack,
+  });
   final SetupFlowState flow;
   final VoidCallback onNext;
   final VoidCallback onBack;
@@ -40,7 +44,9 @@ class _FindDeviceScreenState extends State<FindDeviceScreen> {
     }
     if (!mounted) return;
     if (!ok) {
-      setState(() => _error = 'Bluetooth permission is required to find the Q.');
+      setState(
+        () => _error = 'Bluetooth permission is required to find the Q.',
+      );
       return;
     }
     await _sub?.cancel();
@@ -96,47 +102,62 @@ class _FindDeviceScreenState extends State<FindDeviceScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                  SizedBox(
-                    width: 160,
-                    height: 160,
-                    child: GlowingRing(
-                      // volume 0: no equator arc — just the dim sphere outline
-                      // and the slow rotating highlight tick, our "searching…"
-                      // motion. Dims out if a permission/scan error is showing.
-                      volume: 0.0,
-                      muted: _error != null,
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  const Text('Looking for your Q…',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
+                      SizedBox(
+                        width: 160,
+                        height: 160,
+                        child: GlowingRing(
+                          // volume 0: no equator arc — just the dim sphere outline
+                          // and the slow rotating highlight tick, our "searching…"
+                          // motion. Dims out if a permission/scan error is showing.
+                          volume: 0.0,
+                          muted: _error != null,
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      const Text(
+                        'Looking for your Q…',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
                           color: NexusQColors.white,
                           fontSize: 22,
-                          fontWeight: FontWeight.w300)),
-                  const SizedBox(height: 8),
-                  Text(_error ?? 'Make sure the ring is spinning blue (setup mode).',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13)),
-                  if (_scanning && devices.isEmpty) ...[
-                    const SizedBox(height: 20),
-                    const SizedBox(
-                      width: 120,
-                      child: LinearProgressIndicator(minHeight: 2),
-                    ),
-                  ],
+                          fontWeight: FontWeight.w300,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _error ??
+                            'Make sure the ring is spinning blue (setup mode).',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: NexusQColors.dim,
+                          fontSize: 13,
+                        ),
+                      ),
+                      if (_scanning && devices.isEmpty) ...[
+                        const SizedBox(height: 20),
+                        const SizedBox(
+                          width: 120,
+                          child: LinearProgressIndicator(minHeight: 2),
+                        ),
+                      ],
                       // Found devices appear directly under the glow, still
                       // centred. The Q sorts to the top (see the sort above).
                       for (final d in devices)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: ListTile(
-                            leading: const Icon(Icons.bluetooth,
-                                color: NexusQColors.accent),
-                            title: Text(d.name.isEmpty ? d.mac : d.name,
-                                style: const TextStyle(color: NexusQColors.white)),
-                            subtitle: Text(d.mac,
-                                style: const TextStyle(color: NexusQColors.dim)),
+                            leading: const Icon(
+                              Icons.bluetooth,
+                              color: NexusQColors.accent,
+                            ),
+                            title: Text(
+                              d.name.isEmpty ? d.mac : d.name,
+                              style: const TextStyle(color: NexusQColors.white),
+                            ),
+                            subtitle: Text(
+                              d.mac,
+                              style: const TextStyle(color: NexusQColors.dim),
+                            ),
                             onTap: () => _pick(d),
                           ),
                         ),

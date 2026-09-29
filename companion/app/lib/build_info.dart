@@ -20,8 +20,14 @@
 ///   flutter build apk --debug \
 ///     --dart-define=APP_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2) \
 ///     --dart-define=BUILD_TAG=$(date +%m%d-%H%M)
-const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
-const String kBuildTag = String.fromEnvironment('BUILD_TAG', defaultValue: 'dev');
+const String kAppVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: 'dev',
+);
+const String kBuildTag = String.fromEnvironment(
+  'BUILD_TAG',
+  defaultValue: 'dev',
+);
 
 /// One-line identity for the UI, e.g. "v1.9.0+2 · build 0715-1706".
 const String kBuildLabel = 'v$kAppVersion · build $kBuildTag';

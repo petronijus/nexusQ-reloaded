@@ -15,8 +15,12 @@ const _themes = [
 ];
 
 class ThemeScreen extends StatefulWidget {
-  const ThemeScreen(
-      {super.key, required this.flow, required this.onNext, required this.onBack});
+  const ThemeScreen({
+    super.key,
+    required this.flow,
+    required this.onNext,
+    required this.onBack,
+  });
   final SetupFlowState flow;
   final VoidCallback onNext;
   final VoidCallback onBack;
@@ -46,11 +50,19 @@ class _ThemeScreenState extends State<ThemeScreen> {
       child: Column(
         children: [
           const SizedBox(height: 16),
-          const Text('Pick a light theme',
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          const Text(
+            'Pick a light theme',
+            style: TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 8),
-          const Text('The ring previews your choice live.',
-              style: TextStyle(color: NexusQColors.dim, fontSize: 13)),
+          const Text(
+            'The ring previews your choice live.',
+            style: TextStyle(color: NexusQColors.dim, fontSize: 13),
+          ),
           const SizedBox(height: 24),
           Expanded(
             child: GridView.count(
@@ -70,15 +82,21 @@ class _ThemeScreenState extends State<ThemeScreen> {
                             shape: BoxShape.circle,
                             color: color,
                             border: Border.all(
-                                color: _selected == id
-                                    ? NexusQColors.white
-                                    : Colors.transparent,
-                                width: 2),
+                              color: _selected == id
+                                  ? NexusQColors.white
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Text(label,
-                            style: const TextStyle(color: NexusQColors.dim, fontSize: 12)),
+                        Text(
+                          label,
+                          style: const TextStyle(
+                            color: NexusQColors.dim,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),

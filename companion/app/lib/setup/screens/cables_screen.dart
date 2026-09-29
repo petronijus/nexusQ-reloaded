@@ -14,21 +14,29 @@ class CablesScreen extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: 16),
-          const Text('Connect your Nexus Q',
-              style: TextStyle(color: NexusQColors.white, fontSize: 22, fontWeight: FontWeight.w300)),
+          const Text(
+            'Connect your Nexus Q',
+            style: TextStyle(
+              color: NexusQColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
           const SizedBox(height: 24),
           Expanded(
-            child: ListView(children: [
-              stockImage('cables_diagram_01.png', fallback: Icons.cable),
-              const SizedBox(height: 16),
-              stockImage('cables_diagram_02.png', fallback: Icons.speaker),
-              const SizedBox(height: 16),
-              const Text(
-                'Plug in power. Connect speakers to the banana terminals, or use '
-                'the optical output. The LED ring spins blue while the Q starts up.',
-                style: TextStyle(color: NexusQColors.dim, fontSize: 14),
-              ),
-            ]),
+            child: ListView(
+              children: [
+                stockImage('cables_diagram_01.png', fallback: Icons.cable),
+                const SizedBox(height: 16),
+                stockImage('cables_diagram_02.png', fallback: Icons.speaker),
+                const SizedBox(height: 16),
+                const Text(
+                  'Plug in power. Connect speakers to the banana terminals, or use '
+                  'the optical output. The LED ring spins blue while the Q starts up.',
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 14),
+                ),
+              ],
+            ),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,

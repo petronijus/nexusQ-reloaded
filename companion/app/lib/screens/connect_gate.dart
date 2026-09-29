@@ -119,8 +119,9 @@ class _ConnectGateState extends State<ConnectGate> {
     });
   }
 
-  void _pick(Discovered d) =>
-      _use((widget.clientFactory ?? (d) => TcpClient(host: d.host, port: d.port))(d));
+  void _pick(Discovered d) => _use(
+    (widget.clientFactory ?? (d) => TcpClient(host: d.host, port: d.port))(d),
+  );
 
   Future<void> _discover() async {
     // Back to waiting for a Q — a tap is expected again.
@@ -164,7 +165,9 @@ class _ConnectGateState extends State<ConnectGate> {
       },
       onError: (_) {
         if (!mounted || _phase != _Phase.discovering) return;
-        setState(() => _phase = _found.isEmpty ? _Phase.needInput : _Phase.choose);
+        setState(
+          () => _phase = _found.isEmpty ? _Phase.needInput : _Phase.choose,
+        );
       },
     );
   }
@@ -190,7 +193,9 @@ class _ConnectGateState extends State<ConnectGate> {
   String get _headline {
     switch (_phase) {
       case _Phase.discovering:
-        return _found.isEmpty ? 'Searching for Nexus Q…' : 'Searching for more…';
+        return _found.isEmpty
+            ? 'Searching for Nexus Q…'
+            : 'Searching for more…';
       case _Phase.choose:
         return _found.length == 1 ? 'Your Nexus Q' : 'Choose your Nexus Q';
       case _Phase.needInput:
@@ -217,8 +222,10 @@ class _ConnectGateState extends State<ConnectGate> {
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: const Text(kBuildLabel,
-                    style: TextStyle(color: NexusQColors.dim, fontSize: 10)),
+                child: const Text(
+                  kBuildLabel,
+                  style: TextStyle(color: NexusQColors.dim, fontSize: 10),
+                ),
               ),
             ),
             // Positioned.fill: a NON-positioned Stack child is given LOOSE
@@ -255,7 +262,10 @@ class _ConnectGateState extends State<ConnectGate> {
                     Text(
                       _headline,
                       style: const TextStyle(
-                          color: NexusQColors.white, fontSize: 18, fontWeight: FontWeight.w300),
+                        color: NexusQColors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w300,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -263,7 +273,10 @@ class _ConnectGateState extends State<ConnectGate> {
                           ? 'Tap the one you want to control.'
                           : 'Make sure the device is on the same network.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: NexusQColors.dim, fontSize: 13),
+                      style: const TextStyle(
+                        color: NexusQColors.dim,
+                        fontSize: 13,
+                      ),
                     ),
                     const SizedBox(height: 28),
                     // The devices found so far, under each other. Shown while
@@ -273,7 +286,10 @@ class _ConnectGateState extends State<ConnectGate> {
                     if (_found.isNotEmpty) ..._deviceList(),
                     if (_phase == _Phase.choose) ...[
                       const SizedBox(height: 12),
-                      TextButton(onPressed: _discover, child: const Text('Search again')),
+                      TextButton(
+                        onPressed: _discover,
+                        child: const Text('Search again'),
+                      ),
                     ],
                     if (_phase == _Phase.needInput) ..._fallback(),
                   ],
@@ -291,61 +307,67 @@ class _ConnectGateState extends State<ConnectGate> {
   /// the address underneath. Dark until the box answers the glance; a box
   /// that never answers stays dark and says so.
   List<Widget> _deviceList() => [
-        for (final d in _found)
-          _DeviceRow(
-            key: ValueKey('device-${d.key}'),
-            device: d,
-            glance: _glances[d.key],
-            answered: _glances.containsKey(d.key),
-            onTap: () => _pick(d),
-          ),
-      ];
+    for (final d in _found)
+      _DeviceRow(
+        key: ValueKey('device-${d.key}'),
+        device: d,
+        glance: _glances[d.key],
+        answered: _glances.containsKey(d.key),
+        onTap: () => _pick(d),
+      ),
+  ];
 
   List<Widget> _fallback() => [
-        TextField(
-          controller: _hostCtrl,
-          style: const TextStyle(color: NexusQColors.white),
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            labelText: 'Device address (host or host:port)',
-            labelStyle: TextStyle(color: NexusQColors.dim),
-            enabledBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: NexusQColors.divider)),
-            focusedBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: NexusQColors.accent)),
-          ),
-          onSubmitted: (_) => _connectManual(),
+    TextField(
+      controller: _hostCtrl,
+      style: const TextStyle(color: NexusQColors.white),
+      keyboardType: TextInputType.url,
+      decoration: const InputDecoration(
+        labelText: 'Device address (host or host:port)',
+        labelStyle: TextStyle(color: NexusQColors.dim),
+        enabledBorder: UnderlineInputBorder(
+          borderSide: BorderSide(color: NexusQColors.divider),
         ),
-        const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            TextButton(onPressed: _discover, child: const Text('Search again')),
-            TextButton(onPressed: () => _use(MockClient()), child: const Text('Demo')),
-            FilledButton(onPressed: _connectManual, child: const Text('Connect')),
-          ],
+        focusedBorder: UnderlineInputBorder(
+          borderSide: BorderSide(color: NexusQColors.accent),
         ),
-        const SizedBox(height: 12),
-        // The wizard's transport is BT Classic RFCOMM — Android-only (see
-        // BtSetupClient.supported). Elsewhere, say so instead of offering a
-        // button that dies on the first platform-channel call.
-        if (BtSetupClient.supported)
-          TextButton(
-            onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const SetupFlow())),
-            child: const Text('Set up new device'),
-          )
-        else
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: Text(
-              'Setting up a brand-new Nexus Q uses Bluetooth, which only the '
-              'Android app can do. Once the device is on WiFi it works here too.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: NexusQColors.dim, fontSize: 12),
-            ),
-          ),
-      ];
+      ),
+      onSubmitted: (_) => _connectManual(),
+    ),
+    const SizedBox(height: 20),
+    Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        TextButton(onPressed: _discover, child: const Text('Search again')),
+        TextButton(
+          onPressed: () => _use(MockClient()),
+          child: const Text('Demo'),
+        ),
+        FilledButton(onPressed: _connectManual, child: const Text('Connect')),
+      ],
+    ),
+    const SizedBox(height: 12),
+    // The wizard's transport is BT Classic RFCOMM — Android-only (see
+    // BtSetupClient.supported). Elsewhere, say so instead of offering a
+    // button that dies on the first platform-channel call.
+    if (BtSetupClient.supported)
+      TextButton(
+        onPressed: () => Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const SetupFlow())),
+        child: const Text('Set up new device'),
+      )
+    else
+      const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 8),
+        child: Text(
+          'Setting up a brand-new Nexus Q uses Bluetooth, which only the '
+          'Android app can do. Once the device is on WiFi it works here too.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+        ),
+      ),
+  ];
 }
 
 class _DeviceRow extends StatelessWidget {
@@ -380,14 +402,19 @@ class _DeviceRow extends StatelessWidget {
               size: 132,
             ),
             const SizedBox(height: 10),
-            Text(device.name,
-                style: TextStyle(
-                    color: theme == null ? NexusQColors.white : nameColorFor(theme),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w300)),
+            Text(
+              device.name,
+              style: TextStyle(
+                color: theme == null ? NexusQColors.white : nameColorFor(theme),
+                fontSize: 18,
+                fontWeight: FontWeight.w300,
+              ),
+            ),
             const SizedBox(height: 2),
             Text(
-              answered && g == null ? '${device.host}:${device.port} · not answering' : '${device.host}:${device.port}',
+              answered && g == null
+                  ? '${device.host}:${device.port} · not answering'
+                  : '${device.host}:${device.port}',
               style: const TextStyle(color: NexusQColors.dim, fontSize: 12),
             ),
           ],
