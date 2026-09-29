@@ -1,3 +1,15 @@
 # Commits that only reformat code; `git blame` skips them after
 #   git config blame.ignoreRevsFile .git-blame-ignore-revs
 # One full hash per line, with the subject as a comment above it.
+
+# style(py): format with ruff and fix what it flags
+8a89f04c19dd23bf855ac1d16a2e92b8457ba905
+
+# style(dart): convert the app to dart format's tall style
+1151f4b09856a981de459313f24a825daf142625
+
+# style(android): format the Kotlin sources with ktlint
+34bb38f9df3b1d78eb2b7766c781904670ed2f18
+
+# style(sh): make every shell script shellcheck-clean
+0336bcfe4ea8347f0bce27eee370d2b58277a9d9
