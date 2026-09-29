@@ -6,6 +6,54 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — a developer harness: `just check`, git hooks, agent rules (device **r121**, `nexusq-control` **r60**, `nexusq-mqtt` **r12**, `nexusq-btagent` **r7**, `nexusq-setupd` **r7**, `nexusq-kernel-ota` **r10**, `nexusq-rootfs-ab` **r6**)
+
+The repo gets the standard harness (`/project-setup`, harness version 2):
+`just check` is the fast lane (~25 s: formatters and linters, the app's
+analyzer, the Python, C, Dart and host shell tests), `just ci` the full gate
+(plus the docker shell suites, the ALSA integration test and the app builds).
+lefthook runs the formatter and gitleaks before a commit, Conventional Commits
+on the message and `just check` before a push. `AGENTS.md` holds the rules
+every coding agent follows, `CLAUDE.md` the Claude Code hooks and agents
+(new: `test-runner`, `fleet-safety-reviewer`), `docs/development.md` the
+toolchain, lanes and troubleshooting. The guard hook refuses any write to the
+`bootloader` or `xloader` partition outright, since `Bash(fastboot *)` is allowed.
+
+**The seven revisions carry no behaviour change** — only the reformat below,
+explicit exception chaining and shellcheck comments. They are bumped anyway
+because `docker-build.sh` rebuilds every OTA package with `--force`: the new
+bytes would otherwise ship under the old revision, and `apk upgrade
+--available` (the app's System update) would reinstall them on units that
+report "up to date". Owed on the device: a full build, `apk upgrade` on the
+Prague Q (device r120 → r121 runs `.post-upgrade`), the full diagnostic sweep.
+
+- **One-off reformat**: all Python with ruff (120 columns, target py39), all
+  Dart with `dart format` (tall style), Kotlin with ktlint. The Python is
+  AST-identical apart from lint fixes: 36 protocol errors raised inside an
+  `except` now chain explicitly (`raise … from e` / `from None`; the reply
+  text is unchanged), unused imports and variables are gone.
+- **Found by the new checks**: `scripts/build-kernel-boot.sh` wrote its
+  pmbootstrap config through an unquoted heredoc whose comment held
+  backticks, so every kernel-only build ran `systemd = default` as a command.
+  `docker-build.sh` run on the host found nothing at `/src`, built nothing and
+  exited 0; it now refuses with the right `docker run`, and README and
+  `.release.yml` show that command instead of `./docker-build.sh`.
+- **Two red test suites made honest**: `test_oomd_off.sh` failed because its
+  `printf … | grep -q` check SIGPIPEd under `pipefail` on the large APKBUILD
+  (the same helper is fixed in four more suites), and `test_identity_carry.sh`
+  compared GNU `stat -f` output, which prints free-block counts on Linux.
+  On the Mac, `test-verify-ota-parity.sh` never ran: it used `mapfile`,
+  which macOS's bash 3.2 lacks; it reads with `while read` now.
+- **The C tests run on the Mac too**: the daemons use Linux APIs
+  (`SOCK_CLOEXEC`), so off Linux `tools/dev/test-c.sh` builds them in an
+  Alpine image — the device's musl — instead of with Apple clang.
+- **New tripwires** (`tests/test_aports.py`): every kernel patch is in
+  `source=`, every file next to an APKBUILD is in its `source=`, and the
+  nq-healthd the device ships is byte-identical to the one the C tests test.
+- A host-built x86-64 `userspace/nq-healthd/nq-healthd` and the personal
+  `.claude/settings.local.json` are no longer tracked (its permissions moved
+  to `.claude/settings.json`).
+
 ### Changed — everything the app sets survives a flash (device **r120**, `nexusq-control` **r59**)
 
 Petr, 2026-09-28: "všechno co je v appce za settings by mělo jít do

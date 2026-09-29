@@ -8,6 +8,32 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Every clone — 2026-09-29: the developer harness (`just`, git hooks)
+
+The repo now has `just check` / `just ci`, lefthook git hooks and Claude Code
+hooks (`AGENTS.md`, `docs/development.md`). Git hooks install per clone, so each
+machine runs, once, in its own checkout:
+
+```sh
+just setup      # uv Python 3.14, lefthook install, blame ignore list, flutter pub get, doctor
+```
+
+- **petronijus-PC** — ✅ done 2026-09-29; `just ci` green.
+- **MacBook** — shellcheck and e2fsprogs were installed by brew on 2026-09-29.
+  Still owed: `just setup` in `~/Documents/Dev/nexusQ-reloaded`, then `just ci`.
+  On 2026-09-29 a copy passed `fmt-check`, `lint`, `test-py`, `test-c` (Alpine),
+  `test-dart` and the host shell suites; the docker suites, the ALSA integration
+  test and the APK/iOS builds did not run (the MacBook went to sleep). Then
+  delete the verification copy: `rm -rf /tmp/nq-harness-verify`.
+- **omarchy** — `just setup`; `just doctor` names anything missing
+  (Linux also needs `libpulse-dev`-equivalent headers for the C tests).
+- **Windows** — nothing: the checks are not set up there.
+
+The seven packages bumped for the reformat (device r121, control r60, mqtt r12,
+btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6 — no behaviour change) are
+**not built or published**. When they are: `apk upgrade` on the Prague Q, then
+the full nexusq-diag sweep.
+
 ## Any machine — 2026-09-29 morning: read the second overnight soak on the Prague Q (r120)
 
 The Prague Q runs the fleet-signed apks built on omarchy from 0529c43 (`output/ota-r120/`):
