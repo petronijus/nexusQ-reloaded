@@ -5,6 +5,7 @@ link itself runs against a fake control bridge on a real TCP socket, so the
 whole path — getState, broadcast events, a command, its echo — is exercised
 without a broker or a device.
 """
+
 import importlib.machinery
 import importlib.util
 import json
@@ -20,8 +21,7 @@ DAEMON = os.path.join(HERE, "..", "nexusq-mqtt")
 
 
 def load_daemon():
-    spec = importlib.util.spec_from_loader(
-        "nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
+    spec = importlib.util.spec_from_loader("nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -32,23 +32,37 @@ NODE, PREFIX, DISC = "nexusq_f88fca2048e1", "nexusq", "homeassistant"
 
 
 #: the bridge's own lists (nexusq-control THEMES / SCENES)
-THEMES = [{"name": "blue", "label": "Blue"}, {"name": "warm", "label": "Warm"},
-          {"name": "cool", "label": "Cool"}, {"name": "rose", "label": "Rose"},
-          {"name": "smoke", "label": "Smoke"}, {"name": "off", "label": "Off"}]
-SCENES = [{"name": "waveform", "label": "Waveform", "index": 0},
-          {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
-          {"name": "circles", "label": "Circles", "index": 2},
-          {"name": "pointmorph", "label": "Morph", "index": 3},
-          {"name": "starfield", "label": "Starfield", "index": 4}]
+THEMES = [
+    {"name": "blue", "label": "Blue"},
+    {"name": "warm", "label": "Warm"},
+    {"name": "cool", "label": "Cool"},
+    {"name": "rose", "label": "Rose"},
+    {"name": "smoke", "label": "Smoke"},
+    {"name": "off", "label": "Off"},
+]
+SCENES = [
+    {"name": "waveform", "label": "Waveform", "index": 0},
+    {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
+    {"name": "circles", "label": "Circles", "index": 2},
+    {"name": "pointmorph", "label": "Morph", "index": 3},
+    {"name": "starfield", "label": "Starfield", "index": 4},
+]
 
 
 def bridge_state(on=True, schedule=False, ambient=True, level=200, brightness=200):
-    st = {"brightness": brightness, "theme": "blue", "scene": "waveform",
-          "ring": {"on": on, "clockSynced": True,
-                   "schedule": {"enabled": schedule, "off": "23:00", "on": "07:00"}}}
+    st = {
+        "brightness": brightness,
+        "theme": "blue",
+        "scene": "waveform",
+        "ring": {"on": on, "clockSynced": True, "schedule": {"enabled": schedule, "off": "23:00", "on": "07:00"}},
+    }
     if ambient is not None:
-        st["ambient"] = {"enabled": ambient, "level": level, "clockSynced": True,
-                         "location": {"zone": "Europe/Prague", "lat": 50.08, "lon": 14.43}}
+        st["ambient"] = {
+            "enabled": ambient,
+            "level": level,
+            "clockSynced": True,
+            "location": {"zone": "Europe/Prague", "lat": 50.08, "lon": 14.43},
+        }
     return st
 
 
@@ -93,47 +107,56 @@ class TestCommands(unittest.TestCase):
 
     def test_an_unknown_option_reaches_nothing(self):
         self.assertEqual(self.cmds("theme", b"Purple"), [])
-        self.assertEqual(self.cmds("scene", b"Blue"), [])    # a theme is not a scene
+        self.assertEqual(self.cmds("scene", b"Blue"), [])  # a theme is not a scene
         self.assertEqual(MOD.ring_commands("theme", b"Warm", bridge_state()), [])  # no list yet
 
     def test_a_brightness_move_is_not_a_switch(self):
         # HA sends state ON with every brightness move. Passing that on as
         # setRing would count as a manual switch and turn the schedule off.
-        self.assertEqual(self.cmds("light", b'{"state": "ON", "brightness": 120}'),
-                         [("setBrightness", {"brightness": 120})])
+        self.assertEqual(
+            self.cmds("light", b'{"state": "ON", "brightness": 120}'), [("setBrightness", {"brightness": 120})]
+        )
 
     def test_switching_on_and_off(self):
         off = bridge_state(on=False)
         self.assertEqual(self.cmds("light", b'{"state": "ON"}', off), [("setRing", {"on": True})])
         self.assertEqual(self.cmds("light", b'{"state": "OFF"}'), [("setRing", {"on": False})])
         # on from off with a brightness: the level first, then the switch
-        self.assertEqual(self.cmds("light", b'{"state": "ON", "brightness": 50}', off),
-                         [("setBrightness", {"brightness": 50}), ("setRing", {"on": True})])
+        self.assertEqual(
+            self.cmds("light", b'{"state": "ON", "brightness": 50}', off),
+            [("setBrightness", {"brightness": 50}), ("setRing", {"on": True})],
+        )
 
     def test_schedule_times_keep_the_schedule_state(self):
         on = bridge_state(schedule=True)
-        self.assertEqual(self.cmds("off_at", b"22:30", on),
-                         [("setRingSchedule", {"enabled": True, "off": "22:30"})])
-        self.assertEqual(self.cmds("on_at", b"06:15"),
-                         [("setRingSchedule", {"enabled": False, "on": "06:15"})])
+        self.assertEqual(self.cmds("off_at", b"22:30", on), [("setRingSchedule", {"enabled": True, "off": "22:30"})])
+        self.assertEqual(self.cmds("on_at", b"06:15"), [("setRingSchedule", {"enabled": False, "on": "06:15"})])
 
     def test_switches(self):
         self.assertEqual(self.cmds("schedule", b"ON"), [("setRingSchedule", {"enabled": True})])
         self.assertEqual(self.cmds("ambient", b"OFF"), [("setAmbient", {"enabled": False})])
 
     def test_malformed_reaches_nothing(self):
-        for kind, payload in (("light", b"ON"), ("light", b"[1]"), ("light", b'{"brightness": 0}'),
-                              ("light", b'{"brightness": 999}'), ("light", b'{"brightness": true}'),
-                              ("light", b"\xff\xfe"), ("schedule", b"on"), ("ambient", b"1"),
-                              ("off_at", b"7:00"), ("on_at", b"24:00"), ("off_at", b"23:00; rm"),
-                              ("nonsense", b"ON")):
+        for kind, payload in (
+            ("light", b"ON"),
+            ("light", b"[1]"),
+            ("light", b'{"brightness": 0}'),
+            ("light", b'{"brightness": 999}'),
+            ("light", b'{"brightness": true}'),
+            ("light", b"\xff\xfe"),
+            ("schedule", b"on"),
+            ("ambient", b"1"),
+            ("off_at", b"7:00"),
+            ("on_at", b"24:00"),
+            ("off_at", b"23:00; rm"),
+            ("nonsense", b"ON"),
+        ):
             self.assertEqual(self.cmds(kind, payload), [], (kind, payload))
 
 
 class TestStatePayload(unittest.TestCase):
     def test_theme_and_scene_by_label(self):
-        out = MOD.ring_state_payload(dict(bridge_state(), theme="rose", scene="circles"),
-                                     THEMES, SCENES)
+        out = MOD.ring_state_payload(dict(bridge_state(), theme="rose", scene="circles"), THEMES, SCENES)
         self.assertEqual((out["theme"], out["scene"]), ("Rose", "Circles"))
 
     def test_an_unknown_theme_is_left_out_not_invented(self):
@@ -143,9 +166,19 @@ class TestStatePayload(unittest.TestCase):
 
     def test_shape(self):
         p = MOD.ring_state_payload(bridge_state(on=False, schedule=True, level=50))
-        self.assertEqual(p, {"state": "OFF", "brightness": 200, "color_mode": "brightness",
-                             "schedule": True, "off_at": "23:00", "on_at": "07:00",
-                             "ambient": True, "level_pct": 25})
+        self.assertEqual(
+            p,
+            {
+                "state": "OFF",
+                "brightness": 200,
+                "color_mode": "brightness",
+                "schedule": True,
+                "off_at": "23:00",
+                "on_at": "07:00",
+                "ambient": True,
+                "level_pct": 25,
+            },
+        )
 
     def test_a_pre_ring_bridge_has_no_payload(self):
         self.assertIsNone(MOD.ring_state_payload({"brightness": 200}))
@@ -179,11 +212,21 @@ class TestDiscovery(unittest.TestCase):
 
     def test_every_entity_with_a_full_bridge(self):
         c = self.configs(bridge_state())
-        self.assertEqual(sorted(c), sorted([
-            f"light/{NODE}/ring/config", f"switch/{NODE}/ring_schedule/config",
-            f"text/{NODE}/ring_off_at/config", f"text/{NODE}/ring_on_at/config",
-            f"switch/{NODE}/ambient/config", f"sensor/{NODE}/ring_level/config",
-            f"select/{NODE}/ring_theme/config", f"select/{NODE}/ring_scene/config"]))
+        self.assertEqual(
+            sorted(c),
+            sorted(
+                [
+                    f"light/{NODE}/ring/config",
+                    f"switch/{NODE}/ring_schedule/config",
+                    f"text/{NODE}/ring_off_at/config",
+                    f"text/{NODE}/ring_on_at/config",
+                    f"switch/{NODE}/ambient/config",
+                    f"sensor/{NODE}/ring_level/config",
+                    f"select/{NODE}/ring_theme/config",
+                    f"select/{NODE}/ring_scene/config",
+                ]
+            ),
+        )
         ids = [cfg["unique_id"] for cfg in c.values()]
         self.assertEqual(len(ids), len(set(ids)))
         light = c[f"light/{NODE}/ring/config"]
@@ -191,8 +234,9 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual(light["command_topic"], f"{PREFIX}/{NODE}/ring/light/set")
         # the entity is available only while BOTH the Q and its bridge link are
         self.assertEqual(light["availability_mode"], "all")
-        self.assertEqual([a["topic"] for a in light["availability"]],
-                         [f"{PREFIX}/{NODE}/status", f"{PREFIX}/{NODE}/ring/available"])
+        self.assertEqual(
+            [a["topic"] for a in light["availability"]], [f"{PREFIX}/{NODE}/status", f"{PREFIX}/{NODE}/ring/available"]
+        )
 
     def test_missing_features_delete_their_entities(self):
         c = self.configs(bridge_state(ambient=None))
@@ -203,6 +247,7 @@ class TestDiscovery(unittest.TestCase):
 
     def test_time_pattern_matches_the_bridge(self):
         import re
+
         cfg = self.configs(bridge_state())[f"text/{NODE}/ring_off_at/config"]
         self.assertTrue(re.match(cfg["pattern"], "23:59"))
         self.assertFalse(re.match(cfg["pattern"], "24:00"))
@@ -266,13 +311,12 @@ class FakeBridge:
                     self._send(c, {"id": rid, "ok": True, "result": self.st})
                     continue
                 if m in ("listThemes", "listScenes"):
-                    result = ({"themes": THEMES} if m == "listThemes" else {"scenes": SCENES})
+                    result = {"themes": THEMES} if m == "listThemes" else {"scenes": SCENES}
                     self._send(c, {"id": rid, "ok": True, "result": result})
                     continue
                 self.calls.append((m, p))
                 if m in self.refuse:
-                    self._send(c, {"id": rid, "ok": False,
-                                   "error": {"code": "unavailable", "message": "no"}})
+                    self._send(c, {"id": rid, "ok": False, "error": {"code": "unavailable", "message": "no"}})
                     continue
                 event = self.apply(m, p)
                 self._send(c, {"id": rid, "ok": True, "result": {}})
@@ -285,8 +329,7 @@ class FakeBridge:
             ring["schedule"]["enabled"] = False
             return "ringChanged", ring
         if m == "setRingSchedule":
-            ring["schedule"].update({k: v for k, v in p.items() if k in ("off", "on")},
-                                    enabled=p["enabled"])
+            ring["schedule"].update({k: v for k, v in p.items() if k in ("off", "on")}, enabled=p["enabled"])
             return "ringChanged", ring
         if m == "setBrightness":
             self.st["brightness"] = p["brightness"]
@@ -331,16 +374,18 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.bridge = FakeBridge(bridge_state(schedule=True))
         self.addCleanup(self.bridge.close)
         self.published = []
-        patches = [mock.patch.object(MOD, "CONTROL_PORT", self.bridge.port),
-                   mock.patch.object(MOD, "CONTROL_HOST", "127.0.0.1"),
-                   mock.patch.object(MOD, "RING_RETRY_S", 1)]
+        patches = [
+            mock.patch.object(MOD, "CONTROL_PORT", self.bridge.port),
+            mock.patch.object(MOD, "CONTROL_HOST", "127.0.0.1"),
+            mock.patch.object(MOD, "RING_RETRY_S", 1),
+        ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         self.stop = threading.Event()
-        self.link = MOD.RingLink(NODE, "Obývák", PREFIX, DISC,
-                                 lambda t, p, r: self.published.append((t, p, r)),
-                                 stop=self.stop)
+        self.link = MOD.RingLink(
+            NODE, "Obývák", PREFIX, DISC, lambda t, p, r: self.published.append((t, p, r)), stop=self.stop
+        )
         self.threads = start(self, self.link.listen, self.link.worker)
         # registered last, so it runs first: the threads are stopped and
         # joined while the test's port patch is still in place
@@ -396,8 +441,7 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.bridge.refuse.add("setAmbient")
         n = len(self.published)
         self.link.submit(f"{PREFIX}/{NODE}/ring/ambient/set", b"OFF")
-        self.assertTrue(wait_for(lambda: any(
-            t == f"{PREFIX}/{NODE}/ring/state" for t, _, _ in self.published[n:])))
+        self.assertTrue(wait_for(lambda: any(t == f"{PREFIX}/{NODE}/ring/state" for t, _, _ in self.published[n:])))
         self.assertTrue(self.last_state()["ambient"])
 
     def test_theme_and_visualization_from_ha_and_back(self):
@@ -408,8 +452,7 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.last_state()["theme"] == "Warm"))
         self.link.submit(f"{PREFIX}/{NODE}/ring/scene/set", b"Starfield")
         self.assertTrue(wait_for(lambda: self.last_state()["scene"] == "Starfield"))
-        self.assertEqual(self.bridge.calls, [("setTheme", {"theme": "warm"}),
-                                             ("setScene", {"scene": "starfield"})])
+        self.assertEqual(self.bridge.calls, [("setTheme", {"theme": "warm"}), ("setScene", {"scene": "starfield"})])
 
     def test_a_theme_picked_in_the_app_reaches_ha(self):
         self.assertTrue(wait_for(lambda: (self.last_state() or {}).get("theme") == "Blue"))
@@ -424,8 +467,7 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.last_state() is not None))
         with mock.patch.object(MOD, "RING_RETRY_S", 30):
             self.bridge.close()
-            self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/ring/available", "offline", True)
-                                     in self.published))
+            self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/ring/available", "offline", True) in self.published))
             t0 = time.monotonic()
             self.link.close()
             for t in self.threads:
@@ -441,8 +483,7 @@ class TestLinkAgainstABridge(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.last_state() is not None))
         port = self.bridge.port
         self.bridge.close()
-        self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/ring/available", "offline", True)
-                                 in self.published))
+        self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/ring/available", "offline", True) in self.published))
         # a new bridge on the same port (the service restarted)
         self.bridge = FakeBridge(bridge_state(on=False))
         self.addCleanup(self.bridge.close)

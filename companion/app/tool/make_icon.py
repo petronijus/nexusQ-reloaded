@@ -10,13 +10,13 @@ Outputs (committed as source art):
 
 Requires Pillow.  Run:  python3 tool/make_icon.py
 """
-import math
+
 import os
 from PIL import Image, ImageDraw, ImageFilter
 
 S = 1024
-ACCENT = (51, 181, 229)      # #33B5E5 Holo Blue
-SS = 4                        # supersample for crisp anti-aliased strokes
+ACCENT = (51, 181, 229)  # #33B5E5 Holo Blue
+SS = 4  # supersample for crisp anti-aliased strokes
 
 
 def draw_ring(size, radius_frac, bg):
@@ -42,8 +42,7 @@ def draw_ring(size, radius_frac, bg):
     start, end = 90 - sweep / 2, 90 + sweep / 2
     bright = arc_layer(int(0.014 * n), 255, start, end)
     # glow halo: blurred copy of the bright arc + circle
-    halo = Image.alpha_composite(arc_layer(int(0.02 * n), 200, 0, 360),
-                                 arc_layer(int(0.03 * n), 255, start, end))
+    halo = Image.alpha_composite(arc_layer(int(0.02 * n), 200, 0, 360), arc_layer(int(0.03 * n), 255, start, end))
     halo = halo.filter(ImageFilter.GaussianBlur(radius=0.02 * n))
 
     out = Image.alpha_composite(img, halo)

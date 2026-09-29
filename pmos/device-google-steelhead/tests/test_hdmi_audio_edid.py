@@ -23,8 +23,7 @@ TOOL = os.path.join(HERE, "..", "nq-hdmi")
 
 
 def load_tool():
-    spec = importlib.util.spec_from_loader(
-        "nq_hdmi", importlib.machinery.SourceFileLoader("nq_hdmi", TOOL))
+    spec = importlib.util.spec_from_loader("nq_hdmi", importlib.machinery.SourceFileLoader("nq_hdmi", TOOL))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -59,10 +58,10 @@ def _cta_without_audio():
     base = bytearray(_dvi_edid())
     base[126] = 1
     ext = bytearray(128)
-    ext[0] = 0x02       # CTA-861
-    ext[1] = 0x03       # revision 3
-    ext[2] = 4          # DTD offset: collection is empty
-    ext[3] = 0x00       # no basic audio, no YCbCr
+    ext[0] = 0x02  # CTA-861
+    ext[1] = 0x03  # revision 3
+    ext[2] = 4  # DTD offset: collection is empty
+    ext[3] = 0x00  # no basic audio, no YCbCr
     return bytes(base) + bytes(ext)
 
 
@@ -102,11 +101,11 @@ class TestAudioCapability(unittest.TestCase):
         base[126] = 1
         ext = bytearray(128)
         ext[0], ext[1] = 0x02, 0x03
-        ext[3] = 0x00                       # basic-audio flag NOT set
-        ext[4] = (1 << 5) | 3               # Audio Data Block, 3 bytes
-        ext[5] = (1 << 3) | 1               # LPCM, 2 channels
+        ext[3] = 0x00  # basic-audio flag NOT set
+        ext[4] = (1 << 5) | 3  # Audio Data Block, 3 bytes
+        ext[5] = (1 << 3) | 1  # LPCM, 2 channels
         ext[6], ext[7] = 0x07, 0x07
-        ext[2] = 8                          # DTD offset past the block
+        ext[2] = 8  # DTD offset past the block
         ok, detail = load_tool().parse_edid_audio(bytes(base) + bytes(ext))
         self.assertTrue(ok, detail)
         self.assertIn("LPCM up to 2ch", detail)

@@ -6,6 +6,7 @@ used to write two journal lines — ~5 800 a day of nothing, measured on the
 cottage Q on 2026-09-26. An app connecting from the LAN is exactly what one wants
 to see, so that must keep logging.
 """
+
 import importlib.machinery
 import importlib.util
 import os
@@ -19,7 +20,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

@@ -27,8 +27,8 @@ def load(env):
     """Import the script fresh under `env`; MODE/paths are read at import."""
     with mock.patch.dict(os.environ, env, clear=False):
         spec = importlib.util.spec_from_loader(
-            "nq_uac2_silence",
-            importlib.machinery.SourceFileLoader("nq_uac2_silence", SCRIPT))
+            "nq_uac2_silence", importlib.machinery.SourceFileLoader("nq_uac2_silence", SCRIPT)
+        )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
     return mod
@@ -63,17 +63,19 @@ class ProducerLoop(unittest.TestCase):
         self.producer = os.path.join(self.tmp.name, "pcm0p-status")
         self.consumer = os.path.join(self.tmp.name, "pcm1c-status")
         self.write(self.producer, CLOSED)
-        self.write(self.consumer, OPEN)          # PA starts with the source live
-        self.mod = load({
-            "NQ_WATCH_MODE": "producer",
-            "NQ_PRODUCER_PCM": self.producer,
-            "NQ_CONSUMER_PCM": self.consumer,
-            "NQ_UAC2_SOURCE": "roon_in",
-            "NQ_PRODUCER_POLL": str(self.POLL),
-            "NQ_UAC2_SLEEP_AFTER": str(self.SLEEP_AFTER),
-            "NQ_CONSUMER_CONFIRM": str(self.CONFIRM),
-        })
-        self.suspends = []                       # every (on) the guard asked for
+        self.write(self.consumer, OPEN)  # PA starts with the source live
+        self.mod = load(
+            {
+                "NQ_WATCH_MODE": "producer",
+                "NQ_PRODUCER_PCM": self.producer,
+                "NQ_CONSUMER_PCM": self.consumer,
+                "NQ_UAC2_SOURCE": "roon_in",
+                "NQ_PRODUCER_POLL": str(self.POLL),
+                "NQ_UAC2_SLEEP_AFTER": str(self.SLEEP_AFTER),
+                "NQ_CONSUMER_CONFIRM": str(self.CONFIRM),
+            }
+        )
+        self.suspends = []  # every (on) the guard asked for
         self.logs = []
         mock.patch.object(self.mod, "suspend", side_effect=self.fake_suspend).start()
         mock.patch.object(self.mod, "log", side_effect=self.logs.append).start()
@@ -119,10 +121,12 @@ class ProducerLoop(unittest.TestCase):
 
     def test_producer_opening_resumes(self):
         asleep = self.polls(self.SLEEP_AFTER) + 2
-        w = self.run_loop({
-            asleep: lambda w: self.write(self.producer, OPEN),
-            asleep + 3: lambda w: None,
-        })
+        w = self.run_loop(
+            {
+                asleep: lambda w: self.write(self.producer, OPEN),
+                asleep + 3: lambda w: None,
+            }
+        )
         self.assertEqual(self.suspends, [True, False])
         self.assertFalse(w.asleep)
 
@@ -131,12 +135,13 @@ class ProducerLoop(unittest.TestCase):
         asleep = self.polls(self.SLEEP_AFTER) + 2
         # someone else (module reload, `pactl suspend-source roon_in 0`) reopens
         # the capture side; the producer stays closed
-        w = self.run_loop({
-            asleep: lambda w: self.write(self.consumer, OPEN),
-            asleep + self.CONFIRM + 2: lambda w: None,
-        })
-        self.assertEqual(self.suspends, [True, True],
-                         "the guard never noticed the source running behind its back")
+        w = self.run_loop(
+            {
+                asleep: lambda w: self.write(self.consumer, OPEN),
+                asleep + self.CONFIRM + 2: lambda w: None,
+            }
+        )
+        self.assertEqual(self.suspends, [True, True], "the guard never noticed the source running behind its back")
         self.assertTrue(w.asleep)
         self.assertTrue(any("behind our back" in m for m in self.logs), self.logs)
 
@@ -144,21 +149,25 @@ class ProducerLoop(unittest.TestCase):
         # PA's own suspend is asynchronous: the capture side may read open for a
         # moment after `suspend 1`. A blip shorter than CONFIRM must not fire.
         asleep = self.polls(self.SLEEP_AFTER) + 2
-        self.run_loop({
-            asleep: lambda w: self.write(self.consumer, OPEN),
-            asleep + self.CONFIRM - 2: lambda w: self.write(self.consumer, CLOSED),
-            asleep + self.CONFIRM + 4: lambda w: None,
-        })
+        self.run_loop(
+            {
+                asleep: lambda w: self.write(self.consumer, OPEN),
+                asleep + self.CONFIRM - 2: lambda w: self.write(self.consumer, CLOSED),
+                asleep + self.CONFIRM + 4: lambda w: None,
+            }
+        )
         self.assertEqual(self.suspends, [True])
 
     def test_external_resume_then_producer_opens_wakes_normally(self):
         # the re-suspend must not eat a real wake that follows it
         asleep = self.polls(self.SLEEP_AFTER) + 2
-        w = self.run_loop({
-            asleep: lambda w: self.write(self.consumer, OPEN),
-            asleep + self.CONFIRM + 2: lambda w: self.write(self.producer, OPEN),
-            asleep + self.CONFIRM + 5: lambda w: None,
-        })
+        w = self.run_loop(
+            {
+                asleep: lambda w: self.write(self.consumer, OPEN),
+                asleep + self.CONFIRM + 2: lambda w: self.write(self.producer, OPEN),
+                asleep + self.CONFIRM + 5: lambda w: None,
+            }
+        )
         self.assertEqual(self.suspends, [True, True, False])
         self.assertFalse(w.asleep)
 
@@ -171,10 +180,12 @@ class ProducerLoop(unittest.TestCase):
             # the next suspend(False) will be swallowed: PA keeps it closed
             self.mod.suspend.side_effect = self.swallow_once_then_obey
 
-        w = self.run_loop({
-            asleep: open_producer_but_pa_ignores_us,
-            asleep + 1 + self.CONFIRM + 2: lambda w: None,
-        })
+        self.run_loop(
+            {
+                asleep: open_producer_but_pa_ignores_us,
+                asleep + 1 + self.CONFIRM + 2: lambda w: None,
+            }
+        )
         self.assertEqual(self.suspends, [True, False, False])
         self.assertEqual(open(self.consumer).read(), OPEN)
         self.assertTrue(any("resumed again" in m for m in self.logs), self.logs)
@@ -182,15 +193,17 @@ class ProducerLoop(unittest.TestCase):
     def swallow_once_then_obey(self, on):
         self.suspends.append(on)
         self.mod.suspend.side_effect = self.fake_suspend
-        return True                              # CLI send "succeeded", PA did nothing
+        return True  # CLI send "succeeded", PA did nothing
 
     # -- unknown state is not a state ------------------------------------------
     def test_missing_consumer_file_disables_reconciliation(self):
         asleep = self.polls(self.SLEEP_AFTER) + 2
-        self.run_loop({
-            asleep: lambda w: os.unlink(self.consumer),
-            asleep + self.CONFIRM + 4: lambda w: None,
-        })
+        self.run_loop(
+            {
+                asleep: lambda w: os.unlink(self.consumer),
+                asleep + self.CONFIRM + 4: lambda w: None,
+            }
+        )
         self.assertEqual(self.suspends, [True])
 
 
@@ -198,16 +211,17 @@ class OtherEnd(unittest.TestCase):
     """snd-aloop pairs device 0 with device 1 of the same card."""
 
     def setUp(self):
-        self.mod = load({"NQ_WATCH_MODE": "producer",
-                         "NQ_PRODUCER_PCM": "/proc/asound/RoonLoop/pcm0p/sub0/status"})
+        self.mod = load({"NQ_WATCH_MODE": "producer", "NQ_PRODUCER_PCM": "/proc/asound/RoonLoop/pcm0p/sub0/status"})
 
     def test_pcm0p_pairs_with_pcm1c(self):
-        self.assertEqual(self.mod.other_end("/proc/asound/RoonLoop/pcm0p/sub0/status"),
-                         "/proc/asound/RoonLoop/pcm1c/sub0/status")
+        self.assertEqual(
+            self.mod.other_end("/proc/asound/RoonLoop/pcm0p/sub0/status"), "/proc/asound/RoonLoop/pcm1c/sub0/status"
+        )
 
     def test_pcm1p_pairs_with_pcm0c(self):
-        self.assertEqual(self.mod.other_end("/proc/asound/Loopback/pcm1p/sub3/status"),
-                         "/proc/asound/Loopback/pcm0c/sub3/status")
+        self.assertEqual(
+            self.mod.other_end("/proc/asound/Loopback/pcm1p/sub3/status"), "/proc/asound/Loopback/pcm0c/sub3/status"
+        )
 
     def test_default_consumer_is_derived(self):
         self.assertEqual(self.mod.CONSUMER_PCM, "/proc/asound/RoonLoop/pcm1c/sub0/status")

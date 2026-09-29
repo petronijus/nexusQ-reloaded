@@ -7,6 +7,7 @@ bridge's local hook socket, which updates now-playing / volume and fans the
 change out to connected companions. Best-effort: never fail librespot if the
 bridge is down.
 """
+
 import json
 import os
 import socket

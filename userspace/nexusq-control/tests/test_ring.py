@@ -13,7 +13,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -50,10 +51,13 @@ class RingBase(unittest.TestCase):
         self.tmp.cleanup()
 
     def ring(self):
-        return self.mod.Ring(path=self.path, send=self.nq,
-                             clock=lambda: self.now,
-                             synced=lambda: self.is_synced,
-                             on_change=self.events.append)
+        return self.mod.Ring(
+            path=self.path,
+            send=self.nq,
+            clock=lambda: self.now,
+            synced=lambda: self.is_synced,
+            on_change=self.events.append,
+        )
 
     def stored(self):
         with open(self.path) as f:
@@ -64,8 +68,13 @@ class TestBeat(RingBase):
     def test_every_step_beats(self):
         # ambient brightness re-asserts on this beat instead of its own timer
         beats = []
-        r = self.mod.Ring(path=self.path, send=self.nq, clock=lambda: self.now,
-                          synced=lambda: self.is_synced, on_beat=lambda: beats.append(1))
+        r = self.mod.Ring(
+            path=self.path,
+            send=self.nq,
+            clock=lambda: self.now,
+            synced=lambda: self.is_synced,
+            on_beat=lambda: beats.append(1),
+        )
         r.tick()
         r.tick()
         self.assertEqual(len(beats), 2)
@@ -100,8 +109,9 @@ class TestScheduleWindow(RingBase):
 class TestRingSwitch(RingBase):
     def test_never_set_is_on_with_the_schedule_off(self):
         snap = self.ring().snapshot()
-        self.assertEqual(snap, {"on": True, "clockSynced": True,
-                                "schedule": {"enabled": False, "off": "23:00", "on": "07:00"}})
+        self.assertEqual(
+            snap, {"on": True, "clockSynced": True, "schedule": {"enabled": False, "off": "23:00", "on": "07:00"}}
+        )
         self.assertFalse(os.path.exists(self.path))
 
     def test_off_darkens_nexusqd_and_persists(self):
@@ -137,9 +147,13 @@ class TestRingSwitch(RingBase):
             with self.assertRaises(self.mod.Err) as cm:
                 r.set_on(p)
             self.assertEqual(cm.exception.code, "bad_request")
-        for p in ({"enabled": True, "off": "7:00"}, {"enabled": True, "off": "24:00"},
-                  {"enabled": True, "on": "07:60"}, {"enabled": "yes"},
-                  {"enabled": True, "off": "07:00", "on": "07:00"}):
+        for p in (
+            {"enabled": True, "off": "7:00"},
+            {"enabled": True, "off": "24:00"},
+            {"enabled": True, "on": "07:60"},
+            {"enabled": "yes"},
+            {"enabled": True, "off": "07:00", "on": "07:00"},
+        ):
             with self.assertRaises(self.mod.Err) as cm:
                 r.set_schedule(p)
             self.assertEqual(cm.exception.code, "bad_request", p)
@@ -147,8 +161,13 @@ class TestRingSwitch(RingBase):
 
     def test_torn_file_reads_as_never_set(self):
         os.makedirs(os.path.dirname(self.path))
-        for body in ('{"on": "no"}', '[]', '{"o', '',
-                     '{"on": false, "schedule": {"enabled": true, "off": "25:00", "on": "07:00"}}'):
+        for body in (
+            '{"on": "no"}',
+            "[]",
+            '{"o',
+            "",
+            '{"on": false, "schedule": {"enabled": true, "off": "25:00", "on": "07:00"}}',
+        ):
             with open(self.path, "w") as f:
                 f.write(body)
             snap = self.ring().snapshot()
@@ -175,7 +194,7 @@ class TestScheduler(RingBase):
         self.now = at(22, 59, 45)
         r = self.ring()
         r.set_schedule({"enabled": True, "off": "23:00", "on": "07:00"})
-        self.assertEqual(r.tick(), 15.5)       # wakes just past the boundary, not up to 30 s late
+        self.assertEqual(r.tick(), 15.5)  # wakes just past the boundary, not up to 30 s late
         self.assertEqual(self.events, [])
         self.now = at(23, 0, 1)
         r.tick()
@@ -197,13 +216,13 @@ class TestScheduler(RingBase):
         self.assertEqual(r.tick(), self.mod.RING_REASSERT_S)
         r.tick()
         self.assertEqual(self.nq.sent, ["dark 1", "dark 1"])
-        self.assertEqual(self.events, [])   # nothing the app shows changed
+        self.assertEqual(self.events, [])  # nothing the app shows changed
 
     def test_unsynced_clock_never_switches(self):
         # after a mains unplug the RTC is wrong until NTP; a schedule acting on
         # it would switch the ring at random
         self.is_synced = False
-        self.now = at(3, 0)                  # "night" on a clock nobody trusts
+        self.now = at(3, 0)  # "night" on a clock nobody trusts
         r = self.ring()
         snap = r.set_schedule({"enabled": True, "off": "23:00", "on": "07:00"})
         self.assertTrue(snap["on"])

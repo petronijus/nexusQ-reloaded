@@ -17,9 +17,9 @@ would go stale the moment Petr groups the Q with another output — Roon then
 renames the zone (`Sphere` becomes `Home`, seen live on his Core) and a
 hardcoded name would follow the wrong music or none at all.
 """
+
 import importlib.machinery
 import importlib.util
-import json
 import os
 import subprocess
 import tempfile
@@ -33,7 +33,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -58,12 +59,27 @@ class _Bridge:
         self.transports = {"roon": mod.RoonTransport(self)}
         # inert: the connection chime has its own tests (test_chime.py)
         self.chime = mod.Chime(play=lambda path: False)
-        self.state = {"nowPlaying": {"playing": False, "artist": "", "track": "",
-                                     "album": "", "artUrl": "", "source": "",
-                                     "transport": "none"}}
+        self.state = {
+            "nowPlaying": {
+                "playing": False,
+                "artist": "",
+                "track": "",
+                "album": "",
+                "artUrl": "",
+                "source": "",
+                "transport": "none",
+            }
+        }
         self.sent = []
-        for name in ("on_roon", "roon_sync", "_roon_our_zone", "roon_zone_name",
-                     "roon_zone_state", "_apply_transport", "transport_for"):
+        for name in (
+            "on_roon",
+            "roon_sync",
+            "_roon_our_zone",
+            "roon_zone_name",
+            "roon_zone_state",
+            "_apply_transport",
+            "transport_for",
+        ):
             setattr(self, name, getattr(mod.Bridge, name).__get__(self))
 
     def broadcast(self, event, data):
@@ -71,16 +87,24 @@ class _Bridge:
 
 
 #: One zone, as the extension publishes it.
-def feed(b, zone="Sphere", state="playing", title="Prashanti",
-         artist="Ravi Shankar / Philip Glass", album="Passages", key="abc123"):
+def feed(
+    b,
+    zone="Sphere",
+    state="playing",
+    title="Prashanti",
+    artist="Ravi Shankar / Philip Glass",
+    album="Passages",
+    key="abc123",
+):
     for field, value in (
-            ("state", state),
-            ("is_play_allowed", "true"),
-            ("is_pause_allowed", "true"),
-            ("now_playing/three_line/line1", title),
-            ("now_playing/three_line/line2", artist),
-            ("now_playing/three_line/line3", album),
-            ("now_playing/image_key", key)):
+        ("state", state),
+        ("is_play_allowed", "true"),
+        ("is_pause_allowed", "true"),
+        ("now_playing/three_line/line1", title),
+        ("now_playing/three_line/line2", artist),
+        ("now_playing/three_line/line3", album),
+        ("now_playing/image_key", key),
+    ):
         b.on_roon(f"{zone}/{field}", value)
 
 
@@ -134,9 +158,7 @@ class TestOnlyOurOwnMusic(unittest.TestCase):
     def test_it_does_not_steal_the_screen_from_spotify(self):
         b = _Bridge(self.mod, pulse_state="RUNNING")
         with b.lock:
-            b.state["nowPlaying"] = dict(b.state["nowPlaying"],
-                                         track="Kinkajou", source="spotify",
-                                         playing=True)
+            b.state["nowPlaying"] = dict(b.state["nowPlaying"], track="Kinkajou", source="spotify", playing=True)
         feed(b)
         self.assertEqual(b.state["nowPlaying"]["source"], "spotify")
         self.assertEqual(b.state["nowPlaying"]["track"], "Kinkajou")
@@ -150,8 +172,7 @@ class TestArtwork(unittest.TestCase):
         """Unlike AirPlay's file:// path, the Core serves this over HTTP, so the
         phone can actually load it."""
         b = _Bridge(self.mod, pulse_state="RUNNING")
-        with mock.patch.object(self.mod, "_roon_conf",
-                               lambda: {"core_image_base": "http://core:9330"}):
+        with mock.patch.object(self.mod, "_roon_conf", lambda: {"core_image_base": "http://core:9330"}):
             feed(b, key="deadbeef")
         url = b.state["nowPlaying"]["artUrl"]
         self.assertTrue(url.startswith("http://core:9330/api/image/deadbeef"), url)
@@ -166,8 +187,7 @@ class TestArtwork(unittest.TestCase):
 
     def test_no_image_key_means_no_url(self):
         b = _Bridge(self.mod, pulse_state="RUNNING")
-        with mock.patch.object(self.mod, "_roon_conf",
-                               lambda: {"core_image_base": "http://core:9330"}):
+        with mock.patch.object(self.mod, "_roon_conf", lambda: {"core_image_base": "http://core:9330"}):
             feed(b, key="")
         self.assertEqual(b.state["nowPlaying"]["artUrl"], "")
 
@@ -179,11 +199,9 @@ class TestControl(unittest.TestCase):
     def test_commands_go_to_the_playing_zone_with_roons_own_verbs(self):
         b = _Bridge(self.mod, pulse_state="RUNNING")
         feed(b, zone="Sphere")
-        for method, verb in (("playPause", "playpause"), ("next", "next"),
-                             ("previous", "previous")):
+        for method, verb in (("playPause", "playpause"), ("next", "next"), ("previous", "previous")):
             sent = {}
-            with mock.patch.object(self.mod, "_mqtt_publish",
-                                   lambda t, p: sent.update(topic=t, payload=p)):
+            with mock.patch.object(self.mod, "_mqtt_publish", lambda t, p, sent=sent: sent.update(topic=t, payload=p)):
                 b.transports["roon"].command(method)
             self.assertEqual(sent["topic"], "roon/Sphere/command")
             self.assertEqual(sent["payload"], verb)
@@ -191,8 +209,7 @@ class TestControl(unittest.TestCase):
     def test_no_zone_means_a_clear_refusal_not_a_stray_publish(self):
         b = _Bridge(self.mod, pulse_state="SUSPENDED")
         feed(b, zone="Kitchen")
-        with mock.patch.object(self.mod, "_mqtt_publish",
-                               side_effect=AssertionError("must not publish")):
+        with mock.patch.object(self.mod, "_mqtt_publish", side_effect=AssertionError("must not publish")):
             with self.assertRaises(self.mod.Err):
                 b.transports["roon"].command("playPause")
 
@@ -227,7 +244,7 @@ class TestQuiet(unittest.TestCase):
     def test_a_malformed_topic_is_ignored(self):
         b = _Bridge(self.mod, pulse_state="RUNNING")
         for t in ("", "nofield", "/leadingslash"):
-            b.on_roon(t, "x")           # must not raise
+            b.on_roon(t, "x")  # must not raise
         self.assertEqual(b.state["nowPlaying"]["source"], "")
 
 
@@ -251,8 +268,10 @@ class TestSourceState(unittest.TestCase):
 
     def test_the_state_is_the_last_column(self):
         # Real layout, taken off the device: index, name, module, spec, state.
-        out = ("0\talsa_input.x\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tSUSPENDED\n"
-               "6\troon_in\tmodule-alsa-source.c\ts16le 2ch 48000Hz\tRUNNING\n")
+        out = (
+            "0\talsa_input.x\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tSUSPENDED\n"
+            "6\troon_in\tmodule-alsa-source.c\ts16le 2ch 48000Hz\tRUNNING\n"
+        )
         with mock.patch.object(self.mod, "_pactl", lambda *a, **k: self._cp(out)):
             self.assertEqual(self.mod.Pulse().source_state("roon_in"), "RUNNING")
             self.assertEqual(self.mod.Pulse().source_state("nope"), "")
@@ -264,6 +283,7 @@ class TestSourceState(unittest.TestCase):
     def test_pactl_raising_is_empty_not_an_exception(self):
         def boom(*a, **k):
             raise subprocess.TimeoutExpired("pactl", 4)
+
         with mock.patch.object(self.mod, "_pactl", boom):
             self.assertEqual(self.mod.Pulse().source_state("roon_in"), "")
 

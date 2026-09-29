@@ -4,11 +4,11 @@ The D-Bus plumbing needs a live BlueZ and is covered by on-device acceptance;
 what is tested here is the part that is easy to get subtly wrong — the LED
 ownership rules and the fail-open behaviour of the setupd check.
 """
+
 import importlib.machinery
 import importlib.util
 import os
 import shutil
-import subprocess
 import tempfile
 import unittest
 
@@ -18,7 +18,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-btagent")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_btagent", importlib.machinery.SourceFileLoader("nexusq_btagent", DAEMON))
+        "nexusq_btagent", importlib.machinery.SourceFileLoader("nexusq_btagent", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -38,36 +39,31 @@ class TestLedPlan(unittest.TestCase):
         self.mod = load_daemon()
 
     def test_takes_ring_when_pairable_outside_setup(self):
-        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False, setup_running=False)
         self.assertEqual(cmd, self.mod.DISCOVERABLE_CMD)
         self.assertTrue(owns)
 
     def test_does_not_take_ring_while_setupd_owns_it(self):
         # setupd already spins its own blue and, on success, leaves the chosen
         # theme up — stomping on that is the bug this guard exists to prevent.
-        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
-                                      setup_running=True)
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False, setup_running=True)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
     def test_releases_ring_when_no_longer_pairable(self):
-        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True, setup_running=False)
         self.assertEqual(cmd, self.mod.RELEASE_CMD)
         self.assertFalse(owns)
 
     def test_never_releases_a_ring_it_does_not_own(self):
         # The setup-success path: setupd applied a theme and exited, then turned
         # Discoverable off. We must not send "auto" and wipe that theme.
-        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False, setup_running=False)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
     def test_idempotent_while_already_showing(self):
-        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True, setup_running=False)
         self.assertIsNone(cmd)
         self.assertTrue(owns)
 
@@ -78,16 +74,14 @@ class TestLedPlan(unittest.TestCase):
         # when setup finished — applying a theme and turning discovery off — we
         # would then "release" and send "auto", wiping that theme.
         # Yield to setupd, and yield SILENTLY: no command, no ownership.
-        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True,
-                                      setup_running=True)
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=True, setup_running=True)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
     def test_setup_end_does_not_wipe_the_applied_theme(self):
         # The tail of that same scenario: setup finished, left its theme up, and
         # turned discovery off. Having yielded, we own nothing -> send nothing.
-        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=False, setup_running=False)
         self.assertIsNone(cmd)
         self.assertFalse(owns)
 
@@ -126,7 +120,7 @@ class TestSetupdActive(unittest.TestCase):
         # job begins — BEFORE the main process is forked — which is why this
         # checks the directory and not cgroup.procs (an empty cgroup is still an
         # activating unit).
-        self._running()                      # dir present, no procs file at all
+        self._running()  # dir present, no procs file at all
         self.assertTrue(self.mod.setupd_active(cgroup=self.cg))
 
     def test_failed_is_not_active(self):
@@ -147,8 +141,7 @@ class TestSetupdActive(unittest.TestCase):
         self.assertFalse(self.mod.setupd_active(cgroup="/proc/self/mem/nope"))
 
     def test_default_cgroup_path_is_the_system_slice(self):
-        self.assertEqual(self.mod.SETUPD_CGROUP,
-                         "/sys/fs/cgroup/system.slice/nexusq-setupd.service")
+        self.assertEqual(self.mod.SETUPD_CGROUP, "/sys/fs/cgroup/system.slice/nexusq-setupd.service")
 
 
 class TestLedSend(unittest.TestCase):
@@ -157,8 +150,7 @@ class TestLedSend(unittest.TestCase):
 
     def test_missing_socket_is_not_fatal(self):
         # nexusqd being down must never take the BT agent with it.
-        self.assertFalse(self.mod.led_send("spin 0 0 0",
-                                           sock_path="/nonexistent/nexusqd.sock"))
+        self.assertFalse(self.mod.led_send("spin 0 0 0", sock_path="/nonexistent/nexusqd.sock"))
 
 
 class TestConstants(unittest.TestCase):
@@ -198,15 +190,13 @@ class TestPairableIsTheGate(unittest.TestCase):
         # WITHOUT announcing us to the room — someone CAN pair us, so the ring
         # must be on, and nothing may force Pairable back off under whoever
         # opened the window.
-        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=True, owns_led=False, setup_running=False)
         self.assertEqual(cmd, self.mod.DISCOVERABLE_CMD)
         self.assertTrue(owns)
 
     def test_ring_dark_means_nobody_can_pair(self):
         # The one safety property this daemon exists for.
-        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True,
-                                      setup_running=False)
+        cmd, owns = self.mod.led_plan(pairable=False, owns_led=True, setup_running=False)
         self.assertEqual(cmd, self.mod.RELEASE_CMD)
         self.assertFalse(owns)
 
@@ -224,24 +214,22 @@ class TestDeviceKind(unittest.TestCase):
 
     def test_ble_keyboard_by_icon(self):
         # MX Keys as BlueZ actually reports it.
-        self.assertEqual(
-            self.mod.device_kind("input-keyboard", 0x03c1, None), "keyboard")
+        self.assertEqual(self.mod.device_kind("input-keyboard", 0x03C1, None), "keyboard")
 
     def test_ble_mouse_by_icon(self):
         # MX Master 4 as BlueZ actually reports it.
-        self.assertEqual(
-            self.mod.device_kind("input-mouse", 0x03c2, None), "mouse")
+        self.assertEqual(self.mod.device_kind("input-mouse", 0x03C2, None), "mouse")
 
     def test_ble_falls_back_to_appearance_without_icon(self):
-        self.assertEqual(self.mod.device_kind("", 0x03c1, None), "keyboard")
-        self.assertEqual(self.mod.device_kind("", 0x03c2, None), "mouse")
+        self.assertEqual(self.mod.device_kind("", 0x03C1, None), "keyboard")
+        self.assertEqual(self.mod.device_kind("", 0x03C2, None), "mouse")
 
     def test_classic_phone_by_icon(self):
         # Pixel 9 Pro Fold: class=0x005a420c, icon=phone.
-        self.assertEqual(self.mod.device_kind("phone", None, 0x005a420c), "phone")
+        self.assertEqual(self.mod.device_kind("phone", None, 0x005A420C), "phone")
 
     def test_class_major_fallback(self):
-        self.assertEqual(self.mod.device_kind("", None, 0x005a420c), "phone")
+        self.assertEqual(self.mod.device_kind("", None, 0x005A420C), "phone")
 
     def test_anonymous_is_other(self):
         self.assertEqual(self.mod.device_kind("", None, None), "other")
@@ -267,21 +255,26 @@ class TestBluezProxiesSkipIntrospection(unittest.TestCase):
             self.src = f.read()
 
     def test_the_only_get_object_is_the_non_introspecting_helper(self):
-        calls = [ln.strip() for ln in self.src.splitlines()
-                 if "get_object(" in ln and not ln.strip().startswith(("#", "dbus-python"))]
+        calls = [
+            ln.strip()
+            for ln in self.src.splitlines()
+            if "get_object(" in ln and not ln.strip().startswith(("#", "dbus-python"))
+        ]
         self.assertEqual(calls, ["return self.bus.get_object(BLUEZ, path, introspect=False)"])
 
     def test_argumented_methods_carry_their_signature(self):
-        for needle in ('.Set(iface, name, value, signature="ssv")',
-                       'am.UnregisterAgent(AGENT_PATH, signature="o")',
-                       'am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY, signature="os")',
-                       'am.RequestDefaultAgent(AGENT_PATH, signature="o")',
-                       'signature="o")'):
+        for needle in (
+            '.Set(iface, name, value, signature="ssv")',
+            'am.UnregisterAgent(AGENT_PATH, signature="o")',
+            'am.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY, signature="os")',
+            'am.RequestDefaultAgent(AGENT_PATH, signature="o")',
+            'signature="o")',
+        ):
             self.assertIn(needle, self.src)
         # RemoveDevice is split over two lines; check the call and its signature
         # arrive together.
         i = self.src.index(".RemoveDevice(")
-        self.assertIn('signature="o"', self.src[i:i + 200])
+        self.assertIn('signature="o"', self.src[i : i + 200])
 
 
 if __name__ == "__main__":

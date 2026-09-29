@@ -2,7 +2,6 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -10,12 +9,15 @@ from unittest.mock import patch
 HERE = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
+
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
 
 class TestIdentity(unittest.TestCase):
     def test_load_identity_from_file(self):
@@ -65,9 +67,12 @@ class TestStartSetupMode(unittest.TestCase):
         mod = load_daemon()
         with tempfile.TemporaryDirectory() as d:
             flag_path = os.path.join(d, "nexusq-setup.force")
-            with patch.object(mod, "SETUP_FORCE_FLAG", flag_path), \
-                 patch.object(mod.subprocess, "run",
-                               side_effect=mod.subprocess.TimeoutExpired(cmd="systemctl", timeout=15)):
+            with (
+                patch.object(mod, "SETUP_FORCE_FLAG", flag_path),
+                patch.object(
+                    mod.subprocess, "run", side_effect=mod.subprocess.TimeoutExpired(cmd="systemctl", timeout=15)
+                ),
+            ):
                 with self.assertRaises(mod.Err) as ctx:
                     mod.start_setup_mode()
                 self.assertEqual(ctx.exception.code, "unavailable")

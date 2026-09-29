@@ -26,8 +26,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control",
-        importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -38,9 +38,12 @@ class TestUserSystemctlTransport(unittest.TestCase):
         self.mod = load_daemon()
         self.runs = []
         p = mock.patch.object(
-            self.mod.subprocess, "run",
-            side_effect=lambda cmd, **kw: self.runs.append((cmd, kw))
-            or mock.Mock(returncode=0, stdout="active\n", stderr=""))
+            self.mod.subprocess,
+            "run",
+            side_effect=lambda cmd, **kw: (
+                self.runs.append((cmd, kw)) or mock.Mock(returncode=0, stdout="active\n", stderr="")
+            ),
+        )
         p.start()
         self.addCleanup(mock.patch.stopall)
 
@@ -62,8 +65,7 @@ class TestUserSystemctlTransport(unittest.TestCase):
     def test_no_machine_transport_anywhere(self):
         self.mod._systemctl_user("is-active", "roon.service")
         joined = " ".join(self.argv())
-        self.assertNotIn("--machine", joined,
-                         "the PAM session per call is the whole point of this change")
+        self.assertNotIn("--machine", joined, "the PAM session per call is the whole point of this change")
 
     def test_user_manager_env_is_passed(self):
         self.mod._systemctl_user("is-active", "roon.service")
@@ -74,9 +76,8 @@ class TestUserSystemctlTransport(unittest.TestCase):
     def test_the_actual_systemctl_command_is_unchanged(self):
         self.mod._systemctl_user("enable", "--now", "roon.service")
         argv = self.argv()
-        tail = argv[argv.index("systemctl"):]
-        self.assertEqual(tail, ["systemctl", "--user", "enable", "--now",
-                                "roon.service"])
+        tail = argv[argv.index("systemctl") :]
+        self.assertEqual(tail, ["systemctl", "--user", "enable", "--now", "roon.service"])
 
     def test_timeout_is_still_honoured(self):
         self.mod._systemctl_user("mask", "--now", "roon.service", timeout=30)

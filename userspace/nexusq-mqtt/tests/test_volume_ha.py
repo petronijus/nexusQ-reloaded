@@ -6,6 +6,7 @@ switch that call the app's own methods, and learns every change from the
 bridge's volumeChanged broadcasts -- over the SAME bridge connection as the
 LED ring (BridgeFeed).
 """
+
 import json
 import os
 import sys
@@ -15,8 +16,16 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_ring_ha import (MOD, NODE, PREFIX, DISC, FakeBridge, bridge_state,  # noqa: E402
-                          join_or_fail, start)
+from test_ring_ha import (
+    MOD,
+    NODE,
+    PREFIX,
+    DISC,
+    FakeBridge,
+    bridge_state,  # noqa: E402
+    join_or_fail,
+    start,
+)
 
 
 def wait_for(pred, timeout=5):
@@ -69,10 +78,12 @@ class TestOneConnection(unittest.TestCase):
         self.bridge = FakeBridge(st)
         self.addCleanup(self.bridge.close)
         self.published = []
-        pub = lambda t, p, r: self.published.append((t, p, r))   # noqa: E731
-        for p in (mock.patch.object(MOD, "CONTROL_PORT", self.bridge.port),
-                  mock.patch.object(MOD, "CONTROL_HOST", "127.0.0.1"),
-                  mock.patch.object(MOD, "RING_RETRY_S", 1)):
+        pub = lambda t, p, r: self.published.append((t, p, r))  # noqa: E731
+        for p in (
+            mock.patch.object(MOD, "CONTROL_PORT", self.bridge.port),
+            mock.patch.object(MOD, "CONTROL_HOST", "127.0.0.1"),
+            mock.patch.object(MOD, "RING_RETRY_S", 1),
+        ):
             p.start()
             self.addCleanup(p.stop)
         self.stop = threading.Event()
@@ -80,7 +91,7 @@ class TestOneConnection(unittest.TestCase):
         self.vol = MOD.VolumeLink(NODE, "Obývák", PREFIX, DISC, pub, stop=self.stop)
         self.feed = MOD.BridgeFeed([self.ring, self.vol], stop=self.stop)
         self.threads = start(self, self.feed.listen, self.vol.worker)
-        self.addCleanup(self._stop)       # last registered, runs first
+        self.addCleanup(self._stop)  # last registered, runs first
 
     def _stop(self):
         self.feed.close()
@@ -97,8 +108,7 @@ class TestOneConnection(unittest.TestCase):
     def test_both_get_their_state_from_one_getState(self):
         self.assertTrue(wait_for(lambda: self.vol_state() is not None))
         self.assertEqual(self.vol_state(), {"volume": 40, "muted": False})
-        self.assertTrue(wait_for(lambda: any(t == f"{PREFIX}/{NODE}/ring/state"
-                                             for t, _, _ in self.published)))
+        self.assertTrue(wait_for(lambda: any(t == f"{PREFIX}/{NODE}/ring/state" for t, _, _ in self.published)))
         with self.bridge.lock:
             self.assertEqual(len(self.bridge.clients), 1)
 
@@ -113,8 +123,7 @@ class TestOneConnection(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.vol_state() == {"volume": 62, "muted": False}))
         self.assertTrue(self.vol.submit(f"{PREFIX}/{NODE}/volume/mute/set", b"ON"))
         self.assertTrue(wait_for(lambda: self.vol_state() == {"volume": 62, "muted": True}))
-        self.assertEqual(self.bridge.calls, [("setVolume", {"volume": 62}),
-                                             ("setMuted", {"muted": True})])
+        self.assertEqual(self.bridge.calls, [("setVolume", {"volume": 62}), ("setMuted", {"muted": True})])
 
     def test_a_slider_burst_collapses_to_the_last_value(self):
         self.assertTrue(wait_for(lambda: self.vol_state() is not None))
@@ -126,8 +135,7 @@ class TestOneConnection(unittest.TestCase):
     def test_bridge_down_marks_unavailable(self):
         self.assertTrue(wait_for(lambda: self.vol_state() is not None))
         self.bridge.close()
-        self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/volume/available", "offline", True)
-                                 in self.published))
+        self.assertTrue(wait_for(lambda: (f"{PREFIX}/{NODE}/volume/available", "offline", True) in self.published))
 
 
 if __name__ == "__main__":

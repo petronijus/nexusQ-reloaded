@@ -6,6 +6,7 @@ lines with strstr/atoll (tests/test_accounting.c on its side). Pinned: that
 format, that a reader never sees a half-written file, and that a counter which
 cannot be written never takes the bridge down with it.
 """
+
 import importlib.machinery
 import importlib.util
 import os
@@ -18,8 +19,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control_stats",
-        importlib.machinery.SourceFileLoader("nexusq_control_stats", DAEMON))
+        "nexusq_control_stats", importlib.machinery.SourceFileLoader("nexusq_control_stats", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -48,11 +49,11 @@ class TestControlStats(unittest.TestCase):
         s.bump("ambient_wakes")
         s.bump("tap_fixes")
         self.assertEqual(self.read(), "ambient_wakes 2\ntap_fixes 1\n")
-        self.assertFalse(os.path.exists(self.path + ".tmp"))   # replaced, not left
+        self.assertFalse(os.path.exists(self.path + ".tmp"))  # replaced, not left
 
     def test_an_unwritable_path_costs_nothing(self):
         s = MOD.ControlStats(os.path.join(self.tmp.name, "no", "such", "dir", "stats"))
-        s.bump("ambient_wakes")                                 # must not raise
+        s.bump("ambient_wakes")  # must not raise
         self.assertEqual(s.counts["ambient_wakes"], 1)
 
 

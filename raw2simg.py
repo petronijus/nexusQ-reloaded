@@ -44,19 +44,24 @@ def convert(raw_path, sparse_path):
 
     n_chunks = (total_blks + CHUNK_MAX_BLKS - 1) // CHUNK_MAX_BLKS
     print(f"Input:  {raw_path} ({raw_size / 1024 / 1024:.1f} MB, {total_blks} blocks)")
-    print(f"Encoding ALL blocks as RAW (no DONT_CARE) -> {n_chunks} chunks; "
-          f"every block written so the flash is byte-exact on a non-erased partition.")
+    print(
+        f"Encoding ALL blocks as RAW (no DONT_CARE) -> {n_chunks} chunks; "
+        f"every block written so the flash is byte-exact on a non-erased partition."
+    )
 
-    with open(sparse_path, 'wb') as out, open(raw_path, 'rb') as inp:
-        header = struct.pack('<IHHHHIIII',
-                             SPARSE_HEADER_MAGIC,
-                             1, 0,                 # major/minor version
-                             FILE_HDR_SZ,
-                             CHUNK_HDR_SZ,
-                             BLK_SZ,
-                             total_blks,
-                             n_chunks,
-                             0)                    # image checksum (unused)
+    with open(sparse_path, "wb") as out, open(raw_path, "rb") as inp:
+        header = struct.pack(
+            "<IHHHHIIII",
+            SPARSE_HEADER_MAGIC,
+            1,
+            0,  # major/minor version
+            FILE_HDR_SZ,
+            CHUNK_HDR_SZ,
+            BLK_SZ,
+            total_blks,
+            n_chunks,
+            0,
+        )  # image checksum (unused)
         out.write(header)
 
         blks_left = total_blks
@@ -64,7 +69,7 @@ def convert(raw_path, sparse_path):
         while blks_left > 0:
             count = min(blks_left, CHUNK_MAX_BLKS)
             total_sz = CHUNK_HDR_SZ + count * BLK_SZ
-            out.write(struct.pack('<HHII', CHUNK_TYPE_RAW, 0, count, total_sz))
+            out.write(struct.pack("<HHII", CHUNK_TYPE_RAW, 0, count, total_sz))
             remaining = count * BLK_SZ
             while remaining > 0:
                 buf = inp.read(min(remaining, 8 * 1024 * 1024))
@@ -79,12 +84,14 @@ def convert(raw_path, sparse_path):
                 print(f"  Writing: {pct}% ({chunk_i}/{n_chunks} chunks)")
 
     actual_size = os.path.getsize(sparse_path)
-    print(f"Output: {sparse_path} ({actual_size / 1024 / 1024:.1f} MB, "
-          f"{n_chunks} RAW chunks, {total_blks} blocks — all written)")
+    print(
+        f"Output: {sparse_path} ({actual_size / 1024 / 1024:.1f} MB, "
+        f"{n_chunks} RAW chunks, {total_blks} blocks — all written)"
+    )
     print(f"Done: {actual_size / 1024 / 1024:.1f} MB written")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <raw.img> <sparse.img>")
         sys.exit(1)

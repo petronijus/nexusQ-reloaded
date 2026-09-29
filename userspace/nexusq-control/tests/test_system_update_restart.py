@@ -9,7 +9,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -31,8 +32,7 @@ class TestServicesForChanged(unittest.TestCase):
         self.assertEqual(svcs, ["nq-healthd"])
 
     def test_mqtt_pkg_restarts_mqtt(self):
-        self.assertEqual(self.mod._services_for_changed(["nexusq-mqtt"]),
-                         ["nexusq-mqtt"])
+        self.assertEqual(self.mod._services_for_changed(["nexusq-mqtt"]), ["nexusq-mqtt"])
 
     def test_self_named_daemons_still_map(self):
         for pkg in ("nexusqd", "nexusq-btagent", "nexusq-setupd", "nexusq-control"):
@@ -40,14 +40,11 @@ class TestServicesForChanged(unittest.TestCase):
 
     def test_base_packages_map_to_nothing(self):
         # libc/init churn is handled by the reboot path, not a service restart.
-        self.assertEqual(self.mod._services_for_changed(
-            ["musl", "libcrypto3", "postmarketos-base"]), [])
+        self.assertEqual(self.mod._services_for_changed(["musl", "libcrypto3", "postmarketos-base"]), [])
 
     def test_dedup_and_order_preserved(self):
-        changed = ["nexusqd", "device-google-steelhead", "nexusqd",
-                   "nexusq-mqtt", "musl"]
-        self.assertEqual(self.mod._services_for_changed(changed),
-                         ["nexusqd", "nq-healthd", "nexusq-mqtt"])
+        changed = ["nexusqd", "device-google-steelhead", "nexusqd", "nexusq-mqtt", "musl"]
+        self.assertEqual(self.mod._services_for_changed(changed), ["nexusqd", "nq-healthd", "nexusq-mqtt"])
 
     def test_empty(self):
         self.assertEqual(self.mod._services_for_changed([]), [])
@@ -77,35 +74,40 @@ class TestSystemctlPlan(unittest.TestCase):
 
     def test_reexec_comes_first_when_systemd_changed(self):
         plan = self.mod._systemctl_plan(["nexusqd", "nq-healthd"], True)
-        self.assertEqual(plan, [
-            ["systemctl", "daemon-reexec"],
-            ["systemctl", "restart", "nexusqd"],
-            ["systemctl", "restart", "nq-healthd"],
-        ])
+        self.assertEqual(
+            plan,
+            [
+                ["systemctl", "daemon-reexec"],
+                ["systemctl", "restart", "nexusqd"],
+                ["systemctl", "restart", "nq-healthd"],
+            ],
+        )
 
     def test_reexec_even_with_nothing_to_restart(self):
         # PID 1 must be usable for whatever comes next (the reboot call, the
         # bridge restart), so the re-exec is not conditional on our daemons.
-        self.assertEqual(self.mod._systemctl_plan([], True),
-                         [["systemctl", "daemon-reexec"]])
+        self.assertEqual(self.mod._systemctl_plan([], True), [["systemctl", "daemon-reexec"]])
 
     def test_reload_not_reexec_when_only_units_changed(self):
         plan = self.mod._systemctl_plan(["nexusq-mqtt"], False)
-        self.assertEqual(plan, [
-            ["systemctl", "daemon-reload"],
-            ["systemctl", "restart", "nexusq-mqtt"],
-        ])
+        self.assertEqual(
+            plan,
+            [
+                ["systemctl", "daemon-reload"],
+                ["systemctl", "restart", "nexusq-mqtt"],
+            ],
+        )
 
     def test_nothing_changed_nothing_to_do(self):
         self.assertEqual(self.mod._systemctl_plan([], False), [])
 
     def test_restart_order_is_fixed_and_control_is_never_in_it(self):
-        daemons = ["nexusq-control", "nq-healthd", "nexusq-mqtt", "nexusqd",
-                   "nexusq-setupd", "nexusq-btagent"]
+        daemons = ["nexusq-control", "nq-healthd", "nexusq-mqtt", "nexusqd", "nexusq-setupd", "nexusq-btagent"]
         plan = self.mod._systemctl_plan(daemons, False)
-        self.assertEqual([a[2] for a in plan if a[1] == "restart"],
-                         ["nexusqd", "nexusq-btagent", "nexusq-setupd",
-                          "nexusq-mqtt", "nq-healthd"])
+        self.assertEqual(
+            [a[2] for a in plan if a[1] == "restart"],
+            ["nexusqd", "nexusq-btagent", "nexusq-setupd", "nexusq-mqtt", "nq-healthd"],
+        )
         self.assertNotIn(["systemctl", "restart", "nexusq-control"], plan)
 
 

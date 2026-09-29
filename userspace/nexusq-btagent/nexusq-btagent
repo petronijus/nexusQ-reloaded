@@ -86,7 +86,6 @@ pure logic below stays importable — and unit-testable — on a host with no Bl
 import json
 import os
 import socket
-import subprocess
 import sys
 
 BLUEZ = "org.bluez"
@@ -103,8 +102,7 @@ SETUPD_UNIT = "nexusq-setupd.service"
 # the unit goes away, so the directory's mere existence answers
 # "active OR activating OR deactivating" — exactly the tri-state this daemon
 # wants — with one stat() instead of forking systemctl. See setupd_active().
-SETUPD_CGROUP = os.environ.get(
-    "NEXUSQ_SETUPD_CGROUP", f"/sys/fs/cgroup/system.slice/{SETUPD_UNIT}")
+SETUPD_CGROUP = os.environ.get("NEXUSQ_SETUPD_CGROUP", f"/sys/fs/cgroup/system.slice/{SETUPD_UNIT}")
 
 # Our own control socket. `nexusq-control` (the LAN bridge the app talks to) is
 # stdlib-only by standing rule and so cannot speak D-Bus; BlueZ knowledge lives
@@ -185,7 +183,7 @@ def setupd_active(cgroup=None):
     """
     try:
         return os.path.isdir(cgroup or SETUPD_CGROUP)
-    except OSError as e:      # defensive: isdir swallows most errors already
+    except OSError as e:  # defensive: isdir swallows most errors already
         log("setupd cgroup unreadable; taking the ring so it cannot lie:", e)
         return False
 
@@ -203,10 +201,15 @@ def device_kind(icon, appearance, cls):
     (0x03c1 keyboard / 0x03c2 mouse), then to the CoD major class.
     """
     icon = (icon or "").lower()
-    for needle, kind in (("keyboard", "keyboard"), ("mouse", "mouse"),
-                         ("headset", "headphones"), ("headphones", "headphones"),
-                         ("audio", "audio"), ("phone", "phone"),
-                         ("computer", "computer")):
+    for needle, kind in (
+        ("keyboard", "keyboard"),
+        ("mouse", "mouse"),
+        ("headset", "headphones"),
+        ("headphones", "headphones"),
+        ("audio", "audio"),
+        ("phone", "phone"),
+        ("computer", "computer"),
+    ):
         if needle in icon:
             return kind
 
@@ -246,7 +249,7 @@ def led_plan(pairable, owns_led, setup_running):
         return DISCOVERABLE_CMD, True
     if not pairable and owns_led:
         return RELEASE_CMD, False
-    return None, owns_led        # nothing to do; keep current ownership
+    return None, owns_led  # nothing to do; keep current ownership
 
 
 def _run():
@@ -381,8 +384,7 @@ def _run():
             try:
                 if self.agent is None:
                     self.agent = Agent(self.bus, AGENT_PATH)
-                am = dbus.Interface(self._bluez("/org/bluez"),
-                                    "org.bluez.AgentManager1")
+                am = dbus.Interface(self._bluez("/org/bluez"), "org.bluez.AgentManager1")
                 try:
                     am.UnregisterAgent(AGENT_PATH, signature="o")
                 except dbus.DBusException:
@@ -434,8 +436,11 @@ def _run():
             # without announcing us.)
             cmd, owns = led_plan(pairable, self.owns_led, setupd_active())
             if cmd is not None:
-                log("ring ON: adapter is PAIRABLE — anyone can pair" if owns
-                    else "ring released: adapter no longer pairable")
+                log(
+                    "ring ON: adapter is PAIRABLE — anyone can pair"
+                    if owns
+                    else "ring released: adapter no longer pairable"
+                )
                 if led_send(cmd) or not owns:
                     # Only claim ownership if nexusqd actually took the command;
                     # releasing is unconditional (we are giving the ring up).
@@ -448,16 +453,13 @@ def _run():
             # Trust the bond so its profiles (A2DP above all) reconnect on their
             # own later without re-asking for service authorization.
             try:
-                self._set("Trusted", dbus.Boolean(True), path=path,
-                          iface=DEVICE_IFACE)
-                log(f"bonded {self._get('Address', path=path, iface=DEVICE_IFACE)}"
-                    " -> Trusted")
+                self._set("Trusted", dbus.Boolean(True), path=path, iface=DEVICE_IFACE)
+                log(f"bonded {self._get('Address', path=path, iface=DEVICE_IFACE)} -> Trusted")
             except dbus.DBusException as e:
                 log("could not trust newly bonded device:", e)
 
         def _on_adapter_props(self, iface, changed, invalidated, path=None):
-            if iface == ADAPTER_IFACE and ("Discoverable" in changed
-                                           or "Pairable" in changed):
+            if iface == ADAPTER_IFACE and ("Discoverable" in changed or "Pairable" in changed):
                 self.reconcile()
 
         def _on_bluez_owner(self, name, old, new):
@@ -490,12 +492,11 @@ def _run():
             """Snapshot of known devices, already typed for the app."""
             out = []
             try:
-                om = dbus.Interface(self._bluez("/"),
-                                    "org.freedesktop.DBus.ObjectManager")
+                om = dbus.Interface(self._bluez("/"), "org.freedesktop.DBus.ObjectManager")
                 objs = om.GetManagedObjects()
             except dbus.DBusException:
                 return out
-            for path, ifaces in objs.items():
+            for ifaces in objs.values():
                 d = ifaces.get(DEVICE_IFACE)
                 if not d:
                     continue
@@ -520,17 +521,18 @@ def _run():
                 # a real identity.
                 if not paired_only and not (name or icon or appearance):
                     continue
-                out.append({
-                    "mac": addr,
-                    "name": name,
-                    "kind": device_kind(icon, appearance, cls),
-                    "rssi": int(d.get("RSSI", 0)) if d.get("RSSI") is not None else None,
-                    "paired": bool(d.get("Paired", False)),
-                    "bonded": bool(d.get("Bonded", False)),
-                    "connected": bool(d.get("Connected", False)),
-                })
-            out.sort(key=lambda x: (not x["paired"], x["kind"] == "other",
-                                    -(x["rssi"] or -200)))
+                out.append(
+                    {
+                        "mac": addr,
+                        "name": name,
+                        "kind": device_kind(icon, appearance, cls),
+                        "rssi": int(d.get("RSSI", 0)) if d.get("RSSI") is not None else None,
+                        "paired": bool(d.get("Paired", False)),
+                        "bonded": bool(d.get("Bonded", False)),
+                        "connected": bool(d.get("Connected", False)),
+                    }
+                )
+            out.sort(key=lambda x: (not x["paired"], x["kind"] == "other", -(x["rssi"] or -200)))
             return out
 
         def _dev_path(self, mac):
@@ -568,13 +570,11 @@ def _run():
                 self._close_window()
                 return reply({"ok": True})
             if m == "windowState":
-                return reply({"open": bool(self._get("Pairable")),
-                              "discoverable": bool(self._get("Discoverable"))})
+                return reply({"open": bool(self._get("Pairable")), "discoverable": bool(self._get("Discoverable"))})
             if m == "startScan":
                 secs = max(5, min(int(req.get("secs", SCAN_SECS)), 60))
                 try:
-                    dbus.Interface(self._bluez(ADAPTER_PATH),
-                                   ADAPTER_IFACE).StartDiscovery()
+                    dbus.Interface(self._bluez(ADAPTER_PATH), ADAPTER_IFACE).StartDiscovery()
                 except dbus.DBusException as e:
                     if "InProgress" not in str(e):
                         return reply({"error": "unavailable", "message": str(e)})
@@ -591,16 +591,15 @@ def _run():
                 return reply({"devices": self._devices(paired_only=True)})
             if m == "remove":
                 try:
-                    dbus.Interface(self._bluez(ADAPTER_PATH),
-                                   ADAPTER_IFACE).RemoveDevice(self._dev_path(mac),
-                                                               signature="o")
+                    dbus.Interface(self._bluez(ADAPTER_PATH), ADAPTER_IFACE).RemoveDevice(
+                        self._dev_path(mac), signature="o"
+                    )
                     return reply({"removed": True})
                 except dbus.DBusException as e:
                     return reply({"error": "not_found", "message": str(e)})
             if m in ("connect", "disconnect"):
                 try:
-                    dev = dbus.Interface(self._bluez(self._dev_path(mac)),
-                                         DEVICE_IFACE)
+                    dev = dbus.Interface(self._bluez(self._dev_path(mac)), DEVICE_IFACE)
                     (dev.Connect if m == "connect" else dev.Disconnect)(timeout=30)
                     return reply({"ok": True})
                 except dbus.DBusException as e:
@@ -611,8 +610,7 @@ def _run():
 
         def _stop_scan_once(self):
             try:
-                dbus.Interface(self._bluez(ADAPTER_PATH),
-                               ADAPTER_IFACE).StopDiscovery()
+                dbus.Interface(self._bluez(ADAPTER_PATH), ADAPTER_IFACE).StopDiscovery()
             except dbus.DBusException:
                 pass  # already stopped
             return False  # one-shot timer
@@ -634,8 +632,7 @@ def _run():
             # from their scan is usually GONE (measured: Pair -> UnknownObject).
             # Own the discovery here instead of trusting a previous scan.
             try:
-                dbus.Interface(self._bluez(ADAPTER_PATH),
-                               ADAPTER_IFACE).StartDiscovery()
+                dbus.Interface(self._bluez(ADAPTER_PATH), ADAPTER_IFACE).StartDiscovery()
             except dbus.DBusException as e:
                 if "InProgress" not in str(e):
                     log("pair: could not start discovery:", e)
@@ -648,15 +645,13 @@ def _run():
                     # method — using it here made this test throw every time and
                     # report "not advertising" for a device that was right there.)
                     self._get("Address", path=self._dev_path(mac), iface=DEVICE_IFACE)
-                    dev = dbus.Interface(
-                        self._bluez(self._dev_path(mac)), DEVICE_IFACE)
+                    dev = dbus.Interface(self._bluez(self._dev_path(mac)), DEVICE_IFACE)
                 except dbus.DBusException:
                     deadline[0] -= 1
                     if deadline[0] > 0:
                         return True  # keep waiting for it to advertise
                     self._stop_scan_once()
-                    reply({"error": "not_found",
-                           "message": "device not advertising — is it in pairing mode?"})
+                    reply({"error": "not_found", "message": "device not advertising — is it in pairing mode?"})
                     return False
                 _pair_now(dev)
                 return False
@@ -672,22 +667,21 @@ def _run():
                     # pairing the search should close and pairing should stop".)
                     self._close_window()
                     try:
-                        self._set("Trusted", dbus.Boolean(True),
-                                  path=self._dev_path(mac), iface=DEVICE_IFACE)
+                        self._set("Trusted", dbus.Boolean(True), path=self._dev_path(mac), iface=DEVICE_IFACE)
                     except dbus.DBusException:
                         pass
                     try:
                         dev.Connect(timeout=30)
                     except dbus.DBusException as e:
                         log("paired but connect failed:", e)
-                    info = next((d for d in self._devices()
-                                 if d["mac"].upper() == mac.upper()), {})
+                    info = next((d for d in self._devices() if d["mac"].upper() == mac.upper()), {})
                     # `bonded` is the honest answer to "will this survive a
                     # reboot?" — `paired` alone LIES: it is true for a
                     # session-only pairing that evaporates on restart.
                     log(f"paired {mac} bonded={info.get('bonded')}")
-                    reply({"paired": True, "bonded": bool(info.get("bonded")),
-                           "connected": bool(info.get("connected"))})
+                    reply(
+                        {"paired": True, "bonded": bool(info.get("bonded")), "connected": bool(info.get("connected"))}
+                    )
 
                 def failed(e):
                     self._stop_scan_once()
@@ -697,11 +691,14 @@ def _run():
                     # device that had just paired perfectly.
                     if "AlreadyExists" in str(e):
                         self._close_window()
-                        info = next((d for d in self._devices()
-                                     if d["mac"].upper() == mac.upper()), {})
-                        return reply({"paired": True,
-                                      "bonded": bool(info.get("bonded")),
-                                      "connected": bool(info.get("connected"))})
+                        info = next((d for d in self._devices() if d["mac"].upper() == mac.upper()), {})
+                        return reply(
+                            {
+                                "paired": True,
+                                "bonded": bool(info.get("bonded")),
+                                "connected": bool(info.get("connected")),
+                            }
+                        )
                     self._close_window()
                     log("pair failed:", e)
                     reply({"error": "pair_failed", "message": str(e)})
@@ -765,16 +762,22 @@ def _run():
 
         def run(self):
             self.bus.add_signal_receiver(
-                self._on_device_props, dbus_interface=PROPS_IFACE,
-                signal_name="PropertiesChanged", arg0=DEVICE_IFACE,
-                path_keyword="path")
+                self._on_device_props,
+                dbus_interface=PROPS_IFACE,
+                signal_name="PropertiesChanged",
+                arg0=DEVICE_IFACE,
+                path_keyword="path",
+            )
             self.bus.add_signal_receiver(
-                self._on_adapter_props, dbus_interface=PROPS_IFACE,
-                signal_name="PropertiesChanged", arg0=ADAPTER_IFACE,
-                path_keyword="path")
+                self._on_adapter_props,
+                dbus_interface=PROPS_IFACE,
+                signal_name="PropertiesChanged",
+                arg0=ADAPTER_IFACE,
+                path_keyword="path",
+            )
             self.bus.add_signal_receiver(
-                self._on_bluez_owner, dbus_interface="org.freedesktop.DBus",
-                signal_name="NameOwnerChanged", arg0=BLUEZ)
+                self._on_bluez_owner, dbus_interface="org.freedesktop.DBus", signal_name="NameOwnerChanged", arg0=BLUEZ
+            )
 
             self.register()
             self.arm_window_timeout()

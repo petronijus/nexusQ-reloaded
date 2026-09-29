@@ -82,7 +82,7 @@ def other_end(producer_pcm):
     if not m:
         return ""
     other = "1" if m.group(1) == "0" else "0"
-    return producer_pcm[:m.start()] + f"/pcm{other}c/" + producer_pcm[m.end():]
+    return producer_pcm[: m.start()] + f"/pcm{other}c/" + producer_pcm[m.end() :]
 
 
 # What PulseAudio REALLY holds. module-alsa-source closes its ALSA handle when
@@ -118,14 +118,14 @@ SLEEP_AFTER = float(os.environ.get("NQ_UAC2_SLEEP_AFTER", "10"))
 # SIGKILL and the CLI socket the whole turnaround is 1 ms. So take the cheap
 # period: 512 frames cost 1.57 % of a core purely to wait.
 WAKE_FRAMES = int(os.environ.get("NQ_UAC2_WAKE_FRAMES", "2048"))
-AWAKE_CHUNK = 16384                        # bytes; ~85 ms of s16le stereo
+AWAKE_CHUNK = 16384  # bytes; ~85 ms of s16le stereo
 # Ceiling on one read. Long enough that a normal wait for the next block is
 # never mistaken for a stall, short enough that a wedged producer is reported
 # in seconds rather than never.
 READ_TIMEOUT_S = float(os.environ.get("NQ_UAC2_READ_TIMEOUT_S", "5"))
-STALLED = object()                         # sentinel: no data, reader still open
+STALLED = object()  # sentinel: no data, reader still open
 
-BYTES_PER_FRAME = 4                        # s16le stereo
+BYTES_PER_FRAME = 4  # s16le stereo
 _zero_cache = {}
 
 
@@ -166,7 +166,7 @@ class PaCli:
             return override
         server = os.environ.get("PULSE_SERVER", "")
         if server.startswith("unix:"):
-            native = server[len("unix:"):].split(" ")[0]
+            native = server[len("unix:") :].split(" ")[0]
             if native:
                 return os.path.join(os.path.dirname(native), "cli")
         runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
@@ -196,7 +196,7 @@ class PaCli:
         try:
             while select.select([self.sock], [], [], 0)[0]:
                 if not self.sock.recv(4096):
-                    break                          # EOF: send() will find out
+                    break  # EOF: send() will find out
         except OSError:
             pass
 
@@ -230,9 +230,12 @@ _cli = PaCli()
 
 def pactl(*args):
     try:
-        return subprocess.run(("pactl",) + args, timeout=10,
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode == 0
+        return (
+            subprocess.run(
+                ("pactl",) + args, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -254,8 +257,7 @@ def spawn(cmd):
         # in a Python-side buffer would leave it "not ready" while data was in
         # fact waiting, and every read would time out with the buffer still full.
         # Unbuffered also drops one copy on a path that moves 48 kHz stereo.
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, bufsize=0)
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
     except OSError as e:
         log(f"cannot start {cmd[0]}: {e}")
         return None
@@ -285,17 +287,30 @@ class Watcher:
 
     # -- awake: watch through PulseAudio ---------------------------------
     def start_awake(self):
-        self.proc = spawn(["parec", f"--device={SOURCE}", "--format=s16le",
-                           f"--rate={RATE}", "--channels=2", "--raw"])
+        self.proc = spawn(["parec", f"--device={SOURCE}", "--format=s16le", f"--rate={RATE}", "--channels=2", "--raw"])
         return self.proc is not None
 
     # -- asleep: own the aloop capture directly --------------------------
     def start_asleep(self):
-        self.proc = spawn(["arecord", "-D", f"hw:{ALOOP},1,{SUB}",
-                           "-f", "S16_LE", "-r", str(RATE), "-c", "2",
-                           "-t", "raw",
-                           "--period-size", str(WAKE_FRAMES),
-                           "--buffer-size", str(WAKE_FRAMES * 4)])
+        self.proc = spawn(
+            [
+                "arecord",
+                "-D",
+                f"hw:{ALOOP},1,{SUB}",
+                "-f",
+                "S16_LE",
+                "-r",
+                str(RATE),
+                "-c",
+                "2",
+                "-t",
+                "raw",
+                "--period-size",
+                str(WAKE_FRAMES),
+                "--buffer-size",
+                str(WAKE_FRAMES * 4),
+            ]
+        )
         return self.proc is not None
 
     def read_with_timeout(self, want):
@@ -321,7 +336,7 @@ class Watcher:
             try:
                 ready, _, _ = select.select([fd], [], [], left)
             except (OSError, ValueError):
-                return b""                       # fd closed under us == EOF
+                return b""  # fd closed under us == EOF
             if not ready:
                 break
             block = fd.read1(want - got) if hasattr(fd, "read1") else fd.read(want - got)
@@ -341,7 +356,7 @@ class Watcher:
         if not suspend(True):
             return False
         if not self.start_asleep():
-            suspend(False)                       # never strand it suspended
+            suspend(False)  # never strand it suspended
             return False
         self.asleep = True
         log("silent -> source suspended (amp sink follows, ~0.4% of a core)")
@@ -365,9 +380,11 @@ class Watcher:
         # Whatever is still in flight beyond the aloop ring (~80 ms) is lost, so
         # this is the honest measure of how much of the first note is at risk.
         if detected_at is not None:
-            log(f"{why} -> source resumed ({(t_live - detected_at) * 1000:.0f} ms"
+            log(
+                f"{why} -> source resumed ({(t_live - detected_at) * 1000:.0f} ms"
                 f": detect->free {(t_freed - t0) * 1000:.0f}, "
-                f"free->live {(t_live - t_freed) * 1000:.0f})")
+                f"free->live {(t_live - t_freed) * 1000:.0f})"
+            )
         else:
             log(f"{why} -> source resumed")
         return True
@@ -413,7 +430,7 @@ class Watcher:
         has held for CONSUMER_CONFIRM polls, so PulseAudio's own asynchronous
         transitions never trigger a fight."""
         idle_since = None
-        disagree = 0                             # consecutive polls PA != us
+        disagree = 0  # consecutive polls PA != us
         while not self.stop:
             active = self.producer_active()
             held = self.consumer_open()
@@ -422,8 +439,7 @@ class Watcher:
                     t0 = time.monotonic()
                     suspend(False)
                     self.asleep = False
-                    log(f"producer opened {PRODUCER_PCM} -> source resumed "
-                        f"({(time.monotonic() - t0) * 1000:.0f} ms)")
+                    log(f"producer opened {PRODUCER_PCM} -> source resumed ({(time.monotonic() - t0) * 1000:.0f} ms)")
                     idle_since = None
                     disagree = 0
                 elif held is True:
@@ -431,8 +447,7 @@ class Watcher:
                     if disagree >= CONSUMER_CONFIRM:
                         disagree = 0
                         if suspend(True):
-                            log("source resumed behind our back (producer still "
-                                "closed) -> re-suspended")
+                            log("source resumed behind our back (producer still closed) -> re-suspended")
                 else:
                     disagree = 0
             elif active:
@@ -442,8 +457,7 @@ class Watcher:
                     if disagree >= CONSUMER_CONFIRM:
                         disagree = 0
                         if suspend(False):
-                            log("producer playing but the source is suspended "
-                                "-> resumed again")
+                            log("producer playing but the source is suspended -> resumed again")
                 else:
                     disagree = 0
             else:
@@ -465,11 +479,12 @@ class Watcher:
                 log("NQ_WATCH_MODE=producer needs NQ_PRODUCER_PCM")
                 return 1
             if CONSUMER_PCM:
-                log(f"watching {PRODUCER_PCM} for {SOURCE}, reconciling against "
-                    f"{CONSUMER_PCM} every {CONSUMER_CONFIRM * PRODUCER_POLL:.1f} s")
+                log(
+                    f"watching {PRODUCER_PCM} for {SOURCE}, reconciling against "
+                    f"{CONSUMER_PCM} every {CONSUMER_CONFIRM * PRODUCER_POLL:.1f} s"
+                )
             else:
-                log(f"watching {PRODUCER_PCM} for {SOURCE} (no consumer PCM: an "
-                    f"external resume will NOT be undone)")
+                log(f"watching {PRODUCER_PCM} for {SOURCE} (no consumer PCM: an external resume will NOT be undone)")
             return self.run_producer()
         if not self.start_awake():
             return 1
@@ -487,10 +502,12 @@ class Watcher:
                 # on 2026-08-29 (last log 19:14:03, then nothing at all).
                 stalled_reads += 1
                 if stalled_reads in (1, 20) or stalled_reads % 100 == 0:
-                    log(f"reader has delivered nothing for "
+                    log(
+                        f"reader has delivered nothing for "
                         f"{stalled_reads * READ_TIMEOUT_S:.0f} s "
                         f"({'asleep' if self.asleep else 'awake'}) — "
-                        f"waiting for the producer to come back")
+                        f"waiting for the producer to come back"
+                    )
                 continue
             stalled_reads = 0
             if not buf:
@@ -517,7 +534,7 @@ class Watcher:
                     silent_since = now
                 elif now - silent_since >= SLEEP_AFTER:
                     if not self.go_to_sleep():
-                        silent_since = None      # try again after another run
+                        silent_since = None  # try again after another run
             else:
                 silent_since = None
         return 0

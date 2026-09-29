@@ -23,6 +23,7 @@ fetched and reported, but the headline figures come from the clean part.
 
 Needs `op-cache` for the HA token (1Password item "Homeassistant API Token").
 """
+
 import argparse
 import json
 import os
@@ -57,9 +58,7 @@ NUMERIC = re.compile(r"^-?[\d.]+$")
 
 
 def ha_token():
-    return subprocess.check_output(
-        ["op-cache", "Homeassistant API Token", "credential"], text=True
-    ).strip()
+    return subprocess.check_output(["op-cache", "Homeassistant API Token", "credential"], text=True).strip()
 
 
 def fetch(entities, start, end, token, chunk_hours=6):
@@ -90,9 +89,7 @@ def fetch(entities, start, end, token, chunk_hours=6):
                 if (eid, ts) in seen:
                     continue
                 seen.add((eid, ts))
-                series.setdefault(eid, []).append(
-                    (datetime.fromisoformat(ts).astimezone(CEST), s["state"])
-                )
+                series.setdefault(eid, []).append((datetime.fromisoformat(ts).astimezone(CEST), s["state"]))
         t0 = t1
     for pts in series.values():
         pts.sort()
@@ -100,11 +97,7 @@ def fetch(entities, start, end, token, chunk_hours=6):
 
 
 def nums(series, eid, since=None):
-    return [
-        (t, float(s))
-        for t, s in series.get(eid, [])
-        if NUMERIC.match(s) and (since is None or t >= since)
-    ]
+    return [(t, float(s)) for t, s in series.get(eid, []) if NUMERIC.match(s) and (since is None or t >= since)]
 
 
 def residency(series, since, label):
@@ -124,10 +117,7 @@ def residency(series, since, label):
     print(f"{'sum':<12} {total:7.2f}   (sanity: should be ~100)")
     t = [x for _, x in nums(series, "sensor.nexus_q_die_temperature", since)]
     if t:
-        print(
-            f"die temp     mean {statistics.fmean(t):.1f} C   "
-            f"min {min(t):.1f}   max {max(t):.1f}   n={len(t)}"
-        )
+        print(f"die temp     mean {statistics.fmean(t):.1f} C   min {min(t):.1f}   max {max(t):.1f}   n={len(t)}")
 
 
 def conditions(series):
@@ -179,8 +169,7 @@ def hourly(series):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--days", type=float, default=3.5, help="how far back to fetch")
     ap.add_argument("--since", help="start of the CLEAN window, 'YYYY-MM-DD HH:MM' CEST")
     ap.add_argument("--no-hourly", action="store_true", help="skip the hourly table")
@@ -194,8 +183,10 @@ def main():
 
     series = fetch(OPP + EXTRA + SVC, start, now, ha_token())
 
-    print(f"=== window {start.astimezone(CEST):%Y-%m-%d %H:%M} -> "
-          f"{now.astimezone(CEST):%Y-%m-%d %H:%M} CEST ({args.days} d) ===\n")
+    print(
+        f"=== window {start.astimezone(CEST):%Y-%m-%d %H:%M} -> "
+        f"{now.astimezone(CEST):%Y-%m-%d %H:%M} CEST ({args.days} d) ===\n"
+    )
     conditions(series)
     residency(series, None, "full window")
     if since:

@@ -7,6 +7,7 @@ and the next flash loses it again, silently. Pin, for every one of them, that
 the link survives, the target carries the content, and a dangling link (a
 store that has never held the setting) behaves as "never set".
 """
+
 import importlib.machinery
 import importlib.util
 import json
@@ -22,7 +23,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -47,8 +49,7 @@ class LinkedSetting(unittest.TestCase):
     def assert_written_through(self, link, target):
         self.assertTrue(os.path.islink(link), "the link was replaced by a regular file")
         self.assertTrue(os.path.isfile(target), "the store holds nothing")
-        self.assertEqual(sorted(os.listdir(self.store)), [os.path.basename(target)],
-                         "temp file left behind")
+        self.assertEqual(sorted(os.listdir(self.store)), [os.path.basename(target)], "temp file left behind")
 
 
 class TestEverySettingWritesThroughItsLink(LinkedSetting):
@@ -65,13 +66,11 @@ class TestEverySettingWritesThroughItsLink(LinkedSetting):
         self.assertTrue(ring.snapshot()["on"], "dangling must read as never set")
         ring.set_on({"on": False})
         self.assert_written_through(link, target)
-        self.assertFalse(self.mod.Ring(path=link, send=lambda line: True,
-                                       synced=lambda: True).snapshot()["on"])
+        self.assertFalse(self.mod.Ring(path=link, send=lambda line: True, synced=lambda: True).snapshot()["on"])
 
     def test_eq(self):
         link, target = self.link("eq.json")
-        with mock.patch.object(self.mod, "eq_supported", return_value=True), \
-             mock.patch.object(self.mod, "_eq_apply"):
+        with mock.patch.object(self.mod, "eq_supported", return_value=True), mock.patch.object(self.mod, "_eq_apply"):
             self.mod.set_eq({"bass_db": 3.0}, path=link)
         self.assert_written_through(link, target)
         with open(target) as f:
@@ -79,8 +78,7 @@ class TestEverySettingWritesThroughItsLink(LinkedSetting):
 
     def test_eq_presets(self):
         link, target = self.link("eq-presets.json")
-        self.mod._eq_user_presets_write(
-            [{"id": "vinyl", "label": "Vinyl", "bands": [], "preamp_db": 0.0}], link)
+        self.mod._eq_user_presets_write([{"id": "vinyl", "label": "Vinyl", "bands": [], "preamp_db": 0.0}], link)
         self.assert_written_through(link, target)
         with open(target) as f:
             self.assertEqual(json.load(f)["presets"][0]["id"], "vinyl")
@@ -140,9 +138,11 @@ class TestSceneLeavesTheThemeAlone(unittest.TestCase):
         # the next setTheme or reboot, while getState still reported the theme.
         mod = load_daemon()
         sent = []
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(mod, "SCENE_CONF_PATH", os.path.join(d, "scene.json")), \
-                mock.patch.object(mod, "nexusqd_send", side_effect=lambda l: sent.append(l) or True):
+        with (
+            tempfile.TemporaryDirectory() as d,
+            mock.patch.object(mod, "SCENE_CONF_PATH", os.path.join(d, "scene.json")),
+            mock.patch.object(mod, "nexusqd_send", side_effect=lambda line: sent.append(line) or True),
+        ):
             result, events = bare_bridge(mod).handle("setScene", {"scene": "circles"})
         self.assertEqual(sent, ["scene 2"])
         self.assertEqual(result, {"scene": "circles"})
@@ -175,6 +175,7 @@ if __name__ == "__main__":
 
 # --- everything the app sets survives a flash (Petr, 2026-09-28) ------------
 import sys  # noqa: E402
+
 sys.path.insert(0, HERE)
 import test_volume_reconcile as vr  # noqa: E402
 
@@ -186,8 +187,10 @@ class TestSceneIsKept(unittest.TestCase):
         mod = load_daemon()
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "scene.json")
-            with mock.patch.object(mod, "SCENE_CONF_PATH", path), \
-                    mock.patch.object(mod, "nexusqd_send", return_value=True):
+            with (
+                mock.patch.object(mod, "SCENE_CONF_PATH", path),
+                mock.patch.object(mod, "nexusqd_send", return_value=True),
+            ):
                 bare_bridge(mod).handle("setScene", {"scene": "pointmorph"})
                 self.assertEqual(mod._scene_load(), "pointmorph")
 
@@ -197,7 +200,7 @@ class TestSceneIsKept(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "scene.json")
             mod._scene_save("circles", path)
-            with mock.patch.object(mod, "nexusqd_send", side_effect=lambda l: sent.append(l) or True):
+            with mock.patch.object(mod, "nexusqd_send", side_effect=lambda line: sent.append(line) or True):
                 mod.scene_restore_thread(path)
         self.assertEqual(sent, ["scene 2"])
 
@@ -224,8 +227,7 @@ class _Boot(vr.Patched):
         pulse = vr.FakePulse(up=True, default=vr.SPDIF)
         mixer = vr.FakeMixer(pulse, level=level, muted=muted)
         b = vr.Bridge(pulse, mixer, output=output)
-        b.volumes = VMOD.VolumeStore(path=os.path.join(self.tmp.name, "volume.json"),
-                                     delay=3600)
+        b.volumes = VMOD.VolumeStore(path=os.path.join(self.tmp.name, "volume.json"), delay=3600)
         return b, mixer
 
 
@@ -246,8 +248,10 @@ class TestOutputIsKept(_Boot):
     def test_hdmi_without_a_sink_on_the_cable_falls_back_and_keeps_the_choice(self):
         VMOD._output_save("hdmi")
         b, _ = self.bridge()
-        with mock.patch.object(VMOD, "BOOT_OUTPUT", "speaker"), \
-                mock.patch.object(VMOD, "hdmi_probe", return_value={"connected": False}):
+        with (
+            mock.patch.object(VMOD, "BOOT_OUTPUT", "speaker"),
+            mock.patch.object(VMOD, "hdmi_probe", return_value={"connected": False}),
+        ):
             b._boot_output(attempts=1, pause_s=0)
         self.assertEqual(b.state["output"], "speaker")
         # the TV was off at boot; the user's choice is still HDMI
@@ -291,7 +295,7 @@ class TestVolumeIsKept(_Boot):
     def test_the_knob_is_noted_once_settled(self):
         b, mixer = self.bridge(level=30, output="speaker")
         b.volumes.settle("speaker")
-        mixer.level = 41                     # the dome knob, straight into PA
+        mixer.level = 41  # the dome knob, straight into PA
         b._reconcile_volume()
         self.assertEqual(b.volumes.get("speaker"), (41, False))
 
@@ -305,11 +309,11 @@ class TestVolumeIsKept(_Boot):
         path = os.path.join(self.tmp.name, "drag.json")
         store = VMOD.VolumeStore(path=path, delay=0.2)
         store.settle("speaker")
-        with mock.patch.object(VMOD, "write_json_through",
-                               wraps=VMOD.write_json_through) as w:
+        with mock.patch.object(VMOD, "write_json_through", wraps=VMOD.write_json_through) as w:
             for v in range(10, 40):
                 store.note("speaker", v, False)
             import time
+
             time.sleep(0.5)
         self.assertEqual(w.call_count, 1)
         self.assertEqual(VMOD.VolumeStore(path=path).get("speaker"), (39, False))
@@ -317,7 +321,14 @@ class TestVolumeIsKept(_Boot):
     def test_garbage_in_the_file_is_ignored(self):
         path = os.path.join(self.tmp.name, "bad.json")
         with open(path, "w") as f:
-            json.dump({"outputs": {"speaker": {"volume": 400, "muted": False},
-                                   "tv": {"volume": 5, "muted": False},
-                                   "spdif": {"volume": 30, "muted": "no"}}}, f)
+            json.dump(
+                {
+                    "outputs": {
+                        "speaker": {"volume": 400, "muted": False},
+                        "tv": {"volume": 5, "muted": False},
+                        "spdif": {"volume": 30, "muted": "no"},
+                    }
+                },
+                f,
+            )
         self.assertEqual(VMOD.VolumeStore(path=path).levels, {})

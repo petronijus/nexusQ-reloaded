@@ -29,8 +29,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control_hdmi",
-        importlib.machinery.SourceFileLoader("nexusq_control_hdmi", DAEMON))
+        "nexusq_control_hdmi", importlib.machinery.SourceFileLoader("nexusq_control_hdmi", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -72,7 +72,7 @@ class FakePulse:
     def load_module(self, module, *args):
         self.log.append(("load", module))
         if not self.open_ok:
-            return "7"          # module loads, device does not open
+            return "7"  # module loads, device does not open
         self._sinks.append(MOD.HDMI_SINK_NAME)
         return "7"
 
@@ -107,8 +107,7 @@ class Bridge:
         self.state = {"output": "speaker", "volume": 40, "muted": False}
         self.sent = []
         # inert: persisting the volume has its own tests (test_settings_persist.py)
-        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False,
-                                 get=lambda oid: None)
+        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False, get=lambda oid: None)
 
     _sink_for_output = MOD.Bridge._sink_for_output
     _output_for_sink = MOD.Bridge._output_for_sink
@@ -127,15 +126,20 @@ class Bridge:
 
 
 def probe(connected=True, audio=True, sink="SAMSUNG"):
-    return {"connected": connected, "audio": audio, "sink": sink,
-            "detail": "basic audio", "enabled": True, "blank": "0"}
+    return {
+        "connected": connected,
+        "audio": audio,
+        "sink": sink,
+        "detail": "basic audio",
+        "enabled": True,
+        "blank": "0",
+    }
 
 
 class TestListOutputs(unittest.TestCase):
     def test_nothing_in_the_port_hides_the_row(self):
         b = Bridge()
-        with mock.patch.object(MOD, "hdmi_probe",
-                               return_value=probe(connected=False, audio=False)):
+        with mock.patch.object(MOD, "hdmi_probe", return_value=probe(connected=False, audio=False)):
             ids = [o["id"] for o in b._list_outputs()["outputs"]]
         self.assertNotIn("hdmi", ids)
         self.assertEqual(ids, ["speaker", "spdif"])
@@ -153,8 +157,7 @@ class TestListOutputs(unittest.TestCase):
 
     def test_dvi_monitor_is_shown_but_not_selectable(self):
         b = Bridge()
-        with mock.patch.object(MOD, "hdmi_probe",
-                               return_value=probe(audio=False)):
+        with mock.patch.object(MOD, "hdmi_probe", return_value=probe(audio=False)):
             outs = {o["id"]: o for o in b._list_outputs()["outputs"]}
         self.assertIn("hdmi", outs)
         self.assertFalse(outs["hdmi"]["available"])
@@ -169,11 +172,13 @@ class TestListOutputs(unittest.TestCase):
 class TestSelectHdmi(unittest.TestCase):
     def _select(self, bridge, oid, hold=None):
         hold = hold or mock.Mock()
-        with mock.patch.object(MOD, "hdmi_hold", hold), \
-             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"):
+        with (
+            mock.patch.object(MOD, "hdmi_hold", hold),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe()),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+        ):
             return bridge._set_output({"output": oid}), hold
 
     def test_the_output_is_lit_before_the_device_is_opened(self):
@@ -187,8 +192,7 @@ class TestSelectHdmi(unittest.TestCase):
         self._select(b, "hdmi", hold=hold)
         # The exact ordering is the feature: hold(True) must precede the
         # load-module, or PulseAudio opens a card whose DSS is unclocked.
-        self.assertLess(log.index(("hold", True)),
-                        log.index(("load", "module-alsa-sink")))
+        self.assertLess(log.index(("hold", True)), log.index(("load", "module-alsa-sink")))
 
     def test_selecting_hdmi_routes_to_the_hdmi_sink(self):
         b = Bridge()
@@ -268,8 +272,7 @@ class TestHdmiWatch(unittest.TestCase):
 
     def test_a_sink_going_away_is_announced_too(self):
         b = self._bridge("disconnected")
-        with mock.patch.object(MOD, "hdmi_probe",
-                               return_value=probe(connected=False, audio=False)):
+        with mock.patch.object(MOD, "hdmi_probe", return_value=probe(connected=False, audio=False)):
             b._hdmi_watch_step("connected")
         self.assertEqual(len(b.sent), 1)
         self.assertEqual(b.sent[0][0], "outputsChanged")
@@ -307,25 +310,36 @@ class TestTheFakeMatchesTheRealThing(unittest.TestCase):
     whole class of mistake."""
 
     def test_pulse_has_everything_the_hdmi_path_calls_on_it(self):
-        for name in ("load_module", "unload_module", "module_index",
-                     "sinks", "default_sink", "set_default_sink",
-                     "move_all_inputs", "set_default_source"):
-            self.assertTrue(callable(getattr(MOD.Pulse, name, None)),
-                            f"Pulse.{name} is missing")
+        for name in (
+            "load_module",
+            "unload_module",
+            "module_index",
+            "sinks",
+            "default_sink",
+            "set_default_sink",
+            "move_all_inputs",
+            "set_default_source",
+        ):
+            self.assertTrue(callable(getattr(MOD.Pulse, name, None)), f"Pulse.{name} is missing")
 
     def test_the_module_helpers_live_on_pulse_not_on_mixer(self):
         # Mixer speaks volume, Pulse speaks plumbing; putting these on Mixer is
         # exactly the bug that got shipped to the device once.
         for name in ("load_module", "unload_module", "module_index"):
-            self.assertFalse(hasattr(MOD.Mixer, name),
-                             f"Mixer.{name} belongs on Pulse")
+            self.assertFalse(hasattr(MOD.Mixer, name), f"Mixer.{name} belongs on Pulse")
 
     def test_the_fake_covers_the_real_surface(self):
-        for name in ("sinks", "default_sink", "set_default_sink",
-                     "move_all_inputs", "set_default_source",
-                     "load_module", "unload_module", "module_index"):
-            self.assertTrue(callable(getattr(FakePulse, name, None)),
-                            f"FakePulse.{name} is missing")
+        for name in (
+            "sinks",
+            "default_sink",
+            "set_default_sink",
+            "move_all_inputs",
+            "set_default_source",
+            "load_module",
+            "unload_module",
+            "module_index",
+        ):
+            self.assertTrue(callable(getattr(FakePulse, name, None)), f"FakePulse.{name} is missing")
 
 
 class TestLeavingHdmi(unittest.TestCase):
@@ -337,11 +351,13 @@ class TestLeavingHdmi(unittest.TestCase):
         def hold(on, grace=False):
             log.append(("hold", on))
 
-        with mock.patch.object(MOD, "hdmi_hold", hold), \
-             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"):
+        with (
+            mock.patch.object(MOD, "hdmi_hold", hold),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe()),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+        ):
             b._set_output({"output": "hdmi"})
             log.clear()
             b._set_output({"output": "speaker"})
@@ -354,11 +370,13 @@ class TestLeavingHdmi(unittest.TestCase):
 
     def test_the_hdmi_sink_is_gone_afterwards(self):
         b = Bridge()
-        with mock.patch.object(MOD, "hdmi_hold"), \
-             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"):
+        with (
+            mock.patch.object(MOD, "hdmi_hold"),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe()),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+        ):
             b._set_output({"output": "hdmi"})
             self.assertIn(MOD.HDMI_SINK_NAME, b.pulse.sinks())
             b._set_output({"output": "spdif"})
@@ -369,11 +387,13 @@ class TestLeavingHdmi(unittest.TestCase):
         # puts the receiver into a standby this board cannot wake it from.
         b = Bridge()
         hold = mock.Mock()
-        with mock.patch.object(MOD, "hdmi_hold", hold), \
-             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"):
+        with (
+            mock.patch.object(MOD, "hdmi_hold", hold),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe()),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+        ):
             b._set_output({"output": "hdmi"})
             hold.reset_mock()
             b._set_output({"output": "speaker"})
@@ -384,12 +404,14 @@ class TestLeavingHdmi(unittest.TestCase):
         b = Bridge()
         b.pulse = FakePulse(log=b.log, open_ok=False)
         hold = mock.Mock()
-        with mock.patch.object(MOD, "hdmi_hold", hold), \
-             mock.patch.object(MOD, "hdmi_probe", return_value=probe()), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"), \
-             self.assertRaises(MOD.Err):
+        with (
+            mock.patch.object(MOD, "hdmi_hold", hold),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe()),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+            self.assertRaises(MOD.Err),
+        ):
             b._set_output({"output": "hdmi"})
         self.assertIn(mock.call(False), hold.mock_calls)
         for c in hold.mock_calls:
@@ -400,12 +422,13 @@ class TestLeavingHdmi(unittest.TestCase):
         # must not start systemctl churn on every tap.
         b = Bridge()
         hold = mock.Mock()
-        with mock.patch.object(MOD, "hdmi_hold", hold), \
-             mock.patch.object(MOD, "hdmi_probe",
-                               return_value=probe(connected=False, audio=False)), \
-             mock.patch.object(MOD, "_sync_panel_applet"), \
-             mock.patch.object(MOD, "_amixer"), \
-             mock.patch.object(MOD, "nexusqd_send"):
+        with (
+            mock.patch.object(MOD, "hdmi_hold", hold),
+            mock.patch.object(MOD, "hdmi_probe", return_value=probe(connected=False, audio=False)),
+            mock.patch.object(MOD, "_sync_panel_applet"),
+            mock.patch.object(MOD, "_amixer"),
+            mock.patch.object(MOD, "nexusqd_send"),
+        ):
             b._set_output({"output": "spdif"})
         # It still asks, but with grace — and hdmi_hold() itself no-ops when
         # nothing is holding, rather than arming a timer for an idle unit.
@@ -428,8 +451,10 @@ class TestHoldGracePeriod(unittest.TestCase):
             rc = 0 if systemd_ok or argv[0] != "systemd-run" else 1
             return mock.Mock(returncode=rc, stdout="", stderr="")
 
-        with mock.patch.object(MOD.subprocess, "run", fake_run), \
-             mock.patch.object(MOD, "hdmi_hold_active", return_value=active):
+        with (
+            mock.patch.object(MOD.subprocess, "run", fake_run),
+            mock.patch.object(MOD, "hdmi_hold_active", return_value=active),
+        ):
             MOD.hdmi_hold(on, grace=grace)
         return calls
 
@@ -458,6 +483,5 @@ class TestHoldGracePeriod(unittest.TestCase):
 
     def test_coming_back_cancels_a_pending_release(self):
         calls = self._run(True)
-        self.assertIn(["systemctl", "stop", f"{MOD.HDMI_RELEASE_UNIT}.timer"],
-                      calls)
+        self.assertIn(["systemctl", "stop", f"{MOD.HDMI_RELEASE_UNIT}.timer"], calls)
         self.assertIn(["systemctl", "start", MOD.HDMI_HOLD_UNIT], calls)

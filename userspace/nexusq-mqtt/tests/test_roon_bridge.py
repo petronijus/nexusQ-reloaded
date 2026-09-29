@@ -21,13 +21,11 @@ play/pause to one Roon zone. The same broker carries Home Assistant,
 zigbee2mqtt, the blinds and both Nexus Qs' telemetry — a bug on the other side
 of that socket must not be able to reach any of it.
 """
+
 import importlib.machinery
 import importlib.util
 import json
 import os
-import socket
-import tempfile
-import threading
 import unittest
 from unittest import mock
 
@@ -36,8 +34,7 @@ DAEMON = os.path.join(HERE, "..", "nexusq-mqtt")
 
 
 def load_daemon():
-    spec = importlib.util.spec_from_loader(
-        "nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
+    spec = importlib.util.spec_from_loader("nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -54,20 +51,26 @@ class TestPublishWhitelist(unittest.TestCase):
         self.assertTrue(self.mod._publish_allowed("roon/nexus-speakers/command"))
 
     def test_nothing_else_on_the_roon_tree_is(self):
-        for t in ("roon/Sphere/settings/set/shuffle",
-                  "roon/Sphere/outputs/Sphere/volume/set",
-                  "roon/Sphere/outputs/Sphere/power",
-                  "roon/Sphere/state",
-                  "roon/Sphere/command/extra"):
+        for t in (
+            "roon/Sphere/settings/set/shuffle",
+            "roon/Sphere/outputs/Sphere/volume/set",
+            "roon/Sphere/outputs/Sphere/power",
+            "roon/Sphere/state",
+            "roon/Sphere/command/extra",
+        ):
             self.assertFalse(self.mod._publish_allowed(t), t)
 
     def test_other_peoples_devices_are_not(self):
         """The blinds, the lights, the other Q's telemetry, HA's own tree."""
-        for t in ("homeassistant/light/kitchen/set",
-                  "zigbee2mqtt/bedroom/set",
-                  "blinds-cc1101/living/command",
-                  "nexusq-sumperak/health/state",
-                  "command", "", "/command"):
+        for t in (
+            "homeassistant/light/kitchen/set",
+            "zigbee2mqtt/bedroom/set",
+            "blinds-cc1101/living/command",
+            "nexusq-sumperak/health/state",
+            "command",
+            "",
+            "/command",
+        ):
             self.assertFalse(self.mod._publish_allowed(t), t)
 
     def test_wildcards_are_refused(self):
@@ -83,11 +86,16 @@ class TestSubscribeSet(unittest.TestCase):
 
     def test_it_asks_for_what_the_card_needs(self):
         f = self.mod.ROON_FILTERS
-        for needed in ("state", "now_playing/three_line/line1",
-                       "now_playing/three_line/line2",
-                       "now_playing/three_line/line3",
-                       "now_playing/image_key", "now_playing/length",
-                       "now_playing/seek_position", "is_play_allowed"):
+        for needed in (
+            "state",
+            "now_playing/three_line/line1",
+            "now_playing/three_line/line2",
+            "now_playing/three_line/line3",
+            "now_playing/image_key",
+            "now_playing/length",
+            "now_playing/seek_position",
+            "is_play_allowed",
+        ):
             self.assertTrue(any(x.endswith(needed) for x in f), needed)
 
     def test_it_is_bounded_not_a_wildcard_dump(self):
@@ -106,11 +114,20 @@ class TestForwarding(unittest.TestCase):
         sent = []
 
         class FakeSock:
-            def __enter__(s): return s
-            def __exit__(s, *a): return False
-            def settimeout(s, t): pass
-            def connect(s, p): pass
-            def sendall(s, b): sent.append(b.decode())
+            def __enter__(s):
+                return s
+
+            def __exit__(s, *a):
+                return False
+
+            def settimeout(s, t):
+                pass
+
+            def connect(s, p):
+                pass
+
+            def sendall(s, b):
+                sent.append(b.decode())
 
         with mock.patch.object(self.mod.socket, "socket", lambda *a, **k: FakeSock()):
             self.mod.roon_forward("roon/Sphere/now_playing/three_line/line1", b"Prashanti")
@@ -123,11 +140,20 @@ class TestForwarding(unittest.TestCase):
         sent = []
 
         class FakeSock:
-            def __enter__(s): return s
-            def __exit__(s, *a): return False
-            def settimeout(s, t): pass
-            def connect(s, p): pass
-            def sendall(s, b): sent.append(b)
+            def __enter__(s):
+                return s
+
+            def __exit__(s, *a):
+                return False
+
+            def settimeout(s, t):
+                pass
+
+            def connect(s, p):
+                pass
+
+            def sendall(s, b):
+                sent.append(b)
 
         with mock.patch.object(self.mod.socket, "socket", lambda *a, **k: FakeSock()):
             self.mod.roon_forward("zigbee2mqtt/bedroom/state", b"on")
@@ -136,9 +162,8 @@ class TestForwarding(unittest.TestCase):
     def test_a_dead_bridge_never_raises(self):
         """Telemetry must not stop because the bridge is restarting; the
         extension publishes retained, so the next connect re-delivers it."""
-        with mock.patch.object(self.mod.socket, "socket",
-                               side_effect=OSError("no such socket")):
-            self.mod.roon_forward("roon/Sphere/state", b"playing")   # must not raise
+        with mock.patch.object(self.mod.socket, "socket", side_effect=OSError("no such socket")):
+            self.mod.roon_forward("roon/Sphere/state", b"playing")  # must not raise
 
 
 class TestClientCanReceive(unittest.TestCase):
@@ -172,7 +197,7 @@ class TestClientCanReceive(unittest.TestCase):
         c._rxbuf = bytes([0x30]) + self.mod._remaining_len(len(body)) + body
         c.sock = object()
         with mock.patch.object(self.mod.select, "select", return_value=([], [], [])):
-            c._drain()   # must not raise
+            c._drain()  # must not raise
 
     def test_subscribe_builds_a_qos0_packet_per_filter(self):
         c = self._client()

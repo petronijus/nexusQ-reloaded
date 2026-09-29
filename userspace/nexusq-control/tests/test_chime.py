@@ -12,6 +12,7 @@ every resume after a pause, or on a bridge restart in the middle of a song.
   running when the bridge starts is not announced.
 - Two chimes never play over each other, and a missing sound file is quiet.
 """
+
 import importlib.machinery
 import importlib.util
 import json
@@ -31,7 +32,8 @@ ONEVENT = os.path.join(HERE, "..", "nexusq-onevent")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -50,8 +52,7 @@ class _Clock:
 
 def chime(clock=None):
     played = []
-    c = MOD.Chime(path="/x/polaris.ogg", play=lambda p: played.append(p) or True,
-                  clock=clock or _Clock())
+    c = MOD.Chime(path="/x/polaris.ogg", play=lambda p: played.append(p) or True, clock=clock or _Clock())
     return c, played
 
 
@@ -148,12 +149,12 @@ class TestPlaying(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".ogg") as f:
             c = MOD.Chime(path=f.name)
             running = mock.Mock()
-            running.poll.return_value = None          # still playing
+            running.poll.return_value = None  # still playing
             with mock.patch.object(MOD.subprocess, "Popen", return_value=running) as popen:
                 self.assertTrue(c.connected("spotify"))
                 self.assertFalse(c.connected("bluetooth"))
                 self.assertEqual(popen.call_count, 1)
-                running.poll.return_value = 0          # finished
+                running.poll.return_value = 0  # finished
                 self.assertTrue(c.connected("roon-like"))
                 self.assertEqual(popen.call_count, 2)
 
@@ -181,9 +182,9 @@ class TestPlaying(unittest.TestCase):
 
     def test_pulseaudio_volume_is_cubic(self):
         self.assertEqual(MOD.pa_volume_from_db(0), 65536)
-        self.assertEqual(MOD.pa_volume_from_db(-60), 6554)     # 10 % of 65536
+        self.assertEqual(MOD.pa_volume_from_db(-60), 6554)  # 10 % of 65536
         self.assertEqual(MOD.pa_volume_from_db(-15), 36854)
-        self.assertEqual(MOD.pa_volume_from_db(+6), 65536)     # never a boost
+        self.assertEqual(MOD.pa_volume_from_db(+6), 65536)  # never a boost
 
     def test_a_missing_file_is_quiet(self):
         c = MOD.Chime(path="/nonexistent/polaris.ogg")
@@ -193,16 +194,18 @@ class TestPlaying(unittest.TestCase):
 
 
 class TestBluezCard(unittest.TestCase):
-    CARDS = ("0\talsa_card.platform-sound-spdif\tmodule-alsa-card.c\n"
-             "1\talsa_card.platform-sound-tas5713\tmodule-alsa-card.c\n"
-             "7\tbluez_card.48_EF_1C_00_11_22\tmodule-bluez5-device.c\n")
+    CARDS = (
+        "0\talsa_card.platform-sound-spdif\tmodule-alsa-card.c\n"
+        "1\talsa_card.platform-sound-tas5713\tmodule-alsa-card.c\n"
+        "7\tbluez_card.48_EF_1C_00_11_22\tmodule-bluez5-device.c\n"
+    )
 
     def test_a_bluetooth_card(self):
         self.assertEqual(MOD.bluez_card_for(7, self.CARDS), "bluez_card.48_EF_1C_00_11_22")
 
     def test_other_cards_are_not(self):
         self.assertIsNone(MOD.bluez_card_for(1, self.CARDS))
-        self.assertIsNone(MOD.bluez_card_for(17, self.CARDS))   # 1 != 17
+        self.assertIsNone(MOD.bluez_card_for(17, self.CARDS))  # 1 != 17
 
 
 class _Recorder:
@@ -244,18 +247,19 @@ class TestWiring(unittest.TestCase):
         b = mock.Mock()
         proc = mock.Mock()
         proc.stdout = iter(["Event 'new' on card #7\n", "Event 'change' on card #7\n"])
-        with mock.patch.object(MOD.subprocess, "Popen", side_effect=[proc, FileNotFoundError]), \
-                mock.patch.object(MOD.time, "sleep"):
+        with (
+            mock.patch.object(MOD.subprocess, "Popen", side_effect=[proc, FileNotFoundError]),
+            mock.patch.object(MOD.time, "sleep"),
+        ):
             MOD.pa_watch_thread(b)
         b.on_pa_card_new.assert_called_once_with(7)
 
     def test_airplay_from_its_pulseaudio_stream(self):
         b = self.fake("airplay_sync")
-        b.state = {"nowPlaying": {"source": "spotify"}}   # someone else on screen
+        b.state = {"nowPlaying": {"source": "spotify"}}  # someone else on screen
         b.airplay_sync("playing")
         b.airplay_sync(None)
-        self.assertEqual(b.chime.calls, [("activity", "airplay", True),
-                                         ("activity", "airplay", False)])
+        self.assertEqual(b.chime.calls, [("activity", "airplay", True), ("activity", "airplay", False)])
 
     def test_roon_from_its_zone_reaching_the_q(self):
         b = self.fake("roon_sync")
@@ -264,8 +268,7 @@ class TestWiring(unittest.TestCase):
         b.roon_sync()
         b._roon_our_zone = lambda: None
         b.roon_sync()
-        self.assertEqual(b.chime.calls, [("activity", "roon", True),
-                                         ("activity", "roon", False)])
+        self.assertEqual(b.chime.calls, [("activity", "roon", True), ("activity", "roon", False)])
 
 
 class TestOneventHook(unittest.TestCase):
@@ -285,11 +288,14 @@ class TestOneventHook(unittest.TestCase):
                     conn.close()
                 except OSError:
                     pass
+
             t = threading.Thread(target=accept)
             t.start()
-            subprocess.run([sys.executable, ONEVENT],
-                           env={**os.environ, "PLAYER_EVENT": event,
-                                "NEXUSQ_HOOK_SOCK": path}, timeout=10)
+            subprocess.run(
+                [sys.executable, ONEVENT],
+                env={**os.environ, "PLAYER_EVENT": event, "NEXUSQ_HOOK_SOCK": path},
+                timeout=10,
+            )
             t.join(4)
             srv.close()
             return [json.loads(x) for x in got]

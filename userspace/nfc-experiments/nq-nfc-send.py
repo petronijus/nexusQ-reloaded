@@ -15,54 +15,62 @@ Run with neard STOPPED (it otherwise owns the netlink device):
     systemctl stop neard
     python3 nq-nfc-send.py "hello world"
 """
-import socket, struct, sys, os, time, errno
+
+import ctypes
+import socket
+import struct
+import sys
+import os
+import time
 
 # --- uapi/linux/nfc.h -------------------------------------------------------
-AF_NFC              = 39
-NFC_SOCKPROTO_RAW   = 0
-NETLINK_GENERIC     = 16
-GENL_ID_CTRL        = 16
+AF_NFC = 39
+NFC_SOCKPROTO_RAW = 0
+NETLINK_GENERIC = 16
+GENL_ID_CTRL = 16
 
 # generic netlink control
-CTRL_CMD_GETFAMILY  = 3
-CTRL_ATTR_FAMILY_ID   = 1
+CTRL_CMD_GETFAMILY = 3
+CTRL_ATTR_FAMILY_ID = 1
 CTRL_ATTR_FAMILY_NAME = 2
 CTRL_ATTR_MCAST_GROUPS = 7
 CTRL_ATTR_MCAST_GRP_NAME = 1
-CTRL_ATTR_MCAST_GRP_ID   = 2
+CTRL_ATTR_MCAST_GRP_ID = 2
 
 # nfc_commands
-NFC_CMD_GET_DEVICE       = 1
-NFC_CMD_DEV_UP           = 2
-NFC_CMD_DEV_DOWN         = 3
-NFC_CMD_START_POLL       = 6
-NFC_CMD_STOP_POLL        = 7
-NFC_CMD_GET_TARGET       = 8
-NFC_EVENT_TARGETS_FOUND  = 9
-NFC_EVENT_TARGET_LOST    = 12
+NFC_CMD_GET_DEVICE = 1
+NFC_CMD_DEV_UP = 2
+NFC_CMD_DEV_DOWN = 3
+NFC_CMD_START_POLL = 6
+NFC_CMD_STOP_POLL = 7
+NFC_CMD_GET_TARGET = 8
+NFC_EVENT_TARGETS_FOUND = 9
+NFC_EVENT_TARGET_LOST = 12
 
 # nfc_attrs
-NFC_ATTR_DEVICE_INDEX    = 1
-NFC_ATTR_DEVICE_NAME     = 2
-NFC_ATTR_PROTOCOLS       = 3
-NFC_ATTR_TARGET_INDEX    = 4
-NFC_ATTR_COMM_MODE       = 10
-NFC_ATTR_RF_MODE         = 11
-NFC_ATTR_IM_PROTOCOLS    = 13
+NFC_ATTR_DEVICE_INDEX = 1
+NFC_ATTR_DEVICE_NAME = 2
+NFC_ATTR_PROTOCOLS = 3
+NFC_ATTR_TARGET_INDEX = 4
+NFC_ATTR_COMM_MODE = 10
+NFC_ATTR_RF_MODE = 11
+NFC_ATTR_IM_PROTOCOLS = 13
 
 # nfc_protocols -> masks
-NFC_PROTO_ISO14443       = 4
-NFC_PROTO_ISO14443_B     = 6
+NFC_PROTO_ISO14443 = 4
+NFC_PROTO_ISO14443_B = 6
 ISO_MASK = (1 << NFC_PROTO_ISO14443) | (1 << NFC_PROTO_ISO14443_B)  # 0x50
 
 NLM_F_REQUEST = 0x01
-NLM_F_ACK     = 0x04
-NLMSG_ERROR   = 0x2
-NLMSG_DONE    = 0x3
+NLM_F_ACK = 0x04
+NLMSG_ERROR = 0x2
+NLMSG_DONE = 0x3
 
 # --- our reverse-HCE protocol (MUST match the phone HostApduService) --------
 AID = bytes.fromhex("F0010203040506")
 SELECT_AID = bytes([0x00, 0xA4, 0x04, 0x00, len(AID)]) + AID + bytes([0x00])
+
+
 def payload_apdu(text: bytes) -> bytes:
     return bytes([0x80, 0x10, 0x00, 0x00, len(text)]) + text
 
@@ -80,7 +88,7 @@ def parse_attrs(buf):
         ln, atype = struct.unpack_from("HH", buf, i)
         if ln < 4:
             break
-        out[atype] = buf[i + 4:i + ln]
+        out[atype] = buf[i + 4 : i + ln]
         i += (ln + 3) & ~3
     return out
 
@@ -112,14 +120,13 @@ class Genl:
         i = 0
         while i + 16 <= len(data):
             ln, mtype, flags, seq, pid = struct.unpack_from("IHHII", data, i)
-            payload = data[i + 16:i + ln]
+            payload = data[i + 16 : i + ln]
             msgs.append((mtype, payload))
             i += (ln + 3) & ~3
         return msgs
 
     def resolve_nfc(self):
-        msgs = self.request(GENL_ID_CTRL, CTRL_CMD_GETFAMILY,
-                            nla(CTRL_ATTR_FAMILY_NAME, b"nfc\x00"))
+        msgs = self.request(GENL_ID_CTRL, CTRL_CMD_GETFAMILY, nla(CTRL_ATTR_FAMILY_NAME, b"nfc\x00"))
         for mtype, payload in msgs:
             if mtype == NLMSG_ERROR:
                 continue
@@ -134,7 +141,7 @@ class Genl:
                 j = 0
                 while j + 4 <= len(gbuf):
                     gln, gtype = struct.unpack_from("HH", gbuf, j)
-                    ginner = parse_attrs(gbuf[j + 4:j + gln])
+                    ginner = parse_attrs(gbuf[j + 4 : j + gln])
                     name = ginner.get(CTRL_ATTR_MCAST_GRP_NAME, b"").rstrip(b"\x00")
                     if name == b"events" and CTRL_ATTR_MCAST_GRP_ID in ginner:
                         grp = struct.unpack("I", ginner[CTRL_ATTR_MCAST_GRP_ID][:4])[0]
@@ -145,9 +152,6 @@ class Genl:
 
 def hexs(b):
     return b.hex(" ")
-
-
-import ctypes
 
 
 def wait_for_target(g, fam, DEV, window):
@@ -167,14 +171,14 @@ def wait_for_target(g, fam, DEV, window):
         i = 0
         while i + 16 <= len(data):
             ln, mtype, flags, seq, pid = struct.unpack_from("IHHII", data, i)
-            payload = data[i + 16:i + ln]
+            payload = data[i + 16 : i + ln]
             if len(payload) >= 4 and payload[0] == NFC_EVENT_TARGETS_FOUND:
                 a = parse_attrs(payload[4:])
                 if NFC_ATTR_TARGET_INDEX in a:
                     return struct.unpack("I", a[NFC_ATTR_TARGET_INDEX][:4])[0]
-                for mt, pl in g.request(fam, NFC_CMD_GET_TARGET,
-                                        nla(NFC_ATTR_DEVICE_INDEX, struct.pack("I", DEV)),
-                                        NLM_F_REQUEST | 0x300):
+                for mt, pl in g.request(
+                    fam, NFC_CMD_GET_TARGET, nla(NFC_ATTR_DEVICE_INDEX, struct.pack("I", DEV)), NLM_F_REQUEST | 0x300
+                ):
                     if mt not in (NLMSG_ERROR, NLMSG_DONE) and len(pl) >= 4:
                         ta = parse_attrs(pl[4:])
                         if NFC_ATTR_TARGET_INDEX in ta:
@@ -187,8 +191,7 @@ def send_to_target(g, fam, DEV, libc, target_idx, text):
     """RATS-activated target already found: connect a raw ISO-DEP socket, SELECT
     our AID and push the payload. Returns True on a confirmed 90 00 send."""
     # settle on the activated target: stop the poll loop
-    g.request(fam, NFC_CMD_STOP_POLL, nla(NFC_ATTR_DEVICE_INDEX, struct.pack("I", DEV)),
-              NLM_F_REQUEST | NLM_F_ACK)
+    g.request(fam, NFC_CMD_STOP_POLL, nla(NFC_ATTR_DEVICE_INDEX, struct.pack("I", DEV)), NLM_F_REQUEST | NLM_F_ACK)
 
     def connect_target():
         rs = socket.socket(AF_NFC, socket.SOCK_SEQPACKET, NFC_SOCKPROTO_RAW)
@@ -202,9 +205,9 @@ def send_to_target(g, fam, DEV, libc, target_idx, text):
 
     def xchg(rs, apdu):
         rs.send(apdu)
-        rs.settimeout(5.0)         # HCE first-APDU can be slow (service cold start)
+        rs.settimeout(5.0)  # HCE first-APDU can be slow (service cold start)
         resp = rs.recv(4096)
-        if resp and resp[0] == 0:   # kernel prefixes a 1-byte NULL header
+        if resp and resp[0] == 0:  # kernel prefixes a 1-byte NULL header
             resp = resp[1:]
         return resp
 
@@ -235,8 +238,7 @@ def send_to_target(g, fam, DEV, libc, target_idx, text):
 def main():
     # message: NQ_NFC_MESSAGE env (used by the systemd service, tolerates spaces)
     # takes precedence over argv[1]; falls back to a default.
-    text = (os.environ.get("NQ_NFC_MESSAGE")
-            or (sys.argv[1] if len(sys.argv) > 1 else "Ahoj z Nexus Q!")).encode()
+    text = (os.environ.get("NQ_NFC_MESSAGE") or (sys.argv[1] if len(sys.argv) > 1 else "Ahoj z Nexus Q!")).encode()
     loop = os.environ.get("NQ_NFC_LOOP") == "1"
     WINDOW = float(os.environ.get("NQ_NFC_WINDOW", "8" if loop else "40"))
 
@@ -253,8 +255,11 @@ def main():
     libc = ctypes.CDLL(None, use_errno=True)
 
     if loop:
-        print(f"[nfc] daemon: listening continuously (ISO14443, window {WINDOW:g}s). "
-              f"Tap the phone (companion app foreground) on the dome.", flush=True)
+        print(
+            f"[nfc] daemon: listening continuously (ISO14443, window {WINDOW:g}s). "
+            f"Tap the phone (companion app foreground) on the dome.",
+            flush=True,
+        )
         # Send once per tap: after a successful send, disarm and do NOT re-send
         # while the same phone stays in the field — only re-arm once it has left
         # (a poll cycle finds no target). A minimum cooldown guards against a

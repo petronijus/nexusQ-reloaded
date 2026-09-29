@@ -6,6 +6,7 @@ the geometry of the equinoxes and solstices (noon elevation = 90 - lat + decl),
 and Prague's published sunrise/sunset. The rules are Petr's (2026-09-23): full
 by day, a gradual fade through dusk, never dark.
 """
+
 import datetime
 import importlib.machinery
 import importlib.util
@@ -17,12 +18,13 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(HERE, "..", "nexusq-control")
 UTC = datetime.timezone.utc
-PRAGUE = ("Europe/Prague", 50.0833, 14.4333)     # zone.tab: +5005+01426
+PRAGUE = ("Europe/Prague", 50.0833, 14.4333)  # zone.tab: +5005+01426
 
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -38,8 +40,7 @@ def utc(y, mo, d, h, mi=0):
 def solar_noon_elev(lat, lon, day):
     """Max elevation over the day, found by scanning — independent of how the
     code computes its hour angle."""
-    return max(MOD.sun_elevation(lat, lon, day + datetime.timedelta(minutes=m))
-               for m in range(0, 24 * 60, 2))
+    return max(MOD.sun_elevation(lat, lon, day + datetime.timedelta(minutes=m)) for m in range(0, 24 * 60, 2))
 
 
 class TestSunElevation(unittest.TestCase):
@@ -60,8 +61,11 @@ class TestSunElevation(unittest.TestCase):
 
     def test_the_southern_hemisphere_and_the_west_work_too(self):
         # Sydney, June solstice: winter, noon ~ 90 - 33.87 - 23.44
-        self.assertAlmostEqual(solar_noon_elev(-33.87, 151.21, utc(2026, 6, 21, 0) - datetime.timedelta(hours=12)),
-                               90 - 33.87 - 23.44, delta=0.4)
+        self.assertAlmostEqual(
+            solar_noon_elev(-33.87, 151.21, utc(2026, 6, 21, 0) - datetime.timedelta(hours=12)),
+            90 - 33.87 - 23.44,
+            delta=0.4,
+        )
         # New York at 17:00 UTC (noon EST) in March: high, and midnight: deep
         self.assertGreater(MOD.sun_elevation(40.71, -74.01, utc(2026, 3, 20, 17)), 40)
         self.assertLess(MOD.sun_elevation(40.71, -74.01, utc(2026, 3, 21, 5)), -30)
@@ -93,11 +97,13 @@ class TestZoneLocation(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         with open(os.path.join(self.tmp.name, "zone.tab"), "w") as f:
-            f.write("# comment\n"
-                    "CZ\t+5005+01426\tEurope/Prague\n"
-                    "SK\t+4809+01707\tEurope/Bratislava\n"
-                    "US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)\n"
-                    "AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)\n")
+            f.write(
+                "# comment\n"
+                "CZ\t+5005+01426\tEurope/Prague\n"
+                "SK\t+4809+01707\tEurope/Bratislava\n"
+                "US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)\n"
+                "AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)\n"
+            )
 
     def test_minutes_and_seconds_and_signs(self):
         lat, lon = MOD.zone_location("Europe/Prague", self.tmp.name)
@@ -127,7 +133,7 @@ class FakeNexusqd:
     def __call__(self, line):
         self.sent.append(line)
         if not self.fades and len(line.split()) > 2:
-            return False                  # nexusqd before r24: `brightness N` only
+            return False  # nexusqd before r24: `brightness N` only
         return self.ok
 
 
@@ -136,20 +142,25 @@ class TestBrightness(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, "brightness.json")
-        self.now = utc(2026, 9, 22, 11)          # midday in Prague
+        self.now = utc(2026, 9, 22, 11)  # midday in Prague
         self.is_synced = True
         self.nq = FakeNexusqd()
         self.events = []
 
     def b(self, location=PRAGUE):
-        return MOD.Brightness(path=self.path, send=self.nq, clock=lambda: self.now,
-                              synced=lambda: self.is_synced, location=location,
-                              on_change=self.events.append)
+        return MOD.Brightness(
+            path=self.path,
+            send=self.nq,
+            clock=lambda: self.now,
+            synced=lambda: self.is_synced,
+            location=location,
+            on_change=self.events.append,
+        )
 
     def test_off_is_exactly_the_old_behaviour(self):
         b = self.b()
         b.set_max(180)
-        self.now = utc(2026, 9, 22, 23)          # night: still 180
+        self.now = utc(2026, 9, 22, 23)  # night: still 180
         b.tick()
         self.assertEqual(self.nq.sent[-1], "brightness 180")
         self.assertEqual(self.events, [])
@@ -164,9 +175,9 @@ class TestBrightness(unittest.TestCase):
     def test_ambient_follows_the_sun_under_the_maximum(self):
         b = self.b()
         b.set_max(200)
-        self.assertEqual(b.set_ambient({"enabled": True})["level"], 200)   # midday
-        self.now = utc(2026, 9, 22, 22)          # well after dusk
-        b.tick()                                 # a jump of 150: it fades
+        self.assertEqual(b.set_ambient({"enabled": True})["level"], 200)  # midday
+        self.now = utc(2026, 9, 22, 22)  # well after dusk
+        b.tick()  # a jump of 150: it fades
         self.assertEqual(self.nq.sent[-1], "brightness 50 %d" % MOD.AMBIENT_TICK_FADE_MS)
         self.assertEqual(self.events[-1]["level"], 50)
         # moving the slider at night moves the MAXIMUM, the level follows
@@ -178,19 +189,20 @@ class TestBrightness(unittest.TestCase):
         b = self.b()
         b.set_ambient({"enabled": True})
         levels = []
-        for m in range(16 * 60, 19 * 60 + 1, 5):   # 16:00 -> 19:00 UTC, through dusk
+        for m in range(16 * 60, 19 * 60 + 1, 5):  # 16:00 -> 19:00 UTC, through dusk
             self.now = utc(2026, 9, 22, 0) + datetime.timedelta(minutes=m)
             b.tick()
             levels.append(int(self.nq.sent[-1].split()[1]))
         self.assertEqual(levels[0], 255)
-        self.assertEqual(levels[-1], 64)          # 255 * 0.25, rounded
+        self.assertEqual(levels[-1], 64)  # 255 * 0.25, rounded
         self.assertEqual(levels, sorted(levels, reverse=True))
-        self.assertLessEqual(max(a - b for a, b in zip(levels, levels[1:])), 15,
-                             "a 5-minute step this large would be a visible jump")
+        self.assertLessEqual(
+            max(a - b for a, b in zip(levels, levels[1:])), 15, "a 5-minute step this large would be a visible jump"
+        )
 
     def test_an_untrusted_clock_never_dims(self):
         self.is_synced = False
-        self.now = utc(2026, 9, 22, 23)          # "night" on a clock nobody trusts
+        self.now = utc(2026, 9, 22, 23)  # "night" on a clock nobody trusts
         b = self.b()
         snap = b.set_ambient({"enabled": True})
         self.assertEqual(snap["level"], 255)
@@ -226,7 +238,7 @@ class TestBrightness(unittest.TestCase):
         # again too
         b = self.b()
         b.set_max(200)
-        self.now = utc(2026, 9, 22, 22)          # night: ambient means 50
+        self.now = utc(2026, 9, 22, 22)  # night: ambient means 50
         b.set_ambient({"enabled": True})
         self.assertEqual(self.nq.sent[-1], "brightness 50 %d" % MOD.AMBIENT_TOGGLE_FADE_MS)
         b.set_ambient({"enabled": False})
@@ -244,8 +256,7 @@ class TestBrightness(unittest.TestCase):
         b.set_max(200)
         self.now = utc(2026, 9, 22, 22)
         snap = b.set_ambient({"enabled": True})
-        self.assertEqual(self.nq.sent[-2:], ["brightness 50 %d" % MOD.AMBIENT_TOGGLE_FADE_MS,
-                                             "brightness 50"])
+        self.assertEqual(self.nq.sent[-2:], ["brightness 50 %d" % MOD.AMBIENT_TOGGLE_FADE_MS, "brightness 50"])
         self.assertEqual(snap["level"], 50)
         with open(self.path) as f:
             self.assertTrue(json.load(f)["ambient"])
@@ -254,25 +265,25 @@ class TestBrightness(unittest.TestCase):
     def test_day_and_night_sleep_the_whole_cap(self):
         b = self.b()
         b.set_ambient({"enabled": True})
-        self.assertEqual(b.tick(), MOD.AMBIENT_MAX_SLEEP_S)      # midday
-        self.now = utc(2026, 9, 22, 23)                         # deep night
+        self.assertEqual(b.tick(), MOD.AMBIENT_MAX_SLEEP_S)  # midday
+        self.now = utc(2026, 9, 22, 23)  # deep night
         self.assertEqual(b.tick(), MOD.AMBIENT_MAX_SLEEP_S)
 
     def test_off_sleeps_the_whole_cap(self):
-        self.now = utc(2026, 9, 22, 17)                         # dusk, but ambient off
+        self.now = utc(2026, 9, 22, 17)  # dusk, but ambient off
         self.assertEqual(self.b().tick(), MOD.AMBIENT_MAX_SLEEP_S)
 
     def test_dusk_wakes_exactly_at_the_next_level(self):
         b = self.b()
         b.set_ambient({"enabled": True})
-        self.now = utc(2026, 9, 22, 17, 30)                     # mid-twilight
+        self.now = utc(2026, 9, 22, 17, 30)  # mid-twilight
         delay = b.tick()
         level = int(self.nq.sent[-1].split()[1])
         self.assertLess(delay, MOD.AMBIENT_SCAN_STEP_S * 3)
         at = self.now + datetime.timedelta(seconds=delay)
         before = self.now + datetime.timedelta(seconds=delay - 1.5)
-        self.assertNotEqual(b._level_at(at), level)            # it has changed by then
-        self.assertEqual(b._level_at(before), level)           # and not a second earlier
+        self.assertNotEqual(b._level_at(at), level)  # it has changed by then
+        self.assertEqual(b._level_at(before), level)  # and not a second earlier
 
     def test_following_the_delays_misses_no_level(self):
         # walk a whole dusk the way run() does; every level between day and
@@ -280,7 +291,7 @@ class TestBrightness(unittest.TestCase):
         b = self.b()
         b.set_ambient({"enabled": True})
         self.now = utc(2026, 9, 22, 15)
-        self.nq.sent.clear()                     # the switch itself fades; the walk follows
+        self.nq.sent.clear()  # the switch itself fades; the walk follows
         levels, wakes = [], 0
         while self.now < utc(2026, 9, 22, 20):
             delay = b.tick()
@@ -311,17 +322,22 @@ class TestBrightness(unittest.TestCase):
         b._wake.clear()
         self.nq.sent.clear()
         b.reassert()
-        self.assertEqual(self.nq.sent, ["brightness 90"])       # no fade: a restore
+        self.assertEqual(self.nq.sent, ["brightness 90"])  # no fade: a restore
         self.assertFalse(b._wake.is_set())
-        self.is_synced = True                                   # timesyncd set the clock
+        self.is_synced = True  # timesyncd set the clock
         b.reassert()
         self.assertTrue(b._wake.is_set())
 
     def test_every_scheduler_wake_is_counted(self):
         wakes = []
-        b = MOD.Brightness(path=self.path, send=self.nq, clock=lambda: self.now,
-                           synced=lambda: self.is_synced, location=PRAGUE,
-                           on_wake=lambda: wakes.append(1))
+        b = MOD.Brightness(
+            path=self.path,
+            send=self.nq,
+            clock=lambda: self.now,
+            synced=lambda: self.is_synced,
+            location=PRAGUE,
+            on_wake=lambda: wakes.append(1),
+        )
 
         class Stop(Exception):
             pass
@@ -332,6 +348,7 @@ class TestBrightness(unittest.TestCase):
             waits.append(delay)
             if len(waits) == 3:
                 raise Stop
+
         b._wake.wait = wait
         with self.assertRaises(Stop):
             b.run()
@@ -339,7 +356,7 @@ class TestBrightness(unittest.TestCase):
         self.assertEqual(waits, [MOD.AMBIENT_MAX_SLEEP_S] * 3)
 
     def test_torn_file_reads_as_default(self):
-        for body in ('{"max": 300}', '{"max": "x", "ambient": 1}', '[', ''):
+        for body in ('{"max": 300}', '{"max": "x", "ambient": 1}', "[", ""):
             with open(self.path, "w") as f:
                 f.write(body)
             snap = self.b().snapshot()

@@ -5,6 +5,7 @@ install, and an honest in-progress state, including the reboot after which
 this process is gone. The link runs here with a fake bridge call, a fake apk
 version and a fake clock.
 """
+
 import importlib.machinery
 import importlib.util
 import json
@@ -16,8 +17,7 @@ DAEMON = os.path.join(HERE, "..", "nexusq-mqtt")
 
 
 def load_daemon():
-    spec = importlib.util.spec_from_loader(
-        "nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
+    spec = importlib.util.spec_from_loader("nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -62,8 +62,7 @@ class TestPayload(unittest.TestCase):
         self.assertTrue(p["in_progress"])
 
     def test_summary_fits_home_assistant(self):
-        many = [{"name": f"package-number-{i}", "installed": "1.0-r1",
-                 "available": "1.0-r2"} for i in range(30)]
+        many = [{"name": f"package-number-{i}", "installed": "1.0-r1", "available": "1.0-r2"} for i in range(30)]
         p = MOD.update_state_payload("1.0-r116", {"packages": many})
         self.assertLessEqual(len(p["release_summary"]), MOD.HA_SUMMARY_MAX)
         self.assertEqual(p["latest_version"], "1.0-r116 + 30 updates")
@@ -82,9 +81,9 @@ class Fake:
         self.check_result = check if check is not None else {"packages": [CTRL]}
         self.install_result = install
         self.installed = "1.0-r116"
-        self.link = MOD.UpdateLink(PREFIX, NODE, self.publish, call=self.call,
-                                   version=lambda: self.installed,
-                                   clock=lambda: self.now)
+        self.link = MOD.UpdateLink(
+            PREFIX, NODE, self.publish, call=self.call, version=lambda: self.installed, clock=lambda: self.now
+        )
 
     def publish(self, topic, payload, retain=False):
         self.published.append((topic, json.loads(payload), retain))
@@ -107,15 +106,15 @@ class TestLink(unittest.TestCase):
     def test_timed_checks(self):
         f = Fake()
         f.link.step()
-        self.assertEqual(f.calls, [])                 # not before the first delay
+        self.assertEqual(f.calls, [])  # not before the first delay
         f.now += MOD.UPDATE_FIRST_CHECK_S
         f.link.step()
         self.assertEqual([c for c, _ in f.calls], ["checkSystemUpdate"])
         self.assertEqual(f.states()[-1]["latest_version"], "1.0-r116 + 1 update")
-        self.assertTrue(all(r for _, _, r in f.published))   # retained
+        self.assertTrue(all(r for _, _, r in f.published))  # retained
         f.now += 60
         f.link.step()
-        self.assertEqual(len(f.calls), 1)             # then only every six hours
+        self.assertEqual(len(f.calls), 1)  # then only every six hours
         f.now += MOD.UPDATE_CHECK_EVERY_S
         f.link.step()
         self.assertEqual(len(f.calls), 2)
@@ -127,15 +126,13 @@ class TestLink(unittest.TestCase):
         self.assertEqual([c for c, _ in f.calls], ["checkSystemUpdate"])
 
     def test_install_then_check(self):
-        f = Fake(install={"ok": True, "changed": ["nexusq-control"],
-                          "rebootRecommended": False})
+        f = Fake(install={"ok": True, "changed": ["nexusq-control"], "rebootRecommended": False})
         self.assertTrue(f.link.submit(f.link.topics["install"], "install"))
         f.link.step()
-        self.assertEqual([c for c, _ in f.calls],
-                         ["installSystemUpdate", "checkSystemUpdate"])
+        self.assertEqual([c for c, _ in f.calls], ["installSystemUpdate", "checkSystemUpdate"])
         self.assertEqual(f.calls[0][1], MOD.UPDATE_INSTALL_TIMEOUT_S)
         st = f.states()
-        self.assertTrue(st[0]["in_progress"])         # said before apk runs
+        self.assertTrue(st[0]["in_progress"])  # said before apk runs
         self.assertFalse(st[-1]["in_progress"])
         self.assertEqual(st[-1]["release_summary"], "Up to date.")
 
@@ -157,8 +154,7 @@ class TestLink(unittest.TestCase):
         f = Fake(install=MOD.ControlError("unavailable", "apk upgrade failed"))
         f.link.submit(f.link.topics["install"], "install")
         f.link.step()
-        self.assertEqual([c for c, _ in f.calls],
-                         ["installSystemUpdate", "checkSystemUpdate"])
+        self.assertEqual([c for c, _ in f.calls], ["installSystemUpdate", "checkSystemUpdate"])
         self.assertFalse(f.states()[-1]["in_progress"])
         self.assertIn("nexusq-control", f.states()[-1]["release_summary"])
 
@@ -168,6 +164,7 @@ class TestLink(unittest.TestCase):
 
         def down(method, params, timeout=5):
             raise OSError("connection refused")
+
         f.link.call = down
         f.link.submit(f.link.topics["check"], "PRESS")
         f.link.step()
@@ -183,7 +180,7 @@ class TestLink(unittest.TestCase):
     def test_republish_after_reconnect(self):
         f = Fake()
         f.link.republish()
-        self.assertEqual(f.published, [])             # nothing known yet
+        self.assertEqual(f.published, [])  # nothing known yet
         f.link.submit(f.link.topics["check"], "PRESS")
         f.link.step()
         n = len(f.published)

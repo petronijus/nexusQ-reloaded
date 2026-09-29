@@ -9,6 +9,7 @@ The governor is `conservative`: every `sampling_rate` it compares busy time in
 the window against up_threshold/down_threshold. So what matters is not average
 CPU but BURST SHAPE — how much of one sampling window a wakeup fills.
 """
+
 import gzip
 import re
 import sys
@@ -37,16 +38,16 @@ def events(path):
 
 def main(path, sampling_ms=20.0, up_threshold=80.0):
     counts = defaultdict(int)
-    runtime = defaultdict(float)          # comm -> seconds on cpu
-    runs = []                             # (start, end, cpu, comm)
-    freqs = []                            # (ts, cpu, khz)
+    runtime = defaultdict(float)  # comm -> seconds on cpu
+    runs = []  # (start, end, cpu, comm)
+    freqs = []  # (ts, cpu, khz)
     wakeups = defaultdict(int)
     irq = defaultdict(int)
     wq = defaultdict(int)
     forks = defaultdict(int)
     execs = defaultdict(int)
     hrtimer = defaultdict(int)
-    cur = {}                              # cpu -> (comm, start_ts)
+    cur = {}  # cpu -> (comm, start_ts)
     t0 = t1 = None
 
     for m in events(path):
@@ -62,7 +63,7 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
             s = SWITCH.search(rest)
             if not s:
                 continue
-            prev, nxt = s["pc"], s["nc"]
+            nxt = s["nc"]
             if cpu in cur:
                 comm, start = cur[cpu]
                 if not comm.startswith("swapper"):
@@ -101,21 +102,24 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
     print(f"\n=== CPU time by task (sched_switch reconstruction, {span:.1f} s window)")
     print(f"{'task':<24} {'run s':>8} {'% of 1 core':>12} {'slices':>8} {'mean ms':>9} {'max ms':>8}")
     per_task_runs = defaultdict(list)
-    for s, e, c, comm in runs:
+    for s, e, _cpu, comm in runs:
         per_task_runs[comm].append((e - s) * 1000.0)
     for comm, tot in sorted(runtime.items(), key=lambda kv: -kv[1])[:25]:
         sl = per_task_runs[comm]
-        print(f"{comm:<24} {tot:8.3f} {100.0 * tot / span:11.3f} % {len(sl):8d} "
-              f"{sum(sl) / len(sl):9.3f} {max(sl):8.2f}")
+        print(
+            f"{comm:<24} {tot:8.3f} {100.0 * tot / span:11.3f} % {len(sl):8d} {sum(sl) / len(sl):9.3f} {max(sl):8.2f}"
+        )
     total_busy = sum(runtime.values())
-    print(f"{'TOTAL (both cores)':<24} {total_busy:8.3f} {100.0 * total_busy / span:11.3f} %"
-          f"   -> {100.0 * total_busy / (2 * span):.3f} % of the 2-core machine")
+    print(
+        f"{'TOTAL (both cores)':<24} {total_busy:8.3f} {100.0 * total_busy / span:11.3f} %"
+        f"   -> {100.0 * total_busy / (2 * span):.3f} % of the 2-core machine"
+    )
 
     print("\n=== frequency timeline")
     print(f"transitions: {len(freqs)}  ({len(freqs) / span:.2f}/s)")
     res = defaultdict(float)
     ups = []
-    for i, (ts, cid, khz) in enumerate(freqs):
+    for i, (ts, _cpu, khz) in enumerate(freqs):
         end = freqs[i + 1][0] if i + 1 < len(freqs) else t1
         res[khz] += end - ts
         if i and khz > freqs[i - 1][2]:
@@ -125,8 +129,7 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
         print(f"    {khz // 1000:>5} MHz  {100.0 * res[khz] / tot:6.2f} %   ({res[khz]:7.2f} s)")
 
     # --- what ran in the sampling window that triggered each up-step
-    print(f"\n=== attribution of {len(ups)} UP-transitions "
-          f"(tasks running in the {sampling_ms:.0f} ms before each)")
+    print(f"\n=== attribution of {len(ups)} UP-transitions (tasks running in the {sampling_ms:.0f} ms before each)")
     blame = defaultdict(float)
     blame_n = defaultdict(int)
     per_edge = defaultdict(int)
@@ -136,7 +139,7 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
         per_edge[(frm // 1000, to // 1000)] += 1
         lo = ts - win
         seen = set()
-        for s, e, c, comm in runs:
+        for s, e, _cpu, comm in runs:
             if e < lo:
                 continue
             if s > ts:
@@ -152,8 +155,7 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
     print(f"\n{'task':<24} {'cpu s in windows':>17} {'% of window time':>17} {'ramps present in':>18}")
     tot_win = len(ups) * win
     for comm, sec in sorted(blame.items(), key=lambda kv: -kv[1])[:20]:
-        print(f"{comm:<24} {sec:17.3f} {100.0 * sec / tot_win if tot_win else 0:16.2f} % "
-              f"{blame_n[comm]:17d}")
+        print(f"{comm:<24} {sec:17.3f} {100.0 * sec / tot_win if tot_win else 0:16.2f} % {blame_n[comm]:17d}")
 
     # --- burst shape: can a single run fill a sampling window?
     print(f"\n=== burst shape vs the {sampling_ms:.0f} ms / {up_threshold:.0f} % ramp criterion")
@@ -166,13 +168,20 @@ def main(path, sampling_ms=20.0, up_threshold=80.0):
             big[comm] = n
     for comm, n in sorted(big.items(), key=lambda kv: -kv[1])[:15]:
         sl = [x for x in per_task_runs[comm] if x >= thresh_ms]
-        print(f"    {comm:<24} {n:6d} runs >= {thresh_ms:.0f} ms  ({n / span:6.3f}/s)  "
-              f"longest {max(sl):8.2f} ms  total {sum(sl) / 1000:.2f} s")
+        print(
+            f"    {comm:<24} {n:6d} runs >= {thresh_ms:.0f} ms  ({n / span:6.3f}/s)  "
+            f"longest {max(sl):8.2f} ms  total {sum(sl) / 1000:.2f} s"
+        )
 
     print("\n=== wakeup sources")
-    for title, d in (("sched_wakeup target", wakeups), ("hard IRQ", irq),
-                     ("workqueue fn", wq), ("hrtimer fn", hrtimer),
-                     ("fork parent", forks), ("exec", execs)):
+    for title, d in (
+        ("sched_wakeup target", wakeups),
+        ("hard IRQ", irq),
+        ("workqueue fn", wq),
+        ("hrtimer fn", hrtimer),
+        ("fork parent", forks),
+        ("exec", execs),
+    ):
         rows = sorted(d.items(), key=lambda kv: -kv[1])[:12]
         if not rows:
             continue

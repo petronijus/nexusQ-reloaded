@@ -4,6 +4,7 @@
 Every figure here is a delta of a kernel counter over a known wall interval, so
 nothing depends on a sampler's own view of itself.
 """
+
 import glob
 import gzip
 import os
@@ -56,7 +57,7 @@ def time_in_state(s):
     d = {}
     for ln in s.get("time_in_state", []):
         f, t = ln.split()
-        d[int(f)] = int(t)          # 10 ms units
+        d[int(f)] = int(t)  # 10 ms units
     return d
 
 
@@ -114,7 +115,7 @@ def irqs(s):
                 break
         if not vals:
             continue
-        name = " ".join(p[1 + len(vals):]) or key
+        name = " ".join(p[1 + len(vals) :]) or key
         out[f"{key} {name}"] = sum(vals)
     return out
 
@@ -161,8 +162,7 @@ def report(label, pre_path, post_path, top=14):
         res[f // 1000] = (d / tot) if tot else 0.0
         print(f"   {f // 1000:>5} MHz {pct:6.2f} %   ({d / 100:8.1f} s)  {'#' * int(pct / 2)}")
     rp = rel_power(res)
-    print(f"   >> relative dynamic power {rp:5.2f} x a locked-350 floor "
-          f"(idle baseline 2026-08-19 = 1.16 x)")
+    print(f"   >> relative dynamic power {rp:5.2f} x a locked-350 floor (idle baseline 2026-08-19 = 1.16 x)")
 
     # --- transitions
     ca, cb = trans_table(a), trans_table(b)
@@ -188,12 +188,13 @@ def report(label, pre_path, post_path, top=14):
         tot_j = sum(da)
         busy = tot_j - da[3] - da[4]
         if tot_j:
-            print(f"   {k:<5} busy {100.0 * busy / tot_j:5.2f} %   "
-                  f"user {100.0 * da[0] / tot_j:4.2f}  nice {100.0 * da[1] / tot_j:4.2f}  "
-                  f"sys {100.0 * da[2] / tot_j:4.2f}  irq/sirq {100.0 * (da[5] + da[6]) / tot_j:4.2f}  "
-                  f"(accounted {tot_j / USER_HZ:.0f}s of {dt:.0f}s)")
-    print(f"ctxt {(sb['ctxt'] - sa['ctxt']) / dt:8.1f}/s     "
-          f"forks {(sb['processes'] - sa['processes']) / dt:6.2f}/s")
+            print(
+                f"   {k:<5} busy {100.0 * busy / tot_j:5.2f} %   "
+                f"user {100.0 * da[0] / tot_j:4.2f}  nice {100.0 * da[1] / tot_j:4.2f}  "
+                f"sys {100.0 * da[2] / tot_j:4.2f}  irq/sirq {100.0 * (da[5] + da[6]) / tot_j:4.2f}  "
+                f"(accounted {tot_j / USER_HZ:.0f}s of {dt:.0f}s)"
+            )
+    print(f"ctxt {(sb['ctxt'] - sa['ctxt']) / dt:8.1f}/s     forks {(sb['processes'] - sa['processes']) / dt:6.2f}/s")
 
     # --- per-cgroup CPU
     ga, gb = cgroups(a), cgroups(b)
@@ -216,15 +217,21 @@ def report(label, pre_path, post_path, top=14):
     # was invisible until /proc/interrupts was read separately. Always print it.
     da_all = [x - y for x, y in zip(pb["cpu"], pa["cpu"])]
     busy_all = (sum(da_all) - da_all[3] - da_all[4]) / USER_HZ
-    top_level = sum((gb[k] - ga[k]) / 1e6 for k in gb
-                    if k in ga and k.rstrip("/").count("/") == 4
-                    and k.rstrip("/").endswith((".slice", ".scope")))
+    top_level = sum(
+        (gb[k] - ga[k]) / 1e6
+        for k in gb
+        if k in ga and k.rstrip("/").count("/") == 4 and k.rstrip("/").endswith((".slice", ".scope"))
+    )
     gap = busy_all - top_level
     if busy_all > 0:
-        print(f"   {'-> in cgroups (system+user+init)':<52} {100.0 * top_level / dt:6.3f} %  "
-              f"({top_level:7.2f} s) = {100.0 * top_level / busy_all:.0f} % of all busy CPU")
-        print(f"   {'-> NOT in any cgroup (IRQ/softirq/kthreads)':<52} {100.0 * gap / dt:6.3f} %  "
-              f"({gap:7.2f} s) = {100.0 * gap / busy_all:.0f} % of all busy CPU")
+        print(
+            f"   {'-> in cgroups (system+user+init)':<52} {100.0 * top_level / dt:6.3f} %  "
+            f"({top_level:7.2f} s) = {100.0 * top_level / busy_all:.0f} % of all busy CPU"
+        )
+        print(
+            f"   {'-> NOT in any cgroup (IRQ/softirq/kthreads)':<52} {100.0 * gap / dt:6.3f} %  "
+            f"({gap:7.2f} s) = {100.0 * gap / busy_all:.0f} % of all busy CPU"
+        )
 
     # --- wakeup sources
     ia, ib = irqs(a), irqs(b)
@@ -241,16 +248,25 @@ def report(label, pre_path, post_path, top=14):
     # --- idle + thermal
     ua = {ln.split()[0]: ln for ln in a.get("cpuidle", [])}
     ub = {ln.split()[0]: ln for ln in b.get("cpuidle", [])}
+
+    def g(ln, f):
+        return int(re.search(f + r"=(\d+)", ln).group(1))
+
     for k in sorted(ub):
         if k not in ua:
             continue
-        g = lambda ln, f: int(re.search(f + r"=(\d+)", ln).group(1))
         du = g(ub[k], "usage") - g(ua[k], "usage")
         dt_us = g(ub[k], "time") - g(ua[k], "time")
-        print(f"cpuidle {k.split('/')[-3]}/{k.split('/')[-1]}: {du / dt:7.1f} entries/s   "
-              f"residency {100.0 * dt_us / 1e6 / dt:5.1f} %   mean {dt_us / du if du else 0:6.0f} us")
-    print("temp: " + "  ".join(f"{k.split('/')[-2]}={(temps(b)[k]) / 1000:.1f}C "
-                               f"(was {(temps(a)[k]) / 1000:.1f})" for k in temps(b)))
+        print(
+            f"cpuidle {k.split('/')[-3]}/{k.split('/')[-1]}: {du / dt:7.1f} entries/s   "
+            f"residency {100.0 * dt_us / 1e6 / dt:5.1f} %   mean {dt_us / du if du else 0:6.0f} us"
+        )
+    print(
+        "temp: "
+        + "  ".join(
+            f"{k.split('/')[-2]}={(temps(b)[k]) / 1000:.1f}C (was {(temps(a)[k]) / 1000:.1f})" for k in temps(b)
+        )
+    )
 
 
 def main():

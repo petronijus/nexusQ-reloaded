@@ -30,8 +30,7 @@ TOOL = os.path.join(HERE, "..", "nq-hdmi")
 
 
 def load_tool():
-    spec = importlib.util.spec_from_loader(
-        "nq_hdmi_guard", importlib.machinery.SourceFileLoader("nq_hdmi_guard", TOOL))
+    spec = importlib.util.spec_from_loader("nq_hdmi_guard", importlib.machinery.SourceFileLoader("nq_hdmi_guard", TOOL))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -98,8 +97,10 @@ class TestKeepBlackGuard(unittest.TestCase):
 
     def _run(self, master, active_vt):
         h = self._hold()
-        with mock.patch.object(MOD, "_drm_master_present", return_value=master), \
-             mock.patch.object(MOD, "_read", return_value=active_vt):
+        with (
+            mock.patch.object(MOD, "_drm_master_present", return_value=master),
+            mock.patch.object(MOD, "_read", return_value=active_vt),
+        ):
             MOD.Hold._keep_black(h)
         return h.parked
 

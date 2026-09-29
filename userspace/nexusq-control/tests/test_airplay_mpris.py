@@ -30,6 +30,7 @@ State now comes from PulseAudio, which this daemon has watched reliably for
 months and which cannot feed itself. MPRIS is kept for the BUTTONS only — one
 call per press, no monitor.
 """
+
 import importlib.machinery
 import importlib.util
 import json
@@ -44,7 +45,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -67,9 +69,17 @@ class _Bridge:
         self.transports = {"airplay": mod.AirPlayTransport()}
         # inert: the connection chime has its own tests (test_chime.py)
         self.chime = mod.Chime(play=lambda path: False)
-        self.state = {"nowPlaying": {"playing": False, "artist": "", "track": "",
-                                     "album": "", "artUrl": "", "source": "",
-                                     "transport": "none"}}
+        self.state = {
+            "nowPlaying": {
+                "playing": False,
+                "artist": "",
+                "track": "",
+                "album": "",
+                "artUrl": "",
+                "source": "",
+                "transport": "none",
+            }
+        }
         self.sent = []
         self.airplay_sync = mod.Bridge.airplay_sync.__get__(self)
         self._apply_transport = mod.Bridge._apply_transport.__get__(self)
@@ -81,13 +91,18 @@ class _Bridge:
 
 PLAYING = json.dumps({"type": "s", "data": "Playing"})
 STOPPED = json.dumps({"type": "s", "data": "Stopped"})
-META = json.dumps({"type": "a{sv}", "data": {
-    "xesam:title": {"type": "s", "data": "So What"},
-    # A LIST, which is what MPRIS always sends, even for one artist.
-    "xesam:artist": {"type": "as", "data": ["Miles Davis"]},
-    "xesam:album": {"type": "s", "data": "Kind of Blue"},
-    "mpris:artUrl": {"type": "s", "data": "file:///tmp/cover.jpg"},
-}})
+META = json.dumps(
+    {
+        "type": "a{sv}",
+        "data": {
+            "xesam:title": {"type": "s", "data": "So What"},
+            # A LIST, which is what MPRIS always sends, even for one artist.
+            "xesam:artist": {"type": "as", "data": ["Miles Davis"]},
+            "xesam:album": {"type": "s", "data": "Kind of Blue"},
+            "mpris:artUrl": {"type": "s", "data": "file:///tmp/cover.jpg"},
+        },
+    }
+)
 
 
 class TestMprisDecoding(unittest.TestCase):
@@ -105,8 +120,9 @@ class TestMprisDecoding(unittest.TestCase):
         self.assertEqual(m["xesam:title"], "So What")
 
     def test_several_artists_join(self):
-        payload = json.dumps({"type": "a{sv}", "data": {
-            "xesam:artist": {"type": "as", "data": ["Ella Fitzgerald", "Louis Armstrong"]}}})
+        payload = json.dumps(
+            {"type": "a{sv}", "data": {"xesam:artist": {"type": "as", "data": ["Ella Fitzgerald", "Louis Armstrong"]}}}
+        )
         with mock.patch.object(self.mod.subprocess, "run", _Run(payload)):
             m = self.mod._mpris_metadata()
         self.assertEqual(m["xesam:artist"], "Ella Fitzgerald, Louis Armstrong")
@@ -135,8 +151,7 @@ class TestAirPlayTransport(unittest.TestCase):
                 self.assertEqual(self.t.can_control(), expected, status)
 
     def test_methods_map_to_mpris_calls(self):
-        for method, call in (("playPause", "PlayPause"), ("next", "Next"),
-                             ("previous", "Previous")):
+        for method, call in (("playPause", "PlayPause"), ("next", "Next"), ("previous", "Previous")):
             runner = _Run("")
             with mock.patch.object(self.mod.subprocess, "run", runner):
                 self.t.command(method)
@@ -155,9 +170,9 @@ class TestAirPlayTransport(unittest.TestCase):
 class TestAirPlayStateFromPulse(unittest.TestCase):
     """Play/pause now comes from PA's view of shairport's sink-input."""
 
-    PLAYING_SI = "Sink Input #7\n\tCorked: no\n\tapplication.name = \"ALSA plug-in [shairport-sync]\"\n"
-    PAUSED_SI = "Sink Input #7\n\tCorked: yes\n\tapplication.name = \"ALSA plug-in [shairport-sync]\"\n"
-    OTHER_SI = "Sink Input #4\n\tCorked: no\n\tapplication.name = \"librespot\"\n"
+    PLAYING_SI = 'Sink Input #7\n\tCorked: no\n\tapplication.name = "ALSA plug-in [shairport-sync]"\n'
+    PAUSED_SI = 'Sink Input #7\n\tCorked: yes\n\tapplication.name = "ALSA plug-in [shairport-sync]"\n'
+    OTHER_SI = 'Sink Input #4\n\tCorked: no\n\tapplication.name = "librespot"\n'
 
     def setUp(self):
         self.mod = load_daemon()
@@ -204,8 +219,7 @@ class TestAirPlaySync(unittest.TestCase):
         np = self._sync("paused")
         self.assertFalse(np["playing"])
         self.assertEqual(np["source"], "airplay")
-        self.assertEqual(np["transport"], "device",
-                         "paused is still controllable — that is how you resume")
+        self.assertEqual(np["transport"], "device", "paused is still controllable — that is how you resume")
 
     def test_session_gone_clears_the_card(self):
         self._sync("playing")
@@ -216,9 +230,9 @@ class TestAirPlaySync(unittest.TestCase):
 
     def test_it_does_not_steal_the_screen_from_spotify(self):
         with self.b.lock:
-            self.b.state["nowPlaying"] = dict(self.b.state["nowPlaying"],
-                                              track="Kinkajou", source="spotify",
-                                              playing=True)
+            self.b.state["nowPlaying"] = dict(
+                self.b.state["nowPlaying"], track="Kinkajou", source="spotify", playing=True
+            )
         for state in ("playing", "paused", None):
             np = self._sync(state)
             self.assertEqual(np["source"], "spotify", state)
@@ -246,9 +260,8 @@ class TestTheBusMonitorIsGone(unittest.TestCase):
 
     def test_no_bus_monitor_anywhere(self):
         src = open(DAEMON).read()
-        self.assertNotIn("airplay_watch_thread", src,
-                         "the bus-monitor watcher must stay gone")
-        state_fn = src[src.index("def airplay_pa_state"):src.index("def eq_restore_thread")]
+        self.assertNotIn("airplay_watch_thread", src, "the bus-monitor watcher must stay gone")
+        state_fn = src[src.index("def airplay_pa_state") : src.index("def eq_restore_thread")]
         self.assertIn("pactl", state_fn, "state comes from PulseAudio")
         # The docstring EXPLAINS the monitor that was removed, so match the
         # CALL, not the word.

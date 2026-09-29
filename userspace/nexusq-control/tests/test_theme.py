@@ -12,7 +12,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -44,7 +45,7 @@ class TestThemePersistence(unittest.TestCase):
 
     def test_unknown_or_torn_file_reads_as_none(self):
         os.makedirs(os.path.dirname(self.path))
-        for body in ('{"theme": "plaid"}', '{"theme": 7}', '[]', '{"the', ''):
+        for body in ('{"theme": "plaid"}', '{"theme": 7}', "[]", '{"the', ""):
             with open(self.path, "w") as f:
                 f.write(body)
             self.assertIsNone(self.mod._theme_load(self.path), body)
@@ -77,8 +78,10 @@ class TestThemePersistence(unittest.TestCase):
     def test_restore_retries_until_nexusqd_is_up(self):
         self.mod._theme_save("rose", self.path)
         answers = iter([False, False, True])
-        with mock.patch.object(self.mod, "nexusqd_send", side_effect=lambda c: next(answers)) as send, \
-                mock.patch.object(self.mod.time, "sleep") as sleep:
+        with (
+            mock.patch.object(self.mod, "nexusqd_send", side_effect=lambda c: next(answers)) as send,
+            mock.patch.object(self.mod.time, "sleep") as sleep,
+        ):
             self.mod.theme_restore_thread(self.path)
         self.assertEqual(send.call_count, 3)
         self.assertEqual(sleep.call_count, 2)

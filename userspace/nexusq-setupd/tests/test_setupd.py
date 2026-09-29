@@ -13,7 +13,8 @@ VECTORS = os.path.join(HERE, "..", "..", "..", "companion", "pairing-color-vecto
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_setupd", importlib.machinery.SourceFileLoader("nexusq_setupd", DAEMON))
+        "nexusq_setupd", importlib.machinery.SourceFileLoader("nexusq_setupd", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -45,19 +46,18 @@ class TestSanitizeHostname(unittest.TestCase):
 class TestNmErrorClassification(unittest.TestCase):
     def test_wrong_password(self):
         mod = load_daemon()
-        self.assertEqual(mod.classify_nm_error(
-            "Error: Connection activation failed: Secrets were required, but not provided."),
-            "wrong_password")
+        self.assertEqual(
+            mod.classify_nm_error("Error: Connection activation failed: Secrets were required, but not provided."),
+            "wrong_password",
+        )
 
     def test_not_found(self):
         mod = load_daemon()
-        self.assertEqual(mod.classify_nm_error(
-            "Error: No network with SSID 'foo' found."), "not_found")
+        self.assertEqual(mod.classify_nm_error("Error: No network with SSID 'foo' found."), "not_found")
 
     def test_timeout(self):
         mod = load_daemon()
-        self.assertEqual(mod.classify_nm_error(
-            "Error: Timeout expired (90) seconds"), "timeout")
+        self.assertEqual(mod.classify_nm_error("Error: Timeout expired (90) seconds"), "timeout")
 
     def test_unknown_is_internal(self):
         mod = load_daemon()
@@ -69,10 +69,13 @@ class TestScanParsing(unittest.TestCase):
         mod = load_daemon()
         out = "MyNet:72:WPA2\nMyNet:55:WPA2\nOpenNet:40:\n:30:WPA2\n"
         nets = mod.parse_wifi_list(out)
-        self.assertEqual(nets, [
-            {"ssid": "MyNet", "signal": 72, "security": "wpa-psk"},
-            {"ssid": "OpenNet", "signal": 40, "security": "open"},
-        ])
+        self.assertEqual(
+            nets,
+            [
+                {"ssid": "MyNet", "signal": 72, "security": "wpa-psk"},
+                {"ssid": "OpenNet", "signal": 40, "security": "open"},
+            ],
+        )
 
 
 class TestSetupCore(unittest.TestCase):
@@ -115,7 +118,7 @@ class TestSetupCore(unittest.TestCase):
     def test_finished_session_keeps_the_theme_and_still_releases(self):
         mod = load_daemon()
         core = self._core(mod)
-        core.finished = True       # finishSetup already applied the chosen theme
+        core.finished = True  # finishSetup already applied the chosen theme
         core.end_led()
         sent = [c.args[0] for c in core.led.send.call_args_list]
         self.assertEqual(sent, ["attend 0"])
@@ -160,11 +163,13 @@ class TestSetupCore(unittest.TestCase):
     def test_set_wifi_success(self):
         mod = load_daemon()
         core = self._core(mod)
+
         # run() mock: every nmcli call succeeds; IP lookup returns an address
         def fake_run(args, **kw):
             m = mock.Mock(returncode=0, stderr="")
             m.stdout = "192.168.20.195/24\n" if "IP4.ADDRESS" in args else ""
             return m
+
         core.run = fake_run
         r = core.handle("setWifi", {"ssid": "MyNet", "psk": "secret", "security": "wpa-psk"})
         self.assertTrue(r["ok"])
@@ -175,12 +180,15 @@ class TestSetupCore(unittest.TestCase):
         mod = load_daemon()
         core = self._core(mod)
         calls = []
+
         def fake_run(args, **kw):
             calls.append(args)
             if args[:3] == ["nmcli", "connection", "up"]:
-                return mock.Mock(returncode=4,
-                                 stderr="Error: Connection activation failed: Secrets were required, but not provided.")
+                return mock.Mock(
+                    returncode=4, stderr="Error: Connection activation failed: Secrets were required, but not provided."
+                )
             return mock.Mock(returncode=0, stdout="", stderr="")
+
         core.run = fake_run
         with self.assertRaises(mod.Err) as cm:
             core.handle("setWifi", {"ssid": "MyNet", "psk": "wrong", "security": "wpa-psk"})
@@ -199,9 +207,11 @@ class TestSetupCore(unittest.TestCase):
         mod = load_daemon()
         core = self._core(mod)
         calls = []
+
         def fake_run(args, **kw):
             calls.append(args)
             return mock.Mock(returncode=0, stdout="", stderr="")
+
         core.run = fake_run
         with self.assertRaises(mod.Err) as cm:
             core.handle("setWifi", {"ssid": "X", "security": "wpa-psk"})
@@ -213,17 +223,18 @@ class TestSetupCore(unittest.TestCase):
         mod = load_daemon()
         core = self._core(mod)
         calls = []
+
         def fake_run(args, **kw):
             calls.append(args)
             if args[:3] == ["nmcli", "connection", "add"]:
                 raise mod.subprocess.TimeoutExpired(
-                    cmd=["nmcli", "connection", "add", "wifi-sec.psk", "SECRETPSK"],
-                    timeout=20)
+                    cmd=["nmcli", "connection", "add", "wifi-sec.psk", "SECRETPSK"], timeout=20
+                )
             return mock.Mock(returncode=0, stdout="", stderr="")
+
         core.run = fake_run
         with self.assertRaises(mod.Err) as cm:
-            core.handle("setWifi", {"ssid": "MyNet", "psk": "SECRETPSK",
-                                     "security": "wpa-psk"})
+            core.handle("setWifi", {"ssid": "MyNet", "psk": "SECRETPSK", "security": "wpa-psk"})
         self.assertNotIn("SECRETPSK", cm.exception.message)
         self.assertIn(cm.exception.code, ("internal", "timeout"))
         self.assertIn(["nmcli", "connection", "delete", "wifi"], calls)
@@ -234,8 +245,7 @@ class TestSetupCore(unittest.TestCase):
         mod = load_daemon()
         core = self._core(mod)
         # provisioned: `nmcli -t -f TYPE connection show` lists a wifi profile
-        core.run = lambda *a, **k: mock.Mock(
-            returncode=0, stdout="802-11-wireless\n", stderr="")
+        core.run = lambda *a, **k: mock.Mock(returncode=0, stdout="802-11-wireless\n", stderr="")
         r = core.handle("finishSetup", {})
         self.assertTrue(r["done"])
         self.assertTrue(core.finished)
@@ -315,16 +325,17 @@ class TestBtAdapterMac(unittest.TestCase):
         # mainline kernels have no /sys/class/bluetooth/hci0/address ->
         # the BlueZ Adapter1.Address D-Bus fallback must kick in, uppercased
         mod = load_daemon()
-        with mock.patch("builtins.open", side_effect=OSError), \
-             mock.patch.dict("sys.modules", {"dbus": self._fake_dbus("f8:8f:ca:20:49:e5")}):
+        with (
+            mock.patch("builtins.open", side_effect=OSError),
+            mock.patch.dict("sys.modules", {"dbus": self._fake_dbus("f8:8f:ca:20:49:e5")}),
+        ):
             self.assertEqual(mod.bt_adapter_mac(), "F8:8F:CA:20:49:E5")
 
     def test_no_sysfs_no_dbus_degrades_to_empty(self):
         mod = load_daemon()
         broken = mock.MagicMock()
         broken.SystemBus.side_effect = RuntimeError("no bus")
-        with mock.patch("builtins.open", side_effect=OSError), \
-             mock.patch.dict("sys.modules", {"dbus": broken}):
+        with mock.patch("builtins.open", side_effect=OSError), mock.patch.dict("sys.modules", {"dbus": broken}):
             self.assertEqual(mod.bt_adapter_mac(), "")
 
 

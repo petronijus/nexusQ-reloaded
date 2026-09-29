@@ -9,7 +9,9 @@ Usage:
 
 Host/user overridable via NEXUS_HOST / NEXUS_USER.
 """
-import os, sys
+
+import os
+import sys
 import paramiko
 
 for _s in (sys.stdout, sys.stderr):
@@ -29,8 +31,7 @@ if not PW:
 def client():
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username=USER, password=PW, timeout=20,
-              look_for_keys=False, allow_agent=False)
+    c.connect(HOST, username=USER, password=PW, timeout=20, look_for_keys=False, allow_agent=False)
     return c
 
 
@@ -53,10 +54,10 @@ def main():
             sys.stderr.write(f"sftp failed ({e}); falling back to base64 over exec\n")
     if a[0] == "--put":  # base64 fallback: local -> remote
         import base64
+
         with open(a[1], "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
-        stdin, stdout, stderr = c.exec_command(
-            f"base64 -d > {a[2]}", timeout=300)
+        stdin, stdout, stderr = c.exec_command(f"base64 -d > {a[2]}", timeout=300)
         stdin.write(b64)
         stdin.channel.shutdown_write()
         rc = stdout.channel.recv_exit_status()
@@ -67,8 +68,8 @@ def main():
         sys.exit(rc)
     if a[0] == "--get":  # base64 fallback: remote -> local
         import base64
-        stdin, stdout, stderr = c.exec_command(
-            f"base64 {a[1]}", timeout=300)
+
+        stdin, stdout, stderr = c.exec_command(f"base64 {a[1]}", timeout=300)
         data = stdout.read()
         rc = stdout.channel.recv_exit_status()
         err = stderr.read().decode(errors="replace")

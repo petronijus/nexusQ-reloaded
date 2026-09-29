@@ -16,7 +16,12 @@ written here. No external tools, no architecture assumptions, no shelling out.
 `bin` entries are paths INSIDE the rootfs (e.g. /usr/sbin/e2fsck); their shared
 libraries are resolved recursively and copied along with them.
 """
-import gzip, os, stat, struct, sys
+
+import gzip
+import os
+import stat
+import struct
+import sys
 
 # Every applet the two inits and the tools they carry actually reach for.
 # NB: `printf` must be here. It is NOT an ash builtin in Alpine's busybox, so a
@@ -42,32 +47,32 @@ def elf_needed(path):
     is64, little = data[4] == 2, data[5] == 1
     end = "<" if little else ">"
     if is64:
-        e_shoff, = struct.unpack_from(end + "Q", data, 0x28)
+        (e_shoff,) = struct.unpack_from(end + "Q", data, 0x28)
         e_shentsize, e_shnum = struct.unpack_from(end + "HH", data, 0x3A)
     else:
-        e_shoff, = struct.unpack_from(end + "I", data, 0x20)
+        (e_shoff,) = struct.unpack_from(end + "I", data, 0x20)
         e_shentsize, e_shnum = struct.unpack_from(end + "HH", data, 0x2E)
 
-    dyn = strtab = None
+    dyn = None
     for i in range(e_shnum):
         off = e_shoff + i * e_shentsize
-        sh_type, = struct.unpack_from(end + "I", data, off + 4)
+        (sh_type,) = struct.unpack_from(end + "I", data, off + 4)
         if is64:
             sh_offset, sh_size = struct.unpack_from(end + "QQ", data, off + 0x18)
-            sh_link, = struct.unpack_from(end + "I", data, off + 0x28)
+            (sh_link,) = struct.unpack_from(end + "I", data, off + 0x28)
         else:
             sh_offset, sh_size = struct.unpack_from(end + "II", data, off + 0x10)
-            sh_link, = struct.unpack_from(end + "I", data, off + 0x18)
-        if sh_type == 6:                      # SHT_DYNAMIC
+            (sh_link,) = struct.unpack_from(end + "I", data, off + 0x18)
+        if sh_type == 6:  # SHT_DYNAMIC
             dyn = (sh_offset, sh_size, sh_link)
     if dyn is None:
         return []
     off, size, link = dyn
     loff = e_shoff + link * e_shentsize
     if is64:
-        str_off, = struct.unpack_from(end + "Q", data, loff + 0x18)
+        (str_off,) = struct.unpack_from(end + "Q", data, loff + 0x18)
     else:
-        str_off, = struct.unpack_from(end + "I", data, loff + 0x10)
+        (str_off,) = struct.unpack_from(end + "I", data, loff + 0x10)
 
     needed, step = [], 16 if is64 else 8
     for p in range(off, off + size, step):
@@ -75,11 +80,11 @@ def elf_needed(path):
             d_tag, d_val = struct.unpack_from(end + "qQ", data, p)
         else:
             d_tag, d_val = struct.unpack_from(end + "iI", data, p)
-        if d_tag == 0:                        # DT_NULL
+        if d_tag == 0:  # DT_NULL
             break
-        if d_tag == 1:                        # DT_NEEDED
+        if d_tag == 1:  # DT_NEEDED
             s = data.index(b"\0", str_off + d_val)
-            needed.append(data[str_off + d_val:s].decode())
+            needed.append(data[str_off + d_val : s].decode())
     return needed
 
 
@@ -127,8 +132,9 @@ class Image:
         if os.path.islink(real):
             target = os.readlink(real)
             self.symlink(libpath, target)
-            resolved = target if target.startswith("/") else os.path.normpath(
-                os.path.join(os.path.dirname(libpath), target))
+            resolved = (
+                target if target.startswith("/") else os.path.normpath(os.path.join(os.path.dirname(libpath), target))
+            )
             self.copy(resolved, resolved, 0o755)
         else:
             self.copy(libpath, libpath, 0o755)
@@ -159,17 +165,14 @@ def write_cpio(entries, out_path):
     for path in sorted(entries):
         mode, payload = entries[path]
         name = ("." + path).encode() + b"\0"
-        hdr = b"070701" + b"".join(
-            b"%08x" % v for v in (
-                ino, mode, 0, 0, 1, 0, len(payload), 0, 0, 0, 0, len(name), 0))
+        hdr = b"070701" + b"".join(b"%08x" % v for v in (ino, mode, 0, 0, 1, 0, len(payload), 0, 0, 0, 0, len(name), 0))
         blobs.append(hdr + name)
         blobs.append(b"\0" * (-len(hdr + name) % 4))
         blobs.append(payload)
         blobs.append(b"\0" * (-len(payload) % 4))
         ino += 1
     name = b"TRAILER!!!\0"
-    hdr = b"070701" + b"".join(b"%08x" % v for v in
-                               (ino, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, len(name), 0))
+    hdr = b"070701" + b"".join(b"%08x" % v for v in (ino, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, len(name), 0))
     blobs.append(hdr + name)
     blobs.append(b"\0" * (-len(hdr + name) % 4))
     raw = b"".join(blobs)
@@ -185,12 +188,24 @@ def main():
     extra_bins = sys.argv[5:]
 
     img = Image(root)
-    for d in ("/bin", "/sbin", "/usr", "/usr/bin", "/usr/sbin", "/lib",
-              "/proc", "/sys", "/dev", "/tmp", "/mnt", "/etc", "/newroot"):
+    for d in (
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/usr/bin",
+        "/usr/sbin",
+        "/lib",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/tmp",
+        "/mnt",
+        "/etc",
+        "/newroot",
+    ):
         img.dir(d)
 
-    busybox = next((p for p in ("/usr/bin/busybox", "/bin/busybox")
-                    if os.path.exists(img._real(p))), None)
+    busybox = next((p for p in ("/usr/bin/busybox", "/bin/busybox") if os.path.exists(img._real(p))), None)
     if not busybox:
         sys.exit(f"no busybox in {root}")
     img.copy_with_libs(busybox)
@@ -204,8 +219,7 @@ def main():
         for a in EXTRAS_APPLETS:
             img.symlink(f"/bin/{a}", "/bin/busybox-extras")
     else:
-        sys.exit("busybox-extras is missing -- the image would have no telnetd, "
-                 "and this board has no serial console")
+        sys.exit("busybox-extras is missing -- the image would have no telnetd, and this board has no serial console")
 
     # The musl loader plus the libc symlink names binaries actually record in
     # their NEEDED entries -- ld-musl-armhf.so.1 is the interpreter, but every
@@ -222,8 +236,9 @@ def main():
     # looks exactly like a normal, healthy boot.
     for b in extra_bins:
         if not img.copy_with_libs(b):
-            sys.exit(f"ERROR: {b} is not in {root} — refusing to build an "
-                     f"initramfs that is missing a tool it was asked for")
+            sys.exit(
+                f"ERROR: {b} is not in {root} — refusing to build an initramfs that is missing a tool it was asked for"
+            )
 
     if extra_dir != "-":
         for dirpath, _, files in os.walk(extra_dir):
@@ -239,8 +254,7 @@ def main():
     img.symlink("/sbin/init", "/init")
 
     raw = write_cpio(img.entries, out)
-    print(f"  initramfs: {len(img.entries)} entries, {raw} B raw, "
-          f"{os.path.getsize(out)} B gzipped -> {out}")
+    print(f"  initramfs: {len(img.entries)} entries, {raw} B raw, {os.path.getsize(out)} B gzipped -> {out}")
 
 
 if __name__ == "__main__":

@@ -8,22 +8,22 @@ must be exact, or each push would move the Q. Pinned here: the port of
 vol2attn against values computed from shairport's own source, the inverse
 round trip, the range floor, the settle, and the echo guard.
 """
+
 import importlib.machinery
 import importlib.util
-import math
 import os
 import re
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(HERE, "..", "nexusq-control")
-SHAIRPORT_CONF = os.path.join(HERE, "..", "..", "..", "pmos", "device-google-steelhead",
-                              "shairport-sync.conf")
+SHAIRPORT_CONF = os.path.join(HERE, "..", "..", "..", "pmos", "device-google-steelhead", "shairport-sync.conf")
 
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -43,10 +43,10 @@ class TestCurve(unittest.TestCase):
         f = MOD.airplay_attn_cdb
         self.assertEqual(f(0.0), 0.0)
         self.assertEqual(f(-30.0), -6000.0)
-        self.assertAlmostEqual(f(-15.0), min(-3000 * 15 / 30, -4500 * 10 / 25))   # -1800
-        self.assertAlmostEqual(f(-3.0), -300.0)                                   # line 1 only
+        self.assertAlmostEqual(f(-15.0), min(-3000 * 15 / 30, -4500 * 10 / 25))  # -1800
+        self.assertAlmostEqual(f(-3.0), -300.0)  # line 1 only
         self.assertAlmostEqual(f(-20.0), min(-2000.0, -2700.0, -6000 * 3 / 13))
-        self.assertEqual(f(-144.0), -6000.0)            # AirPlay mute -> the floor
+        self.assertEqual(f(-144.0), -6000.0)  # AirPlay mute -> the floor
 
     def test_half_is_half(self):
         # why a 60 dB range: the iPhone's half-way is the app's 50 %
@@ -75,15 +75,15 @@ class TestFollow(unittest.TestCase):
     def make(self, session=True, sender=None):
         self.pushed = []
         self.sender = sender
-        return MOD.AirPlayVolumeFollow(session=lambda: session,
-                                       sender_volume=lambda: self.sender,
-                                       push=self.pushed.append, settle_s=60)
+        return MOD.AirPlayVolumeFollow(
+            session=lambda: session, sender_volume=lambda: self.sender, push=self.pushed.append, settle_s=60
+        )
 
     def test_pushes_the_settled_value_only(self):
         f = self.make(sender=-15.0)
         for p in (40, 45, 52):
             f.volume_changed(p)
-        a = f.settled()                  # the timer, fired by hand
+        a = f.settled()  # the timer, fired by hand
         self.assertEqual(self.pushed, [a])
         self.assertAlmostEqual(percent_of_cdb(MOD.airplay_attn_cdb(a)), 52, delta=0.01)
         f._timer and f._timer.cancel()

@@ -22,6 +22,7 @@ Config via env:
   NEXUSQ_SETUP_TIMEOUT  (default 600 s of inactivity -> exit)
   NEXUSQ_WLAN_IFACE     (default wlan0)
 """
+
 import json
 import os
 import re
@@ -41,20 +42,20 @@ THEME_CONF_PATH = os.environ.get("NEXUSQ_THEME_CONF", "/etc/nexusq/theme.json")
 SETUP_TIMEOUT = float(os.environ.get("NEXUSQ_SETUP_TIMEOUT", "600"))
 WLAN = os.environ.get("NEXUSQ_WLAN_IFACE", "wlan0")
 FORCE_FLAG = "/run/nexusq-setup.force"
-SPIN_CMD = "spin 0 153 204"          # idle/waiting: stock #0099CC blue, default rate
+SPIN_CMD = "spin 0 153 204"  # idle/waiting: stock #0099CC blue, default rate
 CONNECTING_CMD = "spin 0 153 204 0.4"  # joining WiFi: same blue, SLOW = "working"
-SUCCESS_SPIN = "spin 0 220 60 1.6"   # WiFi joined: FAST green = "got it!"
-ERROR_CMD = "spin 220 30 30 0.5"     # join failed: slow RED, persists until retry
-SUCCESS_CMD = "breathe 0 200 0"      # green success breathe before exit (finishSetup)
+SUCCESS_SPIN = "spin 0 220 60 1.6"  # WiFi joined: FAST green = "got it!"
+ERROR_CMD = "spin 220 30 30 0.5"  # join failed: slow RED, persists until retry
+SUCCESS_CMD = "breathe 0 200 0"  # green success breathe before exit (finishSetup)
 
 # Mirror of the bridge THEME_CMDS (userspace/nexusq-control) — keep in sync.
 THEME_CMDS = {
-    "blue":  ["breathe 0 153 204"],
-    "warm":  ["breathe 255 90 10"],
-    "cool":  ["breathe 0 200 140"],
-    "rose":  ["breathe 255 40 90"],
+    "blue": ["breathe 0 153 204"],
+    "warm": ["breathe 255 90 10"],
+    "cool": ["breathe 0 200 140"],
+    "rose": ["breathe 255 40 90"],
     "smoke": ["breathe 110 115 135"],
-    "off":   ["off"],
+    "off": ["off"],
 }
 
 
@@ -71,6 +72,7 @@ class Err(Exception):
 
 # --- pure helpers (host-tested) ------------------------------------------
 
+
 def pairing_color(mac):
     """The LED visual-pairing color, derived from the BT MAC (stock trick).
     Contract + shared vectors: companion/pairing-color-vectors.json."""
@@ -79,8 +81,7 @@ def pairing_color(mac):
     c = 1.0
     x = 1.0 - abs((hue / 60.0) % 2.0 - 1.0)
     sect = hue // 60
-    rgbf = [(c, x, 0.0), (x, c, 0.0), (0.0, c, x),
-            (0.0, x, c), (x, 0.0, c), (c, 0.0, x)][sect]
+    rgbf = [(c, x, 0.0), (x, c, 0.0), (0.0, c, x), (0.0, x, c), (x, 0.0, c), (c, 0.0, x)][sect]
     return tuple(int(v * 255 + 0.5) for v in rgbf)
 
 
@@ -140,7 +141,7 @@ def parse_wifi_list(out):
         parts = ln.split(":")
         if len(parts) < 3:
             continue
-        ssid = ":".join(parts[:-2])          # SSIDs may contain ':'
+        ssid = ":".join(parts[:-2])  # SSIDs may contain ':'
         signal_s, sec = parts[-2], parts[-1]
         if not ssid:
             continue
@@ -155,6 +156,7 @@ def parse_wifi_list(out):
 
 
 # --- side-effect adapters --------------------------------------------------
+
 
 def run_cmd(args, timeout=60):
     """subprocess.run wrapper (injectable in SetupCore for tests)."""
@@ -188,9 +190,10 @@ def bt_adapter_mac():
         pass
     try:
         import dbus
+
         props = dbus.Interface(
-            dbus.SystemBus().get_object("org.bluez", "/org/bluez/hci0"),
-            "org.freedesktop.DBus.Properties")
+            dbus.SystemBus().get_object("org.bluez", "/org/bluez/hci0"), "org.freedesktop.DBus.Properties"
+        )
         return str(props.Get("org.bluez.Adapter1", "Address")).upper()
     except Exception:  # noqa: BLE001 (no adapter / bluetoothd down)
         return ""
@@ -205,6 +208,7 @@ def wifi_provisioned(run=run_cmd):
 
 
 # --- the setup state machine ----------------------------------------------
+
 
 class SetupCore:
     """Protocol method handlers. Transport-agnostic: Task 5's RFCOMM loop
@@ -262,9 +266,13 @@ class SetupCore:
 
     # -- handlers --
     def _device_info(self):
-        return {"model": "steelhead", "btMac": self.bt_mac,
-                "swVersion": _sw_version(), "provisioned": wifi_provisioned(self.run),
-                "proto": 1}
+        return {
+            "model": "steelhead",
+            "btMac": self.bt_mac,
+            "swVersion": _sw_version(),
+            "provisioned": wifi_provisioned(self.run),
+            "proto": 1,
+        }
 
     def _confirm_color(self):
         # pairing_color needs a real MAC; an unknown adapter address must be
@@ -277,9 +285,10 @@ class SetupCore:
         return {"rgb": [r, g, b]}
 
     def _scan(self):
-        r = self.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY",
-                      "dev", "wifi", "list", "ifname", WLAN, "--rescan", "yes"],
-                     timeout=30)
+        r = self.run(
+            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", WLAN, "--rescan", "yes"],
+            timeout=30,
+        )
         if r.returncode != 0:
             raise Err("unavailable", "wifi scan failed")
         return {"networks": parse_wifi_list(r.stdout)}
@@ -310,8 +319,21 @@ class SetupCore:
         self.led.send(CONNECTING_CMD)
         # replace any previous attempt/profile of the same name
         self._delete_wifi_profile()
-        add = ["nmcli", "connection", "add", "type", "wifi", "con-name", "wifi",
-               "ifname", WLAN, "ssid", ssid, "connection.autoconnect", "yes"]
+        add = [
+            "nmcli",
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "con-name",
+            "wifi",
+            "ifname",
+            WLAN,
+            "ssid",
+            ssid,
+            "connection.autoconnect",
+            "yes",
+        ]
         if security == "wpa-psk":
             add += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
         if hidden:
@@ -344,8 +366,7 @@ class SetupCore:
         ip = self._wlan_ip()
         # brief fast-green "got it!" spin; the wizard moves on to name/theme
         self.led.send(SUCCESS_SPIN)
-        return {"ok": True, "ip": ip,
-                "mdns": socket.gethostname() + ".local"}
+        return {"ok": True, "ip": ip, "mdns": socket.gethostname() + ".local"}
 
     def _fail_join(self, code, msg):
         # every WiFi-join failure lands here: drop the half-made profile and
@@ -369,9 +390,7 @@ class SetupCore:
                 cols = ln.split(":")
                 if len(cols) >= 2 and cols[0] == WLAN:
                     nm = cols[1]
-                    state = ("online" if nm == "connected"
-                             else "associating" if nm.startswith("connecting")
-                             else "idle")
+                    state = "online" if nm == "connected" else "associating" if nm.startswith("connecting") else "idle"
         out = {"state": state}
         if state == "online":
             out["ip"] = self._wlan_ip()
@@ -395,10 +414,8 @@ class SetupCore:
         # before either is relevant; failures must not fail the setup).
         self.run(["systemctl", "restart", "nexusq-control.service"], timeout=30)
         if os.path.isdir("/run/user/10000/systemd"):
-            self.run(["systemctl", "-M", "user@", "--user", "restart",
-                      "librespot.service"], timeout=30)
-        return {"name": name, "room": room, "hostname": host,
-                "mdns": host + ".local"}
+            self.run(["systemctl", "-M", "user@", "--user", "restart", "librespot.service"], timeout=30)
+        return {"name": name, "room": room, "hostname": host, "mdns": host + ".local"}
 
     def _set_theme(self, p):
         theme = str(p.get("theme", ""))
@@ -415,7 +432,7 @@ class SetupCore:
         try:
             write_json_through(THEME_CONF_PATH, {"theme": theme})
         except OSError as e:
-            raise Err("unavailable", f"cannot persist theme: {e}")
+            raise Err("unavailable", f"cannot persist theme: {e}") from e
         self.chosen_theme = theme
         return {"theme": theme}
 
@@ -533,8 +550,7 @@ def _run_transport():
             sock.close()
 
     # adapter: powered + discoverable + pairable, no timeout while setup runs
-    adapter = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/hci0"),
-                             "org.freedesktop.DBus.Properties")
+    adapter = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/hci0"), "org.freedesktop.DBus.Properties")
     ident = {"name": "Nexus Q"}
     try:
         with open(IDENTITY_PATH) as f:
@@ -563,9 +579,8 @@ def _run_transport():
     #
     # One always-on NoInputNoOutput agent serves both. See
     # userspace/nexusq-btagent/README.md.
-    profile = Profile(bus, PROFILE_PATH)   # noqa: F841 (exported object)
-    pm = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
-                        "org.bluez.ProfileManager1")
+    profile = Profile(bus, PROFILE_PATH)  # noqa: F841 (exported object)
+    pm = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.ProfileManager1")
     # Fixed RFCOMM "Channel" 22: a server-role ext profile only starts its
     # RFCOMM listener (ext_start_servers) when a channel is given — omitting it
     # publishes the SDP UUID but binds NO channel, so the phone connects and
@@ -602,13 +617,17 @@ def _run_transport():
     # ("Address in use"); the Q's audio/PBAP stack occupies 3,9,10,13,14,15,16,
     # 17, so 22 is chosen clear of them. The app resolves the channel via SDP by
     # UUID, so the exact number only has to be free and stable.
-    pm.RegisterProfile(PROFILE_PATH, SETUP_UUID, {
-        "Name": dbus.String("NexusQ Setup"),
-        "Role": dbus.String("server"),
-        "Channel": dbus.UInt16(22),
-        "RequireAuthentication": dbus.Boolean(True),
-        "RequireAuthorization": dbus.Boolean(False),
-    })
+    pm.RegisterProfile(
+        PROFILE_PATH,
+        SETUP_UUID,
+        {
+            "Name": dbus.String("NexusQ Setup"),
+            "Role": dbus.String("server"),
+            "Channel": dbus.UInt16(22),
+            "RequireAuthentication": dbus.Boolean(True),
+            "RequireAuthorization": dbus.Boolean(False),
+        },
+    )
 
     # Arm the force flag for this session: Restart=on-failure re-runs
     # ExecCondition, which would otherwise refuse to restart us once a wifi

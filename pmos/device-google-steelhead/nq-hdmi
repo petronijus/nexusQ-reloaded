@@ -72,8 +72,7 @@ import threading
 CONNECTOR = os.environ.get("NEXUSQ_HDMI_CONNECTOR", "card0-HDMI-A-1")
 DRM_DIR = os.environ.get("NEXUSQ_DRM_DIR", "/sys/class/drm")
 FB_BLANK = os.environ.get("NEXUSQ_FB_BLANK", "/sys/class/graphics/fb0/blank")
-FBCON_CURSOR = os.environ.get("NEXUSQ_FBCON_CURSOR",
-                              "/sys/class/graphics/fbcon/cursor_blink")
+FBCON_CURSOR = os.environ.get("NEXUSQ_FBCON_CURSOR", "/sys/class/graphics/fbcon/cursor_blink")
 ACTIVE_VT = os.environ.get("NEXUSQ_ACTIVE_VT", "/sys/class/tty/tty0/active")
 # A VT with no getty on it: switching here is what makes the screen black.
 # tty1..tty6 may carry gettys; 8 is clear on this image.
@@ -132,7 +131,7 @@ def parse_edid_audio(edid):
         return False, "no CTA-861 extension (DVI-class sink, no audio path)"
 
     for off in range(128, len(edid) - 127, 128):
-        block = edid[off:off + 128]
+        block = edid[off : off + 128]
         if len(block) < 128 or block[0] != 0x02:
             continue
         basic_audio = bool(block[3] & 0x40)
@@ -171,7 +170,7 @@ def parse_edid_name(edid):
     if not edid or len(edid) < 128:
         return None
     for off in (54, 72, 90, 108):
-        d = edid[off:off + 18]
+        d = edid[off : off + 18]
         if len(d) == 18 and d[0:3] == b"\x00\x00\x00" and d[3] == 0xFC:
             return d[5:18].split(b"\n")[0].strip().decode(errors="replace") or None
     return None
@@ -185,8 +184,7 @@ def read_edid():
         return b""
 
 
-DRI_CLIENTS = os.environ.get("NEXUSQ_DRI_CLIENTS",
-                             "/sys/kernel/debug/dri/0/clients")
+DRI_CLIENTS = os.environ.get("NEXUSQ_DRI_CLIENTS", "/sys/kernel/debug/dri/0/clients")
 
 
 def _drm_master_present():
@@ -255,8 +253,7 @@ class Hold:
 
         _write(FBCON_CURSOR, 0)
         try:
-            subprocess.run(["chvt", str(HOLD_VT)], check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["chvt", str(HOLD_VT)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
             log(f"chvt {HOLD_VT} failed: {e}")
         # Clear whatever was on it and hide the cursor on that VT specifically.
@@ -270,8 +267,7 @@ class Hold:
         if self.prev_cursor is not None:
             _write(FBCON_CURSOR, self.prev_cursor)
         if self.prev_vt:
-            subprocess.run(["chvt", self.prev_vt], check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["chvt", self.prev_vt], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _keep_lit(self):
         """The single thing that matters: the output must never go dark, because
@@ -329,15 +325,13 @@ class Hold:
 
         st = hdmi_status()
         if not st["connected"]:
-            log("no sink on the HDMI port — nothing to hold. "
-                "Switch the TV/receiver on and select HDMI again.")
+            log("no sink on the HDMI port — nothing to hold. Switch the TV/receiver on and select HDMI again.")
             return 2
         if not st["audio"]:
             log(f"sink present but it takes no audio: {st['detail']}")
             return 3
 
-        log(f"holding the output for {st['sink'] or 'an unnamed sink'} "
-            f"({st['detail']})")
+        log(f"holding the output for {st['sink'] or 'an unnamed sink'} ({st['detail']})")
         self.had_sink = True
         self._park_console()
         self._keep_lit()
@@ -361,9 +355,11 @@ class Hold:
                         self._keep_black()
                 elif self.had_sink:
                     self.had_sink = False
-                    log("sink dropped HPD (switched off, or it slept). This board "
+                    log(
+                        "sink dropped HPD (switched off, or it slept). This board "
                         "cannot wake it: the PHY needs a LINK_CONNECT interrupt "
-                        "and CEC needs an EDID. Waiting for it to come back.")
+                        "and CEC needs an EDID. Waiting for it to come back."
+                    )
         finally:
             self._restore_console()
             log("released the output")
@@ -378,8 +374,7 @@ def cmd_status(args):
         print(f"connected : {st['connected']}")
         print(f"sink      : {st['sink'] or '-'}")
         print(f"audio     : {st['audio']}  ({st['detail']})")
-        print(f"output    : {'enabled' if st['enabled'] else 'disabled'}"
-              f"  fb0 blank={st['blank']}")
+        print(f"output    : {'enabled' if st['enabled'] else 'disabled'}  fb0 blank={st['blank']}")
     return 0 if (st["connected"] and st["audio"]) else 1
 
 
@@ -388,9 +383,7 @@ def cmd_hold(args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(
-        prog="nq-hdmi",
-        description="Hold the Nexus Q's HDMI output up so the sink can hear it")
+    p = argparse.ArgumentParser(prog="nq-hdmi", description="Hold the Nexus Q's HDMI output up so the sink can hear it")
     sub = p.add_subparsers(dest="cmd")
 
     s = sub.add_parser("status", help="is a sink attached, and does it take audio?")
@@ -398,11 +391,12 @@ def main(argv=None):
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("hold", help="hold the output up until terminated")
-    s.add_argument("--no-cec", action="store_true",
-                   help="do not talk CEC to the sink at all")
-    s.add_argument("--cec-quiet", action="store_true",
-                   help="CEC, but without the <Active Source> broadcast that "
-                        "also switches the input of a TV upstream")
+    s.add_argument("--no-cec", action="store_true", help="do not talk CEC to the sink at all")
+    s.add_argument(
+        "--cec-quiet",
+        action="store_true",
+        help="CEC, but without the <Active Source> broadcast that also switches the input of a TV upstream",
+    )
     s.set_defaults(func=cmd_hold)
 
     args = p.parse_args(argv)

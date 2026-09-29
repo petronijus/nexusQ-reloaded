@@ -20,6 +20,7 @@ process which is neither root nor in the socket's group could not open it, but
 one in the group can — rather than grepping for the call. Seen failing with the
 chown removed.
 """
+
 import grp
 import importlib.machinery
 import importlib.util
@@ -35,7 +36,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -57,14 +59,15 @@ class TestHookSocketPermissions(unittest.TestCase):
         drive the bridge, which accepts commands, so assert against it."""
         src = open(DAEMON).read()
         i = src.index("def serve_unix")
-        body = src[i:i + 1600]
-        self.assertIn("os.chown(HOOK_SOCK", body,
-                      "serve_unix must hand the hook socket to the user's group")
+        body = src[i : i + 1600]
+        self.assertIn("os.chown(HOOK_SOCK", body, "serve_unix must hand the hook socket to the user's group")
         self.assertIn("0o660", body)
-        self.assertNotIn("0o666", body,
-                         "widening the socket to the world is not the fix")
-        self.assertLess(body.index("os.chown(HOOK_SOCK"), body.index("os.chmod(HOOK_SOCK"),
-                        "chown before chmod: chown can clear mode bits")
+        self.assertNotIn("0o666", body, "widening the socket to the world is not the fix")
+        self.assertLess(
+            body.index("os.chown(HOOK_SOCK"),
+            body.index("os.chmod(HOOK_SOCK"),
+            "chown before chmod: chown can clear mode bits",
+        )
 
     def test_a_0660_root_owned_socket_really_is_unreachable(self):
         """The bug itself, reproduced: with the group left as root's, a process
@@ -84,9 +87,10 @@ class TestHookSocketPermissions(unittest.TestCase):
             self.assertEqual(mode, 0o600)
             # A socket the caller owns is still connectable; the point of the
             # assertion is the mode arithmetic the fix depends on.
-            self.assertFalse(mode & stat.S_IRWXG,
-                             "0600 leaves no group access — this is what root:root 0660 "
-                             "looked like to uid 10000")
+            self.assertFalse(
+                mode & stat.S_IRWXG,
+                "0600 leaves no group access — this is what root:root 0660 looked like to uid 10000",
+            )
             srv.close()
 
     def test_group_10000_exists_where_the_daemon_runs(self):

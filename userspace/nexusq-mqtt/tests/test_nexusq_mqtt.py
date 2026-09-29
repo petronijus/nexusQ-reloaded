@@ -22,9 +22,7 @@ DAEMON = os.path.join(HERE, "..", "nexusq-mqtt")
 
 
 def load_daemon():
-    spec = importlib.util.spec_from_loader(
-        "nexusq_mqtt", importlib.machinery.SourceFileLoader(
-            "nexusq_mqtt", DAEMON))
+    spec = importlib.util.spec_from_loader("nexusq_mqtt", importlib.machinery.SourceFileLoader("nexusq_mqtt", DAEMON))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -37,15 +35,16 @@ MOD = load_daemon()
 # a minimal fake MQTT broker: accepts one client, parses packets, records them
 # --------------------------------------------------------------------------
 
+
 class FakeBroker:
     """Accepts one client, parses MQTT packets, records CONNECT + PUBLISHes
     (with the retain bit from the raw header byte), answers CONNACK/PINGRESP."""
 
     def __init__(self, connack_rc=0):
         self.connack_rc = connack_rc
-        self.packets = []          # (type_byte, body) in arrival order
-        self.connect = None        # parsed CONNECT dict
-        self.raw_publishes = []    # (topic, payload_bytes, retain_bool)
+        self.packets = []  # (type_byte, body) in arrival order
+        self.connect = None  # parsed CONNECT dict
+        self.raw_publishes = []  # (topic, payload_bytes, retain_bool)
         self._srv = socket.socket()
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind(("127.0.0.1", 0))
@@ -81,9 +80,7 @@ class FakeBroker:
                     self.conn.sendall(bytes([0x20, 2, 0, self.connack_rc]))
                 elif ptype == 0x30:
                     (n,) = struct.unpack_from("!H", body, 0)
-                    self.raw_publishes.append(
-                        (body[2:2 + n].decode(), body[2 + n:],
-                         bool(first[0] & 0x01)))
+                    self.raw_publishes.append((body[2 : 2 + n].decode(), body[2 + n :], bool(first[0] & 0x01)))
                 elif ptype == 0xC0:  # PINGREQ -> PINGRESP
                     self.conn.sendall(b"\xd0\x00")
                 elif ptype == 0xE0:  # DISCONNECT
@@ -107,15 +104,14 @@ class FakeBroker:
     def _parse_connect(body):
         def take_str(buf, off):
             (n,) = struct.unpack_from("!H", buf, off)
-            return buf[off + 2:off + 2 + n].decode(), off + 2 + n
+            return buf[off + 2 : off + 2 + n].decode(), off + 2 + n
 
         proto, off = take_str(body, 0)
         level = body[off]
         flags = body[off + 1]
         (keepalive,) = struct.unpack_from("!H", body, off + 2)
         off += 4
-        out = {"proto": proto, "level": level, "flags": flags,
-               "keepalive": keepalive}
+        out = {"proto": proto, "level": level, "flags": flags, "keepalive": keepalive}
         out["client_id"], off = take_str(body, off)
         if flags & 0x04:
             out["will_topic"], off = take_str(body, off)
@@ -159,6 +155,7 @@ def wait_for(predicate, timeout=5):
 # wire protocol
 # --------------------------------------------------------------------------
 
+
 class TestRemainingLength(unittest.TestCase):
     def test_boundaries(self):
         self.assertEqual(MOD._remaining_len(0), b"\x00")
@@ -175,9 +172,14 @@ class TestRemainingLength(unittest.TestCase):
 class TestConnect(unittest.TestCase):
     def _client(self, broker):
         return MOD.MqttClient(
-            "127.0.0.1", broker.port, client_id="nexusq_test",
-            username="user", password="pass",
-            will_topic="nexusq/status", will_payload="offline")
+            "127.0.0.1",
+            broker.port,
+            client_id="nexusq_test",
+            username="user",
+            password="pass",
+            will_topic="nexusq/status",
+            will_payload="offline",
+        )
 
     def test_connect_packet_contents(self):
         broker = FakeBroker()
@@ -218,11 +220,9 @@ class TestConnect(unittest.TestCase):
             cli.connect()
             cli.publish("nexusq/health/state", '{"a":1}', retain=True)
             cli.publish("nexusq/x", "plain", retain=False)
-            self.assertTrue(
-                wait_for(lambda: len(broker.raw_publishes) >= 2))
+            self.assertTrue(wait_for(lambda: len(broker.raw_publishes) >= 2))
             t0, p0, r0 = broker.raw_publishes[0]
-            self.assertEqual((t0, p0, r0),
-                             ("nexusq/health/state", b'{"a":1}', True))
+            self.assertEqual((t0, p0, r0), ("nexusq/health/state", b'{"a":1}', True))
             t1, p1, r1 = broker.raw_publishes[1]
             self.assertEqual((t1, p1, r1), ("nexusq/x", b"plain", False))
             cli.disconnect()
@@ -253,8 +253,7 @@ class TestConnect(unittest.TestCase):
             payload = "x" * 5000
             cli.publish("nexusq/big", payload)
             self.assertTrue(wait_for(lambda: len(broker.raw_publishes) >= 1))
-            self.assertEqual(broker.raw_publishes[0][1],
-                             payload.encode())
+            self.assertEqual(broker.raw_publishes[0][1], payload.encode())
             cli.disconnect()
         finally:
             broker.close()
@@ -264,18 +263,17 @@ class TestConnect(unittest.TestCase):
 # config
 # --------------------------------------------------------------------------
 
+
 class TestConfig(unittest.TestCase):
     def _write(self, obj):
-        f = tempfile.NamedTemporaryFile(
-            "w", suffix=".json", delete=False)
+        f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
         json.dump(obj, f)
         f.close()
         self.addCleanup(os.unlink, f.name)
         return f.name
 
     def test_minimal_valid_with_defaults(self):
-        conf = MOD.load_conf(self._write(
-            {"host": "h", "username": "u", "password": "p"}))
+        conf = MOD.load_conf(self._write({"host": "h", "username": "u", "password": "p"}))
         self.assertEqual(conf["port"], 1883)
         self.assertEqual(conf["interval_s"], 30)
         self.assertEqual(conf["prefix"], "nexusq")
@@ -289,13 +287,9 @@ class TestConfig(unittest.TestCase):
                 MOD.load_conf(self._write(obj))
 
     def test_interval_clamped(self):
-        conf = MOD.load_conf(self._write(
-            {"host": "h", "username": "u", "password": "p",
-             "interval_s": 3}))
+        conf = MOD.load_conf(self._write({"host": "h", "username": "u", "password": "p", "interval_s": 3}))
         self.assertEqual(conf["interval_s"], 10)
-        conf = MOD.load_conf(self._write(
-            {"host": "h", "username": "u", "password": "p",
-             "interval_s": 100000}))
+        conf = MOD.load_conf(self._write({"host": "h", "username": "u", "password": "p", "interval_s": 100000}))
         self.assertEqual(conf["interval_s"], 600)
 
     def test_bad_json(self):
@@ -314,6 +308,7 @@ class TestConfig(unittest.TestCase):
 # --------------------------------------------------------------------------
 # collectors
 # --------------------------------------------------------------------------
+
 
 class TestHealthTail(unittest.TestCase):
     def test_last_line_wins_and_torn_line_skipped(self):
@@ -344,7 +339,7 @@ class TestOppResidency(unittest.TestCase):
 
     def test_counter_reset_falls_back_to_absolute(self):
         prev = {350000: 5000}
-        cur = {350000: 100, 700000: 300}   # went backwards -> reset
+        cur = {350000: 100, 700000: 300}  # went backwards -> reset
         pct = MOD.opp_residency(prev, cur)
         self.assertEqual(pct[350000], 25.0)
         self.assertEqual(pct[700000], 75.0)
@@ -361,25 +356,21 @@ class TestWindowResidency(unittest.TestCase):
     def test_grows_from_daemon_start_then_slides(self):
         hist = []
         # t=0: since-boot fallback (no history yet)
-        pct, hist = MOD.window_residency(hist, {350: 100, 700: 100}, 0.0,
-                                         window_s=3600)
+        pct, hist = MOD.window_residency(hist, {350: 100, 700: 100}, 0.0, window_s=3600)
         self.assertEqual(pct[350], 50.0)
         # t=1800: measured against t=0 (window still growing)
-        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 100}, 1800.0,
-                                         window_s=3600)
-        self.assertEqual(pct[350], 100.0)   # all growth was at 350
+        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 100}, 1800.0, window_s=3600)
+        self.assertEqual(pct[350], 100.0)  # all growth was at 350
         # t=5400: the t=0 snapshot expired; base is now t=1800
-        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 1000}, 5400.0,
-                                         window_s=3600)
-        self.assertEqual(pct[700], 100.0)   # within the window only 700 grew
+        pct, hist = MOD.window_residency(hist, {350: 1000, 700: 1000}, 5400.0, window_s=3600)
+        self.assertEqual(pct[700], 100.0)  # within the window only 700 grew
         self.assertEqual([t for t, _ in hist], [1800.0, 5400.0])
 
     def test_counter_reset_discards_history(self):
         hist = []
         _, hist = MOD.window_residency(hist, {350: 5000}, 0.0, window_s=3600)
         # counters went backwards -> reboot -> fresh start, since-boot fallback
-        pct, hist = MOD.window_residency(hist, {350: 30, 700: 10}, 30.0,
-                                         window_s=3600)
+        pct, hist = MOD.window_residency(hist, {350: 30, 700: 10}, 30.0, window_s=3600)
         self.assertEqual(pct[350], 75.0)
         self.assertEqual(len(hist), 1)
 
@@ -410,8 +401,10 @@ class TestCpuidle(unittest.TestCase):
 
     def test_read_sums_cpus_and_keeps_latencies(self):
         root = tempfile.mkdtemp()
-        cpuidle_tree(root, [[("C1", 10, 4), ("C2", 20, 1100), ("C3", 30, 1200)],
-                            [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]])
+        cpuidle_tree(
+            root,
+            [[("C1", 10, 4), ("C2", 20, 1100), ("C3", 30, 1200)], [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]],
+        )
         with mock.patch.object(MOD, "CPUIDLE_ROOT", root):
             times, lat, ncpu = MOD.read_cpuidle()
         self.assertEqual(times, {"C1": 11, "C2": 22, "C3": 33})
@@ -422,25 +415,22 @@ class TestCpuidle(unittest.TestCase):
         with mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"):
             self.assertEqual(MOD.read_cpuidle(), ({}, {}, 0))
         root = tempfile.mkdtemp()
-        os.makedirs(os.path.join(root, "cpu0"))   # a CPU without cpuidle
+        os.makedirs(os.path.join(root, "cpu0"))  # a CPU without cpuidle
         with mock.patch.object(MOD, "CPUIDLE_ROOT", root):
             self.assertEqual(MOD.read_cpuidle(), ({}, {}, 0))
 
     def test_window_is_share_of_wall_time_per_cpu(self):
         # since boot: 2 CPUs x 100 s; 150 s of C3 summed = 75 % per CPU
-        pct, hist = MOD.idle_window([], {"C1": 20e6, "C3": 150e6}, 2, 100.0,
-                                    window_s=3600)
+        pct, hist = MOD.idle_window([], {"C1": 20e6, "C3": 150e6}, 2, 100.0, window_s=3600)
         self.assertEqual(pct, {"C1": 10.0, "C3": 75.0})
         # next 100 s: 190 s of C3 over 2 x 100 s -> 95 %, measured from t=100
-        pct, hist = MOD.idle_window(hist, {"C1": 22e6, "C3": 340e6}, 2, 200.0,
-                                    window_s=3600)
+        pct, hist = MOD.idle_window(hist, {"C1": 22e6, "C3": 340e6}, 2, 200.0, window_s=3600)
         self.assertEqual(pct, {"C1": 1.0, "C3": 95.0})
         self.assertEqual(len(hist), 2)
 
     def test_window_slides_and_clamps(self):
         hist = [(0.0, {"C3": 0}, 2)]
-        pct, hist = MOD.idle_window(hist, {"C3": 7000e6}, 2, 4000.0,
-                                    window_s=3600)
+        pct, hist = MOD.idle_window(hist, {"C3": 7000e6}, 2, 4000.0, window_s=3600)
         # t=0 expired: no base left, so since boot (0 at monotonic 0) again
         self.assertEqual(pct["C3"], 87.5)
         # a counter ahead of the wall clock (sleep stretch booked late) clamps
@@ -449,15 +439,12 @@ class TestCpuidle(unittest.TestCase):
 
     def test_window_restarts_on_reset_or_cpu_count(self):
         hist = [(10.0, {"C1": 5e6, "C3": 9e6}, 2)]
-        _, h = MOD.idle_window(hist, {"C1": 1e6, "C3": 9e6}, 2, 20.0,
-                               window_s=3600)
-        self.assertEqual(len(h), 1)            # counter went backwards
-        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 1, 20.0,
-                               window_s=3600)
-        self.assertEqual(len(h), 1)            # a CPU went offline
-        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 2, 20.0,
-                               window_s=3600)
-        self.assertEqual(len(h), 2)            # ordinary step
+        _, h = MOD.idle_window(hist, {"C1": 1e6, "C3": 9e6}, 2, 20.0, window_s=3600)
+        self.assertEqual(len(h), 1)  # counter went backwards
+        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 1, 20.0, window_s=3600)
+        self.assertEqual(len(h), 1)  # a CPU went offline
+        _, h = MOD.idle_window(hist, {"C1": 6e6, "C3": 9e6}, 2, 20.0, window_s=3600)
+        self.assertEqual(len(h), 2)  # ordinary step
         pct, h = MOD.idle_window(hist, {}, 0, 20.0, window_s=3600)
         self.assertEqual((pct, h), ({}, hist))  # no cpuidle: history kept
 
@@ -487,14 +474,14 @@ class TestCpuidle(unittest.TestCase):
             self.assertEqual((share, judged), (100.0, None))
             for i in range(1, 20):
                 share, judged, hist = MOD.veto_window(hist, True, 30.0 * i, 3600)
-            self.assertIsNone(judged)          # 570 s: still too short
+            self.assertIsNone(judged)  # 570 s: still too short
             share, judged, hist = MOD.veto_window(hist, True, 600.0, 3600)
-            self.assertTrue(judged)            # 21/21 blocked over 600 s
+            self.assertTrue(judged)  # 21/21 blocked over 600 s
             share, judged, hist = MOD.veto_window(hist, False, 630.0, 3600)
             share, judged, hist = MOD.veto_window(hist, False, 660.0, 3600)
             share, judged, hist = MOD.veto_window(hist, False, 690.0, 3600)
             self.assertEqual(share, round(100 * 21 / 24, 1))
-            self.assertFalse(judged)           # 87.5 % < 90 %: transient
+            self.assertFalse(judged)  # 87.5 % < 90 %: transient
             # a sample that cannot say is not recorded
             n = len(hist)
             _, _, hist = MOD.veto_window(hist, None, 720.0, 3600)
@@ -502,20 +489,22 @@ class TestCpuidle(unittest.TestCase):
 
     def test_collect_publishes_idle_and_veto(self):
         root = tempfile.mkdtemp()
-        cpuidle_tree(root, [[("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)],
-                            [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]])
+        cpuidle_tree(
+            root, [[("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)], [("C1", 1, 4), ("C2", 2, 1100), ("C3", 3, 1200)]]
+        )
         health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
         health.write(json.dumps({"cstate_armed": "C2,C3", "qos_us": 170}) + "\n")
         health.close()
         self.addCleanup(os.unlink, health.name)
-        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
-                mock.patch.object(MOD, "CPUIDLE_ROOT", root), \
-                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
-                mock.patch.object(MOD, "read_wifi", return_value=(None, None)), \
-                mock.patch.object(MOD, "read_volume",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_uptime", return_value=1):
+        with (
+            mock.patch.object(MOD, "HEALTH_PATH", health.name),
+            mock.patch.object(MOD, "CPUIDLE_ROOT", root),
+            mock.patch.object(MOD, "TIS_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+            mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=1),
+        ):
             win = MOD.Windows()
             state = MOD.collect(win)
         for k in ("idle_c1_pct", "idle_c2_pct", "idle_c3_pct"):
@@ -523,24 +512,24 @@ class TestCpuidle(unittest.TestCase):
         self.assertEqual(state["cstate_armed"], "C2,C3")
         self.assertEqual(state["cpu_latency_limit_us"], 170)
         self.assertEqual(state["deep_idle_blocked_pct"], 100.0)
-        self.assertNotIn("deep_idle_blocked", state)   # window too short
+        self.assertNotIn("deep_idle_blocked", state)  # window too short
         self.assertEqual(len(win.idle), 1)
         self.assertEqual(len(win.veto), 1)
 
     def test_unconstrained_qos_is_not_published(self):
         health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
-        health.write(json.dumps({"cstate_armed": "C2,C3",
-                                 "qos_us": MOD.QOS_NO_LIMIT}) + "\n")
+        health.write(json.dumps({"cstate_armed": "C2,C3", "qos_us": MOD.QOS_NO_LIMIT}) + "\n")
         health.close()
         self.addCleanup(os.unlink, health.name)
-        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
-                mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"), \
-                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
-                mock.patch.object(MOD, "read_wifi", return_value=(None, None)), \
-                mock.patch.object(MOD, "read_volume",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_uptime", return_value=1):
+        with (
+            mock.patch.object(MOD, "HEALTH_PATH", health.name),
+            mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"),
+            mock.patch.object(MOD, "TIS_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+            mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=1),
+        ):
             state = MOD.collect(MOD.Windows())
         self.assertNotIn("cpu_latency_limit_us", state)
         # no cpuidle -> no latency table -> the veto cannot be judged
@@ -561,13 +550,12 @@ class TestDiagnosticsMode(unittest.TestCase):
 
     def test_states(self):
         self.assertEqual(self._read(None), {"diagnostics": False})
-        self.assertEqual(self._read('{"until": null, "endedAt": 5}'),
-                         {"diagnostics": False})
-        self.assertEqual(self._read(json.dumps({"until": self.NOW - 1})),
-                         {"diagnostics": False})
-        self.assertEqual(self._read(json.dumps({"until": self.NOW + 3600})),
-                         {"diagnostics": True,
-                          "diagnostics_until": "2026-09-21T15:13:20Z"})
+        self.assertEqual(self._read('{"until": null, "endedAt": 5}'), {"diagnostics": False})
+        self.assertEqual(self._read(json.dumps({"until": self.NOW - 1})), {"diagnostics": False})
+        self.assertEqual(
+            self._read(json.dumps({"until": self.NOW + 3600})),
+            {"diagnostics": True, "diagnostics_until": "2026-09-21T15:13:20Z"},
+        )
         for doc in ("", "{", "[]", '{"until": true}', '{"until": "x"}'):
             with self.subTest(doc=doc):
                 self.assertEqual(self._read(doc), {"diagnostics": False})
@@ -575,12 +563,23 @@ class TestDiagnosticsMode(unittest.TestCase):
 
 class TestCollect(unittest.TestCase):
     def test_omits_unavailable_and_maps_units(self):
-        health = tempfile.NamedTemporaryFile(
-            "w", suffix=".jsonl", delete=False)
-        health.write(json.dumps({
-            "temp_mC": 76500, "freq": 350000, "gov": "conservative",
-            "load1": "0.42", "mem_avail_kB": 204800, "nq_alive": 1,
-            "led_stall": 0, "dmesg_err": 2, "pstore": 0}) + "\n")
+        health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        health.write(
+            json.dumps(
+                {
+                    "temp_mC": 76500,
+                    "freq": 350000,
+                    "gov": "conservative",
+                    "load1": "0.42",
+                    "mem_avail_kB": 204800,
+                    "nq_alive": 1,
+                    "led_stall": 0,
+                    "dmesg_err": 2,
+                    "pstore": 0,
+                }
+            )
+            + "\n"
+        )
         health.close()
         self.addCleanup(os.unlink, health.name)
         tis = tempfile.NamedTemporaryFile("w", delete=False)
@@ -592,14 +591,14 @@ class TestCollect(unittest.TestCase):
         with open(f"{cgroup}/roon.service/cgroup.procs", "w") as f:
             f.write("1234\n")
 
-        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
-                mock.patch.object(MOD, "TIS_PATH", tis.name), \
-                mock.patch.object(MOD, "USER_CGROUP", cgroup), \
-                mock.patch.object(MOD, "read_wifi",
-                                  return_value=(-48, "TestNet")), \
-                mock.patch.object(MOD, "read_volume",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_uptime", return_value=1234):
+        with (
+            mock.patch.object(MOD, "HEALTH_PATH", health.name),
+            mock.patch.object(MOD, "TIS_PATH", tis.name),
+            mock.patch.object(MOD, "USER_CGROUP", cgroup),
+            mock.patch.object(MOD, "read_wifi", return_value=(-48, "TestNet")),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=1234),
+        ):
             win = MOD.Windows()
             state = MOD.collect(win)
 
@@ -619,27 +618,24 @@ class TestCollect(unittest.TestCase):
         self.assertNotIn("volume_pct", state)
         self.assertNotIn("muted", state)
         # services: only roon has a live cgroup
-        self.assertEqual(state["services"], {
-            "spotify": False, "airplay": False,
-            "roon": True, "usbaudio": False})
+        self.assertEqual(state["services"], {"spotify": False, "airplay": False, "roon": True, "usbaudio": False})
         self.assertEqual(win.tis[-1][1], {350000: 900, 700000: 100})
 
     def test_stale_healthd_drops_health_fields(self):
-        health = tempfile.NamedTemporaryFile(
-            "w", suffix=".jsonl", delete=False)
+        health = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
         health.write('{"temp_mC":76500,"freq":350000}\n')
         health.close()
         self.addCleanup(os.unlink, health.name)
         old = time.time() - 300
         os.utime(health.name, (old, old))
-        with mock.patch.object(MOD, "HEALTH_PATH", health.name), \
-                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
-                mock.patch.object(MOD, "read_wifi",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_volume",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_uptime", return_value=None):
+        with (
+            mock.patch.object(MOD, "HEALTH_PATH", health.name),
+            mock.patch.object(MOD, "TIS_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+            mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=None),
+        ):
             state = MOD.collect(MOD.Windows())
         self.assertFalse(state["healthd_fresh"])
         self.assertNotIn("temp_c", state)
@@ -666,25 +662,22 @@ class TestWifiRepairs(unittest.TestCase):
 
     def test_start_marker_is_zero_and_healthy(self):
         with self.wd({"repairs": 0}):
-            self.assertEqual(MOD.read_wifi_repairs(1000, self.NOW),
-                             {"wifi_repairs": 0,
-                              "wifi_repaired_recently": False})
+            self.assertEqual(
+                MOD.read_wifi_repairs(1000, self.NOW), {"wifi_repairs": 0, "wifi_repaired_recently": False}
+            )
 
     def test_recent_repair_raises_the_flag_with_its_time(self):
-        with self.wd({"repairs": 2, "last_kind": "heal", "last_ok": True,
-                      "last_uptime": 1000}):
+        with self.wd({"repairs": 2, "last_kind": "heal", "last_ok": True, "last_uptime": 1000}):
             out = MOD.read_wifi_repairs(1600, self.NOW)
         self.assertEqual(out["wifi_repairs"], 2)
         self.assertTrue(out["wifi_repaired_recently"])
         self.assertEqual(out["wifi_last_repair_kind"], "heal")
         self.assertIs(out["wifi_last_repair_ok"], True)
         # 600 s before now, in UTC, in the form a HA timestamp sensor parses
-        self.assertEqual(out["wifi_last_repair"], time.strftime(
-            "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(self.NOW - 600)))
+        self.assertEqual(out["wifi_last_repair"], time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(self.NOW - 600)))
 
     def test_a_day_old_repair_is_counted_but_no_longer_a_problem(self):
-        with self.wd({"repairs": 1, "last_kind": "reconnect",
-                      "last_ok": False, "last_uptime": 100}):
+        with self.wd({"repairs": 1, "last_kind": "reconnect", "last_ok": False, "last_uptime": 100}):
             out = MOD.read_wifi_repairs(100 + 24 * 3600, self.NOW)
         self.assertEqual(out["wifi_repairs"], 1)
         self.assertFalse(out["wifi_repaired_recently"])
@@ -694,8 +687,7 @@ class TestWifiRepairs(unittest.TestCase):
         # The RTC does not tick: right after boot time.time() can be 1970.
         # Recency comes from the two uptimes, so it is still right; a wall
         # clock time derived from an unset clock would be a lie.
-        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
-                      "last_uptime": 50}):
+        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True, "last_uptime": 50}):
             out = MOD.read_wifi_repairs(80, 1000.0)
         self.assertTrue(out["wifi_repaired_recently"])
         self.assertNotIn("wifi_last_repair", out)
@@ -703,18 +695,14 @@ class TestWifiRepairs(unittest.TestCase):
     def test_repair_from_the_future_is_ignored(self):
         # last_uptime > uptime cannot come from this boot (/run is tmpfs);
         # report the count but make no recency claim from it.
-        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
-                      "last_uptime": 5000}):
+        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True, "last_uptime": 5000}):
             out = MOD.read_wifi_repairs(100, self.NOW)
-        self.assertEqual(out, {"wifi_repairs": 1,
-                               "wifi_repaired_recently": False})
+        self.assertEqual(out, {"wifi_repairs": 1, "wifi_repaired_recently": False})
 
     def test_unknown_uptime_reports_the_count_only(self):
-        with self.wd({"repairs": 3, "last_kind": "heal", "last_ok": True,
-                      "last_uptime": 50}):
+        with self.wd({"repairs": 3, "last_kind": "heal", "last_ok": True, "last_uptime": 50}):
             out = MOD.read_wifi_repairs(None, self.NOW)
-        self.assertEqual(out, {"wifi_repairs": 3,
-                               "wifi_repaired_recently": False})
+        self.assertEqual(out, {"wifi_repairs": 3, "wifi_repaired_recently": False})
 
     def test_garbage_is_ignored(self):
         for doc in ("", "{", "[]", '{"repairs":"3"}', '{"last_ok":true}'):
@@ -722,16 +710,15 @@ class TestWifiRepairs(unittest.TestCase):
                 self.assertEqual(MOD.read_wifi_repairs(100, self.NOW), {})
 
     def test_collect_carries_the_fields(self):
-        with self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True,
-                      "last_uptime": 1200}), \
-                mock.patch.object(MOD, "HEALTH_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "TIS_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"), \
-                mock.patch.object(MOD, "read_wifi",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_volume",
-                                  return_value=(None, None)), \
-                mock.patch.object(MOD, "read_uptime", return_value=1234):
+        with (
+            self.wd({"repairs": 1, "last_kind": "heal", "last_ok": True, "last_uptime": 1200}),
+            mock.patch.object(MOD, "HEALTH_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "TIS_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+            mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=1234),
+        ):
             state = MOD.collect(MOD.Windows())
         self.assertEqual(state["wifi_repairs"], 1)
         self.assertTrue(state["wifi_repaired_recently"])
@@ -741,10 +728,10 @@ class TestWifiRepairs(unittest.TestCase):
 # HA discovery contract
 # --------------------------------------------------------------------------
 
+
 class TestDiscovery(unittest.TestCase):
     def setUp(self):
-        self.configs = MOD.discovery_configs(
-            "nexusq_f88fca2048e1", "Obývák Q", "nexusq")
+        self.configs = MOD.discovery_configs("nexusq_f88fca2048e1", "Obývák Q", "nexusq")
 
     def test_unique_ids_unique_and_topics_wellformed(self):
         uids = [cfg["unique_id"] for _, cfg in self.configs]
@@ -762,18 +749,14 @@ class TestDiscovery(unittest.TestCase):
         # even though each box was publishing to its own prefix on the broker.
         # The node_id (the factory WiFi MAC) is what separates them.
         for _, cfg in self.configs:
-            self.assertEqual(cfg["state_topic"],
-                             "nexusq/nexusq_f88fca2048e1/health/state")
-            self.assertEqual(cfg["availability_topic"],
-                             "nexusq/nexusq_f88fca2048e1/status")
-            self.assertEqual(cfg["device"]["identifiers"],
-                             ["nexusq_f88fca2048e1"])
+            self.assertEqual(cfg["state_topic"], "nexusq/nexusq_f88fca2048e1/health/state")
+            self.assertEqual(cfg["availability_topic"], "nexusq/nexusq_f88fca2048e1/status")
+            self.assertEqual(cfg["device"]["identifiers"], ["nexusq_f88fca2048e1"])
             self.assertEqual(cfg["device"]["name"], "Obývák Q")
             json.dumps(cfg)  # must be JSON-serializable
 
     def test_two_devices_never_share_a_state_topic(self):
-        other = MOD.discovery_configs("nexusq_f88fca204ab1", "Šumperák Q",
-                                      "nexusq")
+        other = MOD.discovery_configs("nexusq_f88fca204ab1", "Šumperák Q", "nexusq")
         mine = {cfg["state_topic"] for _, cfg in self.configs}
         theirs = {cfg["state_topic"] for _, cfg in other}
         self.assertTrue(mine.isdisjoint(theirs))
@@ -781,23 +764,42 @@ class TestDiscovery(unittest.TestCase):
         avail_theirs = {cfg["availability_topic"] for _, cfg in other}
         self.assertTrue(avail_mine.isdisjoint(avail_theirs))
         # and the discovery config topics themselves stay distinct
-        self.assertTrue({t for t, _ in self.configs}
-                        .isdisjoint({t for t, _ in other}))
+        self.assertTrue({t for t, _ in self.configs}.isdisjoint({t for t, _ in other}))
 
     def test_expected_entities_present(self):
         keys = {t.split("/")[2] for t, _ in self.configs}
         # "volume" is no longer a telemetry sensor: since r10 it is VolumeLink's
         # writable number (tests/test_volume_ha.py)
         self.assertNotIn("volume", {t.split("/")[2] for t, _ in self.configs})
-        for expected in ("temp", "cpu_freq", "governor", "load1",
-                         "mem_avail", "uptime", "wifi_rssi",
-                         "opp350", "opp700", "opp920", "opp1200",
-                         "spotify", "airplay", "roon", "usbaudio",
-                         "nexusqd", "healthd", "wifi_repairs",
-                         "wifi_last_repair", "wifi_link",
-                         "idle_c1", "idle_c2", "idle_c3",
-                         "cpu_latency_limit", "deep_idle_blocked_share",
-                         "deep_idle", "diagnostics"):
+        for expected in (
+            "temp",
+            "cpu_freq",
+            "governor",
+            "load1",
+            "mem_avail",
+            "uptime",
+            "wifi_rssi",
+            "opp350",
+            "opp700",
+            "opp920",
+            "opp1200",
+            "spotify",
+            "airplay",
+            "roon",
+            "usbaudio",
+            "nexusqd",
+            "healthd",
+            "wifi_repairs",
+            "wifi_last_repair",
+            "wifi_link",
+            "idle_c1",
+            "idle_c2",
+            "idle_c3",
+            "cpu_latency_limit",
+            "deep_idle_blocked_share",
+            "deep_idle",
+            "diagnostics",
+        ):
             self.assertIn(expected, keys)
 
     def test_wifi_repair_entities(self):
@@ -817,27 +819,23 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual(cfg["device_class"], "problem")
         # healthy unless the device says it repaired the link recently; an
         # absent field (no watchdog, older device) must read healthy
-        self.assertIn("wifi_repaired_recently | default(false)",
-                      cfg["value_template"])
+        self.assertIn("wifi_repaired_recently | default(false)", cfg["value_template"])
         self.assertIn("'OFF' if (not (", cfg["value_template"])
 
     def test_deep_idle_entities(self):
         by_key = {t.split("/")[2]: (t, cfg) for t, cfg in self.configs}
         for key in ("c1", "c2", "c3"):
-            self.assertIn(f"value_json.idle_{key}_pct",
-                          by_key[f"idle_{key}"][1]["value_template"])
+            self.assertIn(f"value_json.idle_{key}_pct", by_key[f"idle_{key}"][1]["value_template"])
         topic, cfg = by_key["deep_idle"]
         self.assertTrue(topic.startswith("binary_sensor/"))
         self.assertEqual(cfg["device_class"], "problem")
         # absent judgement (short window, older device) must read healthy
-        self.assertIn("deep_idle_blocked | default(false)",
-                      cfg["value_template"])
+        self.assertIn("deep_idle_blocked | default(false)", cfg["value_template"])
 
     def test_opp_templates_reference_their_field(self):
         by_key = {t.split("/")[2]: cfg for t, cfg in self.configs}
         for mhz in (350, 700, 920, 1200):
-            self.assertIn(f"value_json.opp{mhz}_pct",
-                          by_key[f"opp{mhz}"]["value_template"])
+            self.assertIn(f"value_json.opp{mhz}_pct", by_key[f"opp{mhz}"]["value_template"])
 
 
 class TestIdentity(unittest.TestCase):
@@ -850,15 +848,16 @@ class TestIdentity(unittest.TestCase):
         json.dump({"name": "Obývák Q", "room": "obyvak"}, identf)
         identf.close()
         self.addCleanup(os.unlink, identf.name)
-        with mock.patch.object(MOD, "MAC_PATH", macf.name), \
-                mock.patch.object(MOD, "IDENTITY_PATH", identf.name):
+        with mock.patch.object(MOD, "MAC_PATH", macf.name), mock.patch.object(MOD, "IDENTITY_PATH", identf.name):
             node, name = MOD.device_identity()
         self.assertEqual(node, "nexusq_f88fca2048e1")
         self.assertEqual(name, "Obývák Q")
 
     def test_fallbacks(self):
-        with mock.patch.object(MOD, "MAC_PATH", "/nonexistent"), \
-                mock.patch.object(MOD, "IDENTITY_PATH", "/nonexistent"):
+        with (
+            mock.patch.object(MOD, "MAC_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "IDENTITY_PATH", "/nonexistent"),
+        ):
             node, name = MOD.device_identity()
         self.assertEqual(node, "nexusq_000000000000")
         self.assertEqual(name, "Nexus Q")
@@ -897,8 +896,7 @@ class TestVolumeFromControl(unittest.TestCase):
         MOD.CONTROL_HOST, MOD.CONTROL_PORT = "127.0.0.1", port
 
     def test_reads_volume_and_mute(self):
-        port = self._serve(json.dumps(
-            {"id": 1, "result": {"volume": 42, "muted": True}}).encode() + b"\n")
+        port = self._serve(json.dumps({"id": 1, "result": {"volume": 42, "muted": True}}).encode() + b"\n")
         self._with_port(port)
         self.assertEqual(MOD.volume_from_control(), (42, True))
 

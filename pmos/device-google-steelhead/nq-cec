@@ -69,9 +69,9 @@ CEC_DEV = os.environ.get("NEXUSQ_CEC_DEV", "/dev/cec0")
 # member is naturally aligned and the struct is padded to its own alignment.
 CEC_MAX_LOG_ADDRS = 4
 CEC_MAX_MSG_SIZE = 16
-CAPS_SZ = 32 + 32 + 4 + 4 + 4                      # driver[32] name[32] +3x u32
-LOG_ADDRS_SZ = 92                                  # see struct cec_log_addrs
-MSG_SZ = 56                                        # see struct cec_msg
+CAPS_SZ = 32 + 32 + 4 + 4 + 4  # driver[32] name[32] +3x u32
+LOG_ADDRS_SZ = 92  # see struct cec_log_addrs
+MSG_SZ = 56  # see struct cec_msg
 
 _IOC_READ, _IOC_WRITE = 2, 1
 
@@ -163,9 +163,7 @@ class Cec:
         return struct.unpack("<H", b)[0]
 
     def log_addrs(self):
-        b = self._ioctl(
-            CEC_ADAP_G_LOG_ADDRS, array.array("b", bytes(LOG_ADDRS_SZ))
-        ).tobytes()
+        b = self._ioctl(CEC_ADAP_G_LOG_ADDRS, array.array("b", bytes(LOG_ADDRS_SZ))).tobytes()
         mask, cec_version, num = struct.unpack("<HBB", b[4:8])
         return {
             "log_addr": list(b[0:CEC_MAX_LOG_ADDRS]),
@@ -251,17 +249,17 @@ def cmd_status(_args):
         la = c.log_addrs()
     print(f"device      : {CEC_DEV}")
     print(f"driver      : {caps['driver']} ({caps['name']})")
-    print(f"capabilities: 0x{caps['capabilities']:08x}"
-          f"{'  TRANSMIT' if caps['capabilities'] & CEC_CAP_TRANSMIT else ''}"
-          f"{'  LOG_ADDRS' if caps['capabilities'] & CEC_CAP_LOG_ADDRS else ''}")
+    print(
+        f"capabilities: 0x{caps['capabilities']:08x}"
+        f"{'  TRANSMIT' if caps['capabilities'] & CEC_CAP_TRANSMIT else ''}"
+        f"{'  LOG_ADDRS' if caps['capabilities'] & CEC_CAP_LOG_ADDRS else ''}"
+    )
     if pa == CEC_PHYS_ADDR_INVALID:
         print("phys addr   : INVALID — no EDID, sink is not asserting HPD")
     else:
-        print("phys addr   : %x.%x.%x.%x" %
-              ((pa >> 12) & 0xF, (pa >> 8) & 0xF, (pa >> 4) & 0xF, pa & 0xF))
+        print("phys addr   : %x.%x.%x.%x" % ((pa >> 12) & 0xF, (pa >> 8) & 0xF, (pa >> 4) & 0xF, pa & 0xF))
     if la["log_addr_mask"]:
-        print(f"log addr    : {la['log_addr'][0]} "
-              f"(mask 0x{la['log_addr_mask']:04x}, osd {la['osd_name']!r})")
+        print(f"log addr    : {la['log_addr'][0]} (mask 0x{la['log_addr_mask']:04x}, osd {la['osd_name']!r})")
     else:
         print("log addr    : none claimed")
     return 0 if pa != CEC_PHYS_ADDR_INVALID else 1
@@ -281,26 +279,27 @@ def cmd_wake(args):
                 return 1
             la = c.claim_playback()
             pa = c.phys_addr()
-            print(f"nq-cec: claimed logical address {la}, phys addr "
-                  "%x.%x.%x.%x" % ((pa >> 12) & 0xF, (pa >> 8) & 0xF,
-                                   (pa >> 4) & 0xF, pa & 0xF))
+            print(
+                f"nq-cec: claimed logical address {la}, phys addr "
+                "%x.%x.%x.%x" % ((pa >> 12) & 0xF, (pa >> 8) & 0xF, (pa >> 4) & 0xF, pa & 0xF)
+            )
 
             sends = [
                 (CEC_LOG_ADDR_TV, [CEC_MSG_IMAGE_VIEW_ON]),
-                (CEC_LOG_ADDR_AUDIOSYSTEM,
-                 [CEC_MSG_SYSTEM_AUDIO_MODE_REQUEST, pa >> 8, pa & 0xFF]),
+                (CEC_LOG_ADDR_AUDIOSYSTEM, [CEC_MSG_SYSTEM_AUDIO_MODE_REQUEST, pa >> 8, pa & 0xFF]),
             ]
             if not args.quiet:
-                sends.append((CEC_LOG_ADDR_BROADCAST,
-                              [CEC_MSG_ACTIVE_SOURCE, pa >> 8, pa & 0xFF]))
+                sends.append((CEC_LOG_ADDR_BROADCAST, [CEC_MSG_ACTIVE_SOURCE, pa >> 8, pa & 0xFF]))
 
             any_ok = False
             for dest, payload in sends:
                 status = c.transmit(la, dest, payload)
                 ok = bool(status & CEC_TX_STATUS_OK)
                 any_ok = any_ok or ok
-                print(f"nq-cec: -> LA{dest:<2} {_op_name(payload):<26} "
-                      f"{'ok' if ok else f'no ack (status 0x{status:02x})'}")
+                print(
+                    f"nq-cec: -> LA{dest:<2} {_op_name(payload):<26} "
+                    f"{'ok' if ok else f'no ack (status 0x{status:02x})'}"
+                )
             return 0 if any_ok else 1
     except CecError as e:
         print(f"nq-cec: {e}", file=sys.stderr)
@@ -320,17 +319,18 @@ def cmd_release(_args):
 def main(argv=None):
     import argparse
 
-    p = argparse.ArgumentParser(
-        prog="nq-cec", description="HDMI-CEC control for the Nexus Q")
+    p = argparse.ArgumentParser(prog="nq-cec", description="HDMI-CEC control for the Nexus Q")
     sub = p.add_subparsers(dest="cmd")
 
     s = sub.add_parser("status", help="print adapter state")
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("wake", help="wake the sink and ask it to select us")
-    s.add_argument("--quiet", action="store_true",
-                   help="skip the <Active Source> broadcast, which also "
-                        "switches the input of any TV upstream")
+    s.add_argument(
+        "--quiet",
+        action="store_true",
+        help="skip the <Active Source> broadcast, which also switches the input of any TV upstream",
+    )
     s.set_defaults(func=cmd_wake)
 
     s = sub.add_parser("release", help="give the logical address back")
@@ -347,8 +347,7 @@ def main(argv=None):
         return 1
     except OSError as e:
         if e.errno == errno.ENOENT:
-            print(f"nq-cec: {CEC_DEV} does not exist — no CEC adapter",
-                  file=sys.stderr)
+            print(f"nq-cec: {CEC_DEV} does not exist — no CEC adapter", file=sys.stderr)
             return 1
         raise
 

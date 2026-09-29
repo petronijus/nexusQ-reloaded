@@ -28,8 +28,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control_tap",
-        importlib.machinery.SourceFileLoader("nexusq_control_tap", DAEMON))
+        "nexusq_control_tap", importlib.machinery.SourceFileLoader("nexusq_control_tap", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -99,8 +99,7 @@ def run_one_subscribe(b, lines=()):
     def sleep(_):
         raise Stop
 
-    with mock.patch.object(MOD.subprocess, "Popen", return_value=Proc()), \
-         mock.patch.object(MOD.time, "sleep", sleep):
+    with mock.patch.object(MOD.subprocess, "Popen", return_value=Proc()), mock.patch.object(MOD.time, "sleep", sleep):
         try:
             MOD.pa_watch_thread(b)
         except Stop:
@@ -113,7 +112,7 @@ class TestReconcileSource(unittest.TestCase):
         b = Bridge(pulse)
         self.assertTrue(b._reconcile_source())
         self.assertEqual(pulse.source, SPEAKER + ".monitor")
-        self.assertEqual(b.stats.bumped, ["tap_fixes"])     # counted for nq-healthd
+        self.assertEqual(b.stats.bumped, ["tap_fixes"])  # counted for nq-healthd
 
     def test_nothing_to_do_when_it_is_right(self):
         pulse = FakePulse(default_source=SPEAKER + ".monitor")

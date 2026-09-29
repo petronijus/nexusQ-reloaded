@@ -32,6 +32,7 @@ Config via env:
   NEXUSQ_IDENTITY      (default /etc/nexusq/device.json)  # {"name","room"} written
                                                             # by nexusq-setupd's setName
 """
+
 import json
 import math
 import os
@@ -137,9 +138,9 @@ BOOT_OUTPUT = os.environ.get("NEXUSQ_BOOT_OUTPUT", "speaker")
 # is INPUT-AGNOSTIC: any input (librespot now; BT-A2DP / Tidal / casting later) is a
 # PA client whose stream we move onto whichever of these sinks is the active output.
 OUTPUTS = [
-    {"id": "speaker", "label": "Reproduktor",    "match": "tas5713"},
-    {"id": "spdif",   "label": "Optický výstup", "match": "spdif"},
-    {"id": "hdmi",    "label": "HDMI",           "match": "hdmi"},
+    {"id": "speaker", "label": "Reproduktor", "match": "tas5713"},
+    {"id": "spdif", "label": "Optický výstup", "match": "spdif"},
+    {"id": "hdmi", "label": "HDMI", "match": "hdmi"},
 ]
 OUTPUT_BY_ID = {o["id"]: o for o in OUTPUTS}
 
@@ -201,12 +202,12 @@ THEMES = [
 # the idle screensaver has blanked. Picking a visualisation (SCENES) sends `auto`,
 # which clears this override so the audio-reactive scene shows. "off" blanks the ring.
 THEME_CMDS = {
-    "blue":  ["breathe 0 153 204"],   # the original #0099CC breathe hue
-    "warm":  ["breathe 255 90 10"],
-    "cool":  ["breathe 0 200 140"],
-    "rose":  ["breathe 255 40 90"],
+    "blue": ["breathe 0 153 204"],  # the original #0099CC breathe hue
+    "warm": ["breathe 255 90 10"],
+    "cool": ["breathe 0 200 140"],
+    "rose": ["breathe 255 40 90"],
     "smoke": ["breathe 110 115 135"],
-    "off":   ["off"],
+    "off": ["off"],
 }
 
 # The user's colour theme is PERSISTENT (r37). Before this it lived only in
@@ -238,7 +239,7 @@ def _theme_save(name, path=None):
     try:
         write_json_through(path or THEME_CONF_PATH, {"theme": name})
     except OSError as e:
-        raise Err("unavailable", f"cannot persist theme: {e}")
+        raise Err("unavailable", f"cannot persist theme: {e}") from e
 
 
 def theme_restore_thread(path=None):
@@ -286,7 +287,7 @@ def _scene_save(name, path=None):
     try:
         write_json_through(path or SCENE_CONF_PATH, {"scene": name})
     except OSError as e:
-        raise Err("unavailable", f"cannot persist visualization: {e}")
+        raise Err("unavailable", f"cannot persist visualization: {e}") from e
 
 
 def scene_restore_thread(path=None):
@@ -357,9 +358,14 @@ class VolumeStore:
         outs = raw.get("outputs") if isinstance(raw, dict) else None
         levels = {}
         for oid, v in (outs or {}).items():
-            if (oid in OUTPUT_BY_ID and isinstance(v, dict)
-                    and isinstance(v.get("volume"), int) and not isinstance(v.get("volume"), bool)
-                    and 0 <= v["volume"] <= 100 and isinstance(v.get("muted"), bool)):
+            if (
+                oid in OUTPUT_BY_ID
+                and isinstance(v, dict)
+                and isinstance(v.get("volume"), int)
+                and not isinstance(v.get("volume"), bool)
+                and 0 <= v["volume"] <= 100
+                and isinstance(v.get("muted"), bool)
+            ):
                 levels[oid] = (v["volume"], v["muted"])
         return levels
 
@@ -398,6 +404,7 @@ class VolumeStore:
         except OSError as e:
             log("volume not persisted:", e)
 
+
 # --- LED ring on/off + its schedule ---------------------------------------
 # The app's "LED ring" switch. Off does not black the ring outright: nexusqd's
 # `dark 1` hides everything the ring does on its own (idle breath, theme,
@@ -416,8 +423,7 @@ RING_CONF_PATH = os.environ.get("NEXUSQ_RING_CONF", "/etc/nexusq/ring.json")
 # has no backup cell, so after a mains unplug the clock is wrong until then —
 # and a schedule acting on a wrong clock would switch the ring at random. Until
 # the flag exists the schedule does nothing and the ring keeps its last state.
-TIME_SYNC_FLAG = os.environ.get("NEXUSQ_TIME_SYNC_FLAG",
-                                "/run/systemd/timesync/synchronized")
+TIME_SYNC_FLAG = os.environ.get("NEXUSQ_TIME_SYNC_FLAG", "/run/systemd/timesync/synchronized")
 RING_REASSERT_S = 30
 RING_SCHEDULE_DEFAULT = {"enabled": False, "off": "23:00", "on": "07:00"}
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -463,9 +469,9 @@ class Ring:
     `send` is nexusqd_send, `clock` returns local wall-clock time, `synced`
     says whether that clock can be trusted, `on_change` broadcasts."""
 
-    def __init__(self, path=None, send=None, clock=None, synced=None,
-                 on_change=None, on_beat=None):
+    def __init__(self, path=None, send=None, clock=None, synced=None, on_change=None, on_beat=None):
         import datetime
+
         self.path = path or RING_CONF_PATH
         # Called after every scheduler step: other settings nexusqd holds only
         # in memory re-assert on this same beat instead of waking on their own.
@@ -498,14 +504,14 @@ class Ring:
                 if off != on and isinstance(s.get("enabled"), bool):
                     conf["schedule"] = {"enabled": s["enabled"], "off": off, "on": on}
             except Err:
-                pass   # a torn schedule falls back to the default, disabled
+                pass  # a torn schedule falls back to the default, disabled
         return conf
 
     def _save(self):
         try:
             write_json_through(self.path, self.conf)
         except OSError as e:
-            raise Err("unavailable", f"cannot persist the ring setting: {e}")
+            raise Err("unavailable", f"cannot persist the ring setting: {e}") from e
 
     # --- state ------------------------------------------------------------
     def snapshot(self):
@@ -513,8 +519,7 @@ class Ring:
             return self._snapshot()
 
     def _snapshot(self):
-        return {"on": self.conf["on"], "schedule": dict(self.conf["schedule"]),
-                "clockSynced": self._last_synced}
+        return {"on": self.conf["on"], "schedule": dict(self.conf["schedule"]), "clockSynced": self._last_synced}
 
     def _apply(self):
         return self.send("dark %d" % (0 if self.conf["on"] else 1))
@@ -538,7 +543,7 @@ class Ring:
         if not isinstance(on, bool):
             raise Err("bad_request", "on must be a boolean")
         with self.lock:
-            sched = dict(self.conf["schedule"], enabled=False)   # manual wins, schedule off
+            sched = dict(self.conf["schedule"], enabled=False)  # manual wins, schedule off
             self._commit({"on": on, "schedule": sched})
             return self._snapshot()
 
@@ -633,7 +638,7 @@ class ControlStats:
                 f.write("".join("%s %d\n" % (k, self.counts[k]) for k in self.KEYS))
             os.replace(tmp, self.path)
         except OSError as e:
-            if not self._warned:          # a counter must never cost the bridge
+            if not self._warned:  # a counter must never cost the bridge
                 log("control stats not written:", e)
                 self._warned = True
 
@@ -682,9 +687,9 @@ class Chime:
         self.clock = clock or time.monotonic
         self.lock = threading.Lock()
         self.started = self.clock()
-        self._last_chime = {}        # source -> when it last chimed
-        self._active = {}            # derived source -> last known activity
-        self._quiet_since = {}       # derived source -> when it went quiet
+        self._last_chime = {}  # source -> when it last chimed
+        self._active = {}  # derived source -> last known activity
+        self._quiet_since = {}  # derived source -> when it went quiet
         self._proc = None
         self._warned = False
 
@@ -710,10 +715,10 @@ class Chime:
             if was:
                 return False
             if was is None and now - self.started < CHIME_START_GRACE_S:
-                return False         # running when the bridge started
+                return False  # running when the bridge started
             quiet = self._quiet_since.get(source)
             if quiet is not None and now - quiet < CHIME_GAP_S:
-                return False         # a pause, not a new connection
+                return False  # a pause, not a new connection
             return self._ring(source, now)
 
     def _ring(self, source, now):
@@ -736,12 +741,18 @@ class Chime:
             return False
         try:
             self._proc = subprocess.Popen(
-                ["paplay", "--client-name=nexusq-chime",
-                 "--property=media.role=event",
-                 f"--volume={pa_volume_from_db(CHIME_DB)}", path],
+                [
+                    "paplay",
+                    "--client-name=nexusq-chime",
+                    "--property=media.role=event",
+                    f"--volume={pa_volume_from_db(CHIME_DB)}",
+                    path,
+                ],
                 env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL)
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except OSError as e:
             log("chime: paplay failed:", e)
             return False
@@ -771,8 +782,7 @@ def bluez_card_for(index, short_cards):
 # coordinate (Europe/Prague -> 50.08 N 14.43 E). Within one zone that is off by
 # at most a few minutes of dusk, which is invisible in a fade that takes an
 # hour; it needs no GPS and no location permission in the app.
-BRIGHTNESS_CONF_PATH = os.environ.get("NEXUSQ_BRIGHTNESS_CONF",
-                                      "/etc/nexusq/brightness.json")
+BRIGHTNESS_CONF_PATH = os.environ.get("NEXUSQ_BRIGHTNESS_CONF", "/etc/nexusq/brightness.json")
 ZONEINFO_DIR = os.environ.get("NEXUSQ_ZONEINFO", "/usr/share/zoneinfo")
 BRIGHTNESS_DEFAULT = 255
 # Full brightness from this elevation up: the sun is clear of the horizon haze.
@@ -818,6 +828,7 @@ def sun_elevation(lat, lon, when_utc):
     for this century; refraction is ignored, which matters only at the very
     horizon."""
     import datetime
+
     rad, deg = math.radians, math.degrees
     ts = when_utc.astimezone(datetime.timezone.utc)
     jd = ts.timestamp() / 86400.0 + 2440587.5
@@ -825,24 +836,27 @@ def sun_elevation(lat, lon, when_utc):
     l0 = (280.46646 + t * (36000.76983 + t * 0.0003032)) % 360.0
     m = 357.52911 + t * (35999.05029 - 0.0001537 * t)
     e = 0.016708634 - t * (0.000042037 + 0.0000001267 * t)
-    c = (math.sin(rad(m)) * (1.914602 - t * (0.004817 + 0.000014 * t))
-         + math.sin(rad(2 * m)) * (0.019993 - 0.000101 * t)
-         + math.sin(rad(3 * m)) * 0.000289)
+    c = (
+        math.sin(rad(m)) * (1.914602 - t * (0.004817 + 0.000014 * t))
+        + math.sin(rad(2 * m)) * (0.019993 - 0.000101 * t)
+        + math.sin(rad(3 * m)) * 0.000289
+    )
     omega = 125.04 - 1934.136 * t
     lam = l0 + c - 0.00569 - 0.00478 * math.sin(rad(omega))
     eps0 = 23 + (26 + (21.448 - t * (46.815 + t * (0.00059 - t * 0.001813))) / 60) / 60
     eps = eps0 + 0.00256 * math.cos(rad(omega))
     decl = math.asin(math.sin(rad(eps)) * math.sin(rad(lam)))
     y = math.tan(rad(eps) / 2) ** 2
-    eqtime = 4 * deg(y * math.sin(2 * rad(l0))
-                     - 2 * e * math.sin(rad(m))
-                     + 4 * e * y * math.sin(rad(m)) * math.cos(2 * rad(l0))
-                     - 0.5 * y * y * math.sin(4 * rad(l0))
-                     - 1.25 * e * e * math.sin(2 * rad(m)))       # minutes
+    eqtime = 4 * deg(
+        y * math.sin(2 * rad(l0))
+        - 2 * e * math.sin(rad(m))
+        + 4 * e * y * math.sin(rad(m)) * math.cos(2 * rad(l0))
+        - 0.5 * y * y * math.sin(4 * rad(l0))
+        - 1.25 * e * e * math.sin(2 * rad(m))
+    )  # minutes
     minutes = ts.hour * 60 + ts.minute + ts.second / 60 + ts.microsecond / 6e7
-    ha = (minutes + eqtime + 4 * lon) / 4 - 180                    # hour angle, degrees
-    cos_zen = (math.sin(rad(lat)) * math.sin(decl)
-               + math.cos(rad(lat)) * math.cos(decl) * math.cos(rad(ha)))
+    ha = (minutes + eqtime + 4 * lon) / 4 - 180  # hour angle, degrees
+    cos_zen = math.sin(rad(lat)) * math.sin(decl) + math.cos(rad(lat)) * math.cos(decl) * math.cos(rad(ha))
     return 90.0 - deg(math.acos(max(-1.0, min(1.0, cos_zen))))
 
 
@@ -920,11 +934,11 @@ class Brightness:
     nexusqd_send, `clock` returns an aware UTC datetime, `synced` says whether
     the clock can be trusted, `location` is (zone, lat, lon) or None."""
 
-    def __init__(self, path=None, send=None, clock=None, synced=None,
-                 location=None, on_change=None, on_wake=None):
+    def __init__(self, path=None, send=None, clock=None, synced=None, location=None, on_change=None, on_wake=None):
         import datetime
+
         self.path = path or BRIGHTNESS_CONF_PATH
-        self.on_wake = on_wake or (lambda: None)   # counted for nq-healthd
+        self.on_wake = on_wake or (lambda: None)  # counted for nq-healthd
         self.send = send or nexusqd_send
         self.clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
         self.synced = synced or (lambda: os.path.exists(TIME_SYNC_FLAG))
@@ -963,7 +977,7 @@ class Brightness:
         try:
             write_json_through(self.path, self.conf)
         except OSError as e:
-            raise Err("unavailable", f"cannot persist brightness: {e}")
+            raise Err("unavailable", f"cannot persist brightness: {e}") from e
 
     # --- the level --------------------------------------------------------
     def _elevation(self):
@@ -975,8 +989,7 @@ class Brightness:
         return bool(self.conf["ambient"] and self.location and self._last_synced)
 
     def _level_at(self, when):
-        return ambient_level(self.conf["max"],
-                             sun_elevation(self.location[1], self.location[2], when))
+        return ambient_level(self.conf["max"], sun_elevation(self.location[1], self.location[2], when))
 
     def _seconds_to_next_change(self):
         """Seconds until the level differs from the one running now, at most
@@ -984,6 +997,7 @@ class Brightness:
         that matters: the elevation moves under a quarter of a degree a minute,
         and between noon and midnight it only moves one way."""
         import datetime
+
         if not self._ambient_active():
             return AMBIENT_MAX_SLEEP_S
         now, cur = self.clock(), self._level
@@ -1018,10 +1032,13 @@ class Brightness:
     def _snapshot(self):
         loc = None
         if self.location:
-            loc = {"zone": self.location[0], "lat": round(self.location[1], 2),
-                   "lon": round(self.location[2], 2)}
-        return {"enabled": self.conf["ambient"], "level": self._level,
-                "location": loc, "clockSynced": self._last_synced}
+            loc = {"zone": self.location[0], "lat": round(self.location[1], 2), "lon": round(self.location[2], 2)}
+        return {
+            "enabled": self.conf["ambient"],
+            "level": self._level,
+            "location": loc,
+            "clockSynced": self._last_synced,
+        }
 
     def maximum(self):
         with self.lock:
@@ -1059,11 +1076,9 @@ class Brightness:
             raise Err("bad_request", "enabled must be a boolean")
         with self.lock:
             if enabled and not self.location:
-                raise Err("unavailable",
-                          "the Nexus Q's time zone has no known location")
+                raise Err("unavailable", "the Nexus Q's time zone has no known location")
             self._last_synced = self.synced()
-            self._commit(dict(self.conf, ambient=enabled),
-                         fade_ms=AMBIENT_TOGGLE_FADE_MS)
+            self._commit(dict(self.conf, ambient=enabled), fade_ms=AMBIENT_TOGGLE_FADE_MS)
             self._wake.set()
             return self._snapshot()
 
@@ -1117,11 +1132,11 @@ class Brightness:
 # shows while audio plays. The music layer (priority 9) sits above the theme's
 # override (8), so the scene is visible without touching the theme.
 SCENES = [
-    {"name": "waveform",      "label": "Waveform",   "index": 0},
+    {"name": "waveform", "label": "Waveform", "index": 0},
     {"name": "waveformsolid", "label": "Solid Wave", "index": 1},
-    {"name": "circles",       "label": "Circles",    "index": 2},
-    {"name": "pointmorph",    "label": "Morph",      "index": 3},
-    {"name": "starfield",     "label": "Starfield",  "index": 4},
+    {"name": "circles", "label": "Circles", "index": 2},
+    {"name": "pointmorph", "label": "Morph", "index": 3},
+    {"name": "starfield", "label": "Starfield", "index": 4},
 ]
 SCENE_INDEX = {s["name"]: s["index"] for s in SCENES}
 
@@ -1135,7 +1150,9 @@ def _pactl(*args, timeout=4):
     return subprocess.run(
         ["pactl", *args],
         env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -1143,7 +1160,9 @@ def _amixer(*args, timeout=4):
     """Run amixer on the speaker card (used only for the class-D amp safety toggle)."""
     return subprocess.run(
         ["amixer", "-c", MIXER_CARD, *args],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -1166,7 +1185,7 @@ def _sync_panel_applet(sink):
         if r.returncode != 0:
             return
         idx = None
-        rows = [l for l in r.stdout.splitlines() if l.strip()]
+        rows = [line for line in r.stdout.splitlines() if line.strip()]
         for i, ln in enumerate(rows):
             if sink in ln.split():
                 idx = i
@@ -1182,7 +1201,7 @@ def _sync_panel_applet(sink):
                 if in_vol and not done:
                     out.append(f"device={idx}")
                     done = True
-                in_vol = (s == "[volume]")
+                in_vol = s == "[volume]"
                 out.append(ln)
                 continue
             if in_vol and re.match(r"\s*device\s*=", ln):
@@ -1339,8 +1358,7 @@ class Pulse:
         try:
             r = _pactl("load-module", module, *args, timeout=timeout)
             if r.returncode != 0:
-                log(f"pactl load-module {module} failed:",
-                    (r.stderr or "").strip()[:160])
+                log(f"pactl load-module {module} failed:", (r.stderr or "").strip()[:160])
                 return None
             idx = (r.stdout or "").strip()
             return idx or None
@@ -1489,11 +1507,11 @@ def btagent_call(req, timeout=15):
                     break
                 buf += chunk
     except OSError as e:
-        raise Err("unavailable", f"bluetooth agent unreachable: {e.strerror or e}")
+        raise Err("unavailable", f"bluetooth agent unreachable: {e.strerror or e}") from e
     try:
         r = json.loads(buf.decode(errors="replace").strip() or "{}")
     except ValueError:
-        raise Err("internal", "bluetooth agent sent malformed json")
+        raise Err("internal", "bluetooth agent sent malformed json") from None
     if isinstance(r, dict) and r.get("error"):
         # Pass btagent's own error code through: it already speaks our vocabulary
         # (not_found / pair_failed / unavailable / unknown_method).
@@ -1507,11 +1525,10 @@ DESKTOP_UNIT = "tinydm.service"
 def desktop_active():
     """Is the HDMI desktop up? `tinydm.service` starts labwc + the LXQt session."""
     try:
-        r = subprocess.run(["systemctl", "is-active", DESKTOP_UNIT],
-                           capture_output=True, text=True, timeout=8)
+        r = subprocess.run(["systemctl", "is-active", DESKTOP_UNIT], capture_output=True, text=True, timeout=8)
         return (r.stdout or "").strip() in ("active", "activating")
     except (OSError, subprocess.SubprocessError):
-        raise Err("unavailable", "cannot query the desktop")
+        raise Err("unavailable", "cannot query the desktop") from None
 
 
 def set_desktop(on):
@@ -1530,13 +1547,17 @@ def set_desktop(on):
         # `start` is synchronous-ish and cheap; `stop` tears down a graphical
         # session and briefly churns logind (it has wedged ssh auth for ~a minute
         # when hammered), so give it room rather than a snappy deadline.
-        subprocess.run(["systemctl", "start" if on else "stop", DESKTOP_UNIT],
-                       capture_output=True, text=True, timeout=60, check=True)
+        subprocess.run(
+            ["systemctl", "start" if on else "stop", DESKTOP_UNIT],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
     except subprocess.CalledProcessError as e:
-        raise Err("unavailable", f"desktop {'start' if on else 'stop'} failed: "
-                                 f"{(e.stderr or '').strip()[:120]}")
+        raise Err("unavailable", f"desktop {'start' if on else 'stop'} failed: {(e.stderr or '').strip()[:120]}") from e
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "desktop did not respond")
+        raise Err("timeout", "desktop did not respond") from None
 
 
 # --- HDMI output: probe + the hold that keeps a receiver awake --------------
@@ -1547,6 +1568,7 @@ def set_desktop(on):
 # when the desktop stops, the kernel client comes back and the hold resumes
 # looking after it. A second DRM master would have had to negotiate all of that.
 
+
 def hdmi_probe():
     """What `nq-hdmi status --json` reports: is a sink attached, and can it
     hear us?
@@ -1556,11 +1578,9 @@ def hdmi_probe():
     available" rather than fail the whole call. Exit 1 is a normal answer here
     (no sink / no audio), not an error."""
     try:
-        r = subprocess.run([NQ_HDMI, "status", "--json"],
-                           capture_output=True, text=True, timeout=8)
+        r = subprocess.run([NQ_HDMI, "status", "--json"], capture_output=True, text=True, timeout=8)
         if r.returncode not in (0, 1):
-            log("nq-hdmi status exited", r.returncode,
-                (r.stderr or "").strip()[:120])
+            log("nq-hdmi status exited", r.returncode, (r.stderr or "").strip()[:120])
             return {}
         return json.loads(r.stdout or "{}")
     except (OSError, subprocess.SubprocessError, ValueError) as e:
@@ -1570,8 +1590,7 @@ def hdmi_probe():
 
 def hdmi_hold_active():
     try:
-        r = subprocess.run(["systemctl", "is-active", HDMI_HOLD_UNIT],
-                           capture_output=True, text=True, timeout=8)
+        r = subprocess.run(["systemctl", "is-active", HDMI_HOLD_UNIT], capture_output=True, text=True, timeout=8)
         return (r.stdout or "").strip() in ("active", "activating")
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1582,8 +1601,7 @@ def _hdmi_cancel_release():
     for unit in (f"{HDMI_RELEASE_UNIT}.timer", f"{HDMI_RELEASE_UNIT}.service"):
         for verb in ("stop", "reset-failed"):
             try:
-                subprocess.run(["systemctl", verb, unit],
-                               capture_output=True, text=True, timeout=10)
+                subprocess.run(["systemctl", verb, unit], capture_output=True, text=True, timeout=10)
             except (OSError, subprocess.SubprocessError):
                 pass
 
@@ -1597,18 +1615,24 @@ def _hdmi_schedule_release():
     _hdmi_cancel_release()
     try:
         r = subprocess.run(
-            ["systemd-run", f"--unit={HDMI_RELEASE_UNIT}",
-             f"--on-active={int(HDMI_HOLD_GRACE_S)}",
-             "--description=Release the Nexus Q HDMI output hold after its "
-             "grace period",
-             "systemctl", "stop", HDMI_HOLD_UNIT],
-            capture_output=True, text=True, timeout=15)
+            [
+                "systemd-run",
+                f"--unit={HDMI_RELEASE_UNIT}",
+                f"--on-active={int(HDMI_HOLD_GRACE_S)}",
+                "--description=Release the Nexus Q HDMI output hold after its grace period",
+                "systemctl",
+                "stop",
+                HDMI_HOLD_UNIT,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
     except (OSError, subprocess.SubprocessError) as e:
         log("HDMI hold: could not arm the release timer:", e)
         return False
     if r.returncode != 0:
-        log("HDMI hold: could not arm the release timer:",
-            (r.stderr or "").strip()[:160])
+        log("HDMI hold: could not arm the release timer:", (r.stderr or "").strip()[:160])
         return False
     log(f"HDMI hold: lingering for {int(HDMI_HOLD_GRACE_S)}s before release")
     return True
@@ -1637,8 +1661,7 @@ def hdmi_hold(on, grace=False):
             return
         _hdmi_cancel_release()
         try:
-            subprocess.run(["systemctl", "stop", HDMI_HOLD_UNIT],
-                           capture_output=True, text=True, timeout=30)
+            subprocess.run(["systemctl", "stop", HDMI_HOLD_UNIT], capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError) as e:
             log("HDMI hold stop failed:", e)
         return
@@ -1647,10 +1670,9 @@ def hdmi_hold(on, grace=False):
     # just cancelling the execution and re-confirming the unit is up.
     _hdmi_cancel_release()
     try:
-        subprocess.run(["systemctl", "start", HDMI_HOLD_UNIT],
-                       capture_output=True, text=True, timeout=30)
+        subprocess.run(["systemctl", "start", HDMI_HOLD_UNIT], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "the HDMI output hold did not respond")
+        raise Err("timeout", "the HDMI output hold did not respond") from None
 
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -1658,10 +1680,13 @@ def hdmi_hold(on, grace=False):
             return
         status = _hdmi_hold_exit_status()
         if status is not None:
-            raise Err("unavailable", {
-                2: "nothing is connected to the HDMI port",
-                3: "the attached display accepts no audio over HDMI",
-            }.get(status, f"the HDMI output hold failed (exit {status})"))
+            raise Err(
+                "unavailable",
+                {
+                    2: "nothing is connected to the HDMI port",
+                    3: "the attached display accepts no audio over HDMI",
+                }.get(status, f"the HDMI output hold failed (exit {status})"),
+            )
         time.sleep(0.3)
     if not hdmi_hold_active():
         raise Err("unavailable", "the HDMI output hold never came up")
@@ -1671,12 +1696,14 @@ def _hdmi_hold_exit_status():
     """The hold's exit code once it has stopped, or None while it is running."""
     try:
         r = subprocess.run(
-            ["systemctl", "show", "-p", "ExecMainStatus", "-p", "ActiveState",
-             HDMI_HOLD_UNIT], capture_output=True, text=True, timeout=8)
+            ["systemctl", "show", "-p", "ExecMainStatus", "-p", "ActiveState", HDMI_HOLD_UNIT],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
-    fields = dict(
-        ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+    fields = dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
     if fields.get("ActiveState") in ("active", "activating", "deactivating"):
         return None
     try:
@@ -1711,10 +1738,10 @@ def _hdmi_hold_exit_status():
 # defaults -- which is how the Prague Q sat without USB Audio for three days
 # after the 2026-09-16 flash (docs/2026-09-19-the-flash-that-forgot-the-unit.md).
 SERVICES = [
-    {"id": "spotify",  "unit": "librespot.service",       "name": "Spotify Connect", "vendor_on": True},
-    {"id": "airplay",  "unit": "shairport-sync.service",  "name": "AirPlay",         "vendor_on": True},
-    {"id": "roon",     "unit": "roon.service",            "name": "Roon",            "vendor_on": False},
-    {"id": "usbaudio", "unit": "nexusq-uac2-in.service",  "name": "USB Audio",       "vendor_on": False},
+    {"id": "spotify", "unit": "librespot.service", "name": "Spotify Connect", "vendor_on": True},
+    {"id": "airplay", "unit": "shairport-sync.service", "name": "AirPlay", "vendor_on": True},
+    {"id": "roon", "unit": "roon.service", "name": "Roon", "vendor_on": False},
+    {"id": "usbaudio", "unit": "nexusq-uac2-in.service", "name": "USB Audio", "vendor_on": False},
 ]
 _SERVICE_BY_ID = {s["id"]: s for s in SERVICES}
 
@@ -1768,12 +1795,21 @@ def _systemctl_user(*args, timeout=15):
     through here (librespot, roon, shairport-sync) need it. `--init-groups`
     gives the user exactly its own supplementary groups."""
     return subprocess.run(
-        ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
-         "--init-groups", "env",
-         f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
-         f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
-         "systemctl", "--user", *args],
-        capture_output=True, text=True, timeout=timeout,
+        [
+            "setpriv",
+            f"--reuid={_USER_UID}",
+            f"--regid={_USER_UID}",
+            "--init-groups",
+            "env",
+            f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
+            f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
+            "systemctl",
+            "--user",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -1786,11 +1822,21 @@ def _as_user(argv, timeout=10, **kw):
     environment, and root cannot reach another user's bus without it.
     """
     return subprocess.run(
-        ["setpriv", f"--reuid={_USER_UID}", f"--regid={_USER_UID}",
-         "--init-groups", "env",
-         f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
-         f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}", *argv],
-        capture_output=True, text=True, timeout=timeout, **kw)
+        [
+            "setpriv",
+            f"--reuid={_USER_UID}",
+            f"--regid={_USER_UID}",
+            "--init-groups",
+            "env",
+            f"XDG_RUNTIME_DIR={_USER_RUNTIME_DIR}",
+            f"DBUS_SESSION_BUS_ADDRESS={_USER_BUS}",
+            *argv,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        **kw,
+    )
 
 
 # --- AirPlay, over shairport-sync's MPRIS interface ---------------------------
@@ -1816,8 +1862,10 @@ def _mpris_get(prop, timeout=6):
     """One MPRIS property, decoded from busctl's JSON. None when shairport is
     not on the bus at all (not built with mpris, not running, no AirPlay ever)."""
     try:
-        r = _as_user(["busctl", "--user", "get-property", "--json=short",
-                      MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, prop], timeout=timeout)
+        r = _as_user(
+            ["busctl", "--user", "get-property", "--json=short", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, prop],
+            timeout=timeout,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0 or not r.stdout.strip():
@@ -1883,7 +1931,7 @@ def _mqtt_publish(topic, payload):
             s.sendall(json.dumps({"topic": topic, "payload": payload}).encode() + b"\n")
             reply = s.recv(512).decode("utf-8", "replace").strip()
     except OSError as e:
-        raise Err("unavailable", f"MQTT publisher unreachable: {e}")
+        raise Err("unavailable", f"MQTT publisher unreachable: {e}") from e
     try:
         ok = json.loads(reply).get("ok") is True
     except ValueError:
@@ -1956,13 +2004,11 @@ class AirPlayTransport:
         if call is None:
             raise Err("bad_request", f"unsupported transport method {method}")
         try:
-            r = _as_user(["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH,
-                          MPRIS_IFACE, call])
+            r = _as_user(["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, call])
         except (OSError, subprocess.SubprocessError) as e:
-            raise Err("unavailable", f"AirPlay control failed: {e}")
+            raise Err("unavailable", f"AirPlay control failed: {e}") from e
         if r.returncode != 0:
-            raise Err("unavailable",
-                      f"AirPlay refused {call}: {(r.stderr or '').strip()[:120]}")
+            raise Err("unavailable", f"AirPlay refused {call}: {(r.stderr or '').strip()[:120]}")
         return {"ok": True}
 
 
@@ -2014,10 +2060,10 @@ def airplay_volume_for_percent(percent):
     sender's minimum would come back as 10 % and RAISE the Q."""
     if not isinstance(percent, (int, float)) or percent <= 0:
         return None
-    target = 6000.0 * math.log10(min(percent, 100) / 100.0)   # cdB, <= 0
+    target = 6000.0 * math.log10(min(percent, 100) / 100.0)  # cdB, <= 0
     if target < -AIRPLAY_RANGE_CDB - 1e-9:
         return None
-    lo, hi = -30.0, 0.0                 # attn is non-decreasing in a
+    lo, hi = -30.0, 0.0  # attn is non-decreasing in a
     for _ in range(60):
         mid = (lo + hi) / 2
         if airplay_attn_cdb(mid) < target:
@@ -2046,7 +2092,7 @@ class AirPlayVolumeFollow:
 
     def volume_changed(self, percent, muted=False):
         if muted:
-            return          # mute is the Q's; the sender's slider stays
+            return  # mute is the Q's; the sender's slider stays
         with self._lock:
             self._target = percent
             if self._timer is not None:
@@ -2066,7 +2112,7 @@ class AirPlayVolumeFollow:
             return None
         cur = self.sender_volume()
         if cur is not None and abs(airplay_attn_cdb(cur) - airplay_attn_cdb(a)) < 5:
-            return None     # the sender is there already (it moved the Q)
+            return None  # the sender is there already (it moved the Q)
         self.push(a)
         return a
 
@@ -2074,8 +2120,7 @@ class AirPlayVolumeFollow:
 def _airplay_sender_volume():
     """The sender's AirPlay volume from shairport's MPRIS Volume (0..1 maps
     to -30..0), or None."""
-    r = _as_user(["busctl", "--user", "get-property", MPRIS_NAME, MPRIS_PATH,
-                  MPRIS_IFACE, "Volume"], timeout=6)
+    r = _as_user(["busctl", "--user", "get-property", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, "Volume"], timeout=6)
     parts = (r.stdout or "").split()
     if r.returncode != 0 or len(parts) != 2 or parts[0] != "d":
         return None
@@ -2086,8 +2131,10 @@ def _airplay_sender_volume():
 
 
 def _airplay_push_volume(a):
-    r = _as_user(["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE,
-                  "SetVolume", "d", f"{a / 30.0 + 1.0:.6f}"], timeout=6)
+    r = _as_user(
+        ["busctl", "--user", "call", MPRIS_NAME, MPRIS_PATH, MPRIS_IFACE, "SetVolume", "d", f"{a / 30.0 + 1.0:.6f}"],
+        timeout=6,
+    )
     if r.returncode != 0:
         log("airplay: SetVolume failed:", (r.stderr or "").strip()[:120])
 
@@ -2099,8 +2146,7 @@ def _airplay_push_volume(a):
 # listServices every 3 s, that latency made the whole app<->bridge connection
 # look unhealthy and the app dropped it ("no Nexus Q found", 2026-07-17). The
 # cgroup read is instant. uid 10000 is fixed (the appliance user).
-_USER_CGROUP = ("/sys/fs/cgroup/user.slice/user-10000.slice/"
-                "user@10000.service/app.slice")
+_USER_CGROUP = "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice"
 
 
 def _service_on(unit):
@@ -2120,10 +2166,7 @@ def _service_on(unit):
 
 def list_services():
     """All toggleable streaming inputs and whether each is currently ON."""
-    return {"services": [
-        {"id": s["id"], "name": s["name"], "on": _service_on(s["unit"])}
-        for s in SERVICES
-    ]}
+    return {"services": [{"id": s["id"], "name": s["name"], "on": _service_on(s["unit"])} for s in SERVICES]}
 
 
 def set_service(sid, on):
@@ -2148,11 +2191,9 @@ def set_service(sid, on):
             # null the unit before stop and leak a module-owning service).
             r = _systemctl_user("disable", "--now", unit, timeout=30)
         if r.returncode != 0:
-            raise Err("unavailable",
-                      f"turning {sid} {'on' if on else 'off'} failed: "
-                      f"{(r.stderr or '').strip()[:120]}")
+            raise Err("unavailable", f"turning {sid} {'on' if on else 'off'} failed: {(r.stderr or '').strip()[:120]}")
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", f"service {sid} did not respond")
+        raise Err("timeout", f"service {sid} did not respond") from None
     return {"id": sid, "name": s["name"], "on": _service_on(unit)}
 
 
@@ -2172,13 +2213,14 @@ def service_log(sid, lines=200):
     n = max(1, min(1000, int(lines)))
     try:
         r = subprocess.run(
-            ["journalctl", f"_SYSTEMD_USER_UNIT={s['unit']}", "-n", str(n),
-             "--no-pager", "-o", "cat"],
-            capture_output=True, text=True, timeout=12)
+            ["journalctl", f"_SYSTEMD_USER_UNIT={s['unit']}", "-n", str(n), "--no-pager", "-o", "cat"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "journal did not respond")
-    out = [_ANSI_RE.sub("", ln).rstrip()
-           for ln in (r.stdout or "").splitlines()]
+        raise Err("timeout", "journal did not respond") from None
+    out = [_ANSI_RE.sub("", ln).rstrip() for ln in (r.stdout or "").splitlines()]
     return {"id": sid, "name": s["name"], "lines": out}
 
 
@@ -2305,8 +2347,7 @@ class Diagnostics:
     never cut a song off. A service that is not running needs nothing -- its
     launcher reads the file when it next starts."""
 
-    def __init__(self, proc_diag, busy, restart, notify, path=None,
-                 clock=time.time):
+    def __init__(self, proc_diag, busy, restart, notify, path=None, clock=time.time):
         self.proc_diag, self.busy = proc_diag, busy
         self.restart, self.notify = restart, notify
         self.path, self.clock = path, clock
@@ -2324,26 +2365,24 @@ class Diagnostics:
         services, pending = [], []
         for sid, svc in self._units():
             mode = self.proc_diag(svc["unit"], DIAG_EXE[sid])
-            services.append({"id": sid, "name": svc["name"],
-                             "running": mode is not None,
-                             "verbose": mode is True})
+            services.append({"id": sid, "name": svc["name"], "running": mode is not None, "verbose": mode is True})
             if isinstance(mode, bool) and mode != on:
                 pending.append(sid)
-        return {"enabled": on,
-                "until": int(st["until"]) if on else None,
-                "remainingS": int(st["until"] - now) if on else 0,
-                "endedAt": (int(st["endedAt"]) if not on and st["endedAt"]
-                            else None),
-                "maxHours": DIAG_MAX_H,
-                "services": services,
-                "pending": pending}
+        return {
+            "enabled": on,
+            "until": int(st["until"]) if on else None,
+            "remainingS": int(st["until"] - now) if on else 0,
+            "endedAt": (int(st["endedAt"]) if not on and st["endedAt"] else None),
+            "maxHours": DIAG_MAX_H,
+            "services": services,
+            "pending": pending,
+        }
 
     def set(self, p):
         if not isinstance(p.get("enabled"), bool):
             raise Err("bad_request", "enabled (bool) required")
         hours = p.get("hours", DIAG_DEFAULT_H)
-        if (isinstance(hours, bool) or not isinstance(hours, (int, float))
-                or not 0 < hours <= DIAG_MAX_H):
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= DIAG_MAX_H:
             raise Err("bad_request", f"hours must be in (0, {DIAG_MAX_H}]")
         now = self.clock()
         with self.lock:
@@ -2351,18 +2390,17 @@ class Diagnostics:
             if p["enabled"]:
                 # Switching it on again extends from NOW: the app's switch
                 # means "the next N hours", not "N more hours".
-                st = {"until": now + hours * 3600, "since": now,
-                      "hours": hours, "endedAt": None}
+                st = {"until": now + hours * 3600, "since": now, "hours": hours, "endedAt": None}
             elif diag_is_on(st, now):
-                st = {"until": None, "since": st["since"], "hours": st["hours"],
-                      "endedAt": now}
+                st = {"until": None, "since": st["since"], "hours": st["hours"], "endedAt": now}
             try:
                 diag_write(st, self.path)
             except OSError as e:
-                raise Err("internal", f"could not write the diagnostics state: {e}")
-        log("diagnostics", "on until " + time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(st["until"]))
-            if p["enabled"] else "off")
+                raise Err("internal", f"could not write the diagnostics state: {e}") from e
+        log(
+            "diagnostics",
+            "on until " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st["until"])) if p["enabled"] else "off",
+        )
         self.wake.set()
         v = self.view()
         self._last_view = v
@@ -2375,8 +2413,7 @@ class Diagnostics:
         with self.lock:
             st = diag_load(self.path)
             if st["until"] is not None and not diag_is_on(st, now):
-                st = {"until": None, "since": st["since"], "hours": st["hours"],
-                      "endedAt": st["until"]}
+                st = {"until": None, "since": st["since"], "hours": st["hours"], "endedAt": st["until"]}
                 try:
                     diag_write(st, self.path)
                     log("diagnostics expired")
@@ -2387,8 +2424,7 @@ class Diagnostics:
             mode = self.proc_diag(svc["unit"], DIAG_EXE[sid])
             if not isinstance(mode, bool) or mode == on or self.busy(sid):
                 continue
-            log(f"diagnostics: restarting {svc['unit']} "
-                f"({'verbose' if on else 'normal'} logging)")
+            log(f"diagnostics: restarting {svc['unit']} ({'verbose' if on else 'normal'} logging)")
             self.restart(svc["unit"])
         v = self.view()
         if self._last_view is not None and _diag_key(v) != _diag_key(self._last_view):
@@ -2398,7 +2434,7 @@ class Diagnostics:
             return DIAG_PENDING_POLL_S
         if on:
             return max(1.0, min(DIAG_MAX_SLEEP_S, st["until"] - now))
-        return None                        # nothing to do until set() wakes us
+        return None  # nothing to do until set() wakes us
 
     def run(self):
         self._last_view = self.view()
@@ -2423,8 +2459,7 @@ MQTT_CONF_PATH = os.environ.get("NEXUSQ_MQTT_CONF", "/etc/nexusq/mqtt.json")
 
 def _mqtt_service_active():
     try:
-        r = subprocess.run(["systemctl", "is-active", "nexusq-mqtt.service"],
-                           capture_output=True, text=True, timeout=6)
+        r = subprocess.run(["systemctl", "is-active", "nexusq-mqtt.service"], capture_output=True, text=True, timeout=6)
         return (r.stdout or "").strip() or "unknown"
     except (OSError, subprocess.SubprocessError):
         return "unknown"
@@ -2433,8 +2468,14 @@ def _mqtt_service_active():
 def get_mqtt_status(path=None):
     """Provisioning state WITHOUT the password — safe to hand any client."""
     path = path or MQTT_CONF_PATH
-    st = {"configured": False, "host": "", "port": 1883, "username": "",
-          "prefix": "nexusq", "active": _mqtt_service_active()}
+    st = {
+        "configured": False,
+        "host": "",
+        "port": 1883,
+        "username": "",
+        "prefix": "nexusq",
+        "active": _mqtt_service_active(),
+    }
     try:
         with open(path) as f:
             conf = json.load(f)
@@ -2469,8 +2510,7 @@ def set_mqtt_config(p, path=None):
     port = p.get("port", 1883)
     if not isinstance(port, int) or not 0 < port < 65536:
         raise Err("bad_request", "port must be 1..65535")
-    conf = {"host": host.strip(), "port": port,
-            "username": username.strip(), "password": password}
+    conf = {"host": host.strip(), "port": port, "username": username.strip(), "password": password}
     prefix = p.get("prefix")
     if isinstance(prefix, str) and prefix.strip():
         conf["prefix"] = prefix.strip()
@@ -2497,13 +2537,12 @@ def set_mqtt_config(p, path=None):
             os.unlink(tmp)
         except OSError:
             pass
-        raise Err("unavailable", f"cannot write mqtt config: {e}")
+        raise Err("unavailable", f"cannot write mqtt config: {e}") from e
     log(f"mqtt config provisioned: {conf['host']}:{port} user={conf['username']}")
     try:
-        subprocess.run(["systemctl", "restart", "nexusq-mqtt.service"],
-                       capture_output=True, text=True, timeout=20)
+        subprocess.run(["systemctl", "restart", "nexusq-mqtt.service"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "nexusq-mqtt did not restart")
+        raise Err("timeout", "nexusq-mqtt did not restart") from None
     return get_mqtt_status(path)
 
 
@@ -2525,26 +2564,26 @@ EQ_CONF_PATH = os.environ.get("NEXUSQ_EQ_CONF", "/etc/nexusq/eq.json")
 # preset list must never be able to take the live EQ down with it.
 EQ_PRESETS_PATH = os.environ.get("NEXUSQ_EQ_PRESETS", "/etc/nexusq/eq-presets.json")
 EQ_FS = 48000
-EQ_BANDS = 7                      # the TAS5713 main EQ bank: 7 biquads per channel
+EQ_BANDS = 7  # the TAS5713 main EQ bank: 7 biquads per channel
 EQ_MAX_DB = 12.0
 EQ_MIN_HZ, EQ_MAX_HZ = 20.0, 20000.0
 EQ_MIN_Q, EQ_MAX_Q = 0.3, 8.0
 EQ_PREAMP_MIN_DB = -24.0
 _EQ_UNITY = (0x00800000, 0, 0, 0, 0)  # b0 = 1.0 in 3.23, rest zero
-EQ_USER_PRESET_ID = "u:"          # namespace; a builtin id can never collide
-EQ_USER_PRESET_MAX = 24           # /etc is small and a chip row is finite
+EQ_USER_PRESET_ID = "u:"  # namespace; a builtin id can never collide
+EQ_USER_PRESET_MAX = 24  # /etc is small and a chip row is finite
 EQ_PRESET_NAME_MAX = 24
 
 # Band 0 and band 6 keep the frequencies the bass/treble card used (100 Hz /
 # 8 kHz) so a device upgraded from the two-knob version sounds identical; the
 # five idle biquads become log-spaced peaking bands between them.
 EQ_DEFAULT_BANDS = (
-    ("lowshelf",   100.0),
-    ("peaking",    200.0),
-    ("peaking",    430.0),
-    ("peaking",    900.0),
-    ("peaking",   1800.0),
-    ("peaking",   3800.0),
+    ("lowshelf", 100.0),
+    ("peaking", 200.0),
+    ("peaking", 430.0),
+    ("peaking", 900.0),
+    ("peaking", 1800.0),
+    ("peaking", 3800.0),
     ("highshelf", 8000.0),
 )
 
@@ -2552,17 +2591,19 @@ EQ_DEFAULT_BANDS = (
 # a setEq with its bands, so there is a single write path to get wrong.
 # Each entry: (id, label, {band index: (gain_db, q_or_none)})
 EQ_PRESETS = (
-    ("flat",     "Flat",        {}),
-    ("loudness", "Loudness",    {0: (5.0, None), 3: (-2.0, None), 6: (4.0, None)}),
-    ("bass",     "Bass boost",  {0: (6.0, None), 1: (2.5, None)}),
-    ("speech",   "Speech",      {0: (-3.0, None), 3: (3.0, 1.2), 4: (2.0, 1.2)}),
-    ("warm",     "Warm",        {0: (2.5, None), 5: (-2.0, 1.0), 6: (-2.5, None)}),
+    ("flat", "Flat", {}),
+    ("loudness", "Loudness", {0: (5.0, None), 3: (-2.0, None), 6: (4.0, None)}),
+    ("bass", "Bass boost", {0: (6.0, None), 1: (2.5, None)}),
+    ("speech", "Speech", {0: (-3.0, None), 3: (3.0, 1.2), 4: (2.0, 1.2)}),
+    ("warm", "Warm", {0: (2.5, None), 5: (-2.0, 1.0), 6: (-2.5, None)}),
 )
 
 
 def _eq_default_bands():
-    return [{"type": k, "freq_hz": f, "gain_db": 0.0, "q": 0.707 if k == "peaking" else 1.0,
-             "enabled": True} for k, f in EQ_DEFAULT_BANDS]
+    return [
+        {"type": k, "freq_hz": f, "gain_db": 0.0, "q": 0.707 if k == "peaking" else 1.0, "enabled": True}
+        for k, f in EQ_DEFAULT_BANDS
+    ]
 
 
 def _eq_shelf_coeffs(kind, gain_db, f0, s=1.0, fs=EQ_FS):
@@ -2646,7 +2687,7 @@ def _eq_words(band, preamp_lin=1.0):
     if c is None:
         if abs(preamp_lin - 1.0) < 1e-9:
             return list(_EQ_UNITY)
-        c = (1.0, 0.0, 0.0, 0.0, 0.0)      # pure gain biquad
+        c = (1.0, 0.0, 0.0, 0.0, 0.0)  # pure gain biquad
     b0, b1, b2, a1, a2 = c
     return _eq_pack((b0 * preamp_lin, b1 * preamp_lin, b2 * preamp_lin, a1, a2))
 
@@ -2670,7 +2711,7 @@ def _eq_headroom_db(bands, preamp_db=0.0):
     """Peak of the summed response over a log grid — what the app shows, and what
     an auto-preamp would cancel. Positive means the chain can clip."""
     peak = -240.0
-    for i in range(97):                     # 20 Hz .. 20 kHz, ~1/12 octave
+    for i in range(97):  # 20 Hz .. 20 kHz, ~1/12 octave
         f = EQ_MIN_HZ * (EQ_MAX_HZ / EQ_MIN_HZ) ** (i / 96.0)
         peak = max(peak, _eq_response_db(bands, f, preamp_db))
     return round(peak, 2)
@@ -2698,9 +2739,11 @@ def _eq_clean_band(raw, default):
     kind = raw.get("type")
     if kind in ("peaking", "lowshelf", "highshelf"):
         b["type"] = kind
-    for key, lo, hi in (("freq_hz", EQ_MIN_HZ, EQ_MAX_HZ),
-                        ("gain_db", -EQ_MAX_DB, EQ_MAX_DB),
-                        ("q", EQ_MIN_Q, EQ_MAX_Q)):
+    for key, lo, hi in (
+        ("freq_hz", EQ_MIN_HZ, EQ_MAX_HZ),
+        ("gain_db", -EQ_MAX_DB, EQ_MAX_DB),
+        ("q", EQ_MIN_Q, EQ_MAX_Q),
+    ):
         v = raw.get(key)
         if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
             b[key] = max(lo, min(hi, float(v)))
@@ -2712,8 +2755,7 @@ def _eq_clean_band(raw, default):
 def _eq_legacy_indices(bands):
     """(bass index, treble index) for the two-knob compatibility view."""
     lo = next((i for i, b in enumerate(bands) if b["type"] == "lowshelf"), None)
-    hi = next((i for i in range(len(bands) - 1, -1, -1)
-               if bands[i]["type"] == "highshelf"), None)
+    hi = next((i for i in range(len(bands) - 1, -1, -1) if bands[i]["type"] == "highshelf"), None)
     return lo, hi
 
 
@@ -2729,8 +2771,9 @@ def _eq_load(path=None):
         return st
     raw_bands = data.get("bands")
     if isinstance(raw_bands, list):
-        st["bands"] = [_eq_clean_band(raw_bands[i] if i < len(raw_bands) else None,
-                                      st["bands"][i]) for i in range(EQ_BANDS)]
+        st["bands"] = [
+            _eq_clean_band(raw_bands[i] if i < len(raw_bands) else None, st["bands"][i]) for i in range(EQ_BANDS)
+        ]
     else:
         # v1: {"bass_db": x, "treble_db": y} -> the two shelf bands.
         lo, hi = _eq_legacy_indices(st["bands"])
@@ -2753,8 +2796,12 @@ def _eq_view(st):
         "preamp_db": round(st["preamp_db"], 2),
         "headroom_db": _eq_headroom_db(st["bands"], st["preamp_db"]),
         "max_bands": EQ_BANDS,
-        "limits": {"gain_db": EQ_MAX_DB, "freq_hz": [EQ_MIN_HZ, EQ_MAX_HZ],
-                   "q": [EQ_MIN_Q, EQ_MAX_Q], "preamp_db": [EQ_PREAMP_MIN_DB, 0.0]},
+        "limits": {
+            "gain_db": EQ_MAX_DB,
+            "freq_hz": [EQ_MIN_HZ, EQ_MAX_HZ],
+            "q": [EQ_MIN_Q, EQ_MAX_Q],
+            "preamp_db": [EQ_PREAMP_MIN_DB, 0.0],
+        },
         "bass_db": round(st["bands"][lo]["gain_db"], 2) if lo is not None else 0.0,
         "treble_db": round(st["bands"][hi]["gain_db"], 2) if hi is not None else 0.0,
         "supported": eq_supported(),
@@ -2773,8 +2820,9 @@ def _eq_builtin_presets():
             bands[idx]["gain_db"] = gain
             if q is not None:
                 bands[idx]["q"] = q
-        out.append({"id": pid, "label": label, "bands": bands,
-                    "preamp_db": min(0.0, -_eq_headroom_db(bands)), "builtin": True})
+        out.append(
+            {"id": pid, "label": label, "bands": bands, "preamp_db": min(0.0, -_eq_headroom_db(bands)), "builtin": True}
+        )
     return out
 
 
@@ -2815,13 +2863,19 @@ def _eq_user_presets_load(path=None):
         raw_bands = item.get("bands")
         if not isinstance(raw_bands, list):
             continue
-        bands = [_eq_clean_band(raw_bands[i] if i < len(raw_bands) else None,
-                                defaults[i]) for i in range(EQ_BANDS)]
+        bands = [_eq_clean_band(raw_bands[i] if i < len(raw_bands) else None, defaults[i]) for i in range(EQ_BANDS)]
         pre = item.get("preamp_db")
         pre = float(pre) if isinstance(pre, (int, float)) and not isinstance(pre, bool) else 0.0
         seen.add(pid)
-        out.append({"id": pid, "label": label, "bands": bands,
-                    "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)), "builtin": False})
+        out.append(
+            {
+                "id": pid,
+                "label": label,
+                "bands": bands,
+                "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)),
+                "builtin": False,
+            }
+        )
         if len(out) >= EQ_USER_PRESET_MAX:
             break
     return out
@@ -2829,11 +2883,11 @@ def _eq_user_presets_load(path=None):
 
 def _eq_user_presets_write(presets, path=None):
     try:
-        write_json_through(path or EQ_PRESETS_PATH,
-                           {"presets": [{k: v for k, v in p.items() if k != "builtin"}
-                                        for p in presets]})
+        write_json_through(
+            path or EQ_PRESETS_PATH, {"presets": [{k: v for k, v in p.items() if k != "builtin"} for p in presets]}
+        )
     except OSError as e:
-        raise Err("unavailable", f"cannot persist presets: {e}")
+        raise Err("unavailable", f"cannot persist presets: {e}") from e
 
 
 def list_eq_presets(path=None):
@@ -2863,16 +2917,20 @@ def save_eq_preset(p, path=None, eq_path=None):
             raise Err("bad_params", "bands must be a list")
         if len(p["bands"]) > EQ_BANDS:
             raise Err("bad_params", f"at most {EQ_BANDS} bands")
-        bands = [_eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None,
-                                defaults[i]) for i in range(EQ_BANDS)]
+        bands = [_eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None, defaults[i]) for i in range(EQ_BANDS)]
         pre = p.get("preamp_db")
         pre = float(pre) if isinstance(pre, (int, float)) and not isinstance(pre, bool) else 0.0
     else:
         # No bands given: snapshot whatever the amplifier is running right now.
         cur = _eq_load(eq_path)
         bands, pre = cur["bands"], cur["preamp_db"]
-    entry = {"id": pid, "label": name, "bands": bands,
-             "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)), "builtin": False}
+    entry = {
+        "id": pid,
+        "label": name,
+        "bands": bands,
+        "preamp_db": max(EQ_PREAMP_MIN_DB, min(0.0, pre)),
+        "builtin": False,
+    }
 
     presets = _eq_user_presets_load(path)
     replaced = False
@@ -2883,8 +2941,7 @@ def save_eq_preset(p, path=None, eq_path=None):
             break
     if not replaced:
         if len(presets) >= EQ_USER_PRESET_MAX:
-            raise Err("bad_params",
-                      f"at most {EQ_USER_PRESET_MAX} saved presets — delete one first")
+            raise Err("bad_params", f"at most {EQ_USER_PRESET_MAX} saved presets — delete one first")
         presets.append(entry)
     _eq_user_presets_write(presets, path)
     log(f"eq preset {'replaced' if replaced else 'saved'}: {name}")
@@ -2919,9 +2976,7 @@ def _eq_apply(st):
         for ch in (1, 2):
             r = _amixer("cset", f"name=CH{ch} - Biquad {i}", val)
             if r.returncode != 0:
-                raise Err("unavailable",
-                          f"biquad write failed (CH{ch} BQ{i}): "
-                          f"{(r.stderr or '').strip()}")
+                raise Err("unavailable", f"biquad write failed (CH{ch} BQ{i}): {(r.stderr or '').strip()}")
 
 
 def set_eq(p, path=None):
@@ -2937,8 +2992,9 @@ def set_eq(p, path=None):
             raise Err("bad_params", "bands must be a list")
         if len(p["bands"]) > EQ_BANDS:
             raise Err("bad_params", f"at most {EQ_BANDS} bands")
-        st["bands"] = [_eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None,
-                                      st["bands"][i]) for i in range(EQ_BANDS)]
+        st["bands"] = [
+            _eq_clean_band(p["bands"][i] if i < len(p["bands"]) else None, st["bands"][i]) for i in range(EQ_BANDS)
+        ]
     lo, hi = _eq_legacy_indices(st["bands"])
     for key, idx in (("bass_db", lo), ("treble_db", hi)):
         if key in p:
@@ -2954,26 +3010,27 @@ def set_eq(p, path=None):
             raise Err("bad_params", "preamp_db must be a number")
         st["preamp_db"] = max(EQ_PREAMP_MIN_DB, min(0.0, float(v)))
     if p.get("auto_preamp"):
-        st["preamp_db"] = max(EQ_PREAMP_MIN_DB,
-                              min(0.0, -_eq_headroom_db(st["bands"])))
+        st["preamp_db"] = max(EQ_PREAMP_MIN_DB, min(0.0, -_eq_headroom_db(st["bands"])))
     if not eq_supported():
         raise Err("unavailable", "kernel does not expose the TAS5713 biquads")
     _eq_apply(st)
     try:
         write_json_through(path, {"bands": st["bands"], "preamp_db": st["preamp_db"]})
     except OSError as e:
-        raise Err("unavailable", f"cannot persist eq: {e}")
-    active = [f"{b['freq_hz']:.0f}Hz {b['gain_db']:+.1f}" for b in st["bands"]
-              if b.get("enabled", True) and abs(b["gain_db"]) >= 0.05]
-    log(f"eq applied: preamp {st['preamp_db']:+.1f} dB, "
-        + (", ".join(active) if active else "flat"))
+        raise Err("unavailable", f"cannot persist eq: {e}") from e
+    active = [
+        f"{b['freq_hz']:.0f}Hz {b['gain_db']:+.1f}"
+        for b in st["bands"]
+        if b.get("enabled", True) and abs(b["gain_db"]) >= 0.05
+    ]
+    log(f"eq applied: preamp {st['preamp_db']:+.1f} dB, " + (", ".join(active) if active else "flat"))
     return get_eq(path)
 
 
 def _eq_is_flat(st):
-    return (abs(st["preamp_db"]) < 0.05
-            and all(not b.get("enabled", True) or abs(b["gain_db"]) < 0.05
-                    for b in st["bands"]))
+    return abs(st["preamp_db"]) < 0.05 and all(
+        not b.get("enabled", True) or abs(b["gain_db"]) < 0.05 for b in st["bands"]
+    )
 
 
 def airplay_pa_state(bridge):
@@ -2998,10 +3055,13 @@ def airplay_pa_state(bridge):
     MPRIS is still used for the BUTTONS -- one busctl per press, no monitor.
     """
     try:
-        r = subprocess.run(["pactl", "list", "sink-inputs"],
-                           capture_output=True, text=True, timeout=6,
-                           env={**os.environ, "PULSE_SERVER": PULSE_SERVER,
-                                "PULSE_COOKIE": PULSE_COOKIE})
+        r = subprocess.run(
+            ["pactl", "list", "sink-inputs"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -3067,8 +3127,7 @@ def _apk(*args, timeout=90):
     if not _apk_lock.acquire(timeout=timeout):
         raise Err("busy", "apk is busy with another operation")
     try:
-        return subprocess.run(["apk", *args], capture_output=True, text=True,
-                              timeout=timeout)
+        return subprocess.run(["apk", *args], capture_output=True, text=True, timeout=timeout)
     finally:
         _apk_lock.release()
 
@@ -3084,7 +3143,7 @@ def _ensure_ota_repo():
             f.write(("" if body.endswith("\n") else "\n") + NEXUSQ_OTA_REPO + "\n")
         log("added OTA repo:", NEXUSQ_OTA_REPO)
     except OSError as e:
-        raise Err("unavailable", f"cannot edit {_APK_REPOS}: {e}")
+        raise Err("unavailable", f"cannot edit {_APK_REPOS}: {e}") from e
 
 
 def _apk_list_version(output, pkg):
@@ -3094,7 +3153,7 @@ def _apk_list_version(output, pkg):
     for line in output.splitlines():
         line = line.strip()
         if line.startswith(pre) and len(line) > len(pre) and line[len(pre)].isdigit():
-            return line.split()[0][len(pre):]  # "0.1.0-r16"
+            return line.split()[0][len(pre) :]  # "0.1.0-r16"
     return None
 
 
@@ -3108,17 +3167,14 @@ def check_nexus_update():
         pkgs = []
         any_up = False
         for p in OTA_PACKAGES:
-            installed = _apk_list_version(
-                _apk("list", "--installed", p, timeout=30).stdout, p)
+            installed = _apk_list_version(_apk("list", "--installed", p, timeout=30).stdout, p)
             avail = _apk_list_version(upgradable, p)  # only listed if newer exists
             up = avail is not None and installed is not None
             any_up = any_up or up
-            pkgs.append({"name": p, "installed": installed,
-                         "available": avail or installed, "upgradable": up})
-        return {"packages": pkgs, "updateAvailable": any_up,
-                "repo": NEXUSQ_OTA_REPO}
+            pkgs.append({"name": p, "installed": installed, "available": avail or installed, "upgradable": up})
+        return {"packages": pkgs, "updateAvailable": any_up, "repo": NEXUSQ_OTA_REPO}
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk did not respond")
+        raise Err("timeout", "apk did not respond") from None
 
 
 def _apk_changed(r):
@@ -3132,7 +3188,7 @@ def _apk_changed(r):
         for verb in ("Upgrading ", "Installing ", "Reinstalling "):
             i = line.find(verb)
             if i >= 0:
-                rest = line[i + len(verb):].split()
+                rest = line[i + len(verb) :].split()
                 if rest:
                     names.append(rest[0])
                 break
@@ -3148,15 +3204,17 @@ def install_nexus_update():
         _apk("update", timeout=60)
         r = _apk("upgrade", *OTA_PACKAGES, timeout=150)
         if r.returncode != 0:
-            raise Err("unavailable",
-                      f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+            raise Err("unavailable", f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
         changed = _apk_changed(r)
         upgraded = [p for p in OTA_PACKAGES if p in changed]
-        return {"ok": True, "upgraded": upgraded,
-                "restarting": bool(upgraded),
-                "output": ((r.stdout or "") + (r.stderr or "")).strip()[-400:]}
+        return {
+            "ok": True,
+            "upgraded": upgraded,
+            "restarting": bool(upgraded),
+            "output": ((r.stdout or "") + (r.stderr or "")).strip()[-400:],
+        }
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk upgrade did not respond")
+        raise Err("timeout", "apk upgrade did not respond") from None
 
 
 # --- full-system OTA (PROTOCOL §12b) --------------------------------------
@@ -3197,12 +3255,12 @@ _REBOOT_HINTS = ("musl", "systemd", "kmod", "eudev", "busybox", "openrc")
 # nexusq-control restarts itself last (it drops the bridge), so it is handled
 # specially in _finish_system_update, not here.
 _PKG_RESTART = {
-    "nexusqd":                  ("nexusqd",),
-    "nexusq-btagent":           ("nexusq-btagent",),
-    "nexusq-setupd":            ("nexusq-setupd",),
-    "nexusq-mqtt":              ("nexusq-mqtt",),
-    "nexusq-control":           ("nexusq-control",),
-    "device-google-steelhead":  ("nq-healthd",),
+    "nexusqd": ("nexusqd",),
+    "nexusq-btagent": ("nexusq-btagent",),
+    "nexusq-setupd": ("nexusq-setupd",),
+    "nexusq-mqtt": ("nexusq-mqtt",),
+    "nexusq-control": ("nexusq-control",),
+    "device-google-steelhead": ("nq-healthd",),
 }
 
 
@@ -3226,8 +3284,7 @@ def _systemd_changed(changed):
 
 # Restart order after a system upgrade. nexusq-control is deliberately absent:
 # restarting it kills the bridge, so the caller does it last and --no-block.
-_RESTART_ORDER = ("nexusqd", "nexusq-btagent", "nexusq-setupd", "nexusq-mqtt",
-                  "nq-healthd")
+_RESTART_ORDER = ("nexusqd", "nexusq-btagent", "nexusq-setupd", "nexusq-mqtt", "nq-healthd")
 
 
 def _systemctl_plan(daemons, systemd_changed):
@@ -3257,8 +3314,7 @@ def _systemctl_plan(daemons, systemd_changed):
 
 def _uname_r():
     try:
-        return subprocess.run(["uname", "-r"], capture_output=True, text=True,
-                              timeout=5).stdout.strip() or None
+        return subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -3296,12 +3352,10 @@ def check_system_update():
             name = _pkg_name(spec)
             if name == _KERNEL_PKG:
                 continue  # kernel is flash-only (phase 2)
-            pkgs.append({"name": name, "installed": spec[len(name) + 1:],
-                         "available": newv})
-        return {"packages": pkgs, "updateAvailable": len(pkgs) > 0,
-                "kernel": _uname_r(), "repo": NEXUSQ_OTA_REPO}
+            pkgs.append({"name": name, "installed": spec[len(name) + 1 :], "available": newv})
+        return {"packages": pkgs, "updateAvailable": len(pkgs) > 0, "kernel": _uname_r(), "repo": NEXUSQ_OTA_REPO}
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk did not respond")
+        raise Err("timeout", "apk did not respond") from None
 
 
 def install_system_update():
@@ -3323,20 +3377,23 @@ def install_system_update():
         # no way back in. The kernel is applied by nq-kernel-ota, never by apk.
         r = _apk("upgrade", "--available", "--ignore", _KERNEL_PKG, timeout=600)
         if r.returncode != 0:
-            raise Err("unavailable",
-                      f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+            raise Err("unavailable", f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
         changed = _apk_changed(r)
         # Services (not package names) to restart — nq-healthd lives inside
         # device-google-steelhead and nexusq-mqtt is its own daemon, both of
         # which the old package-name list silently skipped (r29).
         daemons = _services_for_changed(changed)
         reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
-        return {"ok": True, "changed": changed, "daemons": daemons,
-                "rebootRecommended": reboot,
-                "systemdChanged": _systemd_changed(changed),
-                "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:]}
+        return {
+            "ok": True,
+            "changed": changed,
+            "daemons": daemons,
+            "rebootRecommended": reboot,
+            "systemdChanged": _systemd_changed(changed),
+            "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:],
+        }
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk upgrade did not respond")
+        raise Err("timeout", "apk upgrade did not respond") from None
 
 
 def start_setup_mode():
@@ -3357,14 +3414,13 @@ def start_setup_mode():
     if arm_err is not None:
         raise Err("unavailable", f"cannot arm setup mode: {arm_err}")
     try:
-        r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"],
-                           capture_output=True, text=True, timeout=15)
+        r = subprocess.run(["systemctl", "start", "nexusq-setupd.service"], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError) as e:
         try:
             os.unlink(SETUP_FORCE_FLAG)
         except OSError:
             pass
-        raise Err("unavailable", f"cannot start setup mode: {e}")
+        raise Err("unavailable", f"cannot start setup mode: {e}") from e
     if r.returncode != 0:
         try:
             os.unlink(SETUP_FORCE_FLAG)
@@ -3382,25 +3438,28 @@ class Bridge:
         # source id -> transport backend (see transport_for / dispatch_transport).
         # Empty until a backend registers itself, which is deliberate: an absent
         # backend must report `none`, not a promise it cannot keep.
-        self.transports = {"airplay": AirPlayTransport(),
-                           "roon": RoonTransport(self)}
+        self.transports = {"airplay": AirPlayTransport(), "roon": RoonTransport(self)}
         self.airplay_volume = AirPlayVolumeFollow(
             session=self.transports["airplay"].can_control,
-            sender_volume=_airplay_sender_volume, push=_airplay_push_volume)
+            sender_volume=_airplay_sender_volume,
+            push=_airplay_push_volume,
+        )
         #: zone name -> {field: value}, fed by nexusq-mqtt from the Core's
         #: extension. Only ever READ for the zone that is playing to us.
         self.roon = {}
         self._roon_zone = None
         self.diag = Diagnostics(
-            proc_diag=_proc_diag, busy=self._source_busy,
+            proc_diag=_proc_diag,
+            busy=self._source_busy,
             restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
-            notify=lambda v: self.broadcast("diagnosticsChanged", v))
+            notify=lambda v: self.broadcast("diagnosticsChanged", v),
+        )
         self.stats = ControlStats()
         # The volume and mute per output, kept in the persist store.
         self.volumes = VolumeStore()
         # The connection chime (Spotify, Bluetooth, AirPlay, Roon).
         self.chime = Chime()
-        self.clients = {}          # id -> socket
+        self.clients = {}  # id -> socket
         self._next_id = 0
         # Seed the active output from PA's current default sink (fall back to speaker),
         # then read volume/mute off that sink.
@@ -3427,9 +3486,15 @@ class Bridge:
             "theme": _theme_load() or THEME_DEFAULT,
             "scene": _scene_load() or SCENE_DEFAULT,
             "output": output,
-            "nowPlaying": {"playing": False, "artist": "", "track": "",
-                           "album": "", "artUrl": "", "source": "",
-                           "transport": "none"},
+            "nowPlaying": {
+                "playing": False,
+                "artist": "",
+                "track": "",
+                "album": "",
+                "artUrl": "",
+                "source": "",
+                "transport": "none",
+            },
             "name": DEVICE_NAME,
         }
         threading.Thread(target=self._boot_output, daemon=True).start()
@@ -3437,12 +3502,14 @@ class Bridge:
         # The LED ring switch + schedule; its scheduler thread is started by
         # main(), like the other restore threads, so a test can build a Bridge
         # without one.
-        self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap),
-                         on_beat=lambda: self.brightness.reassert())
+        self.ring = Ring(
+            on_change=lambda snap: self.broadcast("ringChanged", snap), on_beat=lambda: self.brightness.reassert()
+        )
         # The brightness slider (persistent since r53) and ambient brightness.
         self.brightness = Brightness(
             on_change=lambda snap: self.broadcast("ambientChanged", snap),
-            on_wake=lambda: self.stats.bump("ambient_wakes"))
+            on_wake=lambda: self.stats.bump("ambient_wakes"),
+        )
         self.state["brightness"] = self.brightness.maximum()
 
     def _boot_output(self, attempts=45, pause_s=2):
@@ -3506,13 +3573,15 @@ class Bridge:
             if saved is not None:
                 vol, muted = self.mixer.get(sink)
                 if vol is not None and (vol, bool(muted)) != saved:
-                    self.mixer.set_volume(sink, saved[0])      # implies unmute
+                    self.mixer.set_volume(sink, saved[0])  # implies unmute
                     self.mixer.set_muted(sink, saved[1])
                     # this output is becoming the active one: its mute is
                     # what the dome's mute LED shows
                     nexusqd_send(f"muted {1 if saved[1] else 0}")
-                    log(f"volume restored for {oid}: {saved[0]}%{' muted' if saved[1] else ''}"
-                        f" (the sink said {vol}%{' muted' if muted else ''})")
+                    log(
+                        f"volume restored for {oid}: {saved[0]}%{' muted' if saved[1] else ''}"
+                        f" (the sink said {vol}%{' muted' if muted else ''})"
+                    )
         finally:
             self.volumes.settle(oid)
 
@@ -3602,7 +3671,10 @@ class Bridge:
             f"device={HDMI_ALSA_DEVICE}",
             f"sink_name={HDMI_SINK_NAME}",
             "sink_properties=device.description=HDMI",
-            f"rate={HDMI_SINK_RATE}", "channels=2", "format=s16le")
+            f"rate={HDMI_SINK_RATE}",
+            "channels=2",
+            "format=s16le",
+        )
         if idx is None:
             return None
         # load-module reporting an index is not proof the sink exists: a module
@@ -3610,8 +3682,7 @@ class Bridge:
         return HDMI_SINK_NAME if HDMI_SINK_NAME in self.pulse.sinks() else None
 
     def _hdmi_sink_down(self):
-        idx = self.pulse.module_index("module-alsa-sink",
-                                      f"sink_name={HDMI_SINK_NAME}")
+        idx = self.pulse.module_index("module-alsa-sink", f"sink_name={HDMI_SINK_NAME}")
         if idx is not None:
             self.pulse.unload_module(idx)
 
@@ -3666,7 +3737,7 @@ class Bridge:
             return False
         muted = bool(muted)
         with self.lock:
-            moved = (vol != self.state["volume"] or muted != self.state["muted"])
+            moved = vol != self.state["volume"] or muted != self.state["muted"]
             if moved:
                 self.state["volume"] = vol
                 self.state["muted"] = muted
@@ -3735,8 +3806,13 @@ class Bridge:
             st["ambient"] = self.brightness.snapshot()
             return st, []
         if method == "getDeviceInfo":
-            return {"name": DEVICE_NAME, "model": "steelhead", "room": DEVICE_ROOM,
-                    "serial": _serial(), "swVersion": _sw_version()}, []
+            return {
+                "name": DEVICE_NAME,
+                "model": "steelhead",
+                "room": DEVICE_ROOM,
+                "serial": _serial(),
+                "swVersion": _sw_version(),
+            }, []
         if method in ("setVolume", "adjustVolume", "setMuted", "toggleMute"):
             return self._volume_cmd(method, p)
         if method == "listOutputs":
@@ -3803,8 +3879,7 @@ class Bridge:
             b, amb = self.brightness.set_max(v)
             with self.lock:
                 self.state["brightness"] = b
-            return {"brightness": b}, [("brightnessChanged", {"brightness": b}),
-                                       ("ambientChanged", amb)]
+            return {"brightness": b}, [("brightnessChanged", {"brightness": b}), ("ambientChanged", amb)]
         if method == "getAmbient":
             return self.brightness.snapshot(), []
         if method == "setAmbient":
@@ -3868,8 +3943,9 @@ class Bridge:
             btagent_call({"m": "remove", "mac": _require_mac(p)})
             return {"removed": True}, [("pairedDevicesChanged", {})]
         if method in ("connectBtDevice", "disconnectBtDevice"):
-            btagent_call({"m": "connect" if method == "connectBtDevice" else "disconnect",
-                          "mac": _require_mac(p)}, timeout=45)
+            btagent_call(
+                {"m": "connect" if method == "connectBtDevice" else "disconnect", "mac": _require_mac(p)}, timeout=45
+            )
             return {"ok": True}, [("pairedDevicesChanged", {})]
 
         # --- HDMI desktop on demand (PROTOCOL §10) --------------------------
@@ -3943,13 +4019,12 @@ class Bridge:
             # inside _apk, so a routine poll never wrongly reads "update in
             # progress". `apk` itself can't race (DB lock) — _apk_lock guards it.
             if _nexus_install_lock.locked():
-                return {"packages": [], "updateAvailable": False, "busy": True,
-                        "repo": NEXUSQ_OTA_REPO}, []
+                return {"packages": [], "updateAvailable": False, "busy": True, "repo": NEXUSQ_OTA_REPO}, []
             r = check_nexus_update()
             if r.get("updateAvailable"):
-                nexusqd_send("mblink 255 140 0")     # amber blink on the mute LED
+                nexusqd_send("mblink 255 140 0")  # amber blink on the mute LED
             else:
-                nexusqd_send("mblink stop")          # nothing pending -> steady mute LED
+                nexusqd_send("mblink stop")  # nothing pending -> steady mute LED
             return r, []
         if method == "installNexusUpdate":
             # Refuse a second concurrent install (flaky-link resend) rather than
@@ -3957,18 +4032,17 @@ class Bridge:
             if not _nexus_install_lock.acquire(blocking=False):
                 raise Err("busy", "an update is already installing")
             try:
-                nexusqd_send("mblink stop")          # clear the "update available" blink
-                prog = _OtaProgress().start()        # determinate ring bar
+                nexusqd_send("mblink stop")  # clear the "update available" blink
+                prog = _OtaProgress().start()  # determinate ring bar
                 try:
                     r = install_nexus_update()
                 except Err:
                     prog.cancel()
                     self._led_restore_theme()
                     raise
-                prog.finish()                        # snap the bar to 100%
+                prog.finish()  # snap the bar to 100%
                 time.sleep(0.35)
-                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"),
-                                                 ["auto"]))
+                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
                 self._finish_nexus_update(r.get("upgraded", []), theme_cmds)
                 return r, []
             finally:
@@ -3983,8 +4057,13 @@ class Bridge:
             # busy only while an INSTALL runs (see checkNexusUpdate); apk itself is
             # serialized by _apk_lock, so a check never races the DB lock.
             if _nexus_install_lock.locked():
-                return {"packages": [], "updateAvailable": False, "busy": True,
-                        "kernel": _uname_r(), "repo": NEXUSQ_OTA_REPO}, []
+                return {
+                    "packages": [],
+                    "updateAvailable": False,
+                    "busy": True,
+                    "kernel": _uname_r(),
+                    "repo": NEXUSQ_OTA_REPO,
+                }, []
             return check_system_update(), []
         if method == "installSystemUpdate":
             if not _nexus_install_lock.acquire(blocking=False):
@@ -4001,12 +4080,10 @@ class Bridge:
                 except Err:
                     self._led_restore_theme()
                     raise
-                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"),
-                                                 ["auto"]))
-                self._finish_system_update(r.get("daemons", []),
-                                           r.get("rebootRecommended", False),
-                                           theme_cmds,
-                                           r.get("systemdChanged", False))
+                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
+                self._finish_system_update(
+                    r.get("daemons", []), r.get("rebootRecommended", False), theme_cmds, r.get("systemdChanged", False)
+                )
                 return r, []
             finally:
                 _nexus_install_lock.release()
@@ -4023,40 +4100,41 @@ class Bridge:
         changed non-control daemon, flash the ring GREEN (success, like a good
         pairing), restore the theme, then restart nexusq-control — which drops the
         link; the app reconnects to the new build."""
+
         def _do():
             time.sleep(0.4)
             restarted_nexusqd = False
             for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
                 if svc in upgraded:
                     try:
-                        subprocess.run(["systemctl", "restart", svc],
-                                       capture_output=True, timeout=30)
+                        subprocess.run(["systemctl", "restart", svc], capture_output=True, timeout=30)
                         restarted_nexusqd = restarted_nexusqd or svc == "nexusqd"
                     except (OSError, subprocess.SubprocessError):
                         pass
             if restarted_nexusqd:
                 time.sleep(1.5)  # let the ring daemon come back before we drive it
-            nexusqd_send("set 0 255 0")   # green success
+            nexusqd_send("set 0 255 0")  # green success
             time.sleep(2.5)
             for c in theme_cmds:
-                nexusqd_send(c)           # back to the user's theme
+                nexusqd_send(c)  # back to the user's theme
             if "nexusq-control" in upgraded:
                 try:
                     subprocess.run(
-                        ["systemctl", "--no-block", "restart", "nexusq-control"],
-                        capture_output=True, timeout=10)
+                        ["systemctl", "--no-block", "restart", "nexusq-control"], capture_output=True, timeout=10
+                    )
                 except (OSError, subprocess.SubprocessError):
                     pass
+
         threading.Thread(target=_do, daemon=True).start()
 
-    def _finish_system_update(self, daemons, reboot, theme_cmds,
-                              systemd_changed=False):
+    def _finish_system_update(self, daemons, reboot, theme_cmds, systemd_changed=False):
         """Off-thread tail of a full-system install: make PID 1 able to act
         (daemon-reexec when systemd itself changed, daemon-reload otherwise),
         restart changed daemons, flash the ring green, then either REBOOT (base
         libc/init churned — a reboot is the clean way to apply it; also restarts
         the bridge, so the app reconnects when the Q comes back) or restore the
         theme + restart the bridge if it was among the upgraded ones."""
+
         def _do():
             time.sleep(0.4)
             restarted_nexusqd = False
@@ -4074,15 +4152,14 @@ class Bridge:
                     pass
             if restarted_nexusqd:
                 time.sleep(1.5)
-            nexusqd_send("set 0 255 0")   # green success (this also stops the spinner)
+            nexusqd_send("set 0 255 0")  # green success (this also stops the spinner)
             time.sleep(2.5)
             if reboot:
                 # base libc/init changed — reboot to apply it cleanly. Stay GREEN
                 # (don't flip to the theme first) so the last thing seen is success,
                 # then the device reboots; the app reconnects when it's back.
                 try:
-                    subprocess.run(["systemctl", "reboot"],
-                                   capture_output=True, timeout=10)
+                    subprocess.run(["systemctl", "reboot"], capture_output=True, timeout=10)
                 except (OSError, subprocess.SubprocessError):
                     pass
                 return
@@ -4091,10 +4168,11 @@ class Bridge:
             if "nexusq-control" in daemons:
                 try:
                     subprocess.run(
-                        ["systemctl", "--no-block", "restart", "nexusq-control"],
-                        capture_output=True, timeout=10)
+                        ["systemctl", "--no-block", "restart", "nexusq-control"], capture_output=True, timeout=10
+                    )
                 except (OSError, subprocess.SubprocessError):
                     pass
+
         threading.Thread(target=_do, daemon=True).start()
 
     def _volume_cmd(self, method, p):
@@ -4165,19 +4243,23 @@ class Bridge:
             if o["id"] == "hdmi":
                 if not hdmi.get("connected") and sink is None:
                     continue
-                outs.append({
+                outs.append(
+                    {
+                        "id": o["id"],
+                        "label": o["label"],
+                        "sink": sink or "",
+                        "available": bool(hdmi.get("connected") and hdmi.get("audio")),
+                    }
+                )
+                continue
+            outs.append(
+                {
                     "id": o["id"],
                     "label": o["label"],
                     "sink": sink or "",
-                    "available": bool(hdmi.get("connected") and hdmi.get("audio")),
-                })
-                continue
-            outs.append({
-                "id": o["id"],
-                "label": o["label"],
-                "sink": sink or "",
-                "available": sink is not None,
-            })
+                    "available": sink is not None,
+                }
+            )
         if active is None:
             with self.lock:
                 active = self.state.get("output", "speaker")
@@ -4205,9 +4287,7 @@ class Bridge:
                 raise
             if sink is None:
                 hdmi_hold(False)
-                raise Err("unavailable",
-                          "the HDMI output is up but PulseAudio could not open "
-                          "its audio device")
+                raise Err("unavailable", "the HDMI output is up but PulseAudio could not open its audio device")
         else:
             sink = self._sink_for_output(oid)
             if sink is None:
@@ -4299,13 +4379,14 @@ class Bridge:
             # interface by design. The app is expected to read
             # nowPlaying.transport and drive Spotify's Web API itself, so
             # reaching here means a client ignored the field.
-            raise Err("unavailable",
-                      "Spotify is driven through Spotify's own Web API by the "
-                      "client, not by the device (nowPlaying.transport = "
-                      "spotify-web)")
+            raise Err(
+                "unavailable",
+                "Spotify is driven through Spotify's own Web API by the "
+                "client, not by the device (nowPlaying.transport = "
+                "spotify-web)",
+            )
         if route != "device":
-            raise Err("unavailable",
-                      "nothing is playing that this device can control")
+            raise Err("unavailable", "nothing is playing that this device can control")
 
         backend = self.transports[source]
         try:
@@ -4313,7 +4394,7 @@ class Bridge:
         except Err:
             raise
         except Exception as e:
-            raise Err("unavailable", f"{source} transport failed: {e}")
+            raise Err("unavailable", f"{source} transport failed: {e}") from e
 
         # A backend that knows the new play state says so; otherwise leave the
         # cached state alone and let the source's own metadata feed correct it,
@@ -4360,28 +4441,28 @@ class Bridge:
             # may well be playing, and shairport going away says nothing about it.
             if cur.get("source") != "airplay":
                 return
-            np = dict(cur, track="", artist="", album="", artUrl="",
-                      source="", playing=False)
+            np = dict(cur, track="", artist="", album="", artUrl="", source="", playing=False)
         else:
             if not owns:
-                return                      # something else owns the screen
+                return  # something else owns the screen
             m = _mpris_metadata()
-            np = dict(cur,
-                      track=str(m.get("xesam:title") or ""),
-                      artist=str(m.get("xesam:artist") or ""),
-                      album=str(m.get("xesam:album") or ""),
-                      # file:// in shairport's cache; a phone cannot fetch it.
-                      artUrl="",
-                      source="airplay",
-                      playing=(state == "playing"))
+            np = dict(
+                cur,
+                track=str(m.get("xesam:title") or ""),
+                artist=str(m.get("xesam:artist") or ""),
+                album=str(m.get("xesam:album") or ""),
+                # file:// in shairport's cache; a phone cannot fetch it.
+                artUrl="",
+                source="airplay",
+                playing=(state == "playing"),
+            )
 
         backend = self.transports.get("airplay")
         if backend is not None:
-            backend.note_status("Playing" if state == "playing"
-                                else "Paused" if state == "paused" else "Stopped")
+            backend.note_status("Playing" if state == "playing" else "Paused" if state == "paused" else "Stopped")
         self._apply_transport(np)
         if np == cur:
-            return                          # nothing moved; do not wake clients
+            return  # nothing moved; do not wake clients
         with self.lock:
             self.state["nowPlaying"] = np
         self.broadcast("nowPlayingChanged", np)
@@ -4435,28 +4516,28 @@ class Bridge:
         if zone is None:
             if cur.get("source") != "roon":
                 return
-            np = dict(cur, track="", artist="", album="", artUrl="",
-                      source="", playing=False)
+            np = dict(cur, track="", artist="", album="", artUrl="", source="", playing=False)
         else:
             if cur.get("source") not in ("", "roon"):
-                return                      # something else owns the screen
+                return  # something else owns the screen
             f = self.roon.get(zone, {})
             base = _roon_conf().get("core_image_base", "")
             key = f.get("now_playing/image_key", "")
-            np = dict(cur,
-                      track=f.get("now_playing/three_line/line1", ""),
-                      artist=f.get("now_playing/three_line/line2", ""),
-                      album=f.get("now_playing/three_line/line3", ""),
-                      # Unlike AirPlay's file:// path, this one the phone can
-                      # actually fetch -- the Core serves it over HTTP.
-                      artUrl=(f"{base}/api/image/{key}?scale=fit&width=300&height=300"
-                              if base and key else ""),
-                      source="roon",
-                      playing=(f.get("state") == "playing"))
+            np = dict(
+                cur,
+                track=f.get("now_playing/three_line/line1", ""),
+                artist=f.get("now_playing/three_line/line2", ""),
+                album=f.get("now_playing/three_line/line3", ""),
+                # Unlike AirPlay's file:// path, this one the phone can
+                # actually fetch -- the Core serves it over HTTP.
+                artUrl=(f"{base}/api/image/{key}?scale=fit&width=300&height=300" if base and key else ""),
+                source="roon",
+                playing=(f.get("state") == "playing"),
+            )
 
         self._apply_transport(np)
         if np == cur:
-            return                          # nothing moved; do not wake clients
+            return  # nothing moved; do not wake clients
         with self.lock:
             self.state["nowPlaying"] = np
         self.broadcast("nowPlayingChanged", np)
@@ -4475,19 +4556,21 @@ class Bridge:
         with self.lock:
             cur = dict(self.state["nowPlaying"])
         if kind == "track_changed":
-            cur.update({
-                "track": obj.get("name", ""),
-                "artist": obj.get("artists", ""),
-                "album": obj.get("album", ""),
-                "artUrl": obj.get("cover", ""),
-                "source": "spotify",
-                "playing": True,
-            })
+            cur.update(
+                {
+                    "track": obj.get("name", ""),
+                    "artist": obj.get("artists", ""),
+                    "album": obj.get("album", ""),
+                    "artUrl": obj.get("cover", ""),
+                    "source": "spotify",
+                    "playing": True,
+                }
+            )
             np = cur
         elif kind in ("playing", "paused"):
             # Paused still HAS a track loaded, so the metadata stays: the app is
             # right to show what is sitting there ready to resume.
-            cur["playing"] = (kind == "playing")
+            cur["playing"] = kind == "playing"
             np = cur
         elif kind == "stopped":
             # Stopped is not paused. Nothing is loaded any more, and keeping the
@@ -4496,8 +4579,7 @@ class Bridge:
             # 2026-09-07: "pokud tam ted nic nehraje, nemelo by tam bejt now
             # playing title a image, proste tam nic neni". Clear it, and let the
             # app draw nothing.
-            cur.update({"track": "", "artist": "", "album": "", "artUrl": "",
-                        "source": "", "playing": False})
+            cur.update({"track": "", "artist": "", "album": "", "artUrl": "", "source": "", "playing": False})
             np = cur
         elif kind == "volume":
             # Not a volume of its own any more (device r117): librespot drives
@@ -4522,8 +4604,7 @@ class Err(Exception):
 
 
 def _serial():
-    for path in ("/sys/firmware/devicetree/base/serial-number",
-                 "/proc/device-tree/serial-number"):
+    for path in ("/sys/firmware/devicetree/base/serial-number", "/proc/device-tree/serial-number"):
         try:
             with open(path, "rb") as f:
                 return f.read().rstrip(b"\x00").decode(errors="replace")
@@ -4590,19 +4671,24 @@ def client_thread(bridge, sock, addr):
         try:
             result, events = bridge.handle(method, obj.get("params"))
             if rid is not None:
-                bridge.send_to(cid, (json.dumps(
-                    {"id": rid, "ok": True, "result": result}) + "\n").encode())
+                bridge.send_to(cid, (json.dumps({"id": rid, "ok": True, "result": result}) + "\n").encode())
         except Err as e:
             if rid is not None:
-                bridge.send_to(cid, (json.dumps(
-                    {"id": rid, "ok": False,
-                     "error": {"code": e.code, "message": e.message}}) + "\n").encode())
+                bridge.send_to(
+                    cid,
+                    (
+                        json.dumps({"id": rid, "ok": False, "error": {"code": e.code, "message": e.message}}) + "\n"
+                    ).encode(),
+                )
         except Exception as e:  # noqa: BLE001
             log("handler error:", method, e)
             if rid is not None:
-                bridge.send_to(cid, (json.dumps(
-                    {"id": rid, "ok": False,
-                     "error": {"code": "internal", "message": str(e)}}) + "\n").encode())
+                bridge.send_to(
+                    cid,
+                    (
+                        json.dumps({"id": rid, "ok": False, "error": {"code": "internal", "message": str(e)}}) + "\n"
+                    ).encode(),
+                )
         # broadcast side-effect events only after this request's ack is written
         for name, data in events:
             bridge.broadcast(name, data)
@@ -4666,8 +4752,13 @@ def serve_unix(bridge):
     try:
         os.chown(HOOK_SOCK, -1, _USER_GID)
     except OSError as e:
-        log("hook socket: cannot give it to gid", _USER_GID, "-", e,
-            "- librespot's now-playing hook will not be able to connect")
+        log(
+            "hook socket: cannot give it to gid",
+            _USER_GID,
+            "-",
+            e,
+            "- librespot's now-playing hook will not be able to connect",
+        )
     os.chmod(HOOK_SOCK, 0o660)
     srv.listen(8)
     log("hook socket:", HOOK_SOCK)
@@ -4699,9 +4790,18 @@ def publish_mdns():
             _MDNS = None
         try:
             _MDNS = subprocess.Popen(
-                ["avahi-publish-service", DEVICE_NAME, "_nexusq._tcp", str(PORT),
-                 "proto=1", f"name={DEVICE_NAME}", "model=steelhead", f"room={DEVICE_ROOM}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                [
+                    "avahi-publish-service",
+                    DEVICE_NAME,
+                    "_nexusq._tcp",
+                    str(PORT),
+                    "proto=1",
+                    f"name={DEVICE_NAME}",
+                    "model=steelhead",
+                    f"room={DEVICE_ROOM}",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             log("avahi-publish-service not found; mDNS disabled (connect by host:port)")
@@ -4737,17 +4837,16 @@ def set_name(p):
     host = sanitize_hostname(name)
 
     try:
-        r = subprocess.run(["hostnamectl", "set-hostname", host],
-                           capture_output=True, text=True, timeout=15)
+        r = subprocess.run(["hostnamectl", "set-hostname", host], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError) as e:
-        raise Err("unavailable", f"hostname change failed: {e}")
+        raise Err("unavailable", f"hostname change failed: {e}") from e
     if r.returncode != 0:
         raise Err("internal", "hostname change failed")
 
     try:
         write_identity(IDENTITY_PATH, {"name": name, "room": room})
     except OSError as e:
-        raise Err("internal", f"cannot write identity: {e}")
+        raise Err("internal", f"cannot write identity: {e}") from e
 
     DEVICE_NAME, DEVICE_ROOM = name, room
     publish_mdns()
@@ -4774,8 +4873,8 @@ def pa_watch_thread(bridge):
         proc = None
         try:
             proc = subprocess.Popen(
-                ["pactl", "subscribe"], stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+                ["pactl", "subscribe"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1
+            )
             # AFTER subscribing, so nothing can fall between the read and the
             # first event. Before PulseAudio is up this reads nothing and the
             # subscribe exits at once; the loop comes round again in a second.

@@ -18,8 +18,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control_transport",
-        importlib.machinery.SourceFileLoader("nexusq_control_transport", DAEMON))
+        "nexusq_control_transport", importlib.machinery.SourceFileLoader("nexusq_control_transport", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -52,11 +52,20 @@ class Bridge:
 
     def __init__(self, source="", playing=False):
         import threading
+
         self.lock = threading.Lock()
         self.transports = {}
-        self.state = {"nowPlaying": {"playing": playing, "artist": "", "track": "",
-                                     "album": "", "artUrl": "", "source": source,
-                                     "transport": "none"}}
+        self.state = {
+            "nowPlaying": {
+                "playing": playing,
+                "artist": "",
+                "track": "",
+                "album": "",
+                "artUrl": "",
+                "source": source,
+                "transport": "none",
+            }
+        }
         self.sent = []
 
     def broadcast(self, ev, data):
@@ -90,8 +99,7 @@ class TestTransportFor(unittest.TestCase):
     def test_nothing_playing_is_none(self):
         b = Bridge(source="")
         b.transports["airplay"] = FakeBackend()
-        self.assertEqual(b._apply_transport(dict(b.state["nowPlaying"]))["transport"],
-                         "none")
+        self.assertEqual(b._apply_transport(dict(b.state["nowPlaying"]))["transport"], "none")
 
 
 class TestDispatch(unittest.TestCase):

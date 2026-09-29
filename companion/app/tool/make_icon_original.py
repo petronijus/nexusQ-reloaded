@@ -12,11 +12,14 @@ blobs. To use our own clean mark instead, run tool/make_icon.py.)
 
 Requires Pillow.  Run:  python3 tool/make_icon_original.py
 """
+
 import os
 from PIL import Image
 
-SRC = ("/Users/petronijus/Documents/Dev/nexusQ-reloaded/private/nexusq-original/"
-       "companion/apktool/res/drawable-xhdpi-v4/icon.png")
+SRC = (
+    "/Users/petronijus/Documents/Dev/nexusQ-reloaded/private/nexusq-original/"
+    "companion/apktool/res/drawable-xhdpi-v4/icon.png"
+)
 S = 1024
 
 

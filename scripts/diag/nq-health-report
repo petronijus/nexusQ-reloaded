@@ -18,7 +18,11 @@ overnight soak without the ssh sessions at either end (a session is itself
 the largest load an idle Q sees). TIME is ISO 8601; without a zone it is the
 host's local time: --since=2026-09-28T01:30 --until=2026-09-28T07:45
 """
-import sys, os, json, statistics
+
+import sys
+import os
+import json
+import statistics
 from datetime import datetime, timezone
 
 # --- OPP voltage table (uV), mirrors nq-healthd / the DTS -------------------
@@ -42,7 +46,7 @@ def load_jsonl(path):
 
 
 def fmt_dur(samples, interval_guess):
-    return f"{samples} samples (~{samples*interval_guess}s)"
+    return f"{samples} samples (~{samples * interval_guess}s)"
 
 
 def snapshot_block(text, section, sub):
@@ -108,7 +112,7 @@ def in_window(rows, since=None, until=None):
 
 # Services whose CPU means the window was NOT idle: audio was flowing.
 PLAYBACK_UNITS = ("librespot", "shairport-sync", "pulseaudio")
-PLAYBACK_PCT = 2.0    # % of one core, averaged; PulseAudio idles at ~0.2 %
+PLAYBACK_PCT = 2.0  # % of one core, averaged; PulseAudio idles at ~0.2 %
 
 
 def counter_delta(rows, key, pid_key=None):
@@ -149,9 +153,11 @@ def accounting(rows, interval):
         for k, v in r["unit_us"].items():
             units[k] = units.get(k, 0) + v
     unit_span_s = 60.0 * len(unit_rows)
-    out["unit_pct_of_1_core"] = ({k: 100.0 * v / (unit_span_s * 1e6)
-                                  for k, v in sorted(units.items(), key=lambda kv: -kv[1])}
-                                 if unit_rows else {})
+    out["unit_pct_of_1_core"] = (
+        {k: 100.0 * v / (unit_span_s * 1e6) for k, v in sorted(units.items(), key=lambda kv: -kv[1])}
+        if unit_rows
+        else {}
+    )
 
     renders = counter_delta(rows, "nq_renders", "nq_pid")
     ctl = counter_delta(rows, "nq_ctl", "nq_pid")
@@ -184,10 +190,13 @@ def analyze(rows, events, snap_text):
     # ---- nexusqd hang: alive but control socket unresponsive ----
     hang = [r for r in rows if r.get("nq_alive") == 1 and r.get("nq_resp") == 0]
     if hang:
-        add("crit", "nexusqd_hang",
+        add(
+            "crit",
+            "nexusqd_hang",
             f"nexusqd alive but UNRESPONSIVE in {len(hang)} sample(s) "
             f"(first @ uptime {hang[0].get('t_mono')}s) — the LED ring would be frozen here",
-            hang[0].get("t_mono"))
+            hang[0].get("t_mono"),
+        )
 
     # ---- LED frame frozen while daemon up ----
     # A static frame alone is NOT a hang: the screensaver locks a static frame
@@ -197,18 +206,23 @@ def analyze(rows, events, snap_text):
     # static-by-design and merely noted. (False CRIT on every idle capture
     # before this guard, 2026-07-03.)
     frozen = [r for r in rows if r.get("led_stall", 0) and r["led_stall"] >= 6]
-    distressed = [r for r in frozen
-                  if r.get("nq_resp") == 0 or r.get("nq_progress") == 0]
+    distressed = [r for r in frozen if r.get("nq_resp") == 0 or r.get("nq_progress") == 0]
     if distressed:
-        add("crit", "led_frozen",
+        add(
+            "crit",
+            "led_frozen",
             f"LED frame unchanged >=6 samples WITH distressed nexusqd "
             f"(resp=0/no-progress) on {len(distressed)} occasion(s) "
             f"(first @ uptime {distressed[0].get('t_mono')}s)",
-            distressed[0].get("t_mono"))
+            distressed[0].get("t_mono"),
+        )
     elif frozen:
-        add("info", "led_static",
+        add(
+            "info",
+            "led_static",
             f"LED frame static >=6 samples on {len(frozen)} occasion(s) with a "
-            f"responsive nexusqd — screensaver/static-by-design, not a fault")
+            f"responsive nexusqd — screensaver/static-by-design, not a fault",
+        )
 
     # ---- nexusqd no forward progress while alive (softer hang signal) ----
     stuck = 0
@@ -220,30 +234,30 @@ def analyze(rows, events, snap_text):
         else:
             stuck = 0
     if longest >= 4:
-        add("warn", "nexusqd_no_progress",
+        add(
+            "warn",
+            "nexusqd_no_progress",
             f"nexusqd consumed no CPU for up to {fmt_dur(longest, interval)} while alive "
-            f"(idle is normal, but combined with led_frozen this confirms a hang)")
+            f"(idle is normal, but combined with led_frozen this confirms a hang)",
+        )
 
     # ---- restarts ----
     nqr = [r.get("nq_restarts", 0) for r in rows]
     if nqr and max(nqr) > min(nqr):
-        add("warn", "nexusqd_restart",
-            f"nexusqd restarted during capture (NRestarts {min(nqr)} -> {max(nqr)})")
+        add("warn", "nexusqd_restart", f"nexusqd restarted during capture (NRestarts {min(nqr)} -> {max(nqr)})")
     lsr = [r.get("ls_restarts", 0) for r in rows]
     if lsr and max(lsr) > min(lsr):
-        add("warn", "librespot_restart",
-            f"librespot restarted during capture (NRestarts {min(lsr)} -> {max(lsr)})")
+        add("warn", "librespot_restart", f"librespot restarted during capture (NRestarts {min(lsr)} -> {max(lsr)})")
     # daemon not active at all
     if any(r.get("nq_active") not in ("active", "unknown") for r in rows):
         bad = next(r for r in rows if r.get("nq_active") not in ("active", "unknown"))
-        add("crit", "nexusqd_down",
-            f"nexusqd.service not active (state={bad.get('nq_active')})")
+        add("crit", "nexusqd_down", f"nexusqd.service not active (state={bad.get('nq_active')})")
 
     # ---- thermal ----
     temps = [r.get("temp_mC", 0) for r in rows if r.get("temp_mC")]
     if temps:
         tmax = max(temps)
-        msg = f"peak cpu_thermal {tmax/1000:.1f}C (avg {statistics.mean(temps)/1000:.1f}C)"
+        msg = f"peak cpu_thermal {tmax / 1000:.1f}C (avg {statistics.mean(temps) / 1000:.1f}C)"
         if tmax >= 120000:
             add("crit", "thermal_crit", msg + " — near 125C critical trip")
         elif tmax >= 100000:
@@ -254,8 +268,7 @@ def analyze(rows, events, snap_text):
             add("info", "thermal_ok", msg)
     throttled = [r for r in rows if r.get("cool", 0) and r["cool"] > 0]
     if throttled:
-        add("warn", "thermal_cooling_active",
-            f"CPU cooling engaged (cur_state>0) in {len(throttled)} sample(s)")
+        add("warn", "thermal_cooling_active", f"CPU cooling engaged (cur_state>0) in {len(throttled)} sample(s)")
 
     # ---- power: VDD_MPU vs OPP ----
     mism = [r for r in rows if r.get("vdd_mismatch") == 1]
@@ -263,10 +276,13 @@ def analyze(rows, events, snap_text):
         # persistent vs transient
         sev = "warn" if len(mism) < max(3, len(rows) // 10) else "crit"
         ex = mism[0]
-        add(sev, "vdd_mismatch",
+        add(
+            sev,
+            "vdd_mismatch",
             f"vdd_mpu off expected OPP voltage in {len(mism)}/{len(rows)} samples "
             f"(e.g. {ex.get('vdd_uV')}uV vs {ex.get('vdd_exp_uV')}uV @ {ex.get('freq')}kHz)",
-            ex.get("t_mono"))
+            ex.get("t_mono"),
+        )
 
     # ---- governor / scaling behaviour ----
     freqs = [r.get("freq", 0) for r in rows if r.get("freq")]
@@ -279,13 +295,15 @@ def analyze(rows, events, snap_text):
         # high load but never leaving the lowest OPP => governor not scaling up
         loaded = [r for r in rows if float(r.get("load1", 0) or 0) >= 1.0]
         if loaded and all(r.get("freq", 0) <= 350000 for r in loaded):
-            add("warn", "governor_not_scaling",
+            add(
+                "warn",
+                "governor_not_scaling",
                 f"load>=1.0 in {len(loaded)} sample(s) but freq never left 350MHz "
-                f"(governor={gov}) — possible scaling stall")
+                f"(governor={gov}) — possible scaling stall",
+            )
         elif not reached_top and any(float(r.get("load1", 0) or 0) >= 1.5 for r in rows):
-            add("info", "governor_no_turbo",
-                f"sustained load seen but 1200MHz OPP never used (governor={gov})")
-        res_str = ", ".join(f"{k//1000}MHz:{v}" for k, v in sorted(residency.items()))
+            add("info", "governor_no_turbo", f"sustained load seen but 1200MHz OPP never used (governor={gov})")
+        res_str = ", ".join(f"{k // 1000}MHz:{v}" for k, v in sorted(residency.items()))
         add("info", "freq_residency", f"governor={gov}; residency [{res_str}]")
 
     # ---- cpuidle: are the deep C-states armed, running, or vetoed? ----
@@ -304,10 +322,12 @@ def analyze(rows, events, snap_text):
                 tot[k] = tot.get(k, 0) + (v or 0)
         idle_ms = sum(tot.values())
         armed_now = cst_rows[-1].get("cstate_armed", "") or ""
-        share = ", ".join(f"{k} {100 * v / idle_ms:.1f}%" for k, v in sorted(tot.items())) \
-            if idle_ms else "no idle time recorded"
-        add("info", "cstate_residency",
-            f"deep states armed: {armed_now or 'none'}; share of idle time [{share}]")
+        share = (
+            ", ".join(f"{k} {100 * v / idle_ms:.1f}%" for k, v in sorted(tot.items()))
+            if idle_ms
+            else "no idle time recorded"
+        )
+        add("info", "cstate_residency", f"deep states armed: {armed_now or 'none'}; share of idle time [{share}]")
 
         vetoed = []
         for r in cst_rows:
@@ -326,45 +346,64 @@ def analyze(rows, events, snap_text):
         if vetoed:
             ex = vetoed[0]
             frac = len(vetoed) / len(cst_rows)
-            detail = (f"CPU-latency QoS below the armed states' exit latency in "
-                      f"{len(vetoed)}/{len(cst_rows)} sample(s) (e.g. qos {ex.get('qos_us')} us, "
-                      f"armed {ex.get('cstate_armed')})")
+            detail = (
+                f"CPU-latency QoS below the armed states' exit latency in "
+                f"{len(vetoed)}/{len(cst_rows)} sample(s) (e.g. qos {ex.get('qos_us')} us, "
+                f"armed {ex.get('cstate_armed')})"
+            )
             if frac >= VETO_PERSISTENT:
-                add("warn", "cstate_vetoed",
+                add(
+                    "warn",
+                    "cstate_vetoed",
                     detail + " — the governor can (almost) never pick them; look for a "
-                    "held-open device (BT UART, ALSA with a tiny period)", ex.get("t_mono"))
+                    "held-open device (BT UART, ALSA with a tiny period)",
+                    ex.get("t_mono"),
+                )
             else:
-                add("info", "cstate_vetoed_transient",
+                add(
+                    "info",
+                    "cstate_vetoed_transient",
                     detail + " — transient (e.g. Bluetooth streaming), deep idle resumes after",
-                    ex.get("t_mono"))
+                    ex.get("t_mono"),
+                )
 
     # ---- CPU accounting (healthd >= device r119) ----
     acc = accounting(rows, interval)
     if acc:
         top = ", ".join(f"{k} {v:.2f}%" for k, v in list(acc["unit_pct_of_1_core"].items())[:8])
-        add("info", "cpu_busy",
+        add(
+            "info",
+            "cpu_busy",
             f"busy {acc['busy_pct_of_2_cores']:.2f}% of both cores; "
             f"forks {acc['forks_per_min']:.1f}/min; interrupts {acc['irqs_per_s']:.0f}/s"
             if acc["forks_per_min"] is not None and acc["irqs_per_s"] is not None
-            else f"busy {acc['busy_pct_of_2_cores']:.2f}% of both cores")
+            else f"busy {acc['busy_pct_of_2_cores']:.2f}% of both cores",
+        )
         if top:
             add("info", "cpu_by_unit", f"% of one core: {top}")
         if acc["nexusqd_renders_per_s"] is not None:
-            add("info", "nexusqd_cadence",
-                f"nexusqd {acc['nexusqd_renders_per_s']:.2f} renders/s, "
-                f"{acc['nexusqd_ctl_per_min']:.2f} commands/min")
+            add(
+                "info",
+                "nexusqd_cadence",
+                f"nexusqd {acc['nexusqd_renders_per_s']:.2f} renders/s, {acc['nexusqd_ctl_per_min']:.2f} commands/min",
+            )
         if acc["ambient_wakes"] is not None:
-            add("info", "ambient_wakes",
+            add(
+                "info",
+                "ambient_wakes",
                 f"ambient scheduler woke {acc['ambient_wakes']} time(s) "
                 f"({acc['ambient_wakes_per_h']:.1f}/h); the LED tap's source was "
-                f"put back {acc['tap_fixes'] or 0} time(s)")
-        busy_audio = {k: v for k, v in acc["unit_pct_of_1_core"].items()
-                      if k in PLAYBACK_UNITS and v >= PLAYBACK_PCT}
+                f"put back {acc['tap_fixes'] or 0} time(s)",
+            )
+        busy_audio = {k: v for k, v in acc["unit_pct_of_1_core"].items() if k in PLAYBACK_UNITS and v >= PLAYBACK_PCT}
         if busy_audio:
-            add("warn", "window_not_idle",
-                "audio was flowing in this window (" +
-                ", ".join(f"{k} {v:.1f}%" for k, v in busy_audio.items()) +
-                ") — it is not an idle measurement; narrow it with --since/--until")
+            add(
+                "warn",
+                "window_not_idle",
+                "audio was flowing in this window ("
+                + ", ".join(f"{k} {v:.1f}%" for k, v in busy_audio.items())
+                + ") — it is not an idle measurement; narrow it with --since/--until",
+            )
 
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):
@@ -376,8 +415,12 @@ def analyze(rows, events, snap_text):
     # panic. A crash during THIS capture arrives as healthd's pstore_new event.
     pst = max((r.get("pstore", 0) or 0) for r in rows) if rows else 0
     if pst:
-        add("info", "pstore", f"{pst} crash dump(s) archived in /var/lib/systemd/pstore "
-                              "(cumulative across boots; a new one raises pstore_new)")
+        add(
+            "info",
+            "pstore",
+            f"{pst} crash dump(s) archived in /var/lib/systemd/pstore "
+            "(cumulative across boots; a new one raises pstore_new)",
+        )
 
     # ---- snapshot cross-checks (failed units, pstore in one-shot) ----
     if snap_text:
@@ -396,9 +439,13 @@ def analyze(rows, events, snap_text):
         "led_frozen_events": len(distressed),
         "led_static_events": len(frozen) - len(distressed),
         "vdd_mismatch_samples": len(mism),
-        "worst_severity": ("crit" if any(f["sev"] == "crit" for f in findings)
-                           else "warn" if any(f["sev"] == "warn" for f in findings)
-                           else "ok"),
+        "worst_severity": (
+            "crit"
+            if any(f["sev"] == "crit" for f in findings)
+            else "warn"
+            if any(f["sev"] == "warn" for f in findings)
+            else "ok"
+        ),
     }
     return findings, summary
 
@@ -416,8 +463,7 @@ def timeline_around(rows, t, window=4):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     as_json = "--json" in sys.argv
-    opts = dict(a[2:].split("=", 1) for a in sys.argv[1:]
-                if a.startswith("--") and "=" in a)
+    opts = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
     since = parse_when(opts["since"]) if "since" in opts else None
     until = parse_when(opts["until"]) if "until" in opts else None
     if not args:
@@ -441,8 +487,7 @@ def main():
     findings, summary = analyze(rows, evs, snap_text)
 
     if as_json:
-        print(json.dumps({"summary": summary, "findings": findings,
-                          "device_events": evs}, indent=2))
+        print(json.dumps({"summary": summary, "findings": findings, "device_events": evs}, indent=2))
         return
 
     sevrank = {"crit": 0, "warn": 1, "info": 2}
@@ -450,24 +495,27 @@ def main():
     icon = {"crit": "🔴", "warn": "🟡", "info": "🔵"}
 
     print("══ Nexus Q health report ══")
-    print(f"samples={summary.get('samples')} span={summary.get('span_s')}s "
-          f"interval≈{summary.get('interval_s')}s "
-          f"peak_temp={summary.get('temp_peak_C')}C "
-          f"verdict={summary.get('worst_severity','?').upper()}")
+    print(
+        f"samples={summary.get('samples')} span={summary.get('span_s')}s "
+        f"interval≈{summary.get('interval_s')}s "
+        f"peak_temp={summary.get('temp_peak_C')}C "
+        f"verdict={summary.get('worst_severity', '?').upper()}"
+    )
     print()
     for f in findings:
-        print(f"{icon.get(f['sev'],'•')} [{f['kind']}] {f['msg']}")
+        print(f"{icon.get(f['sev'], '•')} [{f['kind']}] {f['msg']}")
 
     # show the timeline window around the worst (crit) finding that has a time
-    crit_t = next((f["t_mono"] for f in findings
-                   if f["sev"] == "crit" and f["t_mono"] is not None), None)
+    crit_t = next((f["t_mono"] for f in findings if f["sev"] == "crit" and f["t_mono"] is not None), None)
     if crit_t is not None:
         print(f"\n── timeline around uptime {crit_t}s ──")
         for r in timeline_around(rows, crit_t):
-            print(f"  t={r.get('t_mono')}s freq={r.get('freq')} temp={r.get('temp_mC')}mC "
-                  f"vdd={r.get('vdd_uV')} nq_alive={r.get('nq_alive')} "
-                  f"nq_resp={r.get('nq_resp')} led_sum={r.get('led_sum')} "
-                  f"led_stall={r.get('led_stall')} dmesg_new={r.get('dmesg_err_new')}")
+            print(
+                f"  t={r.get('t_mono')}s freq={r.get('freq')} temp={r.get('temp_mC')}mC "
+                f"vdd={r.get('vdd_uV')} nq_alive={r.get('nq_alive')} "
+                f"nq_resp={r.get('nq_resp')} led_sum={r.get('led_sum')} "
+                f"led_stall={r.get('led_stall')} dmesg_new={r.get('dmesg_err_new')}"
+            )
 
     if evs:
         print("\n── device-side events ──")

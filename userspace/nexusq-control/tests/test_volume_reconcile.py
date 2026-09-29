@@ -32,8 +32,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control_volrec",
-        importlib.machinery.SourceFileLoader("nexusq_control_volrec", DAEMON))
+        "nexusq_control_volrec", importlib.machinery.SourceFileLoader("nexusq_control_volrec", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -112,8 +112,7 @@ class Bridge:
         self.airplay_volume = FakeFollow()
         self.sent = []
         # inert: persisting the volume has its own tests (test_settings_persist.py)
-        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False,
-                                 get=lambda oid: None)
+        self.volumes = mock.Mock(settled=lambda oid: True, note=lambda *a: False, get=lambda oid: None)
 
     _active_sink = MOD.Bridge._active_sink
     _sink_for_output = MOD.Bridge._sink_for_output
@@ -127,7 +126,7 @@ class Bridge:
     _boot_available = MOD.Bridge._boot_available
 
     def _reconcile_source(self):
-        return False              # the tap's source: test_tap_source.py
+        return False  # the tap's source: test_tap_source.py
 
     def broadcast(self, event, data):
         self.sent.append((event, data))
@@ -135,10 +134,10 @@ class Bridge:
 
 def quiet():
     """The side effects _set_output and _volume_cmd reach outside the bridge."""
-    return [mock.patch.object(MOD, name) for name in
-            ("hdmi_hold", "_sync_panel_applet", "_amixer", "nexusqd_send")] + [
+    return [mock.patch.object(MOD, name) for name in ("hdmi_hold", "_sync_panel_applet", "_amixer", "nexusqd_send")] + [
         # no saved output: the host's /etc must never steer a test
-        mock.patch.object(MOD, "OUTPUT_CONF_PATH", "/nonexistent/output.json")]
+        mock.patch.object(MOD, "OUTPUT_CONF_PATH", "/nonexistent/output.json")
+    ]
 
 
 class Patched(unittest.TestCase):
@@ -163,9 +162,11 @@ class TestStartupState(unittest.TestCase):
             def start(self):
                 pass
 
-        with mock.patch.object(MOD, "Pulse", return_value=pulse), \
-             mock.patch.object(MOD, "Mixer", return_value=mixer), \
-             mock.patch.object(MOD.threading, "Thread", NoThread):
+        with (
+            mock.patch.object(MOD, "Pulse", return_value=pulse),
+            mock.patch.object(MOD, "Mixer", return_value=mixer),
+            mock.patch.object(MOD.threading, "Thread", NoThread),
+        ):
             return MOD.Bridge()
 
     def test_no_made_up_level_before_pulseaudio(self):
@@ -219,8 +220,10 @@ class TestWatchThreadReconcilesOnSubscribe(Patched):
         def sleep(_):
             raise Stop
 
-        with mock.patch.object(MOD.subprocess, "Popen", return_value=Proc()), \
-             mock.patch.object(MOD.time, "sleep", sleep):
+        with (
+            mock.patch.object(MOD.subprocess, "Popen", return_value=Proc()),
+            mock.patch.object(MOD.time, "sleep", sleep),
+        ):
             with self.assertRaises(Stop):
                 MOD.pa_watch_thread(b)
 
@@ -237,7 +240,7 @@ class TestWatchThreadReconcilesOnSubscribe(Patched):
         b = Bridge(pulse, mixer, volume=30, muted=False)
 
         def lines():
-            mixer.level = 44          # the knob turns after the subscribe
+            mixer.level = 44  # the knob turns after the subscribe
             yield "Event 'change' on sink #1\n"
 
         self.run_one_subscribe(b, lines())
@@ -247,8 +250,7 @@ class TestWatchThreadReconcilesOnSubscribe(Patched):
 class TestBootOutput(Patched):
     def test_the_switch_is_broadcast(self):
         pulse = FakePulse(up=True, default=SPDIF)
-        b = Bridge(pulse, FakeMixer(pulse, level=30), volume=None, muted=None,
-                   output="spdif")
+        b = Bridge(pulse, FakeMixer(pulse, level=30), volume=None, muted=None, output="spdif")
         with mock.patch.object(MOD, "BOOT_OUTPUT", "speaker"):
             b._boot_output(attempts=1, pause_s=0)
         self.assertEqual(b.state["output"], "speaker")
@@ -258,7 +260,7 @@ class TestBootOutput(Patched):
     def test_unknown_level_is_not_announced(self):
         pulse = FakePulse(up=True, default=SPDIF)
         mixer = FakeMixer(pulse)
-        mixer.get = lambda sink: (None, None)     # the sink will not answer yet
+        mixer.get = lambda sink: (None, None)  # the sink will not answer yet
         b = Bridge(pulse, mixer, volume=None, muted=None, output="spdif")
         _, events = b._set_output({"output": "speaker"})
         self.assertEqual(events, [("outputChanged", {"output": "speaker"})])

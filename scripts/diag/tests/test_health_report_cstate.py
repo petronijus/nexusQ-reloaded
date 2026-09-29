@@ -17,8 +17,7 @@ import os
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-loader = importlib.machinery.SourceFileLoader(
-    "nq_health_report", os.path.join(HERE, "..", "nq-health-report"))
+loader = importlib.machinery.SourceFileLoader("nq_health_report", os.path.join(HERE, "..", "nq-health-report"))
 spec = importlib.util.spec_from_loader("nq_health_report", loader)
 MOD = importlib.util.module_from_spec(spec)
 loader.exec_module(MOD)
@@ -28,12 +27,16 @@ def rows(n, vetoed, armed="C2,C3"):
     """n healthd-like samples, the first `vetoed` of them under a 170 us QoS."""
     out = []
     for i in range(n):
-        out.append({
-            "t_mono": 100 + 5 * i, "temp_mC": 50000, "freq": 350000,
-            "cstate_ms": {"C1": 500, "C2": 50, "C3": 4000},
-            "cstate_armed": armed,
-            "qos_us": 170 if i < vetoed else 4444,
-        })
+        out.append(
+            {
+                "t_mono": 100 + 5 * i,
+                "temp_mC": 50000,
+                "freq": 350000,
+                "cstate_ms": {"C1": 500, "C2": 50, "C3": 4000},
+                "cstate_armed": armed,
+                "qos_us": 170 if i < vetoed else 4444,
+            }
+        )
     return out
 
 

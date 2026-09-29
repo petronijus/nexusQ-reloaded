@@ -12,6 +12,7 @@ this file: a paused track is loaded and about to resume, so it SHOULD stay on
 screen; a stopped one is gone. librespot reports both, and only this handler can
 tell the app which it was.
 """
+
 import importlib.machinery
 import importlib.util
 import os
@@ -24,7 +25,8 @@ DAEMON = os.path.join(HERE, "..", "nexusq-control")
 
 def load_daemon():
     spec = importlib.util.spec_from_loader(
-        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON))
+        "nexusq_control", importlib.machinery.SourceFileLoader("nexusq_control", DAEMON)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -38,8 +40,15 @@ class _Bridge:
         self.state = {
             "volume": 30,
             "muted": False,
-            "nowPlaying": {"playing": False, "artist": "", "track": "", "album": "",
-                           "artUrl": "", "source": "", "transport": "none"},
+            "nowPlaying": {
+                "playing": False,
+                "artist": "",
+                "track": "",
+                "album": "",
+                "artUrl": "",
+                "source": "",
+                "transport": "none",
+            },
         }
         self.sent = []
         # `transport_for` consults this map for non-Spotify sources; empty is
@@ -59,8 +68,13 @@ class _Bridge:
         self.sent.append((event, data))
 
 
-PLAYING = {"kind": "track_changed", "name": "Kinkajou", "artists": "Les Baxter",
-           "album": "Ritual of the Savage", "cover": "https://i.example/300"}
+PLAYING = {
+    "kind": "track_changed",
+    "name": "Kinkajou",
+    "artists": "Les Baxter",
+    "album": "Ritual of the Savage",
+    "cover": "https://i.example/300",
+}
 
 
 class TestNowPlayingStopped(unittest.TestCase):
@@ -119,8 +133,9 @@ class TestNowPlayingStopped(unittest.TestCase):
         """No leftovers from the previous song when a new one starts."""
         self.b.on_hook(dict(PLAYING))
         self.b.on_hook({"kind": "stopped"})
-        self.b.on_hook({"kind": "track_changed", "name": "Quiet Village",
-                        "artists": "Les Baxter", "album": "", "cover": ""})
+        self.b.on_hook(
+            {"kind": "track_changed", "name": "Quiet Village", "artists": "Les Baxter", "album": "", "cover": ""}
+        )
         np = self._np()
         self.assertEqual(np["track"], "Quiet Village")
         self.assertEqual(np["album"], "")

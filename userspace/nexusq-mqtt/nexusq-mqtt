@@ -77,8 +77,7 @@ import time
 CONF_PATH = os.environ.get("NQMQTT_CONF", "/etc/nexusq/mqtt.json")
 IDENTITY_PATH = os.environ.get("NQMQTT_IDENTITY", "/etc/nexusq/device.json")
 HEALTH_PATH = os.environ.get("NQMQTT_HEALTH", "/var/log/nq-health/health.jsonl")
-TIS_PATH = os.environ.get(
-    "NQMQTT_TIS", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
+TIS_PATH = os.environ.get("NQMQTT_TIS", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
 # Diagnostics mode state, owned by nexusq-control (PROTOCOL §16).
 DIAG_PATH = os.environ.get("NQMQTT_DIAG", "/var/lib/nexusq/diagnostics.json")
 # cpuN/cpuidle/stateM/{name,time,latency} live under here.
@@ -90,16 +89,12 @@ UPTIME_PATH = os.environ.get("NQMQTT_UPTIME", "/proc/uptime")
 WIFI_WD_PATH = os.environ.get("NQMQTT_WIFI_WD", "/run/nexusq/wifi-watchdog.json")
 # user-unit liveness: a user unit is ACTIVE iff its cgroup has processes
 # (see nexusq-control _service_on for why systemctl --machine is unusable).
-USER_CGROUP = os.environ.get(
-    "NQMQTT_CGROUP",
-    "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice")
+USER_CGROUP = os.environ.get("NQMQTT_CGROUP", "/sys/fs/cgroup/user.slice/user-10000.slice/user@10000.service/app.slice")
 
 # user-session PulseAudio, reachable from this root daemon via the user cookie
 # (the nexusq-control pattern).
-PULSE_SERVER = os.environ.get(
-    "NEXUSQ_PULSE_SERVER", "unix:/run/user/10000/pulse/native")
-PULSE_COOKIE = os.environ.get(
-    "NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/cookie")
+PULSE_SERVER = os.environ.get("NEXUSQ_PULSE_SERVER", "unix:/run/user/10000/pulse/native")
+PULSE_COOKIE = os.environ.get("NEXUSQ_PULSE_COOKIE", "/home/user/.config/pulse/cookie")
 SPEAKER_CARD = os.environ.get("NQ_SPEAKER_CARD", "NexusQSpeaker")
 
 # The same toggleable streaming inputs nexusq-control exposes to the app.
@@ -129,6 +124,7 @@ def log(*args):
 # config + identity
 # --------------------------------------------------------------------------
 
+
 class ConfigError(Exception):
     pass
 
@@ -142,9 +138,9 @@ def load_conf(path=None):
         with open(path) as f:
             raw = json.load(f)
     except OSError as e:
-        raise ConfigError(f"cannot read {path}: {e}")
+        raise ConfigError(f"cannot read {path}: {e}") from e
     except ValueError as e:
-        raise ConfigError(f"{path} is not valid JSON: {e}")
+        raise ConfigError(f"{path} is not valid JSON: {e}") from e
     if not isinstance(raw, dict):
         raise ConfigError(f"{path}: top level must be an object")
     conf = {
@@ -164,7 +160,7 @@ def load_conf(path=None):
     try:
         conf["interval_s"] = min(600, max(10, int(conf["interval_s"])))
     except (TypeError, ValueError):
-        raise ConfigError(f"{path}: 'interval_s' must be a number")
+        raise ConfigError(f"{path}: 'interval_s' must be a number") from None
     return conf
 
 
@@ -193,12 +189,12 @@ def device_identity():
 # collectors
 # --------------------------------------------------------------------------
 
+
 def _run(cmd, timeout=4, env=None):
     """Run a helper tool; '' on any failure — a missing tool or a hiccup must
     never take the publisher down."""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, env=env)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         return r.stdout if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -294,9 +290,9 @@ class Windows:
     object, so a new window never changes collect()'s signature again."""
 
     def __init__(self):
-        self.tis = []     # [(monotonic_t, {freq_khz: ticks})]
-        self.idle = []    # [(monotonic_t, {state: us}, ncpu)]
-        self.veto = []    # [(monotonic_t, blocked: bool)]
+        self.tis = []  # [(monotonic_t, {freq_khz: ticks})]
+        self.idle = []  # [(monotonic_t, {state: us}, ncpu)]
+        self.veto = []  # [(monotonic_t, blocked: bool)]
 
 
 def read_cpuidle():
@@ -306,8 +302,7 @@ def read_cpuidle():
     not dilute the shares; a change in that count resets the window."""
     times, lat, ncpu = {}, {}, 0
     try:
-        cpus = sorted(d for d in os.listdir(CPUIDLE_ROOT)
-                      if re.fullmatch(r"cpu\d+", d))
+        cpus = sorted(d for d in os.listdir(CPUIDLE_ROOT) if re.fullmatch(r"cpu\d+", d))
     except OSError:
         return {}, {}, 0
     for cpu in cpus:
@@ -354,8 +349,7 @@ def idle_window(history, cur, ncpu, now, window_s=None):
         return {}, history
     if history:
         _, newest, n = history[-1]
-        if (n != ncpu or set(newest) != set(cur)
-                or any(cur[k] < v for k, v in newest.items())):
+        if n != ncpu or set(newest) != set(cur) or any(cur[k] < v for k, v in newest.items()):
             history = []
     history = [h for h in history if now - h[0] <= window_s]
     t0, base = (history[0][0], history[0][1]) if history else (0.0, {})
@@ -363,8 +357,7 @@ def idle_window(history, cur, ncpu, now, window_s=None):
     span_us = (now - t0) * 1e6 * ncpu
     if span_us <= 0:
         return {}, history
-    return ({k: round(min(100.0, 100.0 * (v - base.get(k, 0)) / span_us), 1)
-             for k, v in cur.items()}, history)
+    return ({k: round(min(100.0, 100.0 * (v - base.get(k, 0)) / span_us), 1) for k, v in cur.items()}, history)
 
 
 # A deep state the governor may not pick is the failure two investigations were
@@ -487,9 +480,7 @@ def roon_forward(topic, payload):
         value = payload.decode("utf-8", "replace")
     except Exception:
         return
-    line = json.dumps({"kind": "roon",
-                       "topic": topic[len(ROON_ROOT) + 1:],
-                       "value": value}) + "\n"
+    line = json.dumps({"kind": "roon", "topic": topic[len(ROON_ROOT) + 1 :], "value": value}) + "\n"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(2)
@@ -519,10 +510,13 @@ def _publish_allowed(topic):
     play/pause to one zone, and everything else on this broker belongs to
     somebody else's device.
     """
-    return (topic.startswith(PUBLISH_ALLOW_PREFIX)
-            and topic.endswith(PUBLISH_ALLOW_SUFFIX)
-            and topic.count("/") == 2          # roon/<zone>/command
-            and "+" not in topic and "#" not in topic)
+    return (
+        topic.startswith(PUBLISH_ALLOW_PREFIX)
+        and topic.endswith(PUBLISH_ALLOW_SUFFIX)
+        and topic.count("/") == 2  # roon/<zone>/command
+        and "+" not in topic
+        and "#" not in topic
+    )
 
 
 def publish_server(get_client):
@@ -606,8 +600,7 @@ def read_volume():
     if v is not None:
         return v
     try:
-        alsaloop = subprocess.run(["pgrep", "-x", "alsaloop"],
-                                  capture_output=True, timeout=4).returncode == 0
+        alsaloop = subprocess.run(["pgrep", "-x", "alsaloop"], capture_output=True, timeout=4).returncode == 0
     except (OSError, subprocess.SubprocessError):
         alsaloop = False
     if alsaloop:
@@ -618,8 +611,7 @@ def read_volume():
         # the Speaker switch is the mute: [off] == muted
         muted = ("[off]" in out) if ("[on]" in out or "[off]" in out) else None
         return vol, muted
-    env = {**os.environ, "PULSE_SERVER": PULSE_SERVER,
-           "PULSE_COOKIE": PULSE_COOKIE}
+    env = {**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE}
     out = _run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"], env=env)
     m = re.search(r"(\d+)%", out)
     vol = int(m.group(1)) if m else None
@@ -678,8 +670,7 @@ def read_wifi_repairs(uptime, now=None):
         out["wifi_repaired_recently"] = ago < WIFI_REPAIR_RECENT_S
         now = time.time() if now is None else now
         if now >= PLAUSIBLE_EPOCH:
-            out["wifi_last_repair"] = time.strftime(
-                "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now - ago))
+            out["wifi_last_repair"] = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now - ago))
         if isinstance(wd.get("last_kind"), str):
             out["wifi_last_repair_kind"] = wd["last_kind"]
         if isinstance(wd.get("last_ok"), bool):
@@ -696,12 +687,9 @@ def read_diagnostics(now=None):
             until = json.load(f).get("until")
     except (OSError, ValueError, AttributeError):
         until = None
-    if isinstance(until, bool) or not isinstance(until, (int, float)) \
-            or until <= now:
+    if isinstance(until, bool) or not isinstance(until, (int, float)) or until <= now:
         return {"diagnostics": False}
-    return {"diagnostics": True,
-            "diagnostics_until": time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                               time.gmtime(until))}
+    return {"diagnostics": True, "diagnostics_until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))}
 
 
 def read_uptime():
@@ -787,8 +775,7 @@ def collect(win):
         qos = health.get("qos_us")
         if isinstance(armed, str):
             state["cstate_armed"] = armed
-        if isinstance(qos, int) and not isinstance(qos, bool) \
-                and 0 <= qos < QOS_NO_LIMIT:
+        if isinstance(qos, int) and not isinstance(qos, bool) and 0 <= qos < QOS_NO_LIMIT:
             state["cpu_latency_limit_us"] = qos
         blocked = deep_idle_blocked(armed, qos, latency)
     share, judged, win.veto = veto_window(win.veto, blocked, now)
@@ -824,6 +811,7 @@ def collect(win):
 # --------------------------------------------------------------------------
 # minimal MQTT 3.1.1 client (publisher-only, QoS 0)
 # --------------------------------------------------------------------------
+
 
 class MqttError(Exception):
     pass
@@ -868,8 +856,7 @@ class MqttClient:
     KEEPALIVE_S = 90
     PINGRESP_GRACE_S = 15
 
-    def __init__(self, host, port, client_id, username, password,
-                 will_topic, will_payload):
+    def __init__(self, host, port, client_id, username, password, will_topic, will_payload):
         self.host = host
         self.port = port
         self.client_id = client_id
@@ -879,7 +866,7 @@ class MqttClient:
         self.will_payload = will_payload
         self.sock = None
         self._last_send = 0.0
-        self._ping_sent = None   # monotonic time of an unanswered PINGREQ
+        self._ping_sent = None  # monotonic time of an unanswered PINGREQ
         self._rxbuf = b""
         self._packet_id = 0
         #: called with (topic, payload_bytes) for every incoming PUBLISH.
@@ -895,13 +882,14 @@ class MqttClient:
         self.sock.settimeout(timeout)
         flags = 0x02 | 0x04 | 0x20 | 0x80 | 0x40  # clean session, will(+retain,
         # QoS 0), username, password
-        var = (_mqtt_str("MQTT") + bytes([4, flags])
-               + struct.pack("!H", self.KEEPALIVE_S))
-        payload = (_mqtt_str(self.client_id)
-                   + _mqtt_str(self.will_topic)
-                   + _mqtt_str(self.will_payload)
-                   + _mqtt_str(self.username)
-                   + _mqtt_str(self.password))
+        var = _mqtt_str("MQTT") + bytes([4, flags]) + struct.pack("!H", self.KEEPALIVE_S)
+        payload = (
+            _mqtt_str(self.client_id)
+            + _mqtt_str(self.will_topic)
+            + _mqtt_str(self.will_payload)
+            + _mqtt_str(self.username)
+            + _mqtt_str(self.password)
+        )
         body = var + payload
         self._send(bytes([0x10]) + _remaining_len(len(body)) + body)
         ptype, body = self._read_packet()
@@ -909,8 +897,7 @@ class MqttClient:
             raise MqttError(f"expected CONNACK, got type 0x{ptype:02x}")
         rc = body[1]
         if rc != 0:
-            raise MqttError(
-                f"broker refused connection: {CONNACK_RC.get(rc, rc)}")
+            raise MqttError(f"broker refused connection: {CONNACK_RC.get(rc, rc)}")
         self.sock.setblocking(False)
         self._ping_sent = None
 
@@ -918,8 +905,7 @@ class MqttClient:
         if isinstance(payload, str):
             payload = payload.encode("utf-8")
         body = _mqtt_str(topic) + payload
-        self._send(bytes([0x30 | (0x01 if retain else 0)])
-                   + _remaining_len(len(body)) + body)
+        self._send(bytes([0x30 | (0x01 if retain else 0)]) + _remaining_len(len(body)) + body)
 
     def subscribe(self, filters):
         """SUBSCRIBE at QoS 0 to a list of topic filters.
@@ -934,7 +920,7 @@ class MqttClient:
         self._packet_id = (self._packet_id % 65535) + 1
         body = struct.pack("!H", self._packet_id)
         for f in filters:
-            body += _mqtt_str(f) + bytes([0])       # QoS 0
+            body += _mqtt_str(f) + bytes([0])  # QoS 0
         self._send(bytes([0x82]) + _remaining_len(len(body)) + body)
 
     def disconnect(self):
@@ -977,7 +963,7 @@ class MqttClient:
             try:
                 sock.sendall(data)
             except OSError as e:
-                raise MqttError(f"send failed: {e}")
+                raise MqttError(f"send failed: {e}") from e
             self._last_send = time.monotonic()
 
     def _read_packet(self):
@@ -1000,7 +986,7 @@ class MqttClient:
             try:
                 chunk = self.sock.recv(n - len(buf))
             except OSError as e:
-                raise MqttError(f"recv failed: {e}")
+                raise MqttError(f"recv failed: {e}") from e
             if not chunk:
                 raise MqttError("broker closed connection")
             buf += chunk
@@ -1015,7 +1001,7 @@ class MqttClient:
             try:
                 readable, _, _ = select.select([self.sock], [], [], 0)
             except (OSError, ValueError):
-                raise MqttError("socket lost")
+                raise MqttError("socket lost") from None
             if not readable:
                 break
             try:
@@ -1023,7 +1009,7 @@ class MqttClient:
             except BlockingIOError:
                 break
             except OSError as e:
-                raise MqttError(f"recv failed: {e}")
+                raise MqttError(f"recv failed: {e}") from e
             if not data:
                 raise MqttError("broker closed connection")
             self._rxbuf += data
@@ -1040,13 +1026,13 @@ class MqttClient:
                 # is just the topic — no packet identifier follows it.
                 try:
                     tlen = struct.unpack("!H", _body[:2])[0]
-                    topic = _body[2:2 + tlen].decode("utf-8", "replace")
-                    payload = _body[2 + tlen:]
+                    topic = _body[2 : 2 + tlen].decode("utf-8", "replace")
+                    payload = _body[2 + tlen :]
                 except (struct.error, IndexError):
-                    continue                      # malformed; drop, keep going
+                    continue  # malformed; drop, keep going
                 try:
                     self.on_message(topic, payload)
-                except Exception as e:            # a handler must never kill us
+                except Exception as e:  # a handler must never kill us
                     log("mqtt: message handler failed:", e)
 
     def _parse_buffered(self):
@@ -1069,14 +1055,15 @@ class MqttClient:
         if len(buf) < i + length:
             return None
         packet_type = buf[0] & 0xF0
-        body = buf[i:i + length]
-        self._rxbuf = buf[i + length:]
+        body = buf[i : i + length]
+        self._rxbuf = buf[i + length :]
         return packet_type, body
 
 
 # --------------------------------------------------------------------------
 # Home Assistant MQTT discovery
 # --------------------------------------------------------------------------
+
 
 # (key, component, name, extra config). value_template defaults to
 # `{{ value_json.<key... mapping below> }}` composed per entry. Optional fields
@@ -1116,83 +1103,155 @@ def discovery_configs(node_id, display_name, prefix):
         "device": device,
     }
     sensors = [
-        ("temp", "Die temperature",
-         {"device_class": "temperature", "unit_of_measurement": "°C",
-          "state_class": "measurement",
-          "value_template": "{{ value_json.temp_c | default('unknown') }}"}),
-        ("cpu_freq", "CPU frequency",
-         {"device_class": "frequency", "unit_of_measurement": "MHz",
-          "state_class": "measurement",
-          "value_template": "{{ value_json.freq_mhz | default('unknown') }}"}),
-        ("governor", "CPU governor",
-         {"entity_category": "diagnostic",
-          "value_template": "{{ value_json.governor | default('unknown') }}"}),
-        ("load1", "Load (1 min)",
-         {"state_class": "measurement", "icon": "mdi:chip",
-          "value_template": "{{ value_json.load1 | default('unknown') }}"}),
-        ("mem_avail", "Memory available",
-         {"device_class": "data_size", "unit_of_measurement": "MB",
-          "state_class": "measurement", "entity_category": "diagnostic",
-          "value_template":
-              "{{ value_json.mem_avail_mb | default('unknown') }}"}),
-        ("uptime", "Uptime",
-         {"device_class": "duration", "unit_of_measurement": "s",
-          "entity_category": "diagnostic", "state_class": "total_increasing",
-          "value_template": "{{ value_json.uptime_s | default('unknown') }}"}),
-        ("wifi_rssi", "WiFi RSSI",
-         {"device_class": "signal_strength", "unit_of_measurement": "dBm",
-          "state_class": "measurement", "entity_category": "diagnostic",
-          "value_template":
-              "{{ value_json.wifi_rssi_dbm | default('unknown') }}"}),
+        (
+            "temp",
+            "Die temperature",
+            {
+                "device_class": "temperature",
+                "unit_of_measurement": "°C",
+                "state_class": "measurement",
+                "value_template": "{{ value_json.temp_c | default('unknown') }}",
+            },
+        ),
+        (
+            "cpu_freq",
+            "CPU frequency",
+            {
+                "device_class": "frequency",
+                "unit_of_measurement": "MHz",
+                "state_class": "measurement",
+                "value_template": "{{ value_json.freq_mhz | default('unknown') }}",
+            },
+        ),
+        (
+            "governor",
+            "CPU governor",
+            {"entity_category": "diagnostic", "value_template": "{{ value_json.governor | default('unknown') }}"},
+        ),
+        (
+            "load1",
+            "Load (1 min)",
+            {
+                "state_class": "measurement",
+                "icon": "mdi:chip",
+                "value_template": "{{ value_json.load1 | default('unknown') }}",
+            },
+        ),
+        (
+            "mem_avail",
+            "Memory available",
+            {
+                "device_class": "data_size",
+                "unit_of_measurement": "MB",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "value_template": "{{ value_json.mem_avail_mb | default('unknown') }}",
+            },
+        ),
+        (
+            "uptime",
+            "Uptime",
+            {
+                "device_class": "duration",
+                "unit_of_measurement": "s",
+                "entity_category": "diagnostic",
+                "state_class": "total_increasing",
+                "value_template": "{{ value_json.uptime_s | default('unknown') }}",
+            },
+        ),
+        (
+            "wifi_rssi",
+            "WiFi RSSI",
+            {
+                "device_class": "signal_strength",
+                "unit_of_measurement": "dBm",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "value_template": "{{ value_json.wifi_rssi_dbm | default('unknown') }}",
+            },
+        ),
         # Repairs nexusq-wifi-watchdog had to make this boot. total_increasing:
         # the drop to 0 at a reboot is a counter reset, not a decrease, and an
         # automation can trigger on any rise.
-        ("wifi_repairs", "WiFi repairs",
-         {"state_class": "total_increasing", "entity_category": "diagnostic",
-          "icon": "mdi:wifi-refresh",
-          "value_template":
-              "{{ value_json.wifi_repairs | default('unknown') }}"}),
+        (
+            "wifi_repairs",
+            "WiFi repairs",
+            {
+                "state_class": "total_increasing",
+                "entity_category": "diagnostic",
+                "icon": "mdi:wifi-refresh",
+                "value_template": "{{ value_json.wifi_repairs | default('unknown') }}",
+            },
+        ),
         # 'None' is what an MQTT sensor reads as "no value": a timestamp sensor
         # would log a parse error on 'unknown' every publish.
-        ("wifi_last_repair", "Last WiFi repair",
-         {"device_class": "timestamp", "entity_category": "diagnostic",
-          "value_template":
-              "{{ value_json.wifi_last_repair | default('None') }}"}),
+        (
+            "wifi_last_repair",
+            "Last WiFi repair",
+            {
+                "device_class": "timestamp",
+                "entity_category": "diagnostic",
+                "value_template": "{{ value_json.wifi_last_repair | default('None') }}",
+            },
+        ),
     ]
     # per-OPP residency — "podíl frekvencí" (share of time at each OPP over the
     # publish window). The four OPPs are the fixed steelhead table.
     for mhz in (350, 700, 920, 1200):
-        sensors.append((
-            f"opp{mhz}", f"Time at {mhz} MHz",
-            {"unit_of_measurement": "%", "state_class": "measurement",
-             "entity_category": "diagnostic", "icon": "mdi:sine-wave",
-             "value_template":
-                 f"{{{{ value_json.opp{mhz}_pct | default('unknown') }}}}"}))
+        sensors.append(
+            (
+                f"opp{mhz}",
+                f"Time at {mhz} MHz",
+                {
+                    "unit_of_measurement": "%",
+                    "state_class": "measurement",
+                    "entity_category": "diagnostic",
+                    "icon": "mdi:sine-wave",
+                    "value_template": f"{{{{ value_json.opp{mhz}_pct | default('unknown') }}}}",
+                },
+            )
+        )
     # C-state residency: share of wall time in each state over the same hour.
     # C1 is WFI, C2 both cores off with the MPU retained, C3 the MPU off too --
     # steelhead's stock table (kernel patch 0056); what is left is busy time.
-    for key, name in (("c1", "Time in C1 (WFI)"),
-                      ("c2", "Time in C2 (cores off)"),
-                      ("c3", "Time in C3 (MPU off)")):
-        sensors.append((
-            f"idle_{key}", name,
-            {"unit_of_measurement": "%", "state_class": "measurement",
-             "entity_category": "diagnostic", "icon": "mdi:sleep",
-             "value_template":
-                 f"{{{{ value_json.idle_{key}_pct | default('unknown') }}}}"}))
+    for key, name in (("c1", "Time in C1 (WFI)"), ("c2", "Time in C2 (cores off)"), ("c3", "Time in C3 (MPU off)")):
+        sensors.append(
+            (
+                f"idle_{key}",
+                name,
+                {
+                    "unit_of_measurement": "%",
+                    "state_class": "measurement",
+                    "entity_category": "diagnostic",
+                    "icon": "mdi:sleep",
+                    "value_template": f"{{{{ value_json.idle_{key}_pct | default('unknown') }}}}",
+                },
+            )
+        )
     sensors += [
         # Present only while some driver holds a limit; 'None' (no value) is
         # the normal, unconstrained state, not a fault.
-        ("cpu_latency_limit", "CPU latency limit",
-         {"unit_of_measurement": "µs", "entity_category": "diagnostic",
-          "icon": "mdi:timer-lock-outline",
-          "value_template":
-              "{{ value_json.cpu_latency_limit_us | default('None') }}"}),
-        ("deep_idle_blocked_share", "Deep idle blocked",
-         {"unit_of_measurement": "%", "state_class": "measurement",
-          "entity_category": "diagnostic", "icon": "mdi:sleep-off",
-          "value_template":
-              "{{ value_json.deep_idle_blocked_pct | default('unknown') }}"}),
+        (
+            "cpu_latency_limit",
+            "CPU latency limit",
+            {
+                "unit_of_measurement": "µs",
+                "entity_category": "diagnostic",
+                "icon": "mdi:timer-lock-outline",
+                "value_template": "{{ value_json.cpu_latency_limit_us | default('None') }}",
+            },
+        ),
+        (
+            "deep_idle_blocked_share",
+            "Deep idle blocked",
+            {
+                "unit_of_measurement": "%",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "icon": "mdi:sleep-off",
+                "value_template": "{{ value_json.deep_idle_blocked_pct | default('unknown') }}",
+            },
+        ),
     ]
     binary = [
         ("spotify", "Spotify Connect", "running", "services.spotify"),
@@ -1205,46 +1264,48 @@ def discovery_configs(node_id, display_name, prefix):
         cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}", **extra}
         configs.append((f"sensor/{node_id}/{key}/config", cfg))
     for key, name, devclass, path in binary:
-        cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
-               "device_class": devclass,
-               "value_template":
-                   f"{{{{ 'ON' if (value_json.{path} | default(false)) "
-                   f"else 'OFF' }}}}"}
+        cfg = {
+            **base,
+            "name": name,
+            "unique_id": f"{node_id}_{key}",
+            "device_class": devclass,
+            "value_template": f"{{{{ 'ON' if (value_json.{path} | default(false)) else 'OFF' }}}}",
+        }
         configs.append((f"binary_sensor/{node_id}/{key}/config", cfg))
     # Verbose device logging, switched on from the app for a limited time.
-    cfg = {**base, "name": "Diagnostics mode",
-           "unique_id": f"{node_id}_diagnostics",
-           "entity_category": "diagnostic", "icon": "mdi:bug-outline",
-           "value_template":
-               "{{ 'ON' if (value_json.diagnostics | default(false)) "
-               "else 'OFF' }}"}
+    cfg = {
+        **base,
+        "name": "Diagnostics mode",
+        "unique_id": f"{node_id}_diagnostics",
+        "entity_category": "diagnostic",
+        "icon": "mdi:bug-outline",
+        "value_template": "{{ 'ON' if (value_json.diagnostics | default(false)) else 'OFF' }}",
+    }
     configs.append((f"binary_sensor/{node_id}/diagnostics/config", cfg))
     # problem-style binaries: ON == something is wrong
     for key, name, expr in (
-        ("nexusqd", "LED daemon",
-         "value_json.nexusqd_alive | default(true)"),
-        ("healthd", "Health sampler",
-         "value_json.healthd_fresh | default(false)"),
+        ("nexusqd", "LED daemon", "value_json.nexusqd_alive | default(true)"),
+        ("healthd", "Health sampler", "value_json.healthd_fresh | default(false)"),
         # healthy == NOT stalled; absent field (older device) reads as healthy
         # rather than inventing an alarm out of a missing signal.
-        ("led", "LED ring",
-         "not (value_json.led_stalled | default(false))"),
+        ("led", "LED ring", "not (value_json.led_stalled | default(false))"),
         # ON for a day after any watchdog repair; absent (no watchdog, older
         # device) reads as healthy, like the LED ring.
-        ("wifi_link", "WiFi link",
-         "not (value_json.wifi_repaired_recently | default(false))"),
+        ("wifi_link", "WiFi link", "not (value_json.wifi_repaired_recently | default(false))"),
         # ON when the deep C-states were blocked in >= 90 % of the last hour's
         # samples; absent (window still short, older device) reads healthy.
-        ("deep_idle", "Deep idle",
-         "not (value_json.deep_idle_blocked | default(false))"),
+        ("deep_idle", "Deep idle", "not (value_json.deep_idle_blocked | default(false))"),
     ):
-        cfg = {**base, "name": name, "unique_id": f"{node_id}_{key}",
-               "device_class": "problem", "entity_category": "diagnostic",
-               "value_template":
-                   f"{{{{ 'OFF' if ({expr}) else 'ON' }}}}"}
+        cfg = {
+            **base,
+            "name": name,
+            "unique_id": f"{node_id}_{key}",
+            "device_class": "problem",
+            "entity_category": "diagnostic",
+            "value_template": f"{{{{ 'OFF' if ({expr}) else 'ON' }}}}",
+        }
         configs.append((f"binary_sensor/{node_id}/{key}/config", cfg))
     return configs
-
 
 
 # --------------------------------------------------------------------------
@@ -1386,8 +1447,7 @@ def ring_commands(kind, payload, st, themes=None, scenes=None):
         if not _HHMM.match(text):
             return []
         key = "off" if kind == "off_at" else "on"
-        return [("setRingSchedule",
-                 {"enabled": bool(sched.get("enabled")), key: text})]
+        return [("setRingSchedule", {"enabled": bool(sched.get("enabled")), key: text})]
     if kind == "theme":
         name = _name_of(themes, text)
         return [("setTheme", {"theme": name})] if name else []
@@ -1404,9 +1464,13 @@ def ring_discovery_configs(node_id, display_name, prefix, st, themes=None, scene
     downgraded, or ambient not there), published as an empty retained config."""
     topics = ring_topics(prefix, node_id)
     _, status_topic = device_topics(prefix, node_id)
-    device = {"identifiers": [node_id], "name": display_name,
-              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
-              "sw_version": os.uname().release}
+    device = {
+        "identifiers": [node_id],
+        "name": display_name,
+        "manufacturer": "Google",
+        "model": "Nexus Q (steelhead)",
+        "sw_version": os.uname().release,
+    }
     base = {
         "state_topic": topics["state"],
         "device": device,
@@ -1422,50 +1486,116 @@ def ring_discovery_configs(node_id, display_name, prefix, st, themes=None, scene
     has_scene = has_ring and bool(scene_opts) and isinstance(st.get("scene"), str)
     hhmm = r"^([01]\d|2[0-3]):[0-5]\d$"
     entries = [
-        ("light", "ring", has_ring, {
-            "name": "LED ring", "schema": "json",
-            "command_topic": topics["light"],
-            "brightness": True, "brightness_scale": 255,
-            "supported_color_modes": ["brightness"], "icon": "mdi:circle-slice-8"}),
-        ("switch", "ring_schedule", has_ring, {
-            "name": "LED ring schedule", "command_topic": topics["schedule"],
-            "value_template": "{{ 'ON' if value_json.schedule else 'OFF' }}",
-            "entity_category": "config", "icon": "mdi:clock-outline"}),
-        ("text", "ring_off_at", has_ring, {
-            "name": "LED ring off at", "command_topic": topics["off_at"],
-            "value_template": "{{ value_json.off_at }}",
-            "pattern": hhmm, "min": 5, "max": 5,
-            "entity_category": "config", "icon": "mdi:weather-night"}),
-        ("text", "ring_on_at", has_ring, {
-            "name": "LED ring on at", "command_topic": topics["on_at"],
-            "value_template": "{{ value_json.on_at }}",
-            "pattern": hhmm, "min": 5, "max": 5,
-            "entity_category": "config", "icon": "mdi:weather-sunny"}),
-        ("switch", "ambient", has_amb, {
-            "name": "Ambient brightness", "command_topic": topics["ambient"],
-            "value_template": "{{ 'ON' if value_json.ambient else 'OFF' }}",
-            "entity_category": "config", "icon": "mdi:theme-light-dark"}),
-        ("sensor", "ring_level", has_amb, {
-            "name": "LED ring level", "unit_of_measurement": "%",
-            "state_class": "measurement", "entity_category": "diagnostic",
-            "value_template": "{{ value_json.level_pct | default('unknown') }}",
-            "icon": "mdi:brightness-6"}),
-        ("select", "ring_theme", has_theme, {
-            "name": "LED ring theme", "command_topic": topics["theme"],
-            "options": theme_opts,
-            "value_template": "{{ value_json.theme | default(None) }}",
-            "icon": "mdi:palette"}),
-        ("select", "ring_scene", has_scene, {
-            "name": "LED ring visualization", "command_topic": topics["scene"],
-            "options": scene_opts,
-            "value_template": "{{ value_json.scene | default(None) }}",
-            "icon": "mdi:waveform"}),
+        (
+            "light",
+            "ring",
+            has_ring,
+            {
+                "name": "LED ring",
+                "schema": "json",
+                "command_topic": topics["light"],
+                "brightness": True,
+                "brightness_scale": 255,
+                "supported_color_modes": ["brightness"],
+                "icon": "mdi:circle-slice-8",
+            },
+        ),
+        (
+            "switch",
+            "ring_schedule",
+            has_ring,
+            {
+                "name": "LED ring schedule",
+                "command_topic": topics["schedule"],
+                "value_template": "{{ 'ON' if value_json.schedule else 'OFF' }}",
+                "entity_category": "config",
+                "icon": "mdi:clock-outline",
+            },
+        ),
+        (
+            "text",
+            "ring_off_at",
+            has_ring,
+            {
+                "name": "LED ring off at",
+                "command_topic": topics["off_at"],
+                "value_template": "{{ value_json.off_at }}",
+                "pattern": hhmm,
+                "min": 5,
+                "max": 5,
+                "entity_category": "config",
+                "icon": "mdi:weather-night",
+            },
+        ),
+        (
+            "text",
+            "ring_on_at",
+            has_ring,
+            {
+                "name": "LED ring on at",
+                "command_topic": topics["on_at"],
+                "value_template": "{{ value_json.on_at }}",
+                "pattern": hhmm,
+                "min": 5,
+                "max": 5,
+                "entity_category": "config",
+                "icon": "mdi:weather-sunny",
+            },
+        ),
+        (
+            "switch",
+            "ambient",
+            has_amb,
+            {
+                "name": "Ambient brightness",
+                "command_topic": topics["ambient"],
+                "value_template": "{{ 'ON' if value_json.ambient else 'OFF' }}",
+                "entity_category": "config",
+                "icon": "mdi:theme-light-dark",
+            },
+        ),
+        (
+            "sensor",
+            "ring_level",
+            has_amb,
+            {
+                "name": "LED ring level",
+                "unit_of_measurement": "%",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "value_template": "{{ value_json.level_pct | default('unknown') }}",
+                "icon": "mdi:brightness-6",
+            },
+        ),
+        (
+            "select",
+            "ring_theme",
+            has_theme,
+            {
+                "name": "LED ring theme",
+                "command_topic": topics["theme"],
+                "options": theme_opts,
+                "value_template": "{{ value_json.theme | default(None) }}",
+                "icon": "mdi:palette",
+            },
+        ),
+        (
+            "select",
+            "ring_scene",
+            has_scene,
+            {
+                "name": "LED ring visualization",
+                "command_topic": topics["scene"],
+                "options": scene_opts,
+                "value_template": "{{ value_json.scene | default(None) }}",
+                "icon": "mdi:waveform",
+            },
+        ),
     ]
     out = []
     for component, key, supported, extra in entries:
         suffix = f"{component}/{node_id}/{key}/config"
-        out.append((suffix, {**base, "unique_id": f"{node_id}_{key}", **extra}
-                    if supported else None))
+        out.append((suffix, {**base, "unique_id": f"{node_id}_{key}", **extra} if supported else None))
     return out
 
 
@@ -1484,7 +1614,7 @@ def control_call(method, params, timeout=5):
                     continue
                 obj = json.loads(line.decode())
                 if obj.get("id") != 1:
-                    continue           # a broadcast event reaching this client too
+                    continue  # a broadcast event reaching this client too
                 if obj.get("ok") is False:
                     err = obj.get("error") or {}
                     raise ControlError(err.get("code", "error"), err.get("message", ""))
@@ -1525,8 +1655,7 @@ HA_SUMMARY_MAX = 255
 
 def update_topics(prefix, node_id):
     base = f"{prefix}/{node_id}/update"
-    return {"state": f"{base}/state", "install": f"{base}/install",
-            "check": f"{base}/check"}
+    return {"state": f"{base}/state", "install": f"{base}/install", "check": f"{base}/check"}
 
 
 def read_device_version():
@@ -1535,7 +1664,7 @@ def read_device_version():
     it. None when apk cannot say."""
     out = _run(["apk", "info", "-e", "-v", DEVICE_PKG], timeout=10).strip()
     pre = DEVICE_PKG + "-"
-    return out[len(pre):] if out.startswith(pre) else None
+    return out[len(pre) :] if out.startswith(pre) else None
 
 
 def update_state_payload(installed, check, phase=None):
@@ -1550,8 +1679,7 @@ def update_state_payload(installed, check, phase=None):
     `phase`: None, "installing" or "rebooting" -- both of the latter set
     in_progress, which HA shows as a spinner on the entity."""
     installed = installed or "unknown"
-    pkgs = [p for p in (check or {}).get("packages", [])
-            if isinstance(p, dict) and isinstance(p.get("name"), str)]
+    pkgs = [p for p in (check or {}).get("packages", []) if isinstance(p, dict) and isinstance(p.get("name"), str)]
     busy = bool((check or {}).get("busy"))
     latest = installed
     dev = next((p for p in pkgs if p["name"] == DEVICE_PKG), None)
@@ -1565,36 +1693,58 @@ def update_state_payload(installed, check, phase=None):
     elif phase == "installing" or busy:
         summary = "Installing. Services restart when it is done; the Q may reboot."
     elif pkgs:
-        summary = ", ".join(
-            f"{p['name']} {p.get('installed', '?')} → {p.get('available', '?')}"
-            for p in pkgs)
+        summary = ", ".join(f"{p['name']} {p.get('installed', '?')} → {p.get('available', '?')}" for p in pkgs)
         if len(summary) > HA_SUMMARY_MAX:
-            summary = summary[:HA_SUMMARY_MAX - 1] + "…"
+            summary = summary[: HA_SUMMARY_MAX - 1] + "…"
     else:
         summary = "Up to date."
-    return {"installed_version": installed, "latest_version": latest,
-            "title": "Nexus Q system", "release_summary": summary,
-            "in_progress": phase is not None or busy}
+    return {
+        "installed_version": installed,
+        "latest_version": latest,
+        "title": "Nexus Q system",
+        "release_summary": summary,
+        "in_progress": phase is not None or busy,
+    }
 
 
 def update_discovery_configs(node_id, display_name, prefix):
     topics = update_topics(prefix, node_id)
     _, status_topic = device_topics(prefix, node_id)
-    device = {"identifiers": [node_id], "name": display_name,
-              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
-              "sw_version": os.uname().release}
+    device = {
+        "identifiers": [node_id],
+        "name": display_name,
+        "manufacturer": "Google",
+        "model": "Nexus Q (steelhead)",
+        "sw_version": os.uname().release,
+    }
     return [
-        (f"update/{node_id}/system/config", {
-            "name": "System update", "unique_id": f"{node_id}_system_update",
-            "device_class": "firmware", "entity_category": "config",
-            "state_topic": topics["state"],
-            "command_topic": topics["install"], "payload_install": "install",
-            "availability_topic": status_topic, "device": device}),
-        (f"button/{node_id}/update_check/config", {
-            "name": "Check for updates", "unique_id": f"{node_id}_update_check",
-            "entity_category": "config", "icon": "mdi:refresh",
-            "command_topic": topics["check"], "payload_press": "PRESS",
-            "availability_topic": status_topic, "device": device}),
+        (
+            f"update/{node_id}/system/config",
+            {
+                "name": "System update",
+                "unique_id": f"{node_id}_system_update",
+                "device_class": "firmware",
+                "entity_category": "config",
+                "state_topic": topics["state"],
+                "command_topic": topics["install"],
+                "payload_install": "install",
+                "availability_topic": status_topic,
+                "device": device,
+            },
+        ),
+        (
+            f"button/{node_id}/update_check/config",
+            {
+                "name": "Check for updates",
+                "unique_id": f"{node_id}_update_check",
+                "entity_category": "config",
+                "icon": "mdi:refresh",
+                "command_topic": topics["check"],
+                "payload_press": "PRESS",
+                "availability_topic": status_topic,
+                "device": device,
+            },
+        ),
     ]
 
 
@@ -1608,21 +1758,21 @@ class UpdateLink:
     `version()` and `clock()` are injected, so it runs in tests without a
     broker, a bridge or apk."""
 
-    def __init__(self, prefix, node_id, publish, call=control_call,
-                 version=read_device_version, clock=time.monotonic, stop=None):
+    def __init__(
+        self, prefix, node_id, publish, call=control_call, version=read_device_version, clock=time.monotonic, stop=None
+    ):
         self.topics = update_topics(prefix, node_id)
         self.publish, self.call = publish, call
         self.version, self.clock = version, clock
         self.stop = stop or _STOP
         self._cv = threading.Condition()
         self._queue = []
-        self._last = None               # the last payload published
+        self._last = None  # the last payload published
         self._next_check = clock() + UPDATE_FIRST_CHECK_S
 
     def submit(self, topic, payload):
         """From the MQTT receive path: queue, never block it on apk."""
-        kind = {self.topics["install"]: "install",
-                self.topics["check"]: "check"}.get(topic)
+        kind = {self.topics["install"]: "install", self.topics["check"]: "check"}.get(topic)
         if kind is None:
             return False
         if kind == "install" and payload.strip() != "install":
@@ -1656,8 +1806,7 @@ class UpdateLink:
         installed = self.version()
         self._put(update_state_payload(installed, None, "installing"))
         try:
-            r = self.call("installSystemUpdate", {},
-                          timeout=UPDATE_INSTALL_TIMEOUT_S)
+            r = self.call("installSystemUpdate", {}, timeout=UPDATE_INSTALL_TIMEOUT_S)
         except (OSError, ValueError, ControlError) as e:
             # `busy` = the app is installing right now: say so; the next check
             # shows the outcome. Anything else: back to what a check says.
@@ -1717,8 +1866,7 @@ class RingLink:
     #: once per bridge connection (listThemes / listScenes)
     LISTS = (("themes", "listThemes"), ("scenes", "listScenes"))
 
-    def __init__(self, node_id, display_name, prefix, discovery_prefix,
-                 publish, call=control_call, stop=None):
+    def __init__(self, node_id, display_name, prefix, discovery_prefix, publish, call=control_call, stop=None):
         self.node_id, self.display_name = node_id, display_name
         self.prefix, self.discovery_prefix = prefix, discovery_prefix
         self.topics = ring_topics(prefix, node_id)
@@ -1730,7 +1878,7 @@ class RingLink:
         self.st = {}
         self.lists = {"themes": None, "scenes": None}
         self.bridge_up = False
-        self._announced = None      # which entity set HA was last told about
+        self._announced = None  # which entity set HA was last told about
         self._queue = []
         self._cv = threading.Condition()
 
@@ -1763,9 +1911,13 @@ class RingLink:
         self.publish_state()
 
     def apply_event(self, event, data):
-        key = {"ringChanged": "ring", "ambientChanged": "ambient",
-               "brightnessChanged": "brightness", "themeChanged": "theme",
-               "sceneChanged": "scene"}.get(event)
+        key = {
+            "ringChanged": "ring",
+            "ambientChanged": "ambient",
+            "brightnessChanged": "brightness",
+            "themeChanged": "theme",
+            "sceneChanged": "scene",
+        }.get(event)
         if key is None or not isinstance(data, dict):
             return False
         with self.lock:
@@ -1774,7 +1926,7 @@ class RingLink:
                 return False
             self.st[key] = value
         if key in ("ring", "ambient"):
-            self.announce()          # a first ambient event can add entities
+            self.announce()  # a first ambient event can add entities
         self.publish_state()
         return True
 
@@ -1789,21 +1941,25 @@ class RingLink:
         with self.lock:
             st = dict(self.st)
             themes, scenes = self.lists["themes"], self.lists["scenes"]
-        shape = (isinstance(st.get("ring"), dict), isinstance(st.get("ambient"), dict),
-                 json.dumps(themes), json.dumps(scenes),
-                 isinstance(st.get("theme"), str), isinstance(st.get("scene"), str))
+        shape = (
+            isinstance(st.get("ring"), dict),
+            isinstance(st.get("ambient"), dict),
+            json.dumps(themes),
+            json.dumps(scenes),
+            isinstance(st.get("theme"), str),
+            isinstance(st.get("scene"), str),
+        )
         if not force and shape == self._announced:
             return
         self._announced = shape
-        for suffix, cfg in ring_discovery_configs(
-                self.node_id, self.display_name, self.prefix, st, themes, scenes):
-            self.publish(f"{self.discovery_prefix}/{suffix}",
-                         json.dumps(cfg) if cfg is not None else "", True)
+        for suffix, cfg in ring_discovery_configs(self.node_id, self.display_name, self.prefix, st, themes, scenes):
+            self.publish(f"{self.discovery_prefix}/{suffix}", json.dumps(cfg) if cfg is not None else "", True)
 
     def publish_state(self):
         with self.lock:
-            payload = (ring_state_payload(self.st, self.lists["themes"], self.lists["scenes"])
-                       if self.bridge_up else None)
+            payload = (
+                ring_state_payload(self.st, self.lists["themes"], self.lists["scenes"]) if self.bridge_up else None
+            )
         if payload is None:
             return
         self.publish(self.topics["available"], "online", True)
@@ -1967,8 +2123,12 @@ VOLUME_ENABLED = os.environ.get("NQMQTT_VOLUME", "1") != "0"
 
 def volume_topics(prefix, node_id):
     base = f"{prefix}/{node_id}/volume"
-    return {"state": f"{base}/state", "available": f"{base}/available",
-            "level": f"{base}/set", "mute": f"{base}/mute/set"}
+    return {
+        "state": f"{base}/state",
+        "available": f"{base}/available",
+        "level": f"{base}/set",
+        "mute": f"{base}/mute/set",
+    }
 
 
 def volume_commands(kind, payload):
@@ -1984,7 +2144,7 @@ def volume_commands(kind, payload):
             v = float(text)
         except ValueError:
             return []
-        if not (v == v) or v < 0 or v > 100:        # NaN, out of range
+        if not (v == v) or v < 0 or v > 100:  # NaN, out of range
             return []
         return [("setVolume", {"volume": int(round(v))})]
     if kind == "mute" and text in ("ON", "OFF"):
@@ -1999,22 +2159,47 @@ def volume_discovery_configs(node_id, display_name, prefix):
     every telemetry tick and with nothing to set."""
     topics = volume_topics(prefix, node_id)
     _, status_topic = device_topics(prefix, node_id)
-    device = {"identifiers": [node_id], "name": display_name,
-              "manufacturer": "Google", "model": "Nexus Q (steelhead)",
-              "sw_version": os.uname().release}
-    base = {"state_topic": topics["state"], "device": device,
-            "availability": [{"topic": status_topic}, {"topic": topics["available"]}],
-            "availability_mode": "all"}
+    device = {
+        "identifiers": [node_id],
+        "name": display_name,
+        "manufacturer": "Google",
+        "model": "Nexus Q (steelhead)",
+        "sw_version": os.uname().release,
+    }
+    base = {
+        "state_topic": topics["state"],
+        "device": device,
+        "availability": [{"topic": status_topic}, {"topic": topics["available"]}],
+        "availability_mode": "all",
+    }
     return [
-        (f"number/{node_id}/volume_level/config", {
-            **base, "name": "Volume", "unique_id": f"{node_id}_volume_level",
-            "command_topic": topics["level"], "min": 0, "max": 100, "step": 1,
-            "mode": "slider", "unit_of_measurement": "%", "icon": "mdi:volume-high",
-            "value_template": "{{ value_json.volume }}"}),
-        (f"switch/{node_id}/mute/config", {
-            **base, "name": "Mute", "unique_id": f"{node_id}_mute",
-            "command_topic": topics["mute"], "icon": "mdi:volume-off",
-            "value_template": "{{ 'ON' if value_json.muted else 'OFF' }}"}),
+        (
+            f"number/{node_id}/volume_level/config",
+            {
+                **base,
+                "name": "Volume",
+                "unique_id": f"{node_id}_volume_level",
+                "command_topic": topics["level"],
+                "min": 0,
+                "max": 100,
+                "step": 1,
+                "mode": "slider",
+                "unit_of_measurement": "%",
+                "icon": "mdi:volume-high",
+                "value_template": "{{ value_json.volume }}",
+            },
+        ),
+        (
+            f"switch/{node_id}/mute/config",
+            {
+                **base,
+                "name": "Mute",
+                "unique_id": f"{node_id}_mute",
+                "command_topic": topics["mute"],
+                "icon": "mdi:volume-off",
+                "value_template": "{{ 'ON' if value_json.muted else 'OFF' }}",
+            },
+        ),
         (f"sensor/{node_id}/volume/config", None),
     ]
 
@@ -2025,8 +2210,7 @@ class VolumeLink:
     own methods, so HA is one more front end on the one volume. A consumer of
     the BridgeFeed; `publish` and `call` are injected, as in RingLink."""
 
-    def __init__(self, node_id, display_name, prefix, discovery_prefix,
-                 publish, call=control_call, stop=None):
+    def __init__(self, node_id, display_name, prefix, discovery_prefix, publish, call=control_call, stop=None):
         self.node_id, self.display_name = node_id, display_name
         self.prefix, self.discovery_prefix = prefix, discovery_prefix
         self.topics = volume_topics(prefix, node_id)
@@ -2071,10 +2255,8 @@ class VolumeLink:
         self.publish(self.topics["state"], json.dumps(st), True)
 
     def on_mqtt_connect(self):
-        for suffix, cfg in volume_discovery_configs(
-                self.node_id, self.display_name, self.prefix):
-            self.publish(f"{self.discovery_prefix}/{suffix}",
-                         json.dumps(cfg) if cfg is not None else "", True)
+        for suffix, cfg in volume_discovery_configs(self.node_id, self.display_name, self.prefix):
+            self.publish(f"{self.discovery_prefix}/{suffix}", json.dumps(cfg) if cfg is not None else "", True)
         with self.lock:
             up = self.st is not None
         if up:
@@ -2103,7 +2285,7 @@ class VolumeLink:
                 self.call(method, params)
             except (OSError, ValueError, ControlError) as e:
                 log("volume:", method, "failed:", e)
-                self.publish_state()        # HA shows the truth, not the wish
+                self.publish_state()  # HA shows the truth, not the wish
                 return
 
     def worker(self):
@@ -2131,6 +2313,7 @@ class VolumeLink:
 # main loop
 # --------------------------------------------------------------------------
 
+
 def _on_sigterm(signum, frame):
     _STOP.set()
 
@@ -2153,13 +2336,12 @@ def run():
     # ships, dropping these would take its readout away entirely.
     legacy_state_topic = f"{prefix}/health/state"
     legacy_status_topic = f"{prefix}/status"
-    log(f"starting: broker {conf['host']}:{conf['port']}, node {node_id}, "
-        f"interval {conf['interval_s']}s")
+    log(f"starting: broker {conf['host']}:{conf['port']}, node {node_id}, interval {conf['interval_s']}s")
 
     signal.signal(signal.SIGTERM, _on_sigterm)
     signal.signal(signal.SIGINT, _on_sigterm)
 
-    win = Windows()    # rolling histories for the 1 h residency windows
+    win = Windows()  # rolling histories for the 1 h residency windows
     backoff = 5
     client = None
 
@@ -2179,13 +2361,11 @@ def run():
     vol = None
     feed = []
     if RING_ENABLED:
-        ring = RingLink(node_id, display_name, prefix, conf["discovery_prefix"],
-                        safe_publish)
+        ring = RingLink(node_id, display_name, prefix, conf["discovery_prefix"], safe_publish)
         feed.append(ring)
         threading.Thread(target=ring.worker, daemon=True).start()
     if VOLUME_ENABLED:
-        vol = VolumeLink(node_id, display_name, prefix, conf["discovery_prefix"],
-                         safe_publish)
+        vol = VolumeLink(node_id, display_name, prefix, conf["discovery_prefix"], safe_publish)
         feed.append(vol)
         threading.Thread(target=vol.worker, daemon=True).start()
     if feed:
@@ -2209,13 +2389,15 @@ def run():
     if ROON_ENABLED:
         # A closure, not the object: the client is replaced on every reconnect
         # and a captured reference would publish into a dead socket forever.
-        threading.Thread(target=publish_server, args=(lambda: client,),
-                         daemon=True).start()
+        threading.Thread(target=publish_server, args=(lambda: client,), daemon=True).start()
     while not _STOP.is_set():
         try:
             client = MqttClient(
-                conf["host"], conf["port"], client_id=node_id,
-                username=conf["username"], password=conf["password"],
+                conf["host"],
+                conf["port"],
+                client_id=node_id,
+                username=conf["username"],
+                password=conf["password"],
                 # The single Will goes to the PER-DEVICE status topic. MQTT
                 # allows one per connection, and the flat one cannot carry it
                 # honestly with two Qs on the broker: either box dying marked
@@ -2223,7 +2405,9 @@ def run():
                 # any particular device. The legacy topic below is therefore
                 # best-effort (online at connect, offline on a graceful stop)
                 # and says so in the README.
-                will_topic=status_topic, will_payload="offline")
+                will_topic=status_topic,
+                will_payload="offline",
+            )
             client.connect()
             log("connected")
             backoff = 5
@@ -2242,19 +2426,15 @@ def run():
                 client.subscribe([upd.topics["install"], upd.topics["check"]])
             client.publish(status_topic, "online", retain=True)
             client.publish(legacy_status_topic, "online", retain=True)
-            for suffix, cfg in discovery_configs(
-                    node_id, display_name, prefix):
-                client.publish(f"{conf['discovery_prefix']}/{suffix}",
-                               json.dumps(cfg), retain=True)
+            for suffix, cfg in discovery_configs(node_id, display_name, prefix):
+                client.publish(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg), retain=True)
             if ring is not None:
                 ring.on_mqtt_connect()
             if vol is not None:
                 vol.on_mqtt_connect()
             if upd is not None:
-                for suffix, cfg in update_discovery_configs(
-                        node_id, display_name, prefix):
-                    client.publish(f"{conf['discovery_prefix']}/{suffix}",
-                                   json.dumps(cfg), retain=True)
+                for suffix, cfg in update_discovery_configs(node_id, display_name, prefix):
+                    client.publish(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg), retain=True)
                 upd.republish()
             while not _STOP.is_set():
                 state = collect(win)

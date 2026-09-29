@@ -9,7 +9,12 @@ verified against the local file.
 
     NEXUS_PW=... python nexus_put_chunked.py <localfile> <remotepath>
 """
-import os, sys, base64, hashlib, time
+
+import os
+import sys
+import base64
+import hashlib
+import time
 import paramiko
 
 HOST = os.environ.get("NEXUS_HOST", "192.168.20.179")
@@ -24,8 +29,7 @@ CHUNK = 256 * 1024  # raw bytes per chunk
 def connect():
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username=USER, password=PW, timeout=20,
-              look_for_keys=False, allow_agent=False)
+    c.connect(HOST, username=USER, password=PW, timeout=20, look_for_keys=False, allow_agent=False)
     return c
 
 
@@ -48,7 +52,7 @@ def main():
     print(f"uploading {len(data)} bytes in {n} chunks of {CHUNK} -> {remote}")
     c = connect()
     for i in range(n):
-        piece = data[i * CHUNK:(i + 1) * CHUNK]
+        piece = data[i * CHUNK : (i + 1) * CHUNK]
         b64 = base64.b64encode(piece).decode()
         redir = ">" if i == 0 else ">>"
         cmd = f"base64 -d {redir} {remote}"
@@ -69,7 +73,7 @@ def main():
         else:
             sys.exit(f"FAILED on chunk {i}")
         if (i + 1) % 5 == 0 or i == n - 1:
-            print(f"  {i+1}/{n} chunks sent")
+            print(f"  {i + 1}/{n} chunks sent")
     rc, out, err = run(c, f"sha256sum {remote}")
     remote_sha = out.split()[0] if out.split() else "?"
     print(f"local : {local_sha}")
