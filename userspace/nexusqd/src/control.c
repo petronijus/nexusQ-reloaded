@@ -109,3 +109,8 @@ int ctl_parse(const char *line, struct ctl_cmd *out) {
     }
     return -1;
 }
+
+int ctl_mblink_changes(int blinking, const int cur[3], int on, const int rgb[3]) {
+    if (!on) return blinking;
+    return !blinking || cur[0] != rgb[0] || cur[1] != rgb[1] || cur[2] != rgb[2];
+}

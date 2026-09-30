@@ -71,4 +71,12 @@ static void test_bad(void) {
                          NULL};
     for (int i = 0; bad[i]; i++) CHECK(ctl_parse(bad[i], &c) == -1);
 }
-int main(void){ RUN(test_ok); RUN(test_bad); return REPORT(); }
+static void test_mblink_repeat_is_a_no_op(void) {
+    int amber[3] = {255, 140, 0}, red[3] = {255, 0, 0}, off[3] = {0, 0, 0};
+    CHECK(ctl_mblink_changes(0, off, 1, amber) == 1);     /* starts it */
+    CHECK(ctl_mblink_changes(1, amber, 1, amber) == 0);   /* the 30 s re-assert */
+    CHECK(ctl_mblink_changes(1, amber, 1, red) == 1);     /* another colour */
+    CHECK(ctl_mblink_changes(1, amber, 0, off) == 1);     /* stops it */
+    CHECK(ctl_mblink_changes(0, off, 0, off) == 0);       /* a stop with nothing to stop */
+}
+int main(void){ RUN(test_ok); RUN(test_bad); RUN(test_mblink_repeat_is_a_no_op); return REPORT(); }

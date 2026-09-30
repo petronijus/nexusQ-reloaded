@@ -467,7 +467,9 @@ int main(void) {
                     else if (cmd.kind == CTL_MTOGGLE) { muted = !muted; apply_mute_led(muted); if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; } screensaver_on_activity(&ss, now_s()); }
                     else if (cmd.kind == CTL_SETMUTED) { muted = cmd.value; apply_mute_led(muted); if (!muted && mute_blink) { mute_blink_next = 0; mute_blink_on = 0; } screensaver_on_activity(&ss, now_s()); }
                     else if (cmd.kind == CTL_MBLINK) {
-                        if (cmd.value) {
+                        if (!ctl_mblink_changes(mute_blink, mute_blink_rgb, cmd.value, cmd.rgb)) {
+                            quiet = 1;   /* the bridge's 30 s re-assert of what already holds */
+                        } else if (cmd.value) {
                             mute_blink = 1; memcpy(mute_blink_rgb, cmd.rgb, sizeof(mute_blink_rgb));
                             mute_blink_on = 0; mute_blink_next = 0.0;   /* fire immediately on the next tick */
                         } else {
