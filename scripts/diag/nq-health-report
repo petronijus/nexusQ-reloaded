@@ -110,6 +110,19 @@ def in_window(rows, since=None, until=None):
     return out
 
 
+def events_in_window(events, since=None, until=None):
+    """(the events inside [since, until), how many could not be placed).
+
+    t_mono restarts at every boot and events.jsonl outlives boots, so only the
+    wall time (device r124 on) places an event. With no window every event is
+    kept; with one, an event without a wall time is left out and counted, never
+    guessed into the window."""
+    if since is None and until is None:
+        return events, 0
+    placed = [e for e in events if "wall" in e]
+    return in_window(placed, since, until), len(events) - len(placed)
+
+
 # Services whose CPU means the window was NOT idle: audio was flowing.
 PLAYBACK_UNITS = ("librespot", "shairport-sync", "pulseaudio")
 PLAYBACK_PCT = 2.0  # % of one core, averaged; PulseAudio idles at ~0.2 %
@@ -171,12 +184,49 @@ def accounting(rows, interval):
     return out
 
 
+def governed_busy_ms(r):
+    """The busy time the governor answers to: busy_ms (both cores) minus its
+    niced part. nexusq-cpufreq-tune runs the conservative governor with
+    ignore_nice_load=1, so niced work (an `apk upgrade`, the housekeeping
+    daemons at Nice=19) is meant to stay at the lowest OPP. nice_ms exists from
+    device r124; before it, all of busy_ms counts. None when unknown."""
+    busy = r.get("busy_ms")
+    if busy is None or busy < 0:
+        return None
+    nice = r.get("nice_ms")
+    return busy - nice if isinstance(nice, int) and 0 <= nice <= busy else busy
+
+
+def lowest_opp_share(r, lowest=350000):
+    """The share of the sample the CPU spent at the lowest OPP, from opp_ms
+    (time in state over the window). The spot `freq` is one instant: during a
+    busy window it read 350 MHz while opp_ms had the CPU at 1.2 GHz for 93 % of
+    it (2026-09-30). Falls back to the spot reading without opp_ms."""
+    opp = r.get("opp_ms")
+    if isinstance(opp, dict) and opp:
+        total = sum(v for v in opp.values() if isinstance(v, (int, float)) and v > 0)
+        if total > 0:
+            return opp.get(str(lowest), 0) / total
+    freq = r.get("freq")
+    if freq:
+        return 1.0 if freq <= lowest else 0.0
+    return None
+
+
+def reached_opp(r, khz):
+    opp = r.get("opp_ms")
+    if isinstance(opp, dict) and opp.get(str(khz), 0) > 0:
+        return True
+    return (r.get("freq") or 0) >= khz
+
+
 def busy_run(rows, interval, pred):
     """Longest run of consecutive samples with the CPU busy >= 80 % of one core
-    (busy_ms sums both cores over the sample) that also satisfy `pred`."""
+    in the work the governor answers to (governed_busy_ms), that also satisfy
+    `pred`."""
     best = run = 0
     for r in rows:
-        busy = r.get("busy_ms")
+        busy = governed_busy_ms(r)
         if busy is not None and busy >= 0.8 * interval * 1000 and pred(r):
             run += 1
             best = max(best, run)
@@ -301,29 +351,51 @@ def analyze(rows, events, snap_text):
     # ---- governor / scaling behaviour ----
     freqs = [r.get("freq", 0) for r in rows if r.get("freq")]
     if freqs:
-        residency = {}
-        for f in freqs:
-            residency[f] = residency.get(f, 0) + 1
+        # residency from opp_ms (ms in each OPP) where the samples have it,
+        # else from the spot readings (samples per frequency)
+        residency, unit = {}, "ms"
+        for r in rows:
+            if isinstance(r.get("opp_ms"), dict):
+                for k, v in r["opp_ms"].items():
+                    if isinstance(v, (int, float)) and v > 0:
+                        residency[int(k)] = residency.get(int(k), 0) + v
+        if not residency:
+            unit = "samples"
+            for f in freqs:
+                residency[f] = residency.get(f, 0) + 1
         gov = rows[-1].get("gov", "?")
-        reached_top = max(freqs) >= 1200000
+        reached_top = any(reached_opp(r, 1200000) for r in rows)
         # A stall is the CPU really working while the governor holds the lowest
         # OPP: busy_ms (both cores, per sample) at or above the conservative
         # governor's up_threshold of ONE core, 80 %, for several samples in a
         # row. load1 is no evidence: a one-minute average that also counts tasks
         # waiting on I/O, it touched 1.0 at ~16 % utilization in an idle night
-        # (2026-09-30) and raised this warning for nothing.
-        stall = busy_run(rows, interval, lambda r: r.get("freq", 0) <= 350000)
+        # (2026-09-30) and raised this warning for nothing. The busy time is
+        # the governed part (niced work is meant to stay low), and "at the
+        # lowest OPP" is >= 90 % of the sample by opp_ms, not the spot reading
+        # (both misread an `apk add` window the same day).
+        stall = busy_run(rows, interval, lambda r: (lowest_opp_share(r) or 0) >= 0.9)
         if stall >= 3:
+            # Samples from before device r124 have no nice_ms: their niced work,
+            # which the governor ignores on purpose, cannot be taken out.
+            blind = (
+                ""
+                if all("nice_ms" in r for r in rows if r.get("busy_ms") is not None)
+                else (
+                    " (these samples predate nice_ms, so niced work such as `nice apk add`, which "
+                    "ignore_nice_load keeps at 350MHz on purpose, cannot be told apart)"
+                )
+            )
             add(
                 "warn",
                 "governor_not_scaling",
                 f"the CPU ran >=80% of a core for {fmt_dur(stall, interval)} in a row "
-                f"while the frequency stayed at 350MHz (governor={gov}) — possible scaling stall",
+                f"while it spent >=90% of each sample at 350MHz (governor={gov}) — possible scaling stall{blind}",
             )
         elif not reached_top and busy_run(rows, interval, lambda r: True) >= 3:
             add("info", "governor_no_turbo", f"sustained load seen but 1200MHz OPP never used (governor={gov})")
         res_str = ", ".join(f"{k // 1000}MHz:{v}" for k, v in sorted(residency.items()))
-        add("info", "freq_residency", f"governor={gov}; residency [{res_str}]")
+        add("info", "freq_residency", f"governor={gov}; residency in {unit} [{res_str}]")
 
     # ---- cpuidle: are the deep C-states armed, running, or vetoed? ----
     # healthd >= device r106 adds cstate_ms/cstate_n (per-window residency by
@@ -497,7 +569,7 @@ def main():
         health, events, snap = target, None, None
 
     rows = in_window(load_jsonl(health), since, until)
-    evs = load_jsonl(events)
+    evs, unplaced = events_in_window(load_jsonl(events), since, until)
     snap_text = ""
     if snap and os.path.exists(snap):
         with open(snap, errors="replace") as fh:
@@ -506,7 +578,11 @@ def main():
     findings, summary = analyze(rows, evs, snap_text)
 
     if as_json:
-        print(json.dumps({"summary": summary, "findings": findings, "device_events": evs}, indent=2))
+        print(
+            json.dumps(
+                {"summary": summary, "findings": findings, "device_events": evs, "events_unplaced": unplaced}, indent=2
+            )
+        )
         return
 
     sevrank = {"crit": 0, "warn": 1, "info": 2}
@@ -539,7 +615,11 @@ def main():
     if evs:
         print("\n── device-side events ──")
         for e in evs[-12:]:
-            print(f"  [{e.get('sev')}] {e.get('kind')} @ {e.get('t_mono')}s: {e.get('msg')}")
+            when = e.get("wall") or f"uptime {e.get('t_mono')}s"
+            print(f"  [{e.get('sev')}] {e.get('kind')} @ {when}: {e.get('msg')}")
+    if unplaced:
+        print(f"\n({unplaced} device-side event(s) left out: written before device r124, they carry no wall time")
+        print(" and cannot be placed in the --since/--until window)")
 
 
 if __name__ == "__main__":
