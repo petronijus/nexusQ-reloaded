@@ -6,6 +6,91 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — four boot-log findings (kernel **6.18.48-r19**, nexusqd **r25**, nexusq-control **r61**, nexusq-btagent **r8**, nexusq-setupd **r8**, nexusq-mqtt **r14**, device **r123**, alsa-utils **1.2.16-r100**)
+
+Every one of these was in each boot's journal on the Prague Q (kernel r18,
+device r121), and each is now fixed at the source:
+
+- **systemd-coredump's manager never started** (kernel r19, patch **0060**).
+  systemd 262 moved core handling from the `|systemd-coredump` pipe to a
+  socket manager whose `--check-requirements` needs
+  `PIDFD_INFO_SUPPORTED_MASK` and `PIDFD_INFO_COREDUMP_SIGNAL` (Linux 6.19,
+  036375522be8). On 6.18 the manager skipped itself and its Kernel Core
+  Pattern Register unit logged "Dependency failed" on every transaction that
+  touched sysinit.target: 71 times in one 1 h 17 min boot. The patch backports
+  the two pidfs features (uapi `struct pidfd_info` VER3, 88 bytes,
+  `supported_mask` at offset 80, as systemd 262 vendors it; signal and code
+  stored before the release of the coredump mask). Cores were caught all along
+  by the legacy pipe helper (a RoonBridgeHelper SIGSEGV of 2026-09-28 is on
+  the unit), so what changes is the path, not whether crashes are kept.
+  **Device r123** sets the bounds explicitly
+  (`/etc/systemd/coredump.conf.d/20-nexusq-coredump.conf`: 384 MiB per core,
+  which keeps the 184 MiB Roon core whole, 256 MiB store, 1 GiB kept free)
+  instead of systemd's 32-bit defaults.
+- **nexusq-control raced nexusqd's socket at boot** ("nexusqd send failed:
+  No such file or directory", four times, 22.9 s). nexusqd.service had been
+  `After=multi-user.target` since its first commit, which made any ordering
+  between it and a `WantedBy=multi-user.target` peer a cycle (systemd then
+  deletes a start job: nexusq-setupd in v1.9.0-rc1). nexusqd now starts like
+  any service and carries `Before=nexusq-control nexusq-setupd
+  nexusq-btagent` itself. The ordering lives in nexusqd's unit, not as
+  `After=` in the peers, on the fleet-safety review's finding: an OTA
+  interrupted halfway can leave new peers next to an older nexusqd, and an
+  `After=` there would be that cycle again, able to delete nexusq-control's
+  start job, the path that re-runs the update.
+  `tests/test_unit_order.py` builds the ordering graph of every unit we ship
+  (with the target's implied `After=` edges systemd adds) and fails on a
+  cycle, in the tree and next to an older nexusqd; seen failing on both
+  shapes.
+  Starting earlier, nexusqd may now run before steelhead-avr has probed
+  (udev coldplug), and it found the front-panel keys only once at start. It
+  now keeps looking (0.5 s doubling to 8 s), drops the node on
+  POLLERR/POLLHUP (an evdev fd whose device is gone would otherwise spin the
+  loop), and re-sends the mute LED when the keys appear, since that means the
+  AVR has (re)probed. `tests/test_keys.c`, five mutations seen failing.
+- **nexusq-mqtt logged "connection lost: [Errno -3] Try again" at every boot**
+  for its first attempt, made before the resolver was up. `LinkReport` now
+  says nothing about failures in the first 60 s before the first connect
+  ("connected (attempt 2, 11 s after start)" instead), reports a broker that
+  stays unreachable once per outage and again only when the error changes,
+  and every loss of an established link as before. Five tests, seen failing
+  under three mutations.
+- **alsaloop warned "Scheduler getparam failed." at every start.** It asked for
+  real-time scheduling with `sched_getparam()`/`sched_setscheduler()`, which
+  are process-wide in POSIX and ENOSYS stubs in musl. New override aport
+  **pmos/alsa-utils** (Alpine's 1.2.16 build, their four patches vendored,
+  pkgrel 100, `-openrc` dropped) with patch 0001: the scheduler is read and
+  set per thread with the pthread API, and an inherited SCHED_FIFO/SCHED_RR
+  policy is kept. The second half matters: with a working request, alsaloop
+  would otherwise lift itself from the FIFO 10 that nexusq-uac2-in gives it
+  (under an RLIMIT_RTTIME) to Round Robin 99, above the IRQ threads and
+  PulseAudio. `tests/test_alsaloop_sched.py` builds the patched function from
+  the patch against a fake pthread API; seen failing without the keep rule
+  and without the SCHED_RESET_ON_FORK mask. docker-build.sh builds it in
+  Phase 7c8 and ship-checks it; `ota-packages.list` carries alsa-utils and
+  its -systemd and -udev subpackages. Version-pinned like speexdsp and
+  shairport-sync: an Alpine pkgver bump wins again and must be re-based.
+
+**On the Prague Q** (packages by `apk add`, kernel by `nq-kernel-ota
+stage-apk` + `try`, auto-promoted), 2026-09-30:
+
+- `core_pattern` is `@@/run/systemd/coredumpd/kernel`, both coredump units
+  active, `--check-requirements` exits 0, no "Dependency failed" in the boot;
+  a `sleep` killed with SIGSEGV is in `coredumpctl`.
+- No ordering cycle; nexusqd started at 20.84 s, nexusq-control at 20.95 s,
+  btagent at 21.30 s; no "nexusqd send failed"; nexusqd logged "front-panel
+  keys up" at 21.08 s.
+- Unbinding and rebinding steelhead-avr: "keys lost", then "keys up", and the
+  `spin` counter stayed at 34 throughout.
+- alsaloop runs SCHED_FIFO 10, no "getparam" in the journal.
+- After a second, plain reboot with device r123: none of the four messages,
+  no failed unit, and the full nexusq-diag sweep clean
+  (`nq-captures/20260930-143508/`, verdict OK for the boot): 1.2 GHz at
+  1380 mV and 350 MHz at 1025 mV, VDD_MPU on the OPP throughout, peak 89.4 °C
+  under 11 s of dual-core load, nexusqd loops = renders with `spin` flat,
+  the USB audio doze at ~100 musb interrupts/s, `dmesg -l err,warn` empty.
+  The unit ran mqtt r13; r14 changes only a comment in its unit file.
+
 ### Added — the USB audio input dozes while the host sends silence (kernel **6.18.48-r18**, device **r121**)
 
 With the TV box as the USB audio host, the Q took ~2000 musb interrupts a
@@ -100,9 +185,10 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
   failed unit, empty dmesg err/warn, musb 100/s, C3 73 % of idle in a quiet
   30 s window, the gadget capture at 47 968 frames/s, 1.2 GHz reached with
   VDD_MPU exact at every OPP, no Python traceback in any daemon after the
-  reformat, and nq-healthd r121 with no `vdd_mismatch` since boot. Not
-  exercised: its once-per-stretch `led_static` (the waveform scene never holds
-  a static frame).
+  reformat, and nq-healthd r121 with no `vdd_mismatch` since boot. Its
+  once-per-stretch `led_static`, checked by switching the ring off for ~12 min
+  (12:36-12:48, ~144 samples; the old writer would have logged it twice): one
+  line, at 60 samples. The ring was switched back on as it was.
 - Details: `docs/2026-09-30-usb-audio-doze.md`.
 
 ### Found — the 1 ms USB audio interval is the host's floor, not musb's (2026-09-29)
