@@ -14,12 +14,17 @@ Kernel patch 0059 (u_audio doze, `docs/2026-09-30-usb-audio-doze.md`) is in
 the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
 **device r121** switches it on. Neither is built or published.
 
-- **The Prague Q runs patch 0059's fixed version by hand** since 2026-09-30
-  ~10:10: built as r17 (same vermagic), loaded with `insmod` into its r17
-  kernel, `doze_idle_ms=5000`, `doze_probe_ms=50`. The module on disk is the
-  stock one: a reboot undoes it. Verified: doze, unbind/rebind while dozing
-  (clean dmesg), and the run-time switch-off.
-- To ship: build the kernel (r18) and the image or the OTA packages; publish
+- **The Prague Q runs the v2 test set as installed packages** since 2026-09-30
+  12:12: kernel 6.18.48-r18 (promoted by nq-kernel-ota), device r121, control
+  r60, mqtt r12, btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6, from the
+  fleet-signed apks in `output/ota-v2test-2026-09-30/` (not in the OTA repo).
+  It survives reboots; the full diag was clean (CHANGELOG). The cottage Q is
+  still on r120/r17.
+- Still to see on a unit: nq-healthd r121's single `led_static` per static
+  stretch (blank the ring or pick a static scene for > 5 min, then one line in
+  `/var/log/nq-health/events.jsonl`).
+- **Ships with the v2 release, not before** (Petr, 2026-09-30: no publish while
+  v2 is under test). Then: build the kernel (r18) and the image or the OTA packages; publish
   both (the kernel goes to the units through `nexusq-kernel-ota`, device r121
   through `apk upgrade`). A unit that gets r121 before r18 logs once that
   u_audio has no doze, and works as before.

@@ -89,6 +89,20 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
   `doze_idle_ms=0` wakes a dozing stream at once (2007/s), and 5000 puts it
   back to sleep. Not tested physically: a host that closes the stream on its
   own (the TV never does) and a pulled cable, which share that stop path.
+- **Installed as packages on the Prague Q** (2026-09-30 12:12, not published):
+  fleet-signed apks from a full build of 6ee1814 (`output/ota-v2test-2026-09-30/`,
+  rootfs gate 62/62); device r121, control r60, mqtt r12, btagent r7, setupd
+  r7, kernel-ota r10 and rootfs-ab r6 with `apk add`, kernel r18 through
+  `nq-kernel-ota stage-apk` + `try`. It booted, was healthy at once and
+  promoted itself; the package database agrees on r18 and the r17 modules are
+  kept for `restore`. `nexusq-usb-gadget.sh` set 5000/50 at boot by itself.
+  The full diag (`nq-captures/20260930-121517/`) is clean, verdict OK: no
+  failed unit, empty dmesg err/warn, musb 100/s, C3 73 % of idle in a quiet
+  30 s window, the gadget capture at 47 968 frames/s, 1.2 GHz reached with
+  VDD_MPU exact at every OPP, no Python traceback in any daemon after the
+  reformat, and nq-healthd r121 with no `vdd_mismatch` since boot. Not
+  exercised: its once-per-stretch `led_static` (the waveform scene never holds
+  a static frame).
 - Details: `docs/2026-09-30-usb-audio-doze.md`.
 
 ### Found — the 1 ms USB audio interval is the host's floor, not musb's (2026-09-29)
