@@ -173,7 +173,7 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 > appeared source, so whichever input came up last stole the other's loopback.
 > Fixed with `source_dont_move=true` on both loopbacks (device **r92**); the
 > sink-input stays movable, so an input still follows the output the app picks.
-> Regression test `tests/test_loopback_source_pinned.sh`.
+> Regression test `pmos/device-google-steelhead/tests/test_loopback_source_pinned.sh`.
 > → CHANGELOG [1.15.1] · `docs/2026-09-01-loopback-source-stolen.md`
 
 > ## ✅ SHIPPED (2026-08-31, v1.15.0) — mainline 6.18 LTS, and a build that cross-compiles

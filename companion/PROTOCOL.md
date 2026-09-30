@@ -1177,7 +1177,9 @@ Sending `auto_preamp: true` sets `preamp_db` to exactly cancel that peak.
 
 → `{}`
 
-← ```json
+←
+
+```json
 {"supported": true, "bands": [...7...], "preamp_db": 0.0, "headroom_db": 0.0,
  "max_bands": 7, "limits": {...}, "bass_db": 0.0, "treble_db": 0.0}
 ```

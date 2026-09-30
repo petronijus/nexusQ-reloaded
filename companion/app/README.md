@@ -35,7 +35,12 @@ v1.10.1); `flutter analyze` is clean.
 ```
 
 Use it rather than a bare `flutter build apk`, so the in-app version stamp
-(`kBuildLabel`, shown on the connect gate + welcome) cannot drift from `pubspec.yaml`.
+(`kBuildLabel`, shown on the connect gate + welcome) cannot drift from `pubspec.yaml`,
+and so the APK is signed with the app's key: `build-apk.sh` fetches it from
+1Password ("nexusQ companion Android signing key") to a temp file for the build,
+debug and release alike, so either installs over the phone's app
+(`adb install -r`). `--release` refuses to run without it. Check a build with
+`apksigner verify --print-certs <apk>`: SHA-256 `35546f7c…afebe8`.
 
 ## Release = Android AND iOS, every time (rule since 2026-09-05)
 
@@ -242,8 +247,8 @@ the control socket). Three items were reconciled:
   Now each platform uses its native face (deliberate: native > pixel-identical).
 
 - **macOS is NOT wired for discovery** (aspirational target — only iOS is
-  verified): there is no `macos/Runner/BonjourDiscovery.swift` and no
-  `com.apple.developer.networking.multicast` entitlement, so under the app
+  verified): there is no macOS counterpart of `ios/Runner/BonjourDiscovery.swift`
+  and no `com.apple.developer.networking.multicast` entitlement, so under the app
   sandbox `multicast_dns` (raw 5353) is blocked and auto-discovery returns
   nothing. Use the manual host field / `NEXUSQ_HOST` on macOS, or add a native
   Bonjour bridge mirroring iOS. iPhone is unaffected.
