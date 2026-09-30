@@ -30,6 +30,15 @@ report still read WARN, twice for nothing:
   as well (r124), and `--since`/`--until` place them by it; older events
   without it are left out of a window and counted, never guessed in.
 
+**On the Prague Q** (device r124 and mqtt r14 by `apk add`, rebooted
+15:25 CEST): all 127 samples of the boot carry `nice_ms` (never above
+`busy_ms`), nq-healthd ran without a restart, and the full nexusq-diag sweep
+with `--since` for the boot reads OK (`nq-captures/20260930-153539/`):
+1.2 GHz at 1380 mV, VDD_MPU on the OPP in every sample, peak 89.4 °C under
+12 s of dual-core load, no failed unit, none of the four boot-log messages.
+No event fired in the boot, so an event's `wall` has been seen in the binary
+and the host test, not yet in `events.jsonl` on the unit.
+
 ### Fixed — four boot-log findings (kernel **6.18.48-r19**, nexusqd **r25**, nexusq-control **r61**, nexusq-btagent **r8**, nexusq-setupd **r8**, nexusq-mqtt **r14**, device **r123**, alsa-utils **1.2.16-r100**)
 
 Every one of these was in each boot's journal on the Prague Q (kernel r18,

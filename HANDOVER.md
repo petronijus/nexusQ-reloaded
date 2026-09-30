@@ -22,14 +22,16 @@ the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
   still on r120/r17.
 - **Since 14:19 the same day it runs the next test set on top** (the four
   boot-log fixes, CHANGELOG): kernel 6.18.48-r19 (patch 0060, promoted),
-  device r123, nexusqd r25, control r61, btagent r8, setupd r8, mqtt r13 (the
-  tree is r14, a unit-file comment only) and
+  device r124 (since 15:25), nexusqd r25, control r61, btagent r8, setupd r8,
+  mqtt r14 and
   the alsa-utils 1.2.16-r100 override with its -systemd and -udev, from
-  `output/ota-v2test-2026-09-30b/`. They ship with v2 like the rest; at
+  `output/ota-v2test-2026-09-30b/` and `-30c/`. They ship with v2 like the rest; at
   publish time alsa-utils reaches the units only through `apk upgrade
   --available` (the System update), as speexdsp and shairport-sync do. The
-  rootfs image built that day carries device r122 (coredump limit 64 MiB, since
-  raised to 384 MiB in r123): rebuild before flashing anything from it.
+  image in `output/` (build 2026-09-30c: `boot.img` and
+  `nexusq-rootfs-v2test-2026-09-30c-sparse.img`, hashes in
+  `nexusq-2026-09-30c-v2test.sha256`) carries exactly this set with device
+  r124; it is a dev image with the access files baked in, never a release.
   Before the release, on the cottage Q: `apk info -e alsaconf alsa-utils-openrc`
   must name nothing (alsaconf r0 pins `alsa-utils=1.2.16-r0` and would hold
   the upgrade back); the Prague Q has neither (checked 2026-09-30).
