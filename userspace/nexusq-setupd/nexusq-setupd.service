@@ -1,9 +1,10 @@
 [Unit]
 Description=Nexus Q BT WiFi-provisioning (setup mode)
 # BT + NM must exist; none is a hard dep (setupd degrades gracefully).
-# NO After=nexusqd.service: nexusqd is After=multi-user.target, so ordering on
-# it from a WantedBy=multi-user.target unit creates a cycle and systemd DELETES
-# this unit's start job (bit us in v1.9.0-rc1; see HANDOFF 2026-07-13).
+# Started after nexusqd by nexusqd's own Before=, never an After=nexusqd.service
+# here: next to an older nexusqd (After=multi-user.target, an OTA interrupted
+# halfway) that is a boot ordering cycle and systemd DELETES a start job in it
+# (it killed this unit in v1.9.0-rc1); tests/test_unit_order.py.
 After=bluetooth.service NetworkManager.service
 Wants=bluetooth.service
 

@@ -1,8 +1,11 @@
 /* userspace/nexusqd/src/keys.c */
+#define _POSIX_C_SOURCE 200809L   /* O_CLOEXEC, glob() under -std=c11 */
 #include "keys.h"
 #include <string.h>
 #include <stdio.h>
 #include <glob.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 int keys_decode(const uint8_t *buf, int len, struct keyev *out, int max) {
     int n = 0;
@@ -40,4 +43,27 @@ int keys_find_node(char *path, int pathlen) {
     }
     globfree(&g);
     return rc;
+}
+
+void keywatch_init(struct keywatch *kw) {
+    kw->fd = -1; kw->retry_at = 0.0; kw->backoff = KEYS_RETRY_MIN_S;
+}
+int keywatch_tick(struct keywatch *kw, double now, keys_open_fn open_fn, void *ctx) {
+    if (kw->fd >= 0 || now < kw->retry_at) return 0;
+    kw->fd = open_fn(ctx);
+    if (kw->fd >= 0) { kw->backoff = KEYS_RETRY_MIN_S; return 1; }
+    kw->retry_at = now + kw->backoff;
+    kw->backoff = kw->backoff * 2 > KEYS_RETRY_MAX_S ? KEYS_RETRY_MAX_S : kw->backoff * 2;
+    return 0;
+}
+void keywatch_lost(struct keywatch *kw, double now) {
+    if (kw->fd >= 0) close(kw->fd);
+    kw->fd = -1;   /* backoff is at the minimum since the open that set fd */
+    kw->retry_at = now + KEYS_RETRY_MIN_S;   /* the old node is still going away */
+}
+int keys_open_node(void *ctx) {
+    (void)ctx;
+    char node[64];
+    if (keys_find_node(node, sizeof(node)) != 0) return -1;
+    return open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 }

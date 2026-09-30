@@ -16,6 +16,7 @@
 #include "music.h"
 #include "sdnotify.h"
 #include "brightfade.h"
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -268,8 +269,7 @@ int main(void) {
 
     apply_mute_led(muted);      /* idle mute LED = unmuted #006B8E */
 
-    char node[64]; int kfd = -1;
-    if (keys_find_node(node, sizeof(node)) == 0) kfd = open(node, O_RDONLY | O_NONBLOCK);
+    struct keywatch keys; keywatch_init(&keys);   /* opened in the loop, see keys.h */
 
     unlink(SOCK);
     int srv = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -314,7 +314,8 @@ int main(void) {
     int vol_pid = -1; char vol_comm[24] = "-";
     int    last_animating = 0;     /* the intent gate, as of the last cadence choice */
 
-    /* systemd watchdog: init done (AVR + control socket up), tell systemd we are
+    /* systemd watchdog: init done (control socket up; the AVR and its keys may
+     * still be probing, the loop picks them up), tell systemd we are
      * ready, then ping WATCHDOG=1 from the render loop below. A *hang* in that
      * loop (a wedged AVR i2c write, a stuck poll, an effect that never returns)
      * stops the pings and systemd restarts us — the crash path was already
@@ -372,9 +373,17 @@ int main(void) {
             }
         }
 
+        /* the keys node appearing means steelhead-avr has (re)probed: its mute
+         * LED is back at the AVR's power-on colour, so send ours again (the
+         * ring itself recovers on the next AVR_KEEPALIVE_S re-push) */
+        if (keywatch_tick(&keys, now_s(), keys_open_node, NULL)) {
+            fprintf(stderr, "[nexusqd] front-panel keys up\n");
+            if (!mute_blink) apply_mute_led(muted);
+        }
+
         struct pollfd pfds[4]; int np = 0;
         int ki = -1, ai = -1, pi = -1;
-        if (kfd >= 0) { ki = np; pfds[np].fd = kfd; pfds[np].events = POLLIN; np++; }
+        if (keys.fd >= 0) { ki = np; pfds[np].fd = keys.fd; pfds[np].events = POLLIN; np++; }
         if (afd >= 0) { ai = np; pfds[np].fd = afd; pfds[np].events = POLLIN; np++; }
         if (sfd >= 0) { pi = np; pfds[np].fd = sfd; pfds[np].events = POLLIN; np++; }
         pfds[np].fd = srv; pfds[np].events = POLLIN; int srvi = np; np++;
@@ -409,8 +418,17 @@ int main(void) {
         struct timespec tmo = { .tv_sec = rem_s, .tv_nsec = rem_ns };
         if (ppoll(pfds, np, &tmo, NULL) > 0) n_ready++;
 
-        if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
-            uint8_t b[INPUT_EVENT_SIZE*64]; int r = (int)read(kfd, b, sizeof(b));
+        if (ki >= 0 && (pfds[ki].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            /* the driver went away (rmmod, re-probe): an evdev fd then polls
+             * readable-with-error forever, so drop it or the loop spins */
+            fprintf(stderr, "[nexusqd] front-panel keys lost\n");
+            keywatch_lost(&keys, now_s());
+        } else if (ki >= 0 && (pfds[ki].revents & POLLIN)) {
+            uint8_t b[INPUT_EVENT_SIZE*64]; int r = (int)read(keys.fd, b, sizeof(b));
+            if (r < 0 && errno != EAGAIN && errno != EINTR) {
+                fprintf(stderr, "[nexusqd] front-panel keys lost: %s\n", strerror(errno));
+                keywatch_lost(&keys, now_s());
+            }
             struct keyev ev[64]; int n = r > 0 ? keys_decode(b, r, ev, 64) : 0;
             /* physical interaction: leave idle cadence and render immediately
              * (the volume overlay must appear at its full 16 ms cadence) */

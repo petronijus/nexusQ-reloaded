@@ -6,11 +6,12 @@ Documentation=file:/usr/share/doc/nexusq-btagent/README.md
 # bluetoothd restart (or a late start) is handled at runtime, not by ordering.
 After=bluetooth.service
 Wants=bluetooth.service
-# NO After=nexusqd.service: nexusqd is After=multi-user.target, so ordering on it
-# from a WantedBy=multi-user.target unit forms a cycle and systemd DELETES this
-# unit's start job (this exact bug killed nexusq-setupd in v1.9.0-rc1; see
-# HANDOFF 2026-07-13). The LED is a soft dependency anyway — led_send() tolerates
-# nexusqd being absent and the 10 s reconcile retries once it appears.
+# Started after nexusqd by nexusqd's own Before=, never an After=nexusqd.service
+# here: next to an older nexusqd (After=multi-user.target, an OTA interrupted
+# halfway) that is a boot ordering cycle and systemd DELETES a start job in it
+# (it killed nexusq-setupd in v1.9.0-rc1); tests/test_unit_order.py. The LED is
+# a soft dependency anyway: led_send() tolerates nexusqd being absent and the
+# 10 s reconcile retries once it appears.
 
 [Service]
 Type=simple

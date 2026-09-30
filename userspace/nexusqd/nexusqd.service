@@ -1,7 +1,24 @@
 # userspace/nexusqd/nexusqd.service
 [Unit]
 Description=Nexus Q LED ring daemon
-After=multi-user.target
+# Early, like any service, and BEFORE the peers that talk to its socket
+# (Type=notify: after READY=1, so /run/nexusqd.sock exists), or nexusq-control's
+# boot-time theme/scene restore races for it and logs "nexusqd send failed".
+# NOT After=multi-user.target: with it, any ordering between nexusqd and a
+# WantedBy=multi-user.target peer was a boot cycle (peer -> nexusqd ->
+# multi-user.target -> peer) and systemd deleted the peer's start job
+# (nexusq-setupd in v1.9.0-rc1).
+# The ordering is stated HERE, not as After=nexusqd.service in the peers, so it
+# is safe with any mix of package revisions: an OTA interrupted halfway can
+# leave new peer units next to an older nexusqd that is still After=
+# multi-user.target, and an After= in the peer would be that very cycle, able
+# to delete nexusq-control's start job, the path that re-runs the update.
+# tests/test_unit_order.py checks the tree and that mix.
+# The AVR and its keys need no ordering: steelhead-avr probes from udev
+# coldplug, frame writes simply fail until it has, and the keys node is looked
+# for until it appears (keys.h).
+After=systemd-modules-load.service
+Before=nexusq-control.service nexusq-setupd.service nexusq-btagent.service
 Requires=systemd-modules-load.service
 
 [Service]

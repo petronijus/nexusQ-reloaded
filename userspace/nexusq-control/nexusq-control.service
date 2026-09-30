@@ -6,12 +6,13 @@
 Description=Nexus Q companion control bridge
 # nexusqd provides /run/nexusqd.sock; librespot provides now-playing. Both are
 # soft deps — the bridge degrades gracefully if either is down, binds 0.0.0.0 and
-# reconnects to the sockets lazily, so it needs NO start ordering.
-# IMPORTANT: do NOT add `After=nexusqd.service` (or network-online/sound). Once the
-# unit is enabled (via 95-nexusq.preset), `After=nexusqd.service` forms a boot
-# ordering cycle — nexusq-control → nexusqd → multi-user.target → nexusq-control —
-# and systemd breaks it by DELETING nexusq-control's start job, so the bridge never
-# auto-starts (verified: removing the After= line makes it auto-start cleanly).
+# reconnects to the sockets lazily. It starts after nexusqd all the same, so the
+# boot-time theme/scene restore finds the socket; that ordering is nexusqd's
+# Before=, NOT an After=nexusqd.service here: next to an older nexusqd (an OTA
+# interrupted halfway) that After= is a boot ordering cycle, nexusq-control ->
+# nexusqd -> multi-user.target -> nexusq-control, and systemd breaks it by
+# DELETING this unit's start job. See nexusqd.service; tests/test_unit_order.py.
+# No network-online/sound ordering either: nothing here waits for them.
 Wants=nexusqd.service
 
 [Service]
