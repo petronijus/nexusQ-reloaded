@@ -171,6 +171,20 @@ def accounting(rows, interval):
     return out
 
 
+def busy_run(rows, interval, pred):
+    """Longest run of consecutive samples with the CPU busy >= 80 % of one core
+    (busy_ms sums both cores over the sample) that also satisfy `pred`."""
+    best = run = 0
+    for r in rows:
+        busy = r.get("busy_ms")
+        if busy is not None and busy >= 0.8 * interval * 1000 and pred(r):
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    return best
+
+
 def analyze(rows, events, snap_text):
     findings = []  # (severity, kind, message, t_mono_or_None)
 
@@ -292,16 +306,21 @@ def analyze(rows, events, snap_text):
             residency[f] = residency.get(f, 0) + 1
         gov = rows[-1].get("gov", "?")
         reached_top = max(freqs) >= 1200000
-        # high load but never leaving the lowest OPP => governor not scaling up
-        loaded = [r for r in rows if float(r.get("load1", 0) or 0) >= 1.0]
-        if loaded and all(r.get("freq", 0) <= 350000 for r in loaded):
+        # A stall is the CPU really working while the governor holds the lowest
+        # OPP: busy_ms (both cores, per sample) at or above the conservative
+        # governor's up_threshold of ONE core, 80 %, for several samples in a
+        # row. load1 is no evidence: a one-minute average that also counts tasks
+        # waiting on I/O, it touched 1.0 at ~16 % utilization in an idle night
+        # (2026-09-30) and raised this warning for nothing.
+        stall = busy_run(rows, interval, lambda r: r.get("freq", 0) <= 350000)
+        if stall >= 3:
             add(
                 "warn",
                 "governor_not_scaling",
-                f"load>=1.0 in {len(loaded)} sample(s) but freq never left 350MHz "
-                f"(governor={gov}) — possible scaling stall",
+                f"the CPU ran >=80% of a core for {fmt_dur(stall, interval)} in a row "
+                f"while the frequency stayed at 350MHz (governor={gov}) — possible scaling stall",
             )
-        elif not reached_top and any(float(r.get("load1", 0) or 0) >= 1.5 for r in rows):
+        elif not reached_top and busy_run(rows, interval, lambda r: True) >= 3:
             add("info", "governor_no_turbo", f"sustained load seen but 1200MHz OPP never used (governor={gov})")
         res_str = ", ".join(f"{k // 1000}MHz:{v}" for k, v in sorted(residency.items()))
         add("info", "freq_residency", f"governor={gov}; residency [{res_str}]")
