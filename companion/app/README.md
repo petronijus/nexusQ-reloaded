@@ -31,16 +31,40 @@ v1.10.1); `flutter analyze` is clean.
 ## Build an APK
 
 ```sh
-./build-apk.sh          # stamps the UI build label from pubspec.yaml
+./build-apk.sh                            # debug, github flavor, from the working tree
+./build-apk.sh --release                  # the GitHub-release APK (updates itself)
+./build-apk.sh --release --flavor play    # the Android App Bundle for Google Play
 ```
 
-Use it rather than a bare `flutter build apk`, so the in-app version stamp
-(`kBuildLabel`, shown on the connect gate + welcome) cannot drift from `pubspec.yaml`,
-and so the APK is signed with the app's key: `build-apk.sh` fetches it from
-1Password ("nexusQ companion Android signing key") to a temp file for the build,
-debug and release alike, so either installs over the phone's app
-(`adb install -r`). `--release` refuses to run without it. Check a build with
-`apksigner verify --print-certs <apk>`: SHA-256 `35546f7c…afebe8`.
+Use it rather than a bare `flutter build`, so the in-app version stamp
+(`kBuildLabel`, shown on the connect gate + welcome) cannot drift from
+`pubspec.yaml`, and so the build is signed right.
+
+**Flavors** (`android/app/build.gradle.kts`), one application id for all:
+- `github`: the APK on GitHub releases and a developer's phone. Only it updates
+  itself (`AppUpdate.selfUpdateSupported`) and only it carries
+  `REQUEST_INSTALL_PACKAGES` (`android/app/src/github/AndroidManifest.xml`).
+- `play`: Google Play updates it; an app from Play may not update itself.
+- `fdroid`: F-Droid builds it from this source; same rule.
+`test/app_update_flavor_test.dart` pins which one updates itself.
+
+**Releases come from a commit.** `--release` exports the last commit clean
+(`git archive`) and builds that, refusing a tree with uncommitted changes under
+`companion/app`. That keeps the stock imagery and video of the original app,
+which a developer's tree carries gitignored in `assets/stock/`, out of anything
+published, and the build then checks the artifact for them anyway. Debug builds
+use the working tree, stock imagery and all.
+
+**Signing** (since 1.27.0, 2026-09-30). The release key is 1Password's "nexusQ
+companion Android release key" (cert SHA-256 `5becc70a…655a1d`); gradle signs
+every flavor with it, and it is the Google Play upload key. Every install before
+1.27 was signed with the old key, the debug keystore "nexusQ companion Android
+signing key" (`35546f7c…afebe8`), so the github APK is re-signed with both and
+the rotation record `android/signing/rotation.lineage` (old -> new, signed by
+the old key): v2 with the old key for Android 7-8, v3 with the new key and the
+record for Android 9+. An installed app takes the update in place and moves to
+the new key; its old key stays in "past signatures" (verified on Petr's Pixel,
+1.26.1 -> 1.27.0). Check with `apksigner verify --verbose --print-certs <apk>`.
 
 ## Release = Android AND iOS, every time (rule since 2026-09-05)
 
@@ -48,8 +72,8 @@ An app release is not done until **both** platforms carry the same
 `version: X.Y.Z+N`:
 
 1. bump `version:` in `pubspec.yaml`, commit;
-2. **Android**: `./build-apk.sh --release` → `gh release create app-vX.Y.Z` with the
-   apk as `nexusq-companion-X.Y.Z.apk` → bump `../app-release.json` (`version`,
+2. **Android**: `./build-apk.sh --release` (→ `build/app/outputs/flutter-apk/app-github-release.apk`)
+   → `gh release create app-vX.Y.Z` with the apk as `nexusq-companion-X.Y.Z.apk` → bump `../app-release.json` (`version`,
    `versionCode`, `notes`, `apkUrl`) so installed apps get offered it;
 3. **iOS**: `./release-ios.sh` on the MacBook — builds the IPA with the same
    version stamp, signs with the distribution profile and uploads to App Store

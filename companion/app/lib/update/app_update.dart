@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -49,11 +50,20 @@ class AppUpdate {
   AppUpdate._();
 
   /// The whole self-update mechanism is an apk hand-off to the Android package
-  /// installer — no other OS lets an app replace itself. On iOS the binary
-  /// comes from the outside (Xcode/TestFlight), so the app-track is skipped
-  /// there and the merged "App update" card carries only the device daemons.
+  /// installer — no other OS lets an app replace itself — and only the
+  /// `github` build does it: an app from Google Play or F-Droid is updated by
+  /// its store and may not update itself (the `play` / `fdroid` flavors carry
+  /// no install permission either). On iOS the binary comes from the outside
+  /// (TestFlight / the App Store). Elsewhere the app-track is skipped and the
+  /// merged "App update" card carries only the device daemons.
   static bool get selfUpdateSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.android &&
+      (flavorOverride ?? appFlavor) == 'github';
+
+  /// The build's flavor for tests (`appFlavor` is a compile-time constant).
+  @visibleForTesting
+  static String? flavorOverride;
 
   /// Raw manifest on the default branch — no API token, no rate limit that
   /// matters for an occasional check.

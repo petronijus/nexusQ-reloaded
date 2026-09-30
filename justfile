@@ -95,7 +95,7 @@ test-alsa-integration: _docker
 
 # Compile the companion app for Android (debug; release builds: companion/app/build-apk.sh)
 build-apk:
-    cd companion/app && flutter build apk --debug
+    cd companion/app && flutter build apk --debug --flavor github
 
 # Compile the companion app for iOS (debug, unsigned; TestFlight: the nexusq-ios-release agent)
 build-ios: _macos

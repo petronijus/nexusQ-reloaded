@@ -16,9 +16,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- OTA app updates: install the downloaded apk via the OS package installer
-         (the user still confirms). See lib/update/app_update.dart. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- REQUEST_INSTALL_PACKAGES (the app's own updater) is in the github
+         flavor's manifest only: src/github/AndroidManifest.xml. -->
     <!-- Release alerts: a notification when a new Nexus Q release is out
          (lib/update/release_background.dart). Asked for at runtime on
          Android 13+, once, when the first Q is reached. -->

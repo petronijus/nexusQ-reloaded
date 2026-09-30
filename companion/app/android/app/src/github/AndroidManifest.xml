@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The github flavor updates itself: it downloads the new apk and hands it
+         to the OS package installer (the user still confirms). See
+         lib/update/app_update.dart. The play and fdroid flavors are updated by
+         their store and must not carry this permission. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

@@ -28,13 +28,30 @@ android {
         versionName = flutter.versionName
     }
 
-    // The app's signing key: the one every installed app trusts, cert SHA-256
-    // 35:54:6F:7C…:AF:EB:E8. It is 1Password's "nexusQ companion Android signing
-    // key" (a Document, with its alias and passwords as fields); build-apk.sh
-    // fetches it to a private temp file and passes it here, on any machine. It
-    // is the debug keystore the MacBook and the desktop carry by hand (HANDOFF,
-    // 2026-08-28); from the vault a machine without that copy (the macOS VM, a
-    // new one) signs the same, and a release never depends on which host it is.
+    // Where the APK is distributed, `--flavor` on every build (build-apk.sh):
+    //  github  the APK on GitHub releases and on Petr's phone; updates itself
+    //          (lib/update/app_update.dart), so only it may install packages
+    //          (src/github/AndroidManifest.xml);
+    //  play    Google Play, which updates it; an app from Play may not
+    //          update itself by any other means;
+    //  fdroid  F-Droid, built by F-Droid from this source; same rule.
+    // One application id for all three: a store and GitHub are channels of
+    // the same app, not three apps.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") { dimension = "distribution" }
+        create("play") { dimension = "distribution" }
+        create("fdroid") { dimension = "distribution" }
+    }
+
+    // The app's release key (since 2026-09-30), cert SHA-256 5B:EC:C7:0A…:5A:1D:
+    // 1Password's "nexusQ companion Android release key" (a Document with its
+    // alias and passwords as fields). build-apk.sh fetches it to a private temp
+    // file and passes it here, on any machine; it is also the Google Play upload
+    // key. The github APK is re-signed afterwards with the old key (the debug
+    // keystore every install before 1.27 carries, 35:54:6F:7C…) and the rotation
+    // record android/signing/rotation.lineage, so installed apps move to this key
+    // (build-apk.sh, "Signing").
     val nqKeystore = System.getenv("NQ_ANDROID_KEYSTORE")
     if (nqKeystore != null) {
         signingConfigs {
