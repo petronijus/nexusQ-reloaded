@@ -8,6 +8,74 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-09-30 evening: where we stopped (v2 release paused, app to the stores started)
+
+Petr stopped for the day here. Nothing is released; `main` is pushed.
+
+**v2.0.0 is NOT released** (Petr: "ještě nevydáváme"). Still to do before it,
+on his word: the volume test with a phone at a Q (below), approve
+`pmos/release-notes.json` (drop `"draft": true`), INSTALL.md to v2.0.0, the full
+build + `scripts/package-release.sh`. The rest of the checklist is in the
+"v2.0.0 work is all in `main`" section below.
+
+**The one-volume test is not done yet.** Petr wants to test it properly first.
+The plan (agreed, not run): the Prague Q at 10-30 %, Petr drives Spotify, the
+app, the dome and an iPhone over AirPlay; I watch the sink, the bridge's events
+and the librespot / shairport / `AirPlayVolumeFollow` logs. Open question to
+check first: after the dome moves the volume, does the Spotify app show the
+Q's level on connect, or only after the next play (librespot re-reads the mixer
+at play; `docs/2026-09-27-one-volume.md`).
+
+**Home Assistant:** the "Nexus Q" view of the KolacicekAPrdelcicka dashboard
+gained Sound (volume slider, mute) and Lights (LED ring brightness, theme,
+visualisation, ambient, schedule) per Q, and the header's "vol unknown" is
+fixed (it read the retired `sensor.nexus_q_volume`). The Šumperák section has
+no theme / visualisation selects yet: its nexusq-mqtt r10 has no such
+entities; add them after that unit takes v2. Backup of the dashboard before
+the change: the session's scratchpad (not in the repo).
+
+**The companion app to Google Play and F-Droid** (Petr: both). Done and pushed
+(app 1.27.0+67, commit 0100050):
+- flavors `github` / `play` / `fdroid`; only github updates itself;
+- a release key in 1Password ("nexusQ companion Android release key", also the
+  Play upload key) with a rotation record from the old debug key; Petr's Pixel
+  took 1.27.0 in place and runs on the new key;
+- `build-apk.sh --release` builds from a clean export of the last commit (no
+  stock assets of the original app); `--release --flavor play` gives a clean
+  AAB, verified, not uploaded anywhere.
+
+Open, in order:
+1. **Decide the store icon and the sphere art.** The launcher icon is the
+   original Google Nexus Q "Q" (commit 5671c63) and `companion/app/assets/device/sphere.png`
+   is of unknown origin. Petr would keep both; the risk: Play rejects apps that
+   look like Google's at review and repeated violations can suspend the whole
+   developer account (check whether the Kulturní přehled app is on the same
+   account); F-Droid refuses non-free assets outright. Proposal on the table:
+   the repo's own ring icon (`tool/make_icon.py`) and a drawn sphere for the
+   play/fdroid flavors only. The store name stays "Nexus Q Reloaded" (Petr),
+   with a "not affiliated with Google" line in the description.
+2. **Store metadata** in `companion/app/fastlane/metadata/android/en-US/` <!-- docs-check: ignore -->
+   (read by both Play and F-Droid): title, short/full description, changelog
+   for 67, icon 512, feature graphic 1024x500, phone screenshots (take them on
+   Petr's phone over adb while he navigates).
+3. **Privacy policy page** (Play requires one): a page on gh-pages saying the
+   app talks only to the Q on the LAN, to Spotify's Web API when linked and to
+   the user's own MQTT broker; no analytics. Publishing it is public: show
+   Petr the text first.
+4. **Play Console** (Petr's personal account, created after Nov 2023): create
+   the app (Google-generated app signing key; our release key is the upload
+   key), store listing, data safety, content rating, then a **closed test with
+   12 testers for 14 days** before production. Petr gathers the testers. I can
+   drive the console in Chrome; Petr confirms each submission.
+5. **F-Droid:** a merge request to `fdroiddata` (Petr's GitLab account) with a
+   recipe building `--flavor fdroid` from this repo; the fdroid build must come
+   out unsigned for F-Droid to sign, and the Spotify client ID is not in the
+   public source (Spotify control is off in that build unless the recipe passes
+   it; it is a public PKCE id). Review takes weeks.
+6. Spotify control works only for users added to the Spotify developer app (25
+   max) unless Spotify grants extended quota; say so in the store text.
+7. iOS goes to the App Store at the v2 release through VM 108 (Petr).
+
 ## Any machine — 2026-09-30: USB audio doze — kernel 6.18.48-r18 + device r121 are NOT built or published
 
 Kernel patch 0059 (u_audio doze, `docs/2026-09-30-usb-audio-doze.md`) is in
