@@ -54,6 +54,16 @@
 			</array>
 		</dict>
 	</dict>
+	<!-- Release alerts: the periodic background ask of the remembered Nexus Qs
+	     (lib/update/release_background.dart releaseCheckTask, AppDelegate). -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>org.nexusq.release-check</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

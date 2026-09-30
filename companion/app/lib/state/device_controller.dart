@@ -8,6 +8,8 @@ import '../spotify/spotify_auth.dart';
 import '../spotify/spotify_player.dart';
 import '../spotify/transport_rules.dart' as rules;
 import '../spotify/transport_rules.dart' show TransportRoute;
+import '../update/release_background.dart';
+import '../update/update_coordinator.dart';
 
 /// Holds [DeviceState], applies device events to it, and exposes intent methods
 /// the UI calls. Optimistic: updates locally then sends, and reconciles on the
@@ -263,6 +265,18 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       /* keep the last known name */
     }
+    // Release alerts (PROTOCOL §12c): remember this Q for the background
+    // check, and ask it whether a release is out. Neither may hold up or fail
+    // the connect: a plugin that is missing (tests) or refuses is just logged.
+    unawaited(
+      onDeviceReached(
+        client: _client,
+        id: state.deviceId,
+        name: state.deviceName,
+        hostname: state.hostname,
+      ).catchError((Object e) => AppLog.add('update', 'remember: $e')),
+    );
+    unawaited(UpdateCoordinator.forClient(_client).refreshRelease());
   }
 
   void _onEvent(NexusQEvent e) {

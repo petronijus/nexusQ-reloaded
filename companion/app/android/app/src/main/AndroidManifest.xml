@@ -19,6 +19,10 @@
     <!-- OTA app updates: install the downloaded apk via the OS package installer
          (the user still confirms). See lib/update/app_update.dart. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Release alerts: a notification when a new Nexus Q release is out
+         (lib/update/release_background.dart). Asked for at runtime on
+         Android 13+, once, when the first Q is reached. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="nexusQ-reloaded"
         android:name="${applicationName}"

@@ -140,6 +140,52 @@ persists it in `/etc/nexusq/theme.json` (PROTOCOL → LED ring). Against an olde
 bridge the picker still works, it just shows blue after every boot — as the box
 itself does.
 
+## Release alerts and "what's new" (1.26.0 — device nexusq-control r64)
+
+The Q checks for a new **release** by itself (PROTOCOL §12c); the app tells
+its owner, with a short "what's new" written for the release
+(`pmos/release-notes.json`: a headline and one to five items, each an icon, a
+title and one sentence). Only our releases ring; the Alpine base churn does
+not. The phone app itself is not part of this: it updates through its store.
+
+- **In the app.** `UpdateCoordinator` holds the Q's answer (`getUpdateStatus`,
+  and the `updateStatusChanged` event). A pending release shows as a banner
+  under the home app bar ("Nexus Q 2.0.0 is ready") that opens the notes in a
+  sheet with **Update now** (the System install, narrated in Settings); Settings'
+  System card shows the notes inline above its button. When the Q later runs a
+  release it was seen waiting for, the home screen shows "What's new" once.
+- **In the background.** `lib/update/release_background.dart`: WorkManager
+  (Android, every 6 h with network) and BGTaskScheduler (iOS, identifier
+  `org.nexusq.release-check`, whenever iOS grants a refresh) run
+  `runReleaseCheck`, which asks every remembered Q over the LAN and posts one
+  local notification per release (`flutter_local_notifications`, channel
+  "Nexus Q updates"). It only works while the phone is on the Q's network; no
+  server, no push service.
+- **Remembered Qs.** On every connect `DeviceController` stores the Q (serial,
+  name, last address, `<hostname>.local` from `getDeviceInfo`, r64+) in plain
+  preferences (`shared_preferences`, nothing secret). The background tries the
+  address, then the name, since a DHCP lease moves.
+- **Once, not every six hours.** `ReleaseAlerts` keeps, per Q, the release it
+  rang for, the release it saw pending (which gates "what's new") and the one
+  it showed. A release seen in the app is marked rung, so the background does
+  not notify about what the owner already looked at.
+- **Permission.** Asked once, when the first Q is reached (Android 13+, iOS);
+  Settings → Update → "Tell me about new releases" switches the alerts off and
+  on (on asks again).
+- **Platform setup.** Android: `POST_NOTIFICATIONS`, core library desugaring
+  (the notification plugin needs it). iOS: `BGTaskSchedulerPermittedIdentifiers`
+  and `UIBackgroundModes: fetch` in Info.plist; `AppDelegate` registers the
+  task, the background engine's plugins and the notification delegate before
+  `didFinishLaunching` returns (the UIScene life cycle requires it).
+- **Tests.** `test/release_alerts_test.dart` (the decisions, the background
+  pass with injected fetch/post, the coordinator's event, the card) and
+  `test/release_banner_test.dart` (the banner against the demo Q, which waits
+  for 2.0.0). Each seen failing under a mutation.
+- ⚠️ **Known issue.** `workmanager_android` 0.10.9 still applies the Kotlin
+  Gradle Plugin; Flutter 3.47 warns that a future Flutter will refuse to build
+  with such plugins. Before a Flutter upgrade, check that workmanager has moved
+  to built-in Kotlin.
+
 ## iOS (runs since 2026-08-03 — verified on the iPhone 17 simulator, iOS 26.5)
 
 The app builds and runs on iOS (Flutter 3.44 / Xcode 26.6; `flutter build ios
@@ -385,6 +431,10 @@ works).
   exposing optimistic intents.
 - `screens/home_screen.dart` — v1 remote: ring + now-playing, transport, volume, theme picker,
   brightness.
+- `update/` — the update flows (`update_coordinator.dart`), the phone app's own
+  apk updater (`app_update.dart`) and release alerts (`release.dart`,
+  `release_alerts.dart`, `release_background.dart`, `release_icons.dart`; the card
+  is `widgets/whats_new.dart`) — see "Release alerts" above.
 - `mqtt/` — `mqtt_settings.dart` (broker creds in the platform secure store) +
   `health_mqtt.dart` (the `nexusq/health/#` subscriber feeding
   `screens/health_screen.dart` — see "Health panel" above).

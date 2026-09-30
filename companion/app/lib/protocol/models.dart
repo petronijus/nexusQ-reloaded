@@ -337,27 +337,38 @@ class DeviceState {
   bool reconnecting; // link down, the controller is auto-retrying
   String deviceName;
 
+  /// The Q's stable identity and LAN host name, from `getDeviceInfo`. The id
+  /// keys what the app remembers about a Q (release alerts): `id` from bridge
+  /// r64 on (`nexusq_<factory WiFi MAC>`), else a real serial — never
+  /// "unknown", which every Q reports. The host name reaches it as
+  /// `<hostname>.local` when its address moves. Null until known.
+  String? deviceId;
+  String? hostname;
+
   /// Null when the bridge predates the ring switch — the app then offers none.
   RingState? ring;
 
   /// Null when the bridge predates ambient brightness — no switch then.
   AmbientState? ambient;
 
-  DeviceState copy() => DeviceState(
-    volume: volume,
-    muted: muted,
-    brightness: brightness,
-    theme: theme,
-    scene: scene,
-    output: output,
-    outputs: outputs,
-    nowPlaying: nowPlaying,
-    connected: connected,
-    reconnecting: reconnecting,
-    deviceName: deviceName,
-    ring: ring,
-    ambient: ambient,
-  );
+  DeviceState copy() =>
+      DeviceState(
+          volume: volume,
+          muted: muted,
+          brightness: brightness,
+          theme: theme,
+          scene: scene,
+          output: output,
+          outputs: outputs,
+          nowPlaying: nowPlaying,
+          connected: connected,
+          reconnecting: reconnecting,
+          deviceName: deviceName,
+          ring: ring,
+          ambient: ambient,
+        )
+        ..deviceId = deviceId
+        ..hostname = hostname;
 
   void applyJson(Map<String, dynamic> j) {
     if (j['volume'] is num) volume = (j['volume'] as num).round();
@@ -389,6 +400,14 @@ class DeviceState {
   void applyIdentity(Map<String, dynamic> j) {
     final n = j['name'];
     if (n is String && n.trim().isNotEmpty) deviceName = n.trim();
+    // Only getDeviceInfo carries these; a deviceInfoChanged (a rename) keeps them.
+    final id = j['id'], sn = j['serial'], hn = j['hostname'];
+    if (id is String && id.isNotEmpty) {
+      deviceId = id;
+    } else if (sn is String && sn.isNotEmpty && sn != 'unknown') {
+      deviceId = sn;
+    }
+    if (hn is String && hn.isNotEmpty) hostname = hn;
   }
 
   /// Apply a `listOutputs` result: the available outputs + the active one.

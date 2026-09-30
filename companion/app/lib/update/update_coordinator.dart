@@ -23,13 +23,30 @@ import '../build_info.dart';
 import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import 'app_update.dart';
+import 'release.dart';
 
 class UpdateCoordinator extends ChangeNotifier {
   UpdateCoordinator(this.client, {Future<void> Function(Duration)? sleep})
-    : _sleep = sleep ?? ((d) => Future<void>.delayed(d));
+    : _sleep = sleep ?? ((d) => Future<void>.delayed(d)) {
+    // The Q pushes a change of its release status (PROTOCOL §12c) to every
+    // client; the coordinator lives as long as the client, so it listens for
+    // as long as the link can carry one.
+    _events = client.events.listen((e) {
+      if (e.event == 'updateStatusChanged') {
+        _set(() => _release = UpdateStatus.fromJson(e.data));
+      }
+    });
+  }
 
   final NexusQClient client;
   final Future<void> Function(Duration) _sleep;
+  late final StreamSubscription<NexusQEvent> _events;
+
+  @override
+  void dispose() {
+    _events.cancel();
+    super.dispose();
+  }
 
   /// One coordinator per client, for the lifetime of that client — the same
   /// instance whether Settings is open, closed, or reopened.
@@ -87,6 +104,40 @@ class UpdateCoordinator extends ChangeNotifier {
   // phone, so it goes last, onto an already-updated device).
   bool get companionUpdateAvailable => _update != null || nexusUpdateAvailable;
   bool get companionBusy => _downloading || _installingNexus;
+
+  // --- release watch (PROTOCOL §12c) ---------------------------------------
+  // Whether a new Nexus Q release is out, as the Q itself knows it. Null
+  // before the first answer, and on a bridge older than r64, which has no
+  // release watch: the app then shows nothing about releases at all.
+  UpdateStatus? _release;
+  bool _checkingRelease = false;
+
+  UpdateStatus? get release => _release;
+  bool get checkingRelease => _checkingRelease;
+
+  /// The Q's answer from its last check, or, with [check], a check made now.
+  Future<void> refreshRelease({bool check = false}) async {
+    if (_checkingRelease) return;
+    _set(() => _checkingRelease = true);
+    Map<String, dynamic>? r;
+    try {
+      r = await client.call(
+        'getUpdateStatus',
+        check ? {'refresh': true} : null,
+      );
+    } on NexusQError catch (e) {
+      // unknown_method: a bridge before r64. Not an error to show.
+      if (e.code != 'unknown_method') {
+        AppLog.add('update', 'getUpdateStatus failed: $e', warn: true);
+      }
+    } catch (e) {
+      AppLog.add('update', 'getUpdateStatus failed: $e', warn: true);
+    }
+    _set(() {
+      _checkingRelease = false;
+      if (r != null) _release = UpdateStatus.fromJson(r);
+    });
+  }
 
   /// Anything in flight on any track — what the home screen indicator shows.
   bool get busy => companionBusy || _installingSystem;
@@ -226,6 +277,8 @@ class UpdateCoordinator extends ChangeNotifier {
 
   Future<void> checkSystemUpdate() async {
     if (_checkingSystem || _installingSystem) return;
+    // The ⟳ asks both: the packages (apk) and the release (its notes).
+    unawaited(refreshRelease(check: true));
     _set(() {
       _checkingSystem = true;
       _systemError = null;
@@ -284,6 +337,9 @@ class UpdateCoordinator extends ChangeNotifier {
                     'again to finish them.'
               : null;
         });
+        // The Q compared the release with what is installed as the install
+        // ended; this reconnected link has not heard it yet.
+        await refreshRelease();
         return;
       }
       await _sleep(const Duration(seconds: 5)); // device still rebooting

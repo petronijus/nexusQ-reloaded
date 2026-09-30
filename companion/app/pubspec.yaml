@@ -67,7 +67,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          problem (nexusq-mqtt r8). One volume (device r117): letting go of
 #          the volume slider while Spotify plays here also tells Spotify
 #          (Web API), so its apps show the Q's volume.
-version: 1.25.0+64
+version: 1.26.0+65
 
 environment:
   sdk: ^3.12.0
@@ -111,6 +111,15 @@ dependencies:
   app_links: ^7.2.1
   http: ^1.6.0
   crypto: ^3.0.7
+
+  # Release alerts (PROTOCOL §12c): the app remembers the Nexus Qs it has
+  # talked to (shared_preferences: names and addresses, nothing secret), asks
+  # them in the background whether a release is out (workmanager: Android
+  # WorkManager, iOS BGTaskScheduler) and posts one local notification per
+  # release (flutter_local_notifications). No server, no push service.
+  shared_preferences: ^2.5.5
+  workmanager: ^0.10.10
+  flutter_local_notifications: ^22.3.1
 
 dev_dependencies:
   flutter_test:

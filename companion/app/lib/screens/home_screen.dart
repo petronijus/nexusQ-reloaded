@@ -5,11 +5,15 @@ import '../protocol/models.dart';
 import '../spotify/transport_rules.dart';
 import '../state/device_controller.dart';
 import '../theme/nexusq_theme.dart';
+import '../update/release.dart';
+import '../update/release_alerts.dart';
+import '../update/release_background.dart';
 import '../update/update_coordinator.dart';
 import '../spotify/spotify_player.dart';
 import '../widgets/device_sphere.dart';
 import '../widgets/eq_card.dart';
 import '../widgets/lights_section.dart';
+import '../widgets/whats_new.dart';
 import 'connect_gate.dart';
 import 'debug_log_screen.dart';
 import 'devices_screen.dart';
@@ -33,8 +37,12 @@ Color nameColorFor(LedTheme theme) {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.controller});
+  const HomeScreen({super.key, required this.controller, this.releaseStore});
   final DeviceController controller;
+
+  /// Where release alerts keep what they told the owner; the platform
+  /// preferences unless a test hands in its own.
+  final KeyValueStore? releaseStore;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -48,6 +56,68 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     });
+    _updates.addListener(_onRelease);
+    widget.controller.addListener(_onRelease);
+  }
+
+  UpdateCoordinator get _updates =>
+      UpdateCoordinator.forClient(widget.controller.client);
+
+  late final ReleaseAlerts _alerts = ReleaseAlerts(
+    widget.releaseStore ?? SharedPrefsStore(),
+  );
+
+  /// The release answer last acted on, so a rebuild does not act twice.
+  String? _releaseKey;
+
+  /// A release answer arrived (or the Q's identity did, which it needs):
+  /// note a pending release as seen here, so the background check does not
+  /// ring for what the owner is looking at, and show "what's new" once when
+  /// the Q now runs a release it was seen waiting for.
+  Future<void> _onRelease() async {
+    final status = _updates.release;
+    final id = widget.controller.state.deviceId;
+    if (status == null || id == null) return;
+    final key = '$id|${status.available?.version}|${status.current?.version}';
+    if (key == _releaseKey) return;
+    _releaseKey = key;
+    final name = widget.controller.state.deviceName;
+    try {
+      await _alerts.observe(
+        KnownDevice(id: id, name: name, host: '', port: 0),
+        status,
+      );
+      final shown = await _alerts.whatsNewToShow(id, status);
+      if (shown == null || !mounted) return;
+      await showWhatsNewSheet(
+        context,
+        deviceName: name,
+        release: shown,
+        installed: true,
+      );
+    } catch (e) {
+      AppLog.add('update', 'release alerts: $e', warn: true);
+    }
+  }
+
+  void _openRelease(BuildContext context, Release release) {
+    final controller = widget.controller;
+    showWhatsNewSheet(
+      context,
+      deviceName: controller.state.deviceName,
+      release: release,
+      installed: false,
+      onUpdate: () {
+        unawaited(_updates.installSystemUpdate());
+        // Settings narrates the install; the home screen's indicator leads
+        // back there too.
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SettingsScreen(client: controller.client),
+          ),
+        );
+      },
+    );
   }
 
   StreamSubscription<String>? _noticeSub;
@@ -79,6 +149,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _updates.removeListener(_onRelease);
+    widget.controller.removeListener(_onRelease);
     _noticeSub?.cancel();
     _eqArmed.dispose();
     super.dispose();
@@ -212,6 +284,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       reconnecting: s.reconnecting,
                       onRetry: controller.reconnectNow,
                     ),
+                  ListenableBuilder(
+                    listenable: _updates,
+                    builder: (context, _) {
+                      final rel = _updates.release?.available;
+                      if (rel == null || _updates.busy) {
+                        return const SizedBox.shrink();
+                      }
+                      return _ReleaseBanner(
+                        release: rel,
+                        onTap: () => _openRelease(context, rel),
+                      );
+                    },
+                  ),
                   Expanded(
                     child: ListView(
                       padding: const EdgeInsets.fromLTRB(
@@ -461,6 +546,69 @@ class _HomeScreenState extends State<HomeScreen> {
 /// spinner + "reconnecting" while the controller retries on its own, a wifi-off
 /// glyph once it is merely waiting (backgrounded), and a manual Retry that is
 /// always available — the screen stays alive instead of appearing frozen.
+/// "A new release is ready": one line under the app bar, the version and the
+/// headline, opening the "what's new" sheet with its Update button.
+class _ReleaseBanner extends StatelessWidget {
+  const _ReleaseBanner({required this.release, required this.onTap});
+  final Release release;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: NexusQColors.accent.withValues(alpha: 0.12),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: NexusQSpace.standardMargin,
+            vertical: 10,
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.auto_awesome,
+                size: 20,
+                color: NexusQColors.accent,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Nexus Q ${release.version} is ready',
+                      style: const TextStyle(
+                        color: NexusQColors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      release.headline,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: NexusQColors.dim,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Text(
+                "What's new",
+                style: TextStyle(color: NexusQColors.accent, fontSize: 13),
+              ),
+              const Icon(Icons.chevron_right, color: NexusQColors.accent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ConnectionBanner extends StatelessWidget {
   const _ConnectionBanner({required this.reconnecting, required this.onRetry});
   final bool reconnecting;

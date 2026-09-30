@@ -11,6 +11,7 @@ import 'screens/connect_gate.dart';
 import 'setup/setup_flow.dart';
 import 'setup/stock_assets.dart';
 import 'theme/nexusq_theme.dart';
+import 'update/release_background.dart';
 import 'spotify/spotify_auth.dart';
 
 /// Connection source, chosen at launch:
@@ -36,6 +37,13 @@ void main() async {
     ),
   );
   await StockAssets.init();
+  // Release alerts (PROTOCOL §12c): the periodic background ask of every
+  // remembered Q. Idempotent, and never allowed to keep the app from starting.
+  unawaited(
+    scheduleReleaseChecks().catchError(
+      (Object e) => debugPrint('release checks not scheduled: $e'),
+    ),
+  );
   NexusQClient? initial;
   if (_host.isNotEmpty) {
     initial = TcpClient(host: _host);

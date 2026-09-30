@@ -276,7 +276,36 @@ class MockClient implements NexusQClient {
           'name': 'Nexus Q (mock)',
           'model': 'steelhead',
           'serial': 'MOCK0001',
+          'id': 'nexusq_mock',
           'swVersion': 'dev',
+          'hostname': 'nexusq-mock',
+        };
+      case 'getUpdateStatus':
+        // The demo device waits for a release, so the card can be seen (and
+        // tested) without a Q.
+        return {
+          'id': 'nexusq_mock',
+          'checkedAt': 1790086400,
+          'available': {
+            'version': '2.0.0',
+            'date': '2026-10-01',
+            'headline': 'Quieter, a smarter ring, and one volume everywhere',
+            'items': [
+              {
+                'icon': 'power',
+                'title': 'Quiet when idle',
+                'text': 'The Q sleeps deeper when nothing plays.',
+              },
+              {
+                'icon': 'sound',
+                'title': 'One volume everywhere',
+                'text':
+                    'Spotify, AirPlay, the app and the dome move the same one.',
+              },
+            ],
+          },
+          'current': null,
+          'error': null,
         };
       case 'setVolume':
         _volume = (p['volume'] as num).round().clamp(0, 100);

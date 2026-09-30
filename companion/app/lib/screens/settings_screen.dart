@@ -7,7 +7,11 @@ import '../protocol/models.dart';
 import '../spotify/spotify_auth.dart';
 import '../theme/nexusq_theme.dart';
 import '../update/app_update.dart';
+import '../update/release.dart';
+import '../update/release_alerts.dart';
+import '../update/release_background.dart';
 import '../update/update_coordinator.dart';
+import '../widgets/whats_new.dart';
 import 'debug_log_screen.dart';
 import 'health_screen.dart';
 import 'service_log_screen.dart';
@@ -55,6 +59,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {});
   }
 
+  // --- release alerts (PROTOCOL §12c): null until read, or when the phone's
+  // preferences cannot be read (then the switch is not shown) ---
+  final ReleaseAlerts _alerts = ReleaseAlerts(SharedPrefsStore());
+  bool? _alertsOn;
+
+  /// The release this Q waits for, when its bridge has a release watch.
+  Release? get _releaseAvailable => _upd.release?.available;
+
+  Future<void> _loadAlerts() async {
+    try {
+      final on = await _alerts.enabled();
+      if (mounted) setState(() => _alertsOn = on);
+    } catch (e) {
+      AppLog.add('settings', 'release alerts: $e', warn: true);
+    }
+  }
+
+  Future<void> _setAlerts(bool on) async {
+    setState(() => _alertsOn = on);
+    try {
+      await _alerts.setEnabled(on);
+      if (on) await ReleaseNotifications.instance.requestPermission();
+    } catch (e) {
+      AppLog.add('settings', 'release alerts: $e', warn: true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -74,7 +105,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!_upd.busy) {
       _upd.checkUpdate();
       _upd.checkNexusUpdate();
+      _upd.refreshRelease();
     }
+    _loadAlerts();
   }
 
   @override
@@ -640,9 +673,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: Text(
                       _upd.installingSystem
                           ? 'Installing system update…'
-                          : (_upd.systemUpdateAvailable
-                                ? 'System update available'
-                                : 'System software'),
+                          : (_releaseAvailable != null
+                                ? 'Nexus Q ${_releaseAvailable!.version} is ready'
+                                : (_upd.systemUpdateAvailable
+                                      ? 'System update available'
+                                      : 'System software')),
                       style: const TextStyle(color: NexusQColors.white),
                     ),
                     subtitle: Text(
@@ -667,6 +702,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: _upd.checkSystemUpdate,
                           ),
                   ),
+                  // What the pending release brings, right above its button.
+                  if (!_upd.installingSystem && _releaseAvailable != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                      child: WhatsNewList(release: _releaseAvailable!),
+                    ),
+                  // The release this Q runs: its notes, on request.
+                  if (!_upd.installingSystem &&
+                      _releaseAvailable == null &&
+                      _upd.release?.current != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                        child: TextButton.icon(
+                          onPressed: () => showWhatsNewSheet(
+                            context,
+                            deviceName: _deviceName.isEmpty
+                                ? 'This Nexus Q'
+                                : _deviceName,
+                            release: _upd.release!.current!,
+                            installed: true,
+                          ),
+                          icon: const Icon(Icons.auto_awesome, size: 16),
+                          label: Text(
+                            "What's new in ${_upd.release!.current!.version}",
+                          ),
+                        ),
+                      ),
+                    ),
                   if (_upd.systemError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -716,7 +781,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     )
-                  else if (_upd.systemUpdateAvailable)
+                  else if (_upd.systemUpdateAvailable ||
+                      _releaseAvailable != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
@@ -731,6 +797,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
+
+            // Release alerts: the phone asks the Q in the background.
+            if (_alertsOn != null) ...[
+              const SizedBox(height: 10),
+              Card(
+                color: NexusQColors.surface,
+                child: SwitchListTile(
+                  value: _alertsOn!,
+                  onChanged: _setAlerts,
+                  secondary: Icon(
+                    _alertsOn!
+                        ? Icons.notifications_active_outlined
+                        : Icons.notifications_off_outlined,
+                    color: _alertsOn! ? NexusQColors.accent : NexusQColors.dim,
+                  ),
+                  title: const Text(
+                    'Tell me about new releases',
+                    style: TextStyle(color: NexusQColors.white),
+                  ),
+                  subtitle: const Text(
+                    'A notification when a new Nexus Q release is out. The Q '
+                    'checks by itself; this phone asks it every few hours '
+                    'while it is on the same WiFi.',
+                    style: TextStyle(color: NexusQColors.dim, fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
 
             // --- developer ---------------------------------------------------
             const SizedBox(height: 20),
