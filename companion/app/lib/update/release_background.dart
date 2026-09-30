@@ -69,6 +69,15 @@ Future<UpdateStatus?> fetchUpdateStatus(KnownDevice d) async {
   return null;
 }
 
+/// "Nexus Q 2.0.0 is ready", led by the Q's name when it has one of its own
+/// ("Kitchen: Nexus Q 2.0.0 is ready"), which tells two Qs apart without
+/// saying "Nexus Q" twice for a Q that was never renamed.
+String releaseAlertTitle(ReleaseAlert a) {
+  final what = 'Nexus Q ${a.release.version} is ready';
+  final name = a.device.name.trim();
+  return name.isEmpty || name == 'Nexus Q' ? what : '$name: $what';
+}
+
 class ReleaseNotifications {
   ReleaseNotifications._();
   static final instance = ReleaseNotifications._();
@@ -121,7 +130,7 @@ class ReleaseNotifications {
     await _plugin.show(
       // One notification per Q: a newer release replaces the older one.
       id: a.device.id.hashCode & 0x7fffffff,
-      title: '${a.device.name}: Nexus Q ${a.release.version} is ready',
+      title: releaseAlertTitle(a),
       body: a.release.headline,
       notificationDetails: const NotificationDetails(
         android: _channel,

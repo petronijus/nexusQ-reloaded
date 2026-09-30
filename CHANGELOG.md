@@ -100,6 +100,19 @@ is not part of it; it updates through its store.
   peak 88.8 °C under load, no failed unit, none of the four boot-log messages.
   The ring beat's three re-asserts every 30 s (`dark`, `brightness`, `mblink`)
   left nexusqd's render rate at 20.0/s, no-ops as intended.
+- **On Petr's phone** (Pixel 9 Pro Fold, 2026-09-30): the banner, the sheet and the
+  Settings card against the Prague Q ("perfektní"), and the background task posted
+  the notification for a test release while the app was closed. WorkManager will
+  not run the task before its first slot (15 min after it is scheduled), even when
+  forced with `cmd jobscheduler run -f`. **App 1.26.1+66**: the title said "Nexus Q:
+  Nexus Q 2.0.1 is ready" for a Q never renamed; it now names the Q only when it
+  has a name of its own. Built on the desktop with the key from 1Password
+  (`build-apk.sh`, below) and installed over the app.
+- **The app's signing key is in 1Password** ("nexusQ companion Android signing
+  key", the keystore the MacBook and the desktop already shared); `build-apk.sh`
+  fetches it to a private temp file and gradle signs debug and release with it,
+  so any machine with `op` builds an APK that updates the phone's app, and
+  `--release` refuses to run without it.
 - ⚠️ `workmanager_android` 0.10.9 still applies the Kotlin Gradle Plugin, which a
   future Flutter will refuse; check it before the next Flutter upgrade. The iOS
   half (Info.plist, AppDelegate) is written from the plugins' documentation and

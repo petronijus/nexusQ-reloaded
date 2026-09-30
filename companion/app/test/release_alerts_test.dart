@@ -204,6 +204,29 @@ void main() {
     });
   });
 
+  test('the notification names the Q only when it has a name of its own', () {
+    final rel = Release.fromJson(release('2.0.0'))!;
+    expect(
+      releaseAlertTitle(ReleaseAlert(kitchen, rel)),
+      'Kitchen: Nexus Q 2.0.0 is ready',
+    );
+    const plain = KnownDevice(id: 'B', name: 'Nexus Q', host: 'x', port: 1);
+    expect(
+      releaseAlertTitle(
+        const ReleaseAlert(
+          plain,
+          Release(
+            version: '2.0.0',
+            date: '',
+            headline: 'h',
+            items: [ReleaseItem(icon: 'new', title: 't', text: 'x')],
+          ),
+        ),
+      ),
+      'Nexus Q 2.0.0 is ready',
+    );
+  });
+
   test('the permission is asked for once', () async {
     final a = ReleaseAlerts(MemoryStore());
     expect(await a.firstPermissionAsk(), isTrue);
