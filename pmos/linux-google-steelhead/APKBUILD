@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=18
+pkgrel=19
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -88,6 +88,7 @@ source="
 	0057-ARM-dts-omap4-steelhead-MPU-and-CORE-states-belong-to-cpuidle.patch
 	0058-ARM-OMAP4-cpuidle-steelhead-deep-states-enabled-by-default.patch
 	0059-usb-gadget-u_audio-doze-a-capture-stream-of-pure-silence.patch
+	0060-pidfs-backport-PIDFD_INFO_SUPPORTED_MASK-and-the-coredump-signal-code.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -195,4 +196,5 @@ SKIP  0056-ARM-OMAP4-cpuidle-steelhead-runs-stock-C-state-table.patch
 SKIP  0057-ARM-dts-omap4-steelhead-MPU-and-CORE-states-belong-to-cpuidle.patch
 SKIP  0058-ARM-OMAP4-cpuidle-steelhead-deep-states-enabled-by-default.patch
 SKIP  0059-usb-gadget-u_audio-doze-a-capture-stream-of-pure-silence.patch
+SKIP  0060-pidfs-backport-PIDFD_INFO_SUPPORTED_MASK-and-the-coredump-signal-code.patch
 "
