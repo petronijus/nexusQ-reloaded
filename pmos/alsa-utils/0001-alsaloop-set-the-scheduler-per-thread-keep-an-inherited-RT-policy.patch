@@ -1,0 +1,84 @@
+From 5e9d4e3761236eda2aec1a13c9c70b492ee4615a Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 30 Sep 2026 13:23:57 +0200
+Subject: [PATCH] alsaloop: set the scheduler per thread, keep an inherited RT
+ policy
+
+setscheduler() used sched_getparam() and sched_setscheduler(), which
+POSIX defines per process. Linux schedules threads, and musl implements
+both as stubs that fail with ENOSYS, so on musl alsaloop never got
+real-time scheduling and logged "Scheduler getparam failed." at every
+start. Use pthread_getschedparam() and pthread_setschedparam() on the
+calling thread instead; setscheduler() runs in each job thread, so that
+is the thread it was always meant to change.
+
+With the request now effective, a thread that already runs under
+SCHED_FIFO or SCHED_RR keeps what it was given instead of being raised
+to the maximum Round Robin priority. Whoever started alsaloop under
+chrt or a service manager's CPUSchedulingPolicy= chose that priority
+relative to the rest of the system (IRQ threads, the sound server), and
+a loop at priority 99 outranks all of them.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ alsaloop/alsaloop.c | 33 ++++++++++++++++++++++++++++++---
+ 1 file changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/alsaloop/alsaloop.c b/alsaloop/alsaloop.c
+index b9748db..7ea3554 100644
+--- a/alsaloop/alsaloop.c
++++ b/alsaloop/alsaloop.c
+@@ -147,20 +147,47 @@ static void set_loop_time(struct loopback *loop, unsigned long loop_time)
+ 	loop->loop_limit = loop->capt->rate * loop_time;
+ }
+ 
++/*
++ * Ask for real-time scheduling for this thread, unless it already has it.
++ *
++ * The pthread calls act on the calling thread, which is what is meant here:
++ * setscheduler() runs in each job thread.  sched_getparam() and
++ * sched_setscheduler() are process-wide in POSIX, which Linux does not
++ * implement, and musl therefore provides them only as stubs that fail with
++ * ENOSYS: on musl alsaloop never got real-time scheduling, and warned
++ * "Scheduler getparam failed." at every start.
++ *
++ * A thread started under SCHED_FIFO or SCHED_RR (chrt, a service manager's
++ * CPUSchedulingPolicy=) keeps the policy and priority it was given: whoever
++ * chose them also chose what alsaloop may preempt, and the maximum priority
++ * requested below would outrank every other real-time task.
++ */
+ static void setscheduler(void)
+ {
+ 	struct sched_param sched_param;
++	int policy, err;
+ 
+-	if (sched_getparam(0, &sched_param) < 0) {
+-		logit(LOG_WARNING, "Scheduler getparam failed.\n");
++	err = pthread_getschedparam(pthread_self(), &policy, &sched_param);
++	if (err) {
++		logit(LOG_WARNING, "Scheduler getparam failed: %s\n", strerror(err));
++		return;
++	}
++#ifdef SCHED_RESET_ON_FORK
++	policy &= ~SCHED_RESET_ON_FORK;
++#endif
++	if (policy == SCHED_FIFO || policy == SCHED_RR) {
++		if (verbose)
++			logit(LOG_INFO, "Scheduler: keeping the inherited %s policy, priority %i\n",
++			      policy == SCHED_FIFO ? "FIFO" : "Round Robin", sched_param.sched_priority);
+ 		return;
+ 	}
+ 	sched_param.sched_priority = sched_get_priority_max(SCHED_RR);
+-	if (!sched_setscheduler(0, SCHED_RR, &sched_param)) {
++	err = pthread_setschedparam(pthread_self(), SCHED_RR, &sched_param);
++	if (!err) {
+ 		if (verbose)
+ 			logit(LOG_WARNING, "Scheduler set to Round Robin with priority %i\n", sched_param.sched_priority);
+ 		return;
+ 	}
+ 	if (verbose)
+ 		logit(LOG_INFO, "!!!Scheduler set to Round Robin with priority %i FAILED!\n", sched_param.sched_priority);
+ }
+-- 
+2.53.0
+

@@ -1,0 +1,112 @@
+# Maintainer: Petr Parkan Janda <petronijus@bastla.com>
+# Based on Alpine's main/alsa-utils (Leonardo Arena, Natanael Copa), at aports
+# 3308d2766277 (2026-07-05, "main/alsa-utils: upgrade to 1.2.16").
+#
+# alsa-utils, rebuilt with one patch — a straight override of Alpine's package.
+#
+# WHY: nexusq-uac2-in (the USB audio input bridge) logs "Scheduler getparam
+# failed." at every alsaloop start. alsaloop asks for real-time scheduling with
+# sched_getparam()/sched_setscheduler(), which POSIX defines per process and
+# musl implements as ENOSYS stubs, so the request has never worked on this image
+# and the warning is noise in every boot's journal. nexusq-uac2-in gives
+# alsaloop its priority itself (`chrt -f 10` under an RLIMIT_RTTIME), which is
+# the one that must stay in force.
+#
+# The patch (0001, written to go upstream) makes the request per thread through
+# pthread_getschedparam()/pthread_setschedparam(), which musl implements, and
+# keeps an inherited SCHED_FIFO/SCHED_RR policy instead of raising it. That
+# second half matters as much as the first: with a WORKING request and no such
+# rule, alsaloop would lift itself from our FIFO 10 to Round Robin 99, above the
+# IRQ threads and PulseAudio. tests/test_alsaloop_sched.py tests the patched
+# function on the host.
+#
+# Everything else is Alpine's build, flag for flag and patch for patch (their
+# four patches are vendored unchanged; the sums below are theirs), except the
+# -openrc subpackage with its initd/confd, dropped: this image boots systemd.
+#
+# ⚠️ THIS IS A VERSION-PINNED OVERRIDE, like pmos/speexdsp and
+# pmos/shairport-sync. apk picks the highest version across repos, so pkgrel is
+# far above Alpine's (theirs: 1.2.16-r0). That only holds while pkgver matches:
+# **if Alpine moves to a newer pkgver, their package wins again and the warning
+# comes back.** Re-base this aport (and re-vendor Alpine's patches) on any
+# upstream pkgver bump; docker-build.sh's rootfs SHIP CHECK reports which build
+# actually got installed.
+pkgname=alsa-utils
+pkgver=1.2.16
+# Alpine ships -r0. Kept far above it on purpose; see the warning above.
+pkgrel=100
+pkgdesc="Advanced Linux Sound Architecture (ALSA) utilities (Nexus Q build: alsaloop keeps its RT policy)"
+url="https://alsa-project.org/"
+arch="all"
+options="!check"  # No test suite, applets use ncurses / don't have --version
+license="GPL-2.0-or-later"
+makedepends="
+	alsa-lib-dev
+	autoconf
+	automake
+	fftw-dev
+	gettext-dev
+	libtool
+	ncurses-dev
+	pciutils-dev
+	xmlto
+	"
+depends="dialog alsa-ucm-conf"
+subpackages="$pkgname-dbg alsaconf::noarch $pkgname-doc $pkgname-systemd $pkgname-udev"
+source="https://alsa-project.org/files/pub/utils/alsa-utils-$pkgver.tar.bz2
+	alsaconf.patch
+	musl-locale.patch
+	musl-types.patch
+
+	329.patch
+	0001-alsaloop-set-the-scheduler-per-thread-keep-an-inherited-RT-policy.patch
+	"
+
+prepare() {
+	default_prepare
+	autoreconf -vfi
+}
+
+build() {
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--disable-nls \
+		--with-alsactl-lock-dir=/run/lock \
+		--with-udev-rules-dir=/usr/lib/udev/rules.d \
+		--with-systemdsystemunitdir=/usr/lib/systemd/system
+	make
+
+	# Gate: alsaloop must set the scheduler through the pthread API. The patch
+	# failing to apply already stops default_prepare; this catches a re-base
+	# that applies but leaves the process-wide calls in place. Only code lines:
+	# the patch's own comment names the calls it replaces.
+	if grep -nE '^[[:space:]]*[^[:space:]*/].*\bsched_(getparam|setscheduler)\(' alsaloop/alsaloop.c; then
+		echo "alsa-utils: alsaloop still uses the process-wide scheduler calls" >&2
+		return 1
+	fi
+	grep -q 'pthread_getschedparam(pthread_self()' alsaloop/alsaloop.c || {
+		echo "alsa-utils: alsaloop does not read its thread's scheduling policy" >&2
+		return 1
+	}
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+}
+
+alsaconf() {
+	depends="$pkgname=$pkgver-r$pkgrel bash"
+
+	amove usr/sbin/alsaconf
+}
+
+sha512sums="
+288c042f5acb8a7cf1b0a0c25327c74e0bce126124253bdb2d0dc2630b8bc80b5e5d694de97738d031377fd82d887db32af1c4b27c6d940357b318d0a3ef02cf  alsa-utils-1.2.16.tar.bz2
+f04155e1e391c7f36d44422c8e769bf9370117f6bbea6c0664e9858f7a676cc958e4260e4b4d226e71d0716f6be4e6fdd60f1d07cb7e9922fff378ceec01c47d  alsaconf.patch
+4b4b4d6406d57f592ecec9a79b5e401d1e1025e4f0b0d51ba233a5d2fcd1ce27ef336fda0242e7ff7d229d00428b7030d1d5789c9c306f824938366530eff6d9  musl-locale.patch
+ee74137d5bf431090a2603c87c94f19063d9a62921b3c6bc1f19317e006a7ec278b66da9ccfb1b64fa5da46852f6a84ac2511b9ce74969799d0fca4cd9b2bc8d  musl-types.patch
+f66015ef6500b5be7f7dde5900832bc2bab720c24402eb2e8f5ab83bf9eb340c579ef3b78ce71693ac74c18249c806111223c33a3ac55305d567b1bb2095ebb5  329.patch
+SKIP  0001-alsaloop-set-the-scheduler-per-thread-keep-an-inherited-RT-policy.patch
+"

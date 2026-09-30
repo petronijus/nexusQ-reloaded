@@ -64,7 +64,8 @@ for apkbuild in \
     "$SRC/pmos/nexusq-kernel-ota/APKBUILD" \
     "$SRC/pmos/nexusq-rootfs-ab/APKBUILD" \
     "$SRC/pmos/speexdsp/APKBUILD" \
-    "$SRC/pmos/shairport-sync/APKBUILD"; do
+    "$SRC/pmos/shairport-sync/APKBUILD" \
+    "$SRC/pmos/alsa-utils/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -452,6 +453,15 @@ mkdir -p "$SHAIRPORT_DIR"
 cp "$SRC/pmos/shairport-sync/APKBUILD"                    "$SHAIRPORT_DIR/"
 cp "$SRC"/pmos/shairport-sync/*.patch                     "$SHAIRPORT_DIR/"
 echo "  Installed: shairport-sync (no-idle-poll override -> main/shairport-sync)"
+
+# alsa-utils: the same kind of OVERRIDE — Alpine's build (their four patches,
+# vendored) plus one that makes alsaloop set its scheduler per thread and keep
+# the FIFO priority nexusq-uac2-in gives it. See pmos/alsa-utils/APKBUILD.
+ALSAUTILS_DIR="$PMAPORTS/main/alsa-utils"
+mkdir -p "$ALSAUTILS_DIR"
+cp "$SRC/pmos/alsa-utils/APKBUILD"                        "$ALSAUTILS_DIR/"
+cp "$SRC"/pmos/alsa-utils/*.patch                         "$ALSAUTILS_DIR/"
+echo "  Installed: alsa-utils (alsaloop scheduler override -> main/alsa-utils)"
 
 NEXUSQKOTA_DIR="$PMAPORTS/main/nexusq-kernel-ota"
 mkdir -p "$NEXUSQKOTA_DIR"
@@ -1477,6 +1487,43 @@ else
 fi
 
 echo ""
+echo "=== Phase 7c8: Build alsa-utils (override: alsaloop keeps its RT policy) ==="
+set +e
+# MUST run before Phase 8 for the same reason as speexdsp: nexusqd depends=
+# alsa-utils (arecord), so the rootfs would otherwise take Alpine's binary. The
+# APKBUILD gates on alsaloop no longer calling the process-wide scheduler API.
+pmbootstrap $_ucross build alsa-utils --arch armv7 --force 2>&1
+ALSAUTILS_RC=$?
+set -e
+echo "=== alsa-utils build exit code: $ALSAUTILS_RC ==="
+if [ $ALSAUTILS_RC -eq 0 ]; then
+    # pkgrel-EXACT, same reason as speexdsp. The -systemd and -udev subpackages
+    # go with it: the Q has both installed, and the OTA set carries all three.
+    _au_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/alsa-utils/APKBUILD" | head -1)
+    _au_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/alsa-utils/APKBUILD" | head -1)
+    for _au_pkg in alsa-utils alsa-utils-systemd alsa-utils-udev; do
+        _au_apk=$(find "$WORK/packages" -name "${_au_pkg}-${_au_pv}-r${_au_pr}.apk" -print -quit 2>/dev/null)
+        if [ -n "$_au_apk" ]; then
+            cp "$_au_apk" /tmp/output/ && echo "  Exported: $(basename "$_au_apk")"
+        else
+            echo "  FATAL: alsa-utils built but ${_au_pkg}-${_au_pv}-r${_au_pr}.apk is not under $WORK/packages."
+            echo "  Continuing would let the rootfs install a STALE alsa-utils from the warm repo."
+            exit 1
+        fi
+    done
+else
+    echo "  ##############################################################"
+    echo "  # alsa-utils (override) FAILED TO BUILD. The image would take"
+    echo "  # Alpine's build, whose alsaloop logs \"Scheduler getparam"
+    echo "  # failed.\" at every start. See pmos/alsa-utils/."
+    echo "  ##############################################################"
+    grep -n "ERROR\|error:\|FAILED\|alsaloop" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue: every fix is in the build, or it is not a fix."
+    exit 1
+fi
+
+echo ""
 echo "=== Phase 7e: Build the kernel CROSS-NATIVE (native x86_64 speed) ==="
 # The kernel is by far the most expensive package in the tree, and until now it was
 # compiled -- like everything else here -- under qemu-arm emulation, because every
@@ -1888,6 +1935,28 @@ print(f\"{p['start']} {p['size']} {ss}\")
                 echo "  # ALPINE'S build, not our override: its ALSA monitor will"
                 echo "  # wake the CPU 100x/s. See Phase 7c7 and the pin warning in"
                 echo "  # pmos/shairport-sync/APKBUILD."
+                echo "  ##########################################################" ;;
+        esac
+        # SHIP CHECK: and for the alsa-utils override (alsaloop's scheduler).
+        _ship_au="$(sudo awk -v RS="" -v FS="\n" '
+            { pkg = ""; ver = ""
+              for (i = 1; i <= NF; i++) {
+                  if ($i == "P:alsa-utils")          pkg = 1
+                  else if (substr($i, 1, 2) == "V:") ver = substr($i, 3)
+              }
+              if (pkg && ver) { print ver; exit } }' \
+            "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
+        case "${_ship_au:-}" in
+            *-r100)
+                echo "  SHIP CHECK: alsa-utils = $_ship_au (our alsaloop scheduler build)." ;;
+            "")
+                echo "  SHIP CHECK: alsa-utils not installed in the rootfs (?)." ;;
+            *)
+                echo "  ##########################################################"
+                echo "  # SHIP CHECK: alsa-utils = $_ship_au -- that is ALPINE'S"
+                echo "  # build, not our override: alsaloop will log \"Scheduler"
+                echo "  # getparam failed.\" at every start. See Phase 7c8 and the"
+                echo "  # pin warning in pmos/alsa-utils/APKBUILD."
                 echo "  ##########################################################" ;;
         esac
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"

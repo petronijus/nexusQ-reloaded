@@ -72,3 +72,12 @@ speexdsp
 # patch that stops the ALSA monitor thread polling every 10 ms. Unpublished, a box
 # in the field would keep Alpine's 5.1-r0 and its 100 wakeups/s.
 shairport-sync
+
+# The same kind of override (pmos/alsa-utils/APKBUILD): Alpine's build plus a
+# patch that makes alsaloop set its scheduler per thread and keep the FIFO
+# priority nexusq-uac2-in gives it. The Q also has the -systemd and -udev
+# subpackages installed, so all three travel together: one coherent build on a
+# unit, never r100 next to Alpine's r0.
+alsa-utils
+alsa-utils-systemd
+alsa-utils-udev
