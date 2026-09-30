@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=121
+pkgrel=123
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -132,6 +132,7 @@ source="
 	nq-healthd.c
 	nq-diag-snapshot
 	20-nexusq-journal-size.conf
+	20-nexusq-coredump.conf
 	nq-healthd.service
 	nexusq-wifi-watchdog
 	nexusq-wifi-watchdog.service
@@ -247,6 +248,11 @@ package() {
 	# after 10-postmarketos.conf. See the file's own header.
 	install -Dm644 "$srcdir"/20-nexusq-journal-size.conf \
 		"$pkgdir"/etc/systemd/journald.conf.d/20-nexusq-journal-size.conf
+
+	# Bound systemd-coredump, which runs from kernel r19 on (patch 0060). See
+	# the file's own header for the sizes.
+	install -Dm644 "$srcdir"/20-nexusq-coredump.conf \
+		"$pkgdir"/etc/systemd/coredump.conf.d/20-nexusq-coredump.conf
 
 	# Boot-log cleanup (cosmetic, no functional change):
 	#  - pam-base-auth + pam-base-session shadow /usr/lib/pam.d/base-{auth,session}
@@ -844,6 +850,7 @@ SKIP  unudhcpd.conf
 SKIP  nq-healthd.c
 SKIP  nq-diag-snapshot
 SKIP  20-nexusq-journal-size.conf
+SKIP  20-nexusq-coredump.conf
 SKIP  nq-healthd.service
 SKIP  nexusq-wifi-watchdog
 SKIP  nexusq-wifi-watchdog.service
