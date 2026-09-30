@@ -3430,6 +3430,342 @@ def start_setup_mode():
     return {"started": True}
 
 
+# --- Release watch: "a new Nexus Q release is out" (PROTOCOL §12c) -----------
+# The Q learns about a release on its own, so the app can tell its owner
+# without being opened. What a release IS comes from one small file published
+# with the OTA repo, release.json: its version, a short user-facing "what's
+# new" (a headline and a few items), and the version of each of our packages
+# in it. A release is PENDING when any of those packages is installed here at
+# a lower version, and CURRENT when none is. Only our releases count: Alpine's
+# daily base churn installs with the next update but never announces itself
+# (Petr, 2026-09-30).
+#
+# The check is deliberately small: one HTTPS GET of release.json with its ETag
+# (unchanged = a 304 with no body), then `apk info -v` and an `apk version -t`
+# per package that differs. No `apk update`, which would pull the edge indexes
+# (megabytes) every time. The state is kept in /var/lib/nexusq so a restart or
+# a reboot knows the release at once, without the network.
+RELEASE_URL = os.environ.get("NEXUSQ_RELEASE_URL", NEXUSQ_OTA_REPO + "/release.json")
+RELEASE_STATE_PATH = os.environ.get("NEXUSQ_RELEASE_STATE", "/var/lib/nexusq/release-status.json")
+RELEASE_FIRST_CHECK_S = 180  # after start: the network, and a boot, settle first
+RELEASE_CHECK_EVERY_S = 6 * 3600
+RELEASE_RETRY_S = 1800  # after a failed check
+RELEASE_REFRESH_MIN_S = 60  # a client's refresh within this of the last check gets that one
+RELEASE_MAX_BYTES = 64 * 1024
+RELEASE_SCHEMA = 1
+# Icons the app draws; anything else is shown as "new".
+RELEASE_ICONS = ("new", "sound", "speaker", "wifi", "bluetooth", "power", "lights", "music", "usb", "fix", "security")
+_RELEASE_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
+_RELEASE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _release_text(obj, key, limit):
+    v = obj.get(key)
+    if not isinstance(v, str) or not v.strip() or len(v) > limit:
+        raise ValueError(f"{key}: a non-empty string of at most {limit} characters")
+    return v.strip()
+
+
+def parse_release(obj):
+    """The release a manifest describes, or ValueError. The device checks what
+    it needs to show and to compare; scripts/release_manifest.py is the stricter
+    gate a manifest passes before it is ever published."""
+    if not isinstance(obj, dict) or obj.get("schema") != RELEASE_SCHEMA:
+        raise ValueError(f"not a schema {RELEASE_SCHEMA} release manifest")
+    version = obj.get("version")
+    if not isinstance(version, str) or not _RELEASE_VERSION.match(version):
+        raise ValueError("version: X.Y.Z")
+    date = obj.get("date")
+    if not isinstance(date, str) or not _RELEASE_DATE.match(date):
+        raise ValueError("date: YYYY-MM-DD")
+    items = obj.get("items")
+    if not isinstance(items, list) or not 1 <= len(items) <= 5:
+        raise ValueError("items: 1 to 5")
+    out_items = []
+    for it in items:
+        if not isinstance(it, dict):
+            raise ValueError("items: objects")
+        icon = it.get("icon")
+        out_items.append(
+            {
+                "icon": icon if icon in RELEASE_ICONS else "new",
+                "title": _release_text(it, "title", 40),
+                "text": _release_text(it, "text", 140),
+            }
+        )
+    pkgs = obj.get("packages")
+    if (
+        not isinstance(pkgs, dict)
+        or not pkgs
+        or not all(isinstance(k, str) and isinstance(v, str) and k and v for k, v in pkgs.items())
+    ):
+        raise ValueError("packages: {name: version}, not empty")
+    return {
+        "schema": RELEASE_SCHEMA,  # so the saved state parses again at the next start
+        "version": version,
+        "date": date,
+        "headline": _release_text(obj, "headline", 80),
+        "items": out_items,
+        "packages": dict(pkgs),
+    }
+
+
+def release_public(rel):
+    """What a client is shown of a release: everything but the package list."""
+    return {k: rel[k] for k in ("version", "date", "headline", "items")} if rel else None
+
+
+def release_pending(rel, installed, vcmp):
+    """The packages of `rel` installed here at a lower version, sorted.
+    `installed` maps name -> version; `vcmp(a, b)` answers "<", "=" or ">" the
+    way `apk version -t` does. A package the release lists but this unit does
+    not have is not pending: an upgrade does not install it."""
+    out = []
+    for name, want in sorted(rel["packages"].items()):
+        if name == _KERNEL_PKG:
+            continue  # nq-kernel-ota's payload: apk never installs it, so never "pending"
+        have = installed.get(name)
+        if have is not None and have != want and vcmp(have, want) == "<":
+            out.append(name)
+    return out
+
+
+def _apk_installed():
+    """name -> version of every installed package (`apk info -v`)."""
+    r = _apk("info", "-v", timeout=60)
+    if r.returncode != 0:
+        raise Err("unavailable", "apk info failed")
+    out = {}
+    for line in (r.stdout or "").splitlines():
+        spec = line.strip()
+        name = _pkg_name(spec)
+        if spec and name != spec:
+            out[name] = spec[len(name) + 1 :]
+    return out
+
+
+def _apk_vcmp(a, b):
+    """ "<", "=" or ">"; anything else raises. A failed comparison read as
+    "not newer" would call a release installed that is not."""
+    r = _apk("version", "-t", a, b, timeout=20)
+    out = (r.stdout or "").strip()
+    if out not in ("<", "=", ">"):
+        raise Err("unavailable", f"apk version -t {a} {b}: {out or r.returncode}")
+    return out
+
+
+def _release_fetch(url, etag, timeout=20):
+    """(status, body, etag): 200 with the body, or 304 when `etag` still holds.
+    Raises OSError / ValueError on anything else."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "nexusq-control"})
+    if etag:
+        req.add_header("If-None-Match", etag)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(RELEASE_MAX_BYTES + 1)
+            if len(body) > RELEASE_MAX_BYTES:
+                raise ValueError("release manifest too large")
+            return resp.status, body, resp.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            return 304, b"", etag
+        raise OSError(f"HTTP {e.code}") from None
+
+
+class UpdateLed:
+    """The mute LED's amber "update available" blink, owned in one place.
+
+    Two things can light it: a pending release (the release watch) and a
+    pending daemon update (checkNexusUpdate). An install holds it dark while
+    it runs. nexusqd keeps the blink in memory only, so `reassert` sends the
+    current answer again (after a check, and so after a nexusqd restart)."""
+
+    def __init__(self, send):
+        self.send = send
+        self.lock = threading.Lock()
+        self.reasons = set()
+        self.held = False
+
+    def _apply(self):
+        self.send("mblink 255 140 0" if self.reasons and not self.held else "mblink stop")
+
+    def set(self, reason, on):
+        with self.lock:
+            (self.reasons.add if on else self.reasons.discard)(reason)
+            self._apply()
+
+    def hold(self, held):
+        with self.lock:
+            self.held = held
+            self._apply()
+
+    def reassert(self):
+        with self.lock:
+            self._apply()
+
+
+class ReleaseWatch:
+    """The published release against what this unit runs, checked on a timer.
+
+    Injected so the logic is testable without a network or apk:
+      fetch(url, etag) -> (status, body, etag)   (_release_fetch)
+      installed()      -> {name: version}         (_apk_installed)
+      vcmp(a, b)       -> "<" / "=" / ">"         (_apk_vcmp)
+      busy()           -> an install is running   (skip: apk is mid-transaction)
+      notify(view)     -> broadcast updateStatusChanged
+      led(on)          -> the mute LED's release reason"""
+
+    def __init__(self, fetch, installed, vcmp, busy, notify, led, url=None, path=None, clock=time.time, device_id=None):
+        self.device_id = device_id or _device_id
+        self.fetch, self.installed, self.vcmp = fetch, installed, vcmp
+        self.busy, self.notify, self.led = busy, notify, led
+        self.url = url or RELEASE_URL
+        self.path = path or RELEASE_STATE_PATH
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.check_lock = threading.Lock()
+        self.wake = threading.Event()
+        self.st = self._load()
+        self.pending = None  # packages behind the release, None = not evaluated
+        self.error = None
+        self._last_key = None
+
+    def _load(self):
+        fresh = {"checkedAt": None, "etag": None, "release": None}
+        try:
+            with open(self.path) as f:
+                saved = json.load(f)
+            at, etag, rel = saved.get("checkedAt"), saved.get("etag"), saved.get("release")
+            if (at is not None and (isinstance(at, bool) or not isinstance(at, (int, float)))) or (
+                etag is not None and not isinstance(etag, str)
+            ):
+                raise ValueError("bad field types")
+            return {"checkedAt": at, "etag": etag, "release": parse_release(rel) if rel is not None else None}
+        except Exception:  # noqa: BLE001 - no state yet, or any damage: start fresh
+            # A bad file must never stop the bridge from starting (this runs in
+            # Bridge.__init__); the next check rebuilds it.
+            return fresh
+
+    def _save(self):
+        try:
+            write_json_through(self.path, self.st)
+        except OSError as e:
+            log("release watch: could not save the state:", e)
+
+    def view(self):
+        with self.lock:
+            rel, pending = self.st["release"], self.pending
+            return {
+                # Whose answer this is: the app files it under this id, and drops
+                # an answer from a unit that is not the one it asked (an address
+                # can move to another Q).
+                "id": self.device_id(),
+                "checkedAt": int(self.st["checkedAt"]) if self.st["checkedAt"] else None,
+                "available": release_public(rel) if rel and pending else None,
+                "current": release_public(rel) if rel and pending == [] else None,
+                "error": self.error,
+            }
+
+    @staticmethod
+    def _key(v):
+        a, c = v["available"], v["current"]
+        return (a and a["version"], c and c["version"], v["error"])
+
+    def _publish(self):
+        v = self.view()
+        self.led(bool(v["available"]))
+        key = self._key(v)
+        if self._last_key is not None and key != self._last_key:
+            self.notify(v)
+        self._last_key = key
+        return v
+
+    def evaluate(self):
+        """Compare the known release with what is installed; no network."""
+        if self.busy():
+            return self.view()
+        rel = self.st["release"]
+        pending = None
+        if rel:
+            try:
+                pending = release_pending(rel, self.installed(), self.vcmp)
+            except (Err, OSError, subprocess.SubprocessError) as e:
+                log("release watch: cannot read the installed versions:", e)
+        with self.lock:
+            self.pending = pending
+        return self._publish()
+
+    def check(self, min_age=0):
+        """Fetch the manifest, then evaluate. Returns the view.
+
+        One check at a time: a caller that arrives while one is running waits
+        for it and gets its answer. With `min_age`, a check made less than that
+        many seconds ago is answered from, instead of fetching again (what a
+        client's refresh gets, so a LAN client cannot drive fetches)."""
+        with self.check_lock:
+            last = self.st["checkedAt"]
+            if min_age and last and 0 <= self.clock() - last < min_age:
+                return self.view()
+            return self._check()
+
+    def _check(self):
+        try:
+            status, body, etag = self.fetch(self.url, self.st["etag"] if self.st["release"] else None)
+            if status == 200:
+                rel = parse_release(json.loads(body.decode("utf-8")))
+                with self.lock:
+                    self.st["release"], self.st["etag"] = rel, etag
+            with self.lock:
+                self.st["checkedAt"] = self.clock()
+                self.error = None
+            self._save()
+        except Exception as e:  # noqa: BLE001 - any failure is this check's, not the bridge's
+            # A malformed manifest, bad JSON, a nesting too deep to parse, a
+            # truncated HTTP answer: keep the last good release and say why
+            # this check did not count.
+            log("release watch: check failed:", e)
+            with self.lock:
+                self.error = str(e)[:200] or type(e).__name__
+        return self.evaluate()
+
+    def request_check(self):
+        self.wake.set()
+
+    def _due_in(self):
+        """Seconds to the next check, from the last one: at least
+        RELEASE_FIRST_CHECK_S, at most RELEASE_CHECK_EVERY_S. The Q's RTC does not
+        keep time: until NTP, the clock can sit weeks behind the saved
+        checkedAt, and an unclamped `last + 6 h - now` would put the next check
+        weeks away. A last check "in the future" is due now."""
+        last, now = self.st["checkedAt"], self.clock()
+        if not last or last > now:
+            return RELEASE_FIRST_CHECK_S
+        return max(RELEASE_FIRST_CHECK_S, last + RELEASE_CHECK_EVERY_S - now)
+
+    def run(self):
+        # What the last run knew is shown at once, before any network.
+        try:
+            self.evaluate()
+        except Exception as e:  # noqa: BLE001 - never kill the thread
+            log("release watch: first evaluation failed:", e)
+        try:
+            wait = self._due_in()
+        except Exception:  # noqa: BLE001 - never kill the thread
+            wait = RELEASE_FIRST_CHECK_S
+        while True:
+            self.wake.wait(wait)
+            self.wake.clear()
+            try:
+                v = self.check()
+                wait = RELEASE_RETRY_S if v["error"] else RELEASE_CHECK_EVERY_S
+            except Exception as e:  # noqa: BLE001 - never kill the thread
+                log("release watch: check crashed:", e)
+                wait = RELEASE_RETRY_S
+
+
 class Bridge:
     def __init__(self):
         self.pulse = Pulse()
@@ -3455,6 +3791,18 @@ class Bridge:
             notify=lambda v: self.broadcast("diagnosticsChanged", v),
         )
         self.stats = ControlStats()
+        # The mute LED's "update available" blink, and the release watch that
+        # is one of its two reasons (PROTOCOL §12c). Its thread is started by
+        # main(), so a test can build a Bridge without one.
+        self.update_led = UpdateLed(nexusqd_send)
+        self.release = ReleaseWatch(
+            fetch=_release_fetch,
+            installed=_apk_installed,
+            vcmp=_apk_vcmp,
+            busy=_nexus_install_lock.locked,
+            notify=lambda v: self.broadcast("updateStatusChanged", v),
+            led=lambda on: self.update_led.set("release", on),
+        )
         # The volume and mute per output, kept in the persist store.
         self.volumes = VolumeStore()
         # The connection chime (Spotify, Bluetooth, AirPlay, Roon).
@@ -3502,9 +3850,7 @@ class Bridge:
         # The LED ring switch + schedule; its scheduler thread is started by
         # main(), like the other restore threads, so a test can build a Bridge
         # without one.
-        self.ring = Ring(
-            on_change=lambda snap: self.broadcast("ringChanged", snap), on_beat=lambda: self.brightness.reassert()
-        )
+        self.ring = Ring(on_change=lambda snap: self.broadcast("ringChanged", snap), on_beat=self._ring_beat)
         # The brightness slider (persistent since r53) and ambient brightness.
         self.brightness = Brightness(
             on_change=lambda snap: self.broadcast("ambientChanged", snap),
@@ -3811,7 +4157,13 @@ class Bridge:
                 "model": "steelhead",
                 "room": DEVICE_ROOM,
                 "serial": _serial(),
+                # The key a client remembers this unit by (r62; see _device_id).
+                "id": _device_id(),
                 "swVersion": _sw_version(),
+                # The name the Q answers to on the LAN as <hostname>.local: the
+                # app keeps it to reach the Q from the background when the
+                # address it last used has moved (r62, PROTOCOL §12c).
+                "hostname": socket.gethostname(),
             }, []
         if method in ("setVolume", "adjustVolume", "setMuted", "toggleMute"):
             return self._volume_cmd(method, p)
@@ -4021,10 +4373,7 @@ class Bridge:
             if _nexus_install_lock.locked():
                 return {"packages": [], "updateAvailable": False, "busy": True, "repo": NEXUSQ_OTA_REPO}, []
             r = check_nexus_update()
-            if r.get("updateAvailable"):
-                nexusqd_send("mblink 255 140 0")  # amber blink on the mute LED
-            else:
-                nexusqd_send("mblink stop")  # nothing pending -> steady mute LED
+            self.update_led.set("daemons", bool(r.get("updateAvailable")))  # amber blink while pending
             return r, []
         if method == "installNexusUpdate":
             # Refuse a second concurrent install (flaky-link resend) rather than
@@ -4032,7 +4381,7 @@ class Bridge:
             if not _nexus_install_lock.acquire(blocking=False):
                 raise Err("busy", "an update is already installing")
             try:
-                nexusqd_send("mblink stop")  # clear the "update available" blink
+                self.update_led.hold(True)  # no "available" blink while installing
                 prog = _OtaProgress().start()  # determinate ring bar
                 try:
                     r = install_nexus_update()
@@ -4042,11 +4391,13 @@ class Bridge:
                     raise
                 prog.finish()  # snap the bar to 100%
                 time.sleep(0.35)
+                self.update_led.set("daemons", False)
                 theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
                 self._finish_nexus_update(r.get("upgraded", []), theme_cmds)
                 return r, []
             finally:
                 _nexus_install_lock.release()
+                self._after_install()
 
         # --- full-system OTA (the "apt upgrade", PROTOCOL §12b) --------------
         # Distinct from the daemon track above: checkSystemUpdate does NOT blink
@@ -4069,7 +4420,7 @@ class Bridge:
             if not _nexus_install_lock.acquire(blocking=False):
                 raise Err("busy", "an update is already installing")
             try:
-                nexusqd_send("mblink stop")
+                self.update_led.hold(True)  # no "available" blink while installing
                 # A full-system upgrade is slow and of UNKNOWN length (downloads +
                 # triggers like mkinitfs), so the determinate bar would ease to its
                 # cap and sit there looking frozen. Use the INDETERMINATE spinner
@@ -4080,6 +4431,7 @@ class Bridge:
                 except Err:
                     self._led_restore_theme()
                     raise
+                self.update_led.set("daemons", False)  # the system track installs the daemons too
                 theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
                 self._finish_system_update(
                     r.get("daemons", []), r.get("rebootRecommended", False), theme_cmds, r.get("systemdChanged", False)
@@ -4087,8 +4439,37 @@ class Bridge:
                 return r, []
             finally:
                 _nexus_install_lock.release()
+                self._after_install()
+
+        # --- release watch: is a new Nexus Q release out? (PROTOCOL §12c) ----
+        if method == "getUpdateStatus":
+            refresh = p.get("refresh", False)
+            if not isinstance(refresh, bool):
+                raise Err("bad_request", "refresh must be a bool")
+            return (self.release.check(min_age=RELEASE_REFRESH_MIN_S) if refresh else self.release.view()), []
 
         raise Err("unknown_method", method)
+
+    def _ring_beat(self):
+        """The ring's 30 s beat: re-assert what nexusqd keeps only in memory,
+        so a nexusqd restart (a crash, the watchdog, an update) gets it back
+        within 30 s. nexusqd treats an unchanged value as a no-op."""
+        self.brightness.reassert()
+        self.update_led.reassert()
+
+    def _after_install(self):
+        """An install ended (either way): compare the release with what is
+        installed NOW, and only then let the LED speak again, so it never
+        relights for a release the install just brought. Off-thread: the reply
+        goes first. A bridge the install restarts evaluates when it starts."""
+
+        def _do():
+            try:
+                self.release.evaluate()
+            finally:
+                self.update_led.hold(False)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _led_restore_theme(self):
         """Put the ring back to the user's current colour theme (or auto)."""
@@ -4113,6 +4494,7 @@ class Bridge:
                         pass
             if restarted_nexusqd:
                 time.sleep(1.5)  # let the ring daemon come back before we drive it
+                self.update_led.reassert()  # its blink was in the old process's memory
             nexusqd_send("set 0 255 0")  # green success
             time.sleep(2.5)
             for c in theme_cmds:
@@ -4152,6 +4534,7 @@ class Bridge:
                     pass
             if restarted_nexusqd:
                 time.sleep(1.5)
+                self.update_led.reassert()  # its blink was in the old process's memory
             nexusqd_send("set 0 255 0")  # green success (this also stops the spinner)
             time.sleep(2.5)
             if reboot:
@@ -4603,6 +4986,23 @@ class Err(Exception):
         self.message = message
 
 
+DEVICE_MAC_PATH = os.environ.get("NEXUSQ_MAC_PATH", "/sys/class/net/wlan0/address")
+
+
+def _device_id(path=None):
+    """The unit's stable identity: `nexusq_<factory WiFi MAC>`, the node_id
+    nexusq-mqtt gives Home Assistant. The MAC is pinned by kernel patch 0043,
+    so it survives reboots and reflashes; `serial` cannot serve, as the Q's
+    device tree carries none and every unit reads "unknown". None when the
+    WiFi interface is not up to ask."""
+    try:
+        with open(path or DEVICE_MAC_PATH) as f:
+            mac = f.read().strip().replace(":", "").lower()
+    except OSError:
+        return None
+    return f"nexusq_{mac}" if re.fullmatch(r"[0-9a-f]{12}", mac) else None
+
+
 def _serial():
     for path in ("/sys/firmware/devicetree/base/serial-number", "/proc/device-tree/serial-number"):
         try:
@@ -4928,6 +5328,7 @@ def main():
     threading.Thread(target=bridge.diag.run, daemon=True).start()
     threading.Thread(target=bridge.ring.run, daemon=True).start()
     threading.Thread(target=bridge.brightness.run, daemon=True).start()
+    threading.Thread(target=bridge.release.run, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -226,8 +226,9 @@ blind to nexusqd's writes — see the bug note below).
 > **The mute LED blinking amber is NOT a fault — it means "OTA update available".**
 > Since `nexusqd` **r11** / `nexusq-control` **r20** (device OTA, PROTOCOL §12) the
 > bridge drives two LED states that a sweep must not mis-read: the dedicated **mute
-> LED blinks amber** (`mblink 255 140 0`) when a daemon OTA is pending (a *persistent*
-> indicator, cleared only by installing or `mblink stop`), and the **ring shows a
+> LED blinks amber** (`mblink 255 140 0`) when a daemon OTA or, since `nexusq-control`
+> **r64**, a published release (PROTOCOL §12c) is pending (a *persistent* indicator,
+> cleared only by installing it), and the **ring shows a
 > determinate `progress` bar** (then a brief green `set 0 255 0`) **during an
 > install** — a transient, expected state, not a stuck frame. The install restarts the
 > daemons (incl. `nexusq-control`), so a **brief `nexusqd`/bridge restart right after

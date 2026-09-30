@@ -297,7 +297,7 @@ secret on the device or in the app); `none`, or a bridge that omits the field
 ### Device info
 | Method | params | result |
 |---|---|---|
-| `getDeviceInfo` | — | `{ name, model:"steelhead", room, serial, swVersion }` |
+| `getDeviceInfo` | — | `{ name, model:"steelhead", room, serial, id, swVersion, hostname }` — from r64: `id` is the unit's stable identity, `nexusq_<factory WiFi MAC>` (the node_id Home Assistant knows it by; `serial` reads `unknown` on every Q, the device tree carries none), `null` only when the WiFi interface does not exist; `hostname` is the name the Q answers to as `<hostname>.local` |
 | `startSetupMode` | — | `{ started: true }` — arms `/run/nexusq-setup.force` and starts `nexusq-setupd` (BT re-provisioning; see §8). Errors `unavailable`. |
 
 ## 5. Reserved for later (not v1)
@@ -936,10 +936,10 @@ overlay) and resuming the moment that ends.
 
 | Phase | LED |
 |---|---|
-| Update available (`checkNexusUpdate`) | mute LED **blinks amber** — `mblink 255 140 0` (else `mblink stop` when nothing is pending) |
-| Installing (`installNexusUpdate`) | mute-LED blink cleared (`mblink stop`); the RING shows a **determinate progress bar** — `progress <pct>` in `#0099CC`, eased toward a soft cap while `apk upgrade` runs, snapped to 100 % on finish |
+| Update available | mute LED **blinks amber** — `mblink 255 140 0` — while a daemon update (`checkNexusUpdate`) **or** a release (§12c) is pending; `mblink stop` when neither is (control r64+; before, only `checkNexusUpdate` drove it). The bridge re-asserts it on the ring's 30 s beat, so a restarted nexusqd gets it back; nexusqd r26+ treats a repeat as a no-op |
+| Installing (`installNexusUpdate`) | mute-LED blink held dark for the install; the RING shows a **determinate progress bar** — `progress <pct>` in `#0099CC`, eased toward a soft cap while `apk upgrade` runs, snapped to 100 % on finish |
 | Success | ring flashes **green** (`set 0 255 0`), held ~2.5 s, then back to the theme |
-| Failure | ring restored straight to the theme; the mute LED is not re-lit |
+| Failure | ring restored straight to the theme; once the install has ended the bridge compares the release with what is installed again, and the mute LED blinks again if something is still pending |
 
 These use two nexusqd LED primitives (r11), also listed in the §4 LED-ring table:
 - **`progress <pct> [R G B]`** — a determinate ring bar: lights `pct`% of the 32-LED
@@ -982,6 +982,92 @@ success (which also stops the spin). The daemon track (§12.3) keeps the determi
 — its upgrade is small and short. Guarded by the same install lock (`Err "busy"`); the
 install can drop the app link (bridge restart / reboot) — that is **expected**, success
 is confirmed by reconnect + re-check.
+
+### 12c. Release watch — "a new release is out" (`nexusq-control` r64+)
+
+The Q learns about a new **release** on its own, so the app can tell its owner
+without being opened (Petr, 2026-09-30). Only **our releases** count: the
+Alpine/pmOS base packages change almost daily on edge and install with the next
+update, but never announce themselves. The phone app is not part of this; it
+updates through its store.
+
+**What a release is.** Every publish of the OTA repo writes
+`<repo>/release.json` (`scripts/release_manifest.py`): the hand-written notes of
+`pmos/release-notes.json` plus the version of each of our packages the signed
+index carries (the kernel payload excluded).
+
+```json
+{ "schema": 1, "version": "2.0.0", "date": "2026-10-01",
+  "headline": "Quieter, a smarter ring, one volume, and it tells you what's new",
+  "items": [ { "icon": "power", "title": "Quiet when idle",
+               "text": "The Q sleeps deeper when nothing plays, …" } ],
+  "packages": { "nexusqd": "0.1.0-r26", "nexusq-control": "0.1.0-r64", … } }
+```
+
+Limits: `headline` ≤ 80 characters, 1–5 `items`, `title` ≤ 40, `text` ≤ 140.
+`icon` is one of `new` `sound` `speaker` `wifi` `bluetooth` `power` `lights`
+`music` `usb` `fix` `security`; the device shows any other as `new`.
+
+A release is **pending** on a unit when one of its packages is installed there at
+a lower version (`apk version -t`), and **current** when none is. A package the
+release lists but the unit does not have is not pending: an upgrade would not
+install it.
+
+**When.** 3 minutes after the bridge starts, then every **6 hours** (30 minutes
+after a failed check). A check is one HTTPS GET with the last ETag (an unchanged
+manifest answers 304 with no body) and `apk info -v`; no `apk update`. The state
+is kept in `/var/lib/nexusq/release-status.json`, so after a restart or a reboot
+the answer is there at once, without the network. After every install, and at
+every start, the release is compared with what is installed again.
+
+| Method | Params | Result |
+|---|---|---|
+| `getUpdateStatus` | `{ refresh?: bool }` | status object (below). `refresh: true` checks now (network, up to ~20 s) instead of answering from the last check. |
+
+Event: **`updateStatusChanged`** (the status object), pushed when the pending or
+the current release or the error changes; a check that finds the same answer
+pushes nothing.
+
+```json
+{ "id": "nexusq_f88fca2048e1", "checkedAt": 1790086400,
+  "available": { "version": "2.0.0", "date": "2026-10-01", "headline": "…", "items": [ … ] },
+  "current": null,
+  "error": null }
+```
+
+- `available`: the published release while it is pending here, else `null`.
+- `current`: the published release once this unit runs it (so a client can show
+  "what's new" after the update), else `null`. Both `null` = no release known.
+- `error`: why the last check did not count (no network, a malformed manifest),
+  else `null`. The last good release stays in force.
+- `checkedAt`: epoch seconds of the last successful check, `null` before one.
+- Installing a pending release is the System track's `installSystemUpdate`
+  (§12b), which carries our packages with it.
+
+- `id`: the answering unit's `getDeviceInfo` id, so a client that remembers
+  several Qs files the answer under the right one (and drops an answer from a
+  Q that took over a remembered address).
+- A `refresh` within 60 s of the last check answers from that check, and two
+  checks never run at once: a LAN client cannot drive fetches.
+- GitHub Pages caches `release.json` and the APKINDEX separately (about 10
+  min): right after a publish, an install can find nothing new while the
+  release already reads as pending. It settles by itself at the next check.
+
+Errors: `bad_request` (`refresh` not a bool).
+
+**Mute LED.** The amber "update available" blink (§12.3) now has two reasons, a
+pending release and a pending daemon update (`checkNexusUpdate`); it blinks while
+either holds and is held dark while an install runs.
+
+**Draft notes.** `pmos/release-notes.json` carries `"draft": true` until the
+release is approved; a publish meanwhile (a hotfix) keeps the release.json
+already on gh-pages, and `package-release.sh` refuses a draft.
+
+**Publishing rule.** `publish-ota-repo.sh` refuses to publish a manifest with the
+version already on gh-pages but other packages: a unit that installed that
+release would read it as pending again, with notes it has seen. A change of
+packages is a new version with its own notes. `package-release.sh` refuses a
+release whose `pmos/release-notes.json` is for another version.
 
 ## 13. MQTT telemetry provisioning — v1.12.x (dev)
 
