@@ -7,10 +7,11 @@ Description=Nexus Q MQTT health telemetry publisher
 # never baked into the (public) image. Provision /etc/nexusq/mqtt.json (0600)
 # and `systemctl restart nexusq-mqtt` (Condition* is only checked at start).
 ConditionPathExists=/etc/nexusq/mqtt.json
-# IMPORTANT: no After=/Wants= ordering on other nexusq services or
-# network-online — an After= on an enabled peer forms the boot ordering cycle
-# that made systemd DELETE the start job (see nexusq-control.service), and the
-# daemon's reconnect loop already rides out a not-yet-up network or broker.
+# No After=/Wants= on other nexusq services or network-online: nothing here
+# needs them. The reconnect loop rides out a not-yet-up network or broker, and
+# says nothing about it for the first minute (LinkReport in the daemon). And
+# network-online.target means nothing here: NetworkManager-wait-online.service
+# is installed but nothing pulls it in, so the target is reached at once.
 
 [Service]
 ExecStart=/usr/bin/nexusq-mqtt

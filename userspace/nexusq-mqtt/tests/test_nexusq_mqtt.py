@@ -930,5 +930,51 @@ class TestVolumeFromControl(unittest.TestCase):
         self.assertIsNone(MOD.volume_from_control())
 
 
+class TestLinkReport(unittest.TestCase):
+    """The reconnect loop's log lines: quiet while the network arrives at boot,
+    one line per outage after that, every loss of an established link."""
+
+    def test_boot_before_the_network_is_quiet(self):
+        link = MOD.LinkReport(started=100.0)
+        dns = OSError(-3, "Try again")
+        self.assertIsNone(link.failed(106.0, dns))  # the 2026-09-30 boot: DNS not up yet
+        self.assertIsNone(link.failed(116.0, dns))
+        self.assertEqual(link.connected(121.0), "connected (attempt 3, 21 s after start)")
+
+    def test_first_connect_says_plain_connected(self):
+        self.assertEqual(MOD.LinkReport(started=0.0).connected(1.0), "connected")
+
+    def test_a_broker_down_at_boot_is_reported_after_the_grace(self):
+        link = MOD.LinkReport(started=0.0, grace_s=60)
+        refused = ConnectionRefusedError(111, "Connection refused")
+        self.assertIsNone(link.failed(30.0, refused))
+        self.assertEqual(link.failed(70.0, refused), "broker not reachable: [Errno 111] Connection refused")
+        self.assertIsNone(link.failed(130.0, refused))  # said once, not every retry
+
+    def test_an_established_link_that_breaks_is_always_reported(self):
+        link = MOD.LinkReport(started=0.0)
+        link.connected(1.0)
+        self.assertEqual(link.failed(500.0, MOD.MqttError("PINGRESP timeout")), "connection lost: PINGRESP timeout")
+        self.assertEqual(link.connected(505.0), "connected")  # back at the first retry: nothing to add
+        self.assertEqual(
+            link.failed(900.0, MOD.MqttError("broker closed connection")), "connection lost: broker closed connection"
+        )
+
+    def test_an_outage_is_one_line_until_the_error_changes_and_its_end_says_how_long(self):
+        link = MOD.LinkReport(started=0.0)
+        link.connected(1.0)
+        link.failed(1000.0, MOD.MqttError("broker closed connection"))
+        refused = ConnectionRefusedError(111, "Connection refused")
+        self.assertEqual(link.failed(1005.0, refused), "broker not reachable: [Errno 111] Connection refused")
+        self.assertIsNone(link.failed(1015.0, refused))
+        self.assertIsNone(link.failed(1035.0, refused))
+        timeout = TimeoutError("timed out")
+        self.assertEqual(link.failed(1075.0, timeout), "broker not reachable: timed out")
+        self.assertEqual(link.connected(1135.0), "connected (broker was not reachable for 130 s, 4 attempts)")
+        # and the next outage is reported afresh
+        link.failed(2000.0, MOD.MqttError("socket lost"))
+        self.assertEqual(link.failed(2005.0, refused), "broker not reachable: [Errno 111] Connection refused")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2314,6 +2314,60 @@ class VolumeLink:
 # --------------------------------------------------------------------------
 
 
+class LinkReport:
+    """What the reconnect loop says about the broker link, and when.
+
+    The unit starts with no ordering on the network (see the unit file), so at
+    boot the first attempts meet a resolver or a WiFi link that is not up yet
+    ("[Errno -3] Try again"). That is the network arriving, not the link
+    breaking, and was logged as "connection lost". So:
+
+    - a failure before the first connect, within `grace_s` of the start, says
+      nothing; the connect says how many attempts it took;
+    - a failure to connect is "broker not reachable", said once per outage and
+      again only when the error changes; the connect that ends it says how long
+      the outage was;
+    - a failure of an established link is "connection lost", every time.
+    """
+
+    GRACE_S = 60
+
+    def __init__(self, started, grace_s=GRACE_S):
+        self.started = started
+        self.grace_s = grace_s
+        self.ever_connected = False
+        self.up = False
+        self.attempts = 0  # failed connects since the link was last up
+        self.down_since = None  # first failed connect of this outage
+        self.said = None  # the error last reported for this outage
+
+    def connected(self, now):
+        msg = "connected"
+        if not self.ever_connected and self.attempts:
+            msg += f" (attempt {self.attempts + 1}, {now - self.started:.0f} s after start)"
+        elif self.said is not None:
+            msg += f" (broker was not reachable for {now - self.down_since:.0f} s, {self.attempts} attempts)"
+        self.ever_connected = self.up = True
+        self.attempts = 0
+        self.down_since = self.said = None
+        return msg
+
+    def failed(self, now, err):
+        if self.up:
+            self.up = False
+            return f"connection lost: {err}"
+        self.attempts += 1
+        if self.down_since is None:
+            self.down_since = now
+        if not self.ever_connected and now - self.started < self.grace_s:
+            return None
+        text = str(err)
+        if text == self.said:
+            return None
+        self.said = text
+        return f"broker not reachable: {text}"
+
+
 def _on_sigterm(signum, frame):
     _STOP.set()
 
@@ -2344,6 +2398,7 @@ def run():
     win = Windows()  # rolling histories for the 1 h residency windows
     backoff = 5
     client = None
+    link = LinkReport(time.monotonic())
 
     def safe_publish(topic, payload, retain=False):
         """For the side threads: the main loop owns reconnects, so a publish
@@ -2409,7 +2464,7 @@ def run():
                 will_payload="offline",
             )
             client.connect()
-            log("connected")
+            log(link.connected(time.monotonic()))
             backoff = 5
             client.on_message = on_message
             if ROON_ENABLED:
@@ -2446,7 +2501,9 @@ def run():
                     client.maintain()
                     time.sleep(1)
         except (MqttError, OSError) as e:
-            log("connection lost:", e)
+            said = link.failed(time.monotonic(), e)
+            if said:
+                log(said)
             if client is not None:
                 client.close()
                 client = None
