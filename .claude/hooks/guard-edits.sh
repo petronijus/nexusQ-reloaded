@@ -75,7 +75,7 @@ while IFS=$'\t' read -r kind path; do
     continue
   fi
   # Everything below guards the repo's own files against being written.
-  [[ "$kind" != R ]] && $inside || continue
+  if [[ "$kind" == R ]] || ! $inside; then continue; fi
   case "$base" in
     *.lock | package-lock.json | pnpm-lock.yaml | go.sum)
       decide deny "$rel is a lockfile; change the manifest (pubspec.yaml, Podfile) and let the package manager rewrite it." ;;

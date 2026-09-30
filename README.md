@@ -185,8 +185,8 @@ docker run --rm --privileged -v "$PWD:/src:ro" \
 ```
 
 One build at a time: the work volume is single-writer. Working on the code
-itself — `just check`, the tests, the git hooks, the toolchain — is
-[docs/development.md](docs/development.md).
+itself — `just check` (formatting, analyzers, docs, unit tests), the tests,
+the git hooks, the toolchain — is [docs/development.md](docs/development.md).
 
 It builds the kernel (mainline 6.18.48 + **44 patches** in `kernel/patches/`), the
 device daemons (`nexusqd` · `nexusq-control` · `nexusq-btagent` · `nexusq-setupd` ·

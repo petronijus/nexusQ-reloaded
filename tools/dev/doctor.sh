@@ -3,6 +3,8 @@
 # fix for anything missing. Exit 1 when something `just check` needs is wrong;
 # what only the full gate or the image build needs is a warning.
 # Plain bash 3.2 (macOS /bin/bash) compatible.
+# `check && ok … || bad …` is if/else here: ok and warn only print.
+# shellcheck disable=SC2015
 set -uo pipefail
 
 # Formatter output changes between releases, so these are exact: two machines
@@ -30,8 +32,8 @@ if has ktlint; then
 else
   bad "ktlint missing" "$pkg ktlint"
 fi
-has python3 && ok "python3 $(python3 -c 'import sys; print(sys.version.split()[0])') (Claude Code hooks)" \
-  || bad "python3 missing (the Claude Code hooks need it)" "$pkg python3"
+has python3 && ok "python3 $(python3 -c 'import sys; print(sys.version.split()[0])') (Claude Code hooks, docs check)" \
+  || bad "python3 missing (the Claude Code hooks and the docs check need it)" "$pkg python3"
 
 echo "Toolchain"
 if has uv; then

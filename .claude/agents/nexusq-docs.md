@@ -69,7 +69,9 @@ Our docs:
   lights, lift off" and §1d is the one-time bootloader unlock — do not let either
   regress to the pre-2026-09-16 wording.
 - **HANDOFF.md** — the living cross-session handoff. Keep the "current state /
-  what works / what's broken / next steps" honest.
+  what works / what's broken / next steps" honest. `just lint-docs` skips it (its
+  dated session entries are history), so check the paths and commands in its
+  standing header yourself.
 - **PLAN.md** — roadmap/milestones, FORWARD-LOOKING. Tick off what shipped; adjust
   what's next. A completed item does not accumulate as a full ✅-DONE essay here:
   collapse it to a short ✅ line + date + a pointer to its CHANGELOG entry / docs/
@@ -127,9 +129,18 @@ separately, not part of this repo's docs.
   documented dead-end is later disproven, **go back and mark it disproven** rather
   than quietly dropping it — the correction is the more useful record of the two.
 
+- **Run `just lint-docs` after editing — it must pass.** It proves the recipes,
+  links, heading anchors, repo paths and `@imports` the docs name (not whether the
+  prose is true; that part is yours). A finding in a living doc is a doc bug: fix
+  the doc (`git log --follow`, `git ls-files` find where the thing went). A whole
+  doc that records history goes to `EXCLUDE` in `tools/dev/docs-check.py`; a
+  reference that is right in context gets reworded or `<!-- docs-check: ignore -->`.
+  Never exclude a living doc to make it pass.
+
 ## 3. Output
 Return a tight list: each doc you changed and the one-line reason, plus any NEW
 docs/ note you created, and anything you deliberately left alone (with why). If a
 doc claims something you found to be false but couldn't fix without behaviour
 changes, flag it for the caller. Keep it to the ledger of changes — the caller
-wants to know the docs are now true, not a re-narration of the work.
+wants to know the docs are now true, not a re-narration of the work. Say whether
+`just lint-docs` passes.

@@ -8,7 +8,9 @@ Project configuration lives in `.claude/` (committed). What it does for you:
   - every file you write — with the edit tools or from the shell (`sed -i`,
     `>`, heredocs) — goes through `tools/dev/format.sh`: Python and Dart are
     reformatted, Kotlin fixed, shell run through shellcheck; a complaint it
-    cannot fix comes back to you;
+    cannot fix comes back to you (a Python import you just added is kept for
+    the edit that uses it; `just fmt` and the pre-commit hook still drop it if
+    it stays unused);
   - writing key material (`private/access/`, WiFi profiles outside `pmos/`, `*.rsa`,
     `.nexus_pw`, keystores), generated files and lockfiles is refused, from
     the shell too, and so is a shell command that prints key material;

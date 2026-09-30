@@ -31,8 +31,8 @@ doctor:
 
 # ── fast lane (≲ 1 min, no device, no container, no build) ───────────────
 
-# Formatting, static analysis and every unit test that needs no build
-check: fmt-check lint test-py test-c test-dart test-sh
+# Formatting, static analysis, the docs check and every unit test that needs no build
+check: fmt-check lint lint-docs test-py test-c test-dart test-sh
 
 # Format every source file in place
 fmt:
@@ -45,6 +45,10 @@ fmt-check:
 # Static analysis beyond the formatters: the companion app's analyzer
 lint:
     cd companion/app && flutter analyze --fatal-infos
+
+# Docs name only recipes, files, headings and imports that exist
+lint-docs:
+    tools/dev/docs-check.py
 
 # Python unit tests: the daemons, device tools, diag scripts and repo tripwires
 test-py:

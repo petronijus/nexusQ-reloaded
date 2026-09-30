@@ -24,6 +24,7 @@ hook runs the fast lane on every push.
 | ktlint | 1.8.0 | its fixes change between releases |
 | ruff | 0.16.9 (`tools/dev/format.sh`, fetched by uvx) | formatter output changes between releases |
 | Python | 3.14 via uv | the device runs Alpine's 3.14; the host tests run the same minor |
+| python3 | ≥ 3.9 | the Claude Code hooks and the docs check (standard library only) |
 | shellcheck | ≥ 0.10 | `source-path=SCRIPTDIR` and reasons after directives |
 | e2fsprogs | any | the OTA-parity and A/B suites build ext4 images (`mkfs.ext4 -d`, `debugfs`) |
 | cc, make, libpulse headers | any | Linux: the C unit tests build on the host. macOS: they build in an Alpine container (the daemons use Linux APIs), so Docker is part of the fast lane there |
@@ -57,9 +58,10 @@ just setup
 
 | Recipe | Runs | When |
 |---|---|---|
-| `just check` | `fmt-check`, `lint`, `test-py`, `test-c`, `test-dart`, `test-sh` (~25 s) | pre-push hook; Claude Code Stop hook |
+| `just check` | `fmt-check`, `lint`, `lint-docs`, `test-py`, `test-c`, `test-dart`, `test-sh` (~25 s) | pre-push hook; Claude Code Stop hook |
 | `just fmt-check` | ruff format + lint, `dart format`, ktlint, shellcheck, `just --fmt` | |
 | `just lint` | `flutter analyze --fatal-infos` | |
+| `just lint-docs` | `tools/dev/docs-check.py`: every `just` recipe, relative link, heading anchor, repo path in inline code and `@import` the docs name exists; AGENTS.md and CLAUDE.md within 200 lines. `HANDOFF.md` and the dated notes are history and excluded | pre-commit hook, `just check` |
 | `just test-py` | every `*/tests/test_*.py` suite with `python -m unittest` on Python 3.14 | |
 | `just test-c` | `make test` in nexusqd, nq-healthd, nexusq-alsa-vol (`tools/dev/test-c.sh`: host cc on Linux, Alpine elsewhere) | |
 | `just test-dart` | `flutter test` in `companion/app` | |
@@ -93,7 +95,7 @@ flash or `apk upgrade`, and the full diagnostic sweep (the nexusq-diag agent).
 
 | Hook | Does |
 |---|---|
-| pre-commit | formats staged files and re-stages them; gitleaks scans the staged diff |
+| pre-commit | formats staged files and re-stages them; gitleaks scans the staged diff; the docs check |
 | commit-msg | Conventional Commits, subject ≤ 72 characters; also accepts `autosync(<branch>): …` |
 | pre-push | `just check` |
 
@@ -137,3 +139,4 @@ The one-off conversion to ruff, `dart format` and ktlint (2026-09-29) is in
 | `mkfs.ext4: command not found` on macOS | `brew install e2fsprogs` (keg-only; `test-shell.sh` finds it). |
 | The docker lane says Docker is not running | Start Docker Desktop (macOS) or `systemctl start docker`. |
 | A `# needs: docker` suite runs in the host lane | The marker must be in the suite's first five lines. |
+| `docs-check` names a path or recipe that is right in context (another repo's file, a future file in a plan) | write the reference so it cannot be misread, or put `<!-- docs-check: ignore -->` on that line (above a code fence: the whole block); docs that record history go to `EXCLUDE` in `tools/dev/docs-check.py` |

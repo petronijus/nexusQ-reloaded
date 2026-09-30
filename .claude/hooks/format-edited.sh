@@ -14,7 +14,7 @@ while IFS=$'\t' read -r kind path; do
 done < <(printf '%s' "$input" | python3 "$(dirname "$0")/tool_paths.py")
 ((${#files[@]})) || exit 0
 
-if ! out="$("$root/tools/dev/format.sh" "${files[@]}" 2>&1)"; then
+if ! out="$("$root/tools/dev/format.sh" --edit "${files[@]}" 2>&1)"; then
   printf 'Formatting %s reported problems it could not fix:\n%s\n' "${files[*]}" "$out" >&2
   exit 2
 fi

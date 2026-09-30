@@ -16,6 +16,10 @@ pre-commit:
       stage_fixed: true
     - name: secrets
       run: gitleaks git --pre-commit --staged --no-banner --redact
+    - name: docs
+      # No glob: renaming a file or a recipe breaks docs the commit never
+      # touches. The whole run takes well under a second.
+      run: tools/dev/docs-check.py
 
 commit-msg:
   jobs:

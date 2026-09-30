@@ -57,7 +57,7 @@ before changing it — they hold the measurements the code was built on.
 |---|---|
 | `just setup` | install Python 3.14 for the tests, the git hooks, blame's ignore list, the app's packages; run the doctor |
 | `just doctor` | check this machine against the pinned toolchain, print every fix |
-| `just check` | fast lane (~25 s): formatting and linters, analyzer, Python, C, Dart and host shell tests |
+| `just check` | fast lane (~25 s): formatting and linters, analyzer, docs check, Python, C, Dart and host shell tests |
 | `just ci` | full gate: `check`, the docker shell suites, the ALSA integration test, the Android build (and iOS on macOS) |
 | `just fmt` | format everything (`tools/dev/format.sh`) |
 | `just test-py` / `test-c` / `test-dart` / `test-sh` / `test-sh-docker` | one lane |
@@ -88,7 +88,7 @@ scripts/       build, release, flashing and diagnostic helpers; scripts/diag/ th
 tests/         repo-level tripwires (aport source lists, copies that must stay identical)
 reverse-eng/   ground truth extracted from the stock firmware (gitignored, not redistributable)
 private/       the personal overlay: access, stock firmware blobs (gitignored, its own repo)
-tools/dev/     formatter, shell test runner, commit-msg check, toolchain doctor
+tools/dev/     formatter, docs check, shell test runner, commit-msg check, toolchain doctor
 docs/          the dated engineering record, one note per finding
 ```
 
