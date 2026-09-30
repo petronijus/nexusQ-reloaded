@@ -30,33 +30,66 @@ static int fails;
 static void sh(const char *c) { if (system(c)) {} }
 static void put(const char *p, const char *v) { FILE *f = fopen(p, "w"); if (f) { fputs(v, f); fclose(f); } }
 
-static void procstat(long long user, long long sys, long long idle, long long intr, long long procs)
+static void procstat_n(long long user, long long nice, long long sys, long long idle, long long intr, long long procs)
 {
     char b[512];
     snprintf(b, sizeof b,
-             "cpu  %lld 0 %lld %lld 5 0 0 0 0 0\n"
+             "cpu  %lld %lld %lld %lld 5 0 0 0 0 0\n"
              "cpu0 1 0 1 1 0 0 0 0 0 0\n"
              "intr %lld 0 0 17 0 4\n"
              "ctxt 999\nbtime 1\nprocesses %lld\nprocs_running 1\n",
-             user, sys, idle, intr, procs);
+             user, nice, sys, idle, intr, procs);
     put(TEST_PROCSTAT, b);
+}
+
+static void procstat(long long user, long long sys, long long idle, long long intr, long long procs)
+{
+    procstat_n(user, 0, sys, idle, intr, procs);
 }
 
 static void test_cpu_sample(void)
 {
-    long long busy, forks, irqs;
+    long long busy, nice, forks, irqs;
     long hz = sysconf(_SC_CLK_TCK);
     procstat(100, 50, 1000, 5000, 300);
-    cpu_sample(&busy, &forks, &irqs);
-    CHECK(busy == -1 && forks == -1 && irqs == -1);      /* first sample: a gap */
+    cpu_sample(&busy, &nice, &forks, &irqs);
+    CHECK(busy == -1 && nice == -1 && forks == -1 && irqs == -1);   /* first sample: a gap */
     procstat(103, 52, 1400, 5120, 307);                  /* 5 ticks busy, 400 idle */
-    cpu_sample(&busy, &forks, &irqs);
+    cpu_sample(&busy, &nice, &forks, &irqs);
     CHECK(busy == 5 * 1000 / hz);
+    CHECK(nice == 0);
     CHECK(forks == 7);
     CHECK(irqs == 120);
     procstat(1, 1, 1, 1, 1);                             /* counters went backwards */
-    cpu_sample(&busy, &forks, &irqs);
-    CHECK(busy == -1 && forks == -1 && irqs == -1);
+    cpu_sample(&busy, &nice, &forks, &irqs);
+    CHECK(busy == -1 && nice == -1 && forks == -1 && irqs == -1);
+}
+
+/* nice_ms: the niced part of busy_ms, which ignore_nice_load keeps at 350 MHz */
+static void test_nice_share(void)
+{
+    long long busy, nice, forks, irqs;
+    long hz = sysconf(_SC_CLK_TCK);
+    procstat_n(100, 40, 50, 1000, 1, 1);
+    cpu_sample(&busy, &nice, &forks, &irqs);
+    procstat_n(102, 70, 51, 1100, 1, 1);                 /* 30 niced of 33 busy ticks */
+    cpu_sample(&busy, &nice, &forks, &irqs);
+    CHECK(busy == 33 * 1000 / hz);
+    CHECK(nice == 30 * 1000 / hz);
+}
+
+/* an event names its wall clock: t_mono restarts at every boot */
+static void test_event_wall(void)
+{
+    FILE *f = tmpfile();
+    emit_event(f, 7537, "2026-09-29T23:37:02Z", "warn", "vdd_mismatch", "x %d", 1);
+    rewind(f);
+    char line[256] = {0};
+    CHECK(fgets(line, sizeof line, f) != NULL);
+    CHECK(strstr(line, "\"t_mono\":7537") != NULL);
+    CHECK(strstr(line, "\"wall\":\"2026-09-29T23:37:02Z\"") != NULL);
+    CHECK(strstr(line, "\"msg\":\"x 1\"") != NULL);
+    fclose(f);
 }
 
 static void cpustat(const char *dir, long long usec)
@@ -151,6 +184,8 @@ int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     test_cpu_sample();
+    test_nice_share();
+    test_event_wall();
     test_unit_sample();
     test_control_stats();
     test_nexusqd_counters();

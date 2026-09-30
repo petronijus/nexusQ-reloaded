@@ -440,7 +440,11 @@ static int nexusqd_responds(void)
  * spent. The last comes from each unit's cgroup cpu.stat, which also counts
  * the children the unit waited for, so the bridge's `pactl` calls land on the
  * bridge. All of them per interval, `{}`/-1 on a first sample or a reset: an
- * honest gap, like opp_ms. */
+ * honest gap, like opp_ms.
+ * nice_ms (device r124) is the niced share of busy_ms. The conservative
+ * governor runs with ignore_nice_load=1 (nexusq-cpufreq-tune), so niced work
+ * is meant to stay at the lowest OPP; a reader judging whether the governor
+ * responded to load has to take it out (nq-health-report). */
 #ifndef PROC_STAT
 #define PROC_STAT "/proc/stat"
 #endif
@@ -450,23 +454,25 @@ static int nexusqd_responds(void)
 #define CG_SYS CG_ROOT "/system.slice/"
 #define CG_APP CG_ROOT "/user.slice/user-10000.slice/user@10000.service/app.slice/"
 
-static long long prev_busy = -1, prev_forks = -1, prev_irqs = -1;
+static long long prev_busy = -1, prev_nice = -1, prev_forks = -1, prev_irqs = -1;
 
-static void cpu_sample(long long *busy_ms, long long *forks, long long *irqs)
+static void cpu_sample(long long *busy_ms, long long *nice_ms, long long *forks, long long *irqs)
 {
-    *busy_ms = *forks = *irqs = -1;
+    *busy_ms = *nice_ms = *forks = *irqs = -1;
     FILE *f = fopen(PROC_STAT, "re");
     if (!f)
         return;
-    long long busy = -1, fk = -1, iq = -1;
+    long long busy = -1, nice = -1, fk = -1, iq = -1;
     char *line = NULL;
     size_t cap = 0;
     while (getline(&line, &cap, f) > 0) {
         long long u, n, sy, id, io, hi, si, st;
         if (!strncmp(line, "cpu ", 4)
             && sscanf(line + 4, "%lld %lld %lld %lld %lld %lld %lld %lld",
-                      &u, &n, &sy, &id, &io, &hi, &si, &st) == 8)
+                      &u, &n, &sy, &id, &io, &hi, &si, &st) == 8) {
             busy = u + n + sy + hi + si + st;
+            nice = n;
+        }
         else if (!strncmp(line, "intr ", 5))
             iq = atoll(line + 5);            /* the first number is the total */
         else if (!strncmp(line, "processes ", 10))
@@ -480,11 +486,14 @@ static void cpu_sample(long long *busy_ms, long long *forks, long long *irqs)
         hz = 100;
     if (busy >= 0 && prev_busy >= 0 && busy >= prev_busy)
         *busy_ms = (busy - prev_busy) * 1000 / hz;
+    if (*busy_ms >= 0 && nice >= 0 && prev_nice >= 0 && nice >= prev_nice)
+        *nice_ms = (nice - prev_nice) * 1000 / hz;   /* a part of busy_ms, or a gap with it */
     if (fk >= 0 && prev_forks >= 0 && fk >= prev_forks)
         *forks = fk - prev_forks;
     if (iq >= 0 && prev_irqs >= 0 && iq >= prev_irqs)
         *irqs = iq - prev_irqs;
     prev_busy = busy;
+    prev_nice = nice;
     prev_forks = fk;
     prev_irqs = iq;
 }
@@ -1206,7 +1215,11 @@ static enum led_verdict led_judge(struct led_watch *w, long long stall, int dist
     return LED_QUIET;
 }
 
-static void emit_event(FILE *ev, long long mono, const char *sev,
+/* t_mono restarts with every boot and events.jsonl outlives boots, so an event
+ * also carries the wall clock (device r124): without it a reader cannot tell
+ * which boot an event belongs to, and a diag of today's boot once blamed it
+ * for a vdd_mismatch from two nights before. */
+static void emit_event(FILE *ev, long long mono, const char *wall, const char *sev,
                        const char *kind, const char *fmt, ...)
 {
     if (!ev)
@@ -1217,8 +1230,8 @@ static void emit_event(FILE *ev, long long mono, const char *sev,
     vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
     jstr(msg, esc, sizeof esc);
-    fprintf(ev, "{\"t_mono\":%lld,\"sev\":\"%s\",\"kind\":\"%s\",\"msg\":\"%s\"}\n",
-            mono, sev, kind, esc);
+    fprintf(ev, "{\"t_mono\":%lld,\"sev\":\"%s\",\"kind\":\"%s\",\"msg\":\"%s\",\"wall\":\"%s\"}\n",
+            mono, sev, kind, esc, wall);
     fflush(ev);
 }
 
@@ -1292,8 +1305,8 @@ int main(int argc, char **argv)
                       cst_armed, sizeof cst_armed);
         long long qos_us = qos_limit_us();
 
-        long long busy_ms, forks, irqs;
-        cpu_sample(&busy_ms, &forks, &irqs);
+        long long busy_ms, nice_ms, forks, irqs;
+        cpu_sample(&busy_ms, &nice_ms, &forks, &irqs);
         /* Per-unit CPU and nexusqd's counters once a minute, not every 5 s:
          * the unit map is ~500 bytes, and at every sample it would rotate
          * health.jsonl (4 MB) twice a night, losing the start of an
@@ -1460,7 +1473,8 @@ int main(int argc, char **argv)
         /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it.
          * Fields are only ever APPENDED (cstate_*, qos_us since device r106; busy_ms,
          * forks, irqs, unit_us, nq_renders, nq_ctl, ambient_wakes, tap_fixes
-         * since r119 -- unit_us only on every 12th sample, see above). */
+         * since r119 -- unit_us only on every 12th sample, see above; nice_ms
+         * since r124). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -1488,7 +1502,7 @@ int main(int argc, char **argv)
                 "\"qos_us\":%lld,"
                 "\"busy_ms\":%lld,\"forks\":%lld,\"irqs\":%lld,%s%s%s"
                 "\"nq_renders\":%lld,\"nq_ctl\":%lld,"
-                "\"ambient_wakes\":%lld,\"tap_fixes\":%lld}\n",
+                "\"ambient_wakes\":%lld,\"tap_fixes\":%lld,\"nice_ms\":%lld}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
@@ -1499,7 +1513,7 @@ int main(int argc, char **argv)
                 busy_ms, forks, irqs,
                 *unit_us ? "\"unit_us\":" : "", unit_us, *unit_us ? "," : "",
                 nq_renders, nq_ctl,
-                amb_wakes, tap_fixes);
+                amb_wakes, tap_fixes, nice_ms);
         fflush(dst);
 
         if (once)
@@ -1507,7 +1521,7 @@ int main(int argc, char **argv)
 
         /* --- anomaly events: on transition/threshold, never every sample --- */
         if (nq_alive && !nq_resp && prev_nq_resp)
-            emit_event(ev, mono, "crit", "nexusqd_hang",
+            emit_event(ev, mono, wall, "crit", "nexusqd_hang",
                        "nexusqd PID %ld alive but control socket unresponsive (state=%s, progress=%d)",
                        nq_pid, nq_state, nq_progress);
         prev_nq_resp = nq_resp;
@@ -1517,12 +1531,12 @@ int main(int argc, char **argv)
          * NOT a fault. */
         switch (led_judge(&led_watch, led_stall, !nq_resp || !nq_progress)) {
         case LED_FROZEN:
-            emit_event(ev, mono, "crit", "led_frozen",
+            emit_event(ev, mono, wall, "crit", "led_frozen",
                        "LED frame unchanged for %lld samples with distressed nexusqd (resp=%d progress=%d) - ring/AVR/nexusqd hang",
                        led_stall, nq_resp, nq_progress);
             break;
         case LED_STATIC:
-            emit_event(ev, mono, "info", "led_static",
+            emit_event(ev, mono, wall, "info", "led_static",
                        "LED frame unchanged for %lld samples, nexusqd healthy (resp=1) - screensaver/blanked",
                        led_stall);
             break;
@@ -1530,14 +1544,14 @@ int main(int argc, char **argv)
             break;
         }
         if (vdd_report)
-            emit_event(ev, mono, "warn", "vdd_mismatch",
+            emit_event(ev, mono, wall, "warn", "vdd_mismatch",
                        "vdd_mpu %lld uV vs expected %lld uV at %lld kHz, confirmed after 50 ms", vdd, vexp, vr.freq);
         if (prev_pstore >= 0 && pstore > prev_pstore)
-            emit_event(ev, mono, "crit", "pstore_new",
+            emit_event(ev, mono, wall, "crit", "pstore_new",
                        "%ld new crash dump(s) in " PSTORE, pstore - prev_pstore);
         prev_pstore = pstore;
         if (derr_new > 0)
-            emit_event(ev, mono, "warn", "dmesg_err",
+            emit_event(ev, mono, wall, "warn", "dmesg_err",
                        "%lld new kernel error line(s)", derr_new);
 
         tickn++;
