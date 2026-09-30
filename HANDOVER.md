@@ -8,46 +8,17 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Any machine — 2026-09-30 morning: read the third overnight soak (USB audio doze) BEFORE ~13:00
-
-The Prague Q runs its r17 kernel with patch 0059's FIRST version (before the
-review fixes) built as r17 and loaded by hand (doze 5000/50, see the section
-below), TV box as the USB host, nothing
-playing, both sinks suspended. **Do not reboot it before the read**: a reboot
-loads the stock module and ends the experiment. Soak from **00:40 CEST**.
-health.jsonl holds ~13.4 h (two 4 MB files at the r120 schema).
-
-```sh
-NQ_WIFI_HOST=192.168.20.246 scripts/diag/nq-collect
-scripts/diag/nq-health-report nq-captures/latest --since=2026-09-30T00:40 \
-    --until=<first activity: the TV box's app in nexusq-control's log, or an ssh>
-```
-
-Compare with the second soak (same host, no doze; CHANGELOG under r120):
-- interrupts 2983/s, busy 4.98 %, C3 15.2 % of idle, peak 71.0 °C / avg 55.5 °C;
-- `nexusq-uac2-in` 3.87 % of a core.
-
-What this one answers: does the doze hold all night (musb ~100/s in every
-hour, no kernel message, `nq-uac2-silence` never flapping), what C3 and the
-temperature settle at, and whether anything in the idle path changed (the
-gadget capture keeps 48 kHz). Record the result in CHANGELOG and delete this
-section.
-
 ## Any machine — 2026-09-30: USB audio doze — kernel 6.18.48-r18 + device r121 are NOT built or published
 
 Kernel patch 0059 (u_audio doze, `docs/2026-09-30-usb-audio-doze.md`) is in
 the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
 **device r121** switches it on. Neither is built or published.
 
-- **The Prague Q runs patch 0059's first version by hand**: built as r17 (same
-  vermagic) and loaded with `insmod` into its r17 kernel on 2026-09-30 with
-  `doze_idle_ms=5000`, `doze_probe_ms=50`. The module on disk is the stock
-  one: a reboot undoes it. The fixed version (the review's findings) has not
-  run on a unit yet.
-- After the soak, before shipping: build the fixed version as r17 the same way,
-  swap it in, and check dmesg through the paths the TV never takes -- the
-  gadget unbound and rebound while dozing (`echo "" > .../g1/UDC`, then the
-  gadget script), and a Linux host playing silence for >5 s and closing.
+- **The Prague Q runs patch 0059's fixed version by hand** since 2026-09-30
+  ~10:10: built as r17 (same vermagic), loaded with `insmod` into its r17
+  kernel, `doze_idle_ms=5000`, `doze_probe_ms=50`. The module on disk is the
+  stock one: a reboot undoes it. Verified: doze, unbind/rebind while dozing
+  (clean dmesg), and the run-time switch-off.
 - To ship: build the kernel (r18) and the image or the OTA packages; publish
   both (the kernel goes to the units through `nexusq-kernel-ota`, device r121
   through `apk upgrade`). A unit that gets r121 before r18 logs once that

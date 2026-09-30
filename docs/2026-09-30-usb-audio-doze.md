@@ -106,10 +106,22 @@ stop does nothing in a configuration without capture (its timer is never set
 up); the request that starts a doze is held back only after its data is
 copied out; and `doze_idle_ms=0` wakes a dozing stream.
 
-Not exercised on a unit yet, each to be checked with dmesg: the fixed version
-itself; a host that plays zeros for more than 5 s and then closes the stream
-(a Linux host with PipeWire does exactly that); the cable pulled while dozing;
-the gadget unbound and rebound while the timer is armed.
+The fixed version, on the Prague Q the same morning (built as r17 like the
+first, dozing at 100 musb interrupts/s):
+
+- unbinding the gadget while dozing (`echo "" > .../g1/UDC`), which runs the
+  same `u_audio_stop_capture()` as a host closing the stream or a pulled
+  cable: the first version logged `request ... not queued` for ep6in (the
+  feedback) and twice for ep3out, seen on the unit just before the swap; the
+  fixed version logs nothing, and after `nexusq-usb-gadget.sh` rebinds, the
+  TV re-enumerates and the stream dozes again 5 s later;
+- `doze_idle_ms=0` while dozing: 2007 interrupts/s at once; back to 5000, it
+  dozes again (100/s);
+- no kernel message at any step.
+
+Not tested physically: a host that closes the stream by itself (the TV never
+does; a Linux host with PipeWire does after 5 s of silence) and a pulled
+cable. Both take the stop path the unbind exercised.
 
 The remaining C1 share comes from the rest of the idle path (alsaloop and
 `nq-uac2-silence` on the aloop, PulseAudio, the other daemons); the first

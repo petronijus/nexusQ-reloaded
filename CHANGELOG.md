@@ -51,6 +51,27 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
   queued with interrupts off under a flag the stop waits on, the tick ends
   itself once the stream is stopping, and `g_audio_cleanup()` cancels it for
   good.
+- **The overnight soak** (Prague Q, TV as host, the first version; 01:15-09:57
+  CEST, 8.7 h of idle; `nq-captures/20260930-095819/`), against the night
+  before with the same host and no doze:
+
+  | | doze | no doze |
+  |---|---|---|
+  | interrupts, whole box | 1044/s | 2983/s |
+  | C3 share of idle | 60.6 % | 15.2 % |
+  | busy, both cores | 3.81 % | 4.98 % |
+  | `nexusq-uac2-in`, % of a core | 3.34 | 3.87 |
+  | temperature, peak / average | 68.1 / 52.9 °C | 71.0 / 55.5 °C |
+
+  It held in every hour (1019-1061 interrupts/s, C3 56-70 %), 350 MHz was
+  98.9 % of the samples, `nq-uac2-silence` never changed state, and the
+  kernel logged nothing. nexusqd kept its 20.04 renders/s. The report's
+  `governor_not_scaling` warning is its own false positive: the one-minute
+  load average touched 1.0 twice (07:08, 09:09) at ~16 % utilization, which
+  the conservative governor rightly ignores. Fixed in `nq-health-report`: a
+  stall is now the CPU busy >= 80 % of a core for 3 samples in a row at
+  350 MHz, not a load average (`test_health_report_governor.py`, 5 tests,
+  seen failing against a zero threshold); the soak's verdict is now OK.
 - **The fleet-safety review of the first version** (no blocker) found, and
   the patch now fixes: a stream closed while dozing made musb log "request
   not queued" three times (the stop now frees the held-back requests itself);
@@ -59,9 +80,15 @@ kernel patch **0059** lets the UAC2 gadget doze instead:
   a configuration without capture would have cancelled an uninitialized
   timer; the request that starts a doze was held back before its data was
   copied out; and `doze_idle_ms=0` did not wake a dozing stream.
-- **Not yet exercised on a unit:** a host that closes the stream while it
-  dozes, the cable pulled while dozing, the gadget unbound with the timer
-  armed, and the fixed version at all -- the overnight soak runs the first.
+- **The fixed version on the Prague Q** (2026-09-30, built as r17 like the
+  first): it dozes the same (100 musb interrupts/s, C3 ~60 %, 48 kHz kept).
+  Unbinding the gadget while dozing -- the same stop path a host closing the
+  stream or a pulled cable takes -- made the first version log `request ...
+  not queued` three times (ep6in, ep3out twice), seen on the unit; the fixed
+  one logs nothing, re-enumerates and dozes again 5 s later.
+  `doze_idle_ms=0` wakes a dozing stream at once (2007/s), and 5000 puts it
+  back to sleep. Not tested physically: a host that closes the stream on its
+  own (the TV never does) and a pulled cable, which share that stop path.
 - Details: `docs/2026-09-30-usb-audio-doze.md`.
 
 ### Found — the 1 ms USB audio interval is the host's floor, not musb's (2026-09-29)
