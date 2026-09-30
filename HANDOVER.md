@@ -45,6 +45,31 @@ the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
   ~100/s, not ~2000/s; sound from the TV starts normally; then the full
   nexusq-diag sweep. Keep the cottage Q off r18/r121 until Prague has passed.
 
+## Any machine — 2026-09-30: release alerts (control r64, nexusqd r26, app 1.26.0) are NOT released
+
+The Q checks for a release itself and the app notifies (PROTOCOL §12c,
+CHANGELOG). Ships with v2.
+
+- **The Prague Q runs nexusq-control r64 and nexusqd r26** (by `apk add`,
+  from `output/ota-v2test-2026-09-30d/`; rebooted 17:22, first check 3 min
+  after the bridge started). Until the OTA repo has a `release.json`
+  (the v2 publish writes it) its watch logs `release watch: check failed:
+  HTTP 404` every 30 minutes (seen 2026-09-30 17:05). Expected, and gone at the publish.
+- **At the v2 release:** approve or rewrite `pmos/release-notes.json` and
+  drop its `"draft": true` (`package-release.sh` refuses a draft or notes for
+  another version; a publish meanwhile keeps the published release.json); after
+  the publish, `curl https://petronijus.github.io/nexusQ-reloaded/nexusq/release.json`
+  answers, and on a unit `getUpdateStatus {"refresh": true}` reads it.
+- **iOS is not built yet.** Info.plist (BGTaskScheduler, `fetch`) and
+  AppDelegate (task, background plugin registrant, notification delegate) are
+  written from the plugins' docs; build it on the macOS VM
+  (nexusq-ios-release) before the release, and check a background refresh
+  (Xcode: Debug → Simulate Background Fetch) posts the notification.
+- **The phone app** 1.26.0+65 has not been on a phone: a release APK is built on
+  the MacBook (the debug key is machine-bound, app README). Then: allow the
+  notification at the first connect, and check the banner against a unit with
+  a pending release.
+
 ## Every clone — 2026-09-29: the developer harness (`just`, git hooks)
 
 The repo now has `just check` / `just ci`, lefthook git hooks and Claude Code

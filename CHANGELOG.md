@@ -6,6 +6,105 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the Q says when a new release is out, and what it brings (`nexusq-control` **r64**, `nexusqd` **r26**, app **1.26.0+65**)
+
+Petr, 2026-09-30: the Q should check for updates by itself and tell its owner
+with a notification, with a short, clear "what's new" in the app. The phone app
+is not part of it; it updates through its store.
+
+- **What a release says.** `pmos/release-notes.json` is written for each
+  release: a headline and one to five items (an icon, a title, one sentence),
+  in the words an owner reads, not the CHANGELOG's. `scripts/release_manifest.py`
+  checks it and, at publish, adds the version of each of our packages from the
+  signed index; `publish-ota-repo.sh` writes the result as `release.json` beside
+  the repo's `armv7/`. It refuses to republish a version with other packages (a
+  unit that has it would read it as pending again), and `package-release.sh`
+  refuses a release whose notes are for another version. The v2.0.0 notes are
+  a draft for Petr to approve with the release.
+- **The Q checks by itself** (control r64, PROTOCOL §12c; r62 and r63 were test builds on the Prague Q). 3 min after start,
+  then every 6 h: one HTTPS GET of `release.json` with its ETag (unchanged =
+  304, no body), then `apk info -v` and `apk version -t`; no `apk update`, so no
+  edge indexes are pulled for it. A release is pending when any of its packages
+  is installed at a lower version. Only our releases count: Alpine's daily
+  base churn never announces itself. The answer is kept in
+  `/var/lib/nexusq/release-status.json`, so a restart or a reboot knows it
+  without the network; a failed or malformed check keeps the last good release
+  and says why. New method `getUpdateStatus {refresh?}`, event
+  `updateStatusChanged`; `getDeviceInfo` also carries `hostname`. The mute LED's
+  amber blink has two reasons now, a pending release and a pending daemon
+  update, and is held dark while an install runs (`UpdateLed`).
+- **The app tells its owner** (1.26.0+65). A banner under the home app bar
+  ("Nexus Q 2.0.0 is ready") opens the notes in a sheet with Update now;
+  Settings' System card shows them inline; once the Q runs a release it was
+  seen waiting for, "What's new" appears once. In the background (WorkManager
+  every 6 h on Android, BGTaskScheduler on iOS when the system allows) the app
+  asks every Q it has talked to, by its last address and then `<hostname>.local`,
+  and posts one local notification per release; a release already seen in the
+  app does not ring. The permission is asked once, at the first Q; Settings has
+  a switch. No server and no push service: it works while the phone is on the
+  Q's network.
+- Tests: `test_release_watch.py` (28; every review fix seen failing against the
+  old behaviour), nexusqd `test_control.c` (the no-op repeat),
+  `scripts/tests/test_release_manifest.py` (the notes gate, the build from an
+  index, what it builds the Q accepts, the icon list equal in tool, device and
+  app), `test/release_alerts_test.dart` (18) and `test/release_banner_test.dart`,
+  each seen failing under a mutation. `flutter analyze --fatal-infos` clean, the
+  whole app suite (210) green, a debug APK builds with the new plugins.
+- **The fleet-safety review of the first version** found no blocker, and
+  what r64 / nexusqd r26 / app 1.26.0 now do differently:
+  - the next check was `last + 6 h - now` from a clock the RTC does not keep:
+    before NTP a boot's clock sits weeks behind, so a reboot could push the
+    next check weeks away; the wait is now clamped, and a last check "in the
+    future" is due now;
+  - every OTA publish would have shipped the unapproved v2.0.0 draft: notes
+    carry `"draft": true` until approved, a publish meanwhile keeps the
+    published `release.json`, and `package-release.sh` refuses a draft;
+  - the app's background check filed whatever answered at a remembered address
+    under that Q (an address can move to another Q, and every Q is called
+    `steelhead` by default): `getUpdateStatus` carries the unit's `id`, and an
+    answer from another Q is dropped;
+  - a damaged state file (`[]`, `null`, wrong types) would have crashed the
+    bridge at start, and a truncated HTTP answer or a too-deep JSON escaped the
+    check: both now end in a fresh start or a recorded error;
+  - a failed `apk version -t` read as "installed": it is an error now;
+  - two checks could run at once and a LAN client could drive fetches: one
+    check at a time, and a refresh within 60 s gets the last one;
+  - after an install the LED could relight for what the install just brought,
+    and a restarted nexusqd lost the blink for up to 6 h: the release is
+    compared again before the LED may speak, and the blink is re-asserted on
+    the ring's 30 s beat, which nexusqd r26 treats as a no-op when nothing
+    changed (it used to restart the blink and shift its phase);
+  - a manifest naming the kernel would have been pending forever: the device
+    skips it too, not only the publish tool.
+  - The blink's cost: while it is live nexusqd's idle cap is 0.5 s instead of
+    1 s (one more wakeup a second, and two mute-LED writes a second) when the
+    ring is static; with a theme or the visualiser the ring renders at 20/s
+    anyway. Against ~1000 interrupts a second at idle that is small, and it is
+    an estimate, not a measurement: the Prague Q's ring breathes, so it cannot
+    show the static case.
+- **On the Prague Q** (control r62/r63 by `apk add`, the watch pointed at a
+  test server on the desktop that answers with an ETag and 304 like GitHub
+  Pages, through a drop-in in `/run`): a manifest with nexusqd at r26 read as
+  `available: 2.0.0` with its five items and pushed one `updateStatusChanged`;
+  with the unit's own versions it read as `current: 2.0.0`, one event; the next
+  check got a 304 and pushed nothing; with the server stopped, the release
+  stayed and `error` said "Connection refused". `getDeviceInfo` answers
+  `id: nexusq_f88fca2048e1` (r63+; `serial` is "unknown" on every Q, which is
+  why the app does not key by it). The drop-in and the test state were removed
+  afterwards.
+- **r64 + nexusqd r26 on the Prague Q** (rebooted 17:22): the first check ran
+  3 min after the bridge started (a 404 until the v2 publish writes
+  `release.json`, logged every 30 min, expected), `getDeviceInfo` answers the
+  `id`, and the full nexusq-diag sweep reads OK for the boot
+  (`nq-captures/20260930-172722/`): 1.2 GHz at 1380 mV, 350 MHz at 1025 mV,
+  peak 88.8 °C under load, no failed unit, none of the four boot-log messages.
+  The ring beat's three re-asserts every 30 s (`dark`, `brightness`, `mblink`)
+  left nexusqd's render rate at 20.0/s, no-ops as intended.
+- ⚠️ `workmanager_android` 0.10.9 still applies the Kotlin Gradle Plugin, which a
+  future Flutter will refuse; check it before the next Flutter upgrade. The iOS
+  half (Info.plist, AppDelegate) is written from the plugins' documentation and
+  has not been built yet: it needs the macOS VM (nexusq-ios-release).
+
 ### Fixed — the diag's two false warnings (device **r124**, `nq-health-report`)
 
 The full sweep of the four-fixes set (below) was clean on the device, and its
