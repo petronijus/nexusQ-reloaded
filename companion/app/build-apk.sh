@@ -54,6 +54,41 @@ else
 	echo "WARNING: no Spotify client ID (1Password item missing or op not signed in) -> Spotify control disabled in this build" >&2
 fi
 
+# The signing key every installed app trusts lives in 1Password ("nexusQ
+# companion Android signing key": the keystore as a Document, alias and
+# passwords as fields). It is fetched to a private temp file for this build and
+# removed after; android/app/build.gradle.kts signs with it. A caller may pass
+# NQ_ANDROID_KEYSTORE & co. itself (a machine where op cannot sign in).
+KEY_ITEM="${NQ_ANDROID_KEY_ITEM:-nexusQ companion Android signing key}"
+KEYFILE=""
+cleanup() { if [ -n "$KEYFILE" ]; then rm -f "$KEYFILE"; fi; }
+trap cleanup EXIT INT TERM
+if [ -z "${NQ_ANDROID_KEYSTORE:-}" ] && command -v op >/dev/null 2>&1; then
+	KEYFILE=$(mktemp "${TMPDIR:-/tmp}/nq-android-key.XXXXXX")
+	chmod 600 "$KEYFILE"
+	if op document get "$KEY_ITEM" --account my --out-file "$KEYFILE" --force >/dev/null 2>&1; then
+		NQ_ANDROID_KEYSTORE="$KEYFILE"
+		NQ_ANDROID_KEYSTORE_PASSWORD=$(op item get "$KEY_ITEM" --account my --fields "label=store password" --reveal)
+		NQ_ANDROID_KEY_ALIAS=$(op item get "$KEY_ITEM" --account my --fields "label=key alias")
+		NQ_ANDROID_KEY_PASSWORD=$(op item get "$KEY_ITEM" --account my --fields "label=key password" --reveal)
+		export NQ_ANDROID_KEYSTORE NQ_ANDROID_KEYSTORE_PASSWORD NQ_ANDROID_KEY_ALIAS NQ_ANDROID_KEY_PASSWORD
+	else
+		rm -f "$KEYFILE"
+		KEYFILE=""
+	fi
+fi
+if [ -n "${NQ_ANDROID_KEYSTORE:-}" ]; then
+	echo "Signing: the app's key (1Password \"$KEY_ITEM\")"
+elif [ "$MODE" = "--release" ]; then
+	echo "ERROR: no app signing key (1Password \"$KEY_ITEM\" unreadable; is op signed in?)." >&2
+	echo "       A release signed with this machine's debug key installs on no phone that" >&2
+	echo "       has the app. Refusing." >&2
+	exit 1
+else
+	echo "WARNING: no app signing key -> this debug build is signed with this machine's" >&2
+	echo "         debug key and will not install over the phone's app." >&2
+fi
+
 flutter build apk "$MODE" \
 	--dart-define=APP_VERSION="$APP_VERSION" \
 	--dart-define=BUILD_TAG="$BUILD_TAG" \

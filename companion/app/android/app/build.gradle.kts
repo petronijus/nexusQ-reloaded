@@ -28,28 +28,45 @@ android {
         versionName = flutter.versionName
     }
 
+    // The app's signing key: the one every installed app trusts, cert SHA-256
+    // 35:54:6F:7C…:AF:EB:E8. It is 1Password's "nexusQ companion Android signing
+    // key" (a Document, with its alias and passwords as fields); build-apk.sh
+    // fetches it to a private temp file and passes it here, on any machine. It
+    // is the debug keystore the MacBook and the desktop carry by hand (HANDOFF,
+    // 2026-08-28); from the vault a machine without that copy (the macOS VM, a
+    // new one) signs the same, and a release never depends on which host it is.
+    val nqKeystore = System.getenv("NQ_ANDROID_KEYSTORE")
+    if (nqKeystore != null) {
+        signingConfigs {
+            create("nexusq") {
+                storeFile = file(nqKeystore)
+                storePassword = System.getenv("NQ_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("NQ_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("NQ_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        // With the key, debug builds are signed with it too, so `flutter run`
+        // and build-apk.sh's debug build install over the phone's app.
+        if (nqKeystore != null) {
+            getByName("debug") {
+                signingConfig = signingConfigs.getByName("nexusq")
+            }
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            //
-            // ⚠️ THIS MAKES RELEASES MACHINE-BOUND. The debug keystore
-            // (~/.android/debug.keystore) is generated per machine, so the APK's
-            // signature identifies the BUILD HOST. Every published release has
-            // been built on the MacBook — cert SHA-256 35546f7c…afebe8, confirmed
-            // 2026-08-28 against app-v1.16.2. Build a release anywhere else and
-            // Android refuses to install it over the installed app (signature
-            // mismatch), forcing an uninstall and losing app data.
-            //
-            // So: BUILD APP RELEASES ON THE MACBOOK until this is replaced with a
-            // real keystore. (Device .apk packages are the opposite — those must
-            // be built on the desktop. See HANDOFF.md "WHICH MACHINE BUILDS WHAT".)
-            //
-            // The proper fix: a real keystore, kept in 1Password and referenced
-            // from android/key.properties. The app SELF-UPDATES, and a debug key
-            // has the publicly known password "android" — so today the signature
-            // authenticates nobody.
-            signingConfig = signingConfigs.getByName("debug")
+            // With the key (build-apk.sh) a release is signed with it. Without it
+            // this machine's debug key signs, which yields an APK no phone with
+            // the app will take as an update: fine for a compile check (`just
+            // ci` builds debug anyway), never for a phone -- build-apk.sh
+            // --release refuses to run without the key.
+            signingConfig =
+                if (nqKeystore != null) {
+                    signingConfigs.getByName("nexusq")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
         }
     }
 }

@@ -12,7 +12,7 @@ session on 2026-08-28, so it is written down here rather than re-derived.
 
 | artifact | build on | signed with | how to check |
 |---|---|---|---|
-| **Android APK** (companion app) | **MacBook or desktop** (same keystore) | `~/.android/debug.keystore`, cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
+| **Android APK** (companion app) | **any machine with `op`** via `companion/app/build-apk.sh` (since 2026-09-30); the MacBook and the desktop also carry the key as `~/.android/debug.keystore` | 1Password → "nexusQ companion Android signing key" (the same keystore), cert SHA-256 `35546f7c…afebe8` (`CN=Android Debug`) | `apksigner verify --print-certs <apk>` |
 | **Alpine `.apk`** (device-google-steelhead, nexusq-control, nexusqd, …) | **any machine holding the fleet key — for signing AND trust** (desktop proven; MacBook proven end to end with v1.15.2 on 2026-09-05, after `install-fleet-signing-key.sh` also reconciled `config_apk_keys/`) | `pmos@local-6a42e957` in docker volume `nexusq-workdir`; public half committed as `pmos/ota-signing-key.rsa.pub`, private half in 1Password → "nexusQ OTA signing key (fleet)" | `cmp pmos/ota-signing-key.rsa.pub <(ssh root@<device> cat /etc/apk/keys/pmos@local-*.rsa.pub)` |
 
 **And a release is BOTH tracks.** The image (GitHub Releases) reaches whoever
@@ -23,10 +23,12 @@ exists. Which packages belong in the OTA set lives in **`pmos/ota-packages.list`
 read by both the publisher and the gate; adding a package anywhere else fails
 *silently*, because apk simply never offers the newer version.
 
-- `companion/app/android/app/build.gradle.kts` still carries the Flutter
-  template's `signingConfig = signingConfigs.getByName("debug")` (and its literal
-  `// TODO: Add your own signing config`), so the app's release signature is
-  whatever `~/.android/debug.keystore` the build host happens to have.
+- Since 2026-09-30 `build-apk.sh` fetches the key from 1Password to a private
+  temp file and `build.gradle.kts` signs release AND debug builds with it, so a
+  debug build installs over the phone's app too. `build-apk.sh --release`
+  refuses to run without it; a bare `flutter build` (`just ci`) still falls back
+  to the host's debug key. The macOS VM 108 has no Android SDK at all (checked
+  2026-09-30): Android is built on the desktop or the MacBook.
 - **The debug keystore is the SAME on the MacBook and the desktop** (Petr,
   2026-08-28) — cert SHA-256 `35546f7c…afebe8`, and every published app release
   from `app-v1.8.0` to `app-v1.17.0` carries it. **Either machine can build and
