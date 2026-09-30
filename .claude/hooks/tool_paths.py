@@ -10,15 +10,24 @@ Reads the hook's JSON from stdin and prints one line per path:
                       (cat, grep, head, sed, jq, git diff, …) — which is how a
                       file's content reaches the conversation. Naming a file
                       for a program to consume (`source .env`,
-                      `--env-file .env`) is not reading it.
+                      `--env-file .env`) is not reading it. A recursive
+                      search or dump of a directory (`grep -r`, `rg`, `ag`,
+                      `git grep`, `find … -exec cat`, `tar c … | xxd`) is
+                      reported as every file it would reach — for `rg`,
+                      `ag` and `git grep` minus what .gitignore excludes and,
+                      for `rg`/`ag`, minus hidden files, as they do.
 
 Edit, Write and NotebookEdit name their file directly. For Bash the command
 is lexed the way the shell splits it (quotes, escapes, line continuations,
 heredocs, `$(…)` and backticks, unquoted globs) and read for the ways agents
 actually write files: redirections (`>`, `>>`, `&>`, `>|`), `tee`,
 `sed -i`, `perl -i`, `cp`/`mv`/`install`/`ln`/`rsync`, `dd of=`,
-`truncate`, nested `bash -c '…'`, and `cd` between commands. Remote
-targets (`host:/path` for rsync and scp) are not local files and are skipped.
+`truncate`, nested `bash -c '…'` / `env -S '…'`, and `cd` between commands
+(and `env -C` / `sudo -D`). Wrappers are unwrapped with their options
+(`sudo -u root cat .env` reads .env). Remote targets (`host:/path` for rsync
+and scp) are not local files and are skipped. A directory walk skips .git
+and dependency/build trees (node_modules, .venv, …) and stops at MAX_WALK
+files.
 
 This is best effort, not a sandbox: a program that opens a file itself
 (`python -c`, `node -e`, `xargs sed -i`, a script) is invisible here. What
@@ -34,6 +43,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 from typing import NamedTuple
 
@@ -66,8 +76,27 @@ OPERATORS = sorted(
     reverse=True,
 )
 SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")"}
-# Words that run the rest of the line as a command.
-PREFIXES = {"sudo", "doas", "env", "command", "builtin", "exec", "time", "nice", "nohup"}
+# Words that run the rest of the line as a command, with the options of each
+# that take a value (the next word, unless written `--opt=value`). Without
+# the table `sudo -u root cat .env` read as the program `root` (v5).
+WRAPPERS = {
+    "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "-R", "--user", "--group",
+             "--close-from", "--chdir", "--host", "--prompt", "--role", "--type", "--other-user",
+             "--command-timeout", "--chroot"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+    "time": {"-f", "-o", "--format", "--output"},
+    "exec": {"-a"},
+    "command": set(),
+    "builtin": set(),
+    "nohup": set(),
+}  # fmt: skip
+# Options of those wrappers that change the directory the command runs in.
+CHDIR_OPTS = {"-C", "--chdir", "-D"}
 SHELLS = {"sh", "bash", "zsh", "dash"}
 # Commands whose output is (part of) the files they are given.
 READERS = {
@@ -118,12 +147,42 @@ READERS = {
     "emacs",
     "openssl",
     "keytool",
+    "dtc",
+    "fdtdump",
+    "fdtget",
     "plutil",
     "iconv",
     "tr",
 }
 # `git <subcommand>` that prints file contents.
 GIT_READERS = {"show", "diff", "blame", "log", "grep", "cat-file"}
+# Searchers that take a pattern first, then paths (the working directory when
+# none is given), and read directories recursively: `recursive` says when,
+# `values` are the options that take the next word.
+GREP_VALUES = {"-e", "-f", "-A", "-B", "-C", "-m", "-d", "-D", "--regexp", "--file", "--max-count",
+               "--context", "--after-context", "--before-context", "--include", "--exclude",
+               "--exclude-dir", "--exclude-from", "--label", "--directories", "--devices", "--color",
+               "--colour", "--binary-files"}  # fmt: skip
+RG_VALUES = {"-e", "-f", "-g", "-t", "-T", "-A", "-B", "-C", "-m", "-M", "-j", "-r", "-E", "-d",
+             "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--type-add",
+             "--max-count", "--max-columns", "--threads", "--context", "--after-context",
+             "--before-context", "--replace", "--pre", "--pre-glob", "--sort", "--sortr",
+             "--encoding", "--color", "--colors", "--max-depth", "--ignore-file", "--path-separator",
+             "--max-filesize", "--dfa-size-limit", "--regex-size-limit", "--engine"}  # fmt: skip
+AG_VALUES = {"-A", "-B", "-C", "-G", "-g", "-m", "-p", "--ignore", "--ignore-dir", "--depth",
+             "--path-to-ignore", "--file-search-regex", "--max-count", "--context", "--after",
+             "--before", "--pager", "--workers"}  # fmt: skip
+ACK_VALUES = {"-A", "-B", "-C", "-m", "-g", "--type", "--ignore-dir", "--ignore-file",
+              "--max-count", "--context", "--after-context", "--before-context", "--match",
+              "--output", "--pager"}  # fmt: skip
+TAR_VALUES = {"-f", "--file", "-C", "--directory", "-T", "--files-from", "-X", "--exclude-from",
+              "-b", "--blocking-factor", "-H", "--format", "-I", "--use-compress-program",
+              "--exclude"}  # fmt: skip
+# Trees a directory walk never enters: a secret there is improbable, and a
+# walk through them would cost more than the hook's budget.
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".dart_tool", ".gradle",
+             "Pods", ".pnpm-store", ".next", ".turbo", ".cache", "target"}  # fmt: skip
+MAX_WALK = 50000
 REMOTE = re.compile(r"^(?:[A-Za-z0-9_.+-]+@)?[A-Za-z0-9_.-]+:(?!//)")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 GLOB = set("*?[")
@@ -369,17 +428,17 @@ class Parser:
             words.append(t)
             i += 1
 
-        while words and (ASSIGNMENT.match(words[0].text) or words[0].text in PREFIXES):
-            words.pop(0)
-            while words and words[0].text.startswith("-"):  # sudo -u x, nice -n 5
-                words.pop(0)
+        words, cwd = self.unwrap(words, cwd, depth)
         if not words:
             return
         name, args = os.path.basename(words[0].text), words[1:]
         texts = [a.text for a in args]
 
         sub = next((t for t in texts if not t.startswith("-")), "")
-        if name in READERS or (name == "git" and sub in GIT_READERS):
+        if self.searched(name, args, sub, cwd):
+            for a in inputs:
+                self.mention(a, cwd)
+        elif name in READERS or (name == "git" and sub in GIT_READERS):
             for a in args + inputs:
                 self.mention(a, cwd)
 
@@ -409,6 +468,190 @@ class Parser:
         elif name == "truncate":
             for a in operands(args, {"-s", "--size", "-r", "--reference"}):
                 self.write(a, cwd)
+
+    def unwrap(self, words: list[Word], cwd: str, depth: int) -> tuple[list[Word], str]:
+        """Strip assignments and wrappers (with their options) off a command.
+
+        `env -S '…'` runs its string as a command; `env -C dir`, `sudo -D dir`
+        move the command's working directory.
+        """
+        while words:
+            if ASSIGNMENT.match(words[0].text):
+                words = words[1:]
+                continue
+            name = os.path.basename(words[0].text)
+            if name not in WRAPPERS:
+                break
+            values, words = WRAPPERS[name], words[1:]
+            duration = name == "timeout"  # `timeout 5 cmd`: the first operand is not the command
+            while words:
+                t = words[0].text
+                if t == "--":
+                    words = words[1:]
+                    break
+                if t.startswith("--"):
+                    opt, eq, val = t.partition("=")
+                    words = words[1:]
+                    if opt in values:
+                        if eq:
+                            cwd = self.wrapper_option(name, opt, Word(val, False, "$" in val), cwd, depth)
+                        elif words:
+                            cwd = self.wrapper_option(name, opt, words[0], cwd, depth)
+                            words = words[1:]
+                    continue
+                if t.startswith("-") and len(t) > 1:
+                    words = words[1:]
+                    for k, ch in enumerate(t[1:]):
+                        if "-" + ch in values:  # the rest of the cluster, or the next word, is its value
+                            rest = t[k + 2 :]
+                            if rest:
+                                cwd = self.wrapper_option(name, "-" + ch, Word(rest, False, "$" in rest), cwd, depth)
+                            elif words:
+                                cwd = self.wrapper_option(name, "-" + ch, words[0], cwd, depth)
+                                words = words[1:]
+                            break
+                    continue
+                if name == "env" and ASSIGNMENT.match(t):
+                    words = words[1:]
+                    continue
+                if duration:
+                    duration, words = False, words[1:]
+                    continue
+                break
+        return words, cwd
+
+    def wrapper_option(self, name: str, opt: str, value: Word, cwd: str, depth: int) -> str:
+        """Act on a wrapper option's value; returns the command's working directory."""
+        if value.dynamic:
+            return cwd
+        if opt in {"env": ("-C", "--chdir"), "sudo": ("-D", "--chdir")}.get(name, ()):
+            return self.resolve(value, cwd)[0]
+        if opt in ("-S", "--split-string") and depth < 3:
+            self.run(value.text, depth + 1)
+        return cwd
+
+    def searched(self, name: str, args: list[Word], sub: str, cwd: str) -> bool:
+        """Record what a recursive search or dump reads; False if it is none."""
+        texts = [a.text for a in args]
+        shorts = "".join(t[1:] for t in texts if re.match(r"^-[A-Za-z.]+$", t))
+        if name in ("grep", "egrep", "fgrep"):
+            if not ({"-r", "-R", "--recursive", "--dereference-recursive"} & set(texts) or set("rR") & set(shorts)):
+                return False
+            self.search(args, cwd, GREP_VALUES, ignore=False, hidden=True)
+        elif name == "rg":
+            u = shorts.count("u") + (2 if "--unrestricted" in texts else 0)
+            ignore = u == 0 and not any(t.startswith("--no-ignore") for t in texts)
+            hidden = u >= 2 or "--hidden" in texts or "." in shorts
+            self.search(args, cwd, RG_VALUES, ignore, hidden, patternless="--files" in texts)
+        elif name == "ag":
+            unrestricted = "u" in shorts or "--unrestricted" in texts
+            self.search(args, cwd, AG_VALUES, ignore=not unrestricted, hidden=unrestricted or "--hidden" in texts)
+        elif name == "ack":
+            self.search(args, cwd, ACK_VALUES, ignore=False, hidden=True)
+        elif name == "git" and sub == "grep":
+            rest = args[texts.index("grep") + 1 :]
+            no_index = "--no-index" in texts
+            self.search(rest, cwd, GREP_VALUES, ignore=not no_index, hidden=True)
+        elif name == "find":
+            execs = [i for i, t in enumerate(texts) if t in ("-exec", "-execdir", "-ok", "-okdir")]
+            if not any(i + 1 < len(texts) and os.path.basename(texts[i + 1]) in READERS for i in execs):
+                return False
+            starts = []
+            for a in args:
+                if a.text.startswith(("-", "(", "!")):
+                    break
+                starts.append(a)
+            for a in starts or [Word(".", False, False)]:
+                self.reach(a, cwd, ignore=False, hidden=True)
+        elif name == "tar":
+            return self.tar(args, cwd)
+        elif name == "zip":
+            ops = operands(args, {"-b", "-n", "-t", "-tt", "-x", "-i", "-P", "-Z"})
+            if not ops or ops[0].text != "-":  # only `zip - …` prints the archive
+                return False
+            for a in ops[1:]:
+                self.reach(a, cwd, ignore=False, hidden=True)
+        else:
+            return False
+        return True
+
+    def search(
+        self, args: list[Word], cwd: str, values: set[str], ignore: bool, hidden: bool, patternless: bool = False
+    ) -> None:
+        """A searcher: its pattern (unless -e/-f gave it) is not a path; no path means `.`."""
+        explicit, skip, dashdash, ops = patternless, False, False, []
+        for a in args:
+            t = a.text
+            if skip:
+                skip = False
+            elif dashdash or not t.startswith("-") or t == "-":
+                ops.append(a)
+            elif t == "--":
+                dashdash = True
+            elif t.startswith("--"):
+                opt, eq, _ = t.partition("=")
+                explicit = explicit or opt in ("--regexp", "--file")
+                skip = opt in values and not eq
+            else:
+                for k, ch in enumerate(t[1:]):
+                    if "-" + ch in values:
+                        explicit = explicit or ch in "ef"
+                        skip = k == len(t) - 2
+                        break
+        if not explicit and ops:
+            ops = ops[1:]
+        for a in ops or [Word(".", False, False)]:
+            self.reach(a, cwd, ignore, hidden)
+
+    def tar(self, args: list[Word], cwd: str) -> bool:
+        """`tar c` writing the archive to stdout prints every file it packs."""
+        texts = [a.text for a in args]
+        first = texts[0] if texts else ""
+        bundled = bool(re.fullmatch(r"[A-Za-z]+", first))
+        letters = first if bundled else "".join(t[1:] for t in texts if re.match(r"^-[A-Za-z]+$", t))
+        if "c" not in letters and "--create" not in texts:
+            return False
+        archive, base, members, skip = None, cwd, [], None
+        rest = args[1:] if bundled else args
+        if bundled and "f" in first and rest:
+            archive, rest = rest[0].text, rest[1:]
+        for a in rest:
+            t = a.text
+            if skip:
+                if skip in ("-f", "--file"):
+                    archive = t
+                elif skip in ("-C", "--directory"):
+                    base = self.resolve(a, base)[0]
+                skip = None
+            elif t.startswith("--"):
+                opt, eq, val = t.partition("=")
+                if opt == "--file" and eq:
+                    archive = val
+                elif opt == "--directory" and eq:
+                    base = self.resolve(Word(val, False, False), base)[0]
+                elif opt in TAR_VALUES and not eq:
+                    skip = opt
+            elif t.startswith("-") and len(t) > 1:
+                last = "-" + t[-1]
+                if last in TAR_VALUES:
+                    skip = last
+            else:
+                members.append((a, base))
+        if archive not in (None, "-"):
+            return False
+        for a, b in members:
+            self.reach(a, b, ignore=False, hidden=True)
+        return True
+
+    def reach(self, word: Word, cwd: str, ignore: bool, hidden: bool) -> None:
+        """A path a recursive reader is given: the file itself, or every file under it."""
+        if word.dynamic or not word.text:
+            return
+        for path in self.resolve(word, cwd):
+            if os.path.isfile(path):
+                self.read.append(path)
+            elif os.path.isdir(path):
+                self.read.extend(walk(path, ignore, hidden))
 
     def scripted(self, args: list[Word], cwd: str, value_opts: set[str]) -> None:
         """sed/perl: the first operand is the script unless -e/-f gave one."""
@@ -446,6 +689,43 @@ class Parser:
         if name in ("mv", "gmv"):
             for s in sources:
                 self.write(s, cwd)
+
+
+def walk(root: str, ignore: bool, hidden: bool) -> list[str]:
+    """The files a recursive reader reaches under `root`.
+
+    ignore: the reader honours .gitignore (rg, ag, git grep): ask git, which
+    knows every ignore file; outside a work tree nothing is ignored.
+    hidden: whether it reads dot-files (rg and ag skip them by default).
+    """
+    found: list[str] = []
+    if ignore:
+        try:
+            out = subprocess.run(
+                ["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                capture_output=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            out = None
+        if out is not None and out.returncode == 0:
+            for rel in out.stdout.decode("utf-8", "surrogateescape").split("\0"):
+                if not rel or (not hidden and any(part.startswith(".") for part in rel.split("/"))):
+                    continue
+                path = os.path.join(root, rel)
+                if os.path.isfile(path):
+                    found.append(os.path.normpath(path))
+                    if len(found) >= MAX_WALK:
+                        break
+            return found
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and (hidden or not d.startswith("."))]
+        for f in filenames:
+            if hidden or not f.startswith("."):
+                found.append(os.path.join(dirpath, f))
+                if len(found) >= MAX_WALK:
+                    return found
+    return found
 
 
 def operands(args: list[Word], value_opts: set[str] = frozenset()) -> list[Word]:

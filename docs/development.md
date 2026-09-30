@@ -114,8 +114,9 @@ The one-off conversion to ruff, `dart format` and ktlint (2026-09-29) is in
   which imports it.
 - `.claude/` (committed): `settings.json` (permissions, hooks, the auto-mode
   fastboot rules), `hooks/` (format and guard every write, shell writes
-  included; refuse to print key material; run `just check` before a turn
-  ends), `agents/` (test-runner, fleet-safety-reviewer, nexusq-docs,
+  included; refuse to print key material, also through wrappers and
+  recursive searches, and deny a call the guard cannot parse; run
+  `just check` before a turn ends), `agents/` (test-runner, fleet-safety-reviewer, nexusq-docs,
   nexusq-build, nexusq-connect, nexusq-diag, stock-parity-auditor,
   nexusq-ios-release), `rules/` (aports, kernel, daemons, companion app),
   `skills/` (nexusq-build, nexusq-connect, nexusq-diag, nexusq-ios-release),

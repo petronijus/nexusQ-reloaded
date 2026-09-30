@@ -13,7 +13,10 @@ Project configuration lives in `.claude/` (committed). What it does for you:
     it stays unused);
   - writing key material (`private/access/`, WiFi profiles outside `pmos/`, `*.rsa`,
     `.nexus_pw`, keystores), generated files and lockfiles is refused, from
-    the shell too, and so is a shell command that prints key material;
+    the shell too, and so is a shell command that prints key material — also when wrapped
+    (`sudo -u x cat …`) or reached by a recursive search (`grep -r`; use `rg` or
+    `git grep`, which skip gitignored files); a call the guard cannot parse
+    is denied;
     editing `kernel/patches/*.patch` by hand asks first;
   - when you finish a turn with code changes, `just check` runs; if it fails,
     you get the output and must fix it before stopping.
