@@ -694,10 +694,14 @@ v1.8.1; the 4th dispositioned 2026-07-13) — anything else is a **REGRESSION**,
 report it:
   1. **eth-lan DHCP fail** on a DHCP-less direct PC cable (environmental —
      `autoconnect=false` would break real-LAN plug-and-play);
-  2. **kscreen `.service` D-Bus naming** (upstream libkscreen packaging lint, hard
-     dep via lxqt-config);
-  3. **avahi `No NSS support for mDNS`** (`nss-mdns` unpackaged in pmOS/Alpine;
-     avahi's publish path for librespot Spotify-Connect zeroconf works fine);
+  2. **kscreen `.service` D-Bus naming** (libkscreen 6.7's out-of-process
+     backend, hard dep via lxqt-config; upstream dropped that backend and its
+     service file for 6.8, commit fa080ec3c1 — it goes when Alpine ships
+     Plasma 6.8; still there after that = a finding);
+  3. **avahi `No NSS support for mDNS`** (avahi dlopens `libnss_mdns*.so`, and
+     musl has no NSS at all, so the check can never pass here and nss-mdns
+     would only mask it; left as is by Petr's decision, 2026-09-30. avahi's
+     publish path for librespot Spotify-Connect zeroconf works fine);
   4. **NM `sd-event.c:4488 assertion failed`** — a ONE-SHOT assert from
      NetworkManager's **vendored libsystemd**, fired exactly at the RTC→NTP
      clock step (CLOCK_REALTIME jumps weeks on ≤ r1 kernels and after a mains

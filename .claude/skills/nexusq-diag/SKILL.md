@@ -225,8 +225,10 @@ Findings are tagged by `kind`; interpret them like this:
   is **EMPTY** and `journalctl -b -p warning` = **ONLY 4 genuinely-external
   residuals** (3 through v1.8.1; #4 dispositioned 2026-07-13) — (1) eth-lan DHCP
   fail on a DHCP-less direct PC cable
-  (environmental), (2) kscreen `.service` D-Bus naming (upstream libkscreen),
-  (3) avahi `No NSS support for mDNS` (`nss-mdns` unpackaged), (4) a **one-shot**
+  (environmental), (2) kscreen `.service` D-Bus naming (libkscreen 6.7; gone
+  upstream in 6.8, so it leaves with Alpine's Plasma 6.8), (3) avahi `No NSS
+  support for mDNS` (musl has no NSS, the check can never pass; left as is,
+  Petr 2026-09-30), (4) a **one-shot**
   NM `sd-event.c:4488 assertion failed` at the RTC→NTP clock step (NM's vendored
   libsystemd asserting on the huge CLOCK_REALTIME jump — which happens on
   ≤ r1 kernels and after a mains unplug, see the RTC note; this said "no RTC

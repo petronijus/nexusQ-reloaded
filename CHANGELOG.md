@@ -6,6 +6,30 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the diag's two false warnings (device **r124**, `nq-health-report`)
+
+The full sweep of the four-fixes set (below) was clean on the device, and its
+report still read WARN, twice for nothing:
+
+- **`governor_not_scaling` during an install.** The verdict took the spot
+  `freq` (one instant per 5 s sample) and all of `busy_ms`. In the `apk add`
+  window of 2026-09-30 the spot reading said 350 MHz while `opp_ms` had the
+  CPU at 1.2 GHz for 93 % of the same sample, and the rest of the busy time
+  was niced work, which `ignore_nice_load=1` keeps at 350 MHz on purpose.
+  **nq-healthd (device r124)** now appends `nice_ms`, the niced part of
+  `busy_ms` (a gap with it); **nq-health-report** judges the time spent at
+  350 MHz from `opp_ms` (>= 90 % of the sample), takes niced time out of the
+  busy time, reads 1.2 GHz bursts from `opp_ms` too, and reports residency in
+  ms where the samples have it. On samples from before r124 it says that
+  niced work cannot be told apart. Five tests, each seen failing under its
+  mutation.
+- **A `vdd_mismatch` put in the wrong boot.** Events carried only `t_mono`,
+  which restarts at every boot, while `events.jsonl` outlives boots: the
+  sweep attributed a mismatch from 2026-09-29 01:37 (the healthd before the
+  50 ms re-read, device r120) to that day's install. Events now carry `wall`
+  as well (r124), and `--since`/`--until` place them by it; older events
+  without it are left out of a window and counted, never guessed in.
+
 ### Fixed — four boot-log findings (kernel **6.18.48-r19**, nexusqd **r25**, nexusq-control **r61**, nexusq-btagent **r8**, nexusq-setupd **r8**, nexusq-mqtt **r14**, device **r123**, alsa-utils **1.2.16-r100**)
 
 Every one of these was in each boot's journal on the Prague Q (kernel r18,
