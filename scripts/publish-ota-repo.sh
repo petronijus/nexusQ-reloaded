@@ -153,6 +153,27 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
 echo "=== secrets gate: nothing personal inside the packages ==="
 "$REPO_ROOT/scripts/verify-apk-no-secrets.sh" "$STAGE"/nexusq/armv7/*.apk
 
+# THE RELEASE MANIFEST. release.json is what a Q's release watch reads to tell
+# its owner a release is out (nexusq-control, PROTOCOL §12c): the hand-written
+# notes in pmos/release-notes.json plus the version of every package this index
+# carries. It is rebuilt at every publish from the index just signed, so it can
+# never name a package version the repo does not have.
+# Draft notes (not yet approved with a release) build nothing (exit 3): the
+# release.json already published is carried over below instead, so a hotfix
+# pushed meanwhile never rings the fleet with unapproved text.
+echo "=== release manifest: pmos/release-notes.json + the index ==="
+RELEASE_DRAFT=0
+rc=0
+python3 "$REPO_ROOT/scripts/release_manifest.py" build "$REPO_ROOT/pmos/release-notes.json" \
+    "$STAGE/nexusq/armv7/APKINDEX.tar.gz" "$OTA_LIST" > "$STAGE/nexusq/release.json" || rc=$?
+if [ "$rc" -eq 3 ]; then
+    RELEASE_DRAFT=1
+    rm -f "$STAGE/nexusq/release.json"
+    echo "  the notes are a draft: the published release.json (if any) stays as it is"
+elif [ "$rc" -ne 0 ]; then
+    exit "$rc"
+fi
+
 echo "=== publishing to the gh-pages branch ==="
 WT="$STAGE/gh-pages-wt"
 # Publish onto what the REMOTE actually has, not onto whatever the local branch
@@ -163,6 +184,16 @@ WT="$STAGE/gh-pages-wt"
 # "[gh-pages abc1234] OTA apk repo — ..." line. A publish that did not publish.
 git -C "$REPO_ROOT" fetch --quiet origin gh-pages
 git -C "$REPO_ROOT" worktree add --detach "$WT" origin/gh-pages
+# A gate below can stop the script: the worktree must not outlive it.
+trap 'git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null; sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
+if [ "$RELEASE_DRAFT" -eq 1 ] && [ -f "$WT/nexusq/release.json" ]; then
+    cp "$WT/nexusq/release.json" "$STAGE/nexusq/release.json"
+fi
+# A change of packages is a new release: a unit that installed the published
+# one would otherwise read "<that release> available" again, with notes it has
+# already seen. So the same version with other packages is refused; bump the
+# version in pmos/release-notes.json and say what changed.
+python3 "$REPO_ROOT/scripts/release_manifest.py" republish "$WT/nexusq/release.json" "$STAGE/nexusq/release.json"
 rm -rf "$WT/nexusq"
 cp -r "$STAGE/nexusq" "$WT/"
 

@@ -105,6 +105,19 @@ if [ "$GUIDE_VER" != "$VER" ]; then
 fi
 echo "  INSTALL.md marker says $GUIDE_VER"
 
+# ...and so do the release notes every Q will announce. publish-ota-repo.sh
+# turns pmos/release-notes.json into the release.json the units' release watch
+# reads (PROTOCOL §12c): notes left at the previous release would tell every
+# owner about the last release again, or not at all.
+echo "==> Release gate: the release notes are for this release"
+if ! python3 scripts/release_manifest.py check pmos/release-notes.json --version "$VER"; then
+    echo "ERROR: write pmos/release-notes.json for $VER (a headline and one to five short" >&2
+    echo "       items, in the words an owner reads in the app) and, once approved," >&2
+    echo "       drop its \"draft\": true; then re-run." >&2
+    exit 1
+fi
+echo "  pmos/release-notes.json is for $VER"
+
 # ...and the marker alone is not the guide. v1.16.0 shipped with the marker
 # correctly reading v1.16.0 while the sentence under the title still said "This
 # guide describes release v1.15.2", naming the wrong kernel and the wrong device
