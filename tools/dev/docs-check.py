@@ -14,12 +14,16 @@ Markdown file is checked for:
 - `@imports` in AGENTS.md / CLAUDE.md: the imported file exists;
 - AGENTS.md and CLAUDE.md stay within MAX_LINES (always-loaded context).
 
+"Exists" means in a fresh clone: tracked, or new and not ignored by git.
+A directory that is on this disk only for ignored content does not count.
+
     tools/dev/docs-check.py      (`just lint-docs`; the pre-commit hook)
 
 Prints `file:line: problem` per finding and exits 1 when there is any.
 `<!-- docs-check: ignore -->` on a line skips that line; on the line right
 above a code fence it skips the whole block.
 
+TEMPLATE: set EXCLUDE to the docs that record history on purpose.
 Python >= 3.9, standard library only.
 """
 
@@ -224,7 +228,7 @@ def code_spans(text: str):
 
 
 def link_destinations(doc: Doc):
-    """(line, destination) of inline links, images, reference definitions and HTML links."""
+    """(line, destination) of every link: inline, image, reference, HTML."""
     prose = doc.prose
     for m in re.finditer(r"(?<!\\)\]\(", prose):
         dest = read_destination(prose, m.end())
@@ -320,32 +324,64 @@ def unicode_mark(ch: str) -> bool:
 
 
 class Repo:
+    """The repo as a clone sees it: what git tracks plus new files it does not
+    ignore. A directory that exists only for ignored content (the
+    `node_modules` of a deleted package) does not count, and names match
+    exactly, so a macOS checkout agrees with Linux and GitHub. git lists
+    nothing inside a submodule, so there the disk decides.
+    """
+
     def __init__(self, root: Path):
         self.root = root
-        self._dirs: dict[Path, set[str] | None] = {}
+        self.files: set[str] = set()
+        self.dirs: set[str] = {""}
+        self.submodules: set[str] = set()
+        self._listings: dict[Path, set[str] | None] = {}
+        for entry in git(root, "ls-files", "-z", "--stage").split("\0"):
+            if not entry:
+                continue
+            meta, path = entry.split("\t", 1)
+            if meta.split()[0] == "160000":
+                self.submodules.add(path)
+                self._add_dirs(path)
+            elif os.path.lexists(root / path):  # not deleted in the worktree
+                self._add(path)
+        others = git(root, "ls-files", "-z", "--others", "--exclude-standard")
+        for path in others.split("\0"):
+            if path:
+                self._add(path)
+
+    def _add(self, path: str) -> None:
+        self.files.add(path)
+        self._add_dirs(posixpath.dirname(path))
+
+    def _add_dirs(self, path: str) -> None:
+        while path and path not in self.dirs:
+            self.dirs.add(path)
+            path = posixpath.dirname(path)
 
     def exists(self, rel: str) -> bool:
-        """Exact-case existence, so a macOS clone agrees with Linux and GitHub."""
+        rel = posixpath.normpath(rel) if rel else "."
+        if rel == ".":
+            return True
+        if rel in self.files or rel in self.dirs:
+            return True
+        return any(rel.startswith(sub + "/") for sub in self.submodules) and (self._on_disk(rel))
+
+    def _on_disk(self, rel: str) -> bool:
+        """Exact-case existence on disk, for paths inside a submodule."""
         path = self.root
         for part in rel.split("/"):
-            if part in ("", "."):
-                continue
-            names = self._listing(path)
+            if path not in self._listings:
+                try:
+                    self._listings[path] = set(os.listdir(path))
+                except OSError:
+                    self._listings[path] = None
+            names = self._listings[path]
             if names is None or part not in names:
                 return False
             path = path / part
         return True
-
-    def is_dir(self, rel: str) -> bool:
-        return (self.root / rel).is_dir()
-
-    def _listing(self, path: Path) -> set[str] | None:
-        if path not in self._dirs:
-            try:
-                self._dirs[path] = set(os.listdir(path))
-            except OSError:
-                self._dirs[path] = None
-        return self._dirs[path]
 
     def ignored(self, rels: list[str]) -> set[str]:
         if not rels:
@@ -461,7 +497,8 @@ def check_invocation(root: Module, args: list[str]) -> str | None:
     i = 0
     while i < len(args) and (args[i].startswith("-") or ASSIGNMENT.match(args[i])):
         if args[i].startswith("-") and args[i] not in JUST_NEUTRAL_FLAGS:
-            return None  # another justfile, a subcommand (--list, --show …): not ours to judge
+            # Another justfile, or a subcommand (--list, --show …): not ours.
+            return None
         i += 1
     while i < len(args):
         token = args[i]
@@ -543,7 +580,8 @@ def resolve(doc: Doc, target: str) -> str | None:
 
 
 def check_links(doc: Doc, repo: Repo, docs: dict[str, Doc], anchors: dict[str, set[str]]) -> list[Problem]:
-    problems, targets = [], []
+    problems: list[Problem] = []
+    missing: list[tuple[int, str, str]] = []
     for n, dest in link_destinations(doc):
         if n in doc.ignored:
             continue
@@ -556,10 +594,8 @@ def check_links(doc: Doc, repo: Repo, docs: dict[str, Doc], anchors: dict[str, s
         if rel is None:
             continue
         if not repo.exists(rel):
-            problems.append(Problem(doc.path, n, f"link `{dest}`: no such file or directory"))
+            missing.append((n, dest, rel))
             continue
-        if target:
-            targets.append((n, dest, rel))
         fragment = unquote(fragment)
         if not fragment or not rel.lower().endswith((".md", ".markdown")) or LINE_ANCHOR.match(fragment):
             continue
@@ -568,16 +604,13 @@ def check_links(doc: Doc, repo: Repo, docs: dict[str, Doc], anchors: dict[str, s
             anchors[rel] = slugs(other)
         if fragment.lower() not in {a.lower() for a in anchors[rel]}:
             problems.append(Problem(doc.path, n, f"link `{dest}`: no heading `#{fragment}` in {rel}"))
-    ignored = repo.ignored([rel for _, _, rel in targets])
-    for n, dest, rel in targets:
+    ignored = repo.ignored([rel for _, _, rel in missing])
+    for n, dest, rel in missing:
         if rel in ignored:
-            problems.append(
-                Problem(
-                    doc.path,
-                    n,
-                    f"link `{dest}`: git ignores {rel}, so a clone does not have it",
-                )
-            )
+            reason = f"git ignores {rel}, so a clone does not have it"
+        else:
+            reason = "no such file or directory"
+        problems.append(Problem(doc.path, n, f"link `{dest}`: {reason}"))
     return problems
 
 
@@ -723,7 +756,8 @@ def main() -> int:
     if problems:
         files = len({p.path for p in problems})
         print(
-            f"docs-check: {len(problems)} problem(s) in {files} file(s). Fix the doc (or the reference);"
+            f"docs-check: {len(problems)} problem(s) in {files} file(s)."
+            " Fix the doc (or the reference);"
             f" mark an intentional one with {IGNORE_MARK}"
         )
         return 1
