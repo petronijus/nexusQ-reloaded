@@ -6,6 +6,63 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — Home Assistant showed the cottage under the Prague Q's name (`nexusq-mqtt` **r17**)
+
+The two-day health check before v2 (2026-10-02, `nq-captures/20261002-100501/`)
+found the Prague Q itself calm (40.7 h, no restart anywhere, C3 72-73 % of idle,
+2.7-2.9 % busy, VDD_MPU on the OPP in all 10 007 samples), and Home Assistant
+wrong: since 2026-10-01 14:11 CEST its "Nexus Q" device was named "Nexus Q
+Šumperák" and showed frozen numbers (uptime 47 479, 38.1 °C).
+
+- **Cause.** The cottage broker still held 19 retained discovery configs with
+  the Prague Q's node_id, pointing at the cottage's old flat topic: a leftover
+  of the 2026-08-29 cloned-MAC night. Its bridge (`homeassistant/# out`)
+  replays them into the home broker at every reconnect, and one happened at
+  14:11:54. nexusq-mqtt published discovery only at its own connect, so the
+  Prague Q never healed.
+- **Cleared at the source** (2026-10-02): an empty retained publish on each of
+  the 19 topics on the cottage broker, then a restart of the Prague Q's
+  nexusq-mqtt. HA shows the Prague Q's live numbers under its own name again.
+- **Guarded in r17** (`DiscoveryGuard`, README): the unit subscribes to its own
+  discovery configs and answers a foreign one, so this cannot persist again.
+  `tests/test_discovery_guard.py`, each rule seen failing under a mutation.
+  Tried on the Prague Q by replaying the hijack on the cottage broker (a stale
+  uptime config, then its removal 8 s later): the first version republished
+  ours at once but dropped the removal inside its one-minute holdoff, leaving
+  the entity deleted in HA. A write inside the holdoff is now deferred and
+  answered once it is over (r15 and r16 were the test builds).
+- **The fleet-safety review of r16** found no blocker and two majors, both
+  fixed in r17: two units with one node_id (the 2026-08-29 cloned MAC) would
+  have answered each other forever, once a minute; the holdoff now doubles up
+  to an hour, six answers end it (`GIVING UP`, logged once), an hour of quiet
+  starts a new episode, and the fallback node_id turns the guard off; a test
+  wires two guards to one simulated broker for two days and the fight is
+  over in about half an hour. And with Install now working, a RETAINED
+  `install` would have installed at every reconnect: the client now passes the
+  RETAIN bit, and retained commands (ring, volume, install, check) are
+  dropped. No retained command was found on either broker. Also: the guard
+  decides and sends under one lock with every discovery publish, so it cannot
+  send an older ring config over a newer one. Behaviour changes: deleting the
+  device in HA does not stick while the Q runs, and a unit's first r17 connect
+  clears configs an older revision left under its node_id.
+- **Found on the way: Install in Home Assistant never worked** (r10-r14). The
+  receive path hands over bytes and `UpdateLink.submit` compared them with the
+  string `"install"`, so every press was logged as ignored (the Prague Q's
+  journal had two). The tests passed strings. Fixed, with a test that sends
+  bytes, seen failing.
+- **"Time at X MHz (24 h)".** The dashboard's frequency chart showed the last
+  hour only, because the sensors are a rolling hour. r17 adds the same
+  residency over 24 h, from the kernel's counters, as four more sensors; a mean
+  of the hourly sensor in HA would not be a mean over time (HA stores a sensor
+  only when it changes: 37 points in 24 h).
+- **Still open: the cottage Q has published nothing since 2026-09-28 01:54.**
+  Its retained status still says `online` and its last state carries uptime
+  47 479; the cottage plug went unavailable at 01:42 and 01:54 that night, so a
+  power cut is the likely cause, with the broker going down at the same moment
+  and never sending the Will. The Q did not come back on the network since.
+  It cannot be reached from Prague (the cottage Pi wants a password that is
+  not in 1Password); it needs a look on site.
+
 ### Added — the Q says when a new release is out, and what it brings (`nexusq-control` **r64**, `nexusqd` **r26**, app **1.26.0+65**)
 
 Petr, 2026-09-30: the Q should check for updates by itself and tell its owner

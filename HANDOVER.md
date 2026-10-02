@@ -118,6 +118,10 @@ the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
 The Q checks for a release itself and the app notifies (PROTOCOL §12c,
 CHANGELOG). Ships with v2.
 
+- **Since 2026-10-02 it also runs nexusq-mqtt r17** (the discovery guard, the
+  24 h residency sensors, the HA Install fix, retained commands ignored;
+  `output/ota-v2test-2026-10-02/`). Owed after the publish: one real Install
+  press in HA with an update pending, then the diag sweep.
 - **The Prague Q runs nexusq-control r64 and nexusqd r26** (by `apk add`,
   from `output/ota-v2test-2026-09-30d/`; rebooted 17:22, first check 3 min
   after the bridge started). Until the OTA repo has a `release.json`
