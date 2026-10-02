@@ -136,6 +136,36 @@ class TestLink(unittest.TestCase):
         self.assertFalse(st[-1]["in_progress"])
         self.assertEqual(st[-1]["release_summary"], "Up to date.")
 
+    def test_install_as_it_arrives_from_the_broker(self):
+        # The receive path hands over bytes: an Install press in HA arrives as
+        # b"install", and until r17 it was logged as ignored, every time.
+        f = Fake(install={"ok": True, "changed": ["nexusq-control"], "rebootRecommended": False})
+        self.assertTrue(f.link.submit(f.link.topics["install"], b"install"))
+        f.link.step()
+        self.assertEqual([c for c, _ in f.calls], ["installSystemUpdate", "checkSystemUpdate"])
+
+    def test_a_foreign_install_payload_is_still_ignored(self):
+        f = Fake()
+        self.assertTrue(f.link.submit(f.link.topics["install"], b"please"))
+        f.link.step()
+        self.assertNotIn("installSystemUpdate", [c for c, _ in f.calls])
+
+    def test_a_retained_install_never_installs(self):
+        # The broker replays a retained message at every subscribe; obeyed, a
+        # stray `mosquitto_pub -r .../update/install` would install at every
+        # reconnect. route_message drops retained commands (r17).
+        f = Fake(install={"ok": True, "changed": ["nexusq-control"], "rebootRecommended": False})
+        guard = MOD.DiscoveryGuard("homeassistant", NODE)
+        answered = []
+        MOD.route_message(f.link.topics["install"], b"install", True, guard, answered.append, [f.link])
+        f.link.step()
+        self.assertNotIn("installSystemUpdate", [c for c, _ in f.calls])
+        # the same press, live, does
+        MOD.route_message(f.link.topics["install"], b"install", False, guard, answered.append, [f.link])
+        f.link.step()
+        self.assertIn("installSystemUpdate", [c for c, _ in f.calls])
+        self.assertEqual(answered, [])
+
     def test_install_that_reboots_says_so(self):
         f = Fake(install={"ok": True, "changed": ["musl"], "rebootRecommended": True})
         f.link.submit(f.link.topics["install"], "install")

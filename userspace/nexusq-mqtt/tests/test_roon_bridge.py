@@ -180,7 +180,7 @@ class TestClientCanReceive(unittest.TestCase):
     def test_an_incoming_publish_is_decoded(self):
         got = []
         c = self._client()
-        c.on_message = lambda t, p: got.append((t, p))
+        c.on_message = lambda t, p, retained=False: got.append((t, p))
         topic = b"roon/Sphere/state"
         body = len(topic).to_bytes(2, "big") + topic + b"playing"
         c._rxbuf = bytes([0x30]) + self.mod._remaining_len(len(body)) + body
@@ -189,9 +189,24 @@ class TestClientCanReceive(unittest.TestCase):
             c._drain()
         self.assertEqual(got, [("roon/Sphere/state", b"playing")])
 
+    def test_the_retain_bit_reaches_the_handler(self):
+        # a retained message (fixed header 0x31) is the broker's replay, and
+        # route_message must be able to tell it from a live one (0x30)
+        got = []
+        c = self._client()
+        c.on_message = lambda t, p, retained=False: got.append(retained)
+        topic = b"nexusq/x/update/install"
+        body = len(topic).to_bytes(2, "big") + topic + b"install"
+        packet = self.mod._remaining_len(len(body)) + body
+        c._rxbuf = bytes([0x31]) + packet + bytes([0x30]) + packet
+        c.sock = object()
+        with mock.patch.object(self.mod.select, "select", return_value=([], [], [])):
+            c._drain()
+        self.assertEqual(got, [True, False])
+
     def test_a_handler_that_throws_does_not_kill_the_daemon(self):
         c = self._client()
-        c.on_message = lambda t, p: 1 / 0
+        c.on_message = lambda t, p, retained=False: 1 / 0
         topic = b"roon/Sphere/state"
         body = len(topic).to_bytes(2, "big") + topic + b"playing"
         c._rxbuf = bytes([0x30]) + self.mod._remaining_len(len(body)) + body

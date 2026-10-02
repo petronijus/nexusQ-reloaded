@@ -62,6 +62,7 @@ Env overrides (host-test seams, mirroring nq-healthd's NQ_* style):
     NQMQTT_DIAG
 """
 
+import contextlib
 import json
 import os
 import re
@@ -261,7 +262,7 @@ def opp_residency(prev, cur):
 OPP_WINDOW_S = int(os.environ.get("NQMQTT_OPP_WINDOW_S", "3600"))
 
 
-def window_residency(history, cur, now, window_s=None):
+def window_residency(history, cur, now, window_s=None, keep_every_s=0):
     """Rolling-window per-OPP share.
 
     history: list of (monotonic_t, snapshot) oldest-first; cur: the snapshot
@@ -269,7 +270,12 @@ def window_residency(history, cur, now, window_s=None):
     new history has expired entries pruned and `cur` appended. A counter that
     went BACKWARDS vs the newest history entry means the kernel counters were
     reset (reboot while our state somehow survived) — the whole history is
-    discarded rather than poisoning an hour of readings."""
+    discarded rather than poisoning an hour of readings.
+
+    keep_every_s thins the history a long window keeps: a snapshot is stored
+    only once the newest is that old (the share still uses `cur`), so a day's
+    window holds 288 snapshots at 300 s instead of 2880, at the cost of up to
+    keep_every_s of slack at the window's far edge."""
     window_s = OPP_WINDOW_S if window_s is None else window_s
     if not cur:
         return {}, history
@@ -280,8 +286,16 @@ def window_residency(history, cur, now, window_s=None):
     history = [(t, s) for (t, s) in history if now - t <= window_s]
     base = history[0][1] if history else {}
     pct = opp_residency(base, cur)
-    history.append((now, cur))
+    if not history or now - history[-1][0] >= keep_every_s:
+        history.append((now, cur))
     return pct, history
+
+
+# The day window behind the "Time at X MHz (24 h)" sensors (r17): an hour
+# says what the Q is doing now, a day what it costs. Kept in memory, so after
+# a restart it covers the time since (since boot, at first).
+OPP_DAY_WINDOW_S = 24 * 3600
+OPP_DAY_KEEP_EVERY_S = 300
 
 
 class Windows:
@@ -291,6 +305,7 @@ class Windows:
 
     def __init__(self):
         self.tis = []  # [(monotonic_t, {freq_khz: ticks})]
+        self.tis_day = []  # the same, thinned, for the 24 h window
         self.idle = []  # [(monotonic_t, {state: us}, ncpu)]
         self.veto = []  # [(monotonic_t, blocked: bool)]
 
@@ -759,6 +774,11 @@ def collect(win):
     pct, win.tis = window_residency(win.tis, cur_tis, now)
     for freq, val in pct.items():
         state[f"opp{freq // 1000}_pct"] = val
+    pct, win.tis_day = window_residency(
+        win.tis_day, cur_tis, now, window_s=OPP_DAY_WINDOW_S, keep_every_s=OPP_DAY_KEEP_EVERY_S
+    )
+    for freq, val in pct.items():
+        state[f"opp{freq // 1000}_24h_pct"] = val
 
     # C-states: share of wall time over the same rolling hour, from the kernel's
     # counters (healthd's per-sample cstate_ms is a 5 s window; an hour of it
@@ -1018,7 +1038,7 @@ class MqttClient:
             parsed = self._parse_buffered()
             if parsed is None:
                 break
-            ptype, _body = parsed
+            ptype, flags, _body = parsed
             if ptype == 0xD0:  # PINGRESP
                 self._ping_sent = None
             elif ptype == 0x30 and self.on_message is not None:
@@ -1031,7 +1051,10 @@ class MqttClient:
                 except (struct.error, IndexError):
                     continue  # malformed; drop, keep going
                 try:
-                    self.on_message(topic, payload)
+                    # The RETAIN bit says the broker is replaying what it holds
+                    # (at every subscribe), not that someone pressed something
+                    # now: a command handler must tell the two apart.
+                    self.on_message(topic, payload, bool(flags & 0x01))
                 except Exception as e:  # a handler must never kill us
                     log("mqtt: message handler failed:", e)
 
@@ -1055,9 +1078,10 @@ class MqttClient:
         if len(buf) < i + length:
             return None
         packet_type = buf[0] & 0xF0
+        flags = buf[0] & 0x0F
         body = buf[i : i + length]
         self._rxbuf = buf[i + length :]
-        return packet_type, body
+        return packet_type, flags, body
 
 
 # --------------------------------------------------------------------------
@@ -1208,6 +1232,22 @@ def discovery_configs(node_id, display_name, prefix):
                     "entity_category": "diagnostic",
                     "icon": "mdi:sine-wave",
                     "value_template": f"{{{{ value_json.opp{mhz}_pct | default('unknown') }}}}",
+                },
+            )
+        )
+    # The same over a day (OPP_DAY_WINDOW_S): what the Q's frequencies cost
+    # over 24 h, which an hour's window cannot say.
+    for mhz in (350, 700, 920, 1200):
+        sensors.append(
+            (
+                f"opp{mhz}_24h",
+                f"Time at {mhz} MHz (24 h)",
+                {
+                    "unit_of_measurement": "%",
+                    "state_class": "measurement",
+                    "entity_category": "diagnostic",
+                    "icon": "mdi:sine-wave",
+                    "value_template": f"{{{{ value_json.opp{mhz}_24h_pct | default('unknown') }}}}",
                 },
             )
         )
@@ -1770,13 +1810,20 @@ class UpdateLink:
         self._last = None  # the last payload published
         self._next_check = clock() + UPDATE_FIRST_CHECK_S
 
+    def command_topics(self):
+        return {self.topics["install"], self.topics["check"]}
+
     def submit(self, topic, payload):
         """From the MQTT receive path: queue, never block it on apk."""
         kind = {self.topics["install"]: "install", self.topics["check"]: "check"}.get(topic)
         if kind is None:
             return False
-        if kind == "install" and payload.strip() != "install":
-            log("update: ignored install payload", payload[:40])
+        # The receive path hands over bytes. Compared as they came, b"install"
+        # never equalled "install", and every Install press in Home Assistant
+        # was logged as ignored (r10-r14).
+        text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)
+        if kind == "install" and text.strip() != "install":
+            log("update: ignored install payload", text[:40])
             return True
         with self._cv:
             if kind not in self._queue:
@@ -1982,6 +2029,9 @@ class RingLink:
             if topic == self.topics[kind]:
                 return kind
         return None
+
+    def command_topics(self):
+        return {self.topics[k] for k in self.KINDS}
 
     def submit(self, topic, payload):
         """From the MQTT receive path: queue, never block it on the bridge."""
@@ -2264,6 +2314,9 @@ class VolumeLink:
         else:
             self.publish(self.topics["available"], "offline", True)
 
+    def command_topics(self):
+        return {self.topics["level"], self.topics["mute"]}
+
     def submit(self, topic, payload):
         kind = {self.topics["level"]: "level", self.topics["mute"]: "mute"}.get(topic)
         if kind is None:
@@ -2368,6 +2421,160 @@ class LinkReport:
         return f"broker not reachable: {text}"
 
 
+class DiscoveryGuard:
+    """Keeps this unit's Home Assistant discovery configs its own.
+
+    A retained config under our node_id is the device's identity in HA: its
+    name, its state topic, every unique_id. Anyone who can publish there can
+    take the device over, and something did: the cottage broker kept 19 stale
+    configs carrying the Prague Q's node_id (written during the cloned-MAC
+    night, 2026-08-29), and replayed them into the home broker every time its
+    bridge reconnected. From 2026-10-01 HA showed the cottage's frozen numbers
+    under the Prague Q's name, and nothing on the Q noticed, because discovery
+    was published only at its own connect.
+
+    So the unit listens to `<discovery>/+/<node_id>/+/config` and answers:
+      - a config we publish, arriving with other contents: ours again;
+      - a config we never published, under our node_id: cleared (an empty
+        retained message removes the entity in HA);
+      - our own, echoed back: nothing.
+
+    Bounded, because the other writer may be a unit that thinks the same of
+    its own version (two units with one node_id, as on 2026-08-29, would
+    otherwise answer each other forever):
+      - a write inside the holdoff is deferred, not dropped (`due()`, from the
+        main loop): a stale config and its removal 8 s apart left the entity
+        deleted in HA on the Prague Q;
+      - the holdoff doubles with each answer in an episode, from HOLDOFF_S to
+        HOLDOFF_MAX_S, and after GIVE_UP answers the guard stops answering that
+        topic and says once, loudly, that something else keeps writing it;
+      - an episode ends when the topic has had no foreign write for
+        EPISODE_GAP_S, so a stale replay hours later (a bridge reconnect) is
+        answered at once again;
+      - with the `000000000000` fallback node_id (wlan0 unreadable at start)
+        the guard is off: that id is nobody's own.
+
+    `record` is fed every discovery publish of this unit, so the set is exactly
+    what this unit publishes now (a config it retracted, published as "", is
+    recorded as "" and a foreign one there is cleared again)."""
+
+    HOLDOFF_S = 60
+    HOLDOFF_MAX_S = 3600
+    GIVE_UP = 6
+    EPISODE_GAP_S = 3600
+
+    def __init__(self, discovery_prefix, node_id, clock=time.monotonic):
+        self.prefix = discovery_prefix.rstrip("/") + "/"
+        self.node_id = node_id
+        self.enabled = not node_id.endswith("000000000000")
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.ours = {}  # topic -> the payload we published (str)
+        self.seen = {}  # topic -> a foreign payload not answered yet
+        self.answered = {}  # topic -> when we last answered it
+        self.strikes = {}  # topic -> answers in the current episode
+        self.last_foreign = {}  # topic -> when a foreign write last arrived
+        self.gave_up = set()
+
+    @property
+    def filter(self):
+        return f"{self.prefix}+/{self.node_id}/+/config"
+
+    def mine(self, topic):
+        # <prefix>/<component>/<node_id>/<object_id>/config
+        parts = topic[len(self.prefix) :].split("/") if topic.startswith(self.prefix) else []
+        return len(parts) == 4 and parts[1] == self.node_id and parts[3] == "config"
+
+    def record(self, topic, payload):
+        if self.mine(topic):
+            text = payload.decode("utf-8") if isinstance(payload, bytes) else str(payload)
+            with self.lock:
+                self.ours[topic] = text
+
+    def observe(self, topic, payload):
+        """A message on our discovery filter: (topic, payload) to publish, or None."""
+        if not self.enabled or not self.mine(topic):
+            return None
+        text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)
+        with self.lock:
+            if text == self.ours.get(topic, ""):
+                self.seen.pop(topic, None)
+                return None  # our own, or an empty topic we left empty
+            now = self.clock()
+            last = self.last_foreign.get(topic)
+            if last is None or now - last >= self.EPISODE_GAP_S:
+                self.strikes[topic] = 0  # a new episode
+                self.gave_up.discard(topic)
+            self.last_foreign[topic] = now
+            self.seen[topic] = text
+            return self._answer(topic, now)
+
+    def due(self):
+        """Deferred answers whose holdoff is over: [(topic, payload)]."""
+        if not self.enabled:
+            return []
+        with self.lock:
+            now = self.clock()
+            out = [self._answer(t, now) for t in list(self.seen)]
+        return [a for a in out if a is not None]
+
+    def _holdoff(self, topic):
+        n = self.strikes.get(topic, 0)
+        return min(self.HOLDOFF_MAX_S, self.HOLDOFF_S * 2 ** max(0, n - 1))
+
+    def _answer(self, topic, now):
+        # under self.lock; a foreign payload for `topic` is in self.seen
+        if topic in self.gave_up:
+            return None
+        last = self.answered.get(topic)
+        if last is not None and self.strikes.get(topic, 0) and now - last < self._holdoff(topic):
+            return None  # deferred: due() answers it after the holdoff
+        if self.strikes.get(topic, 0) >= self.GIVE_UP:
+            self.gave_up.add(topic)
+            self.seen.pop(topic, None)
+            log(
+                "discovery: GIVING UP on",
+                topic,
+                f"- answered {self.GIVE_UP} times and something keeps writing it; another unit",
+                f"with node_id {self.node_id} (a cloned MAC?) or a broker replaying a stale config",
+            )
+            return None
+        want = self.ours.get(topic, "")
+        self.answered[topic] = now
+        self.strikes[topic] = self.strikes.get(topic, 0) + 1
+        self.seen.pop(topic, None)
+        log(
+            "discovery: a foreign config on",
+            topic,
+            "- republishing ours" if want else "- clearing it (not ours)",
+        )
+        return topic, want
+
+
+def route_message(topic, payload, retained, guard, answer, links, roon=None):
+    """Where a message from the broker goes.
+
+    - our own discovery filter: to the guard, whose answers `answer` sends;
+    - a RETAINED message on a command topic: dropped. Retained means the
+      broker replaying what it holds at every subscribe, not someone pressing
+      something now; obeyed, a stray `mosquitto_pub -r .../update/install`
+      would install at every reconnect and a retained volume would set the
+      volume at every reconnect (r17: until then the Install payload never
+      matched at all, which hid this);
+    - otherwise the first link that takes it, then the Roon bridge."""
+    if guard.mine(topic):
+        answer(lambda: [a for a in [guard.observe(topic, payload)] if a is not None])
+        return
+    if retained and any(topic in link.command_topics() for link in links):
+        log("ignored a retained command on", topic)
+        return
+    for link in links:
+        if link.submit(topic, payload):
+            return
+    if roon is not None:
+        roon(topic, payload)
+
+
 def _on_sigterm(signum, frame):
     _STOP.set()
 
@@ -2400,17 +2607,23 @@ def run():
     client = None
     link = LinkReport(time.monotonic())
 
+    guard = DiscoveryGuard(conf["discovery_prefix"], node_id)
+    discovery_lock = threading.Lock()
+
     def safe_publish(topic, payload, retain=False):
         """For the side threads: the main loop owns reconnects, so a publish
         into a dead or absent connection is dropped here and the whole
-        picture is re-sent after the next connect."""
+        picture is re-sent after the next connect. A discovery config is
+        recorded and sent under discovery_lock (see publish_discovery)."""
         c = client
-        if c is None:
-            return
-        try:
-            c.publish(topic, payload, retain=retain)
-        except (MqttError, OSError):
-            pass
+        with discovery_lock if guard.mine(topic) else contextlib.nullcontext():
+            guard.record(topic, payload)
+            if c is None:
+                return
+            try:
+                c.publish(topic, payload, retain=retain)
+            except (MqttError, OSError):
+                pass
 
     ring = None
     vol = None
@@ -2431,15 +2644,33 @@ def run():
         upd = UpdateLink(prefix, node_id, safe_publish)
         threading.Thread(target=upd.worker, daemon=True).start()
 
-    def on_message(topic, payload):
-        if ring is not None and ring.submit(topic, payload):
-            return
-        if vol is not None and vol.submit(topic, payload):
-            return
-        if upd is not None and upd.submit(topic, payload):
-            return
-        if ROON_ENABLED:
-            roon_forward(topic, payload)
+    def publish_discovery(topic, payload):
+        """A discovery publish of this unit: recorded for the guard and sent
+        under one lock, so the guard can never send an older version over a
+        newer one a side thread is sending (RingLink re-announces when the
+        ring's shape changes). A failure raises, so the main loop reconnects."""
+        with discovery_lock:
+            guard.record(topic, payload)
+            client.publish(topic, payload, retain=True)
+
+    def guard_answer(decide):
+        """Decide and send the guard's answers under discovery_lock, so the
+        version it sends is the one recorded at that instant."""
+        with discovery_lock:
+            for topic, cfg in decide():
+                guard.record(topic, cfg)
+                client.publish(topic, cfg, retain=True)
+
+    def on_message(topic, payload, retained=False):
+        route_message(
+            topic,
+            payload,
+            retained,
+            guard,
+            guard_answer,
+            [link for link in (ring, vol, upd) if link is not None],
+            roon_forward if ROON_ENABLED else None,
+        )
 
     if ROON_ENABLED:
         # A closure, not the object: the client is replaced on every reconnect
@@ -2482,15 +2713,22 @@ def run():
             client.publish(status_topic, "online", retain=True)
             client.publish(legacy_status_topic, "online", retain=True)
             for suffix, cfg in discovery_configs(node_id, display_name, prefix):
-                client.publish(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg), retain=True)
+                publish_discovery(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg))
             if ring is not None:
                 ring.on_mqtt_connect()
             if vol is not None:
                 vol.on_mqtt_connect()
             if upd is not None:
                 for suffix, cfg in update_discovery_configs(node_id, display_name, prefix):
-                    client.publish(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg), retain=True)
+                    publish_discovery(f"{conf['discovery_prefix']}/{suffix}", json.dumps(cfg))
                 upd.republish()
+            # Last, once everything of ours is published and recorded: the
+            # broker replays what it retains under our node_id, and the guard
+            # answers anything that is not ours.
+            if guard.enabled:
+                client.subscribe([guard.filter])
+            else:
+                log("discovery guard off: node_id", node_id, "is the fallback, nobody's own")
             while not _STOP.is_set():
                 state = collect(win)
                 payload = json.dumps(state)
@@ -2499,6 +2737,7 @@ def run():
                 deadline = time.monotonic() + conf["interval_s"]
                 while not _STOP.is_set() and time.monotonic() < deadline:
                     client.maintain()
+                    guard_answer(guard.due)
                     time.sleep(1)
         except (MqttError, OSError) as e:
             said = link.failed(time.monotonic(), e)

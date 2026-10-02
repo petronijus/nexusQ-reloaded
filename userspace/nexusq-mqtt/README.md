@@ -91,6 +91,12 @@ null — HA templates guard with `| default('unknown')`, the app can distinguish
     Petr: "lítá to úplně jak se to zlíbí"). Until an hour of history exists
     the window is honestly shorter (since daemon start); a kernel counter
     reset discards the history rather than poisoning an hour of readings
+  - `opp350_24h_pct` … `opp1200_24h_pct` (r17) — the same over a **24 h**
+    window, from the same counters (a snapshot kept every 5 min). An hour says
+    what the Q is doing now, a day what it costs. In memory, so after a
+    restart it covers the time since. Not a mean of the hourly sensor in
+    Home Assistant: HA records a sensor only when it changes, so a mean of its
+    points is not a mean over time
   - `idle_c1_pct` `idle_c2_pct` `idle_c3_pct` (r8) — share of **wall time**
     each CPU spent in each C-state over the same rolling hour, from the
     kernel's cumulative `cpuN/cpuidle/stateM/time` (both CPUs, averaged).
@@ -141,7 +147,8 @@ Discovery creates one device ("Nexus Q" / the name from
 `/etc/nexusq/device.json`, keyed by the factory WiFi MAC) with:
 
 - sensors: die temperature, CPU frequency, governor, load, memory available,
-  uptime, WiFi RSSI, 4× per-OPP residency, 3× C-state residency
+  uptime, WiFi RSSI, 4× per-OPP residency over an hour and 4× over a day
+  (**Time at X MHz (24 h)**, r17), 3× C-state residency
   (**Time in C1/C2/C3**), **CPU latency limit**, **Deep idle blocked** (%),
   **WiFi repairs**
   (`total_increasing`, so a reboot's reset to 0 is not a decrease and an
@@ -255,9 +262,61 @@ gets entities Home Assistant can **drive**:
   start, then every 6 h (`NQMQTT_UPDATE_EVERY_S`), and on the button, never on
   the telemetry tick.
 - Only this node's `update/install` with the payload `install` installs.
+  Until r17 the payload arrived as bytes and was compared with a string, so
+  every Install press was logged as ignored; only the app's update worked.
   Anyone who can publish there can update the Q, exactly as anyone who can
   reach the bridge's port can; the broker's credentials are the gate.
 - Disable with `NQMQTT_UPDATE=0`.
+
+### Discovery guard (r17, 2026-10-02)
+
+The retained configs under this unit's node_id are its identity in Home
+Assistant, and anyone who can publish there can take it over. On 2026-10-01
+the cottage broker's bridge replayed 19 stale configs carrying the Prague Q's
+node_id (left over from the 2026-08-29 cloned-MAC night,
+`docs/2026-08-29-mqtt-at-the-cottage-and-a-cloned-mac.md`), and HA showed the
+cottage's frozen numbers under the Prague Q's name until a diagnostic sweep
+noticed.
+
+After its own discovery is out, the daemon subscribes to
+`<discovery_prefix>/+/<node_id>/+/config` (`DiscoveryGuard`): a config it
+publishes, arriving with other contents, is published again; a config it never
+published under its node_id is cleared (an empty retained message, which also
+removes the entity in HA); its own echo is ignored.
+
+It is bounded, because the other writer may be a unit that thinks the same of
+its own version (two units with one node_id, as on 2026-08-29):
+- a write inside the holdoff is deferred, never dropped (a stale config and
+  its removal 8 s apart once left an entity deleted);
+- the holdoff doubles with each answer, from 60 s up to an hour, and after six
+  answers the guard stops on that topic and logs `discovery: GIVING UP on …`
+  once: something else keeps writing it (a node_id collision, or a broker
+  replaying a stale config); in a fight between two units one of them gives
+  up and the other's version stands, within about half an hour;
+- an hour without a foreign write ends the episode, so a stale replay at the
+  next bridge reconnect is answered at once again;
+- with the fallback node_id `nexusq_000000000000` (wlan0 unreadable at start)
+  the guard is off.
+
+What changes for a user:
+- **Deleting the device in HA does not stick** while the Q runs: HA clears the
+  retained configs and the guard publishes them again. Remove it by stopping
+  `nexusq-mqtt` (or removing `/etc/nexusq/mqtt.json`) first.
+- **`NQMQTT_RING=0`, `NQMQTT_VOLUME=0`, `NQMQTT_UPDATE=0` now remove those
+  entities from HA**, and a unit's first r17 connect clears every config an
+  older revision left under its node_id (the cottage Q's included): an entity
+  that disappears then is one this revision no longer publishes.
+
+### Retained commands are ignored (r17)
+
+The client now sees the RETAIN bit, and a retained message on a command topic
+(ring, volume, update install/check) is dropped with `ignored a retained
+command on …`. A retained message is the broker replaying what it holds at
+every subscribe, not someone pressing something: obeyed, a stray
+`mosquitto_pub -r …/update/install` would install at every reconnect, and a
+retained volume would set the volume at every reconnect. (Until r17 this was
+hidden for Install by the bytes bug above; for the ring and the volume it was
+there all along.)
 
 ## Configuration (NOT baked into the image — provisioned by the companion app)
 

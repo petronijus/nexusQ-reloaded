@@ -380,6 +380,79 @@ class TestWindowResidency(unittest.TestCase):
         self.assertEqual(pct, {})
         self.assertEqual(hist2, hist)
 
+    def test_the_day_window_is_thinned_but_measures_every_publish(self):
+        hist = []
+        for i in range(10):  # every 30 s for 5 min
+            pct, hist = MOD.window_residency(
+                hist, {350: 100 * (i + 1), 1200: 10}, 30.0 * i, window_s=86400, keep_every_s=300
+            )
+        self.assertEqual([t for t, _ in hist], [0.0])  # one snapshot kept
+        # measured against t=0 with the newest counters all the same
+        self.assertEqual(pct[350], 100.0)
+        _, hist = MOD.window_residency(hist, {350: 1100, 1200: 10}, 300.0, window_s=86400, keep_every_s=300)
+        self.assertEqual([t for t, _ in hist], [0.0, 300.0])
+
+    def test_the_day_window_spans_a_day(self):
+        hist = []
+        _, hist = MOD.window_residency(hist, {350: 0, 1200: 0}, 0.0, window_s=86400, keep_every_s=300)
+        _, hist = MOD.window_residency(hist, {350: 900, 1200: 100}, 3600.0, window_s=86400, keep_every_s=300)
+        # 23 h later the first snapshot is still the base: a day, not an hour
+        pct, hist = MOD.window_residency(hist, {350: 1800, 1200: 200}, 82800.0, window_s=86400, keep_every_s=300)
+        self.assertEqual(pct[350], 90.0)
+        self.assertEqual(hist[0][0], 0.0)
+
+    def test_collect_publishes_the_hour_and_the_day(self):
+        tis = tempfile.NamedTemporaryFile("w", delete=False)
+        tis.write("350000 900\n700000 0\n920000 0\n1200000 100\n")
+        tis.close()
+        self.addCleanup(os.unlink, tis.name)
+        with (
+            mock.patch.object(MOD, "HEALTH_PATH", "/nonexistent"),
+            mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"),
+            mock.patch.object(MOD, "TIS_PATH", tis.name),
+            mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+            mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+            mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+            mock.patch.object(MOD, "read_uptime", return_value=1),
+        ):
+            state = MOD.collect(MOD.Windows())
+        self.assertEqual(state["opp350_pct"], 90.0)
+        self.assertEqual(state["opp350_24h_pct"], 90.0)
+        self.assertEqual(state["opp1200_24h_pct"], 10.0)
+
+    def test_the_day_reaches_past_the_hour(self):
+        tis = tempfile.NamedTemporaryFile("w", delete=False)
+        tis.close()
+        self.addCleanup(os.unlink, tis.name)
+        win = MOD.Windows()
+
+        def at(t, c350, c1200):
+            with open(tis.name, "w") as f:
+                f.write(f"350000 {c350}\n1200000 {c1200}\n")
+            with (
+                mock.patch.object(MOD, "HEALTH_PATH", "/nonexistent"),
+                mock.patch.object(MOD, "CPUIDLE_ROOT", "/nonexistent"),
+                mock.patch.object(MOD, "TIS_PATH", tis.name),
+                mock.patch.object(MOD, "USER_CGROUP", "/nonexistent"),
+                mock.patch.object(MOD, "read_wifi", return_value=(None, None)),
+                mock.patch.object(MOD, "read_volume", return_value=(None, None)),
+                mock.patch.object(MOD, "read_uptime", return_value=1),
+                mock.patch.object(MOD.time, "monotonic", return_value=t),
+            ):
+                return MOD.collect(win)
+
+        at(0.0, 900, 100)
+        at(3700.0, 1000, 100)  # an hour at 350 MHz
+        st = at(7300.0, 1000, 3700)  # then an hour at 1.2 GHz
+        self.assertEqual(st["opp1200_pct"], 100.0)  # the last hour only
+        self.assertEqual(st["opp1200_24h_pct"], round(100 * 3600 / 3700, 1))  # since t=0
+
+    def test_the_day_sensors_are_announced(self):
+        cfgs = dict(MOD.discovery_configs("nexusq_x", "Nexus Q", "nexusq"))
+        cfg = cfgs["sensor/nexusq_x/opp350_24h/config"]
+        self.assertEqual(cfg["name"], "Time at 350 MHz (24 h)")
+        self.assertIn("opp350_24h_pct", cfg["value_template"])
+
 
 def cpuidle_tree(root, per_cpu):
     """A fake /sys/devices/system/cpu: per_cpu = [[(name, time_us, lat)...]]."""
