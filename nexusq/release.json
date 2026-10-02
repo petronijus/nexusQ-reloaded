@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "version": "2.0.0",
+  "date": "2026-10-02",
+  "headline": "Quieter, a smarter ring, one volume, and it tells you what's new",
+  "items": [
+    {
+      "icon": "power",
+      "title": "Quiet when idle",
+      "text": "The Q sleeps deeper when nothing plays, and USB audio naps through the silence your TV sends."
+    },
+    {
+      "icon": "sound",
+      "title": "One volume everywhere",
+      "text": "Spotify, AirPlay, the app, the dome and Home Assistant all move the same volume."
+    },
+    {
+      "icon": "lights",
+      "title": "A ring that follows the day",
+      "text": "The ring dims with the daylight, switches off on a schedule, and fades smoothly."
+    },
+    {
+      "icon": "fix",
+      "title": "Your settings stay",
+      "text": "The name, theme, services, EQ and MQTT setup survive a reflash."
+    },
+    {
+      "icon": "new",
+      "title": "Update alerts",
+      "text": "The Q checks for new releases by itself, and the app tells you what's new."
+    }
+  ],
+  "packages": {
+    "nexusq-control": "0.1.0-r64",
+    "nexusqd": "0.1.0-r26",
+    "nexusq-btagent": "0.1.0-r8",
+    "nexusq-setupd": "0.1.0-r8",
+    "nexusq-mqtt": "0.1.0-r17",
+    "nexusq-alsa-vol": "0.1.0-r1",
+    "nexusq-kernel-ota": "0.1.0-r10",
+    "nexusq-rootfs-ab": "0.1.0-r6",
+    "device-google-steelhead": "1.0-r124",
+    "device-google-steelhead-nonfree-firmware": "1.0-r124",
+    "firmware-google-steelhead": "1-r3",
+    "speexdsp": "1.2.1-r100",
+    "shairport-sync": "5.1-r100",
+    "alsa-utils": "1.2.16-r100",
+    "alsa-utils-systemd": "1.2.16-r100",
+    "alsa-utils-udev": "1.2.16-r100"
+  }
+}
