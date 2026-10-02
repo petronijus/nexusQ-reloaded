@@ -128,11 +128,10 @@ CHANGELOG). Ships with v2.
   another version; a publish meanwhile keeps the published release.json); after
   the publish, `curl https://petronijus.github.io/nexusQ-reloaded/nexusq/release.json`
   answers, and on a unit `getUpdateStatus {"refresh": true}` reads it.
-- **iOS is not built yet.** Info.plist (BGTaskScheduler, `fetch`) and
-  AppDelegate (task, background plugin registrant, notification delegate) are
-  written from the plugins' docs; build it on the macOS VM
-  (nexusq-ios-release) before the release, and check a background refresh
-  (Xcode: Debug → Simulate Background Fetch) posts the notification.
+- **iOS compiles** (`just ci` on the MacBook, 2026-10-02, no codesign) with the
+  new Info.plist (BGTaskScheduler, `fetch`) and AppDelegate. Not yet run on a
+  device: at the release, check a background refresh (Xcode: Debug → Simulate
+  Background Fetch) posts the notification.
 - **The phone app** 1.26.0+65 has not been on a phone: a release APK is built on
   the MacBook (the debug key is machine-bound, app README). Then: allow the
   notification at the first connect, and check the banner against a unit with
@@ -149,12 +148,9 @@ just setup      # uv Python 3.14, lefthook install, blame ignore list, flutter p
 ```
 
 - **petronijus-PC** — ✅ done 2026-09-29; `just ci` green.
-- **MacBook** — shellcheck and e2fsprogs were installed by brew on 2026-09-29.
-  Still owed: `just setup` in `~/Documents/Dev/nexusQ-reloaded`, then `just ci`.
-  On 2026-09-29 a copy passed `fmt-check`, `lint`, `test-py`, `test-c` (Alpine),
-  `test-dart` and the host shell suites; the docker suites, the ALSA integration
-  test and the APK/iOS builds did not run (the MacBook went to sleep). Then
-  delete the verification copy: `rm -rf /tmp/nq-harness-verify`.
+- **MacBook** — ✅ done 2026-10-02: hooks installed, the verification copy gone,
+  `just ci` green (docker suites, ALSA integration test, Android build and the
+  iOS build without codesign included; Docker Desktop must be running).
 - **Omarchy** — shares `~/Documents` with Ubuntu, so it is the SAME clone and
   its git hooks are already live. Until its tools are installed: without
   lefthook the hooks are skipped; with lefthook but without shellcheck, just,
