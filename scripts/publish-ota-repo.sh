@@ -185,7 +185,10 @@ WT="$STAGE/gh-pages-wt"
 git -C "$REPO_ROOT" fetch --quiet origin gh-pages
 git -C "$REPO_ROOT" worktree add --detach "$WT" origin/gh-pages
 # A gate below can stop the script: the worktree must not outlive it.
-trap 'git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null; sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
+# `|| true`: under `set -e` a failing command aborts the trap itself, and its
+# status becomes the script's -- the v2.0.0 release published fine and then
+# exited 128 here, because the worktree removed at the end was removed again.
+trap 'git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true; sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
 if [ "$RELEASE_DRAFT" -eq 1 ] && [ -f "$WT/nexusq/release.json" ]; then
     cp "$WT/nexusq/release.json" "$STAGE/nexusq/release.json"
 fi
@@ -290,4 +293,5 @@ else
   fi
 fi
 git -C "$REPO_ROOT" worktree remove "$WT" --force
+trap 'sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
 echo "=== done — https://petronijus.github.io/nexusQ-reloaded/nexusq ==="
