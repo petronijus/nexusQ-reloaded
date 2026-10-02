@@ -6,6 +6,37 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-10-02 — quieter, a smarter ring, one volume, and it tells you what's new
+
+Kernel **6.18.48-r19** (patches 0059–0060), device **r124**, `nexusqd` **r26**,
+`nexusq-control` **r64**, `nexusq-mqtt` **r17**, `nexusq-kernel-ota` **r10**,
+`nexusq-rootfs-ab` **r6**, `nexusq-setupd` r8, `nexusq-btagent` r8, the new
+`nexusq-alsa-vol` r1 and `shairport-sync` 5.1-r100 in the OTA set; WiFi/BT
+firmware r3 unchanged. Released 2026-10-02 with `nexusq-boot-v2.0.0.img`
+(6.41 MiB) + `nexusq-rootfs-v2.0.0-sparse.img.zst` (682 MiB), cut on the
+Linux desktop; companion app **1.27.0+67** released beside it (`app-v1.27.0`).
+
+A major version, because it changes how a Q lives in the field. Every unit gets
+A/B rootfs slots and its own radio identity; everything the app sets survives a
+reflash; the Q checks for releases by itself and the app says what is new. And
+it plays nicer: one volume for Spotify, AirPlay, the app, the dome and Home
+Assistant (**Roon users: set the zone to *Fixed volume***), a ring that follows
+the daylight and a schedule, a USB audio input that dozes through a TV's
+silence, half the idle work. **Coming from v1.19.0 flash BOTH `boot` and
+`userdata`** (the kernel changed), or take it over the air: the app's system
+update, then `nq-kernel-ota` for the kernel. The USB network gadget is now
+**172.16.43.1**.
+
+### Fixed — the release script stopped after a good OTA publish (`publish-ota-repo.sh`)
+
+Cutting this release, `package-release.sh` published the OTA repo (live on
+Pages after 24 s) and then exited 128 before its parity gate. The publish
+script removes its gh-pages worktree at the end, and its EXIT trap removed it
+again; under `set -e` the failing `git worktree remove` aborted the trap and
+became the script's status. The trap now tolerates it and is narrowed once the
+worktree is gone (reproduced standalone: rc 128 before, 0 after). The parity
+gate was run by hand: 19 passed, 0 failed.
+
 ### Fixed — Home Assistant showed the cottage under the Prague Q's name (`nexusq-mqtt` **r17**)
 
 The two-day health check before v2 (2026-10-02, `nq-captures/20261002-100501/`)
