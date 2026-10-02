@@ -8,15 +8,29 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Any machine — 2026-09-30 evening: where we stopped (v2 release paused, app to the stores started)
+## Any machine — 2026-10-02: v2.0.0 is RELEASED; what is left of it
 
-Petr stopped for the day here. Nothing is released; `main` is pushed.
+Released from the desktop on 2026-10-02: the OTA repo on gh-pages (with
+`release.json`, so every v2 unit's release watch sees 2.0.0; parity gate 19/0),
+the GitHub release `v2.0.0` (boot 6.41 MiB, rootfs 682 MiB), `app-v1.27.0`
+(the github APK, release key + rotation) and `companion/app-release.json`.
 
-**v2.0.0 is NOT released** (Petr: "ještě nevydáváme"). Still to do before it,
-on his word: the volume test with a phone at a Q (below), approve
-`pmos/release-notes.json` (drop `"draft": true`), INSTALL.md to v2.0.0, the full
-build + `scripts/package-release.sh`. The rest of the checklist is in the
-"v2.0.0 work is all in `main`" section below.
+Left of the release:
+1. **iOS 1.27.0+67 to TestFlight** (the nexusq-ios-release agent, VM 108).
+   Not done: Claude Code's permission classifier refused the agent the read of
+   the ASC API key from 1Password ("Kulturni prehled ASC API Key"). Petr has to
+   allow that read (a permission rule, or approving it when asked); he has
+   already OK'd shutting Windows VM 106 down for it. Until then the app release
+   is Android-only, against the both-tracks rule.
+2. **Prague Q** (runs r124 / r64 / r26 / mqtt r17 by hand): take the update
+   through the app (checks the OTA path and the HA Install press), then
+   `nq-kernel-ota` for kernel r19; full diag sweep after. Then diagnostics mode
+   on (librespot re-auth loop), and Roon's zone to Fixed volume.
+3. **Cottage Q:** offline since 2026-09-28 01:54 (power cut); once it is back
+   it can take v2 over the air. Then the Šumperák HA section (below).
+4. The one-volume test below was still not run before the release.
+
+The 2026-09-30 notes below are kept for the store work and the volume test.
 
 **The one-volume test is not done yet.** Petr wants to test it properly first.
 The plan (agreed, not run): the Prague Q at 10-30 %, Petr drives Spotify, the
