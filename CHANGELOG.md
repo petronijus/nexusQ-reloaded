@@ -97,16 +97,69 @@ for 105.9 MB of the slices' 117 MB, the rest being scopes (ssh sessions, the
 user manager itself). The box's anon read 118 MB fresh from that boot,
 against 141.6 MB after 3 d 4 h on the one before.
 
-### Known issue — kernel OTA never prunes old module trees (`nexusq-kernel-ota`)
+### Fixed — the kernel OTA removes module trees nothing can boot (`nexusq-kernel-ota` **r11**)
 
 The post-boot sweep of kernel r20 (2026-10-03) found five trees in
-`/lib/modules` on the Prague Q, r16 to r20, 8.2 MB each. apk owns r20, and
-r19 is kept on purpose for `restore` (it belongs to the slot-A backup image);
-r16–r18 have no owner (`apk info -W`: no owner package) and nothing in
-`nq-kernel-ota` removes a tree once its backup image has been replaced. About
-25 MB now, 8 MB more with every kernel OTA; `/` is at 46 %. The fix belongs in
-the promote step: once a new backup is taken, the tree of the kernel it
-replaced is no longer anything's rollback.
+`/lib/modules` on the Prague Q, r16 to r20, 8.2 MB each. apk owned r20 and
+r19 was kept on purpose for `restore` (the slot-A backup boots it); r16–r18
+were owned by nothing, and nothing in `nq-kernel-ota` ever removed a tree
+once its kernel had left both slots and the backup. 8 MB more with every
+kernel OTA.
+
+`nq-kernel-ota prune`, run by `promote` after it reconciles the package
+database, removes a tree only when it belongs to none of: the running kernel,
+slot A's, the backup's, a pending trial's (named in the marker when the field
+is a release, else read from the trial slot), or a package that owns files in
+it (an `F:` line in apk's database, matched on the whole release). It also
+keeps the trees of the two newest kernels before those
+(`NQ_KOTA_KEEP_PREVIOUS`; newest by release number, the tree's mtime only
+breaking ties, because the Q has no RTC and a stage before NTP stamps the
+newest tree as the oldest): the
+fleet-safety review pointed out that INSTALL.md's boot-only reflash of an
+older release boots a kernel outside every slot, and without its tree that
+kernel has no WiFi. On the Prague Q that means r16 goes and r17–r20 stay; at
+most four trees (~33 MB) from here on. INSTALL.md §2 now says when a
+boot-only flash is safe, and `nq-kernel-ota status` lists the trees. The release of an image is read from
+the image itself, the "Linux version" banner in the zImage's LZMA payload,
+found the way the kernel's `scripts/extract-vmlinux` finds it, so it cannot
+drift from what a slot holds; about 4.6 s per image on the Q, cached by the
+image's md5. When slot A, the backup, a pending trial or apk's database cannot be
+read, nothing is removed: a guess there could delete the modules `restore`
+needs, and a kernel without them has no WiFi (2026-08-31). A decoy LZMA header
+claiming a dictionary the 32-bit Q cannot map costs that candidate only
+(`memlimit`, `MemoryError`), and only a string shaped like a release is
+accepted. Every command that writes a slot, the marker or a module tree now
+takes a lock (`flock` on the state dir): `stage-apk` installs the new tree
+well before it writes the marker, and a prune in between would have taken it.
+The lock needs util-linux `flock` (busybox's cannot wait), so the package now
+depends on `flock`, and says so plainly if it finds the busybox one;
+`autopromote` exits at once with nothing pending and clears the reboot reason
+before it takes the lock, so nothing can stand between a trial boot and its
+disarm. The suites run in Alpine off Linux, as the unit's busybox would.
+
+The rootfs A/B slots each carry their own `/lib/modules` and their own
+backup, and `prune` only touches the running rootfs, trusting its own backup;
+after a `restore` from the other rootfs the boot slot may hold a kernel this
+one's backup never saw. The two newest previous trees cover the usual case;
+the structural fix, state shared between the rootfs slots, is not part of
+this. The trial slot is not
+consulted without a pending trial: nothing boots it then but `rescue`, which
+leaves the rootfs unmounted, and on a unit that never took a kernel OTA it
+still holds stock recovery. 24 host tests on real boot images with LZMA
+payloads (`test_prune_modules.sh`, also through `promote`), each safety rule
+seen failing under its mutation; `test_personalize.sh`, which reaches
+`promote` through `autopromote`, no longer points it at the host's own
+`/lib/modules`.
+
+**On the Prague Q** (2026-10-03, r11 by `apk add`; util-linux `flock` 2.42.4
+already there through `nexusq-rootfs-ab`): `prune` read slot A as r20 and the
+backup as r19, kept r17 and r18 as the two previous kernels and removed r16
+(8.4 MB). The first run took 27 s at nice 19, two image decodes; the second,
+from the cache, no time at all. `nexusq-kernel-ota-promote` and
+`nexusq-identity` both ran to success under the lock, the identity unchanged.
+Not yet exercised on a unit: `prune` at the end of a real kernel OTA's
+`promote`, which the next kernel OTA will do (the host suite runs it through
+`promote`).
 
 ### Resolved upstream — `systemd-tmpfiles` and the unknown user `systemd-network`
 

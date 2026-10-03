@@ -4,7 +4,7 @@
 # docs/2026-08-18-kernel-ota-phase2.md
 pkgname=nexusq-kernel-ota
 pkgver=0.1.0
-pkgrel=10
+pkgrel=11
 pkgdesc="Nexus Q kernel OTA — trial-slot writer with health-gated promotion"
 url="https://github.com/petronijus/nexusQ-reloaded"
 arch="noarch"
@@ -17,7 +17,9 @@ license="GPL-2.0-only"
 # the base install. Depending on iputils drags in iputils-tracepath and friends
 # for a `ping -c1` we already have, and an OTA install then fails the moment a
 # mirror hiccups, which is exactly how this was found.
-depends="python3"
+# flock (util-linux): every command that writes a slot, the marker or a module
+# tree takes a lock, and busybox's flock has no -w (r11).
+depends="python3 flock"
 options="!check"
 # Staged flat next to this APKBUILD by docker-build.sh from
 # userspace/nexusq-kernel-ota/.

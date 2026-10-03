@@ -46,6 +46,9 @@ DT_ROOT=${NQ_KOTA_DT_ROOT:-/sys/firmware/devicetree/base}
 PERSIST_MNT=${NQ_KOTA_PERSIST_MNT:-/var/lib/nexusq/persist}
 IDENTITY_RECORD=${NQ_KOTA_IDENTITY_RECORD:-$PERSIST_MNT/identity/radio}
 EMMC_CID=${NQ_KOTA_CID:-/sys/block/mmcblk0/device/cid}
+MODULES_DIR=${NQ_KOTA_MODULES_DIR:-/lib/modules}            # overridable for tests only
+APK_DB=${NQ_KOTA_APK_DB:-/lib/apk/db/installed}             # overridable for tests only
+RELEASE_CACHE="$STATE_DIR/image-releases"   # "<md5 of the image> <kernel release>"
 
 die() { echo "nq-kernel-ota: $*" >&2; exit 1; }
 log() { echo "nq-kernel-ota: $*"; }
@@ -520,6 +523,9 @@ cmd_autopromote() {
 
     log "trial boot marker found; disarming the reboot reason first"
     sar write ""
+    # The lock comes after the disarm, never before it: nothing may stand
+    # between a trial boot and clearing the request that made it.
+    take_lock
 
     _now=$(uname -r)
     if [ -n "$_want" ] && [ "$_want" != "$_now" ]; then
@@ -591,6 +597,10 @@ usage: nq-kernel-ota <command>
   reconcile          make the package database and /boot describe the kernel
                      that is actually running (promote does this itself; run it
                      again once the repo carries that kernel)
+  prune              remove /lib/modules trees of kernels that are neither
+                     running, nor in slot A, the backup or a pending trial, nor
+                     owned by a package, nor among the 2 newest before them
+                     (promote does this itself; `status` lists what is left)
   status             what is where, and whether a trial is pending
   reason [value]     read (or set) the u-boot reboot reason in SAR RAM
   restore            put the boot slot back from the pre-update backup
@@ -622,6 +632,10 @@ cmd_status() {
         log "no trial boot pending"
     fi
     [ -f "$BACKUP" ] && log "slot-A backup: $BACKUP ($(stat -c %s "$BACKUP") B)"
+    # A kernel boots with WiFi only if its modules are here. Whoever is about to
+    # `fastboot flash boot` an older image needs this line: prune removes the
+    # trees of kernels that are in no slot, backup or package.
+    log "module trees  $(cd "$MODULES_DIR" 2>/dev/null && ls -d -- */ 2>/dev/null | tr -d / | tr '\n' ' ')"
     return 0
 }
 
@@ -920,6 +934,156 @@ reconcile_pkgdb() {
         [ -n "$_stash" ] && rm -f "$_stash"
     fi
 }
+# --- which kernel an image holds --------------------------------------------
+# The release is only inside the compressed zImage. Find the LZMA stream the way
+# the kernel's own scripts/extract-vmlinux does -- try every candidate header,
+# keep the one that decodes -- and read the "Linux version <release> (" banner,
+# streaming and stopping there. Reading it from the image, not from a note made
+# when the image was written, means it cannot drift from what the slot holds.
+# ~4.6 s per image on the Q (2026-10-03), so the answer is cached by the md5 of
+# the same 8 MiB `status` hashes.
+image_release_raw() {
+    nice -n 19 python3 - "$1" <<'RELEOF'
+import lzma, re, struct, sys
+with open(sys.argv[1], "rb") as f:
+    data = f.read(8 * 1024 * 1024)
+if data[:8] != b"ANDROID!":
+    sys.exit(1)
+ks, ka, rs, ra, ss, sa, tags, ps = struct.unpack_from("<8I", data, 8)
+k = data[ps:ps + ks]
+banner = re.compile(rb"Linux version (\S+) \(")
+# A release is all the answer is used for, and a misread backup release is the
+# one way prune could delete what `restore` boots: accept only that shape.
+release = re.compile(rb"^[0-9]+\.[0-9]+(\.[0-9]+)?-[A-Za-z0-9._+-]+$")
+i = k.find(b"\x5d\x00\x00")
+while i >= 0:
+    # A decoy header may claim a dictionary the 32-bit Q cannot map; liblzma
+    # then raises MemoryError, which must cost that candidate, not the scan.
+    d = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE, memlimit=128 << 20)
+    tail = b""
+    try:
+        for pos in range(i, len(k), 65536):
+            tail += d.decompress(k[pos:pos + 65536])
+            m = banner.search(tail)
+            if m and release.match(m.group(1)):
+                print(m.group(1).decode())
+                sys.exit(0)
+            tail = tail[-256:]
+            if d.eof:
+                break
+    except (lzma.LZMAError, MemoryError):
+        pass
+    i = k.find(b"\x5d\x00\x00", i + 1)
+sys.exit(1)
+RELEOF
+}
+
+image_release() {
+    [ -e "$1" ] || return 1
+    _sum=$(dd if="$1" bs=1M count=8 2>/dev/null | md5sum | cut -d' ' -f1)
+    _rel=$(awk -v s="$_sum" '$1 == s { print $2; exit }' "$RELEASE_CACHE" 2>/dev/null)
+    if [ -z "$_rel" ]; then
+        _rel=$(image_release_raw "$1") || return 1
+        [ -n "$_rel" ] || return 1
+        mkdir -p "$STATE_DIR"
+        # A handful of lines at most: one per image this unit has held lately.
+        { tail -n 15 "$RELEASE_CACHE" 2>/dev/null; echo "$_sum $_rel"; } > "$RELEASE_CACHE.new" \
+            && mv "$RELEASE_CACHE.new" "$RELEASE_CACHE"
+    fi
+    echo "$_rel"
+}
+
+# --- module trees nothing can boot any more ----------------------------------
+# stage-apk installs the new kernel's modules beside the running one's, and
+# reconcile keeps the outgoing tree because the slot-A backup boots it. Nothing
+# ever removed a tree once its kernel had left both slots and the backup: the
+# Prague Q carried r16-r20 on 2026-10-03, 8.2 MB each, three of them owned by
+# nothing.
+#
+# A tree stays when it belongs to any kernel that can still run here: the
+# running one, slot A's, the backup's (`restore`), a staged trial's, or one
+# that apk owns files in -- and so do the trees of the NQ_KOTA_KEEP_PREVIOUS
+# (2) newest kernels before those, which a boot-only reflash of an older
+# release still boots (the fleet-safety review, 2026-10-03). The trial slot itself does not count: without a
+# pending trial nothing boots it except `rescue`, which leaves the rootfs
+# unmounted, and on a unit that never took a kernel OTA it still holds stock
+# recovery. If any of those releases cannot be read, nothing is removed:
+# a guess here deletes the modules of the kernel `restore` would boot.
+keep() { case "$_keep" in *" $1 "*) ;; *) _keep="$_keep$1 " ;; esac; }
+
+# The shape image_release_raw accepts, for anything else that claims to name a
+# kernel (the pending marker).
+is_release() { printf '%s\n' "$1" | grep -Eqx '[0-9]+\.[0-9]+(\.[0-9]+)?-[A-Za-z0-9._+-]+'; }
+
+cmd_prune() {
+    _keep=" $(uname -r) "
+    _rel=$(image_release "$BOOT_SLOT") \
+        || { log "prune: cannot read the kernel release in slot A — removing nothing"; return 0; }
+    keep "$_rel"
+    if [ -f "$BACKUP" ]; then
+        _rel=$(image_release "$BACKUP") \
+            || { log "prune: cannot read the kernel release in $BACKUP — removing nothing"; return 0; }
+        keep "$_rel"
+    fi
+    if [ -f "$PENDING" ]; then
+        # The marker's 4th field is the staged release -- when it is one. A
+        # plain `stage` leaves it empty, and an image path with a space in it
+        # shifts the fields; either way the trial slot itself is read instead.
+        _rel=$(awk '{print $4}' "$PENDING" 2>/dev/null)
+        if ! is_release "$_rel"; then
+            _rel=$(image_release "$TRIAL_SLOT") \
+                || { log "prune: a trial is pending and its kernel is unknown — removing nothing"; return 0; }
+        fi
+        keep "$_rel"
+    fi
+    # Ownership is read from apk's database; without it every tree would look
+    # unowned, so no database means nothing is removed.
+    [ -r "$APK_DB" ] || { log "prune: cannot read $APK_DB — removing nothing"; return 0; }
+    # Newest kernel first. The first $_spare trees no slot, backup or package
+    # needs are kept anyway, for a `fastboot flash boot` of a previous release
+    # (INSTALL.md §2): without them that kernel comes up with no WiFi.
+    # "Newest" is the release (6.18.48-r20 > -r19 > 6.12.12-r52), the tree's
+    # mtime only breaks ties: the Q has no RTC, and a stage-apk before NTP has
+    # synced stamps the newest tree as the oldest.
+    _spare=${NQ_KOTA_KEEP_PREVIOUS:-2}
+    case "$_spare" in ''|*[!0-9]*) _spare=2 ;; esac
+    _gone=0 _held=0
+    _list=$(for _d in "$MODULES_DIR"/*/; do
+                [ -d "$_d" ] || continue
+                _b=$(basename "$_d")
+                # major minor patch rev mtime path, numbers 0 where absent
+                printf '%s\t%s\t%s\n' "$(printf '%s\n' "$_b" | awk '{
+                    n = split($0, v, /[.-]/); r = 0
+                    if (match($0, /-r[0-9]+/)) r = substr($0, RSTART + 2, RLENGTH - 2)
+                    printf "%d\t%d\t%d\t%d", v[1] + 0, v[2] + 0, v[3] + 0, r + 0 }')" \
+                    "$(stat -c %Y "$_d" 2>/dev/null || echo 0)" "$_d"
+            done | sort -t "$(printf '\t')" -k1,1nr -k2,2nr -k3,3nr -k4,4nr -k5,5nr | cut -f6-)
+    _ifs=$IFS; IFS='
+'
+    set -f
+    for _d in $_list; do
+        [ -d "$_d" ] || continue
+        _r=$(basename "$_d")
+        case "$_keep" in *" $_r "*) continue ;; esac
+        # apk lists every directory a package installs into as an F: line.
+        if awk -v p="F:lib/modules/$_r" '$0 == p || index($0, p "/") == 1 { f = 1; exit } END { exit !f }' \
+               "$APK_DB" 2>/dev/null; then
+            log "prune: keeping $MODULES_DIR/$_r — a package owns files in it"
+            continue
+        fi
+        if [ "$_held" -lt "$_spare" ]; then
+            _held=$((_held + 1))
+            log "prune: keeping $MODULES_DIR/$_r — one of the $_spare newest previous kernels"
+            continue
+        fi
+        log "prune: removing $MODULES_DIR/$_r ($(du -sk "$_d" 2>/dev/null | cut -f1) kB) — no slot, backup or package uses it"
+        rm -rf "${_d%/}" && _gone=$((_gone + 1))
+    done
+    set +f
+    IFS=$_ifs
+    log "prune: in use${_keep% }; kept $_held previous; removed $_gone tree(s)"
+}
+
 cmd_promote() {
     [ -f "$PENDING" ] || die "nothing pending — promote is for a kernel that just proved it boots"
     log "promoting trial slot -> boot slot"
@@ -939,6 +1103,10 @@ cmd_promote() {
     # afterwards — the device sat with /boot describing the previous kernel and
     # only a log line, which was wrong, to say so.
     reconcile_pkgdb
+
+    # The backup now holds the kernel just replaced, so the tree of the one
+    # before it is nobody's rollback any more.
+    cmd_prune
 }
 
 cmd_restore() {
@@ -951,6 +1119,28 @@ cmd_restore() {
     log "restored and disarmed."
 }
 
+# One writer at a time. stage-apk installs /lib/modules/<new> well before it
+# writes the pending marker, and a prune in between would take the trial's
+# modules with it; two stages, or a stage racing the boot-time promote, would
+# leave the slots and the marker disagreeing. Read-only commands do not wait.
+# util-linux flock (the package depends on it): busybox's has no -w.
+take_lock() {
+    mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+    flock --version 2>/dev/null | grep -q util-linux \
+        || die "needs util-linux flock (busybox's cannot wait with -w): apk add flock"
+    exec 9>"$STATE_DIR/lock" || die "cannot open $STATE_DIR/lock"
+    flock -n 9 && return 0
+    log "waiting for another nq-kernel-ota (autopromote holds the lock up to ${HEALTH_WAIT_S}s during a trial)"
+    flock -w "${NQ_KOTA_LOCK_WAIT_S:-600}" 9 \
+        || die "another nq-kernel-ota still holds $STATE_DIR/lock — gave up waiting"
+}
+# autopromote takes it itself, after disarming the reboot reason.
+case "${1:-}" in
+    stage|stage-apk|stage-latest|try|promote|reconcile|prune|personalize|restore|rescue)
+        take_lock ;;
+    reason) [ $# -ge 2 ] && take_lock ;;
+esac
+
 case "${1:-}" in
     stage)       shift; cmd_stage "$@" ;;
     stage-apk)    shift; cmd_stage_apk "$@" ;;
@@ -960,6 +1150,7 @@ case "${1:-}" in
     try)     cmd_try ;;
     promote)     cmd_promote ;;
     reconcile)   reconcile_pkgdb ;;
+    prune)       cmd_prune ;;
     personalize) shift; cmd_personalize "$@" ;;
     autopromote) cmd_autopromote ;;
     status)  cmd_status ;;

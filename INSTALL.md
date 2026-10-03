@@ -327,6 +327,16 @@ fastboot -S 100M flash userdata nexusq-rootfs-v2.0.0-sparse.img
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
 is ~23 chunks, each reporting OKAY — measured 2026-07-03).
 
+**Boot alone, without userdata** (going back to an older kernel on a unit that
+otherwise works) is safe only for a kernel whose modules are still on the unit:
+the WiFi and Bluetooth drivers are modules, and a kernel without its
+`/lib/modules/<release>` tree comes up with neither. Since `nexusq-kernel-ota`
+r11 each kernel OTA removes the trees no kernel here needs any more; it keeps
+the running kernel's, slot A's, the backup's (`nq-kernel-ota restore`) and the
+two newest releases before those. `nq-kernel-ota status` ends with the trees that are
+there (`module trees  6.18.48-r19 6.18.48-r20 …`): if the release of the image
+you are about to flash is not in that line, flash userdata too.
+
 **What a flash keeps (device r103+, 2026-09-19):** `boot` and `userdata` are
 the only partitions written, and the unit's own state lives on the `cache`
 partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — and

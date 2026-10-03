@@ -20,7 +20,7 @@ if [ "$(uname -s)" != Linux ] && [ -z "${NQ_TEST_IN_CONTAINER:-}" ]; then
     command -v docker >/dev/null || { echo "docker required off Linux" >&2; exit 2; }
     exec docker run --rm -e NQ_TEST_IN_CONTAINER=1 \
         -v "$HERE/../../..:/repo:ro" alpine:3.21 sh -c \
-        'apk add -q bash python3 >/dev/null 2>&1 && bash /repo/pmos/nexusq-kernel-ota/tests/test_personalize.sh'
+        'apk add -q bash python3 flock >/dev/null 2>&1 && bash /repo/pmos/nexusq-kernel-ota/tests/test_personalize.sh'
 fi
 TOOL="$HERE/../../../userspace/nexusq-kernel-ota/nq-kernel-ota"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -102,7 +102,8 @@ check '[ "$(wanted_identity "" "$GENERIC" $COTT_CID)" = "$d1" ]' "no record, gen
 check '[ "$(wanted_identity "" "wifi=? bt=?" $COTT_CID)" = "$d1" ]' "a slot with no identity at all: derived"
 
 # A synthetic boot slot, trial slot and everything personalize touches.
-mkdir -p "$T/bin" "$T/state" "$T/store/identity" "$T/dt/wifi" "$T/dt/bt"
+# promote prunes /lib/modules: never the host's own (it runs autopromote below)
+mkdir -p "$T/bin" "$T/state" "$T/store/identity" "$T/dt/wifi" "$T/dt/bt" "$T/modules"; : > "$T/apkdb"
 printf '#!/bin/sh\n[ "${1:-}" = -r ] && { echo 6.18.48-r17; exit 0; }\nexec /bin/uname "$@"\n' > "$T/bin/uname"; chmod +x "$T/bin/uname"
 printf '#!/bin/sh\n[ "$1" = is-active ] && { echo active; exit 0; }\nexit 0\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
 printf 'CONFIG_CMDLINE="console=ttyS2,115200 root=/dev/mmcblk0p13"\n' > "$T/config"
@@ -114,7 +115,8 @@ slot() {  # slot <wifi-hex> <bt-hex-stored>: a fresh boot slot and an empty tria
 }
 run() { PATH="$T/bin:$PATH" NQ_KOTA_BOOT_SLOT="$T/slotA" NQ_KOTA_TRIAL_SLOT="$T/slotB" \
         NQ_KOTA_STATE_DIR="$T/state" NQ_KOTA_PERSIST_MNT=/ NQ_KOTA_IDENTITY_RECORD="$T/store/identity/radio" \
-        NQ_KOTA_CID="$T/cid" NQ_KOTA_DT_ROOT="$T/dt" NQ_KOTA_HEALTH_WAIT_S=10 sh "$TOOL" "$@" 2>&1; }
+        NQ_KOTA_CID="$T/cid" NQ_KOTA_DT_ROOT="$T/dt" NQ_KOTA_HEALTH_WAIT_S=10 \
+        NQ_KOTA_MODULES_DIR="$T/modules" NQ_KOTA_APK_DB="$T/apkdb" sh "$TOOL" "$@" 2>&1; }
 
 echo "=== a release flashed onto another unit: its own identity, via the trial slot ==="
 slot $GEN_W $GEN_B; echo $COTT_CID > "$T/cid"
