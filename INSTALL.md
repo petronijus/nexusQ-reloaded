@@ -1,10 +1,18 @@
-<!-- RELEASE: v2.0.0 -->
+<!-- RELEASE: v2.0.1 -->
 # Nexus Q Reloaded -- Install Guide
 
-**This guide describes release `v2.0.0`** (device **r124**, `nexusqd` **r26**,
-`nexusq-control` **r64**, `nexusq-mqtt` **r17**, kernel-ota **r10**, rootfs-ab
-**r6**, WiFi/BT firmware r3, kernel **`6.18.48-r19`**, 58 patches through
-`0060`, with 0004 and 0032 dropped -- upstream fixed both).
+**This guide describes release `v2.0.1`** (device **r126**, `nexusqd` **r26**,
+`nexusq-control` **r64**, `nexusq-mqtt` **r17**, kernel-ota **r11**, rootfs-ab
+**r6**, WiFi/BT firmware r3, kernel **`6.18.48-r20`**, 59 patches through
+`0061`, with 0004 and 0032 dropped -- upstream fixed both).
+
+> **v2.0.1: a clean log on every USB plug, tidier kernel updates, a memory
+> watch.** Plugging or unplugging the USB cable no longer logs a power-chip
+> error; a kernel update removes the drivers of kernels nothing can boot any
+> more (and keeps the ones a rollback needs, see §2); and the health monitor
+> records which service holds how much memory, for weeks. **Coming from v2.0.0**
+> update over the air (the app's system update, then `nq-kernel-ota` for the
+> kernel), or flash BOTH `boot` and `userdata` -- the kernel changed.
 
 > **v2.0.0: quieter, a smarter ring, one volume, and it tells you what's new.**
 > Spotify, AirPlay, the app, the dome and Home Assistant move one volume (if you
@@ -99,8 +107,8 @@ touch the `bootloader` partition -- everything else can always be reflashed.
 - `fastboot` on your PC (`apt install android-sdk-platform-tools` or
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
-- release artifacts: `nexusq-boot-v2.0.0.img` (6.41 MiB), `nexusq-rootfs-v2.0.0-sparse.img.zst`
-  (**682 MiB** compressed, **2.82 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v2.0.0.txt`
+- release artifacts: `nexusq-boot-v2.0.1.img` (6.41 MiB), `nexusq-rootfs-v2.0.1-sparse.img.zst`
+  (**687 MiB** compressed, **2.82 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v2.0.1.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
@@ -116,7 +124,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
     the kernel changed, **coming from v1.10.1 flash BOTH `boot` and `userdata`** (a
     userdata-only flash would keep the r44 boot.img and miss patch 0044); coming from any
     earlier release flash both regardless. Flashing both is always safe. Verify against
-    `sha256sums-v2.0.0.txt`.
+    `sha256sums-v2.0.1.txt`.
   - _(Dev builds past v1.11.0 — v1.11.1/1.11.2/**v1.11.3** … **v1.11.9**, and
     **v1.12.0** (built 2026-08-10: MQTT health telemetry `nexusq-mqtt`, device
     r67; gates PASS, not yet flashed) — are **not
@@ -306,12 +314,12 @@ hard-coded in the stock bootloader, so no amount of retrying widens it.
 # dev builds since 2026-08-20 carry the small A/B-slot initramfs, still well
 # under the limit) -> 8 MB boot partition.
 # It MUST stay under 8 MB or U-Boot rejects the write (error=-27).
-# v2.0.0's boot image is kernel 6.18.48-r19 -- 58 patches through 0060 (r17 in
-# v1.19.0). Flashing boot is always safe, and is REQUIRED coming from any
+# v2.0.1's boot image is kernel 6.18.48-r20 -- 59 patches through 0061 (r19 in
+# v2.0.0). Flashing boot is always safe, and is REQUIRED coming from any
 # release on a different kernel revision -- which is every earlier one.
 # (This comment described the v1.11.0 kernel, r45 on 6.12.12 at ~5.3 MiB, until
 #  2026-09-16 -- four kernel revisions after it stopped being true.)
-fastboot flash boot nexusq-boot-v2.0.0.img
+fastboot flash boot nexusq-boot-v2.0.1.img
 
 # Root filesystem -> userdata partition. The -S 100M chunking is REQUIRED:
 # the 2012 U-Boot has a ~150 MB download buffer and fails silently without it.
@@ -319,9 +327,9 @@ fastboot flash boot nexusq-boot-v2.0.0.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The rootfs ships zstd-compressed (682 MiB -> 2.82 GiB sparse) -- decompress it first:
-zstd -d nexusq-rootfs-v2.0.0-sparse.img.zst   # -> nexusq-rootfs-v2.0.0-sparse.img
-fastboot -S 100M flash userdata nexusq-rootfs-v2.0.0-sparse.img
+# The rootfs ships zstd-compressed (687 MiB -> 2.82 GiB sparse) -- decompress it first:
+zstd -d nexusq-rootfs-v2.0.1-sparse.img.zst   # -> nexusq-rootfs-v2.0.1-sparse.img
+fastboot -S 100M flash userdata nexusq-rootfs-v2.0.1-sparse.img
 ```
 
 Expect boot + userdata to take **~3 minutes** total (the chunked userdata flash
