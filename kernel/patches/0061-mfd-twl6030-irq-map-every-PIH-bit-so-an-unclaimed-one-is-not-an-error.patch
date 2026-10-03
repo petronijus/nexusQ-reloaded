@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000061 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sat, 3 Oct 2026 22:13:22 +0200
+Subject: [PATCH] mfd: twl6030-irq: map every PIH bit, so an unclaimed one is
+ not an error
+
+On every USB cable event the Nexus Q (steelhead) logged
+
+  twl6030_irq: Unmapped PIH ISR 20 detected
+
+PIH bit 20 is CHRG_CTRL. phy-twl6030-usb unmasks it in INT_MSK_LINE_C
+and INT_MSK_STS_C because twl6030_irq_thread() copies it onto the VBUS
+bit (19) -- "VBUS status bit is not reliable for VBUS disconnect". The
+copied bit 19 reaches twl6030-usb as it should. Bit 20 itself is then
+dispatched too, and since the irq domain went linear, a hwirq gets a
+mapping only when a consumer translates it from DT. Nothing consumes
+CHARGER_INTR_OFFSET on a board without a charger (this one has no
+battery and no charger driver), so irq_find_mapping() returns 0 and the
+loop prints an error for an event that was handled.
+
+The vendor 3.0 kernel this board shipped with does the same unmask and
+the same copy, and stays silent: twl6030_init_irq() there gave the whole
+irq_base range a descriptor (handle_simple_irq on a dummy chip), and an
+interrupt nobody requested ended on a descriptor without an action.
+
+Do the same with the domain: create the mapping of every hwirq once the
+parent interrupt is requested. An unclaimed bit then reaches
+handle_nested_irq(), which drops an interrupt without an action
+silently. Mapping on demand still works, since a later translation finds
+the existing mapping. All PIH lines are masked at that point, so no
+interrupt can arrive before the mappings exist.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ drivers/mfd/twl6030-irq.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/mfd/twl6030-irq.c b/drivers/mfd/twl6030-irq.c
+index 0ca00f6..fa77b11 100644
+--- a/drivers/mfd/twl6030-irq.c
++++ b/drivers/mfd/twl6030-irq.c
+@@ -292,6 +292,7 @@ int twl6030_init_irq(struct device *dev, int irq_num)
+ {
+ 	int			nr_irqs;
+ 	int			status;
++	int			i;
+ 	u8			mask[3];
+ 	const struct of_device_id *of_id;
+ 
+@@ -354,6 +355,22 @@ int twl6030_init_irq(struct device *dev, int irq_num)
+ 	}
+ 
+ 	twl6030_irq->twl_irq = irq_num;
++
++	/*
++	 * Map every PIH bit up front, not only the ones a consumer asks for.
++	 * The PIH raises bits nobody has to request: phy-twl6030-usb unmasks
++	 * CHRG_CTRL (bit 20) because the thread above copies it onto VBUS to
++	 * catch a disconnect, and on a board without a charger driver nothing
++	 * maps CHARGER_INTR_OFFSET, so every VBUS edge logged "Unmapped PIH ISR
++	 * 20" as an error. With a mapping, a bit nobody handles is dropped by
++	 * handle_nested_irq() like any interrupt without an action -- what the
++	 * vendor kernel did, whose irq_base range gave every bit a descriptor.
++	 * All lines are still masked here, so nothing can arrive before this.
++	 */
++	for (i = 0; i < nr_irqs; i++)
++		if (!irq_create_mapping(twl6030_irq->irq_domain, i))
++			dev_warn(dev, "could not map PIH hwirq %d\n", i);
++
+ 	register_pm_notifier(&twl6030_irq->pm_nb);
+ 	return 0;
+ 
+-- 
+2.55.0
+
