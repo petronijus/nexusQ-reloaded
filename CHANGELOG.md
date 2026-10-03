@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-10-04 — a clean log on every USB plug, tidier kernel updates, a memory watch
+
+Kernel **6.18.48-r20** (patch 0061), device **r126**, `nexusq-kernel-ota`
+**r11**; everything else as in 2.0.0 (`nexusqd` r26, `nexusq-control` r64,
+`nexusq-mqtt` r17, `nexusq-rootfs-ab` r6, WiFi/BT firmware r3). Released
+2026-10-04 from the Linux desktop; the companion app is unchanged (1.27.0).
+
+A maintenance release. A USB plug or unplug no longer logs a TWL6030 error,
+a kernel update cleans up the module trees nothing can boot any more, and the
+health monitor now records whose memory grows, for weeks. **Coming from 2.0.0**
+take it over the air (the app's system update, then `nq-kernel-ota` for the
+kernel), or flash BOTH `boot` and `userdata` -- the kernel changed.
+
 ### Fixed — a USB cable event no longer logs a TWL6030 error (kernel **6.18.48-r20**, patch 0061)
 
 `twl6030_irq: Unmapped PIH ISR 20 detected`, at every USB plug or unplug

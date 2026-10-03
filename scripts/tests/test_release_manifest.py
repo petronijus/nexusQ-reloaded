@@ -82,7 +82,8 @@ class Notes(unittest.TestCase):
             "a long title": bad(lambda n: n["items"][0].update(title="t" * 41)),
             "a long text": bad(lambda n: n["items"][0].update(text="t" * 141)),
             "an extra item key": bad(lambda n: n["items"][0].update(url="https://x")),
-            "six items": bad(lambda n: n.update(items=n["items"] + [n["items"][0]])),
+            # exactly six, whatever the current notes hold (2.0.0 had five)
+            "six items": bad(lambda n: n.update(items=[n["items"][0]] * 6)),
             "no items": bad(lambda n: n.update(items=[])),
         }
         for what, n in cases.items():
@@ -125,7 +126,8 @@ class Republish(unittest.TestCase):
         old = {**NOTES, "packages": {"nexusqd": "0.1.0-r25"}}
         RM.check_republish(None, old)  # a first publish
         RM.check_republish(old, dict(old))  # the same release again
-        RM.check_republish(old, {**NOTES, "version": "2.0.1", "packages": {"nexusqd": "0.1.0-r26"}})
+        other = "99.0.0" if NOTES["version"] != "99.0.0" else "98.0.0"  # any other version
+        RM.check_republish(old, {**NOTES, "version": other, "packages": {"nexusqd": "0.1.0-r26"}})
         with self.assertRaises(RM.ManifestError):
             RM.check_republish(old, {**NOTES, "packages": {"nexusqd": "0.1.0-r26"}})
 

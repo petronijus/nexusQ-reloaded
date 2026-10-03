@@ -265,7 +265,9 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 1.18.0 ─ ✦ HDMI audio: the output that was never offered — issue #5                 2026-09-20
 (dev) ── ✦ ramoops was never broken — the crash archive is /var/lib/systemd/pstore   2026-09-20
 (dev) ── ✦ deep idle: both cores OFF — CPU1 errata, BT QoS, WiFi IRQ veto, stock C-states   2026-09-23
-1.19.0 ─ ✦ both cores asleep (C2/C3 on by default) · stock WiFi firmware ends the unicast wedge   2026-09-26   ← latest tag
+1.19.0 ─ ✦ both cores asleep (C2/C3 on by default) · stock WiFi firmware ends the unicast wedge   2026-09-26
+2.0.0 ── ✦ A/B rootfs on every Q · one volume · a ring that follows the day · update alerts   2026-10-02
+2.0.1 ── ✦ a USB plug logs nothing · kernel OTA prunes dead module trees · memory watch   2026-10-04   ← latest tag
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>

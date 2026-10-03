@@ -1,33 +1,23 @@
 {
   "schema": 1,
-  "version": "2.0.0",
-  "date": "2026-10-02",
-  "headline": "Quieter, a smarter ring, one volume, and it tells you what's new",
+  "version": "2.0.1",
+  "date": "2026-10-04",
+  "headline": "A clean log on every USB plug, tidier kernel updates, a memory watch",
   "items": [
     {
-      "icon": "power",
-      "title": "Quiet when idle",
-      "text": "The Q sleeps deeper when nothing plays, and USB audio naps through the silence your TV sends."
-    },
-    {
-      "icon": "sound",
-      "title": "One volume everywhere",
-      "text": "Spotify, AirPlay, the app, the dome and Home Assistant all move the same volume."
-    },
-    {
-      "icon": "lights",
-      "title": "A ring that follows the day",
-      "text": "The ring dims with the daylight, switches off on a schedule, and fades smoothly."
+      "icon": "usb",
+      "title": "Quiet USB plugging",
+      "text": "Plugging or unplugging the USB cable no longer logs a power-chip error."
     },
     {
       "icon": "fix",
-      "title": "Your settings stay",
-      "text": "The name, theme, services, EQ and MQTT setup survive a reflash."
+      "title": "Tidier kernel updates",
+      "text": "A kernel update now removes old drivers nothing can boot, and keeps the ones a rollback still needs."
     },
     {
       "icon": "new",
-      "title": "Update alerts",
-      "text": "The Q checks for new releases by itself, and the app tells you what's new."
+      "title": "A memory watch",
+      "text": "The Q records how much memory each service holds over weeks, so a slow leak shows who it is."
     }
   ]
 }
