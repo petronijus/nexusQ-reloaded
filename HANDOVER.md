@@ -8,6 +8,27 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-10-04: v2.0.1 is RELEASED
+
+Released from the desktop on 2026-10-04: the OTA repo on gh-pages (release.json
+says 2.0.1; parity gate 19/0) and the GitHub release `v2.0.1` (boot 6.41 MiB,
+rootfs 687 MiB). Kernel 6.18.48-r20 (patch 0061, the USB-plug PIH error),
+device r126 (nq-healthd's `mem.jsonl`), `nexusq-kernel-ota` r11 (prunes dead
+module trees, depends on util-linux `flock`). No app release; the app stays
+1.27.0.
+
+- **Prague Q:** already runs all of it, installed by hand on 2026-10-03, and
+  is current against the repo. Its memory trend starts with the r20 boot
+  (22:45 CEST): after a few days, `nq-health-report`'s `mem_trend` should name
+  what grew ~0.33 MB/h on the 3-day boot before.
+- **Cottage Q:** takes v2.0.1 like v2.0.0, over the air: the app's system
+  update, then `nq-kernel-ota stage-latest && nq-kernel-ota try` with someone
+  in reach. Check `apk info -e flock` first (it arrives with
+  `nexusq-rootfs-ab` r4+); kernel-ota r11 refuses to write without it.
+- Not exercised on a unit yet: `prune` at the end of a real kernel OTA's
+  promote. The cottage's v2.0.1 kernel OTA will be the first; read
+  `journalctl -u nexusq-kernel-ota-promote` there.
+
 ## Any machine — 2026-10-02: v2.0.0 is RELEASED; what is left of it
 
 Released from the desktop on 2026-10-02: the OTA repo on gh-pages (with
