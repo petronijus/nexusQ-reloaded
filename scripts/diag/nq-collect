@@ -72,6 +72,8 @@ say "[collect] snapshot: $(wc -l < "$DIR/snapshot.txt") lines"
 # and without it an overnight window loses its start (2026-09-28).
 dev 'cat /var/log/nq-health/health.jsonl.1 /var/log/nq-health/health.jsonl 2>/dev/null' > "$DIR/health.jsonl" 2>/dev/null || true
 dev 'cat /var/log/nq-health/events.jsonl 2>/dev/null' > "$DIR/events.jsonl" 2>/dev/null || true
+# Who holds the memory, every 10 min since device r125; weeks of it, across boots.
+dev 'cat /var/log/nq-health/mem.jsonl.1 /var/log/nq-health/mem.jsonl 2>/dev/null' > "$DIR/mem.jsonl" 2>/dev/null || true
 
 if [ ! -s "$DIR/health.jsonl" ]; then
 	say "[collect] no persistent health log (daemon not on image); gathering a $((BURST*INTERVAL))s live burst ..."
@@ -94,4 +96,4 @@ python3 "$REPORT" "$DIR" --json > "$DIR/report.json" 2>/dev/null || true
 ln -sfn "$ts" "$OUTROOT/latest"
 say ""
 say "[collect] saved: $DIR"
-say "[collect] report: $DIR/report.txt  (json: report.json, raw: snapshot.txt/health.jsonl)"
+say "[collect] report: $DIR/report.txt  (json: report.json, raw: snapshot.txt/health.jsonl/mem.jsonl)"

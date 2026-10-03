@@ -13,8 +13,9 @@ TESTDIRS = -DTEST_ARCHIVE='"/tmp/nqh-test-archive"' -DTEST_PSTOREFS='"/tmp/nqh-t
 CSTDIRS  = -DTEST_CPUROOT='"/tmp/nqh-test-cpu"' -DTEST_QOS='"/tmp/nqh-test-qos"'
 ACCTDIRS = -DTEST_PROCSTAT='"/tmp/nqh-test-procstat"' -DTEST_CGROOT='"/tmp/nqh-test-cg"' \
            -DTEST_CTLSTATS='"/tmp/nqh-test-ctlstats"' -DTEST_NQSOCK='"/tmp/nqh-test-nq.sock"'
+MEMDIRS  = -DTEST_CGROOT='"/tmp/nqh-test-memcg"' -DTEST_MEMINFO='"/tmp/nqh-test-meminfo"'
 LEDDIRS  = -DTEST_LEDSROOT='"/tmp/nqh-test-leds"' -DTEST_I2CDEVS='"/tmp/nqh-test-i2c"'
-test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c tests/test_accounting.c tests/test_led_frame.c tests/test_judgements.c nq-healthd.c
+test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c tests/test_accounting.c tests/test_memory.c tests/test_led_frame.c tests/test_judgements.c nq-healthd.c
 	$(CC) $(CFLAGS) -I. $(TESTDIRS) -o /tmp/nqh-test-pstore tests/test_pstore_count.c
 	@/tmp/nqh-test-pstore
 	$(CC) $(CFLAGS) -I. $(CSTDIRS) -o /tmp/nqh-test-cstate tests/test_cstate.c
@@ -26,6 +27,10 @@ test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c test
 	# CPU accounting, against a fixture /proc/stat, cgroup tree and fake nexusqd.
 	$(CC) $(CFLAGS) -I. $(ACCTDIRS) -o /tmp/nqh-test-acct tests/test_accounting.c
 	@/tmp/nqh-test-acct
+	# meminfo_sample()/cg_anon_kB()/mem_units()/mem_line(): mem.jsonl, who holds
+	# the memory, against a fixture meminfo and cgroup tree (device r125).
+	$(CC) $(CFLAGS) -I. $(MEMDIRS) -o /tmp/nqh-test-mem tests/test_memory.c
+	@/tmp/nqh-test-mem
 	# find_frame_attr()/led_frame(): the LED ring fingerprint, against a fixture
 	# sysfs shaped like the unit's (the frame on the AVR's i2c device).
 	$(CC) $(CFLAGS) -I. $(LEDDIRS) -o /tmp/nqh-test-led tests/test_led_frame.c

@@ -452,7 +452,8 @@ static int nexusqd_responds(void)
 #define CG_ROOT "/sys/fs/cgroup"
 #endif
 #define CG_SYS CG_ROOT "/system.slice/"
-#define CG_APP CG_ROOT "/user.slice/user-10000.slice/user@10000.service/app.slice/"
+#define CG_USERMGR CG_ROOT "/user.slice/user-10000.slice/user@10000.service"
+#define CG_APP CG_USERMGR "/app.slice/"
 
 static long long prev_busy = -1, prev_nice = -1, prev_forks = -1, prev_irqs = -1;
 
@@ -552,6 +553,179 @@ static void unit_sample(char *out, size_t n)
     }
     unit_primed = 1;
     snprintf(out, n, "{%s}", jo < sizeof json ? json : "");
+}
+
+/* ---------- memory: who is growing? (device r125) -------------------------
+ * The 2026-10-03 diag saw AnonPages climb linearly, ~0.33 MB/h over three days
+ * of one boot, and could not say whose it was: nothing recorded memory per
+ * service over time, and an RSS diff over minutes sees only Roon's GC churn.
+ * So, every NQ_MEM_EVERY samples (10 min by default), one line goes to
+ * mem.jsonl: the box's MemAvailable, AnonPages and Shmem, and the anonymous
+ * memory of every service, from its cgroup's memory.stat.
+ *
+ * WHY anon, not memory.current. memory.current includes the unit's page cache,
+ * which the kernel grows and drops as it likes; a leak is anonymous memory
+ * (malloc, a growing heap) that nothing but the process can give back. Shmem
+ * is the other thing that only grows (tmpfs, /dev/shm), so the box's goes in
+ * too; inside a cgroup it is part of "file".
+ *
+ * WHY its own file. health.jsonl rotates at 4 MB, about 14 h of history at a
+ * 5 s cadence, and a leak this slow needs days to show over GC noise. At one
+ * ~1 KB line per 10 min, mem.jsonl holds about a month before it rotates.
+ * boot_id lets a reader split it by boot, since t_mono restarts at each one.
+ *
+ * WHICH units. Every *.service under system.slice and under uid 10000's
+ * service manager, found by readdir rather than listed: the leak that started
+ * this was in no list anyone would have written. The walk descends into
+ * sub-slices, because a template's instances live in one (system-getty.slice
+ * holds getty@tty1, system-serial\x2dgetty.slice serial-getty@ttyGS0) and the
+ * user manager splits its services over app.slice, session.slice and
+ * background.slice; r125 read only the top level and left ~8 MB of user.slice
+ * without a name on the Prague Q. Plus the slices and init.scope, so a reader
+ * can see growth that no service accounts for (scopes: ssh sessions, the user
+ * manager's own process). */
+#ifndef MEMINFO
+#define MEMINFO "/proc/meminfo"
+#endif
+#ifndef BOOT_ID
+#define BOOT_ID "/proc/sys/kernel/random/boot_id"
+#endif
+static long mem_every = 120;   /* samples between mem.jsonl lines */
+static char mempath[512];
+
+/* MemAvailable, AnonPages, Shmem in kB; 0 for a field that is missing. */
+static void meminfo_sample(long long *avail, long long *anon, long long *shmem)
+{
+    *avail = *anon = *shmem = 0;
+    FILE *f = fopen(MEMINFO, "re");
+    if (!f)
+        return;
+    char line[256];
+    int got = 0;
+    while (got < 3 && fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "MemAvailable:", 13))
+            *avail = strtoll(line + 13, NULL, 10), got++;
+        else if (!strncmp(line, "AnonPages:", 10))
+            *anon = strtoll(line + 10, NULL, 10), got++;
+        else if (!strncmp(line, "Shmem:", 6))
+            *shmem = strtoll(line + 6, NULL, 10), got++;
+    }
+    fclose(f);
+}
+
+/* The "anon" line of a cgroup's memory.stat, in kB; -1 without one. The key
+ * must start a line: "inactive_anon" and "active_anon" end in it too. */
+static long long cg_anon_kB(const char *dir)
+{
+    char path[600], buf[4096];
+    snprintf(path, sizeof path, "%s/memory.stat", dir);
+    if (slurp(path, buf, sizeof buf) <= 0)
+        return -1;
+    for (const char *p = buf; p; ) {
+        if (!strncmp(p, "anon ", 5))
+            return atoll(p + 5) / 1024;
+        if ((p = strchr(p, '\n')))
+            p++;
+    }
+    return -1;
+}
+
+/* Appends "name":kB to the object being built in json, unless the name is
+ * already in it: a user service named like a system one (the user manager
+ * runs its own dbus-broker) becomes "user/<name>" rather than silently
+ * shadowing it. Returns the new length. */
+static size_t mem_put(char *json, size_t n, size_t jo, const char *name, int user, long long kb)
+{
+    char key[160], esc[200];
+    snprintf(key, sizeof key, "%s%s", user == 2 ? "user/" : "", name);
+    jstr(key, esc, sizeof esc);
+    char probe[210];
+    snprintf(probe, sizeof probe, "\"%s\":", esc);
+    if (strstr(json, probe)) {
+        if (user != 1)
+            return jo;
+        return mem_put(json, n, jo, name, 2, kb);
+    }
+    int w = snprintf(json + jo, n - jo, "%s%s%lld", jo ? "," : "", probe, kb);
+    if (w < 0 || (size_t)w >= n - jo) {
+        json[jo] = '\0';               /* full: drop this one, keep the rest valid */
+        return jo;
+    }
+    return jo + (size_t)w;
+}
+
+static int has_suffix(const char *s, size_t len, const char *suf)
+{
+    size_t k = strlen(suf);
+    return len > k && strcmp(s + len - k, suf) == 0;
+}
+
+/* Every *.service under dir, descending into *.slice children (depth-bound:
+ * systemd nests a slice per dash in its name, and two levels cover every
+ * slice on this system). user: 0 for the system manager, 1 for uid 10000's. */
+static size_t mem_walk(char *json, size_t n, size_t jo, const char *dir, int user, int depth)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return jo;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t len = strlen(e->d_name);
+        int svc = has_suffix(e->d_name, len, ".service");
+        if (!svc && !(depth < 3 && has_suffix(e->d_name, len, ".slice")))
+            continue;
+        char sub[600];
+        if (snprintf(sub, sizeof sub, "%s/%s", dir, e->d_name) >= (int)sizeof sub)
+            continue;
+        if (!svc) {
+            jo = mem_walk(json, n, jo, sub, user, depth + 1);
+            continue;
+        }
+        long long kb = cg_anon_kB(sub);
+        if (kb < 0)
+            continue;
+        char name[128];
+        snprintf(name, sizeof name, "%.*s", (int)(len - 8), e->d_name);
+        jo = mem_put(json, n, jo, name, user, kb);
+    }
+    closedir(d);
+    return jo;
+}
+
+/* {"system.slice":kB,...,"<service>":kB,...}: the aggregates first, then
+ * every service that has a memory.stat. */
+static void mem_units(char *out, size_t n)
+{
+    char json[4096];
+    size_t jo = 0;
+    json[0] = '\0';
+    static const struct { const char *name, *dir; } aggr[] = {
+        { "system.slice", CG_ROOT "/system.slice" },
+        { "user.slice",   CG_ROOT "/user.slice" },
+        { "init.scope",   CG_ROOT "/init.scope" },
+    };
+    for (size_t i = 0; i < sizeof aggr / sizeof aggr[0]; i++) {
+        long long kb = cg_anon_kB(aggr[i].dir);
+        if (kb >= 0)
+            jo = mem_put(json, sizeof json, jo, aggr[i].name, 0, kb);
+    }
+    jo = mem_walk(json, sizeof json, jo, CG_ROOT "/system.slice", 0, 0);
+    jo = mem_walk(json, sizeof json, jo, CG_USERMGR, 1, 0);
+    snprintf(out, n, "{%s}", json);
+}
+
+static void mem_line(char *out, size_t n, long long mono, const char *wall, const char *boot_id)
+{
+    long long avail, anon, shmem;
+    meminfo_sample(&avail, &anon, &shmem);
+    char units[4200], bid[80];
+    mem_units(units, sizeof units);
+    jstr(boot_id, bid, sizeof bid);
+    snprintf(out, n,
+             "{\"t_mono\":%lld,\"wall\":\"%s\",\"boot_id\":\"%s\","
+             "\"mem_avail_kB\":%lld,\"anon_kB\":%lld,\"shmem_kB\":%lld,"
+             "\"unit_anon_kB\":%s}\n",
+             mono, wall, bid, avail, anon, shmem, units);
 }
 
 /* nexusqd's own counters, cumulative since it started (the report diffs them
@@ -1099,15 +1273,15 @@ static int unit_probe(const char *unit, int user_scope,
 }
 
 /* ---------- log rotation ------------------------------------------------- */
-static void rotate_if_big(FILE **outp)
+static void rotate_if_big(const char *path, FILE **outp)
 {
     struct stat st;
-    if (stat(logpath, &st) == 0 && st.st_size > maxbytes) {
+    if (stat(path, &st) == 0 && st.st_size > maxbytes) {
         char old[600];
-        snprintf(old, sizeof old, "%s.1", logpath);
-        if (rename(logpath, old) == 0 && *outp) {
+        snprintf(old, sizeof old, "%s.1", path);
+        if (rename(path, old) == 0 && outp && *outp) {
             /* the open stream still points at the renamed inode — drop it so
-             * the next sample reopens a fresh logpath (readers stat logpath) */
+             * the next sample reopens a fresh path (readers stat the path) */
             fclose(*outp);
             *outp = NULL;
         }
@@ -1245,10 +1419,15 @@ int main(int argc, char **argv)
     if ((e = getenv("NQ_UNIT_REFRESH_S")))    unit_refresh_s = atol(e);
     if ((e = getenv("NQ_DMESG_EVERY")))       dmesg_every = atol(e);
     if ((e = getenv("NQ_PROGRESS_STALE_S")))  progress_stale_s = atol(e);
+    if ((e = getenv("NQ_MEM_EVERY")))         mem_every = atol(e);
     if (interval_s < 1) interval_s = 1;
+    if (mem_every < 1) mem_every = 1;
 
     snprintf(logpath, sizeof logpath, "%s/health.jsonl", logdir);
     snprintf(eventpath, sizeof eventpath, "%s/events.jsonl", logdir);
+    snprintf(mempath, sizeof mempath, "%s/mem.jsonl", logdir);
+    char boot_id[64];
+    slurp_line(BOOT_ID, boot_id, sizeof boot_id, "");
 
     char vdd_dir[512] = "", abb_dir[512] = "";
     reg_dir("vdd_mpu", vdd_dir, sizeof vdd_dir);
@@ -1456,25 +1635,14 @@ int main(int argc, char **argv)
         if (sp)
             *sp = '\0';
 
-        long long memav = 0;
-        {
-            FILE *f = fopen("/proc/meminfo", "re");
-            if (f) {
-                char line[256];
-                while (fgets(line, sizeof line, f))
-                    if (!strncmp(line, "MemAvailable:", 13)) {
-                        memav = strtoll(line + 13, NULL, 10);
-                        break;
-                    }
-                fclose(f);
-            }
-        }
+        long long memav, anon_kb, shmem_kb;
+        meminfo_sample(&memav, &anon_kb, &shmem_kb);
 
         /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it.
          * Fields are only ever APPENDED (cstate_*, qos_us since device r106; busy_ms,
          * forks, irqs, unit_us, nq_renders, nq_ctl, ambient_wakes, tap_fixes
          * since r119 -- unit_us only on every 12th sample, see above; nice_ms
-         * since r124). */
+         * since r124; anon_kB, shmem_kB since r125). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -1483,7 +1651,7 @@ int main(int argc, char **argv)
         FILE *dst = stdout;
         if (!once) {
             if (tickn % 12 == 0)
-                rotate_if_big(&out);
+                rotate_if_big(logpath, &out);
             if (!out)
                 out = fopen(logpath, "ae");
             dst = out ? out : stdout;
@@ -1502,7 +1670,8 @@ int main(int argc, char **argv)
                 "\"qos_us\":%lld,"
                 "\"busy_ms\":%lld,\"forks\":%lld,\"irqs\":%lld,%s%s%s"
                 "\"nq_renders\":%lld,\"nq_ctl\":%lld,"
-                "\"ambient_wakes\":%lld,\"tap_fixes\":%lld,\"nice_ms\":%lld}\n",
+                "\"ambient_wakes\":%lld,\"tap_fixes\":%lld,\"nice_ms\":%lld,"
+                "\"anon_kB\":%lld,\"shmem_kB\":%lld}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
@@ -1513,11 +1682,25 @@ int main(int argc, char **argv)
                 busy_ms, forks, irqs,
                 *unit_us ? "\"unit_us\":" : "", unit_us, *unit_us ? "," : "",
                 nq_renders, nq_ctl,
-                amb_wakes, tap_fixes, nice_ms);
+                amb_wakes, tap_fixes, nice_ms,
+                anon_kb, shmem_kb);
         fflush(dst);
 
         if (once)
             return 0;
+
+        /* Who holds the memory, every mem_every samples (see mem_line). Opened
+         * per line: once in 10 minutes does not need a descriptor held open. */
+        if (tickn % mem_every == 0) {
+            char ml[4800];
+            mem_line(ml, sizeof ml, mono, wall, boot_id);
+            rotate_if_big(mempath, NULL);
+            FILE *mf = fopen(mempath, "ae");
+            if (mf) {
+                fputs(ml, mf);
+                fclose(mf);
+            }
+        }
 
         /* --- anomaly events: on transition/threshold, never every sample --- */
         if (nq_alive && !nq_resp && prev_nq_resp)

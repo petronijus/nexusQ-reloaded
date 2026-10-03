@@ -5,6 +5,7 @@ Consumes what `nqctl snapshot` / the nexusq-diag skill collect:
   - health.jsonl   (time series from nq-healthd)
   - events.jsonl   (anomaly events emitted by nq-healthd)
   - snapshot.txt   (one-shot nq-diag-snapshot, optional)
+  - mem.jsonl      (every 10 min since device r125: memory per service, optional)
 
 It produces a human-readable report AND a machine summary (--json) of findings,
 so an agent can act on the conclusion without re-parsing raw logs. Stdlib only.
@@ -184,6 +185,141 @@ def accounting(rows, interval):
     return out
 
 
+# --- memory: who is growing? (healthd >= device r125) -----------------------
+# mem.jsonl carries, every 10 min, the box's MemAvailable/AnonPages/Shmem and
+# every service's anonymous memory from its cgroup. A leak is a slope, and a
+# slow one only beats GC churn over hours: the one that started this record was
+# +0.33 MB/h, visible over three days and invisible over a 2.5 min RSS diff.
+MEM_MIN_SPAN_H = 3.0  # shorter than this, no trend is claimed at all
+MEM_WARN_SPAN_H = 6.0  # a warning rests on at least this much
+MEM_WARN_DAYS = 14.0  # MemAvailable gone within this at the anon growth rate
+MEM_GROWER_KB_H = 50.0  # a service growing slower than this is noise
+MEM_SLICES = ("system.slice", "user.slice", "init.scope")
+
+
+def slope_per_h(points):
+    """Least-squares slope of [(t_s, value)] per hour; None without two
+    distinct times."""
+    if len(points) < 2:
+        return None
+    n = len(points)
+    mt = sum(t for t, _ in points) / n
+    mv = sum(v for _, v in points) / n
+    den = sum((t - mt) ** 2 for t, _ in points)
+    if den == 0:
+        return None
+    return 3600.0 * sum((t - mt) * (v - mv) for t, v in points) / den
+
+
+def series_span_h(points):
+    return (points[-1][0] - points[0][0]) / 3600.0 if len(points) >= 2 else 0.0
+
+
+def long_slope_per_h(points):
+    """slope_per_h, but only for a series that itself covers MEM_MIN_SPAN_H.
+    A field can be younger than the window: after the upgrade to r125,
+    health.jsonl held 13.8 h of samples without anon_kB and two minutes with
+    it, and those two minutes fitted -80 MB/h (2026-10-03)."""
+    return slope_per_h(points) if series_span_h(points) >= MEM_MIN_SPAN_H else None
+
+
+def since_restart(points):
+    """The tail of a unit's series since it last restarted. A restart shows as
+    the unit missing from a record (None) or its anon falling below half the
+    previous value: a service starts again from its startup size, and a GC
+    rarely hands back half. Fitting across a restart would read as a shrink."""
+    tail = []
+    prev = None
+    for t, v in points:
+        if v is None or (prev is not None and v < prev / 2):
+            tail = []
+        if v is not None:
+            tail.append((t, v))
+        prev = v
+    return tail
+
+
+def last_boot(rows):
+    """The records of the newest boot: by boot_id where the records carry it
+    (mem.jsonl), else the last run in which t_mono never went backwards."""
+    if rows and rows[-1].get("boot_id"):
+        bid = rows[-1]["boot_id"]
+        return [r for r in rows if r.get("boot_id") == bid]
+    start = 0
+    for i in range(1, len(rows)):
+        if rows[i].get("t_mono", 0) < rows[i - 1].get("t_mono", 0):
+            start = i
+    return rows[start:]
+
+
+def memory_trend(mem_rows, health_rows):
+    """Memory growth over the newest boot in the window, from mem.jsonl, or,
+    without it, from health.jsonl's anon_kB / mem_avail_kB (box only, no
+    per-service figures). None when neither has a usable series."""
+    src = "mem.jsonl"
+    rows = last_boot([r for r in mem_rows if isinstance(r.get("t_mono"), int)])
+    if len(rows) < 2:
+        src = "health.jsonl"
+        rows = last_boot([r for r in health_rows if isinstance(r.get("t_mono"), int)])
+    rows = [r for r in rows if isinstance(r.get("mem_avail_kB"), int) and r["mem_avail_kB"] > 0]
+    if len(rows) < 2:
+        return None
+    span_h = (rows[-1]["t_mono"] - rows[0]["t_mono"]) / 3600.0
+    out = {"source": src, "span_h": span_h, "mem_avail_kB": rows[-1]["mem_avail_kB"]}
+    if span_h < MEM_MIN_SPAN_H:
+        return out
+    anon = [(r["t_mono"], r["anon_kB"]) for r in rows if isinstance(r.get("anon_kB"), int) and r["anon_kB"] > 0]
+    out["anon_kB"] = anon[-1][1] if anon else None
+    out["anon_span_h"] = series_span_h(anon)
+    out["anon_kB_per_h"] = long_slope_per_h(anon)
+    out["avail_kB_per_h"] = slope_per_h([(r["t_mono"], r["mem_avail_kB"]) for r in rows])
+    shm = [(r["t_mono"], r["shmem_kB"]) for r in rows if isinstance(r.get("shmem_kB"), int)]
+    out["shmem_kB_per_h"] = long_slope_per_h(shm)
+    # Days until MemAvailable is gone if anon keeps growing: anon is what the
+    # kernel cannot reclaim, so it is the rate that eats MemAvailable for good.
+    rate = out["anon_kB_per_h"]
+    out["days_to_exhaustion"] = out["mem_avail_kB"] / rate / 24.0 if rate and rate > 0 else None
+
+    names = []
+    for r in rows:
+        for k in r.get("unit_anon_kB") or {}:
+            if k not in names:
+                names.append(k)
+    slices, services = {}, {}
+    for name in names:
+        pts = [(r["t_mono"], (r.get("unit_anon_kB") or {}).get(name)) for r in rows]
+        tail = since_restart(pts)
+        if tail:
+            k = long_slope_per_h(tail)
+            if k is not None:
+                (slices if name in MEM_SLICES else services)[name] = k
+    out["slices_kB_per_h"] = slices
+    out["growers_kB_per_h"] = dict(
+        sorted(((k, v) for k, v in services.items() if v >= MEM_GROWER_KB_H), key=lambda kv: -kv[1])
+    )
+    return out
+
+
+def mem_trend_msg(m):
+    def mb(kb):
+        return f"{kb / 1024:+.2f} MB/h"
+
+    parts = [f"over {m['span_h']:.1f} h of this boot ({m['source']}): MemAvailable {m['mem_avail_kB'] / 1024:.0f} MB"]
+    if m.get("avail_kB_per_h") is not None:
+        parts[0] += f" ({mb(m['avail_kB_per_h'])})"
+    if m.get("anon_kB_per_h") is not None:
+        parts.append(f"anon {m['anon_kB'] / 1024:.0f} MB ({mb(m['anon_kB_per_h'])})")
+    if m.get("shmem_kB_per_h") is not None:
+        parts.append(f"shmem {mb(m['shmem_kB_per_h'])}")
+    if m.get("slices_kB_per_h"):
+        parts.append("by slice: " + ", ".join(f"{k} {mb(v)}" for k, v in m["slices_kB_per_h"].items()))
+    if m.get("growers_kB_per_h"):
+        parts.append("growing: " + ", ".join(f"{k} {mb(v)}" for k, v in list(m["growers_kB_per_h"].items())[:6]))
+    elif m["source"] == "mem.jsonl":
+        parts.append(f"no service grows faster than {MEM_GROWER_KB_H:.0f} kB/h")
+    return "; ".join(parts)
+
+
 def governed_busy_ms(r):
     """The busy time the governor answers to: busy_ms (both cores) minus its
     niced part. nexusq-cpufreq-tune runs the conservative governor with
@@ -235,7 +371,7 @@ def busy_run(rows, interval, pred):
     return best
 
 
-def analyze(rows, events, snap_text):
+def analyze(rows, events, snap_text, mem_rows=None):
     findings = []  # (severity, kind, message, t_mono_or_None)
 
     def add(sev, kind, msg, t=None):
@@ -496,6 +632,32 @@ def analyze(rows, events, snap_text):
                 + ") — it is not an idle measurement; narrow it with --since/--until",
             )
 
+    # ---- memory growth (healthd >= device r125 for the per-service view) ----
+    mem = memory_trend(mem_rows or [], rows)
+    if mem:
+        if mem["span_h"] < MEM_MIN_SPAN_H:
+            add(
+                "info",
+                "mem_trend",
+                f"MemAvailable {mem['mem_avail_kB'] / 1024:.0f} MB; {mem['span_h']:.1f} h of this boot "
+                f"is too short to tell a leak from churn (needs {MEM_MIN_SPAN_H:.0f} h)",
+            )
+        else:
+            add("info", "mem_trend", mem_trend_msg(mem))
+            days = mem.get("days_to_exhaustion")
+            if days is not None and days < MEM_WARN_DAYS and mem["anon_span_h"] >= MEM_WARN_SPAN_H:
+                add(
+                    "warn",
+                    "mem_growth",
+                    f"anonymous memory grows {mem['anon_kB_per_h'] / 1024:.2f} MB/h: at that rate "
+                    f"MemAvailable ({mem['mem_avail_kB'] / 1024:.0f} MB) is gone in {days:.1f} days"
+                    + (
+                        " — " + ", ".join(list(mem["growers_kB_per_h"])[:3]) + " lead"
+                        if mem.get("growers_kB_per_h")
+                        else ""
+                    ),
+                )
+
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):
         n = sum(r.get("dmesg_err_new", 0) for r in rows)
@@ -522,6 +684,7 @@ def analyze(rows, events, snap_text):
 
     summary = {
         "accounting": acc,
+        "memory": mem,
         "samples": len(rows),
         "span_s": span,
         "interval_s": interval,
@@ -564,9 +727,10 @@ def main():
     if os.path.isdir(target):
         health = os.path.join(target, "health.jsonl")
         events = os.path.join(target, "events.jsonl")
+        memlog = os.path.join(target, "mem.jsonl")
         snap = os.path.join(target, "snapshot.txt")
     else:
-        health, events, snap = target, None, None
+        health, events, snap, memlog = target, None, None, None
 
     rows = in_window(load_jsonl(health), since, until)
     evs, unplaced = events_in_window(load_jsonl(events), since, until)
@@ -575,7 +739,8 @@ def main():
         with open(snap, errors="replace") as fh:
             snap_text = fh.read()
 
-    findings, summary = analyze(rows, evs, snap_text)
+    mem_rows = in_window(load_jsonl(memlog), since, until)
+    findings, summary = analyze(rows, evs, snap_text, mem_rows)
 
     if as_json:
         print(
