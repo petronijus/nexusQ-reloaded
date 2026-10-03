@@ -6,6 +6,27 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Known issue — the release watch cannot see a kernel (`nexusq-control`, `release_manifest.py`)
+
+Found on 2026-10-04, after cutting v2.0.1; recorded, not changed. A Q calls a
+release PENDING when one of the packages `release.json` lists is installed
+here at a lower version. The kernel is not among them: `release_manifest.py`
+leaves `linux-google-steelhead` out (`NOT_APK_INSTALLED`, it is only
+`nq-kernel-ota`'s payload) and `release_pending()` in nexusq-control skips it
+too. So:
+
+- a release that changes **only the kernel** would never be announced: every
+  unit reads it as current, and neither the app nor Home Assistant offers it;
+- after any release, a unit that took the packages through the app but not
+  the kernel through `nq-kernel-ota` reads as current while it runs the old
+  kernel (`uname -r` against the release's kernel is compared nowhere).
+
+v2.0.1 is announced anyway, because device r126 and kernel-ota r11 moved with
+the kernel. The fix needs the manifest to carry the released kernel apart from
+the apk packages and the watch to compare it with the running kernel, with the
+app saying that the kernel goes through `nq-kernel-ota` (it is not an apk
+upgrade and needs someone in reach for the trial boot).
+
 ## [2.0.1] — 2026-10-04 — a clean log on every USB plug, tidier kernel updates, a memory watch
 
 Kernel **6.18.48-r20** (patch 0061), device **r126**, `nexusq-kernel-ota`
