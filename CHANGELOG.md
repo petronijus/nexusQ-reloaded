@@ -6,6 +6,119 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a USB cable event no longer logs a TWL6030 error (kernel **6.18.48-r20**, patch 0061)
+
+`twl6030_irq: Unmapped PIH ISR 20 detected`, at every USB plug or unplug
+(the known issue from v1.17.0). PIH bit 20 is CHRG_CTRL: `phy-twl6030-usb`
+unmasks it because `twl6030_irq_thread()` copies it onto the VBUS bit to catch
+a disconnect, and the copy reaches the USB driver as it should. Bit 20 itself
+is dispatched too, and the linear irq domain only maps a hwirq a DT consumer
+asks for; on a board with no charger nothing asks for CHARGER_INTR_OFFSET, so
+an event that had been handled was logged as an error.
+
+The stock-parity audit (`reverse-eng/vmlinux.bin`) found the vendor kernel
+doing the same unmask and the same copy, and staying silent: its
+`twl6030_init_irq` wired the whole `irq_base` range (368–387) to
+`handle_simple_irq`, so an interrupt nobody requested ended on a descriptor
+without an action. Patch 0061 does the same with the domain: every PIH hwirq
+is mapped once the parent IRQ is requested (all lines are still masked
+then), an unclaimed one reaches `handle_nested_irq()` and is dropped without
+a message, and consumers still find their mapping on translation. Rejected:
+silencing the `pr_err` (a mask, not stock), and not unmasking 0x10 (stock
+unmasks it, and it is the only VBUS-disconnect source).
+
+**On the Prague Q** (2026-10-03, staged with `nq-kernel-ota stage-apk`, trial
+boot, promoted): on r19 one replug of the USB cable logged 12 `Unmapped PIH
+ISR 20` lines (the plug bounces); on r20 the same replug logged none, the
+gadget went through `ttyGS0` hangup and `usb0` carrier back to `configured`,
+and `dmesg -l err,warn` is empty. `/sys/kernel/irq` holds all 20 twl6030
+descriptors, with gpadc, usb ×2 and rtc on the ones they had, and hwirq 2
+(CHRG_CTRL) without an action.
+
+**Recheck this patch before enabling the TWL6030 charger** (mainline has
+`twl6030_charger.c`, `CONFIG_CHARGER_TWL6030`, unset here) or any DT
+consumer of hwirq 2. Each VBUS edge now leaves `IRQS_PENDING` on that
+action-less descriptor, and a later `request_irq` would replay it through
+`irq_sw_resend`, which for a nested IRQ resends the parent (the GIC line
+behind wakeupgen) from a tasklet. Stock's `handle_simple_irq` range carried
+the same latent state; nothing requests the line today.
+
+The audit also noted, outside this fix: stock routes PIH bit 2 (BAT_VLOW) to
+offset 6 (`twl6030_vlow_init`), mainline to PWR_INTR_OFFSET; with every hwirq
+mapped, such an event is now dropped silently instead of logged, as stock
+would for an unrequested line.
+
+### Added — healthd records whose memory grows, for weeks (device **r126**, `nq-health-report`)
+
+The 2026-10-03 sweep of the Prague Q (3 d 4 h up) found AnonPages climbing
+linearly, 116.7 → 130.1 → 141.8 MB at 5 min, 40.7 h and 76 h of uptime, about
++0.33 MB/h with no plateau, and could not say whose it was: nothing recorded
+memory per service over time, and an RSS diff over minutes sees only Roon's
+GC churn. Harmless for weeks at that rate (756 MB still available), but
+unattributable.
+
+- **nq-healthd** writes `/var/log/nq-health/mem.jsonl` every 10 minutes
+  (`NQ_MEM_EVERY` samples): the box's MemAvailable, AnonPages and Shmem, the
+  `boot_id`, and the anonymous memory of every service under `system.slice`
+  and under uid 10000's service manager, plus the two slices and
+  `init.scope`. Services are found by readdir, not listed, because the leak
+  that started this was in no list anyone would have written, and the walk
+  descends into sub-slices: template instances live in one
+  (`system-getty.slice`), and the user manager spreads its services over
+  `app.slice`, `session.slice` and `background.slice`. r125, which read only
+  the top level and left ~8 MB of `user.slice` unnamed, ran on the Prague Q
+  only; the fleet-safety review caught it. The figure is the `anon` line of the
+  cgroup's `memory.stat`, not `memory.current`, which counts page cache the
+  kernel grows and drops as it likes. Its own file because `health.jsonl`
+  holds about 14 h before it rotates; at ~840 B a line `mem.jsonl` holds
+  about a month. `health.jsonl` gains `anon_kB` and `shmem_kB` per sample
+  (appended; nexusq-mqtt and the app read nothing new).
+- **nq-collect** pulls `mem.jsonl.1` + `mem.jsonl`; **nq-health-report**
+  reports `mem_trend` for the newest boot: least-squares MB/h of
+  MemAvailable, anon and shmem, per slice, and the services growing faster
+  than 50 kB/h, each fitted since its last restart (a restart reads as a
+  shrink and would hide a leak). Nothing is claimed under 3 h; `mem_growth`
+  warns when the anon rate would empty MemAvailable within 14 days, over at
+  least 6 h. Without `mem.jsonl` it falls back to `health.jsonl`, box only.
+- Tests: `test_memory.c` (the `anon` line, not `inactive_anon`/`active_anon`;
+  services found in both managers and in sub-slices; mounts, scopes and
+  unaccounted units left out; a user service named like a system one kept as
+  `user/<name>`) and
+  `test_health_report_memory.py`; each seen failing under its mutation.
+
+**On the Prague Q** (device r125 by `apk add`, nq-healthd restarted 22:08
+CEST): the first `mem.jsonl` record lists 34 cgroups, Roon at 60.6 MB anon,
+the services summing to 128.5 MB of the box's 141.6 MB. Its CPU cost is
+unchanged (0.14–0.16 % of a core; the 10-minute walk does not show). Device
+r126 replaced it at 23:02 CEST, on kernel r20 a quarter of an hour after a
+reboot: 40 entries, now with `getty@tty1`, `serial-getty@ttyGS0`,
+`unudhcpd@usb0`, `gvfs-daemon` and `user/dbus-broker`; the services account
+for 105.9 MB of the slices' 117 MB, the rest being scopes (ssh sessions, the
+user manager itself). The box's anon read 118 MB fresh from that boot,
+against 141.6 MB after 3 d 4 h on the one before.
+
+### Known issue — kernel OTA never prunes old module trees (`nexusq-kernel-ota`)
+
+The post-boot sweep of kernel r20 (2026-10-03) found five trees in
+`/lib/modules` on the Prague Q, r16 to r20, 8.2 MB each. apk owns r20, and
+r19 is kept on purpose for `restore` (it belongs to the slot-A backup image);
+r16–r18 have no owner (`apk info -W`: no owner package) and nothing in
+`nq-kernel-ota` removes a tree once its backup image has been replaced. About
+25 MB now, 8 MB more with every kernel OTA; `/` is at 46 %. The fix belongs in
+the promote step: once a new backup is taken, the tree of the kernel it
+replaced is no longer anything's rollback.
+
+### Resolved upstream — `systemd-tmpfiles` and the unknown user `systemd-network`
+
+The known issue recorded with v1.17.0 is gone, and not by anything here.
+Alpine's `systemd-262` (the image has carried 262-r1 since 2026-09-23, the
+unit runs 262-r2) moved `tmpfiles.d/systemd-network.conf` into a separate
+`systemd-networkd` subpackage, together with the `sysusers.d` entry that
+creates the user; this image does not install it, so neither is on the unit.
+No `systemd-network` line in `systemd-tmpfiles-setup` or in any
+`systemd-tmpfiles-clean` run across the five boots the journal still holds
+(checked 2026-10-03).
+
 ## [2.0.0] — 2026-10-02 — quieter, a smarter ring, one volume, and it tells you what's new
 
 Kernel **6.18.48-r19** (patches 0059–0060), device **r124**, `nexusqd` **r26**,
@@ -2709,6 +2822,8 @@ checking something that is actually true.
 
 ### Known issue — `twl6030_irq: Unmapped PIH ISR 20` on every USB cable event
 
+*(Fixed in kernel 6.18.48-r20, patch 0061: see `[Unreleased]`, 2026-10-03.)*
+
 Characterised by the post-r2 diag sweep, not fixed. PIH bit 20 is the TWL6030's
 **CHRG_CTRL**, and `drivers/mfd/twl6030-irq.c` deliberately copies it onto the
 VBUS bit on every VBUS change — *"Since VBUS status bit is not reliable for VBUS
@@ -2733,7 +2848,7 @@ snippet, and `systemd-networkd` is not installed here at all. Present on r1 too,
 so not a kernel delta, and not in the four-residual list of
 `docs/2026-07-02-boot-error-inventory.md`. The fix belongs in the Alpine aport;
 an empty local override would be masking, so it is recorded rather than papered
-over.
+over. *(Resolved upstream by `systemd-262`: see `[Unreleased]`, 2026-10-03.)*
 
 ### Observed — PulseAudio auto-grabs the UAC2 gadget capture card
 

@@ -96,7 +96,9 @@ scripts/diag/nq-collect            # [OUTDIR] [--burst N] [--interval S]
 
 Watch an intermittent fault longer with e.g. `--burst 60 --interval 2`. The
 capture holds `report.txt` (human), `report.json` (`summary.worst_severity` is the
-verdict), `snapshot.txt` (full device dump), `health.jsonl`, `events.jsonl`. If the
+verdict), `snapshot.txt` (full device dump), `health.jsonl`, `events.jsonl`, `mem.jsonl`
+(memory per service every 10 min since device r125: for a slow leak, read the
+report's `mem_trend`, it names the service that grows). If the
 running image predates `nq-healthd`, nq-collect bootstraps the tools into `/tmp`
 and gathers a short live burst. Paths are documented in `scripts/diag/README.md`.
 

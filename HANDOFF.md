@@ -547,10 +547,13 @@ ran" and `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-
   has no charger node), so `irq_find_mapping` returns 0 and the driver prints.
   Re-plugging USB would reproduce it on r2. It is ours to silence
   ([[all-boot-errors-are-ours]]) — an open item, not a residual.
+  *Fixed 2026-10-03, kernel 6.18.48-r20 (patch 0061); see CHANGELOG.*
 - **Two undocumented warnings found by the sweep**, neither kernel-related:
   `systemd-tmpfiles` cannot resolve user `systemd-network` (×4 at boot, ×4 per
   `systemd-tmpfiles-clean` run) because Alpine's `systemd-262_rc3-r0` ships the
-  networkd tmpfiles snippet without the sysusers entry — present on r1 too; and
+  networkd tmpfiles snippet without the sysusers entry — present on r1 too
+  (*resolved upstream* by Alpine's `systemd-262`, which moved both into the
+  uninstalled `systemd-networkd` subpackage; gone on 2026-10-03); and
   PulseAudio auto-grabs the UAC2 gadget capture card via `module-udev-detect`
   (`alsa_card.platform-musb-hdrc.0.auto`), which the ignore rules do not cover,
   against `nexusq-uac2-in`'s rule that PA must read the aloop and never the

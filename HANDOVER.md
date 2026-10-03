@@ -472,8 +472,9 @@ recorded in HANDOFF.md's 2026-09-17 session):
   bit on every VBUS change; on this battery-less board nothing consumes bit 20,
   so the driver prints. Both lines bracket a gadget ACM hangup — a **USB cable
   event**, not a fault. On r2 `dmesg -l err,warn` is one line, but only because
-  no VBUS edge occurred; re-plugging USB would reproduce it. Open, ours to
-  silence.
+  no VBUS edge occurred; re-plugging USB would reproduce it. **Fixed
+  2026-10-03 in kernel 6.18.48-r20** (patch 0061: every PIH hwirq mapped, as
+  stock), verified with a cable replug on the Prague Q.
 - The `twl_rtc` line was **not** "no RTC battery, genuinely external" as this
   section claimed: the TWL6030 RTC counter was **stopped** (`RTC_CTRL_REG` 0x00,
   `since_epoch` frozen at 946684800 across the whole boot) because MSECURE was
