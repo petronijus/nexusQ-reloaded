@@ -6,6 +6,19 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Known issue — dbus-broker rejects shairport-sync's system-bus policies (`shairport-sync`)
+
+Found on 2026-10-10 by the post-release sweep of the Prague Q, and recorded,
+not changed. At boot and at every dbus reload (an apk transaction), dbus-broker
+logs `Invalid user-name in /etc/dbus-1/system.d/shairport-sync-dbus.conf +11:
+user="shairport-sync"` and the same for `-mpris.conf`, then `NSS returned no
+entry for 'shairport-sync'`. The log reaches back to 2026-09-24, before 5.5.2.
+`make install` with `--with-dbus-interface --with-mpris-interface` installs
+system-bus policies for a user the Q never creates, and `shairport-nexusq` runs
+the daemon on the session bus (`--dbus-default-message-bus=session`), so the
+policies are dead config. The fix belongs in the aport's `package()` (drop the
+two system.d files), with a pkgrel bump.
+
 ### Known issue — the release watch cannot see a kernel (`nexusq-control`, `release_manifest.py`)
 
 Found on 2026-10-04, after cutting v2.0.1; recorded, not changed. A Q calls a
@@ -85,7 +98,10 @@ version the aport builds now.
 Verified on the Prague Q before the release: r101 (without the `main()` fix)
 built, started, advertised AirPlay over mDNS, idled at 2 wakeups/s and stopped
 on SIGTERM in 24 ms. An AirPlay stream on 5.5.2 was not played before the
-release.
+release. After the release, r102 from the OTA repo idles at 1.52 wakeups/s
+over 75 s: 1/s is 0001's one-second backstop in `alsa_buf_mon`, 0.5/s is the
+`dacp` thread's two-second port scan, which 5.1 has too; `exit_manager` and
+`main()` wake 0 times.
 
 ## [2.0.1] — 2026-10-04 — a clean log on every USB plug, tidier kernel updates, a memory watch
 

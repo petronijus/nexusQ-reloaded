@@ -8,6 +8,24 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-10-10: v2.0.2 is RELEASED
+
+Released from the desktop on 2026-10-10: the OTA repo on gh-pages (release.json
+says 2.0.2; parity gate 19/0) and the GitHub release `v2.0.2` (boot 6.41 MiB,
+rootfs 681 MiB). The only package change is `shairport-sync` 5.5.2-r102 (it
+had to ship: Alpine's 5.5.1-r0 outranked our 5.1-r100). No app release; the
+app stays 1.27.0.
+
+- **Prague Q:** runs r102 from the published repo (`apk fix`, binary md5 equal
+  to the repo apk's), restarted 19:00. Idle shairport-sync wakes 1.5/s (as 5.1 did); the sweep
+  after it was clean.
+  **Not yet checked: an AirPlay stream on 5.5.2** -- Petr declined a listening
+  test before the release. The next time AirPlay is used, confirm from data:
+  a `shairport-sync` sink-input appears, no XRUN in dmesg, Now Playing in the
+  app, a volume move lands where `airplay_attn_cdb` predicts.
+- **Cottage Q:** takes v2.0.2 (and v2.0.1 before it, see below) over the air
+  with the app's system update; the kernel did not change in 2.0.2.
+
 ## Any machine — 2026-10-04: v2.0.1 is RELEASED
 
 Released from the desktop on 2026-10-04: the OTA repo on gh-pages (release.json
