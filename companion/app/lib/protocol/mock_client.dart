@@ -159,13 +159,13 @@ class MockClient implements NexusQClient {
   static const _outputs = [
     {
       'id': 'speaker',
-      'label': 'Reproduktor',
+      'label': 'Speaker',
       'sink': 'alsa_output.platform-sound-tas5713.stereo-fallback',
       'available': true,
     },
     {
       'id': 'spdif',
-      'label': 'Optický výstup',
+      'label': 'Optical',
       'sink': 'alsa_output.platform-sound-spdif.stereo-fallback',
       'available': true,
     },

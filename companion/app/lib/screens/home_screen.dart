@@ -726,7 +726,7 @@ class _OutputPill extends StatelessWidget {
             Icon(output.icon, size: 22, color: fg),
             const SizedBox(height: 6),
             Text(
-              output.label,
+              output.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,

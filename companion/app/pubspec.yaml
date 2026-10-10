@@ -67,7 +67,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #          problem (nexusq-mqtt r8). One volume (device r117): letting go of
 #          the volume slider while Spotify plays here also tells Spotify
 #          (Web API), so its apps show the Q's volume.
-version: 1.27.0+67
+version: 1.27.1+68
 
 environment:
   sdk: ^3.12.0
@@ -132,11 +132,12 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
-  # Generates the launcher icons for every platform from assets/icon/ (our own
-  # glowing-ring mark — see tool/make_icon.py). Run: dart run flutter_launcher_icons
+  # Generates the launcher icons for every platform from assets/icon/ (the
+  # original Nexus Q app's "Q", tool/make_icon_original.py; our own ring mark is
+  # tool/make_icon.py). Run: dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.4
 
-# Launcher-icon generation config (our original Nexus Q ring, not the Google "Q").
+# Launcher-icon generation config: the original Nexus Q app's "Q" (since 5671c63).
 flutter_launcher_icons:
   image_path: "assets/icon/icon.png"
   android: "ic_launcher"

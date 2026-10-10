@@ -360,10 +360,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
-            // --- Sound: the TAS5713 hardware EQ (PROTOCOL §14) ---------------
-            const SizedBox(height: 20),
-            _sectionTitle('Sound'),
-
             // --- HDMI desktop ------------------------------------------------
             const SizedBox(height: 20),
             _sectionTitle('HDMI desktop'),

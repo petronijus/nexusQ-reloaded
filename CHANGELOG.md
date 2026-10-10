@@ -6,6 +6,24 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the output picker spoke Czech (`nexusq-control` **r65**, app **1.27.1+68**, unreleased)
+
+Found on 2026-10-11 while taking the store screenshots: the home screen's
+OUTPUT picker read "Reproduktor" and "Optický výstup". Every UI string is
+English, but the bridge's output table had carried Czech labels since the
+picker was built (v1.6.15), and the app showed whatever `listOutputs` sent.
+Two fixes, so a Q that has not taken r65 yet still reads right:
+
+- `nexusq-control` r65 labels the outputs "Speaker", "Optical" and "HDMI"
+  (`OUTPUTS`; pinned by `test_outputs_are_labelled_in_english`).
+- The app names the outputs it knows itself (`AudioOutput.name`, pinned by
+  `test/output_name_test.dart`); a bridge's `label` names only an output id
+  the app has no name for. Its defaults and the demo bridge are English too.
+
+Also in the app: Settings had a "Sound" heading with nothing under it, left
+behind when the equalizer moved to the home screen in 1.15.0 (fef4a56); it is
+gone.
+
 ### Known issue — dbus-broker rejects shairport-sync's system-bus policies (`shairport-sync`)
 
 Found on 2026-10-10 by the post-release sweep of the Prague Q, and recorded,

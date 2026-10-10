@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The original Nexus Q app's "Q" mark, redrawn as a vector from its largest
+  shipped bitmap (drawable-xhdpi icon.png, 96x96) so it stays sharp at store
+  sizes. Geometry and colours are measured from that bitmap, on its 96-unit
+  grid: ring centre (48,48), outer radius 44.5, inner radius 29.5; tail a 45-degree
+  parallelogram whose top edge runs from x=37 to x=57.5 at y=46, clipped by the
+  ring's outer circle. Transparent background, as the original.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <defs>
+    <clipPath id="outer">
+      <circle cx="48" cy="48" r="44.5"/>
+    </clipPath>
+    <clipPath id="hole">
+      <circle cx="48" cy="48" r="29.5"/>
+    </clipPath>
+    <!-- The ring is lit from above: a light rim on the outside at the top,
+         and on the inside at the bottom (the far wall of the hole). -->
+    <linearGradient id="rimOuter" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A9A9AB" stop-opacity="1"/>
+      <stop offset="0.35" stop-color="#A9A9AB" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rimInner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.6" stop-color="#B4B4B4" stop-opacity="0"/>
+      <stop offset="1" stop-color="#B4B4B4" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="tailFill" gradientUnits="userSpaceOnUse" x1="47" y1="46" x2="75" y2="84">
+      <stop offset="0" stop-color="#3B86FF"/>
+      <stop offset="0.55" stop-color="#3A84FD"/>
+      <stop offset="1" stop-color="#2C6EE1"/>
+    </linearGradient>
+    <filter id="tailShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="-0.7" dy="0.7" stdDeviation="0.7" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- ring -->
+  <circle cx="48" cy="48" r="37" fill="none" stroke="#4A4A4F" stroke-width="15"/>
+  <circle cx="48" cy="48" r="44" fill="none" stroke="url(#rimOuter)" stroke-width="1.2"/>
+  <circle cx="48" cy="48" r="30.1" fill="none" stroke="url(#rimInner)" stroke-width="1.4"/>
+
+  <!-- tail -->
+  <g clip-path="url(#outer)">
+    <polygon points="37,46 57.5,46 105,93.5 84.5,93.5" fill="url(#tailFill)" filter="url(#tailShadow)"/>
+    <!-- the cyan top face -->
+    <polygon points="37,46 57.5,46 59.5,48 39,48" fill="#2EFFFF"/>
+  </g>
+  <!-- the cyan right edge, only where it crosses the hole -->
+  <g clip-path="url(#hole)">
+    <line x1="57.5" y1="46" x2="80" y2="68.5" stroke="#31CDFF" stroke-width="1.1"/>
+  </g>
+</svg>

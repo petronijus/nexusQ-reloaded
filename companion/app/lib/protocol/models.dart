@@ -115,6 +115,12 @@ class AudioOutput {
     available: j['available'] is bool ? j['available'] as bool : true,
   );
 
+  /// What the UI calls this output. The app names the outputs it knows
+  /// itself, in English, so that a bridge's label cannot decide the UI's
+  /// language (bridges before nexusq-control r65 label them in Czech); the
+  /// bridge's `label` names only an output the app has no name for.
+  String get name => _kOutputNames[id] ?? label;
+
   /// A Holo-style glyph per known output id (falls back to a generic speaker).
   IconData get icon {
     switch (id) {
@@ -130,11 +136,17 @@ class AudioOutput {
   }
 }
 
+const _kOutputNames = {
+  'speaker': 'Speaker',
+  'spdif': 'Optical',
+  'hdmi': 'HDMI',
+};
+
 /// Shown until the bridge's `listOutputs` fills in the real set — the two
 /// always-present hardware outputs (matches the device's speaker + optical).
 const kDefaultOutputs = <AudioOutput>[
-  AudioOutput(id: 'speaker', label: 'Reproduktor'),
-  AudioOutput(id: 'spdif', label: 'Optický výstup'),
+  AudioOutput(id: 'speaker', label: 'Speaker'),
+  AudioOutput(id: 'spdif', label: 'Optical'),
 ];
 
 /// The LED ring switch and its schedule (PROTOCOL §4, "LED ring on/off").
