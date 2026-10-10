@@ -267,7 +267,8 @@ One line per milestone; the full story of each is in [CHANGELOG.md](CHANGELOG.md
 (dev) ── ✦ deep idle: both cores OFF — CPU1 errata, BT QoS, WiFi IRQ veto, stock C-states   2026-09-23
 1.19.0 ─ ✦ both cores asleep (C2/C3 on by default) · stock WiFi firmware ends the unicast wedge   2026-09-26
 2.0.0 ── ✦ A/B rootfs on every Q · one volume · a ring that follows the day · update alerts   2026-10-02
-2.0.1 ── ✦ a USB plug logs nothing · kernel OTA prunes dead module trees · memory watch   2026-10-04   ← latest tag
+2.0.1 ── ✦ a USB plug logs nothing · kernel OTA prunes dead module trees · memory watch   2026-10-04
+2.0.2 ── ✦ AirPlay on Shairport Sync 5.5.2 (security fixes) · no idle polling   2026-10-10   ← latest tag
 ```
 
 <sub>(v1.7.4 was an unusable crackle-bake artifact — never shipped; v1.8.0 is its working successor.)</sub>
