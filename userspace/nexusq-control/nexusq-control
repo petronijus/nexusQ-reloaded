@@ -132,14 +132,14 @@ DEVICE_ROOM = _IDENT["room"]
 PANEL_CONF = os.environ.get("NEXUSQ_PANEL_CONF", "/home/user/.config/lxqt/panel.conf")
 BOOT_OUTPUT = os.environ.get("NEXUSQ_BOOT_OUTPUT", "speaker")
 
-# Known PulseAudio sinks → a stable id + Czech-friendly label. Matched by substring
+# Known PulseAudio sinks → a stable id + an English label. Matched by substring
 # against the PA sink name (e.g. alsa_output.platform-sound-tas5713.stereo-fallback)
 # so we tolerate profile-suffix drift. Order = the app's display order. This mapping
 # is INPUT-AGNOSTIC: any input (librespot now; BT-A2DP / Tidal / casting later) is a
 # PA client whose stream we move onto whichever of these sinks is the active output.
 OUTPUTS = [
-    {"id": "speaker", "label": "Reproduktor", "match": "tas5713"},
-    {"id": "spdif", "label": "Optický výstup", "match": "spdif"},
+    {"id": "speaker", "label": "Speaker", "match": "tas5713"},
+    {"id": "spdif", "label": "Optical", "match": "spdif"},
     {"id": "hdmi", "label": "HDMI", "match": "hdmi"},
 ]
 OUTPUT_BY_ID = {o["id"]: o for o in OUTPUTS}

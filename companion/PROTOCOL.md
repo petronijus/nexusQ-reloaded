@@ -131,8 +131,11 @@ first. So:
 | `listOutputs` | — | `{ "outputs": [ {id, label, sink, available} ], "active": "<id>" }` | `outputsChanged` — unsolicited, see below |
 | `setOutput` | `{ "output": "<id>" }` | `{ output }` | `outputChanged` — also re-emits `volumeChanged` (new sink's level/mute; not while the level is unknown) |
 
-Output ids: `speaker` ("Reproduktor", TAS5713 banana terminals) · `spdif`
-("Optický výstup", optical S/PDIF) · `hdmi` ("HDMI").
+Output ids: `speaker` ("Speaker", TAS5713 banana terminals) · `spdif`
+("Optical", optical S/PDIF) · `hdmi` ("HDMI"). Bridges before nexusq-control
+r65 sent the first two in Czech ("Reproduktor", "Optický výstup"); the app
+(1.27.1+) names the ids it knows itself and shows `label` only for an id it
+does not know.
 
 `hdmi` is decided by the CABLE, not by the sink list, because its PulseAudio sink
 exists only while HDMI is the selected output (the bridge loads it on demand —

@@ -144,6 +144,14 @@ class TestListOutputs(unittest.TestCase):
         self.assertNotIn("hdmi", ids)
         self.assertEqual(ids, ["speaker", "spdif"])
 
+    def test_outputs_are_labelled_in_english(self):
+        # Every UI string is English; until r65 these were Czech
+        # ("Reproduktor", "Optický výstup") and the app showed them as sent.
+        b = Bridge()
+        with mock.patch.object(MOD, "hdmi_probe", return_value=probe()):
+            labels = {o["id"]: o["label"] for o in b._list_outputs()["outputs"]}
+        self.assertEqual(labels, {"speaker": "Speaker", "spdif": "Optical", "hdmi": "HDMI"})
+
     def test_audio_capable_sink_is_offered_even_with_no_pa_sink_loaded(self):
         # The regression this whole change is about: the PA sink is loaded on
         # demand, so it is absent until HDMI is picked. Availability must not
