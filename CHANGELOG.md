@@ -32,8 +32,10 @@ upgrade and needs someone in reach for the trial boot).
 `shairport-sync` **5.5.2-r102**; everything else as in 2.0.1 (kernel
 6.18.48-r20, device r126, `nexusq-kernel-ota` r11, `nexusqd` r26,
 `nexusq-control` r64, `nexusq-mqtt` r17, `nexusq-rootfs-ab` r6, WiFi/BT
-firmware r3). Released 2026-10-10 from the Linux desktop; the companion app is
-unchanged (1.27.0).
+firmware r3). Released 2026-10-10 from the Linux desktop with
+`nexusq-boot-v2.0.2.img` (6.41 MiB) + `nexusq-rootfs-v2.0.2-sparse.img.zst`
+(681 MiB), the OTA repo published beside it (parity gate 19/0); the companion
+app is unchanged (1.27.0).
 
 A maintenance release. AirPlay moves to Shairport Sync 5.5.2, which carries
 upstream's security fix for the classic-AirPlay decoder the Q uses, and our
