@@ -1,7 +1,7 @@
 # Maintainer: Petr Parkan Janda <petronijus@bastla.com>
 # Based on Alpine's community/shairport-sync (Carlo Landmeter, Patrycja Rosa).
 #
-# shairport-sync, rebuilt with one patch — a straight override of Alpine's package.
+# shairport-sync, rebuilt with two patches — a straight override of Alpine's package.
 #
 # WHY (measured 2026-09-26 on the cottage Q, nq-captures/sumperak-soak-20260926/):
 # with the deep C-states on, the idle Q leaves idle ~720 times a second, and the
@@ -10,7 +10,8 @@
 # is `while (config.keep_dac_busy == 0) usleep(10000);` — polling a flag that
 # with disable_standby_mode = "never" (the default, and ours) never becomes true.
 # There is no configuration that stops it (docs/2026-09-20-sleep-states-design.md
-# §4h, "The shairport knob does not work"), and upstream 5.5.2 still polls.
+# §4h, "The shairport knob does not work"), and upstream still polls: checked
+# 2026-10-10 against 5.5.2, master and development, and no upstream issue or PR.
 #
 # The patch replaces the poll with a condition variable: every write of
 # keep_dac_busy goes through a setter that broadcasts it, and the monitor blocks
@@ -19,21 +20,34 @@
 # against the unpatched 5.1 on the ALSA null device: 85 -> 0 wakeups/s with our
 # configuration, "always" mode unchanged at 30/s. See the patch header.
 #
+# 0002: 5.2 added an exit manager thread that polls its exit flag every 100 ms,
+# and ended main() in a one-second sleep loop. On the Prague Q, 5.5.2 with 0001
+# alone woke 12 times a second at idle, 10 of them in exit_manager. The manager
+# now blocks on a semaphore (sem_post is safe in the SIGTERM handler that
+# requests the exit) and main() in pause().
+#
+# Upstream's 5.5.2 tarball still says AC_INIT(..., [5.5.1]), so `shairport-sync
+# -V` would report 5.5.1 -- read by a diag as "Alpine's build won". prepare()
+# sets it to $pkgver.
+#
 # Everything else is Alpine's build, flag for flag, so the binary's features and
 # runtime dependencies are exactly the ones the device already runs — except the
 # -openrc subpackage and its initd, dropped: this image boots systemd and ships
 # its own shairport-sync.service (device-google-steelhead).
 #
 # ⚠️ THIS IS A VERSION-PINNED OVERRIDE, like pmos/speexdsp. apk picks the highest
-# version across repos, so pkgrel is far above Alpine's (theirs: 5.1-r0). That
+# version across repos, so pkgrel is far above Alpine's (theirs: 5.5.1-r0). That
 # only holds while pkgver matches: **if Alpine moves to a newer pkgver, their
 # package wins again and the Q silently goes back to 100 wakeups/s.** Re-base
 # this aport (and the patch) on any upstream pkgver bump; docker-build.sh's
 # rootfs SHIP CHECK reports which build actually got installed.
 pkgname=shairport-sync
-pkgver=5.1
+# 5.5.2, one release ahead of Alpine's 5.5.1, so their next bump does not
+# overtake this build at once. Re-based from 5.1 on 2026-10-10, when Alpine's
+# 5.5.1-r0 had already outranked 5.1-r100 on the Prague Q's `apk version`.
+pkgver=5.5.2
 # Alpine ships -r0. Kept far above it on purpose; see the warning above.
-pkgrel=100
+pkgrel=102
 pkgdesc="AirTunes emulator (Nexus Q build: no idle polling of the DAC keep-busy flag)"
 url="https://github.com/mikebrady/shairport-sync"
 arch="all"
@@ -56,11 +70,18 @@ makedepends="
 subpackages="$pkgname-doc"
 source="$pkgname-$pkgver.tar.gz::https://github.com/mikebrady/shairport-sync/archive/$pkgver.tar.gz
 	0001-alsa-block-on-keep_dac_busy-instead-of-polling.patch
+	0002-exit-main-block-instead-of-polling.patch
 	"
 options="!check"
 
 prepare() {
 	default_prepare
+	# Upstream forgot to bump AC_INIT for 5.5.2; the binary reports this.
+	sed -i "s/^AC_INIT(\[shairport-sync\], \[[^]]*\]/AC_INIT([shairport-sync], [$pkgver]/" configure.ac
+	grep -q "^AC_INIT(\[shairport-sync\], \[$pkgver\]" configure.ac || {
+		echo "shairport-sync: could not set AC_INIT to $pkgver" >&2
+		return 1
+	}
 	autoreconf -i -f
 }
 
@@ -100,6 +121,15 @@ build() {
 		echo "shairport-sync: audio_alsa.c does not block on keep_dac_busy" >&2
 		return 1
 	}
+	# The same for 0002: the exit manager blocks on its semaphore, main() in pause().
+	grep -q 'sem_wait(&exit_request_sem)' utilities/exit.c || {
+		echo "shairport-sync: utilities/exit.c does not block on exit_request_sem" >&2
+		return 1
+	}
+	if grep -nE '^[[:space:]]*usleep\(1000000\);' shairport.c; then
+		echo "shairport-sync: main() still sleeps in a one-second loop" >&2
+		return 1
+	fi
 }
 
 package() {
@@ -107,6 +137,7 @@ package() {
 }
 
 sha512sums="
-b089a2487559d8245da676f017f702a8bc5e07ba5589c99395576214fbb3442e502fcd9148aec562117e2df580bab5be59c65f4121f0f2915c152c2bb0e773a2  shairport-sync-5.1.tar.gz
+b120331f797583351ff980d5a68860b1b3835af1ef7931c63825ed8094306680e37cf5bf12f61e897ad063b1f79eb207169e53c45bd9443a89169f5fb3f7005d  shairport-sync-5.5.2.tar.gz
 SKIP  0001-alsa-block-on-keep_dac_busy-instead-of-polling.patch
+SKIP  0002-exit-main-block-instead-of-polling.patch
 "

@@ -1,0 +1,98 @@
+From: Petr Parkan Janda <petronijus@bastla.com>
+Subject: [PATCH] exit, main: block instead of polling for the exit
+
+Since 5.2 two threads wait for the process to end by polling:
+
+- the exit manager waits for exit_request_flag with
+  `while(exit_request_flag == 0) usleep(100000);`, ten wakeups a second;
+- main() ends in `while (1) usleep(1000000);`, one more.
+
+Both run for the life of the process to look at a flag that is set once, at
+exit. On a Nexus Q (OMAP4460) idling in deep C-states the exit manager was
+the largest source of wakeups left in an idle shairport-sync: measured on the
+device, 10 of its 12 wakeups/s.
+
+exit_request() now also posts a semaphore and the manager blocks in
+sem_wait(). A semaphore rather than a condition variable because
+exit_request() is called from the SIGINT/SIGTERM handlers, and sem_post() is
+async-signal-safe where pthread_cond_signal() is not; errno is saved around it
+for the same reason. If sem_init() or sem_wait() fail, the manager falls back
+to the old 100 ms poll, so an exit request is never lost.
+
+main() waits in pause() instead. The exit manager ends the process, as
+before; a signal handler only interrupts the wait.
+---
+diff --git i/shairport.c w/shairport.c
+index 8489832..4115093 100644
+--- i/shairport.c
++++ w/shairport.c
+@@ -3381,9 +3381,10 @@ int main(int argc, char **argv) {
+   named_pthread_create(&rtsp_listener_thread, NULL, &rtsp_listen_loop, NULL, "listener");
+   atexit(exit_rtsp_listener);
+   
+-  // wait forever...
+-  while (1) {
+-    usleep(1000000);
+-  }
++  // wait forever... in pause() rather than waking every second to sleep
++  // again: the exit manager thread ends the process, and a signal handler
++  // (SIGCHLD, SIGINT, SIGTERM) only interrupts the wait.
++  for (;;)
++    pause();
+   return 0;
+ }
+diff --git i/utilities/exit.c w/utilities/exit.c
+index 9ba01af..72c31da 100644
+--- i/utilities/exit.c
++++ w/utilities/exit.c
+@@ -33,6 +33,8 @@ SOFTWARE.
+ // the thread will take care of terminating the program cleanly.
+ // pass in EXIT_SUCCESS or EXIT_FAILURE in the request.
+ 
++#include <errno.h>
++#include <semaphore.h>
+ #include <signal.h> // for sig_atomic_t
+ #include <stdlib.h> // for EXIT_SUCCESS
+ #include <string.h> // for memset
+@@ -47,15 +49,28 @@ volatile sig_atomic_t exit_status = EXIT_SUCCESS;
+ 
+ pthread_t exit_manager_thread;
+ 
++// exit_request() posts this semaphore and the exit manager blocks on it, instead
++// of polling exit_request_flag every 100 ms -- ten wakeups a second for the life
++// of the process. A semaphore rather than a condition variable because
++// exit_request() runs in the SIGINT/SIGTERM handlers: sem_post() is
++// async-signal-safe, pthread_cond_signal() is not.
++static sem_t exit_request_sem;
++static volatile sig_atomic_t exit_request_sem_ready = 0;
++
+ void *exit_manager(__attribute__((unused)) void *arg) {
+-  while(exit_request_flag == 0) {
+-    usleep(100000);
++  while (exit_request_flag == 0) {
++    if (exit_request_sem_ready == 0)
++      usleep(100000); // sem_init() failed: poll, as before
++    else if ((sem_wait(&exit_request_sem) != 0) && (errno != EINTR))
++      usleep(100000); // sem_wait() failed for another reason: poll this round
+   }
+   exit(exit_status);
+   return NULL;
+ }
+ 
+ void exit_init() {
++  if (sem_init(&exit_request_sem, 0, 0) == 0)
++    exit_request_sem_ready = 1;
+   memset(&exit_manager_thread, 0, sizeof(pthread_t));
+   named_pthread_create(&exit_manager_thread, NULL, &exit_manager, NULL, "exit_manager");
+ }
+@@ -63,4 +78,9 @@ void exit_init() {
+ void exit_request(const int exit_status_requested) {
+   exit_status = exit_status_requested; // EXIT_SUCCESS or EXIT_FAILURE
+   exit_request_flag = 1; // ask for exit
++  if (exit_request_sem_ready != 0) {
++    int saved_errno = errno; // may be running in a signal handler
++    sem_post(&exit_request_sem);
++    errno = saved_errno;
++  }
+ }
+\ No newline at end of file

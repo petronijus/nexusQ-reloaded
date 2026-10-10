@@ -1884,9 +1884,18 @@ print(f\"{p['start']} {p['size']} {ss}\")
             sync; sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
             exit 1
         fi
+        # The exact version each override's aport builds, pkgver-rpkgrel. The
+        # SHIP CHECKs below compare against it rather than a `*-r100` pattern:
+        # that matched any old build of ours and went red for every new one
+        # (shairport-sync moved to -r101 on 2026-10-10).
+        _aport_ver() {
+            _av_v=$(sed -n 's/^pkgver=//p' "$SRC/pmos/$1/APKBUILD" | head -1)
+            _av_r=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/$1/APKBUILD" | head -1)
+            echo "${_av_v}-r${_av_r}"
+        }
         # SHIP CHECK: did our NEON speexdsp actually land, or did the rootfs
         # silently take Alpine's scalar one? Checking the VERSION is enough and
-        # needs no readelf here: our -r100 can only exist if both NEON gates in
+        # needs no readelf here: our build can only exist if both NEON gates in
         # pmos/speexdsp/APKBUILD passed at build time. Not fatal — unlike a
         # missing libpython this yields a working image, just one where the
         # resampler costs ~3x — but it must be impossible to miss in the log.
@@ -1899,7 +1908,7 @@ print(f\"{p['start']} {p['size']} {ss}\")
               if (pkg && ver) { print ver; exit } }' \
             "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
         case "${_ship_sdsp:-}" in
-            *-r100)
+            "$(_aport_ver speexdsp)")
                 echo "  SHIP CHECK: speexdsp = $_ship_sdsp (our NEON build)." ;;
             "")
                 echo "  SHIP CHECK: speexdsp not installed in the rootfs (?)." ;;
@@ -1912,9 +1921,9 @@ print(f\"{p['start']} {p['size']} {ss}\")
                 echo "  # NEON build did not win."
                 echo "  ##########################################################" ;;
         esac
-        # SHIP CHECK: the same question for the shairport-sync override. -r100 can
-        # only exist if its no-poll gate passed; anything else is Alpine's build,
-        # whose ALSA monitor wakes the CPU 100 times a second. Not fatal (AirPlay
+        # SHIP CHECK: the same question for the shairport-sync override. Our
+        # build can only exist if its no-poll gates passed; anything else is
+        # Alpine's build (or a stale one of ours), whose threads poll at idle. Not fatal (AirPlay
         # works either way), but never silent.
         _ship_sps="$(sudo awk -v RS="" -v FS="\n" '
             { pkg = ""; ver = ""
@@ -1925,16 +1934,16 @@ print(f\"{p['start']} {p['size']} {ss}\")
               if (pkg && ver) { print ver; exit } }' \
             "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
         case "${_ship_sps:-}" in
-            *-r100)
+            "$(_aport_ver shairport-sync)")
                 echo "  SHIP CHECK: shairport-sync = $_ship_sps (our no-idle-poll build)." ;;
             "")
                 echo "  SHIP CHECK: shairport-sync not installed in the rootfs (?)." ;;
             *)
                 echo "  ##########################################################"
-                echo "  # SHIP CHECK: shairport-sync = $_ship_sps -- that is"
-                echo "  # ALPINE'S build, not our override: its ALSA monitor will"
-                echo "  # wake the CPU 100x/s. See Phase 7c7 and the pin warning in"
-                echo "  # pmos/shairport-sync/APKBUILD."
+                echo "  # SHIP CHECK: shairport-sync = $_ship_sps, not our"
+                echo "  # $(_aport_ver shairport-sync): Alpine's build or a stale one,"
+                echo "  # which wakes the CPU up to 100x/s. See Phase 7c7 and the pin"
+                echo "  # warning in pmos/shairport-sync/APKBUILD."
                 echo "  ##########################################################" ;;
         esac
         # SHIP CHECK: and for the alsa-utils override (alsaloop's scheduler).
@@ -1947,7 +1956,7 @@ print(f\"{p['start']} {p['size']} {ss}\")
               if (pkg && ver) { print ver; exit } }' \
             "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
         case "${_ship_au:-}" in
-            *-r100)
+            "$(_aport_ver alsa-utils)")
                 echo "  SHIP CHECK: alsa-utils = $_ship_au (our alsaloop scheduler build)." ;;
             "")
                 echo "  SHIP CHECK: alsa-utils not installed in the rootfs (?)." ;;

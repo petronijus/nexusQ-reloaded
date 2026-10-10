@@ -24,7 +24,7 @@ Measured on the ALSA null device: 85 -> 0 wakeups/s with the default
 configuration; "always" unchanged at 30/s (the scan interval).
 ---
 diff --git a/activity_monitor.c b/activity_monitor.c
-index 06fe4fe..38287c3 100644
+index 368e858..89cda68 100644
 --- a/activity_monitor.c
 +++ b/activity_monitor.c
 @@ -74,7 +74,7 @@ void going_active(int block) {
@@ -46,10 +46,10 @@ index 06fe4fe..38287c3 100644
  }
  
 diff --git a/audio_alsa.c b/audio_alsa.c
-index 83ed20d..f1c28bf 100644
+index 7571a37..d4e38cf 100644
 --- a/audio_alsa.c
 +++ b/audio_alsa.c
-@@ -1383,7 +1383,7 @@ static int init(int argc, char **argv) {
+@@ -1384,7 +1384,7 @@ static int init(int argc, char **argv) {
        else if ((strcasecmp(str, "yes") == 0) || (strcasecmp(str, "on") == 0) ||
                 (strcasecmp(str, "always") == 0)) {
          config.disable_standby_mode = disable_standby_always;
@@ -58,7 +58,7 @@ index 83ed20d..f1c28bf 100644
        } else if (strcasecmp(str, "auto") == 0)
          config.disable_standby_mode = disable_standby_auto;
        else {
-@@ -1423,7 +1423,7 @@ static int init(int argc, char **argv) {
+@@ -1424,7 +1424,7 @@ static int init(int argc, char **argv) {
        else if ((strcasecmp(str, "yes") == 0) || (strcasecmp(str, "on") == 0) ||
                 (strcasecmp(str, "always") == 0)) {
          config.use_precision_timing = YNA_YES;
@@ -67,7 +67,7 @@ index 83ed20d..f1c28bf 100644
        } else if (strcasecmp(str, "auto") == 0)
          config.use_precision_timing = YNA_AUTO;
        else {
-@@ -2265,8 +2265,8 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
+@@ -2264,8 +2264,8 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
    int64_t sleep_time_actual_ns = 0; // actual sleep time since last check, or zero
    int okb = -1;
  
@@ -78,16 +78,16 @@ index 83ed20d..f1c28bf 100644
  
    debug(1, "alsa: get initial disable standby parameters for rate/channels: %u/%u.",
          disable_standby_mode_default_rate, disable_standby_mode_default_channels);
-@@ -2303,6 +2303,8 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
+@@ -2302,6 +2302,8 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
              "alsa_buffer_monitor_thread_code sleep was %.6f sec but request was for %.6f sec. "
              "Disabling standby may not work properly!",
              sleep_time_actual_ns * 0.000000001, config.disable_standby_mode_silence_scan_interval);
 +    // Declared out here: pthread_cleanup_push/pop open and close a block.
 +    int nothing_to_do = 0;
-     pthread_cleanup_debug_mutex_lock(&alsa_mutex, 200000, 0);
+     pthread_mutex_lock_and_cleanup_push(&alsa_mutex);
      // check possible state transitions here
      if ((alsa_backend_state == abm_disconnected) && (config.keep_dac_busy != 0)) {
-@@ -2409,11 +2411,20 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
+@@ -2408,11 +2410,20 @@ static void *alsa_buffer_monitor_thread_code(__attribute__((unused)) void *arg)
          }
        }
      }
@@ -95,7 +95,7 @@ index 83ed20d..f1c28bf 100644
 +    // rather than rescanning every disable_standby_mode_silence_scan_interval.
 +    // Decided under alsa_mutex, where alsa_backend_state is otherwise read.
 +    nothing_to_do = (config.keep_dac_busy == 0) && (alsa_backend_state == abm_disconnected);
-     debug_mutex_unlock(&alsa_mutex, 0);
+     pthread_mutex_unlock(&alsa_mutex);
      pthread_cleanup_pop(0); // release the mutex
 -    uint64_t tsb = get_absolute_time_in_ns();
 -    usleep(sleep_time_us); // has a cancellation point in it
@@ -112,10 +112,10 @@ index 83ed20d..f1c28bf 100644
    pthread_exit(NULL);
  }
 diff --git a/common.c b/common.c
-index c513077..d2abbac 100644
+index f041c22..f3c6e30 100644
 --- a/common.c
 +++ b/common.c
-@@ -1979,6 +1979,32 @@ void rwlock_unlock(void *arg) { pthread_rwlock_unlock((pthread_rwlock_t *)arg);
+@@ -1858,6 +1858,32 @@ void rwlock_unlock(void *arg) { pthread_rwlock_unlock((pthread_rwlock_t *)arg);
  
  void mutex_unlock(void *arg) { pthread_mutex_unlock((pthread_mutex_t *)arg); }
  
@@ -132,7 +132,7 @@ index c513077..d2abbac 100644
 +// Blocks until config.keep_dac_busy is non-zero. A cancellation point (the ALSA
 +// backend cancels its monitor thread on shutdown), so the mutex is released by a
 +// cleanup handler. The one-second timeout is only a backstop for a writer that
-+// bypasses set_keep_dac_busy(); every writer in this tree goes through it.
++// bypasses set_keep_dac_busy(); every write after start-up goes through it.
 +void wait_for_keep_dac_busy(void) {
 +  pthread_mutex_lock(&keep_dac_busy_mutex);
 +  pthread_cleanup_push(mutex_unlock, &keep_dac_busy_mutex);
@@ -149,29 +149,30 @@ index c513077..d2abbac 100644
    debug(3, "thread_cleanup called.");
    pthread_t *thread = (pthread_t *)arg;
 diff --git a/common.h b/common.h
-index 3c52383..e0ef690 100644
+index 11a10fc..bea2bb5 100644
 --- a/common.h
 +++ b/common.h
-@@ -654,6 +654,14 @@ uint16_t bind_UDP_port(int ip_family, const char *self_ip_address, uint32_t scop
- 
+@@ -595,6 +595,15 @@ uint16_t bind_UDP_port(int ip_family, const char *self_ip_address, uint32_t scop
+ void malloc_cleanup(void *arg);
  void socket_cleanup(void *arg);
  void mutex_unlock(void *arg);
 +
-+// config.keep_dac_busy is only ever changed through set_keep_dac_busy(), which
-+// wakes anything blocked in wait_for_keep_dac_busy(). The ALSA buffer monitor
++// Every write of config.keep_dac_busy after start-up goes through
++// set_keep_dac_busy(), which wakes anything blocked in wait_for_keep_dac_busy()
++// (the ALSA backend's init() only zeroes it, before any thread runs). The ALSA buffer monitor
 +// used to poll the flag every 10 ms instead — 100 wakeups a second for the life
 +// of the process whenever disable_standby_mode is "never" (the default), when
 +// the flag never becomes true at all.
 +void set_keep_dac_busy(int value);
 +void wait_for_keep_dac_busy(void);
- void rwlock_unlock(void *arg);
  void mutex_cleanup(void *arg);
+ void rwlock_unlock(void *arg);
  void cv_cleanup(void *arg);
 diff --git a/dbus-service.c b/dbus-service.c
-index 4dbd1a6..f7809eb 100644
+index 397ac75..ccdbae0 100644
 --- a/dbus-service.c
 +++ b/dbus-service.c
-@@ -565,10 +565,10 @@ gboolean notify_disable_standby_callback(ShairportSync *skeleton,
+@@ -566,10 +566,10 @@ gboolean notify_disable_standby_callback(ShairportSync *skeleton,
    // debug(1, "\"notify_disable_standby_callback\" called.");
    if (shairport_sync_get_disable_standby(skeleton)) {
      debug(1, ">> disable standby mode");
@@ -184,7 +185,7 @@ index 4dbd1a6..f7809eb 100644
    }
    return TRUE;
  }
-@@ -727,11 +727,11 @@ gboolean notify_disable_standby_mode_callback(ShairportSync *skeleton,
+@@ -728,11 +728,11 @@ gboolean notify_disable_standby_mode_callback(ShairportSync *skeleton,
    if ((strcasecmp(th, "no") == 0) || (strcasecmp(th, "off") == 0) ||
        (strcasecmp(th, "never") == 0)) {
      config.disable_standby_mode = disable_standby_off;

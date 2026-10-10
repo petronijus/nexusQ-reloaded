@@ -27,6 +27,64 @@ the apk packages and the watch to compare it with the running kernel, with the
 app saying that the kernel goes through `nq-kernel-ota` (it is not an apk
 upgrade and needs someone in reach for the trial boot).
 
+## [2.0.2] — 2026-10-10 — AirPlay security fixes, and an idle Q that stays idle
+
+`shairport-sync` **5.5.2-r102**; everything else as in 2.0.1 (kernel
+6.18.48-r20, device r126, `nexusq-kernel-ota` r11, `nexusqd` r26,
+`nexusq-control` r64, `nexusq-mqtt` r17, `nexusq-rootfs-ab` r6, WiFi/BT
+firmware r3). Released 2026-10-10 from the Linux desktop; the companion app is
+unchanged (1.27.0).
+
+A maintenance release. AirPlay moves to Shairport Sync 5.5.2, which carries
+upstream's security fix for the classic-AirPlay decoder the Q uses, and our
+build of it no longer polls at idle. It
+had to ship now: Alpine's 5.5.1 had started to outrank our 5.1 build, so the
+next system update would have put the stock, polling build back on every Q.
+**Coming from 2.0.1** take the app's system update; the kernel did not change,
+so a flash needs only `userdata`.
+
+### Fixed — shairport-sync re-based on 5.5.2 before Alpine's 5.5.1 replaced it (`shairport-sync` 5.5.2-r102)
+
+The 2026-10-10 diagnostic sweep of the Prague Q found `apk version` offering
+Alpine's `shairport-sync` 5.5.1-r0 over our 5.1-r100. Our override only wins
+while its pkgver matches Alpine's, so the next system update would have put
+back the stock build, with the 10 ms `keep_dac_busy` poll that is the idle Q's
+largest single source of wakeups (91 idle exits/s, see the aport's header).
+
+Upstream still polls, in 5.5.2, on `master` and on `development`, and there is
+no upstream issue or PR about it. The patch is re-based onto 5.5.2, one release
+ahead of Alpine, so their next bump does not overtake it at once. Three hunks
+needed porting by hand: upstream renamed the monitor thread's lock helper
+(`pthread_mutex_lock_and_cleanup_push` / `pthread_mutex_unlock`) and moved the
+cleanup declarations in `common.h`. The build flags and dependencies match
+Alpine's 5.5.1 aport, and the configuration the Q ships is unaffected by
+5.2-5.5.2. 5.5 also brings upstream's security fixes. Most are in AirPlay 2
+code, which the Q's build leaves out (no `--with-airplay-2`); the one that
+reaches it is in the Hammerton ALAC decoder the Q uses (no `--with-apple-alac`):
+one oversized UDP audio packet of an uncompressed classic-AirPlay session
+could overflow the heap with the sender's data.
+
+5.2 brought two pollers of its own. r100 (5.5.2 with the re-based patch
+only), installed on the Prague Q, woke 12 times a second at idle against 5.1's
+1, and 10 of those were the new `exit_manager` thread, which checks its exit
+flag every 100 ms; `main()` now also ends in a one-second sleep loop. `0002`
+fixes both: the thread blocks on a semaphore that `exit_request()` posts (a
+semaphore because the SIGTERM handler requests the exit, and `sem_post` is
+async-signal-safe where a condition variable is not), and `main()` waits in
+`pause()`. The build fails if any of the three polls comes back. Upstream's
+5.5.2 tarball still declares 5.5.1 in `configure.ac`, so `shairport-sync -V`
+reported 5.5.1; the aport sets it to the real version.
+
+The image build's SHIP CHECKs for the three overrides (speexdsp,
+shairport-sync, alsa-utils) matched `*-r100`, which would have called our own
+r102 "Alpine's build" and an old r100 of ours current. They compare the exact
+version the aport builds now.
+
+Verified on the Prague Q before the release: r101 (without the `main()` fix)
+built, started, advertised AirPlay over mDNS, idled at 2 wakeups/s and stopped
+on SIGTERM in 24 ms. An AirPlay stream on 5.5.2 was not played before the
+release.
+
 ## [2.0.1] — 2026-10-04 — a clean log on every USB plug, tidier kernel updates, a memory watch
 
 Kernel **6.18.48-r20** (patch 0061), device **r126**, `nexusq-kernel-ota`
