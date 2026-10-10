@@ -1,23 +1,18 @@
 {
   "schema": 1,
-  "version": "2.0.1",
-  "date": "2026-10-04",
-  "headline": "A clean log on every USB plug, tidier kernel updates, a memory watch",
+  "version": "2.0.2",
+  "date": "2026-10-10",
+  "headline": "AirPlay security fixes, and an idle Q that stays idle",
   "items": [
     {
-      "icon": "usb",
-      "title": "Quiet USB plugging",
-      "text": "Plugging or unplugging the USB cable no longer logs a power-chip error."
+      "icon": "security",
+      "title": "AirPlay security fixes",
+      "text": "AirPlay moves to Shairport Sync 5.5.2, which fixes a flaw a device on your network could use to corrupt its memory."
     },
     {
-      "icon": "fix",
-      "title": "Tidier kernel updates",
-      "text": "A kernel update now removes old drivers nothing can boot, and keeps the ones a rollback still needs."
-    },
-    {
-      "icon": "new",
-      "title": "A memory watch",
-      "text": "The Q records how much memory each service holds over weeks, so a slow leak shows who it is."
+      "icon": "power",
+      "title": "A quieter idle",
+      "text": "AirPlay no longer wakes the processor ten times a second while nothing is playing."
     }
   ],
   "packages": {
@@ -33,7 +28,7 @@
     "device-google-steelhead-nonfree-firmware": "1.0-r126",
     "firmware-google-steelhead": "1-r3",
     "speexdsp": "1.2.1-r100",
-    "shairport-sync": "5.1-r100",
+    "shairport-sync": "5.5.2-r102",
     "alsa-utils": "1.2.16-r100",
     "alsa-utils-systemd": "1.2.16-r100",
     "alsa-utils-udev": "1.2.16-r100"
