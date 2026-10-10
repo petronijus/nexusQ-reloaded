@@ -1,0 +1,1 @@
+Remote, setup and settings for a Nexus Q running the Nexus Q Reloaded firmware.

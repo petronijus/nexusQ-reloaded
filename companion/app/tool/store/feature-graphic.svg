@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Google Play's feature graphic (1024x500), in the app's own look
+  (docs/2026-06-30-companion-design-language.md): a true-black canvas, the
+  sphere, Holo Blue (#33B5E5) for the title. Rendered by make_store_art.sh;
+  the text needs the Roboto font installed. `sphere.png` is
+  assets/device/sphere.png, which the script puts next to this file (rsvg
+  reads no file outside the SVG's own directory).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1024 500" width="1024" height="500">
+  <defs>
+    <!-- the ring's glow, spilling onto the canvas under the sphere -->
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#33B5E5" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#33B5E5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="500" fill="#000000"/>
+
+  <ellipse cx="800" cy="350" rx="230" ry="80" fill="url(#glow)"/>
+  <image x="610" y="60" width="380" height="380" xlink:href="sphere.png"/>
+
+  <text x="64" y="262" font-family="Roboto" font-weight="300" font-size="58" fill="#33B5E5">Nexus Q Reloaded</text>
+  <text x="66" y="312" font-family="Roboto" font-weight="400" font-size="26" fill="#FFFFFF">The remote for your Nexus Q,</text>
+  <text x="66" y="348" font-family="Roboto" font-weight="400" font-size="26" fill="#FFFFFF">back on mainline Linux.</text>
+</svg>

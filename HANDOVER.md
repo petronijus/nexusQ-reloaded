@@ -8,6 +8,15 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Any machine — 2026-10-11: nexusq-control r65 and app 1.27.1+68 are NOT built or released
+
+`nexusq-control` r65 labels the audio outputs in English ("Speaker",
+"Optical"; they were Czech). It is in the tree, not built, not in the OTA
+repo: it goes out with the next image release. The app 1.27.1+68 (sharp
+launcher icon, English output names whatever the Q sends, no empty "Sound"
+heading) runs on Petr's Pixel as a DEBUG build from the working tree; the
+release (GitHub `app-v1.27.1`, `companion/app-release.json`, iOS) is not cut.
+
 ## Any machine — 2026-10-10: v2.0.2 is RELEASED
 
 Released from the desktop on 2026-10-10: the OTA repo on gh-pages (release.json
@@ -98,19 +107,24 @@ the change: the session's scratchpad (not in the repo).
   AAB, verified, not uploaded anywhere.
 
 Open, in order:
-1. **Decide the store icon and the sphere art.** The launcher icon is the
-   original Google Nexus Q "Q" (commit 5671c63) and `companion/app/assets/device/sphere.png`
-   is of unknown origin. Petr would keep both; the risk: Play rejects apps that
-   look like Google's at review and repeated violations can suspend the whole
-   developer account (check whether the Kulturní přehled app is on the same
-   account); F-Droid refuses non-free assets outright. Proposal on the table:
-   the repo's own ring icon (`tool/make_icon.py`) and a drawn sphere for the
-   play/fdroid flavors only. The store name stays "Nexus Q Reloaded" (Petr),
-   with a "not affiliated with Google" line in the description.
-2. **Store metadata** in `companion/app/fastlane/metadata/android/en-US/` <!-- docs-check: ignore -->
-   (read by both Play and F-Droid): title, short/full description, changelog
-   for 67, icon 512, feature graphic 1024x500, phone screenshots (take them on
-   Petr's phone over adb while he navigates).
+1. ✅ **Store icon and sphere art: the originals** (Petr, 2026-10-10), the
+   Google "Q" and `companion/app/assets/device/sphere.png`, in every flavor; accepted risk:
+   Play may reject apps that look like Google's at review (check whether the
+   Kulturní přehled app is on the same developer account, since repeated
+   violations can suspend all of it). The Q exists only as a 96 px bitmap, so
+   the store icon is a vector redraw of it (`companion/app/tool/store/q-mark.svg`,
+   measured from the bitmap). The launcher icon, a 96 px upscale before,
+   was soft; since app 1.27.1+68 it is rendered from the SVG too.
+2. **Store metadata** in `companion/app/fastlane/metadata/android/en-US/`
+   (read by both Play and F-Droid). Done 2026-10-10: title, short/full
+   description (with "not affiliated with Google" and the Spotify 25-user
+   limit), changelog for 68, icon 512 and feature graphic 1024x500
+   (`companion/app/tool/store/make_store_art.sh` renders both), and five
+   phone screenshots (2026-10-11, Petr's Pixel 9 Pro Fold, outer display, app
+   1.27.1+68 debug against the Prague Q): home, equalizer, settings, devices,
+   health. Cropped to Play's 2:1 limit and clear of personal data (the Spotify
+   account name, the WiFi SSID). Not shot: the setup wizard, because a debug
+   build shows the original app's stock imagery that a release does not carry.
 3. **Privacy policy page** (Play requires one): a page on gh-pages saying the
    app talks only to the Q on the LAN, to Spotify's Web API when linked and to
    the user's own MQTT broker; no analytics. Publishing it is public: show
@@ -120,13 +134,15 @@ Open, in order:
    key), store listing, data safety, content rating, then a **closed test with
    12 testers for 14 days** before production. Petr gathers the testers. I can
    drive the console in Chrome; Petr confirms each submission.
-5. **F-Droid:** a merge request to `fdroiddata` (Petr's GitLab account) with a
+5. **F-Droid — on hold:** with the original Google assets F-Droid refuses
+   the app (non-free assets); it needs free art in the fdroid flavor first.
+   Then: a merge request to `fdroiddata` (Petr's GitLab account) with a
    recipe building `--flavor fdroid` from this repo; the fdroid build must come
    out unsigned for F-Droid to sign, and the Spotify client ID is not in the
    public source (Spotify control is off in that build unless the recipe passes
    it; it is a public PKCE id). Review takes weeks.
-6. Spotify control works only for users added to the Spotify developer app (25
-   max) unless Spotify grants extended quota; say so in the store text.
+6. ✅ Spotify control works only for users added to the Spotify developer app
+   (25 max) unless Spotify grants extended quota; the store text says so.
 7. iOS goes to the App Store at the v2 release through VM 108 (Petr).
 
 ## Any machine — 2026-09-30: USB audio doze — kernel 6.18.48-r18 + device r121 are NOT built or published
@@ -208,12 +224,9 @@ just setup      # uv Python 3.14, lefthook install, blame ignore list, flutter p
 - **MacBook** — ✅ done 2026-10-02: hooks installed, the verification copy gone,
   `just ci` green (docker suites, ALSA integration test, Android build and the
   iOS build without codesign included; Docker Desktop must be running).
-- **Omarchy** — shares `~/Documents` with Ubuntu, so it is the SAME clone and
-  its git hooks are already live. Until its tools are installed: without
-  lefthook the hooks are skipped; with lefthook but without shellcheck, just,
-  uv, ktlint or Flutter they FAIL, and project-sync's autosync is refused.
-  Run `just doctor` there, install what it names (libpulse headers included),
-  `uv python install 3.14`, then `just check`.
+- **Omarchy** — ✅ done 2026-10-10: shares `~/Documents` with Ubuntu (the SAME
+  clone, hooks already live); `just doctor` clean (every tool, Python 3.14,
+  Flutter 3.47.5, libpulse headers, Docker), `just check` green.
 - **Windows** — nothing: the checks are not set up there.
 
 The seven packages bumped for the reformat (device r121, control r60, mqtt r12,

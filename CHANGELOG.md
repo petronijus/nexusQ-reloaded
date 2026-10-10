@@ -24,6 +24,26 @@ Also in the app: Settings had a "Sound" heading with nothing under it, left
 behind when the equalizer moved to the home screen in 1.15.0 (fef4a56); it is
 gone.
 
+### Changed — a sharp launcher icon, and the Google Play listing (app **1.27.1+68**, unreleased)
+
+The launcher icon has been the original Nexus Q app's "Q" since 5671c63, but
+that mark only ever shipped as a bitmap of at most 96x96: upscaled to the
+launcher's sizes it was visibly soft. It is now a vector,
+`companion/app/tool/store/q-mark.svg`, redrawn from that bitmap with its
+geometry and colours measured on the 96-unit grid (ring 44.5/29.5 around
+(48,48), the 45-degree tail, the cyan top face and edge).
+`tool/make_icon_original.py` renders the launcher inputs from it, so it no
+longer needs the private overlay; the Android, iOS, macOS and web icons are
+regenerated.
+
+For Google Play (Petr, 2026-10-10: the original Q and sphere stay, in every
+flavor), `companion/app/fastlane/metadata/android/en-US/` holds the listing:
+title, short and full description (it needs our firmware; not affiliated with
+Google; Spotify control limited to 25 allowlisted accounts), the changelog for
+68, the 512 icon and the 1024x500 feature graphic, both rendered by
+`tool/store/make_store_art.sh`. F-Droid is on hold: it refuses the original
+Google assets.
+
 ### Known issue — dbus-broker rejects shairport-sync's system-bus policies (`shairport-sync`)
 
 Found on 2026-10-10 by the post-release sweep of the Prague Q, and recorded,

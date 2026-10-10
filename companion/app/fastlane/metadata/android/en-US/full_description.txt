@@ -1,0 +1,34 @@
+The Nexus Q was Google's glowing media sphere from 2012, cancelled before it ever really shipped. Nexus Q Reloaded brings it back on mainline Linux as a music player for Spotify Connect, AirPlay, Roon, Bluetooth and USB audio. This app is its remote and, since the sphere has no screen and no buttons beyond its dome, its settings panel.
+
+<b>This app needs a Nexus Q running the Nexus Q Reloaded firmware.</b> It does not work with the original Android software the Q shipped with. The firmware is free and open source; how to install it is at https://github.com/petronijus/nexusQ-reloaded
+
+<b>Play and control</b>
+• See what is playing, from whichever source is playing it
+• One volume shared by Spotify, AirPlay, the dome and Home Assistant
+• Play, pause and skip Spotify on the Q (needs a linked Spotify Premium account)
+• Equalizer, mute, and the output: speaker, optical or HDMI
+
+<b>The light ring</b>
+• Pick the ring's theme, brightness and how it follows the music
+• Switch it off by hand or on a schedule, or let it dim with the daylight
+
+<b>Set up a new Q</b>
+• A step-by-step setup over Bluetooth: find the Q, confirm it by the colour on its ring, join it to your WiFi, give it a name and a room
+• Tap the phone on the Q to start (on phones with NFC)
+
+<b>Bluetooth and desktop</b>
+• Pair a phone to the Q, or add a Bluetooth mouse and keyboard
+• Switch on the Q's HDMI desktop
+
+<b>Updates and health</b>
+• The app tells you when your Q has a new release, shows what it brings, and installs it
+• A live health view (temperature, CPU, services, WiFi) through your own MQTT broker, the same one Home Assistant uses
+• More than one Q in the house: pick which one to control
+
+<b>Privacy</b>
+The app talks to your Nexus Q on your home network, to Spotify's Web API only if you link a Spotify account, and to your own MQTT broker only if you set one up. It has no analytics, no ads and no account of its own.
+
+<b>About Spotify control</b>
+Controlling Spotify from the app uses Spotify's Web API. Until Spotify grants the app extended access, it works only for accounts the developer has added to the app (Spotify allows 25). Spotify Connect itself — playing to the Q from the Spotify app — works for everyone.
+
+Nexus Q Reloaded is an independent open-source project. It is not affiliated with, endorsed by or sponsored by Google. Google and Nexus are trademarks of Google LLC.
