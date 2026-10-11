@@ -1,0 +1,39 @@
+From 8dcf0b9214f2cfeb4c37272eadb7ba63d62f84bc Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:13:36 +0000
+Subject: [PATCH 63/73] drm: hook the pvrsgx directory into the DRM Kconfig and
+ Makefile
+
+The two hook lines of the openpvrsgx merge (pvrsrvkm-6.18-rc6), without
+the DRM_INTEL_CDV line (openpvrsgx 084d34836943 in Maemo), so the pinned
+pvrsgx tree that prepare() copies
+into drivers/gpu/drm/pvrsgx is configured and built.
+---
+ drivers/gpu/drm/Kconfig  | 1 +
+ drivers/gpu/drm/Makefile | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/drivers/gpu/drm/Kconfig b/drivers/gpu/drm/Kconfig
+index 4b0228c88..c152b49d0 100644
+--- a/drivers/gpu/drm/Kconfig
++++ b/drivers/gpu/drm/Kconfig
+@@ -386,6 +386,7 @@ source "drivers/gpu/drm/tidss/Kconfig"
+ source "drivers/gpu/drm/adp/Kconfig"
+ 
+ source "drivers/gpu/drm/xlnx/Kconfig"
++source "drivers/gpu/drm/pvrsgx/Kconfig"
+ 
+ source "drivers/gpu/drm/gud/Kconfig"
+ 
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index 1b3a7ab6d..efbeb0122 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -222,6 +222,7 @@ obj-$(CONFIG_DRM_VBOXVIDEO) += vboxvideo/
+ obj-$(CONFIG_DRM_LIMA)  += lima/
+ obj-$(CONFIG_DRM_PANFROST) += panfrost/
+ obj-$(CONFIG_DRM_PANTHOR) += panthor/
++obj-y			+= pvrsgx/
+ obj-$(CONFIG_DRM_TYR) += tyr/
+ obj-$(CONFIG_DRM_ASPEED_GFX) += aspeed/
+ obj-$(CONFIG_DRM_MCDE) += mcde/

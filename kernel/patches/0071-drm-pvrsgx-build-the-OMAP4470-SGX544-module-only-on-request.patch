@@ -1,0 +1,52 @@
+From 69236ad9cfee2d0f8fe6bfc1840f8d41b447df9d Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:38 +0000
+Subject: [PATCH 71/73] drm: pvrsgx: build the OMAP4470 SGX544 module only on
+ request
+
+Under ARCH_OMAP4 the Makefile built pvrsrvkm_omap4_sgx544_112 after the
+SGX540 module, into the same object directory. Gate it on a new
+SGX_OMAP4470 option, default n: OMAP4430/4460 boards ship no dead module
+and build the DDK once.
+---
+ drivers/gpu/drm/pvrsgx/Kconfig  | 9 +++++++++
+ drivers/gpu/drm/pvrsgx/Makefile | 2 ++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/drivers/gpu/drm/pvrsgx/Kconfig b/drivers/gpu/drm/pvrsgx/Kconfig
+index 540f22fad..3425e838c 100644
+--- a/drivers/gpu/drm/pvrsgx/Kconfig
++++ b/drivers/gpu/drm/pvrsgx/Kconfig
+@@ -83,6 +83,15 @@ config SGX_OMAP
+ 	help
+ 	  Support for the PowerVR SGX 3D core inside OMAP SoC.
+ 
++config SGX_OMAP4470
++	bool "Also build the OMAP4470 (SGX544-112) module"
++	depends on SGX_OMAP && ARCH_OMAP4
++	default n
++	help
++	  Under ARCH_OMAP4 the OMAP4430/4460 (SGX540-120) module is always
++	  built. Say Y here to build pvrsrvkm_omap4_sgx544_112 for the
++	  OMAP4470 as well.
++
+ config SGX_POULSBO
+ 	tristate "PowerVR SGX inside GMA500 SoC"
+ 	depends on SGX && MATOM
+diff --git a/drivers/gpu/drm/pvrsgx/Makefile b/drivers/gpu/drm/pvrsgx/Makefile
+index bb6748ffc..9e5eb60a1 100644
+--- a/drivers/gpu/drm/pvrsgx/Makefile
++++ b/drivers/gpu/drm/pvrsgx/Makefile
+@@ -94,10 +94,12 @@ ifneq ($(CONFIG_ARCH_OMAP4),)
+ # ES1 would have REV=110 but that is unsupported by sgxerrata.h
+ 	$(Q)SOC_VENDOR=ti SOC_FAMILY=omap SOC=omap4 SGX=sgx540 SGX_FLAG=SGX540 SGX_REV=120 AM_VERSION=4 TARGET_TYPE=$(CONFIG_SGX_OMAP) $(MAKE) $(build)=$(SOURCE)
+ 	$(Q)if [ -r $(SOURCE)/modules.order ]; then cat $(SOURCE)/modules.order >>$(obj)/modules.order; fi
++ifneq ($(CONFIG_SGX_OMAP4470),)
+ 	@$(kecho) "  MAKE    $(obj): omap4470"
+ # see https://pyra-handheld.com/boards/threads/omap4470-sgx-drivers.78480/
+ 	$(Q)SOC_VENDOR=ti SOC_FAMILY=omap SOC=omap4 SGX=sgx544 SGX_FLAG=SGX544 SGX_REV=112 AM_VERSION=4 TARGET_TYPE=$(CONFIG_SGX_OMAP) $(MAKE) $(build)=$(SOURCE)
+ 	$(Q)if [ -r $(SOURCE)/modules.order ]; then cat $(SOURCE)/modules.order >>$(obj)/modules.order; fi
++endif # CONFIG_SGX_OMAP4470
+ ifneq ($(CONFIG_SOC_AM43XX),)
+ 	@$(kecho) "  MAKE    $(obj): am4"
+ 	$(Q)SOC_VENDOR=ti SOC_FAMILY=omap SOC=am4 SGX=sgx530 SGX_FLAG=SGX530 SGX_REV=125 AM_VERSION=4 TARGET_TYPE=$(CONFIG_SGX_OMAP) $(MAKE) $(build)=$(SOURCE)

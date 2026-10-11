@@ -96,10 +96,12 @@ CONFIG_BPF_SYSCALL=y
 CONFIG_BPF_JIT=y
 # end of BPF subsystem
 
-CONFIG_PREEMPT_NONE_BUILD=y
-CONFIG_PREEMPT_NONE=y
+CONFIG_PREEMPT_BUILD=y
+# CONFIG_PREEMPT_NONE is not set
 # CONFIG_PREEMPT_VOLUNTARY is not set
-# CONFIG_PREEMPT is not set
+CONFIG_PREEMPT=y
+CONFIG_PREEMPT_COUNT=y
+CONFIG_PREEMPTION=y
 
 #
 # CPU/Task time and stats accounting
@@ -118,9 +120,11 @@ CONFIG_PSI=y
 # RCU Subsystem
 #
 CONFIG_TINY_RCU=y
+CONFIG_PREEMPT_RCU=y
 # CONFIG_RCU_EXPERT is not set
 CONFIG_TINY_SRCU=y
 CONFIG_NEED_TASKS_RCU=y
+CONFIG_TASKS_RCU=y
 # end of RCU Subsystem
 
 CONFIG_IKCONFIG=y
@@ -486,7 +490,15 @@ CONFIG_ARM_APPENDED_DTB=y
 CONFIG_ARM_ATAG_DTB_COMPAT=y
 CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_FROM_BOOTLOADER=y
 # CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_EXTEND is not set
-CONFIG_CMDLINE="console=ttyS2,115200 console=tty0 root=/dev/mmcblk0p13 rootwait rw mem=1008M ramoops.mem_address=0xbf000000 ramoops.mem_size=0x100000 ramoops.console_size=0x80000 ramoops.record_size=0x20000 ramoops.dump_oops=1 ramoops.mem_type=1 loglevel=4 video=HDMI-A-1:1280x720@60 panic=30"
+# modprobe.blacklist: the SGX540 GPU module (CONFIG_SGX_OMAP=m) must not
+# autoload until bring-up has proven it on the hardware; it is loaded by hand
+# (an explicit `modprobe <name>` is not blocked, only alias autoload). In the
+# forced cmdline it is part of the zImage, so it travels with the kernel slot
+# and rolls back with it -- a modprobe.d file in the kernel apk would not:
+# nq-kernel-ota stage-apk takes only /lib/modules/<release> and /boot out of the
+# apk, so on a kernel OTA's trial boot the rootfs would not have it yet. The
+# APKBUILD's build() refuses an SGX build without it.
+CONFIG_CMDLINE="console=ttyS2,115200 console=tty0 root=/dev/mmcblk0p13 rootwait rw mem=1008M ramoops.mem_address=0xbf000000 ramoops.mem_size=0x100000 ramoops.console_size=0x80000 ramoops.record_size=0x20000 ramoops.dump_oops=1 ramoops.mem_type=1 loglevel=4 video=HDMI-A-1:1280x720@60 panic=30 modprobe.blacklist=pvrsrvkm_omap4_sgx540_120"
 # CONFIG_CMDLINE_FROM_BOOTLOADER is not set
 # CONFIG_CMDLINE_EXTEND is not set
 CONFIG_CMDLINE_FORCE=y
@@ -756,11 +768,7 @@ CONFIG_BFQ_GROUP_IOSCHED=y
 # end of IO Schedulers
 
 CONFIG_ASN1=y
-CONFIG_INLINE_SPIN_UNLOCK_IRQ=y
-CONFIG_INLINE_READ_UNLOCK=y
-CONFIG_INLINE_READ_UNLOCK_IRQ=y
-CONFIG_INLINE_WRITE_UNLOCK=y
-CONFIG_INLINE_WRITE_UNLOCK_IRQ=y
+CONFIG_UNINLINE_SPIN_UNLOCK=y
 CONFIG_ARCH_SUPPORTS_ATOMIC_RMW=y
 CONFIG_ARCH_HAS_NON_OVERLAPPING_ADDRESS_SPACE=y
 CONFIG_FREEZER=y
@@ -2975,6 +2983,20 @@ CONFIG_DRM_TI_TPD12S015=y
 # CONFIG_DRM_TIDSS is not set
 # CONFIG_DRM_GUD is not set
 # CONFIG_DRM_SSD130X is not set
+
+#
+# PowerVR SGX540 (openpvrsgx DDK 1.17.4948957, copied in by the kernel aport's
+# prepare()). SGX_OMAP=m builds pvrsrvkm_omap4_sgx540_120.ko only; CONFIG_SGX
+# just gates the directory, so the zImage does not grow. SGX_OMAP4470 (the
+# SGX544 variant) exists only with patch 0071. docs/gpu-sgx540/kernel-driver-port.md
+#
+CONFIG_SGX=y
+CONFIG_PVRSGX_1_17_4948957=y
+# CONFIG_SGX_DEBUG is not set
+CONFIG_SGX_DRM=y
+CONFIG_SGX_OMAP=m
+# CONFIG_SGX_OMAP4470 is not set
+# CONFIG_SGX_GENERIC is not set
 # CONFIG_DRM_WERROR is not set
 CONFIG_DRM_PANEL_ORIENTATION_QUIRKS=y
 
@@ -5693,6 +5715,8 @@ CONFIG_SCHED_DEBUG=y
 # CONFIG_SCHEDSTATS is not set
 # end of Scheduler Debugging
 
+# CONFIG_DEBUG_PREEMPT is not set
+
 #
 # Lock Debugging (spinlocks, mutexes, etc...)
 #
@@ -5759,6 +5783,7 @@ CONFIG_FTRACE=y
 # CONFIG_FUNCTION_TRACER is not set
 # CONFIG_STACK_TRACER is not set
 # CONFIG_IRQSOFF_TRACER is not set
+# CONFIG_PREEMPT_TRACER is not set
 # CONFIG_SCHED_TRACER is not set
 # CONFIG_HWLAT_TRACER is not set
 # CONFIG_OSNOISE_TRACER is not set

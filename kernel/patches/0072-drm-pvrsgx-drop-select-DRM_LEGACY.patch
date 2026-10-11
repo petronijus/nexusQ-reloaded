@@ -1,0 +1,26 @@
+From 30333c65ebd01c764cf80d8728e2b056425bcb39 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:38 +0000
+Subject: [PATCH 72/73] drm: pvrsgx: drop select DRM_LEGACY
+
+The symbol has not existed since 6.8, and nothing in the 1.17 OMAP
+build uses the legacy DRM API.
+---
+ drivers/gpu/drm/pvrsgx/Kconfig | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/Kconfig b/drivers/gpu/drm/pvrsgx/Kconfig
+index 3425e838c..76be1005e 100644
+--- a/drivers/gpu/drm/pvrsgx/Kconfig
++++ b/drivers/gpu/drm/pvrsgx/Kconfig
+@@ -66,10 +66,8 @@ config SGX_DEBUG
+ config SGX_DRM
+ 	bool "PowerVR SGX build with DRM support"
+ 	depends on SGX
+-	select DRM_LEGACY
+ 	help
+ 	  Build for using DRM infrastructure.
+-	  Note: this selectes DRM_LEGACY with all its issues.
+ 
+ config SGX_CEDARVIEW
+ 	tristate "PowerVR SGX inside Atom SoC"

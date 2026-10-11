@@ -1,0 +1,31 @@
+From b5e2810ce950a3687007fda34ddf678200c73b21 Mon Sep 17 00:00:00 2001
+From: Andreas Kemnade <andreas@kemnade.info>
+Date: Wed, 17 Jun 2026 22:41:46 +0200
+Subject: [PATCH 65/73] drm: pvrsgx: 1.17: fix unitialized variable
+
+Compiler complaints:
+drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c:598:4: warning: variable 'blocking_fence_count' is uninitialized when used here [-Wuninitialized]
+  598 |                         blocking_fence_count++;
+      |                         ^~~~~~~~~~~~~~~~~~~~
+drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c:542:31: note: initialize the variable 'blocking_fence_count' to silence this warning
+  542 |         unsigned blocking_fence_count;
+      |                                      ^
+
+Signed-off-by: Andreas Kemnade <andreas@kemnade.info>
+---
+ .../eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c      | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
+index fa9762301..0c136744a 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
+@@ -539,7 +539,7 @@ static int update_dma_resv_fences_dst(struct pvr_fence_frame *pvr_fence_frame,
+ 	return update_reservation_return_value(ret, false);
+ #else // (LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0))
+ 	struct dma_fence *fence_to_signal;
+-	unsigned blocking_fence_count;
++	unsigned blocking_fence_count = 0;
+ 	int ret;
+ 
+ 	struct dma_resv_iter cursor;

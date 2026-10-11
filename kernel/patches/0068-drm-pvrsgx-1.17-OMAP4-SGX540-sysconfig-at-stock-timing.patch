@@ -1,0 +1,149 @@
+From 9315b5ee535bbcd0d9b77f8539a1285d4b7703c8 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:37 +0000
+Subject: [PATCH 68/73] drm: pvrsgx: 1.17: OMAP4 SGX540 sysconfig at stock
+ timing
+
+AM_VERSION=4 made OMAP4 include the AM437x header: 200 MHz core,
+50 Hz hardware recovery, 2 ms active-power latency. The core clock
+calibrates the microkernel timer, so at the 307.2 MHz the DT gives the
+fck the 1 ms PDS tick ran at 0.65 ms. Add sysconfig-omap4.h for
+SGX540 rev 1.2.0 with the values of TI's OMAP44xx KM and the stock
+kernel: 307.2 MHz, 100 Hz recovery, 1000 Hz PDS timer, 100 ms APM
+latency.
+
+Build it with PVR_NO_OMAP_TIMER, as the stock kernel and TI's OMAP44xx
+KM do: with the AM437x header SysInitialise() ioremapped 0x4804a03c, the
+AM437x GP7 timer, on OMAP4 and exported it to userspace as the SoC
+timer. DEBUG/TIMING builds that want a GP timer stop with an #error
+until the OMAP4 addresses are checked.
+---
+ .../pvrsgx/1.17.4948957/eurasia_km/Makefile   |  7 ++
+ .../services4/system/omap/sysconfig-omap4.h   | 86 +++++++++++++++++++
+ .../services4/system/omap/sysconfig.h         |  2 +
+ 3 files changed, 95 insertions(+)
+ create mode 100644 drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+index 7bf91251e..a0a810ed7 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+@@ -57,6 +57,13 @@ ccflags-y += \
+ 	-I$(src)/services4/3rdparty/bufferclass_example \
+ 	-I$(srctree)/include/linux
+ 
++# OMAP4430/4460 SGX540-120: no SoC timer, like the stock kernel and TI's
++# OMAP44xx KM (PVR_NO_OMAP_TIMER := 1). Otherwise SysInitialise() maps the
++# AM437x GP7 timer address on OMAP4 and hands it to userspace.
++ifeq ($(SOC)_$(SGX)_$(SGX_REV),omap4_sgx540_120)
++ccflags-y += -DPVR_NO_OMAP_TIMER
++endif
++
+ # choose SoC integration variant to choose the right source subtree
+ 
+ ccflags-y += \
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
+new file mode 100644
+index 000000000..dc1a9e6b3
+--- /dev/null
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
+@@ -0,0 +1,86 @@
++/*************************************************************************/ /*!
++@Title          System Description Header for AM437x SoC family
++@Copyright      Copyright (c) Texas Instruments Inc. All Rights Reserved
++@Description    This header provides system-specific declarations and macros
++@License        Dual MIT/GPLv2
++
++The contents of this file are subject to the MIT license as set out below.
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++Alternatively, the contents of this file may be used under the terms of
++the GNU General Public License Version 2 ("GPL") in which case the provisions
++of GPL are applicable instead of those above.
++
++If you wish to allow use of your version of this file only under the terms of
++GPL, and not to allow others to use your version of this file under the terms
++of the MIT license, indicate your decision by deleting the provisions above
++and replace them with the notice and other provisions required by GPL as set
++out in the file called "GPL-COPYING" included in this distribution. If you do
++not delete the provisions above, a recipient may use your version of this file
++under the terms of either the MIT license or GPL.
++
++This License is also included in this distribution in the file called
++"MIT-COPYING".
++
++EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
++PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
++BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
++PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
++COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++*/ /**************************************************************************/
++
++#if !defined(__SOCCONFIG_OMAP4_H__)
++#define __SOCCONFIG_OMAP4_H__
++
++/*
++ * OMAP4430/4460 with SGX540 rev 1.2.0. The AM437x header this SoC used to
++ * share declares a 200 MHz core and 50 Hz recovery; these are the values of
++ * TI's OMAP44xx KM and of the stock Android kernel for this SoC.
++ */
++
++#if defined(__linux__)
++#if !defined(PVR_LDM_DEVICE_TREE)
++#define SYS_OMAP_SGX_REGS_SYS_PHYS_BASE	0x56000000
++#define SYS_OMAP_SGX_REGS_SIZE		0x1000000
++#define SYS_OMAP_SGX_IRQ		53	/* GIC SPI 21 + 32 */
++#endif	/* !defined(PVR_LDM_DEVICE_TREE) */
++
++#define VS_PRODUCT_NAME	"OMAP4"
++
++/*
++ * The core clock calibrates the microkernel timer
++ * (ui32uKernelTimerClock = CoreClockSpeed / uKernelFreq), so it must match
++ * the rate the DT gives the GPU fck: dpll_per_m7x2_ck at 307.2 MHz.
++ */
++#define SYS_SGX_CLOCK_SPEED		307200000
++#define SYS_SGX_PDS_TIMER_FREQ		(1000)	/* 1 ms */
++#define SYS_SGX_HWRECOVERY_TIMEOUT_FREQ	(100)	/* 10 ms */
++
++#if !defined(SYS_SGX_ACTIVE_POWER_LATENCY_MS)
++#define SYS_SGX_ACTIVE_POWER_LATENCY_MS	(100)
++#endif
++
++/*
++ * The GP timer is only used by DEBUG and TIMING builds; its OMAP4 addresses
++ * have not been checked, so such a build stops here instead of using the
++ * AM437x ones.
++ */
++#if (defined(DEBUG) || defined(TIMING)) && !defined(PVR_NO_OMAP_TIMER)
++#error "SYS_OMAP_GPTIMER_* addresses are not defined for OMAP4"
++#endif
++
++#define DEVICE_SGX_INTERRUPT		(1<<0)
++
++#endif	/* defined(__linux__) */
++#endif	/* __SOCCONFIG_OMAP4_H__ */
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.h b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.h
+index d53046b1d..3588160b7 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.h
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.h
+@@ -47,6 +47,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #include "sysconfig-am6.h"
+ #elif (AM_VERSION == 5)
+ #include "sysconfig-dra7.h"
++#elif (AM_VERSION == 4) && defined(SGX540) && (SGX_CORE_REV == 120)
++#include "sysconfig-omap4.h"
+ #elif (AM_VERSION == 4)
+ #include "sysconfig-am4.h"
+ #elif (AM_VERSION == 3)

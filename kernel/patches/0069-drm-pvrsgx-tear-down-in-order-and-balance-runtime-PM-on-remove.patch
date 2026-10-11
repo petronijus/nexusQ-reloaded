@@ -1,0 +1,76 @@
+From da1e864d3bc1ba018025e96f6f47740dc396291c Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:37 +0000
+Subject: [PATCH 69/73] drm: pvrsgx: tear down in order and balance runtime PM
+ on remove
+
+pvr_remove() called drm_put_dev() before pvr_drm_unload() and then
+used the freed device. Unregister, unload, then put, holding one
+runtime-PM reference across the teardown and dropping it with autosuspend
+off, so the usage count ends where probe left it (the extra put in the
+Maemo version underflows when the device is still active). The probe
+error path unloaded and freed through the global instead of the device
+it allocated, and unregistered a device it never registered.
+
+Autosuspend delay 100 ms, the stock kernel's sgx_apm_latency, instead
+of 2000 ms; to be measured against the power budget on the device.
+---
+ drivers/gpu/drm/pvrsgx/pvr-drv.c | 27 +++++++++++++++++++++------
+ 1 file changed, 21 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-drv.c b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+index 1596e741f..c67f444c2 100644
+--- a/drivers/gpu/drm/pvrsgx/pvr-drv.c
++++ b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+@@ -439,7 +439,7 @@ static int pvr_probe(struct platform_device *pdev)
+ 
+ 	pm_runtime_enable(ddata->dev);
+ 	pm_runtime_use_autosuspend(ddata->dev);
+-	pm_runtime_set_autosuspend_delay(ddata->dev, 2000);
++	pm_runtime_set_autosuspend_delay(ddata->dev, 100);
+ 	error = pm_runtime_get_sync(ddata->dev);
+ 	if (error < 0) {
+ 		pm_runtime_put_noidle(ddata->dev);
+@@ -472,10 +472,11 @@ static int pvr_probe(struct platform_device *pdev)
+ 	return 0;
+ 
+ out_err_unload:
+-	pvr_drm_unload(gpsPVRDRMDev);
++	pvr_drm_unload(ddev);
+ 
+ out_err_free:
+-	drm_put_dev(gpsPVRDRMDev);
++	gpsPVRDRMDev = NULL;
++	drm_dev_put(ddev);
+ 
+ out_err_idle:
+ 	pm_runtime_put_sync(ddata->dev);
+@@ -487,11 +488,25 @@ static int pvr_probe(struct platform_device *pdev)
+ 
+ static void pvr_remove(struct platform_device *pdev)
+ {
+-	drm_put_dev(gpsPVRDRMDev);
+-	pvr_drm_unload(gpsPVRDRMDev);
++	struct pvr *ddata = platform_get_drvdata(pdev);
++	struct drm_device *ddev = ddata->ddev;
++	int error;
++
++	/* Keep the device resumed while the services are torn down. */
++	error = pm_runtime_resume_and_get(&pdev->dev);
++	if (error < 0)
++		dev_warn(&pdev->dev, "resume before remove failed: %d\n", error);
++
++	drm_dev_unregister(ddev);
++	pvr_drm_unload(ddev);
+ 	gpsPVRDRMDev = NULL;
++	drm_dev_put(ddev);
+ 
+-	pm_runtime_put_sync(&pdev->dev);
++	pm_runtime_dont_use_autosuspend(&pdev->dev);
++	if (error < 0)
++		pm_runtime_put_noidle(&pdev->dev);
++	else
++		pm_runtime_put_sync(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
+ }
+ 

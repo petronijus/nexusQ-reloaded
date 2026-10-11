@@ -1,0 +1,35 @@
+From c34ce37758309b8b6365a0c14bf0dedd93c1dad4 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:38 +0000
+Subject: [PATCH 70/73] drm: pvrsgx: 1.17: map dma-buf attachments with the
+ unlocked helpers
+
+Since 6.2 dma_buf_map_attachment() and dma_buf_unmap_attachment()
+expect the reservation lock held (dma_resv_assert_held). The driver
+does not hold it; use the _unlocked variants, which take it.
+---
+ .../eurasia_km/services4/srvkm/env/linux/dmabuf.c             | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/dmabuf.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/dmabuf.c
+index 912823fad..5ef14a9ac 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/dmabuf.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/dmabuf.c
+@@ -98,7 +98,7 @@ IMG_VOID DmaBufUnimportAndReleasePhysAddr(IMG_HANDLE hImport)
+ 
+ 	if (!IS_ERR_OR_NULL(import->sg_table))
+ 	{
+-		dma_buf_unmap_attachment(import->attachment,
++		dma_buf_unmap_attachment_unlocked(import->attachment,
+ 						import->sg_table,
+ 						DMA_BIDIRECTIONAL);
+ 	}
+@@ -183,7 +183,7 @@ PVRSRV_ERROR DmaBufImportAndAcquirePhysAddr(const IMG_INT32 i32FD,
+ 		goto error;
+ 	}
+ 
+-	import->sg_table = dma_buf_map_attachment(import->attachment,
++	import->sg_table = dma_buf_map_attachment_unlocked(import->attachment,
+ 							DMA_BIDIRECTIONAL);
+ 	if (IS_ERR(import->sg_table))
+ 	{

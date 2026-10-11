@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=21
+pkgrel=25
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -28,8 +28,25 @@ _flavor="${pkgname#linux-}"
 _config="config-$_flavor.$arch"
 _carch="arm"
 
+# PowerVR SGX540 kernel driver: openpvrsgx (DDK 1.17.4948957), built in-tree as
+# the module pvrsrvkm_omap4_sgx540_120 and shipped IN this package, because
+# nq-kernel-ota stages only /lib/modules/<release> out of the kernel apk.
+# Upstream is pinned to one commit of _pvrsgx_branch; prepare()
+# copies its drivers/gpu/drm/pvrsgx into the tree and our patches 0063-0074 go
+# on top. The pin is never edited by hand: scripts/bump-pvrsgx.sh moves
+# commit + sha512 together and test-applies the whole series on a pristine tree.
+# The sha512 is checked in unpack() as well as in sha512sums, because the build
+# regenerates sha512sums (pmbootstrap checksum) and would otherwise accept
+# whatever the URL serves. docs/2026-10-11-gpu-sgx540-groundwork.md
+_pvrsgx_branch=pvrsrvkm-6.18-rc6
+_pvrsgx_commit=d2f1e031d58aca97bc4b62367f0d7bef4a7559c3
+_pvrsgx_sha512=a8f1d1b2e7d8a412fa41c37a07b5869a3bd829841bf8836ff610123ed79155d449f69d85d9466f167e2a526178f132074992f9c90642921b09679f75406f5374
+_pvrsgx_ddk=1.17.4948957
+_pvrsgx_archive="linux_openpvrsgx-$_pvrsgx_commit.tar.gz"
+
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
+	$_pvrsgx_archive::https://github.com/openpvrsgx-devgroup/linux_openpvrsgx/archive/$_pvrsgx_commit.tar.gz
 	$_config
 	0001-ASoC-tas571x-add-TAS5713-support.patch
 	0002-dt-bindings-add-ti-tas5713.patch
@@ -91,11 +108,55 @@ source="
 	0060-pidfs-backport-PIDFD_INFO_SUPPORTED_MASK-and-the-coredump-signal-code.patch
 	0061-mfd-twl6030-irq-map-every-PIH-bit-so-an-unclaimed-one-is-not-an-error.patch
 	0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch
+	0063-drm-hook-the-pvrsgx-directory-into-the-DRM-Kconfig-and-Makefile.patch
+	0064-drm-pvrsgx-enable-runtime-PM-autosuspend-for-pvr-drv.patch
+	0065-drm-pvrsgx-1.17-fix-uninitialized-blocking-fence-count.patch
+	0066-drm-pvrsgx-1.17-build-VMAP-memory-areas-and-map-them-right.patch
+	0067-drm-pvrsgx-1.17-serve-cached-allocations-with-vmalloc.patch
+	0068-drm-pvrsgx-1.17-OMAP4-SGX540-sysconfig-at-stock-timing.patch
+	0069-drm-pvrsgx-tear-down-in-order-and-balance-runtime-PM-on-remove.patch
+	0070-drm-pvrsgx-1.17-map-dma-buf-attachments-with-the-unlocked-helpers.patch
+	0071-drm-pvrsgx-build-the-OMAP4470-SGX544-module-only-on-request.patch
+	0072-drm-pvrsgx-drop-select-DRM_LEGACY.patch
+	0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
+	0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
 
+unpack() {
+	fetch || return 1
+	mkdir -p "$srcdir"
+	msg "Unpacking linux-$pkgver.tar.xz..."
+	unxz -c "$SRCDEST/linux-$pkgver.tar.xz" | tar -C "$srcdir" -xf - || return 1
+
+	# The pin, enforced here and not only through sha512sums (see the variables).
+	echo "$_pvrsgx_sha512  $SRCDEST/$_pvrsgx_archive" | sha512sum -c - \
+		|| die "$_pvrsgx_archive does not match the pinned sha512 (scripts/bump-pvrsgx.sh moves the pin)"
+	# Only the driver directory is used: extracting the whole second kernel tree
+	# would put ~1.4 GB into srcdir for 6 MB of it.
+	msg "Unpacking drivers/gpu/drm/pvrsgx of openpvrsgx $_pvrsgx_commit..."
+	gunzip -c "$SRCDEST/$_pvrsgx_archive" \
+		| tar -C "$srcdir" -xf - "linux_openpvrsgx-$_pvrsgx_commit/drivers/gpu/drm/pvrsgx" \
+		|| return 1
+}
+
 prepare() {
+	# The pvrsgx copy runs BEFORE the patches: 0064-0074 patch files that only
+	# exist once it is in place (0063, the Kconfig/Makefile hook, is the only one
+	# that touches pristine files). Exactly the files the pvrsrvkm-6.18-rc6 build
+	# uses for DDK $_pvrsgx_ddk -- the other DDK versions stay out of the tree.
+	local _pvr_src="$srcdir/linux_openpvrsgx-$_pvrsgx_commit/drivers/gpu/drm/pvrsgx"
+	local _pvr_dst="$builddir/drivers/gpu/drm/pvrsgx"
+	[ -d "$_pvr_src/$_pvrsgx_ddk" ] || die "the openpvrsgx archive has no drivers/gpu/drm/pvrsgx/$_pvrsgx_ddk"
+	# A future mainline that ships its own pvrsgx directory must be noticed, not
+	# silently overwritten.
+	[ -e "$_pvr_dst" ] && die "linux-$pkgver already has drivers/gpu/drm/pvrsgx"
+	mkdir -p "$_pvr_dst"
+	cp -a "$_pvr_src/Kconfig" "$_pvr_src/Makefile" \
+		"$_pvr_src/pvr-drv.c" "$_pvr_src/pvr-drv.h" \
+		"$_pvr_src/$_pvrsgx_ddk" "$_pvr_dst/"
+
 	default_prepare
 	cp "$srcdir/$_config" .config
 
@@ -119,6 +180,28 @@ build() {
 		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
 		KCFLAGS="-Wno-array-bounds" \
 		olddefconfig
+
+	# olddefconfig silently drops a symbol whose Kconfig is missing (the hook
+	# patch 0063 not applied, a renamed option after a pin bump), and the image
+	# would then ship without the GPU module and without a word.
+	local _sym
+	for _sym in CONFIG_SGX=y CONFIG_PVRSGX_1_17_4948957=y CONFIG_SGX_DRM=y CONFIG_SGX_OMAP=m; do
+		grep -qx "$_sym" .config || die "olddefconfig dropped $_sym"
+	done
+	grep -qx 'CONFIG_SGX_OMAP4470=y' .config && die "CONFIG_SGX_OMAP4470=y: the Nexus Q is an OMAP4460"
+	# osfunc.c has an #error for a non-preemptible kernel; say it readably here
+	# instead of twenty minutes into the build.
+	grep -Eqx 'CONFIG_PREEMPT(_VOLUNTARY)?=y' .config \
+		|| die "pvrsgx 1.17 needs CONFIG_PREEMPT_VOLUNTARY=y or CONFIG_PREEMPT=y"
+	# Until bring-up has proven the driver on the hardware it must not autoload.
+	# The blacklist rides in the forced command line, so it is part of the
+	# zImage and travels with the kernel slot (see the defconfig). The revision
+	# that lets the module autoload removes this check with it.
+	grep -Eq '^CONFIG_CMDLINE=".*modprobe\.blacklist=([^ "]*,)?pvrsrvkm_omap4_sgx540_120[, "]' .config \
+		|| die "CONFIG_SGX_OMAP=m without modprobe.blacklist=pvrsrvkm_omap4_sgx540_120 in CONFIG_CMDLINE"
+	grep -qx 'CONFIG_CMDLINE_FORCE=y' .config \
+		|| die "the SGX blacklist needs CONFIG_CMDLINE_FORCE=y (U-Boot's cmdline would replace it)"
+
 	make ARCH="$_carch" CC="${CC:-gcc}" \
 		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
 		KCFLAGS="-Wno-array-bounds"
@@ -136,10 +219,20 @@ package() {
 
 	install -D "$builddir"/include/config/kernel.release \
 		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+
+	# The SGX540 module is part of THIS package on purpose: nq-kernel-ota
+	# carries /lib/modules/<release> only from the kernel apk. Never split it.
+	local _rel _ko
+	_rel=$(cat "$builddir"/include/config/kernel.release)
+	_ko=$(find "$pkgdir/lib/modules/$_rel" -name pvrsrvkm_omap4_sgx540_120.ko)
+	[ -n "$_ko" ] || die "pvrsrvkm_omap4_sgx540_120.ko is missing from the package"
+	[ -z "$(find "$pkgdir/lib/modules/$_rel" -name 'pvrsrvkm_omap4_sgx544_*.ko')" ] \
+		|| die "the OMAP4470 SGX544 module was built (patch 0071 not effective)"
 }
 
 sha512sums="
 SKIP  linux-$pkgver.tar.xz
+$_pvrsgx_sha512  $_pvrsgx_archive
 SKIP  $_config
 SKIP  0001-ASoC-tas571x-add-TAS5713-support.patch
 SKIP  0002-dt-bindings-add-ti-tas5713.patch
@@ -201,4 +294,16 @@ SKIP  0059-usb-gadget-u_audio-doze-a-capture-stream-of-pure-silence.patch
 SKIP  0060-pidfs-backport-PIDFD_INFO_SUPPORTED_MASK-and-the-coredump-signal-code.patch
 SKIP  0061-mfd-twl6030-irq-map-every-PIH-bit-so-an-unclaimed-one-is-not-an-error.patch
 SKIP  0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch
+SKIP  0063-drm-hook-the-pvrsgx-directory-into-the-DRM-Kconfig-and-Makefile.patch
+SKIP  0064-drm-pvrsgx-enable-runtime-PM-autosuspend-for-pvr-drv.patch
+SKIP  0065-drm-pvrsgx-1.17-fix-uninitialized-blocking-fence-count.patch
+SKIP  0066-drm-pvrsgx-1.17-build-VMAP-memory-areas-and-map-them-right.patch
+SKIP  0067-drm-pvrsgx-1.17-serve-cached-allocations-with-vmalloc.patch
+SKIP  0068-drm-pvrsgx-1.17-OMAP4-SGX540-sysconfig-at-stock-timing.patch
+SKIP  0069-drm-pvrsgx-tear-down-in-order-and-balance-runtime-PM-on-remove.patch
+SKIP  0070-drm-pvrsgx-1.17-map-dma-buf-attachments-with-the-unlocked-helpers.patch
+SKIP  0071-drm-pvrsgx-build-the-OMAP4470-SGX544-module-only-on-request.patch
+SKIP  0072-drm-pvrsgx-drop-select-DRM_LEGACY.patch
+SKIP  0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
+SKIP  0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
 "

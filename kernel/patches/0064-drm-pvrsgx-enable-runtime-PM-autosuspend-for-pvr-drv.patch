@@ -1,0 +1,49 @@
+From 4343903784c8af3dc2e3d0c2bd74c488a375fd61 Mon Sep 17 00:00:00 2001
+From: Tony Lindgren <tony@atomide.com>
+Date: Tue, 14 Nov 2023 16:50:33 +0200
+Subject: [PATCH 64/73] gpu: pvr: Enable runtime PM autosuspend for pvr-drv
+
+This allows idling the pvr sgx hardware when not in use.
+
+[nexusq: probe half only; the remove path is reworked separately]
+
+Note that this currently depends on the related patches for the DDK
+version. For example, ddk-1.17 needs patch "drm: pvrsgx: Force enable
+limited runtime PM support for ddk 1.17".
+
+Signed-off-by: Tony Lindgren <tony@atomide.com>
+---
+ drivers/gpu/drm/pvrsgx/pvr-drv.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-drv.c b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+index 29166e59c..1596e741f 100644
+--- a/drivers/gpu/drm/pvrsgx/pvr-drv.c
++++ b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+@@ -438,6 +438,8 @@ static int pvr_probe(struct platform_device *pdev)
+ 		ddata->ocp_base = ddata->sgx_base + ddata->cap->ocp_offset;
+ 
+ 	pm_runtime_enable(ddata->dev);
++	pm_runtime_use_autosuspend(ddata->dev);
++	pm_runtime_set_autosuspend_delay(ddata->dev, 2000);
+ 	error = pm_runtime_get_sync(ddata->dev);
+ 	if (error < 0) {
+ 		pm_runtime_put_noidle(ddata->dev);
+@@ -464,6 +466,9 @@ static int pvr_probe(struct platform_device *pdev)
+ 
+ 	gpsPVRLDMDev = pdev;
+ 
++	pm_runtime_mark_last_busy(ddata->dev);
++	pm_runtime_put_autosuspend(ddata->dev);
++
+ 	return 0;
+ 
+ out_err_unload:
+@@ -474,6 +479,7 @@ static int pvr_probe(struct platform_device *pdev)
+ 
+ out_err_idle:
+ 	pm_runtime_put_sync(ddata->dev);
++	pm_runtime_dont_use_autosuspend(ddata->dev);
+ 	pm_runtime_disable(ddata->dev);
+ 
+ 	return error;

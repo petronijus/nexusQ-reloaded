@@ -1,0 +1,114 @@
+From 233f3b67792068ef618bbaa8415d3bde4e7eec42 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 19:05:00 +0000
+Subject: [PATCH] drm: pvrsgx: map only the SGX register window on OMAP4
+
+Both the DRM wrapper's pvr_probe() and the DDK's SysLocateDevices()
+ioremapped the whole DT resource, and the OMAP4 gpu@0 node spans the
+32 MB SGX target module. Each mapping needs a 32 MB hole in the 248 MB
+ARM vmalloc area; right after boot there is one, after an hour of
+uptime there is not, and the module fails to load with
+"vmalloc_node_range for size 33558528 failed" and "SysLocateDevices:
+Failed to map SGX registers".
+
+The stock kernel maps 0x56000000-0x5600FFFF (the omap44xx_gpu hwmod
+resource; OSMapPhysToLin with 0xFFFF in SysInitialise), and the OCP
+registers it touches (0xFE10-0xFE50) are inside that window. Cap both
+mappings at 64 KB: pvr_probe() maps a trimmed copy of the resource, and
+SysLocateDevices() caps at SYS_OMAP_SGX_REGS_SIZE, now 64 KB and
+defined for DT builds too, using resource_size(), which also fixes the
+size being one byte short.
+---
+ .../services4/system/omap/sysconfig-omap4.h    |  8 +++++++-
+ .../services4/system/omap/sysconfig.c          |  9 ++++++++-
+ drivers/gpu/drm/pvrsgx/pvr-drv.c               | 18 +++++++++++++++++-
+ 3 files changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
+index dc1a9e6..af71d11 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig-omap4.h
+@@ -50,9 +50,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+  */
+ 
+ #if defined(__linux__)
++/*
++ * The register file, OCP block (0xFE00) included: stock maps
++ * 0x56000000-0x5600FFFF. Also the cap on the DT resource, which spans the
++ * whole 32 MB target module.
++ */
++#define SYS_OMAP_SGX_REGS_SIZE		0x10000
++
+ #if !defined(PVR_LDM_DEVICE_TREE)
+ #define SYS_OMAP_SGX_REGS_SYS_PHYS_BASE	0x56000000
+-#define SYS_OMAP_SGX_REGS_SIZE		0x1000000
+ #define SYS_OMAP_SGX_IRQ		53	/* GIC SPI 21 + 32 */
+ #endif	/* !defined(PVR_LDM_DEVICE_TREE) */
+ 
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.c
+index 3c6644d..150b0bb 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysconfig.c
+@@ -197,7 +197,14 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
+ 		SysSysPAddrToCpuPAddr(gsSGXDeviceMap.sRegsSysPBase);
+ 	PVR_TRACE(("SGX register base: 0x%lx", (unsigned long)gsSGXDeviceMap.sRegsCpuPBase.uiAddr));
+ 
+-	gsSGXDeviceMap.ui32RegsSize = (unsigned int)(dev_res->end - dev_res->start);
++	/*
++	 * The DT resource spans the whole SGX target module (32 MB on OMAP4)
++	 * while the registers are its first SYS_OMAP_SGX_REGS_SIZE bytes. Map
++	 * only those: a 32 MB ioremap stops fitting the vmalloc area once the
++	 * system has been up for a while, and the module then fails to load.
++	 */
++	gsSGXDeviceMap.ui32RegsSize = (unsigned int)min_t(resource_size_t,
++					resource_size(dev_res), SYS_OMAP_SGX_REGS_SIZE);
+ 	PVR_TRACE(("SGX register size: %d",gsSGXDeviceMap.ui32RegsSize));
+ 
+ 	gsSGXDeviceMap.ui32IRQ = dev_irq;
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-drv.c b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+index c67f444..63cd448 100644
+--- a/drivers/gpu/drm/pvrsgx/pvr-drv.c
++++ b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+@@ -14,7 +14,9 @@
+ #include <linux/mod_devicetable.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
++#include <linux/platform_device.h>
+ #include <linux/pm_runtime.h>
++#include <linux/sizes.h>
+ 
+ #include <drm/drm.h>
+ #include <drm/drm_device.h>
+@@ -416,6 +418,7 @@ static int pvr_init_match(struct pvr *ddata)
+ static int pvr_probe(struct platform_device *pdev)
+ {
+ 	struct drm_device *ddev;
++	struct resource *res, regs;
+ 	struct pvr *ddata;
+ 	int error;
+ 
+@@ -430,7 +433,20 @@ static int pvr_probe(struct platform_device *pdev)
+ 	if (error)
+ 		return error;
+ 
+-	ddata->sgx_base = devm_platform_ioremap_resource(pdev, 0);
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -ENODEV;
++
++	/*
++	 * The DT resource spans the whole SGX target module (32 MB on OMAP4);
++	 * the registers, TI's OCP block at 0xfe00 included, are its first
++	 * 64 KB. Mapping the whole window needs a 32 MB vmalloc hole, which
++	 * a 32-bit system up for a while no longer has.
++	 */
++	regs = DEFINE_RES_MEM_NAMED(res->start,
++				    min_t(resource_size_t, resource_size(res), SZ_64K),
++				    res->name);
++	ddata->sgx_base = devm_ioremap_resource(&pdev->dev, &regs);
+ 	if (IS_ERR(ddata->sgx_base))
+ 		return PTR_ERR(ddata->sgx_base);
+ 
+-- 
+2.55.0
+

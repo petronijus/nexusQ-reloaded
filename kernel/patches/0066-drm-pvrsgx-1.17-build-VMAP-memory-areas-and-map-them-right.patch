@@ -1,0 +1,64 @@
+From 8b1ee1e9e8cff1e6e57f4d9e305180869678e044 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:37 +0000
+Subject: [PATCH 66/73] drm: pvrsgx: 1.17: build VMAP memory areas, and map
+ them right
+
+Since 5.8 __vmalloc() takes no pgprot, so uncached and write-combined
+LINUX_MEM_AREA_VMALLOC areas, the memory the microkernel shares with the
+host, came out cached unless core mm exported __vmalloc_node_range. Build
+them from alloc_pages() + vmap(..., prot) instead, the path the DDK's own
+build system defaults to (PVR_LINUX_MEM_AREA_USE_VMAP ?= 1 in core.mk).
+
+That path had two defects of its own:
+- vmap() was passed GFP_KERNEL | __GFP_HIGHMEM as its VM_* flags argument.
+  0xcc2 reads as VM_ALLOC | VM_NO_GUARD | VM_KASAN | VM_ALLOW_HUGE_VMAP,
+  and vmap() WARNs on VM_NO_GUARD since 5.x. Pass VM_MAP.
+- NewVMallocLinuxMemArea() did not check the mapping and stored a NULL
+  address in the area. Fail the allocation instead.
+---
+ drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile     | 6 ++++++
+ .../1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c  | 6 +++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+index 60683b5db..7bf91251e 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+@@ -131,6 +131,12 @@ ccflags-y += \
+ 	-DSYS_USING_INTERRUPTS \
+ 	-DSUPPORT_ACTIVE_POWER_MANAGEMENT
+ 
++# Since 5.8 __vmalloc() takes no pgprot, so uncached and write-combined
++# LINUX_MEM_AREA_VMALLOC areas (the memory shared with the microkernel)
++# must be built from alloc_pages() + vmap(..., prot). The DDK's own build
++# system defaults this on (eurasiacon/build/linux2/config/core.mk).
++ccflags-y += -DPVR_LINUX_MEM_AREA_USE_VMAP
++
+ # new for ddk 1.14 tree
+ ccflags-y += \
+ 	-DPVR_LDM_DEVICE_TREE
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
+index 496b04e00..354887471 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
+@@ -625,7 +625,7 @@ _VMapWrapper(struct page **ppsPageList, IMG_UINT32 ui32NumPages, IMG_UINT32 ui32
+             return NULL;
+     }
+ 
+-    pvRet = vmap(ppsPageList, ui32NumPages, GFP_KERNEL | __GFP_HIGHMEM, PGProtFlags);
++    pvRet = vmap(ppsPageList, ui32NumPages, VM_MAP, PGProtFlags);
+ 
+ #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
+     if (pvRet)
+@@ -1111,6 +1111,10 @@ NewVMallocLinuxMemArea(IMG_SIZE_T uBytes, IMG_UINT32 ui32AreaFlags)
+     }
+ 
+     pvCpuVAddr = VMapWrapper(ppsPageList, ui32NumPages, ui32AreaFlags);
++    if (!pvCpuVAddr)
++    {
++        goto failed;
++    }
+ #else	/* defined(PVR_LINUX_MEM_AREA_USE_VMAP) */
+     pvCpuVAddr = VMallocWrapper(uBytes, ui32AreaFlags);
+     if (!pvCpuVAddr)

@@ -6,6 +6,77 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25**, unreleased)
+
+The second and third kernel steps of the GPU work
+(`docs/2026-10-11-gpu-sgx540-groundwork.md`, §8 "Decisions").
+
+- **r22, `CONFIG_PREEMPT`.** The kernel was `PREEMPT_NONE`; the openpvrsgx DDK
+  1.17 stops with an `#error` on a non-preemptible kernel (`osfunc.c`), and the
+  stock 3.0.8 kernel was `SMP PREEMPT`. Full preemption rather than upstream
+  omap2plus' `PREEMPT_VOLUNTARY`: stock parity, and the configuration the DDK
+  is known to work with on OMAP4 (kc1, Maemo, Letux). Side effects in the
+  defconfig: `PREEMPT_RCU`, `TASKS_RCU`, `UNINLINE_SPIN_UNLOCK`; module
+  vermagic now carries `preempt`. About +45 KB of boot image (compile gate,
+  2026-10-11); the SGX module adds nothing to the zImage. The r23 kernel
+  stages at 6 774 784 B with the A/B ramdisk, 40 960 B under the
+  6 815 744 B ceiling.
+- **r23, the PowerVR SGX540 kernel driver** (`pvrsrvkm_omap4_sgx540_120.ko`,
+  `CONFIG_SGX_OMAP=m`), built in-tree inside `linux-google-steelhead`, because
+  `nq-kernel-ota` stages only `/lib/modules/<release>` out of the kernel apk —
+  a separate package would miss every kernel OTA and every rollback. Not a
+  copy in `kernel/patches`: the aport fetches openpvrsgx `pvrsrvkm-6.18-rc6` @
+  `d2f1e031d58a` as a GitHub archive pinned by sha512 (checked in `unpack()`,
+  because the build regenerates `sha512sums`), extracts only
+  `drivers/gpu/drm/pvrsgx`, copies the 1.17.4948957 tree in `prepare()` and
+  applies patches **0063–0073**: the DRM Kconfig/Makefile hook; runtime-PM
+  autosuspend (Lindgren 2cd8d74ec61a, probe half) and the
+  `blocking_fence_count` fix (ff422e4ab0bb) and the `sgxinfokm.h` warnings
+  (3f5f503efcc6) from upstream; and ours — VMAP memory areas with
+  `vmap(..., VM_MAP, prot)`, cached allocations through plain `__vmalloc()`
+  (no core-mm export), an OMAP4 SGX540 sysconfig at stock timing (307.2 MHz,
+  100 Hz recovery, 1000 Hz PDS, 100 ms APM latency, `PVR_NO_OMAP_TIMER`), an
+  ordered `pvr_remove()` with balanced runtime PM, the `_unlocked` dma-buf
+  helpers, the OMAP4470 SGX544 module only on request (`SGX_OMAP4470`, off),
+  no `select DRM_LEGACY`. `build()` dies if `olddefconfig` drops an SGX
+  symbol or the kernel is not preemptible; `package()` dies if the module is
+  missing or the SGX544 one was built.
+- **r24/r25, patch 0074: map only the SGX register window.** Both the DRM
+  wrapper's `pvr_probe()` and the DDK's `SysLocateDevices()` ioremapped the
+  whole DT resource, and `gpu@0` spans the 32 MB SGX target module. Right
+  after boot the 248 MB vmalloc area has two such holes, so r23 loaded
+  cleanly 11 times in a row; after an hour of uptime (HDMI connected, zram
+  up) it did not: `vmalloc_node_range for size 33558528 failed` and
+  `SysLocateDevices: Failed to map SGX registers`. Stock maps 64 KB (the
+  `omap44xx_gpu` hwmod resource `0x56000000-0x5600FFFF`,
+  `OSMapPhysToLin(base, 0xFFFF)` in `SysInitialise`; stock-parity audit
+  2026-10-11), and the OCP registers the driver touches (`0xFE10`-`0xFE50`)
+  are inside it. Both mappings are now capped at 64 KB (`resource_size()`,
+  which also fixes the DDK's size being one byte short). r24 carried only
+  the DDK half and was trial-booted on the Prague unit: `pvrsrvinit`
+  passed and **kmscube ran on HDMI, rendered by the SGX540** (with an
+  `LD_PRELOAD` shim for the sandbox kmscube, which passes
+  `DRM_FORMAT_MOD_INVALID` to AddFB2 with `DRM_MODE_FB_MODIFIERS`); its
+  `/proc/vmallocinfo` still showed the probe's 32 MB mapping, which r25
+  removes.
+- **Not loaded by default.** `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120`
+  is in `CONFIG_CMDLINE` (`CONFIG_CMDLINE_FORCE=y`), so it is part of the
+  zImage and travels and rolls back with the kernel slot. A `modprobe.d` file
+  in the kernel apk would not protect a kernel OTA's trial boot: `stage-apk`
+  takes only `/lib/modules/<release>` and `/boot` out of the apk, and the
+  package (with any file of its own) is installed only at `promote`. The
+  blacklist stops udev's alias autoload; an explicit
+  `modprobe pvrsrvkm_omap4_sgx540_120` still loads it for bring-up. `build()`
+  refuses an SGX build without it; the revision that lets the module
+  autoload removes both.
+- **The update path:** `scripts/bump-pvrsgx.sh [<commit>|<branch>]` resolves
+  a new upstream commit, hashes its archive, test-applies the whole series on
+  a pristine tree with the aport's own `unpack()`/`prepare()`, checks that
+  `olddefconfig` keeps the SGX symbols, and only then rewrites the pin;
+  `--check` re-verifies the current one. Tested by
+  `scripts/tests/test-bump-pvrsgx.sh` (a conflicting upstream commit, a
+  tampered archive, a hook that misses, a kernel that ships its own pvrsgx).
+
 ### Changed — the SGX clock runs from DPLL_PER like stock (kernel **6.18.48-r21**, unreleased)
 
 First kernel step of the GPU work (`docs/2026-10-11-gpu-sgx540-groundwork.md`).

@@ -1,0 +1,82 @@
+From 6e4daf31a25e03677e58fdb85a53a1da74a6e73d Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 13:45:37 +0000
+Subject: [PATCH 67/73] drm: pvrsgx: 1.17: serve cached allocations with
+ __vmalloc()
+
+With VMAP areas the only _VMallocWrapper() caller left is OSAllocMem(),
+always PVRSRV_HAP_CACHED, which is what plain __vmalloc() maps. Use it,
+refuse any other cache type loudly, and drop __old_vmalloc(), so the
+module no longer needs EXPORT_SYMBOL(__vmalloc_node_range_noprof) in
+mm/vmalloc.c. A >= 5.8 build without PVR_LINUX_MEM_AREA_USE_VMAP now
+stops with an #error instead of mapping shared memory cached.
+---
+ .../eurasia_km/services4/srvkm/env/linux/mm.c | 48 ++++++++-----------
+ 1 file changed, 21 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
+index 354887471..e1eeba75b 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/mm.c
+@@ -509,32 +509,14 @@ AllocFlagsToPGProt(pgprot_t *pPGProtFlags, IMG_UINT32 ui32AllocFlags)
+     return IMG_TRUE;
+ }
+ 
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0))
+-#else
+-/* provide pre-5.8 __vmalloc() with 3 parameters */
+-
+-#include <linux/kallsyms.h>
+-
+-static void *__old_vmalloc_node(unsigned long size, unsigned long align,
+-			    gfp_t gfp_mask, pgprot_t prot,
+-			    int node, const void *caller)
+-{
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,10,0))
+-/* we need to add EXPORT_SYMBOL(__vmalloc_node_range); to vmalloc.c */
+-	return __vmalloc_node_range(size, align, VMALLOC_START, VMALLOC_END,
+-				    gfp_mask, prot, 0, node, caller);
+-#else
+-/* we need to add EXPORT_SYMBOL(__vmalloc_node_range_noprof); to vmalloc.c */
+-	return __vmalloc_node_range_noprof(size, align, VMALLOC_START, VMALLOC_END,
+-				    gfp_mask, prot, 0, node, caller);
+-#endif
+-}
+-
+-static void *__old_vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
+-{
+-	return __old_vmalloc_node(size, 1, gfp_mask, prot, NUMA_NO_NODE,
+-				__builtin_return_address(0));
+-}
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)) && !defined(PVR_LINUX_MEM_AREA_USE_VMAP)
++/*
++ * Since 5.8 __vmalloc() takes no pgprot, and the only allocator that still
++ * does (__vmalloc_node_range) is not exported to modules. Uncached and
++ * write-combined LINUX_MEM_AREA_VMALLOC areas therefore have to come from
++ * the VMAP path; _VMallocWrapper() below serves cached memory only.
++ */
++#error "PVR_LINUX_MEM_AREA_USE_VMAP is required on Linux 5.8 and later"
+ #endif
+ 
+ IMG_VOID *
+@@ -568,7 +550,19 @@ _VMallocWrapper(IMG_SIZE_T uiBytes,
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0))
+     pvRet = __vmalloc(uiBytes, gfp_mask, PGProtFlags);
+ #else
+-    pvRet = __old_vmalloc(uiBytes, gfp_mask, PGProtFlags);
++    /*
++     * __vmalloc() maps with PAGE_KERNEL. With PVR_LINUX_MEM_AREA_USE_VMAP the
++     * only caller is OSAllocMem() with PVRSRV_HAP_CACHED; anything else would
++     * silently get a cached mapping, so refuse it.
++     */
++    if ((ui32AllocFlags & PVRSRV_HAP_CACHETYPE_MASK) != PVRSRV_HAP_CACHED)
++    {
++        PVR_DPF((PVR_DBG_ERROR, "%s: only cached allocations are supported (flags 0x%08x)",
++                 __FUNCTION__, ui32AllocFlags));
++        WARN_ON_ONCE(1);
++        return NULL;
++    }
++    pvRet = __vmalloc(uiBytes, gfp_mask);
+ #endif
+     
+ #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
