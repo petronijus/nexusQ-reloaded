@@ -1,0 +1,77 @@
+From 93789f82d1016014ece9c14849c27b1341435e4e Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Mon, 12 Oct 2026 00:58:24 +0200
+Subject: [PATCH] drm: pvrsgx: 1.17: keep the module loaded once it has created
+ a fence
+
+A pvr fence is attached to the reservation object of the buffer a client
+rendered to, and that buffer can belong to another driver (omapdrm: the
+compositor's GBM scanout buffers). It then lives as long as that buffer,
+which can outlast this module. dma_fence_release() reads fence->ops from
+our data and calls ops->release in our text, so unloading the module
+while such a fence is alive panics the kernel later. Seen on the Nexus Q
+on 2026-10-12: rmmod after a GPU desktop session printed
+"PVRLinuxFenceDeInit: 1 fences leaked", and minutes later PID 1 closing
+the buffer oopsed in dma_fence_release at the freed fence_ops.
+
+The DDK has no way to take a fence back, and a module_put() from inside
+the release callback would still return through freed text. Pin the
+module with the first fence instead: from then on rmmod fails with EBUSY
+and the driver stays until reboot. A driver that never created a fence
+can still be unloaded.
+---
+ .../srvkm/env/linux/pvr_linux_fence.c         | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
+index 0c13674..6de7302 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/env/linux/pvr_linux_fence.c
+@@ -62,6 +62,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ #include <linux/dma-resv.h>
+ #include <linux/list.h>
++#include <linux/module.h>
+ 
+ #include "dmabuf.h"
+ 
+@@ -143,6 +144,27 @@ static unsigned fence_context;
+ static atomic_t fence_seqno = ATOMIC_INIT(0);
+ static atomic_t fences_outstanding = ATOMIC_INIT(0);
+ 
++/*
++ * A fence this driver creates goes into the reservation object of whatever
++ * buffer the client rendered to, and that buffer may belong to another driver
++ * (omapdrm: the compositor's scanout buffers). It then lives as long as that
++ * buffer, which can be longer than this module: dma_fence_release() reads
++ * fence->ops, which is in our data, and calls ops->release, which is in our
++ * text. Unloading the module with such a fence alive panics the kernel later
++ * (seen 2026-10-12: "PVRLinuxFenceDeInit: 1 fences leaked", then an oops in
++ * dma_fence_release from PID 1 closing the buffer). The DDK cannot take its
++ * fences back, and a module_put() inside the release callback would still
++ * return through freed text. So the first fence pins the module for good:
++ * from then on rmmod fails with EBUSY and the driver stays until reboot.
++ */
++static atomic_t module_pinned = ATOMIC_INIT(0);
++
++static void pin_module_for_fences(void)
++{
++	if (!atomic_xchg(&module_pinned, 1))
++		__module_get(THIS_MODULE);
++}
++
+ #if defined(DEBUG)
+ static atomic_t fences_allocated = ATOMIC_INIT(0);
+ static atomic_t fences_signalled = ATOMIC_INIT(0);
+@@ -242,6 +264,8 @@ static struct fence *create_fence_to_signal(struct pvr_fence_frame *pvr_fence_fr
+ 		return NULL;
+ 	}
+ 
++	pin_module_for_fences();
++
+ 	spin_lock_init(&pvr_fence->lock);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,10,0))
+-- 
+2.55.0
+

@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=25
+pkgrel=26
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -32,7 +32,7 @@ _carch="arm"
 # the module pvrsrvkm_omap4_sgx540_120 and shipped IN this package, because
 # nq-kernel-ota stages only /lib/modules/<release> out of the kernel apk.
 # Upstream is pinned to one commit of _pvrsgx_branch; prepare()
-# copies its drivers/gpu/drm/pvrsgx into the tree and our patches 0063-0074 go
+# copies its drivers/gpu/drm/pvrsgx into the tree and our patches 0063-0075 go
 # on top. The pin is never edited by hand: scripts/bump-pvrsgx.sh moves
 # commit + sha512 together and test-applies the whole series on a pristine tree.
 # The sha512 is checked in unpack() as well as in sha512sums, because the build
@@ -120,6 +120,7 @@ source="
 	0072-drm-pvrsgx-drop-select-DRM_LEGACY.patch
 	0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
 	0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
+	0075-drm-pvrsgx-1.17-keep-the-module-loaded-once-it-has-created-a-fence.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -142,7 +143,7 @@ unpack() {
 }
 
 prepare() {
-	# The pvrsgx copy runs BEFORE the patches: 0064-0074 patch files that only
+	# The pvrsgx copy runs BEFORE the patches: 0064-0075 patch files that only
 	# exist once it is in place (0063, the Kconfig/Makefile hook, is the only one
 	# that touches pristine files). Exactly the files the pvrsrvkm-6.18-rc6 build
 	# uses for DDK $_pvrsgx_ddk -- the other DDK versions stay out of the tree.
@@ -306,4 +307,5 @@ SKIP  0071-drm-pvrsgx-build-the-OMAP4470-SGX544-module-only-on-request.patch
 SKIP  0072-drm-pvrsgx-drop-select-DRM_LEGACY.patch
 SKIP  0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
 SKIP  0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
+SKIP  0075-drm-pvrsgx-1.17-keep-the-module-loaded-once-it-has-created-a-fence.patch
 "

@@ -6,7 +6,7 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25**, unreleased)
+### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25** + **r26**, unreleased)
 
 The second and third kernel steps of the GPU work
 (`docs/2026-10-11-gpu-sgx540-groundwork.md`, §8 "Decisions").
@@ -59,6 +59,15 @@ The second and third kernel steps of the GPU work
   `DRM_FORMAT_MOD_INVALID` to AddFB2 with `DRM_MODE_FB_MODIFIERS`); its
   `/proc/vmallocinfo` still showed the probe's 32 MB mapping, which r25
   removes.
+- **r26, patch 0075: the driver stays loaded once it has created a fence.**
+  A pvr fence goes into the reservation object of the buffer the client
+  rendered to, which can be another driver's (omapdrm: labwc's scanout
+  buffers) and outlive the module; `dma_fence_release` then reads the freed
+  `fence_ops`. Seen on the Prague unit 2026-10-12: `PVRLinuxFenceDeInit: 1
+  fences leaked` at rmmod, then an oops when PID 1 closed the buffer. The
+  first fence pins the module; rmmod returns EBUSY until reboot. Built, not
+  booted yet. Open next to it: an 8-minute PID 1 stall around the driver
+  load/unload (`docs/gpu-sgx540/stall-and-panic-2026-10-12.md`).
 - **Not loaded by default.** `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120`
   is in `CONFIG_CMDLINE` (`CONFIG_CMDLINE_FORCE=y`), so it is part of the
   zImage and travels and rolls back with the kernel slot. A `modprobe.d` file
