@@ -8,6 +8,26 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Prague Q — 2026-10-12: GPU desktop work in progress, the unit is NOT in a release state
+
+- **Kernel:** slot A r21 (booted after a panic), slot B r25; the
+  `nexusq-kernel-ota-promote.service` is **masked** on purpose (no GPU kernel
+  gets promoted until the stall below is fixed). Unmask it, or roll slot B
+  back, before leaving the unit for good: a mask is ssh state no package
+  carries, and while it stays no kernel OTA can promote here.
+- **Installed by hand** from local builds (`apk add`, not from the OTA repo):
+  device r127, nexusq-sgx r0, nexusq-sgx-mesa r0; TI blobs fetched into
+  `/var/lib/sgx-ddk/lib`. On r21 the desktop starts on Pixman by itself.
+  The next OTA or image brings the published versions back; none of these is
+  published, and they must not be until the measurement gate passes.
+- **Open:** the 8-minute PID 1 stall around the SGX driver load/unload and the
+  `dma_fence_release` panic — `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
+  r26 (patch 0075 for the panic) is built, not booted; the next run needs Petr
+  at the unit (trial boot, USB as the rescue) and
+  `docs/gpu-sgx540/drafts/stall/stall-monitor.sh`.
+- **Decision pending:** the runtime hardware watchdog is not armed on the units
+  (`RuntimeWatchdogUSec=0`); a kernel-side GPU hang would not recover.
+
 ## Any machine — 2026-10-11: nexusq-control r65 and app 1.27.1+68 are NOT built or released
 
 `nexusq-control` r65 labels the audio outputs in English ("Speaker",
