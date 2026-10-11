@@ -62,7 +62,7 @@ needed to start it).
 | 4 | GFX ground truth (once per arm) | `PM_GFX_PWRSTST` 0x4a307204 via `nexusq-gpu-probe.sh --regs` | POWERSTATEST, LASTPOWERSTATEENTERED | PRM only; never an address in 0x56000000-0x57ffffff [groundwork §7] |
 | 5 | CPU frequency | `/sys/devices/system/cpu/cpufreq/policy0/stats/{time_in_state,total_trans}` | 350 MHz residency %, transitions/s | today 350 MHz ≈ 99.8 % at idle [pm §5.1]; passive long-window number from HA: `scripts/diag/ha-opp-window.py` |
 | 6 | VDD_MPU against the OPP | regulator `vdd_mpu` µV + `abb_mpu`; healthd `vdd_uV`, `vdd_exp_uV`, `vdd_mismatch`, `abb_uV` | any `vdd_mismatch` event in the window | expected 350/1025, 700/1203, 920/1317, 1200/1380 MHz/mV (`nq-diag-snapshot` "vdd_mpu vs OPP expectation") |
-| 7 | VDD_CORE | TWL6030 VCORE1: `nexusq-gpu-probe.sh --pmic` (`i2cget -y -f <bus> 0x48 0x55`/`0x56`, expected `0x23` = 1 139 440 µV) [pm Addendum "Live VDD_CORE without a device"], or a multimeter | value in mV, once per arm; it must not change | Linux has no VDD_CORE regulator; PRM VP_CORE reads are expected to be 0 [pm §4] |
+| 7 | VDD_CORE | TWL6030 VCORE1: a multimeter on the VCORE1 output. *(Corrected 2026-10-11: `nexusq-gpu-probe.sh --pmic` read 0x48 0x55/0x56 = 0x00/0x00 on the Prague unit with the rail on; the control interface does not show the setpoint, so `--pmic` only records the raw block and reports VDD_CORE unreadable. Expected 1 139 440 µV from the x-loader)* [pm Addendum "Live VDD_CORE without a device" §6] | value in mV, once per arm; it must not change | Linux has no VDD_CORE regulator; PRM VP_CORE reads are expected to be 0 [pm §4] |
 | 8 | Temperature | `/sys/class/thermal/thermal_zone0/temp` at 1 Hz in the detached sampler; TMP101 hwmon (i2c 0x48 on I2C2) | median, p95, max | passive trip 100 °C cools the CPU only [pm §7] |
 | 9 | Interrupts | `/proc/interrupts` (GPU line = GIC-0 hwirq 53, DSS line, total), `/proc/softirqs` | GPU IRQ/s, total IRQ/s | GIC SPI 21 = hwirq 53 [pm §8.1] |
 | 10 | GPU clock | `nexusq-gpu-probe.sh` `gpu_clock`, `dpll_m7` | parent and rate at start and end | must be `dpll_per_m7x2_ck` 307 200 000 (or 153 600 000 under the VDD_CORE gate) [pm §2, §4] |
@@ -163,7 +163,9 @@ Numbers stay in the note; the CHANGELOG names the revision.
 - The VCORE1 register address on the TWL6030 control interface is still to be
   confirmed from the TRM before row 7 can be read without a multimeter *(closed
   2026-10-11: derived from stock and mainline without the TRM; the first live read
-  confirms it [pm Addendum "Live VDD_CORE without a device"])*
+  confirms it [pm Addendum "Live VDD_CORE without a device"])* *(Reopened
+  2026-10-11: the live read gave 0x00/0x00 at 0x55/0x56 with VCORE1 on. No
+  read-only register path exists; row 7 needs the multimeter [pm Addendum §6])*
   [groundwork §8 q1].
 - The proposed healthd fields (row 11) and the `nq-opp-study2.sh` GPU items do
   not exist yet; until they do, rows 2-3 and 9 come from the probe and the

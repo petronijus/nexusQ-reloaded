@@ -14,7 +14,8 @@
 #   * every external command runs under `timeout` and `nice -n 19` (r() below),
 #     so a blocking sysfs read cannot hang the probe or compete with audio;
 #   * with --pmic only: single-byte SMBus reads of the TWL6030 at 0x48 on its
-#     own bus (i2cget -f; never i2cset), see the VDD_CORE section;
+#     own bus (i2cget -f; never i2cset), see the VDD_CORE section. They show
+#     the VCORE1 block raw; the live VDD_CORE setpoint is not readable there;
 #   * no access to the GPU's own registers. /dev/mem is used only with --regs,
 #     only for an allowlist of PRM/CM addresses (always-on), and an address in
 #     0x56000000-0x57ffffff is refused outright: touching the SGX window while
@@ -28,10 +29,12 @@
 #
 # Usage (as root on the Q; without root the debugfs checks are skipped):
 #   nexusq-gpu-probe.sh [--host NAME] [--client] [--regs] [--pmic] [--no-pmdebug]
+#   ssh root@<unit> 'sh -s -- [options]' <nexusq-gpu-probe.sh
 #     --host NAME   expected hostname (default: $NQ_EXPECT_HOST or "steelhead")
 #     --client      a GPU client is running on purpose: GFX ON is not a failure
 #     --regs        also read PRM/CM registers with busybox devmem (allowlisted)
-#     --pmic        also read TWL6030 VCORE1 (VDD_CORE) over the control i2c
+#     --pmic        also read the TWL6030 VCORE1 block (raw; VDD_CORE itself
+#                   is not readable there, see the VDD_CORE section)
 #     --no-pmdebug  do not read debugfs pm_debug (see caveat above)
 #   NQ_TIMEOUT=s    per-command timeout (default 5)
 #
@@ -61,8 +64,22 @@ r() { timeout "$TO" nice -n 19 "$@"; }
 # Read one small file; empty output (not an error) when it is missing.
 rd() { r cat "$1" 2>/dev/null; }
 
+# Kept in step with the header by hand: under `sh -s` there is no $0 to read.
 usage() {
-	r sed -n '/^# Usage/,/^# Exit/p' "$0" | r sed 's/^# \{0,1\}//'
+	r cat <<-'EOF'
+		Usage (as root on the Q; without root the debugfs checks are skipped):
+		  nexusq-gpu-probe.sh [--host NAME] [--client] [--regs] [--pmic] [--no-pmdebug]
+		  ssh root@<unit> 'sh -s -- [options]' <nexusq-gpu-probe.sh
+		    --host NAME   expected hostname (default: $NQ_EXPECT_HOST or "steelhead")
+		    --client      a GPU client is running on purpose: GFX ON is not a failure
+		    --regs        also read PRM/CM registers with busybox devmem (allowlisted)
+		    --pmic        also read the TWL6030 VCORE1 block (raw; VDD_CORE itself
+		                  is not readable there, see the VDD_CORE section)
+		    --no-pmdebug  do not read debugfs pm_debug
+		  NQ_TIMEOUT=s    per-command timeout (default 5)
+		Output: one line per check, "PASS|FAIL|WARN|INFO|SKIP  check  detail".
+		Exit:   0 no FAIL, 1 at least one FAIL, 2 wrong host or bad usage.
+	EOF
 }
 
 while [ $# -gt 0 ]; do
@@ -276,24 +293,28 @@ done
 if [ -n "$vcore" ]; then
 	res INFO vdd_core "regulator(s):$vcore"
 else
-	res INFO vdd_core "no VDD_CORE regulator in Linux (expected, pm §4); use --pmic, or a multimeter"
+	res INFO vdd_core "no VDD_CORE regulator in Linux (expected, pm §4); only a multimeter on VCORE1 measures it"
 fi
 
-# --pmic: TWL6030 VCORE1 read back over the control i2c [pm Addendum "Live
-# VDD_CORE without a device"]. Expected from the stock x-loader: vsel 0x23 =
-# 1 139 440 uV. VCORE1 block on slave 0x48: GRP 0x52, TRANS 0x53 (stock
-# omap4460_twl6030_setup @0xc003eb00), +3 = 0x55, +4 = 0x56 (the SR-interface
-# volt/cmd offsets, omap_twl.c:32-33); 0x55 is the register the x-loader and
-# the OMAP VC write to scale. SMPS_OFFSET efuse at 0xE0 (omap_twl.c:42).
+# --pmic: TWL6030 VCORE1 block over the control i2c [pm Addendum "Live
+# VDD_CORE without a device", corrected 2026-10-11 by "Live read"]. This is
+# NOT a VDD_CORE reading. Measured on the Prague unit (6.18.48-r20): VCORE1
+# 0x52..0x57 = 07 05 55 00 00 06 with the rail powered, while the fixed SMPSs
+# beside it hold their setpoint at block+4 (V1V8 0x4a=0x3c = 1.8 V, V2V1
+# 0x50=0x3e = 2.1 V). The x-loader programs VCORE1 through the SmartReflex
+# interface (slave 0x12, PRM_VC_VAL_BYPASS); that setpoint does not show up
+# at 0x48:0x55/0x56, so these reads cannot gate the 307.2 MHz clock. A zero
+# vsel is "not programmed through this interface", never 0 uV. The gate needs
+# a multimeter on VCORE1's output [pm §4 method 3].
+# Block layout (stride 6 from 0x40; GRP/TRANS/STATE per twl6030-regulator.c
+# VREG_GRP/TRANS/STATE, VREG_VOLTAGE_SMPS = +4; +3/+5 names UNVERIFIED).
 # -f is required: twl-core is bound to 0x48, so i2c-dev would return EBUSY
 # (i2c-dev.c:188-196, 414-415). The bus is found by the client name, never
 # assumed: a TMP101 also answers at 0x48 on I2C2. Reads only; never i2cset.
-vsel_uv() {   # vsel_uv <vsel> <smps_offset>: echo uV, empty if not decodable
+vsel_uv() {   # vsel_uv <vsel> <smps_offset>: echo uV; empty for 0 or unmapped
 	v=$(($1 & 0x3f))
 	if [ $(($2 & 0x08)) -ne 0 ]; then base=709000; else base=607700; fi
-	if [ "$v" -eq 0 ]; then
-		echo 0
-	elif [ "$v" -le 57 ]; then
+	if [ "$v" -ge 1 ] && [ "$v" -le 57 ]; then
 		echo $((base + (v - 1) * 12660))
 	elif [ "$v" -eq 58 ]; then
 		echo 1350000
@@ -316,18 +337,19 @@ if [ "$PMIC" = 1 ]; then
 		state=$(tw 0x54)
 		r55=$(tw 0x55)
 		r56=$(tw 0x56)
-		raw="i2c-$bus 0x48: e0=$offs 52=$grp 53=$trans 54=$state 55=$r55 56=$r56"
-		if [ -z "$offs" ] || [ -z "$r55" ] || [ -z "$r56" ]; then
+		v1v8=$(tw 0x4a)
+		raw="i2c-$bus 0x48: e0=$offs 52=$grp 53=$trans 54=$state 55=$r55 56=$r56 (V1V8 4a=$v1v8)"
+		if [ -z "$offs" ] || [ -z "$state" ] || [ -z "$r55" ] || [ -z "$r56" ]; then
 			res WARN vdd_core_pmic "read failed ($raw)"
 		else
-			if [ $((r55 & 0x3f)) -ne 0 ]; then src=0x55; v=$r55; else src=0x56; v=$r56; fi
-			uv=$(vsel_uv "$v" "$offs")
-			if [ -z "$uv" ]; then
-				res WARN vdd_core_pmic "vsel $v from $src not decodable ($raw)"
-			elif [ "$uv" -ge 1127000 ]; then
-				res PASS vdd_core_pmic "VCORE1 ${uv} uV from $src (gate >= 1127000: 307.2 MHz allowed; $raw)"
+			# CFG_STATE bits 3:2 = APP state, 1 = ON (twl6030-regulator.c:63-70)
+			if [ $(((state >> 2) & 3)) -eq 1 ]; then on="VCORE1 ON for APP"; else on="VCORE1 APP state $(((state >> 2) & 3))"; fi
+			u55=$(vsel_uv "$r55" "$offs")
+			u56=$(vsel_uv "$r56" "$offs")
+			if [ -z "$u55" ] && [ -z "$u56" ]; then
+				res WARN vdd_core_pmic "$on; setpoint not readable via the control interface (0x55/0x56 vsel 0): VDD_CORE unknown, 307.2 MHz gate needs a multimeter, else 153.6 MHz ($raw)"
 			else
-				res WARN vdd_core_pmic "VCORE1 ${uv} uV from $src: below 1127000, SGX limited to 153.6 MHz (pm §4 gate; $raw)"
+				res WARN vdd_core_pmic "$on; control-interface value(s) 0x55=${u55:-n/a} uV 0x56=${u56:-n/a} uV, not proven to be the active setpoint: no gate verdict ($raw)"
 			fi
 		fi
 	fi

@@ -83,8 +83,12 @@ and listed in the addendum at the end.
    needs VDD_CORE ≥ 1.127 V). **Never 384 MHz** (stock OPP-OV, needs VDD_CORE
    1.25 V) while mainline cannot scale VDD_CORE [stk §4, pm §2]. The live VDD_CORE
    is expected at **1.139 V**: the stock x-loader programs VCORE1 vsel 0x23, and
-   nothing on mainline rewrites it. One read (`nexusq-gpu-probe.sh --pmic`)
-   confirms it first [pm §4, pm Addendum "Live VDD_CORE without a device"].
+   nothing on mainline rewrites it. ~~One read (`nexusq-gpu-probe.sh --pmic`)
+   confirms it first~~ *Corrected 2026-10-11 after the live read: the TWL6030
+   control interface does not show that setpoint (VCORE1 0x55/0x56 read 0x00 on
+   the Prague unit with the rail on). VDD_CORE is not readable from Linux; the
+   307.2 MHz gate needs a multimeter on VCORE1, until then 153.6 MHz*
+   [pm §4, pm Addendum "Live VDD_CORE without a device" §6].
 6. **The openpvrsgx glue would pin the GFX domain ON.** `pvr_probe()` takes a
    `pm_runtime_get_sync()` reference that is only dropped on error and in
    `pvr_remove()` (pvr-drv.c:440-441, 465, 476, 488 at `d2f1e031`). Code inference,
@@ -355,10 +359,10 @@ UNVERIFIED, scaled from the Maemo and kc1 precedents [ur §6, kdp §12].
   1. Decisions from Petr (§9 step 1).
   2. Read-only probe of a unit with [drafts/nexusq-gpu-probe.sh](gpu-sgx540/drafts/nexusq-gpu-probe.sh) (state of
      `56000000.gpu`, `prm_gfx`, mux parent and rate, runtime-PM counters).
-  3. **Measure VDD_CORE** (TWL6030 VCORE1): `nexusq-gpu-probe.sh --pmic`
-     (`i2cget -y -f <bus> 0x48 0x55`/`0x56`, register derived from stock
-     without the TRM; expected `0x23` = 1.139 V) [pm Addendum "Live VDD_CORE without a device"], or
-     a multimeter on the VCORE1 output. The PRM VP_CORE registers are expected to
+  3. **Measure VDD_CORE** (TWL6030 VCORE1) with a multimeter on the VCORE1
+     output. *(Corrected 2026-10-11: the `--pmic` read of 0x48 0x55/0x56 returned
+     0x00/0x00 on the Prague unit with the rail on; it does not show the
+     SR-programmed setpoint, and no other read-only path exists)* [pm Addendum "Live VDD_CORE without a device" §6]. The PRM VP_CORE registers are expected to
      be uninformative because mainline leaves INITVOLTAGE 0 [pm §4].
   4. DT clock block (draft `0062-…patch.draft`), shipped as an ordinary kernel
      revision: inert in power terms (the gate stays off), visible in `clk_summary`.
@@ -592,7 +596,7 @@ sees it; the arms are defined in [pm §9](gpu-sgx540/power-clocks-pm.md).
 | P5 | CPU-side driver overhead pulls the `conservative` governor up the ladder | M | M | 350 MHz residency, arm A3 vs A4 | frame cap, damage-limited scenes; the GPU must beat the SW arm or it does not ship | 4 |
 | P6 | EMIF contention starves McBSP2 audio DMA (the 2026-07 crackle class) | M | H | XRUN/underflow counters per `docs/2026-07-08-audio-crackle-dma-contention.md` | half-resolution blur FBO; 30 fps cap; test with music, Petr listening | 3-4 |
 | P7 | Thermal: GPU heat on the same die; the passive trip throttles the **CPU**, not the GPU | M | M-H | `thermal_zone0`, TMP101; 102.8 °C already seen under CPU load | frame cap at > 85 °C; client thermal stop at 95 °C; devfreq cooling only with Phase 7 | 3-4 |
-| P8 | VDD_CORE below 1.127 V → 307.2 MHz out of spec | L (x-loader sets 1.139 V, 12.4 mV margin; live read pending) [pm Addendum "Live VDD_CORE without a device"] | H | Phase 0 measurement | gate: run 153.6 MHz (962 mV point) until proven | 0 |
+| P8 | VDD_CORE below 1.127 V → 307.2 MHz out of spec | L (x-loader sets 1.139 V, 12.4 mV margin; *2026-10-11: not readable from Linux, multimeter pending*) [pm Addendum "Live VDD_CORE without a device" §6] | H | Phase 0 measurement | gate: run 153.6 MHz (962 mV point) until proven | 0 |
 | P9 | APM churn: gaps > latency power-cycle GFX mid-animation | M (~~moot if APM does not work~~ *corrected 2026-10-11 [pm Addendum APM]:* not moot: with (h) the same churn applies at (h)'s latency) | L | `gpu_active_ms` pattern, PRM transitions | 100 ms latency (stock), not openpvrsgx's 2 ms, for APM and (h) alike | 1 |
 | P10 | `SYS_SGX_CLOCK_SPEED` 200 MHz vs real 307.2 MHz miscalibrates µKernel timing (PDS tick 0.65 ms) | H (as shipped) | M | code; HW-recovery timing | patch (c) OMAP4 sysconfig | 1 |
 | P11 | udev autoloads the module from `MODULE_DEVICE_TABLE(of)` before P1 is fixed | H | H | `lsmod` after boot | modprobe.d blacklist; later the Phase 6 boot guard | 1 |
@@ -693,10 +697,10 @@ it, is **Petr's decision** [re §10 item 1, §11]; until then nothing extends th
 
 Device measurements (read-only, Phase 0):
 
-1. Live VDD_CORE (TWL6030 VCORE1) under mainline. The register is derived without
-   the TRM: 0x48 regs 0x55/0x56, `i2cget -f` required, bus found by the `twl6030`
-   client name (the TMP101 shares address 0x48 on another bus). Expected `0x23` =
-   1.139 V [pm §4, pm Addendum "Live VDD_CORE without a device"].
+1. Live VDD_CORE (TWL6030 VCORE1) under mainline. ~~The register is derived without
+   the TRM: 0x48 regs 0x55/0x56 … Expected `0x23` = 1.139 V.~~ *2026-10-11: read live,
+   0x55/0x56 = 0x00/0x00 with VCORE1 on; the control interface does not expose the
+   setpoint. Open until a multimeter reading* [pm §4, pm Addendum "Live VDD_CORE without a device" §6].
 2. Is `56000000.gpu` created and unbound? Does `0x56000024` read `0x00010200` and
    `0x5600fe00` read `0x40000000` with runtime PM forced on [ml §4]?
 3. Which HDMI mode does labwc pick on the Samsung soundbar or a TV, and does the
@@ -794,6 +798,18 @@ Policy (Petr):
     if B1 emulation fails, a tracked Weston exception?
 31. Stock-derived shaders in private images only, re-authored for public ones?
 
+### Decisions (Petr, 2026-10-11)
+
+- **28 → fetch at install.** The public OTA repo carries only the aport; it fetches
+  the pinned TI blobs and checks their sha256. No TI binary lands on gh-pages.
+- **29 → pin an archive plus a bump script.** `linux-google-steelhead` pins the
+  openpvrsgx archive (`d2f1e031d58a`) with our patches on top. A bump script is the
+  update path. Patches may go upstream later, after asking Petr before posting.
+- **31 → ship the stock shaders as they are**, in every image. No private-only
+  split and no re-authoring.
+- **RE passages (re §10 item 1) → keep** as written.
+- 30 and 25 stay open; Phase 0 does not depend on them.
+
 ---
 
 ## 9. The first 10 concrete next steps
@@ -803,8 +819,14 @@ Policy (Petr):
 2. **Read-only probe** of a unit with [drafts/nexusq-gpu-probe.sh](gpu-sgx540/drafts/nexusq-gpu-probe.sh)
    (after review, copied into `scripts/diag/`): confirm `56000000.gpu` unbound,
    `prm_gfx` off, the mux parent and the runtime-PM counters on today's image.
-3. **Measure VDD_CORE**: read TWL6030 VCORE1 with `nexusq-gpu-probe.sh --pmic`
-   (expected 1.139 V) [pm Addendum "Live VDD_CORE without a device"], or a multimeter on the rail. Gate: ≥ 1.127 V → 307.2 MHz; else 153.6 MHz.
+3. ✅ **VDD_CORE settled 2026-10-11** by construction (pm Addendum §7): 307.2 MHz allowed. Still open: make the kernel send the stock CORE ON voltage itself (0027 never transmits it); a multimeter is a cross-check only.
+   ~~Measure VDD_CORE with a multimeter on the VCORE1 output (Petr, hands-on).~~
+   *(Corrected 2026-10-11: `nexusq-gpu-probe.sh --pmic` read 0x48 0x55/0x56 =
+   0x00/0x00 on the Prague unit with the rail on. The SR-programmed setpoint is not
+   visible on the control interface, and there is no other read-only path; the probe
+   now reports it as unreadable. A method that writes the PMIC needs Petr's approval
+   first.)* [pm Addendum "Live VDD_CORE without a device" §6]. Expected 1.139 V from
+   the x-loader. Gate: ≥ 1.127 V → 307.2 MHz; else, or until measured, 153.6 MHz.
 4. **DT clock block** ([drafts/0062-…patch.draft](gpu-sgx540/drafts/0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch.draft)):
    through the stock-parity-auditor, into `kernel/dts/omap4-steelhead.dts` plus a
    new patch, `pkgrel` bump, trial-slot OTA; `clk_summary` must flip from

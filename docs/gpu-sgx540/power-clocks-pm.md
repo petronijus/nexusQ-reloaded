@@ -411,12 +411,20 @@ brief limited commands.
    are the *SR-interface* offsets). *(Corrected 2026-10-11: derived without the
    TRM. The VCORE1 block is 0x52-0x57 on 0x48, and the read is
    `i2cget -y -f <twl6030 bus> 0x48 0x55 b` plus 0x56. `-f` is required, not just
-   likely. Expected `0x23`. See the Addendum.)* A wrong address on a read is harmless on the
+   likely. Expected `0x23`. See the Addendum.)* *(Corrected again 2026-10-11 by a
+   live read: 0x55 and 0x56 both read `0x00` while VCORE1 is on, so this register pair
+   does not show the SmartReflex-programmed setpoint. **No read-only path to VDD_CORE
+   exists**; see the Addendum, §6 "Live read".)* A wrong address on a read is harmless on the
    TWL6030 (UNVERIFIED but low risk), but it would give a wrong answer. Note (UNVERIFIED,
    from twl-core behaviour): the bound twl driver claims the TWL slave addresses, so
    `i2cget` will most likely need `-f`. Also, do not confuse it with the TMP101, which
    is also at 0x48 but on I2C2 [REPO kernel/patches/0003…:608-628].
-3. **Multimeter on VCORE1's output inductor/cap** (hands-on, Petr). Definitive.
+3. **Multimeter on VCORE1's output inductor/cap** (hands-on, Petr). Definitive. *(2026-10-11:
+   now the only read-only method. Measure on the output side of VCORE1's inductor
+   (1 µH typ) or its 10 µF output capacitor, which sit next to the TWL6030; the
+   VCORE1_FDBK ball is L2 [TWL6030 datasheet SWCS045C, pin table and SMPS
+   characteristics]. Where these parts sit on the steelhead board is not documented
+   (UNVERIFIED; no schematic).)*
 
 Then convert vsel to µV with the TWL6030 ES1.1+ map: `SMPS_OFFSET=0x7f` → 0.7-1.4 V scale,
 12.66 mV/step [REPO docs/2026-07-02-…§1, patch 0023].
@@ -1294,6 +1302,11 @@ last job, between frames and at idle):
 
 ## Addendum (2026-10-11): Live VDD_CORE without a device: derive it from the stock bootloader and the TWL6030 register map
 
+*(Corrected 2026-10-11, same day: the live read in §6 below did not return `0x23`.
+0x55 and 0x56 on 0x48 both read `0x00` while VCORE1 is on. The x-loader analysis
+(§1-§3) stands; the read path in §4 does not. VDD_CORE is not readable from Linux,
+and the gate needs a multimeter.)*
+
 **Verdict.** The stock x-loader programs TWL6030 VCORE1 (VDD_CORE) to **vsel 0x23 =
 1 139 440 µV** on every boot. It writes the target **1127 mV** (the 4460 CORE OPP100
 nominal) through `PRM_VC_VAL_BYPASS`, slave 0x12, reg 0x55. The stock U-Boot carries
@@ -1465,18 +1478,97 @@ offset 0x00 → 1 038 140. The last one is the WARN branch, seen on the host onl
   1210 mV TPS SET1 until patch 0014 commands 1025 mV, and the hand-over is a
   downward step, not a no-step transition. That is harmless at 350 MHz.
 
+### 6. Live read (2026-10-11, Prague unit): the control interface does not show the setpoint
+
+Run on `steelhead` (Prague unit, 6.18.48-r20, `hostname` checked first). The twl6030
+client is `0-0048`; the TMP101 is `1-0048`. Every read is a single
+`timeout 5 nice -n 19 i2cget -y -f 0 0x48 <reg> b`. The PM receiver blocks
+0x40..0x69 and 0xE0..0xE3 were read; nothing was written.
+
+| Block (base) | +0 GRP | +1 TRANS | +2 STATE | +3 | +4 | +5 |
+|---|---|---|---|---|---|---|
+| 0x40 (V1V29, UNVERIFIED name) | 0x07 | 0x05 | 0x55 | 0x00 | **0x2b** | 0x00 |
+| 0x46 V1V8 | 0x07 | 0x05 | 0x55 | 0x00 | **0x3c** = 1.8 V | 0x00 |
+| 0x4C V2V1 | 0x07 | 0x05 | 0x55 | 0x00 | **0x3e** = 2.1 V | 0x00 |
+| 0x52 **VCORE1** (VDD_CORE) | 0x07 | 0x05 | 0x55 | **0x00** | **0x00** | 0x06 |
+| 0x58 VCORE2 (VDD_IVA) | 0x07 | 0x05 | 0x55 | 0x00 | 0x00 | 0x06 |
+| 0x5E VCORE3 (unused on 4460) | 0x06 | 0x05 | 0x00 | 0x00 | 0x00 | 0x06 |
+| 0x64 VMEM | 0x06 | 0x05 | 0x00 | 0x00 | 0x2b | 0x00 |
+
+`0xE0` (SMPS_OFFSET) = 0x7f, `0xE1..0xE3` = 0x00.
+
+What this shows:
+- **The block layout is confirmed.** The fixed SMPSs sit where mainline puts them:
+  V1V8 at PM_RECEIVER + 0x16 = 0x46 and V2V1 at + 0x1c = 0x4C
+  ([twl6030-regulator.c:610-611](https://raw.githubusercontent.com/torvalds/linux/v6.18/drivers/regulator/twl6030-regulator.c);
+  PM_RECEIVER base 0x30 on slave index 0, [twl-core.c:104, 350](https://raw.githubusercontent.com/torvalds/linux/v6.18/drivers/mfd/twl-core.c)).
+  Their `+4` register (`VREG_VOLTAGE_SMPS`, twl6030-regulator.c:52) holds their real
+  setpoint: 0x3c and 0x3e are the 1.8 V and 2.1 V codes of the SMPS map
+  (`twl6030smps_list_voltage` codes 60 and 62, twl6030-regulator.c:333-341). So `+4` read over 0x48 does return a
+  live voltage code for an SMPS that is programmed through this interface.
+- **VCORE1 is on.** STATE 0x55: bits 3:2 (APP state) = 01 = ON
+  (`TWL6030_CFG_STATE_APP`, twl6030-regulator.c:63-70). VCORE3, which the 4460 does
+  not use, reads STATE 0x00, so the decode tells on from off. The SoC is also running.
+- **VCORE1's `+3` (0x55) and `+4` (0x56) are both 0x00, and so are VCORE2's 0x5B/0x5C.**
+  The x-loader wrote 0x23 to VCORE1 and 0x21 to VCORE2 over the SmartReflex interface
+  (§1). Neither value appears here, and nothing in Linux writes these registers (§3).
+  A vsel of 0 is 0 V in every TWL6030 SMPS map (`twl6030_vsel_to_uv` returns 0 for it,
+  omap_twl.c:70-71; code 0 is 0 V in `twl6030smps_list_voltage`, twl6030-regulator.c:323-325), which a live rail cannot have. So **0 here means "not programmed
+  through the control interface", not a voltage.** The setpoint the SR interface
+  (slave 0x12) wrote lives somewhere the control interface does not expose, or the
+  two interfaces address different registers at the same offsets. Which of the two
+  is true needs the TWL6030 TRM (not public). UNVERIFIED either way; the practical
+  result is the same.
+- The x-loader's write is not proven to have succeeded either. If it failed, VCORE1
+  runs at its OTP boot default, which is not readable from anywhere (UNVERIFIED).
+- **TRANS 0x05 and GRP 0x07** are the values nobody wrote. Stock wrote 0x52 ← 0x01 and
+  0x53 ← 0x01 ("VCORE1OFF=OFF SLEEP=OFF ACT=AUTO") at boot; mainline does neither. That
+  is a stock-parity difference for the CORE RET/OFF work, not for the GPU gate.
+
+**Other read-only paths, checked:**
+- **OMAP VC.** `PRM_VC_VAL_BYPASS` has SLAVEADDR, REGADDR, DATA and VALID, with no read
+  or direction bit; mainline only ever writes it and polls VALID
+  ([vc.c:190-235 @v6.18](https://raw.githubusercontent.com/torvalds/linux/v6.18/arch/arm/mach-omap2/vc.c)).
+  The SR I2C is write-only from the SoC side. Reading the register back would show only
+  the last command sent (on our kernel, an MPU command to 0x60), not VCORE1. Using the VC
+  needs a PRM **write**, so it is not a read path.
+- **PRM VP_CORE.** Not driven on mainline (§4 method 1). `devmem` is not in today's
+  image (neither as a command nor as a busybox applet), so it was not read.
+- **TWL6030 GPADC.** The internal channels are battery, backup battery, charger input,
+  VBUS, VBUS current, die temperature and USB ID
+  ([twl6030-gpadc.c:150-235](https://raw.githubusercontent.com/torvalds/linux/v6.18/drivers/iio/adc/twl6030-gpadc.c)).
+  None is VCORE1. Channels 2, 3, 5 and 6 are external, and their wiring on steelhead is
+  unknown. A conversion also starts with a GPADC control write, so it is not read-only.
+- **Linux views.** No regulator, debugfs or sysfs file covers VCORE1 (§4; the
+  `twl6030_gpadc` IIO device is the only TWL ADC view).
+
+**Consequence for the gate.** VDD_CORE is not readable from Linux. The 307.2 MHz gate
+needs one of:
+1. **a multimeter on VCORE1's output** (§4 method 3), definitive and read-only; or
+2. **a method that writes**, which Petr must approve first: re-sending the x-loader's
+   own `bypass(0x12, 0x55, 0x23)` through `PRM_VC_VAL_BYPASS` makes the setpoint known
+   by construction, but it is a PMIC write on a live rail.
+
+Until then the SGX is limited to **153.6 MHz** (§4 gate).
+
+The accuracy figure that was missing is in the public datasheet: total DC output
+accuracy is −1.2 %/+2.4 % around a typical value that sits above nominal (1.1 V row:
+min 1.101, typ 1.114, max 1.141 V) [TWL6030 datasheet SWCS045C, "Switched-mode
+regulators", TDCOV]. If the setpoint is 0x23 (1.139 V), the minimum stays above
+1.127 V. How the table's nominal column maps to a vsel code is UNVERIFIED.
+
 ### Not reproduced, or still open
 
-- **No live read.** Every value here is derived from images and sources. Nothing ran
-  on a unit (brief: no device access).
+- ~~**No live read.**~~ *(2026-10-11: done, §6. It did not confirm the expected 0x23;
+  0x55/0x56 read 0x00.)* Every value in §1-§5 is derived from images and sources.
 - That slave 0x48's 0x55 is the same register the SR interface (0x12) writes. The
   evidence is the shared block layout (stock 0x52/0x53/0x58/0x59/0x5E and patch
   0014's 0x5E/0x64 on 0x48, versus the SR 0x55/0x5B/0x61). If 0x55 reads 0 or junk,
   the answer is in 0x56 or the TRM, and the multimeter decides.
 - The precedence between 0x55 and 0x56, and the meaning of bits 6-7 (the probe
   decodes bits 5:0 only).
-- SMPS DC accuracy and load-line droop. With 12.4 mV of margin, a multimeter
-  cross-check on one unit is still worth doing once.
+- Load-line droop under GPU load. The DC accuracy is now known (§6). The multimeter
+  reading is no longer a cross-check: it is the gate.
 - Whether `SMPS_MULT=0x52`, bit 4 (meaning not in mainline, which defines only bits
   0, 1 and 6) applies a multiplier to any VCORE. If it did, the x-loader's own
   conversion would be wrong too. The x-loader ignores MULT.
@@ -1485,3 +1577,35 @@ offset 0x00 → 1 038 140. The last one is the WARN branch, seen on the host onl
 - The U-Boot check for other VCORE1 writers covers immediate operands only (§2).
 - The licence of the x-loader's TI HS header and PPA blob ("PPA", "CertPK_"
   strings at the start of the image). Only the U-Boot-derived code was analysed.
+
+### 7. Setpoint by construction (2026-10-11 15:45, Prague unit, approved by Petr)
+
+With no read-only path, the x-loader's own write was re-sent once from Linux so that
+VCORE1's setpoint is known by construction rather than assumed:
+
+- **What was sent:** `PRM_VC_VAL_BYPASS` (0x4a307ba0) ← `0x00235512` (slave 0x12, reg
+  0x55, vsel 0x23 = 1 139 440 µV), then the same word with VALID (bit 24), polled until
+  VALID cleared. This is byte-for-byte what `do_scale_vcore` in the stock x-loader does
+  on every boot (§1).
+- **Guards:** `hostname` = `steelhead` checked first; the bypass register read before
+  the write showed no transaction in flight (`0x00000500`, VALID clear; the last
+  transaction was the TPS62361 init to slave 0x60); the staged word was read back
+  before VALID was set; cpufreq policy0 was pinned to 700 MHz for the duration so no
+  VP-driven MPU transition could run, then restored to 350-1200 MHz `conservative`.
+- **Result:** VALID cleared after 2 polls; the register then read `0x00235512`.
+  `PRM_IRQSTATUS_MPU` read `0x80004100` before and after, so no new VC error status was
+  raised. The unit stayed `running`, 56.8 °C, dmesg quiet.
+- **One failed attempt first (harmless):** `struct.pack_into()` on the `/dev/mem` mmap
+  goes through `memcpy` and took an alignment fault (`Unhandled fault: alignment
+  exception (0x811) at …eba1`, Bus error). Only a staging byte changed
+  (`0x560` → `0x500`); VALID was never set, so nothing was sent. **PRM registers need
+  single aligned 32-bit accesses:** use `memoryview(mmap).cast("I")`, never
+  `struct.pack_into`/`unpack_from`.
+
+**Gate verdict:** VDD_CORE = 1.139 V by construction on this boot (the VC accepted the
+transaction; the TWL6030 ACK is implied by VALID clearing without an error status, not
+observed directly). Every boot re-applies the same value through the x-loader, so
+**307.2 MHz is allowed**. A multimeter reading stays a cross-check, not a gate. The
+proper fix is in the build, not in a one-off: the kernel should send the stock CORE ON
+voltage itself (patch 0027 sets the VC ON value but it is never transmitted), tracked
+as a Phase 0 item.
