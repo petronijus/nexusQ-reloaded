@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -32,13 +33,19 @@ static void check(int ok, const char *what)
 	fails += !ok;
 }
 
-/* Run fn in a child; true when it died of SIGABRT (glibc's __chk_fail). */
+/*
+ * Run fn in a child; true when it died of SIGABRT (glibc's __chk_fail).
+ * The child is made non-dumpable: an expected abort must not reach the core
+ * handler. RLIMIT_CORE=0 would not do: with a pipe core_pattern the handler
+ * (systemd-coredump) still runs and journals the crash.
+ */
 static int aborts(void (*fn)(void))
 {
 	pid_t pid = fork();
 	int st;
 
 	if (pid == 0) {
+		prctl(PR_SET_DUMPABLE, 0);
 		int devnull = open("/dev/null", O_WRONLY);
 		dup2(devnull, 2);
 		fn();
