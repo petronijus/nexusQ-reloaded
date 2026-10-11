@@ -1,0 +1,372 @@
+DRAFT — not built, not tested, not in any build (2026-10-11)
+
+What this is: the changes pmos/linux-google-steelhead/APKBUILD and
+kernel/configs/steelhead_defconfig would need to build the PowerVR SGX540
+kernel driver (openpvrsgx DDK 1.17.4948957, module pvrsrvkm_omap4_sgx540_120)
+IN-TREE as a module, inside the kernel package. It is a fragment: only the
+parts that change are shown, against the APKBUILD as of dc988b9
+(pkgver 6.18.48, pkgrel 20). Nothing here has been compiled; the compile gate
+(groundwork §4 Phase 1 step 1, kdp §12 step 1) is what turns it into a fact.
+
+Short names below follow the master note
+(docs/2026-10-11-gpu-sgx540-groundwork.md): kdp = kernel-driver-port.md,
+pm = power-clocks-pm.md, ur = usecases-roadmap.md, ub = userspace-blobs.md,
+ml = mainline-6.18.md.
+
+
+== 1. Why in-tree, in THIS package, with no subpackage ==================
+
+- nq-kernel-ota stage-apk copies /lib/modules/<rel> ONLY out of the kernel
+  apk (userspace/nexusq-kernel-ota/nq-kernel-ota:398-415, read 2026-10-11).
+  A separate module aport, or a subpackage of this one, would be missing on
+  every kernel OTA and would not roll back with the slot [kdp §6.1, ur §5.3,
+  groundwork §1 "Boot image" row].
+- CONFIG_MODVERSIONS=y (steelhead_defconfig:695) plus
+  CONFIG_LOCALVERSION="-r$pkgrel" (APKBUILD:97-113) make an out-of-tree module
+  a lockstep rebuild per pkgrel, and we ship no kernel -dev package
+  (APKBUILD:126-138) [kdp §6.1].
+- Built-in (=y) is "very likely not viable": ~66 KB of LZMA text alone for
+  the stock 1.8 KM against ~92-94 KB boot-image headroom [kdp §6.1,
+  Verification item 2]. =m leaves the zImage unchanged.
+
+=> package() does NOT split. The .ko lands under
+   /lib/modules/<rel>/kernel/drivers/gpu/drm/pvrsgx/... of the main package
+   and travels with the kernel slot.
+
+
+== 2. Pins (resolved with git ls-remote on 2026-10-11) =================
+
+  openpvrsgx base   pvrsrvkm-6.18-rc6
+                    d2f1e031d58aca97bc4b62367f0d7bef4a7559c3
+                    (merge onto "Linux 6.18-rc6", 2025-11-21) [kdp §3.1]
+  cross-check only  letux/pvrsrvkm-1.17.4948957-v3
+                    e5de755688193794ecbbcd6df2bf32fd3dee122a (2026-08-21)
+                    Maemo droid4-linux tag maemo-kernel-6.18.51.1
+                    db432aff895bb8a500cba67ce2041df5ad3c36ab [ur §2.2]
+  cherry-pick       ff422e4ab0bb "fix unitialized variable"
+                    (blocking_fence_count, pvr_linux_fence.c) [kdp §3.2, §8 i]
+
+The 12-character prefixes the notes cite (d2f1e031d58a, e5de75568819,
+db432aff895b) match the full hashes above. Before adoption the pvrsgx tree
+at d2f1e031 is diffed against Maemo db432aff and -v3 e5de7556, and any
+OMAP-relevant fix is adopted as one more patch (groundwork §3 "Primary
+path", §9 step 7). If d2f1e031 does not build, fallback F2 (Maemo's pvrsgx/
+tree, or -v3 with a compat layer) [groundwork §3 Fallbacks].
+
+
+== 3. source= additions =================================================
+
+The archive is the whole openpvrsgx kernel tree. UNVERIFIED: ~230-260 MB
+gz [kdp §6.2 item 1]; pmbootstrap caches distfiles, so it is paid once per
+pin. Only drivers/gpu/drm/pvrsgx/{Kconfig,Makefile,pvr-drv.c,pvr-drv.h,
+1.17.4948957/} is used (≈6.0 MB, 358 files) [kdp §6.2]. The smaller
+alternative (a script-generated pvrsgx-<sha>.tar.xz release asset) adds a
+mirror we would have to keep honest [kdp §6.2]; not chosen here.
+
+The patch names are PROPOSALS, numbered after the DT draft 0062. Letters
+are kdp §8's patch set; groundwork §2 counts (a)-(g) as "our 7 patches",
+(h) is the hook and (i) the cherry-pick.
+
+```
+_pvrsgx_commit=d2f1e031d58aca97bc4b62367f0d7bef4a7559c3	# pvrsrvkm-6.18-rc6
+_pvrsgx_ddk=1.17.4948957
+
+source="
+	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
+	linux_openpvrsgx-$_pvrsgx_commit.tar.gz::https://github.com/openpvrsgx-devgroup/linux_openpvrsgx/archive/$_pvrsgx_commit.tar.gz
+	$_config
+	0001-ASoC-tas571x-add-TAS5713-support.patch
+	...
+	0061-mfd-twl6030-irq-map-every-PIH-bit-so-an-unclaimed-one-is-not-an-error.patch
+	0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch
+	0063-drm-hook-the-pvrsgx-directory-into-the-DRM-Kconfig-and-Makefile.patch        # (h)
+	0064-drm-pvrsgx-1.17-use-VMAP-mem-areas-on-OMAP.patch                             # (a)
+	0065-drm-pvrsgx-1.17-allocate-cached-areas-with-__vmalloc.patch                   # (b)
+	0066-drm-pvrsgx-1.17-OMAP4-SGX540-sysconfig-at-stock-timing.patch                 # (c)
+	0067-drm-pvrsgx-balance-runtime-PM-in-pvr_probe-and-fix-the-remove-order.patch    # (d)
+	0068-drm-pvrsgx-1.17-map-dma-buf-attachments-with-the-unlocked-helpers.patch      # (e)
+	0069-drm-pvrsgx-build-the-OMAP4470-SGX544-variant-only-on-request.patch           # (f)
+	0070-drm-pvrsgx-drop-select-DRM_LEGACY.patch                                      # (g)
+	0071-drm-pvrsgx-1.17-initialise-blocking_fence_count.patch                        # (i) ff422e4ab0bb
+"
+```
+
+(The "# (x)" annotations are for this draft only; source= must not carry
+comments.)
+
+What each patch carries, with the evidence it rests on:
+
+  (h) `source "drivers/gpu/drm/pvrsgx/Kconfig"` + `obj-y += pvrsgx/` in
+      drivers/gpu/drm/{Kconfig,Makefile}: the merge diff without the
+      DRM_INTEL_CDV line [kdp §8 h]. The only patch that touches pristine
+      files, so it is the only one that would apply without the prepare()
+      copy below.
+  (a) -DPVR_LINUX_MEM_AREA_USE_VMAP for the OMAP SGX540 build. Without it
+      SGXInitialise times out (openpvrsgx #3, kc1 #26, TI eda7780bfd52);
+      absent from the 6.18-rc6 and 7.2 Makefiles [kdp §3.1, §8 a].
+  (b) _VMallocWrapper(): PAGE_KERNEL -> __vmalloc(); removes the need for
+      EXPORT_SYMBOL(__vmalloc_node_range_noprof), so no core-mm patch.
+      Statically verified single call chain [kdp §8 b, Verification 11].
+  (c) sysconfig-omap4.h for SGX540 rev 120: SYS_SGX_CLOCK_SPEED 307200000,
+      HW recovery 100 Hz, PDS timer 1000 Hz, APM latency 100 ms (stock
+      sgx_apm_latency @0xc0725b9c); today OMAP4 silently uses the AM437x
+      header (200 MHz / 50 Hz / 2 ms) [kdp §8 c, pm open question 3,
+      groundwork §2 table]. If Phase 0 forces 153.6 MHz (VDD_CORE gate),
+      SYS_SGX_CLOCK_SPEED must say 153600000 instead, or be taken from
+      clk_get_rate() [pm open question 3].
+  (d) pm_runtime_use_autosuspend() + 100 ms delay + put_autosuspend() after
+      drm_dev_register() in pvr_probe(); pvr_remove() order
+      drm_dev_unregister -> unload -> drm_dev_put. Code inference with one
+      piece of counter-evidence (84db121f1016) [kdp §8 d, pm TL;DR 8,
+      groundwork §5 P1].
+  (e) dma_buf_map_attachment_unlocked()/..._unmap_..._unlocked() at
+      dmabuf.c:186 and :101 [kdp §7 6.2 row, §8 e].
+  (f) Kconfig bool SGX_OMAP4470 (default n) gating the second
+      pvrsrvkm_omap4_sgx544_112 build under ARCH_OMAP4 (Makefile:92-100)
+      [kdp §8 f].
+  (g) remove `select DRM_LEGACY` from SGX_DRM (Kconfig:69); the symbol does
+      not exist in 6.18.48 [kdp §8 g].
+  (i) cherry-pick ff422e4ab0bb from -v3 [kdp §3.2, §8 i].
+
+Patch generation (project rule, .claude/rules/kernel.md): patches come from
+the git patch stack with `git format-patch` and must apply with GNU patch on
+a pristine tree. ASSUMED workflow, UNVERIFIED against how the kstack tree
+(~/nexusq-build/kstack/linux on the build machine [kdp §12 step 1]) is
+organised: one LOCAL commit "import pvrsgx @ d2f1e031" that copies exactly
+the files prepare() copies, which is never exported; (h) and (a)-(i) are
+exported on top of it. GNU patch then sees the same pre-image that prepare()
+creates.
+
+
+== 4. prepare(): copy before patching ===================================
+
+Ordering matters: (a)-(g) and (i) patch files that only exist after the copy,
+so the copy runs BEFORE default_prepare [kdp §6.2 item 2].
+
+```
+prepare() {
+	# PowerVR SGX KM (openpvrsgx, DDK $_pvrsgx_ddk), built in-tree as a module.
+	# Copy exactly the driver directory from the pinned upstream tree before the
+	# patches run: our pvrsgx patches apply to these files. The base commit is
+	# tracked in git as $_pvrsgx_commit; scripts/pvrsgx-bump.sh is the update path.
+	# docs/2026-10-11-gpu-sgx540-groundwork.md
+	_pvr_src="$srcdir/linux_openpvrsgx-$_pvrsgx_commit/drivers/gpu/drm/pvrsgx"
+	_pvr_dst="$builddir/drivers/gpu/drm/pvrsgx"
+	[ -d "$_pvr_src/$_pvrsgx_ddk" ] || die "openpvrsgx archive has no pvrsgx/$_pvrsgx_ddk"
+	[ -e "$_pvr_dst" ] && die "pristine tree already has drivers/gpu/drm/pvrsgx"
+	mkdir -p "$_pvr_dst"
+	cp -a "$_pvr_src/Kconfig" "$_pvr_src/Makefile" \
+		"$_pvr_src/pvr-drv.c" "$_pvr_src/pvr-drv.h" \
+		"$_pvr_src/$_pvrsgx_ddk" "$_pvr_dst/"
+
+	default_prepare
+	cp "$srcdir/$_config" .config
+
+	sed -i "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-r$pkgrel\"/" .config
+}
+```
+
+Assumptions:
+- abuild's default unpack extracts the .tar.gz to
+  $srcdir/linux_openpvrsgx-<full sha>/ (GitHub archive layout). UNVERIFIED for
+  this exact archive; the `[ -d ]` guard makes a different layout fail loudly.
+- The extraction of a full second kernel tree costs disk and time in the
+  builder container (UNVERIFIED size). A custom unpack() that extracts only
+  */drivers/gpu/drm/pvrsgx/* would avoid it; not drafted, because it would
+  re-implement abuild's unpack for the kernel tarball too.
+- The `[ -e "$_pvr_dst" ] && die` guard is there because a future mainline
+  that ships its own drivers/gpu/drm/pvrsgx must be noticed, not overwritten.
+
+
+== 5. build(): fail loudly if olddefconfig dropped a symbol =============
+
+olddefconfig silently drops a symbol whose Kconfig is missing (e.g. if (h)
+did not apply). Add after the olddefconfig call, before `make`:
+
+```
+	# The GPU KM must survive olddefconfig. A missing pvrsgx Kconfig (hook
+	# patch not applied) drops these silently and the image ships without the
+	# module.
+	for _sym in CONFIG_SGX=y CONFIG_PVRSGX_1_17_4948957=y CONFIG_SGX_DRM=y \
+			CONFIG_SGX_OMAP=m; do
+		grep -qx "$_sym" .config || die "olddefconfig dropped $_sym"
+	done
+	# osfunc.c:126-135 has an #error for a non-preemptible kernel; catch it here
+	# with a readable message instead of 20 minutes into the build.
+	grep -Eqx 'CONFIG_PREEMPT(_VOLUNTARY)?=y' .config \
+		|| die "pvrsgx 1.17 needs CONFIG_PREEMPT_VOLUNTARY=y or CONFIG_PREEMPT=y"
+```
+
+The second check is redundant with the compiler's #error by design: it is
+the readable failure, and it is the test that can be seen failing first
+(groundwork §4 Phase 1a: "the compile gate fails with the #error on the old
+config and passes on the new").
+
+
+== 6. package(): assert the module is there, no split ====================
+
+Add after `make zinstall modules_install dtbs_install ...`:
+
+```
+	# The SGX540 KM is part of THIS package on purpose: nq-kernel-ota carries
+	# /lib/modules/<rel> only from the kernel apk. Never split it out.
+	_rel=$(cat "$builddir"/include/config/kernel.release)
+	_ko=$(find "$pkgdir/lib/modules/$_rel" -name pvrsrvkm_omap4_sgx540_120.ko)
+	[ -n "$_ko" ] || die "pvrsrvkm_omap4_sgx540_120.ko missing from the package"
+	[ -z "$(find "$pkgdir/lib/modules/$_rel" -name 'pvrsrvkm_omap4_sgx544_*.ko')" ] \
+		|| die "the OMAP4470 SGX544 variant was built (patch f not effective)"
+```
+
+- Expected path, from Maemo's 6.18.51 package: .../kernel/drivers/gpu/drm/
+  pvrsgx/1.17.4948957/eurasia_km/pvrsrvkm_omap4_sgx540_120.ko [ub §2.2];
+  `find` is used so a different sub-path does not matter.
+- INSTALL_MOD_STRIP=1 stays: the KM is GPL/MIT source we build, stripping it
+  is fine (the TI userspace is a different matter, see sgx-ddk-um.APKBUILD.draft).
+- The module carries MODULE_DEVICE_TABLE(of) for ti,omap4430-gpu (expected
+  modinfo alias `of:N*T*Cti,omap4430-gpu*` [kdp §12 step 1]), so udev would
+  autoload it at boot. Until patch (d) is proven on hardware it must not
+  autoload [groundwork §5 P1/P11, §7]. See §8 of this draft.
+
+
+== 7. defconfig (kernel/configs/steelhead_defconfig) ===================
+
+The aport copies the defconfig verbatim into config-google-steelhead.armv7
+(docker-build.sh:285-286, scripts/build-kernel-boot.sh:51-52), so the change
+is an edit of that file, not a merged fragment. The file is a full .config
+(it carries "# end of" markers); after the first olddefconfig with the new
+symbols, copy the resulting .config back so diffs stay readable [kdp open
+question 10].
+
+7a. Preemption model. Its OWN kernel revision, Phase 1a, before the GPU
+    revision [groundwork §4 Phase 1a, §5 P2]. Today (steelhead_defconfig:99-102):
+
+```
+CONFIG_PREEMPT_NONE_BUILD=y
+CONFIG_PREEMPT_NONE=y
+# CONFIG_PREEMPT_VOLUNTARY is not set
+# CONFIG_PREEMPT is not set
+```
+
+    Variant V (upstream's choice, 0affbb5a7b95 / omap2plus_defconfig:511):
+
+```
+# CONFIG_PREEMPT_NONE is not set
+CONFIG_PREEMPT_VOLUNTARY=y
+# CONFIG_PREEMPT is not set
+```
+
+    Variant P (stock parity: 3.0.8 "#1 SMP PREEMPT"; the working kc1 run):
+
+```
+# CONFIG_PREEMPT_NONE is not set
+# CONFIG_PREEMPT_VOLUNTARY is not set
+CONFIG_PREEMPT=y
+```
+
+    The *_BUILD helper symbol is recomputed by olddefconfig. Whether
+    VOLUNTARY is enough for the DDK's spin-wait-on-workqueue paths is
+    UNVERIFIED [kdp §8 k, groundwork §8 q5]; the choice is made on the
+    Phase 1a A/B (measurement-protocol.md, arm P1a) and recorded in a dated
+    note. Variant P adds "preempt" to the module vermagic [kdp §8 k];
+    harmless here because every module is rebuilt in-tree.
+
+7b. The SGX symbols, base = pvrsrvkm-6.18-rc6 [kdp §9]:
+
+```
+CONFIG_SGX=y
+CONFIG_PVRSGX_1_17_4948957=y
+# CONFIG_SGX_DEBUG is not set
+CONFIG_SGX_DRM=y
+CONFIG_SGX_OMAP=m
+# CONFIG_SGX_GENERIC is not set
+# CONFIG_SGX_OMAP4470 is not set
+```
+
+    CONFIG_SGX is a bool that only gates the subdirectory; with SGX_OMAP=m
+    nothing is built into the zImage [kdp §6.1]. CONFIG_SGX_OMAP4470 exists
+    only once patch (f) is in.
+
+7c. ONLY if the base becomes -v3/-v4 (fallback F2): pin the ABI symbols so
+    the UM build-options check cannot drift [kdp §3.2, §9]:
+
+```
+CONFIG_SGX_ABI=y
+CONFIG_PVRSGX_1_17_4948957_ABI=y
+CONFIG_SGX_PB_PER_CONTEXT=y
+CONFIG_SGX_HW_PERF=y
+CONFIG_SGX_HW_RECOVERY=y
+# CONFIG_SGX_PDUMP is not set
+# CONFIG_SGX_HW_PROFILING is not set
+# CONFIG_SGX_USSE_EDM_STATUS_DEBUG is not set
+CONFIG_SGX_IOCTL_ALIAS=0
+```
+
+7d. Already present and sufficient, no change [kdp §9]: CONFIG_DRM=y (2830),
+    CONFIG_DRM_OMAP=y (2869), CONFIG_DMA_SHARED_BUFFER=y (1425),
+    CONFIG_CMA=y with CMA_SIZE_MBYTES=16 (5529; Maemo uses 32, 16 assumed
+    enough because omapdrm scans out through DMM/TILER [ur §6 Phase 0 step 5,
+    groundwork §5 P15]), CONFIG_MODVERSIONS=y (695), CONFIG_WERROR off (33).
+
+7e. Not now: CONFIG_PM_DEVFREQ / DEVFREQ_GOV_SIMPLE_ONDEMAND /
+    DEVFREQ_THERMAL belong to optional Phase 7 [groundwork §4 Phase 7,
+    pm §10].
+
+
+== 8. Autoload: a kernel-side blacklist that travels with the slot =====
+
+The roadmap ships /etc/modprobe.d/nexusq-gpu.conf with
+`blacklist pvrsrvkm_omap4_sgx540_120` in device-google-steelhead
+[groundwork §4 Phase 1 step 3, ur §6 Phase 1 step 2]. That file lives on the
+ROOTFS, while the module arrives with the KERNEL slot. A unit whose rootfs
+does not yet carry the blacklist but which takes a GPU kernel by OTA would
+autoload the module at boot, exactly risk P11 [groundwork §5].
+
+Proposal (not in the notes; UNVERIFIED): ALSO add
+`modprobe.blacklist=pvrsrvkm_omap4_sgx540_120` to CONFIG_CMDLINE
+(steelhead_defconfig:489). With CONFIG_CMDLINE_FORCE=y (:492) the command
+line is part of the kernel image, so the blacklist rides the same slot as
+the module and rolls back with it. kmod reads `modprobe.blacklist=` from the
+kernel command line, and a blacklist only suppresses alias-based loading,
+so an explicit `modprobe pvrsrvkm_omap4_sgx540_120` in Phase 1 still works
+(kmod behaviour as documented in modprobe.d(5); UNVERIFIED on the unit:
+check `lsmod` after boot and one explicit modprobe). Remove it in the
+kernel revision that introduces the Phase 6 boot guard.
+
+
+== 9. pkgrel, CHANGELOG, tests =========================================
+
+- Three separate kernel revisions, each its own pkgrel bump and CHANGELOG
+  line naming the revision (.claude/rules/aports.md):
+    r(N)    0062 DT clock block (Phase 0; inert in power terms)
+    r(N+1)  preemption model (Phase 1a)
+    r(N+2)  pvrsgx import + 0063-0071 + SGX symbols + cmdline blacklist
+            (Phase 1)
+  N is whatever pkgrel follows 20 at adoption time. Each revision gets its
+  own /lib/modules/6.18.48-r<N> through LOCALVERSION (APKBUILD:97-113).
+- tests/test_aports.py keeps passing: its sources() filter drops entries
+  containing "://" (the archive), and every new kernel/patches/*.patch is
+  listed in source= (sources() at test_aports.py:28-34, the patch test at
+  :38-48).
+- scripts/pvrsgx-bump.sh <branch|sha> (to be written, [kdp §6.2 item 4]):
+  resolves the upstream head with git ls-remote, rewrites _pvrsgx_commit,
+  runs `pmbootstrap checksum`, extracts a pristine 6.18.x + the new pvrsgx
+  tree and re-applies 0063-0071 with GNU patch; any reject fails loudly.
+  Its own seen-failing test: point it at a commit where one of our patches
+  no longer applies and watch it exit non-zero [kdp §12 step 4].
+- sha512sums: regenerated by the build (`pmbootstrap checksum`), never hand
+  edited (.claude/rules/aports.md). The archive gets a real sha512 (not
+  SKIP), like nexusq-glibc-rt pins its tarball (pmos/nexusq-glibc-rt/APKBUILD).
+- Review gates before any commit under kernel/ or pmos/: stock-parity-auditor
+  for (c) and the DT block, fleet-safety-reviewer (CLAUDE.md agent table).
+
+
+== 10. What this fragment does not decide ===============================
+
+- VOLUNTARY vs PREEMPT (Phase 1a data).
+- 307.2 vs 153.6 MHz (Phase 0 VDD_CORE measurement; patch (c) and the 0062
+  DT block must agree) [pm §4 Gate].
+- Whether the live match table is pvr-drv.c's ti,omap4430-gpu or the DDK's
+  PVR_USE_DEVICE_TREE ti,omap4-sgx540-120 [groundwork §8 q9]; this draft
+  assumes pvr-drv.c, like the notes.
+- Whether d2f1e031 compiles unchanged on 6.18.48 with Alpine GCC 15.2
+  [groundwork §8 q8, §5 P16]; budget +0-8 h [kdp §12 step 1].

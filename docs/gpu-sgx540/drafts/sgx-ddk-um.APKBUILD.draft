@@ -1,0 +1,410 @@
+# DRAFT — not built, not tested, not in any build (2026-10-11)
+#
+# What this is: an APKBUILD sketch for the PowerVR SGX540 userspace on the Q:
+# the TI DDK 1.17.4948957 "ti443x_linux" blobs, unmodified, plus the open glue
+# that replaces TI's closed init tool and libdbm. It is the "route A" (native
+# musl + gcompat) PRODUCT packaging; route B (glibc sandbox, first light) is a
+# procedure, not a package, and is described at the end. Nothing here has been
+# built. It follows the project's aport rules (.claude/rules/aports.md) and the
+# structure of pmos/nexusq-glibc-rt/APKBUILD.
+#
+# Short names follow docs/2026-10-11-gpu-sgx540-groundwork.md: ub =
+# gpu-sgx540/userspace-blobs.md, ur = usecases-roadmap.md, cd =
+# compositor-display.md, kdp = kernel-driver-port.md.
+#
+# ---------------------------------------------------------------------------
+# Assumptions, each with its pointer
+# ---------------------------------------------------------------------------
+# A1  The KM is openpvrsgx 1.17.4948957 built in-tree (=m) in
+#     linux-google-steelhead (drafts/linux-google-steelhead.APKBUILD.fragment.draft).
+#     KM and UM must be the SAME DDK build with the same build-options mask;
+#     a mismatch is refused by SGXInit [groundwork §2, ub §3.7, kdp §4].
+# A2  Blob set = TI omap5-sgx-ddk-um-linux, branch 1.17.4948957/mesa/glibc-2.35,
+#     commit 84a396a4fb379f10931421e489ac8a199d6a9f2c (2024-10-16), target
+#     ti443x_linux [groundwork §3 Primary path "UM", ub §2.1]. Re-fetched on
+#     2026-10-11 (sparse fetch of LICENSE + targetfs/ti443x_linux only) and
+#     hashed; the per-file sha256 below are that measurement, and their first
+#     12 characters equal ub §2.1's table.
+# A3  Source of the blobs at build time: Maemo Leste sgx-ddk-um, tag
+#     1.17.4948957+leste15 = a9dbdc75233dc0ca5fe2622dfffc44f164843c1f
+#     (git ls-remote 2026-10-11). Its ti443x/ files are sha256-identical to
+#     TI 84a396a4 [ub §2.2, Verification "Maemo sgx-ddk-um"]; the same archive
+#     carries the open dbm/ and pvrsrvinit/ sources, so one pinned source
+#     serves both. Why not TI directly: abuild cannot fetch git, and the TI
+#     cgit snapshot endpoint returned 503 on 2026-10-11 [ub §8, groundwork §6].
+# A4  The Maemo tree contains NO TI licence file (its file list at a9dbdc75,
+#     GitHub API 2026-10-11, has no LICENSE/COPYING). The TSPA text therefore
+#     ships from our aport as LICENSE.TI-TSPA: a verbatim copy of TI
+#     84a396a4:LICENSE (6554 bytes, git blob 925cfe51b67bb65067d8eb96217238ac279bca99,
+#     sha256 37507b462edf97b59717d2d144daaac85fbca6080c3602b5128e446e97f9ad47).
+#     The TSPA requires redistributions to "reproduce this license"
+#     (LICENSE:18-20) [ub §8].
+# A5  Unmodified means unmodified: options="!strip", no patchelf, no symbol
+#     weakening, no dd string patches, ever [ub §8, groundwork §6]. Every
+#     shipped blob is checked against A2's sha256 in package(); a mismatch
+#     fails the build. This is also the "without modification" proof the
+#     release preflight re-checks on the image.
+# A6  Not shipped: TI's libdbm blob (replaced by Maemo's LGPL re-implementation),
+#     pvrsrvctl (replaced by pvrsrvinit), libPVRScopeServices (profiling only,
+#     needs libstdc++) [groundwork §3 "UM", ub §8 packaging design].
+# A7  Install prefix /usr/lib/sgx-ddk with the .so and .so.1 links: the
+#     unversioned names are dlopen()ed at runtime (libpvr_dri_support loads
+#     libGLESv2_PVR_MESA.so, which loads libglslcompiler.so) [ub §3.1, §4.4
+#     item 7]. Private directory, MobiAqua-style [ub §2.3, §6 design notes].
+# A8  musl route needs (a) libgcompat.so.0 in the GLOBAL scope before the blobs
+#     load, (b) a private ld-linux-armhf.so.3 -> /lib/ld-musl-armhf.so.1 link
+#     [ub §4.4 items 1-2]. Two ABI hazards stay open and are measured, not
+#     patched: mmap@GLIBC_2.4 (32-bit off_t) in libsrv_um and the strerror_r
+#     GNU/XSI clash [ub §4.4 items 4 and 8, groundwork TL;DR 9]. If either
+#     bites and cannot be shown cold, route A fails the Phase 2 gate and the
+#     product stays on route B or fallback F1 [groundwork §3].
+# A9  The microkernel firmware is inside libsrv_init.so (.rodata 0x15b94); there
+#     is no .fw file to package or fetch [ub §3.6].
+# A10 Mesa: the GBM/EGL front end (gallium "sgx") is a SEPARATE aport,
+#     nexusq-sgx-mesa, in its own private prefix; Alpine's Mesa 26.2.4 stays
+#     untouched [groundwork §3 "Mesa", ur §5.9]. Sketch at the end.
+# A11 Licence of Maemo's pvrsrvinit/pvrsrvinit.c is UNKNOWN: the 29-line file
+#     has no header and the repo has no COPYING (a9dbdc75, read 2026-10-11).
+#     dbm/dbm.c and dbm_helpers.c say "GNU Lesser General Public License as
+#     published by the Free Software Foundation" with no version
+#     (dbm.c:6-8). Before adoption: ask upstream for a licence statement, or
+#     replace pvrsrvinit with our own equally trivial dlopen("libsrv_init.so.1")
+#     + dlsym("SrvInit") program. The SPDX ids below are therefore provisional.
+#
+# ---------------------------------------------------------------------------
+# Delivery modes and PUBLIC_RELEASE=1 (Petr decides: groundwork §6, §8 q28)
+# ---------------------------------------------------------------------------
+# M1 "redistribute" (groundwork §6 option 1). sgx-ddk-um-ti443x is built from
+#    the pinned archive, installed in personal AND public images, and listed
+#    in pmos/ota-packages.list (~1 MB; the ti443x deb is 974 KB [ur §6 Phase 6]).
+#    Precedents: Maemo main, pmOS non-free 2021-22, our own
+#    device-google-steelhead-nonfree-firmware [ub §8].
+# M2 "fetch at install" (groundwork §6 option 2). With PUBLIC_RELEASE=1,
+#    docker-build.sh installs sgx-ddk-um-fetch INSTEAD of -ti443x; the public
+#    rootfs and the gh-pages repo carry no TI binary. The unit downloads the
+#    pinned archive on first network, verifies every file against the sha256
+#    list shipped in the package, installs into /var/lib/sgx-ddk, and the
+#    persist store keeps it across a flash. Personal builds still install
+#    -ti443x directly. Caveat: the download is from Maemo's GitHub; a second
+#    origin is needed [groundwork §6 option 2 caveat, ub open question 9].
+# M3 "private overlay" (the firmware-google-steelhead pattern,
+#    docker-build.sh:334-375). If the archive ever disappears upstream, the
+#    untouched files are kept in ./private/sgx-ddk/ti443x/ (gitignored),
+#    docker-build.sh stages them into the aport after checking each sha256
+#    exactly like _fw_stage checks md5, and a public clone without the
+#    overlay builds an EMPTY -ti443x (the build succeeds, the GPU stays off).
+#    Not the default: the blobs are not secrets and M1/M2 need no overlay.
+#
+# Release preflight (scripts/release-preflight-no-secrets.sh, to be extended;
+# it checks secrets today, not licences [ur §5.11]). Two checks, debugfs on the
+# ext4 image like the existing check_* functions:
+#   Key both on the TI file NAMES in ti443x.sha256, not on the directory or a
+#   *.so.1.17.4948957 glob: the open libdbm we build installs as
+#   libdbm.so.1.17.4948957 too (dbm/Makefile.am install-exec-hook) and lives
+#   in the same /usr/lib/sgx-ddk.
+#   check_sgx_licence: if any TI blob name is present under /usr/lib/sgx-ddk,
+#     /usr/share/licenses/sgx-ddk-um-ti443x/LICENSE.TI-TSPA must exist and hash
+#     to A4's sha256 [groundwork §6, ub §8].
+#   check_sgx_unmodified: every TI blob name present hashes to its pin
+#     (debugfs -R "cat <path>" | sha256sum).
+#   In M2 additionally: FAIL if any TI blob name is in a PUBLIC_RELEASE image
+#     at all.
+# Seen failing first: build an image with the licence file deleted, and one
+# with a single byte of libusc changed; both must FAIL [groundwork §4 Phase 6].
+#
+# ---------------------------------------------------------------------------
+# Files this aport would carry (to be created at adoption; contents drafted
+# here so the review sees them)
+# ---------------------------------------------------------------------------
+# LICENSE.TI-TSPA   verbatim TI 84a396a4:LICENSE (A4). Not reproduced in this
+#                   draft on purpose: it must be copied byte for byte, then
+#                   checked against A4's sha256.
+#
+# ti443x.sha256     (measured 2026-10-11 from TI 84a396a4, A2)
+#   6bdfe93ac40248dd066f0f6f4d85438042194827b49e6140ab926879c576b9f1  libsrv_um.so.1.17.4948957
+#   ac329c21ef7507d4663634385f7ee58358cafc1aecff54d4cb3ba01344b0a2f9  libsrv_init.so.1.17.4948957
+#   61cb7a4e7cd91265ea6b0646a1d23c72bd8fa3873984c6a7f4a1acb72d0f23ba  libusc.so.1.17.4948957
+#   cf65d40e941580e4490924f0897b0dda3d2d2da34975801a3acca8be8e19b9dc  libglslcompiler.so.1.17.4948957
+#   b8bcd405e8e310b2c1894757c850d2dc68b782ee951012f2fe1acca7e414c118  libGLESv2_PVR_MESA.so.1.17.4948957
+#   3896bb0154fb9318cf97c6951b21b83806165a923bf2d39509cdd3491f29bc48  libGLESv1_PVR_MESA.so.1.17.4948957
+#   1a14a453a4db7cb4266cfb3de54bf476e25d10b5cf45b4d85ab52810889905bb  libpvr_dri_support.so.1.17.4948957
+#   ba924676fabd81a7a0b326cd7d68d58dade7ea8404b2e17c22132a09e6d32fd2  libpvr2d.so.1.17.4948957
+#   (not shipped, A6, recorded for completeness:)
+#   c294a8279484eeee07d450fb05a58d89ea658a421a2ea6dde3b65a9caebd22dc  libdbm.so.1.17.4948957
+#   b5c6db168bfdebf3cc8903b5bfe1cbad296f3e5b508a218b1e1c9987b864b9ff  libPVRScopeServices.so.1.17.4948957
+#   c2adbdf3aaa13edc9461264f2ce78bb7053ee29f159bd35534ccf6e58e75037d  pvrsrvctl
+#
+# powervr.ini       -> /etc/powervr.ini. Maemo's Droid 4 setting, the first
+#                      candidate for us [ub §2.2, §3.5]:
+#                        [default]
+#                        DisableHWTQTextureUpload=1
+#
+# 70-nexusq-sgx.rules -> /usr/lib/udev/rules.d/. Starts services init when the
+#                      pvr DRM device appears, instead of pmOS's 6x5 s retry
+#                      loop [ub §3.4]. The parent driver name "pvrsrvkm" is TI's
+#                      template value (50-pvrsrvctl.rules.template, ub §3.4) and
+#                      UNVERIFIED for openpvrsgx's pvr-drv.c: read it with
+#                      `udevadm info -a /dev/dri/card1` in Phase 1 and fix the
+#                      match before adoption.
+#                        ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", \
+#                          DRIVERS=="pvrsrvkm", TAG+="systemd", \
+#                          ENV{SYSTEMD_WANTS}+="nexusq-sgx-init.service"
+#
+# nexusq-sgx-init.service -> /usr/lib/systemd/system/. Pulled in by udev only,
+#                      so it has no [Install] section and needs no preset
+#                      (aports rule: enable with a preset, never a symlink; a
+#                      udev-wanted unit is not enabled at all). While the KM is
+#                      blacklisted (kernel draft §8) the device never appears at
+#                      boot and this never runs.
+#                        [Unit]
+#                        Description=PowerVR SGX540 services init (SrvInit, uploads the microkernel)
+#                        Documentation=file:///usr/share/doc/sgx-ddk-um/README
+#                        ConditionPathExists=|/usr/lib/sgx-ddk/libsrv_init.so.1
+#                        ConditionPathExists=|/var/lib/sgx-ddk/lib/libsrv_init.so.1
+#                        [Service]
+#                        Type=oneshot
+#                        RemainAfterExit=yes
+#                        Environment=LD_LIBRARY_PATH=/usr/lib/sgx-ddk:/var/lib/sgx-ddk/lib
+#                        ExecStart=/usr/libexec/sgx-ddk/pvrsrvinit
+#                        Nice=10
+#                        TimeoutStartSec=30
+#      Runs as root: pmOS's package said "(WARNING: runs as root)" [ub §3.4].
+#      No ExecStop: SrvInit has no counterpart in pvrsrvinit; unloading is
+#      `rmmod` with no client open (kdp §12 step 6). UNVERIFIED whether a second
+#      SrvInit after a module reload is accepted; Phase 1's 10 load/start/unload
+#      cycles answer it [groundwork §4 Phase 1 exit].
+#
+# nq-sgx-fetch + nq-sgx-fetch.service   (subpackage -fetch, mode M2 only)
+#      Oneshot, After=network-online.target, Wants=network-online.target,
+#      ConditionPathExists=!/var/lib/sgx-ddk/.complete. busy-box sh script:
+#        1. wget the pinned archive (A3) into a mktemp dir under /var/lib/sgx-ddk;
+#        2. tar -x ONLY the eight shipped names of ti443x.sha256 from
+#           sgx-ddk-um-<sha>/ti443x/usr/lib/ (not the libdbm blob, not Scope, A6);
+#        3. sha256sum -c against /usr/share/sgx-ddk-um/ti443x.sha256 (shipped
+#           in the package): any mismatch = delete the temp dir, exit 1, no
+#           partial install;
+#        4. move into /var/lib/sgx-ddk/lib, create the .so/.so.1 links (the
+#           ld-linux-armhf.so.3 link comes from -open in /usr/lib/sgx-ddk),
+#           touch .complete;
+#        5. never modify a file after verification (A5).
+#      A failed unit is a loud diag finding and the app shows "GPU userspace
+#      not installed" [ub §8 fallback design]. Persist across a flash with a
+#      bind mount from /var/lib/nexusq/persist/sgx-ddk, the same pattern as
+#      nexusq-persist-roon.mount (ConditionPathIsMountPoint on the store).
+#
+# ---------------------------------------------------------------------------
+
+pkgname=sgx-ddk-um
+pkgver=1.17.4948957
+pkgrel=0
+_ti_commit=84a396a4fb379f10931421e489ac8a199d6a9f2c	# TI ti443x blobs (A2)
+_maemo_commit=a9dbdc75233dc0ca5fe2622dfffc44f164843c1f	# tag 1.17.4948957+leste15 (A3)
+pkgdesc="PowerVR SGX540 userspace (TI DDK 1.17.4948957, ti443x) and its open glue"
+url="https://github.com/maemo-leste/sgx-ddk-um"
+arch="armv7"
+# Provisional, see A11. The main package is empty; the subpackages carry the
+# real licences.
+license="LicenseRef-TI-TSPA AND LGPL-2.0-or-later"
+# !strip: the TSPA allows only UNMODIFIED binaries (A5).
+# !tracedeps: the blobs NEED libc.so.6 / ld-linux-armhf.so.3, which no Alpine
+#   package provides by that name (same reason as nexusq-glibc-rt).
+# !archcheck: glibc armhf ELF on purpose. !check: no host tests for blobs;
+#   the seen-failing tests are the preflight checks above and the probe.
+options="!strip !check !tracedeps !archcheck"
+depends="$pkgname-open"
+makedepends="autoconf automake libtool libdrm-dev mesa-dev"
+subpackages="
+	$pkgname-ti443x:_ti443x
+	$pkgname-open:_open
+	$pkgname-fetch:_fetch
+	"
+source="
+	sgx-ddk-um-$_maemo_commit.tar.gz::https://github.com/maemo-leste/sgx-ddk-um/archive/$_maemo_commit.tar.gz
+	LICENSE.TI-TSPA
+	ti443x.sha256
+	powervr.ini
+	70-nexusq-sgx.rules
+	nexusq-sgx-init.service
+	nq-sgx-fetch
+	nq-sgx-fetch.service
+	"
+builddir="$srcdir/sgx-ddk-um-$_maemo_commit"
+
+_blobs="libsrv_um libsrv_init libusc libglslcompiler libGLESv2_PVR_MESA
+	libGLESv1_PVR_MESA libpvr_dri_support libpvr2d"
+
+prepare() {
+	default_prepare
+	# Refuse to build from anything but the pinned, unmodified TI files (A5).
+	cd "$builddir"/ti443x/usr/lib
+	for _b in $_blobs; do
+		grep " $_b.so.$pkgver\$" "$srcdir"/ti443x.sha256
+	done | sha256sum -c - || die "ti443x blobs differ from TI $_ti_commit"
+	# The licence must be TI's text byte for byte (A4).
+	echo "37507b462edf97b59717d2d144daaac85fbca6080c3602b5128e446e97f9ad47  $srcdir/LICENSE.TI-TSPA" \
+		| sha256sum -c - || die "LICENSE.TI-TSPA is not TI 84a396a4:LICENSE"
+}
+
+build() {
+	# Open glue only (libdbm, pvrsrvinit), built natively for musl. configure.ac
+	# needs pkg-config libdrm and gbm (configure.ac:41-42 at a9dbdc75); Alpine's
+	# gbm headers are used for compiling only.
+	autoreconf -fi
+	./configure \
+		--prefix=/usr \
+		--libdir=/usr/lib/sgx-ddk \
+		--bindir=/usr/libexec/sgx-ddk \
+		--sysconfdir=/etc
+	make
+}
+
+package() {
+	# Meta package (depends= above): the open glue, which in turn needs ONE
+	# blob provider, -ti443x (M1, personal builds) or -fetch (M2).
+	mkdir -p "$pkgdir"
+}
+
+_ti443x() {
+	pkgdesc="PowerVR SGX540 TI DDK 1.17.4948957 ti443x blobs, unmodified (TI TSPA)"
+	license="LicenseRef-TI-TSPA"
+	provides="sgx-ddk-um-blobs=$pkgver-r$pkgrel"
+	depends="!$pkgname-fetch"
+	local _d="$subpkgdir"/usr/lib/sgx-ddk _b
+	install -dm755 "$_d"
+	for _b in $_blobs; do
+		# install -m, never strip/patch: the bytes stay TI's (A5).
+		install -m755 "$builddir"/ti443x/usr/lib/$_b.so.$pkgver "$_d"/
+		ln -s $_b.so.$pkgver "$_d"/$_b.so.1
+		ln -s $_b.so.$pkgver "$_d"/$_b.so
+	done
+	install -Dm644 "$srcdir"/LICENSE.TI-TSPA \
+		"$subpkgdir"/usr/share/licenses/$pkgname-ti443x/LICENSE.TI-TSPA
+	install -Dm644 "$srcdir"/ti443x.sha256 \
+		"$subpkgdir"/usr/share/$pkgname/ti443x.sha256
+}
+
+_open() {
+	pkgdesc="PowerVR SGX540 open glue: libdbm (LGPL), pvrsrvinit, init unit, apphints"
+	license="LGPL-2.0-or-later"	# provisional, A11
+	depends="gcompat libdrm sgx-ddk-um-blobs"
+	local _d="$subpkgdir"/usr/lib/sgx-ddk
+	make -C "$builddir" DESTDIR="$subpkgdir" install
+	# Maemo's install also drops etc/profile.d/mesa.sh
+	# (MESA_LOADER_DRIVER_OVERRIDE=pvr, Makefile.am:6-7). Not wanted system wide:
+	# the TI-aliased Mesa picks omapdrm without it [ub §3.1], and only GPU
+	# clients get the private prefix [ur §5.9].
+	rm -f "$subpkgdir"/etc/profile.d/mesa.sh
+	rmdir "$subpkgdir"/etc/profile.d 2>/dev/null || true
+	# glibc loader name -> musl, so a blob's NEEDED ld-linux-armhf.so.3 resolves
+	# to musl itself [ub §4.4 item 2]. Not gcompat's PIE loader.
+	ln -s /lib/ld-musl-armhf.so.1 "$_d"/ld-linux-armhf.so.3
+	install -Dm644 "$srcdir"/powervr.ini "$subpkgdir"/etc/powervr.ini
+	install -Dm644 "$srcdir"/70-nexusq-sgx.rules \
+		"$subpkgdir"/usr/lib/udev/rules.d/70-nexusq-sgx.rules
+	install -Dm644 "$srcdir"/nexusq-sgx-init.service \
+		"$subpkgdir"/usr/lib/systemd/system/nexusq-sgx-init.service
+}
+
+_fetch() {
+	pkgdesc="PowerVR SGX540 TI blobs, fetched and sha256-verified at install (public images)"
+	license="MIT"
+	provides="sgx-ddk-um-blobs=$pkgver-r$pkgrel"
+	depends="!$pkgname-ti443x"
+	install -Dm755 "$srcdir"/nq-sgx-fetch "$subpkgdir"/usr/libexec/sgx-ddk/nq-sgx-fetch
+	install -Dm644 "$srcdir"/nq-sgx-fetch.service \
+		"$subpkgdir"/usr/lib/systemd/system/nq-sgx-fetch.service
+	install -Dm644 "$srcdir"/ti443x.sha256 "$subpkgdir"/usr/share/$pkgname/ti443x.sha256
+	install -Dm644 "$srcdir"/LICENSE.TI-TSPA \
+		"$subpkgdir"/usr/share/licenses/$pkgname-ti443x/LICENSE.TI-TSPA
+	# The blobs land in /var/lib/sgx-ddk/lib, filled by the unit. NOT a
+	# /usr/lib/sgx-ddk symlink: -open installs libdbm and the loader link into
+	# that real directory, and apk must never write through a symlink into
+	# state the unit owns. GPU processes search both directories:
+	#   LD_LIBRARY_PATH=/usr/lib/sgx-ddk:/var/lib/sgx-ddk/lib
+	install -dm755 "$subpkgdir"/var/lib/sgx-ddk
+	# The unit needs an [Install] and a preset line (95-nexusq-*.preset style,
+	# pmos/device-google-steelhead/nexusq.preset) -- device package side.
+}
+
+sha512sums="
+SKIP  sgx-ddk-um-$_maemo_commit.tar.gz
+SKIP  LICENSE.TI-TSPA
+SKIP  ti443x.sha256
+SKIP  powervr.ini
+SKIP  70-nexusq-sgx.rules
+SKIP  nexusq-sgx-init.service
+SKIP  nq-sgx-fetch
+SKIP  nq-sgx-fetch.service
+"
+# (sha512sums are regenerated by `pmbootstrap checksum` at adoption, never
+# hand-edited; SKIP here only because nothing was downloaded for this draft.
+# GitHub archive tarballs are not guaranteed byte-stable over time, which is
+# why the per-file sha256 check in prepare() is the real pin, not the tarball
+# sha512.)
+
+# ---------------------------------------------------------------------------
+# Open points for the route A product (measured in Phase 2, never patched
+# into the blobs) [ub §4.4, §10]
+# ---------------------------------------------------------------------------
+# - gcompat in the global scope. pvrsrvinit is a musl executable that
+#   dlopen()s libsrv_init.so.1 -> libsrv_um.so.1, and libsrv_um imports
+#   __printf_chk/__snprintf_chk/__vsnprintf_chk, which only gcompat has
+#   [ub §4.3]. Link pvrsrvinit with `-Wl,--no-as-needed -l:libgcompat.so.0`
+#   (DT_NEEDED => global, AFTER libc) or start it with LD_PRELOAD (BEFORE libc).
+#   The order decides who gets which strerror_r [ub §4.4 item 8]; pick on the
+#   strace/gdb evidence, not by guess.
+# - strace -f -e trace=mmap,mmap2,openat,ioctl of pvrsrvinit and of the first
+#   GLES client: which DRM nodes open, and what offset PVRSRVMapDmaBuf passes
+#   [groundwork §4 Phase 2, ub §10 step 3]. No further disassembly of TI blobs
+#   (TSPA; groundwork §6 compliance note).
+# - Route A is first-of-its-kind for the 2024 blobs on musl [ub §6 A].
+#
+# ---------------------------------------------------------------------------
+# Companion aport sketch: nexusq-sgx-mesa (separate APKBUILD at adoption)
+# ---------------------------------------------------------------------------
+# One mesa-sgx in a private prefix, never replacing Alpine's Mesa (no glvnd in
+# Alpine; soname collision otherwise) [groundwork §3 "Mesa", ur §5.9]:
+#   candidates (build both once, pick one) [groundwork §3, ub §10 step 1]:
+#     TI      https://github.com/TexasInstruments/mesa  powervr/24.0.1
+#             7c82c1eebc67f5a62a347a84d42fe795cf7f523b (has the 2025-01 render-node fix)
+#     mobiaqua https://github.com/mobiaqua/mesa-sgx  mesa-22.3-sgx head a698020
+#   meson: -Dllvm=disabled -Dgallium-drivers=sgx,softpipe
+#          -Dgallium-sgx-alias=omapdrm -Dgbm=enabled
+#          -Dplatforms=wayland (drm/surfaceless come with GBM/EGL) [ub §3.1, §10 step 4]
+#   prefix /usr/lib/sgx-mesa: libEGL.so.1, libgbm.so.1, libGLESv2.so.2,
+#          dri/omapdrm_dri.so; GPU clients only, via
+#          LD_LIBRARY_PATH=/usr/lib/sgx-mesa:/usr/lib/sgx-ddk [ub §6 design notes].
+#   depends="sgx-ddk-um". It requires the 2024 blobs: every current SGX Mesa
+#   frontend looks up PVRDRIRegisterVersionedCallbacksV0 [ub §3.1].
+#   Toolchain risk on Alpine edge (GCC 15, C23) [ub §3.1].
+#
+# ---------------------------------------------------------------------------
+# Route B, glibc sandbox, FIRST LIGHT ONLY (a procedure, not an OTA package)
+# ---------------------------------------------------------------------------
+# Purpose: prove KM + blobs + Mesa on our kernel with the fewest unknowns; a
+# failure here is KM/DT/clock, not ABI [groundwork §3 row 1, ub §6 B].
+#   1. On the HOST, copy the pinned bookworm base (nexusq-glibc-rt tarball,
+#      pmos/nexusq-glibc-rt/APKBUILD) to a new tree; never modify
+#      /opt/glibc-rt itself (Roon's sandbox).
+#   2. Unpack into it, with dpkg-deb -x, from Maemo daedalus
+#      (https://maedevu.maemo.org/leste/, Packages index of 2026-10-11) [ub §2.2,
+#      groundwork §4 Phase 2]:
+#        sgx-ddk-um-ti443x 1.17.4948957+leste15-1+4m7 (Depends libc6 >= 2.34)
+#        sgx-ddk-um-tools  (pvrsrvinit; version UNVERIFIED, same source package)
+#        libegl-mesa0, libgbm1, libgl1-mesa-dri 22.3.6+sgx2-1+4m7
+#        plus their Debian bookworm armhf closure (libllvm15 alone is
+#        100,245 kB installed) [ub §6 B, Verification correction 6].
+#      Do NOT use excalibur's Mesa 24.0.9-sgx1: it needs glibc >= 2.38, bookworm
+#      has 2.36 [ur §5.8].
+#   3. Copy the tree to the unit's rootfs (> 100 MB: flash/scp only, NEVER the
+#      OTA repo [groundwork §4 Phase 2]).
+#   4. Start services init inside it, as root, with the pvr device bound:
+#        bwrap --bind <tree> / --dev /dev --dev-bind /dev/dri /dev/dri \
+#              --proc /proc --ro-bind /sys /sys --ro-bind /etc/powervr.ini /etc/powervr.ini \
+#              /usr/bin/pvrsrvinit
+#      (bwrap pattern of roon-nexusq [ub §6 B]; the exact flag set is
+#      UNVERIFIED and is settled in Phase 2.) Then eglinfo/es2_info, kmscube
+#      on the CURRENT mode, under timeout + nice, frame-capped
+#      [groundwork §4 Phase 2-3, §7].
+#   5. Nothing from route B ships. The product is route A (this APKBUILD) or
+#      fallback F1, decided at the Phase 2 gate [groundwork §3, §4 Phase 2].

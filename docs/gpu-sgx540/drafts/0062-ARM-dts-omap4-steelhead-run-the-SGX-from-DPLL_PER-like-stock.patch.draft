@@ -1,0 +1,101 @@
+DRAFT — not built, not tested, not in any build (2026-10-11)
+
+What this is: a kernel patch sketch in the shape of patch 0057, for the one DT
+change the GPU research says steelhead needs. Everything above the "From " line
+is commentary; GNU patch skips it as leading garbage.
+
+Evidence (docs/2026-10-11-gpu-sgx540-groundwork.md, gpu-sgx540/power-clocks-pm.md §2,
+gpu-sgx540/stock-ground-truth.md §4):
+  - stock omap4_steelhead_display_init() reparents gpu_fck to dpll_per_m7x2_ck
+    (vmlinux.bin @0xc0075f08..0xc0075f48, clk_set_parent @0xc0075f40);
+  - stock omap446x_opp_def_list GPU rows: 153.6 / 307.2 / 384 MHz at VDD_CORE
+    962 / 1127 / 1250 mV, all on dpll_per_m7x2_ck (@0xc0043e94..0xc0043ec4);
+  - mainline v6.18.48 omap443x.dtsi:78-86 has exactly this block for the 4430;
+    omap4460.dtsi has none; patch 0003 has none;
+  - live on 6.18.48-r20: l3-gfx-clkctrl:0000:24 runs from dpll_core_m7x2_ck at
+    266 666 667 Hz, and dpll_per_m7x2_ck is already programmed to 307 200 000 Hz
+    with no consumer (nq-captures/20261010-185940/snapshot.txt:324-333, 465-470);
+  - the img,powervr-sgx binding forbids clocks/power-domains on the gpu@0 child
+    for ti,omap4430-gpu, so the assignment belongs on &sgx_module.
+
+What is assumed (UNVERIFIED):
+  - VDD_CORE on the unit is >= 1.127 V (stock's OPP100 voltage). Patch 0027 sets
+    the VC ON target to 1.2 V, but the running rail has not been measured. If it
+    is lower, use assigned-clock-rates = <0>, <153600000> (stock OPP50, 962 mV).
+  - The hunk context below was generated against kernel/dts/omap4-steelhead.dts
+    as of dc988b9 (the final state after 0003, 0040, 0042, 0043, 0057). It must
+    be regenerated against whatever the DTS is when this is adopted.
+  - The assignment is applied when ti-sysc probes target-module@56000000 at boot
+    (of_clk_set_defaults). The functional clock gate stays off until a GPU driver
+    enables the module, so this is inert in power terms; what moves is the mux
+    and the prepare count, from dpll_core_m7x2_ck to dpll_per_m7x2_ck. Check
+    that dpll_core_m7x2_ck then autoidles (open question in mainline-6.18.md §3.4).
+
+How to adopt (project workflow, scripts/regen-dts-patch.sh header):
+  1. put the block into kernel/dts/omap4-steelhead.dts (the DTS source is the
+     final state);
+  2. add this file as kernel/patches/0062-…patch (number = next free one) and to
+     source= in pmos/linux-google-steelhead/APKBUILD; bump pkgrel;
+  3. run scripts/regen-dts-patch.sh so 0003 stays consistent; tests/test_aports.py
+     must stay green; stock-parity-auditor review first.
+Test seen failing: today's clk_summary shows the mux under dpll_core_m7x2_ck at
+266 666 667 (snapshot above); after the change it must read dpll_per_m7x2_ck,
+307 200 000. `fdtget` on the built DTB must show assigned-clocks on
+/ocp/target-module@56000000.
+
+From 0000000000000000000000000000000000000062 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 12:00:00 +0200
+Subject: [PATCH] ARM: dts: omap4-steelhead: run the SGX from DPLL_PER like stock
+
+Stock steelhead reparents gpu_fck to dpll_per_m7x2_ck in
+omap4_steelhead_display_init(), and every stock 446x GPU OPP (153.6, 307.2
+and 384 MHz at VDD_CORE 962, 1127 and 1250 mV) is a divider of
+DPLL_PER x2 = 1536 MHz. Mainline makes the same assignment for the 4430
+only (omap443x.dtsi, "like droid4 stock"); omap4460.dtsi has none, so on
+steelhead the SGX functional clock comes from dpll_core_m7x2_ck at
+266.67 MHz, a rate stock never used.
+
+Assign the stock parent at 307.2 MHz, stock's OPP100. Mainline does not
+scale VDD_CORE, so the 384 MHz OPP (core OPP-OV, 1.25 V) stays unused.
+The binding forbids clocks on the gpu@0 child, so the assignment sits on
+the ti-sysc target module, as in omap443x.dtsi. Nothing enables the clock
+until a GPU driver binds.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+--- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -908,6 +908,29 @@
+ };
+ 
+ /*
++ * GPU (PowerVR SGX540 rev 1.2.0): run the functional clock from DPLL_PER M7,
++ * as stock does. Stock omap4_steelhead_display_init() calls
++ * clk_set_parent(gpu_fck, dpll_per_m7x2_ck), and every stock 446x GPU OPP
++ * (153.6 / 307.2 / 384 MHz at VDD_CORE 962 / 1127 / 1250 mV) is a divider of
++ * DPLL_PER x2 = 1536 MHz. Mainline does this only for the 4430
++ * (omap443x.dtsi, 307.2 MHz, "like droid4 stock"); omap4460.dtsi has no such
++ * block, so without it the SGX runs from dpll_core_m7x2_ck at 266.67 MHz.
++ *
++ * 307.2 MHz is stock OPP100 and needs VDD_CORE >= 1.127 V. Mainline has no
++ * VDD_CORE scaling, so 384 MHz (OPP-OV, 1.25 V) is deliberately not used.
++ * The img,powervr-sgx binding forbids clocks on the gpu@0 child for
++ * ti,omap4430-gpu, so the assignment sits on the ti-sysc target module.
++ * Applied when ti-sysc probes the module; the clock stays gated until a GPU
++ * driver enables it.
++ */
++&sgx_module {
++	assigned-clocks = <&l3_gfx_clkctrl OMAP4_GPU_CLKCTRL 24>,
++			  <&dpll_per_m7x2_ck>;
++	assigned-clock-rates = <0>, <307200000>;
++	assigned-clock-parents = <&dpll_per_m7x2_ck>;
++};
++
++/*
+  * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
+  * Voltage Controller, VP force-update). OPP table = OPP50/100/Turbo/Nitro
+  * (350 / 700 / 920 / 1200 MHz); the cpu-supply scales VDD_MPU 1025..1380 mV with
+-- 
+2.47.0

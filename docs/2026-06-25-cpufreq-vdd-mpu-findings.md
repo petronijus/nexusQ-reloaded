@@ -48,6 +48,12 @@ emphasis is on ground truth.
   VDD_CORE/MM) and hands VDD_MPU to the TPS62361 for DVFS. **On our mainline kernel
   none of that happens** → the TPS62361 stays **dormant** and **VCORE1 (TWL6030) is
   what feeds VDD_MPU** (at the 350 MHz boot OPP, ~1025 mV).
+  *(Contradicted 2026-10-11, from static evidence: on the 4460, VCORE1 feeds
+  VDD_CORE and the TPS62361 feeds VDD_MPU. The stock x-loader sets VCORE1 to 1127 mV
+  and the TPS SET1 to 1210 mV on every boot, stock's 4460 TWL setup only puts
+  VCORE1 in the APE PREQ1 group, and upstream U-Boot says "4460 : supplies
+  vdd_core". See `docs/gpu-sgx540/power-clocks-pm.md`, Addendum "Live VDD_CORE
+  without a device".)*
 - PandaBoard-ES (same OMAP4460) drives the TPS62361 `VSEL0` via an OMAP GPIO
   (`GPIO_WK7`); **our Nexus Q straps VSEL0/VSEL1** instead (the stock init passes
   both VSEL gpios as `-1` → strapped, voltage set purely over the SR i2c). The
