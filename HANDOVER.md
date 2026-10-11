@@ -125,10 +125,12 @@ Open, in order:
    health. Cropped to Play's 2:1 limit and clear of personal data (the Spotify
    account name, the WiFi SSID). Not shot: the setup wizard, because a debug
    build shows the original app's stock imagery that a release does not carry.
-3. **Privacy policy page** (Play requires one): a page on gh-pages saying the
-   app talks only to the Q on the LAN, to Spotify's Web API when linked and to
-   the user's own MQTT broker; no analytics. Publishing it is public: show
-   Petr the text first.
+3. ✅ **Privacy policy page** (Play requires one), published 2026-10-11 at
+   https://petronijus.github.io/nexusQ-reloaded/privacy/ (text approved by
+   Petr; contact: GitHub issues only). Source `companion/privacy/index.html`,
+   copied by hand to gh-pages `privacy/index.html`; the OTA publish leaves it
+   alone. That URL goes into the Play Console's privacy policy field, and the
+   data safety form follows it: no data collected or shared.
 4. **Play Console** (Petr's personal account, created after Nov 2023): create
    the app (Google-generated app signing key; our release key is the upload
    key), store listing, data safety, content rating, then a **closed test with
