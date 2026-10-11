@@ -196,6 +196,9 @@ if [ "$MODE" = --release ]; then
 		echo "$STOCK" | head -5 >&2
 		exit 1
 	fi
+	# Nor a permission a plugin slipped in (storage, photos/video: Google
+	# Play refuses those without a declared core use).
+	tool/check-permissions.sh "$OUT"
 fi
 
 # The github APK: re-sign with the old key, the release key and the rotation

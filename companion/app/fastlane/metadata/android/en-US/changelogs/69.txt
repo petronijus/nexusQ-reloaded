@@ -1,0 +1,7 @@
+First release on Google Play.
+• The light ring: switch it off, put it on a schedule, let it dim with the daylight, pick its theme and visualisation
+• One volume shared with Spotify, AirPlay, the dome and Home Assistant
+• The app tells you when your Q has a new release and shows what it brings
+• Device diagnostics for developers
+• A sharper app icon, and the outputs named in English
+Made for Nexus Q Reloaded 2.0.

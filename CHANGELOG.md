@@ -21,6 +21,20 @@ the GPU yet, so the clock runs only for ti-sysc's revision read at probe.
 MCLK included) do not move: the M7 divider already ran at 307.2 MHz and has no
 `ti,set-rate-parent`.
 
+### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
+
+Google Play stopped the first closed-testing release (68) on 2026-10-11:
+"photo and video permissions" need a declared core use. The app never asked
+for them; `open_filex`, which the github flavor's updater uses to open the
+downloaded apk, declares `READ_EXTERNAL_STORAGE` and `READ_MEDIA_IMAGES` /
+`_VIDEO` / `_AUDIO`, and the manifest merger put them in every flavor. The
+apk sits in the app's own cache and goes through the plugin's FileProvider,
+so none is needed: the app's manifest removes all four
+(`tools:node="remove"`). `tool/check-permissions.sh` now fails a release
+whose APK or bundle carries them again, or any other storage, background
+location or advertising-ID permission; seen failing on build 68 and on every
+APK built since 1.8.0.
+
 ### Fixed — the output picker spoke Czech (`nexusq-control` **r65**, app **1.27.1+68**, unreleased)
 
 Found on 2026-10-11 while taking the store screenshots: the home screen's

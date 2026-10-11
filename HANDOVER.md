@@ -145,9 +145,19 @@ Open, in order:
    not a government, financial or health app); store settings (Music &
    Audio, contact petronijus@bastla.com, website the GitHub repo); the
    default store listing from fastlane (texts, icon, feature graphic, five
-   screenshots; AI label: none, the art is hand-written SVG). Next: build
-   the `play` flavor AAB signed with our release key (it becomes the upload
-   key, Google generates the app signing key), a **closed test with 12
+   screenshots; AI label: none, the art is hand-written SVG). **Internal
+   testing live 2026-10-11:** release 68 (1.27.1), the `play` AAB from
+   0d39cd6 signed with our release key (now the upload key; Google holds the
+   app signing key), testers = the account's "Internal testers" list; join
+   link https://play.google.com/apps/internaltest/4701738953222611772. Until
+   Google reviews the listing, testers see the temporary name
+   `org.nexusq.nexusq_companion (unreviewed)`; "Send app for review" stays
+   locked until the dashboard's remaining steps (the closed test) are done.
+   An install from Play does not go over the GitHub/debug build (other
+   signer): uninstall that first. The closed track (Alpha: all countries,
+   list "Nexus Q Reloaded testers", feedback = GitHub issues) refused 68
+   for its photo/video permissions (open_filex); 1.27.1+69 removes them.
+   Next: a **closed test with 12
    testers for 14 days**, then apply for production. Petr gathers the
    testers; he confirms each submission.
    Also open: **Android developer verification** (Console, left menu) — the
