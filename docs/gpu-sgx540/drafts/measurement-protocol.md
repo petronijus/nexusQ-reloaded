@@ -50,7 +50,7 @@ every rendering phase must run with music playing ([ur §5.4](../usecases-roadma
 
 ## 3. Instruments: what to read at window start and end
 
-All reads are read-only. `drafts/nexusq-gpu-probe.sh` covers the GPU rows in
+All reads are read-only. `scripts/diag/nexusq-gpu-probe.sh` covers the GPU rows in
 one call (run it at start and end, outside the window if an ssh session is
 needed to start it).
 
@@ -103,7 +103,13 @@ one that matters (same doc, "Proven by elimination").
 3. `pactl list sink-inputs`.
 4. Set the arm up (module load, client start, HDMI plug, music by Petr).
 5. Start the detached sampler with `systemd-run` (extended `nq-opp-study2.sh`),
-   then close the session.
+   then close the session. For an idle arm:
+   `systemd-run --unit=nq-gpu-<arm> -p Nice=19 --setenv=GPU=1 --setenv=ARM_S=3600
+   --setenv=SETTLE_S=900 --setenv=OUT=/var/log/nq-gpu/<arm> sh nq-opp-study2.sh
+   '<arm>:-:-:-:-:-:none'` (every knob a dash: it changes nothing). An audio
+   path that is live on purpose goes in `ALLOW_UNITS` (or `ALLOW_PLAYBACK=1` for
+   an audio arm) and is stamped into `run.log`; windows with different audio
+   states are not compared.
 6. Settle ≥ 15 min, then the window: **≥ 60 min** for idle arms (A0, A0h, A1,
    A2, P1a idle), **≥ 15 min** for active arms (A3, A4), **60 min** of playback
    for A0m and P1a playing [pm §9.1; the 1 h playback run in sleep-states-design
@@ -169,7 +175,12 @@ Numbers stay in the note; the CHANGELOG names the revision.
   [groundwork §8 q1].
 - The proposed healthd fields (row 11) and the `nq-opp-study2.sh` GPU items do
   not exist yet; until they do, rows 2-3 and 9 come from the probe and the
-  sampler's start/end snapshots only.
+  sampler's start/end snapshots only. *(Sampler half closed 2026-10-11:
+  `nq-opp-study2.sh` with `GPU=1` records rows 1-3, 5, 8, 9, the probe and the
+  Addendum B.8 items at both window edges, and `scripts/diag/analyze-gpu-window.py`
+  derives the §6 values and verdicts; see `scripts/diag/README.md`. Its playback
+  guard now reads ALSA substream state: the old cgroup test fired on every start
+  because the player units always run. The healthd fields are still open.)*
 - The wall-power instrument (row 13) is Petr's decision [groundwork §8 q4].
 - P1a's thresholds are proposed here, not taken from a note; Petr may want
   stricter audio criteria (e.g. a longer playback window) before a kernel-wide

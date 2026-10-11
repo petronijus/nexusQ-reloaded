@@ -66,7 +66,7 @@ one belongs to and the adoption procedure are in
 | Draft | Roadmap phase |
 |---|---|
 | [drafts/0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch.draft](drafts/0062-ARM-dts-omap4-steelhead-run-the-SGX-from-DPLL_PER-like-stock.patch.draft) | 0 (DT clock block) |
-| [drafts/nexusq-gpu-probe.sh](drafts/nexusq-gpu-probe.sh) | 0, then every phase (read-only probe) |
+| [scripts/diag/nexusq-gpu-probe.sh](../../scripts/diag/nexusq-gpu-probe.sh) | 0, then every phase (read-only probe) |
 | [drafts/measurement-protocol.md](drafts/measurement-protocol.md) | 0, 1a, 1, 3, 4, 5 (baselines and arms) |
 | [drafts/linux-google-steelhead.APKBUILD.fragment.draft](drafts/linux-google-steelhead.APKBUILD.fragment.draft) | 1a, 1 (KM in-tree `=m`, defconfig) |
 | [drafts/sgx-ddk-um.APKBUILD.draft](drafts/sgx-ddk-um.APKBUILD.draft) | 2, 6 (userspace package, public release) |

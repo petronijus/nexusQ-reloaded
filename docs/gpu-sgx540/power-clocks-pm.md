@@ -1434,7 +1434,7 @@ other value is a finding.
 
 ### 5. Probe change
 
-`drafts/nexusq-gpu-probe.sh` gets `--pmic` (opt-in, root, i2c-tools). It does the
+`scripts/diag/nexusq-gpu-probe.sh` gets `--pmic` (opt-in, root, i2c-tools). It does the
 reads above, decodes the value with `vsel_uv()`, and reports `vdd_core_pmic` as PASS
 (≥ 1 127 000 µV), WARN (below 1 127 000 µV, or not decodable) or SKIP. Checks done on
 2026-10-11: `shellcheck` 0.11.0 is clean. `vsel_uv` was run on the host under `bash

@@ -1,0 +1,205 @@
+# SGX540 runtime EGL/GLES extension dump, 2026-10-11
+#
+# Unit: Prague Nexus Q (hostname steelhead), kernel 6.18.48-r23 (PREEMPT, trial slot),
+# KM pvrsrvkm_omap4_sgx540_120 (openpvrsgx 1.17.4948957), SGX clock 307.2 MHz from dpll_per_m7x2_ck.
+# UM: TI omap5-sgx-ddk-um-linux 84a396a4fb379f10931421e489ac8a199d6a9f2c ti443x_linux (unmodified,
+# sha256-verified), Maemo daedalus libdbm (open) + pvrsrvinit, Maemo daedalus Mesa 22.3.6+sgx2-1+4m7,
+# Debian bookworm libglvnd 1.6.0 / mesa-utils 8.5.0, in the route B glibc sandbox
+# (/var/lib/nexusq-gpu-sandbox). Captured with sgxprobe (drafts/first-light/sgxprobe.c) and eglinfo.
+# Full record: first-light-2026-10-11.md.
+#
+# Verdicts:
+#   B1 GL_EXT_unpack_subimage         : ABSENT  (runtime glGetString(GL_EXTENSIONS))
+#   B2 EGL_EXT_image_dma_buf_import   : ABSENT  (GBM, surfaceless and device platforms)
+#   also absent: GL_EXT_read_format_bgra, EGL_EXT_image_dma_buf_import_modifiers,
+#   EGL_ANDROID_native_fence_sync, EGL_KHR_partial_update, EGL_EXT_swap_buffers_with_damage
+#   present: GL_OES_EGL_image, GL_OES_EGL_image_external, GL_OES_surfaceless_context,
+#   GL_OES_rgb8_rgba8, GL_EXT_texture_format_BGRA8888, EGL_KHR_surfaceless_context,
+#   EGL_KHR_no_config_context, EGL_MESA_platform_gbm, EGL_KHR_fence_sync, EGL_EXT_buffer_age (GBM only)
+
+## sgxprobe, EGL_PLATFORM_SURFACELESS_MESA, ES2 context, FBO target
+platform = surfaceless
+EGL_VERSION = 1.4
+EGL_VENDOR = Mesa Project
+EGL_CLIENT_APIS = OpenGL_ES 
+EGL_EXTENSIONS = EGL_EXT_create_context_robustness EGL_EXT_yuv_surface EGL_KHR_config_attribs EGL_KHR_create_context EGL_KHR_fence_sync EGL_KHR_get_all_proc_addresses EGL_KHR_gl_renderbuffer_image EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_image_base EGL_KHR_no_config_context EGL_KHR_reusable_sync EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_drm_image EGL_MESA_query_driver EGL_WL_bind_wayland_display 
+EGL_CLIENT_EXTENSIONS = EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+GL_VENDOR = Imagination Technologies
+GL_RENDERER = PowerVR SGX 540
+GL_VERSION = OpenGL ES 2.0 build 1.17@4948957
+GL_SHADING_LANGUAGE_VERSION = OpenGL ES GLSL ES 1.00 build 1.17@4948957
+GL_EXTENSIONS = GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_depth_texture GL_OES_egl_sync GL_OES_element_index_uint GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_fbo_render_mipmap GL_OES_fragment_precision_high GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_float GL_OES_texture_half_float GL_OES_vertex_array_object GL_OES_vertex_half_float GL_EXT_blend_minmax GL_EXT_discard_framebuffer GL_EXT_multi_draw_arrays GL_EXT_multisampled_render_to_texture GL_EXT_shader_texture_lod GL_EXT_texture_format_BGRA8888 GL_EXT_texture_rg GL_IMG_multisampled_render_to_texture GL_IMG_program_binary GL_IMG_read_format GL_IMG_shader_binary GL_IMG_texture_compression_pvrtc GL_IMG_texture_format_BGRA8888 GL_IMG_texture_npot GL_IMG_uniform_buffer_object GL_KHR_debug GL_EXT_texture_storage
+GL_MAX_TEXTURE_SIZE = 2048 (0x800)
+GL_MAX_CUBE_MAP_TEXTURE_SIZE = 2048 (0x800)
+GL_MAX_RENDERBUFFER_SIZE = 2048 (0x800)
+GL_MAX_VIEWPORT_DIMS = 2048 2048
+GL_MAX_TEXTURE_IMAGE_UNITS = 8 (0x8)
+GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS = 8 (0x8)
+GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS = 8 (0x8)
+GL_MAX_VERTEX_ATTRIBS = 8 (0x8)
+GL_MAX_VERTEX_UNIFORM_VECTORS = 128 (0x80)
+GL_MAX_FRAGMENT_UNIFORM_VECTORS = 64 (0x40)
+GL_MAX_VARYING_VECTORS = 8 (0x8)
+GL_IMPLEMENTATION_COLOR_READ_TYPE = 33635 (0x8363)
+GL_IMPLEMENTATION_COLOR_READ_FORMAT = 6407 (0x1907)
+GL_SUBPIXEL_BITS = 4 (0x4)
+GL_SAMPLES = 0 (0x0)
+GL_ALIASED_POINT_SIZE_RANGE = 1 511
+GL_ALIASED_LINE_WIDTH_RANGE = 1 16
+
+## eglinfo.arm-linux-gnueabihf (mesa-utils 8.5.0), all platforms (MESA_LOADER_DRIVER_OVERRIDE=pvr)
+EGL client extensions string:
+    EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query
+    EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses
+    EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device
+    EGL_EXT_platform_wayland EGL_KHR_platform_wayland
+    EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb
+    EGL_MESA_platform_gbm EGL_KHR_platform_gbm
+    EGL_MESA_platform_surfaceless
+
+GBM platform:
+EGL API version: 1.4
+EGL vendor string: Mesa Project
+EGL version string: 1.4
+EGL client APIs: OpenGL_ES 
+EGL driver name: pvr
+EGL extensions string:
+    EGL_EXT_buffer_age EGL_EXT_create_context_robustness
+    EGL_EXT_yuv_surface EGL_KHR_config_attribs EGL_KHR_create_context
+    EGL_KHR_fence_sync EGL_KHR_get_all_proc_addresses
+    EGL_KHR_gl_renderbuffer_image EGL_KHR_gl_texture_2D_image
+    EGL_KHR_gl_texture_cubemap_image EGL_KHR_image EGL_KHR_image_base
+    EGL_KHR_image_pixmap EGL_KHR_no_config_context EGL_KHR_reusable_sync
+    EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float
+    EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_drm_image
+    EGL_MESA_query_driver EGL_WL_bind_wayland_display
+Configurations:
+     bf lv colorbuffer dp st  ms    vis   cav bi  renderable  supported
+  id sz  l  r  g  b  a th cl ns b    id   eat nd gl es es2 vg surfaces 
+---------------------------------------------------------------------
+0x01 32  0  8  8  8  8  0  0  0 0 0x34325241--      a     y  y     win,pb
+0x02 32  0  8  8  8  8  0  0  4 1 0x34325241--      a     y  y     win,pb
+0x03 32  0  8  8  8  8 24  8  0 0 0x34325241--      a     y  y     win,pb
+0x04 32  0  8  8  8  8 24  8  4 1 0x34325241--      a     y  y     win,pb
+0x05 24  0  8  8  8  0  0  0  0 0 0x34325258--      y     y  y     win,pb
+0x06 24  0  8  8  8  0  0  0  4 1 0x34325258--      y     y  y     win,pb
+0x07 24  0  8  8  8  0 24  8  0 0 0x34325258--      y     y  y     win,pb
+0x08 24  0  8  8  8  0 24  8  4 1 0x34325258--      y     y  y     win,pb
+0x09 16  0  5  6  5  0  0  0  0 0 0x36314752--      y     y  y     win,pb
+0x0a 16  0  5  6  5  0  0  0  4 1 0x36314752--      y     y  y     win,pb
+0x0b 16  0  5  6  5  0 24  8  0 0 0x36314752--      y     y  y     win,pb
+0x0c 16  0  5  6  5  0 24  8  4 1 0x36314752--      y     y  y     win,pb
+
+Wayland platform:
+eglinfo: eglInitialize failed
+
+X11 platform:
+eglinfo: eglInitialize failed
+
+Surfaceless platform:
+EGL API version: 1.4
+EGL vendor string: Mesa Project
+EGL version string: 1.4
+EGL client APIs: OpenGL_ES 
+EGL driver name: pvr
+EGL extensions string:
+    EGL_EXT_create_context_robustness EGL_EXT_yuv_surface
+    EGL_KHR_config_attribs EGL_KHR_create_context EGL_KHR_fence_sync
+    EGL_KHR_get_all_proc_addresses EGL_KHR_gl_renderbuffer_image
+    EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image
+    EGL_KHR_image_base EGL_KHR_no_config_context EGL_KHR_reusable_sync
+    EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float
+    EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_drm_image
+    EGL_MESA_query_driver EGL_WL_bind_wayland_display
+Configurations:
+     bf lv colorbuffer dp st  ms    vis   cav bi  renderable  supported
+  id sz  l  r  g  b  a th cl ns b    id   eat nd gl es es2 vg surfaces 
+---------------------------------------------------------------------
+0x01 32  0  8  8  8  8  0  0  0 0 0x00--      a     y  y     pb
+0x02 32  0  8  8  8  8  0  0  4 1 0x00--      a     y  y     pb
+0x03 32  0  8  8  8  8 24  8  0 0 0x00--      a     y  y     pb
+0x04 32  0  8  8  8  8 24  8  4 1 0x00--      a     y  y     pb
+0x05 24  0  8  8  8  0  0  0  0 0 0x00--      y     y  y     pb
+0x06 24  0  8  8  8  0  0  0  4 1 0x00--      y     y  y     pb
+0x07 24  0  8  8  8  0 24  8  0 0 0x00--      y     y  y     pb
+0x08 24  0  8  8  8  0 24  8  4 1 0x00--      y     y  y     pb
+0x09 16  0  5  6  5  0  0  0  0 0 0x00--      y     y  y     pb
+0x0a 16  0  5  6  5  0  0  0  4 1 0x00--      y     y  y     pb
+0x0b 16  0  5  6  5  0 24  8  0 0 0x00--      y     y  y     pb
+0x0c 16  0  5  6  5  0 24  8  4 1 0x00--      y     y  y     pb
+
+Device platform:
+Device #0:
+
+EGL deMESA: info: Loaded libpvr_dri_support.so
+vice extensions string:
+    EGL_EXT_device_drm EGL_EXT_device_drm_render_node
+Platform Device:
+EGL API version: 1.4
+EGL vendor string: Mesa Project
+EGL version string: 1.4
+EGL client APIs: OpenGL_ES 
+EGL driver name: pvr
+EGL extensions string:
+    EGL_EXT_create_context_robustness EGL_EXT_yuv_surface
+    EGL_KHR_config_attribs EGL_KHR_create_context EGL_KHR_fence_sync
+    EGL_KHR_get_all_proc_addresses EGL_KHR_gl_renderbuffer_image
+    EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image
+    EGL_KHR_image_base EGL_KHR_no_config_context EGL_KHR_reusable_sync
+    EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float
+    EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_drm_image
+    EGL_MESA_query_driver EGL_WL_bind_wayland_display
+Configurations:
+     bf lv colorbuffer dp st  ms    vis   cav bi  renderable  supported
+  id sz  l  r  g  b  a th cl ns b    id   eat nd gl es es2 vg surfaces 
+---------------------------------------------------------------------
+0x01 32  0  8  8  8  8  0  0  0 0 0x00--      a     y  y     pb
+0x02 32  0  8  8  8  8  0  0  4 1 0x00--      a     y  y     pb
+0x03 32  0  8  8  8  8 24  8  0 0 0x00--      a     y  y     pb
+0x04 32  0  8  8  8  8 24  8  4 1 0x00--      a     y  y     pb
+0x05 24  0  8  8  8  0  0  0  0 0 0x00--      y     y  y     pb
+0x06 24  0  8  8  8  0  0  0  4 1 0x00--      y     y  y     pb
+0x07 24  0  8  8  8  0 24  8  0 0 0x00--      y     y  y     pb
+0x08 24  0  8  8  8  0 24  8  4 1 0x00--      y     y  y     pb
+0x09 16  0  5  6  5  0  0  0  0 0 0x00--      y     y  y     pb
+0x0a 16  0  5  6  5  0  0  0  4 1 0x00--      y     y  y     pb
+0x0b 16  0  5  6  5  0 24  8  0 0 0x00--      y     y  y     pb
+0x0c 16  0  5  6  5  0 24  8  4 1 0x00--      y     y  y     pb
+
+Device #1:
+
+EGL device extensions string:
+    EGL_EXT_device_drm EGL_EXT_device_drm_render_node
+Platform Device:
+EGL API version: 1.4
+EGL vendor string: Mesa Project
+EGL version string: 1.4
+EGL client APIs: OpenGL_ES 
+EGL driver name: pvr
+EGL extensions string:
+    EGL_EXT_create_context_robustness EGL_EXT_yuv_surface
+    EGL_KHR_config_attribs EGL_KHR_create_context EGL_KHR_fence_sync
+    EGL_KHR_get_all_proc_addresses EGL_KHR_gl_renderbuffer_image
+    EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image
+    EGL_KHR_image_base EGL_KHR_no_config_context EGL_KHR_reusable_sync
+    EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float
+    EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_drm_image
+    EGL_MESA_query_driver EGL_WL_bind_wayland_display
+Configurations:
+     bf lv colorbuffer dp st  ms    vis   cav bi  renderable  supported
+  id sz  l  r  g  b  a th cl ns b    id   eat nd gl es es2 vg surfaces 
+---------------------------------------------------------------------
+0x01 32  0  8  8  8  8  0  0  0 0 0x00--      a     y  y     pb
+0x02 32  0  8  8  8  8  0  0  4 1 0x00--      a     y  y     pb
+0x03 32  0  8  8  8  8 24  8  0 0 0x00--      a     y  y     pb
+0x04 32  0  8  8  8  8 24  8  4 1 0x00--      a     y  y     pb
+0x05 24  0  8  8  8  0  0  0  0 0 0x00--      y     y  y     pb
+0x06 24  0  8  8  8  0  0  0  4 1 0x00--      y     y  y     pb
+0x07 24  0  8  8  8  0 24  8  0 0 0x00--      y     y  y     pb
+0x08 24  0  8  8  8  0 24  8  4 1 0x00--      y     y  y     pb
+0x09 16  0  5  6  5  0  0  0  0 0 0x00--      y     y  y     pb
+0x0a 16  0  5  6  5  0  0  0  4 1 0x00--      y     y  y     pb
+0x0b 16  0  5  6  5  0 24  8  0 0 0x00--      y     y  y     pb
+0x0c 16  0  5  6  5  0 24  8  4 1 0x00--      y     y  y     pb
+
+(Device #2 = Mesa swrast/llvmpipe software device, omitted)

@@ -1,0 +1,9 @@
+FROM debian:bookworm
+ENV PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+RUN dpkg --add-architecture armhf && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    crossbuild-essential-armhf pkg-config ninja-build python3 python3-pip python3-mako python3-yaml bison flex git ca-certificates \
+    libdrm-dev:armhf libexpat1-dev:armhf zlib1g-dev:armhf libglvnd-dev:armhf libwayland-dev:armhf libwayland-egl-backend-dev:armhf wayland-protocols libwayland-bin \
+    libx11-dev:armhf libxext-dev:armhf libxfixes-dev:armhf libxcb-glx0-dev:armhf libxcb-shm0-dev:armhf libx11-xcb-dev:armhf libxcb-dri2-0-dev:armhf libxcb-dri3-dev:armhf libxcb-present-dev:armhf libxshmfence-dev:armhf libxxf86vm-dev:armhf libxrandr-dev:armhf libzstd-dev:armhf libelf-dev:armhf \
+ && pip3 install --break-system-packages meson==1.4.1 \
+ && rm -rf /var/lib/apt/lists/*
+RUN printf '[binaries]\nc = '"'"'arm-linux-gnueabihf-gcc'"'"'\ncpp = '"'"'arm-linux-gnueabihf-g++'"'"'\nar = '"'"'arm-linux-gnueabihf-ar'"'"'\nstrip = '"'"'arm-linux-gnueabihf-strip'"'"'\npkg-config = '"'"'pkg-config'"'"'\n[host_machine]\nsystem = '"'"'linux'"'"'\ncpu_family = '"'"'arm'"'"'\ncpu = '"'"'armv7hl'"'"'\nendian = '"'"'little'"'"'\n' > /cross-armhf.ini

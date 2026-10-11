@@ -357,7 +357,7 @@ UNVERIFIED, scaled from the Maemo and kc1 precedents [ur §6, kdp §12].
 - **Entry:** none.
 - **Work:**
   1. Decisions from Petr (§9 step 1).
-  2. Read-only probe of a unit with [drafts/nexusq-gpu-probe.sh](gpu-sgx540/drafts/nexusq-gpu-probe.sh) (state of
+  2. Read-only probe of a unit with [scripts/diag/nexusq-gpu-probe.sh](../scripts/diag/nexusq-gpu-probe.sh) (state of
      `56000000.gpu`, `prm_gfx`, mux parent and rate, runtime-PM counters).
   3. **Measure VDD_CORE** (TWL6030 VCORE1) with a multimeter on the VCORE1
      output. *(Corrected 2026-10-11: the `--pmic` read of 0x48 0x55/0x56 returned
@@ -816,7 +816,7 @@ Policy (Petr):
 
 1. **Decisions from Petr** (open questions 28-31 and 25), recorded in a dated
    note; nothing is built before them.
-2. **Read-only probe** of a unit with [drafts/nexusq-gpu-probe.sh](gpu-sgx540/drafts/nexusq-gpu-probe.sh)
+2. **Read-only probe** of a unit with [scripts/diag/nexusq-gpu-probe.sh](../scripts/diag/nexusq-gpu-probe.sh)
    (after review, copied into `scripts/diag/`): confirm `56000000.gpu` unbound,
    `prm_gfx` off, the mux parent and the runtime-PM counters on today's image.
 3. ✅ **VDD_CORE settled 2026-10-11** by construction (pm Addendum §7): 307.2 MHz allowed. Still open: make the kernel send the stock CORE ON voltage itself (0027 never transmits it); a multimeter is a cross-check only.
@@ -915,7 +915,7 @@ had been listed but applied nowhere.
   use them), the seven RE notes (tags as `re` defines them), the five drafts, a
   reading order, and the licence caveat on the disassembly-derived passages.
 - Links in this note now name the real files:
-  [nexusq-gpu-probe.sh](gpu-sgx540/drafts/nexusq-gpu-probe.sh),
+  [nexusq-gpu-probe.sh](../scripts/diag/nexusq-gpu-probe.sh),
   [linux-google-steelhead.APKBUILD.fragment.draft](gpu-sgx540/drafts/linux-google-steelhead.APKBUILD.fragment.draft),
   [sgx-ddk-um.APKBUILD.draft](gpu-sgx540/drafts/sgx-ddk-um.APKBUILD.draft).
 - Evidence table: `re` (the RE master) and the seven RE-note tags added.

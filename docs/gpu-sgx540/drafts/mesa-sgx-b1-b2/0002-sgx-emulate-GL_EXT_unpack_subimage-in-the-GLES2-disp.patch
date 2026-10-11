@@ -1,0 +1,543 @@
+From 15d5b88c062778d14e614c4f8d2cc65bf650ef18 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 21:53:20 +0200
+Subject: [PATCH 2/2] sgx: emulate GL_EXT_unpack_subimage in the GLES2 dispatch
+ table
+
+The DDK 1.17 GLES2 library lacks GL_EXT_unpack_subimage, which the
+wlroots GLES2 renderer (since 0.13) and weston's gl-renderer (since 10.0)
+require. Wrap glPixelStorei, glTexImage2D, glTexSubImage2D, the three
+glGet*v and glGetString in the table filled from the DDK: keep
+UNPACK_ROW_LENGTH/SKIP_ROWS/SKIP_PIXELS per context, hand the DDK the
+selected rows (an offset pointer when they are contiguous, a packed copy
+read with alignment 1 otherwise) and advertise the extension.
+---
+ src/gallium/frontends/sgx/meson.build   |   1 +
+ src/gallium/frontends/sgx/sgx_context.c |   5 +
+ src/gallium/frontends/sgx/sgx_dri.c     |   1 +
+ src/gallium/frontends/sgx/sgx_dri.h     |  16 +
+ src/gallium/frontends/sgx/sgx_unpack.c  | 421 ++++++++++++++++++++++++
+ 5 files changed, 444 insertions(+)
+ create mode 100644 src/gallium/frontends/sgx/sgx_unpack.c
+
+diff --git a/src/gallium/frontends/sgx/meson.build b/src/gallium/frontends/sgx/meson.build
+index 90d703f..8fc4066 100644
+--- a/src/gallium/frontends/sgx/meson.build
++++ b/src/gallium/frontends/sgx/meson.build
+@@ -28,6 +28,7 @@ files_libsgx = files(
+   'sgx_dri.c',
+   'sgx_ext.c',
+   'sgx_util.c',
++  'sgx_unpack.c',
+ )
+ 
+ libsgx_c_args = ['-DGALLIUM_SGX']
+diff --git a/src/gallium/frontends/sgx/sgx_context.c b/src/gallium/frontends/sgx/sgx_context.c
+index 99a83e8..9763549 100644
+--- a/src/gallium/frontends/sgx/sgx_context.c
++++ b/src/gallium/frontends/sgx/sgx_context.c
+@@ -210,6 +210,9 @@ pvrdri_create_dispatch_table(PVRDRIScreen *psPVRScreen, PVRDRIAPIType eAPI)
+ 
+    pvrdri_set_mesa_dispatch(*ppsTable, eAPI, psScreenImpl, pvLibHandle, uNumFuncs);
+ 
++   if (eAPI == PVRDRI_API_GLES2)
++      pvrdri_unpack_install(*ppsTable, (_glapi_proc) generic_nop);
++
+    return true;
+ }
+ 
+@@ -217,6 +220,7 @@ void
+ pvrdri_set_null_dispatch_table(void)
+ {
+    _glapi_set_dispatch(NULL);
++   pvrdri_unpack_set_current(NULL);
+ }
+ 
+ void
+@@ -228,4 +232,5 @@ pvrdri_set_dispatch_table(PVRDRIContext *psPVRContext)
+                                        psPVRContext->eAPI);
+ 
+    _glapi_set_dispatch(psTable);
++   pvrdri_unpack_set_current(psPVRContext);
+ }
+diff --git a/src/gallium/frontends/sgx/sgx_dri.c b/src/gallium/frontends/sgx/sgx_dri.c
+index 216c467..02d6d97 100644
+--- a/src/gallium/frontends/sgx/sgx_dri.c
++++ b/src/gallium/frontends/sgx/sgx_dri.c
+@@ -740,6 +740,7 @@ PVRDRICreateContext(gl_api eMesaAPI, const struct gl_config *psGLMode,
+       goto ErrorContextDestroy;
+    }
+ 
++   pvrdri_unpack_init_context(psPVRContext);
+    psDRIContext->driverPrivate = (void*) psPVRContext;
+    PVRDRIScreenAddReference(psPVRScreen);
+ 
+diff --git a/src/gallium/frontends/sgx/sgx_dri.h b/src/gallium/frontends/sgx/sgx_dri.h
+index ed17bf1..4223ead 100644
+--- a/src/gallium/frontends/sgx/sgx_dri.h
++++ b/src/gallium/frontends/sgx/sgx_dri.h
+@@ -74,6 +74,14 @@ typedef struct PVRDRIScreen_TAG {
+ } PVRDRIScreen;
+ 
+ /* PVR context data */
++/* GL_EXT_unpack_subimage state, emulated in sgx_unpack.c */
++typedef struct PVRDRIUnpackState_TAG {
++   int iRowLength;
++   int iSkipRows;
++   int iSkipPixels;
++   int iAlignment;
++} PVRDRIUnpackState;
++
+ typedef struct PVRDRIContext_TAG {
+    PVRQElem sQElem;
+ 
+@@ -90,6 +98,8 @@ typedef struct PVRDRIContext_TAG {
+    PVRDRIAPIType eAPI;
+ 
+    PVRDRIContextImpl *psImpl;
++
++   PVRDRIUnpackState sUnpack;
+ } PVRDRIContext;
+ 
+ /* PVR drawable data */
+@@ -264,4 +274,10 @@ bool MODSUPRegisterSupportInterfaceV0(const void *pvInterface,
+                                       unsigned int uVersion,
+                                       unsigned int uMinVersion);
+ 
++/* sgx_unpack.c */
++struct _glapi_table;
++void pvrdri_unpack_install(struct _glapi_table *psTable, void (*pfNop)(void));
++void pvrdri_unpack_init_context(PVRDRIContext *psPVRContext);
++void pvrdri_unpack_set_current(PVRDRIContext *psPVRContext);
++
+ #endif /* defined(__PVRDRI_H__) */
+diff --git a/src/gallium/frontends/sgx/sgx_unpack.c b/src/gallium/frontends/sgx/sgx_unpack.c
+new file mode 100644
+index 0000000..797ee6b
+--- /dev/null
++++ b/src/gallium/frontends/sgx/sgx_unpack.c
+@@ -0,0 +1,421 @@
++/*
++ * GL_EXT_unpack_subimage for the SGX GLES2 library.
++ *
++ * The DDK 1.17 libGLESv2 does not implement GL_EXT_unpack_subimage, and both
++ * wlroots (since 0.13) and weston's GLES2 renderer (since 10.0) require it to
++ * upload damaged sub-rectangles of client buffers. The extension only adds
++ * three pixel-store parameters (GL_UNPACK_ROW_LENGTH_EXT, _SKIP_ROWS_EXT,
++ * _SKIP_PIXELS_EXT) that glTexImage2D/glTexSubImage2D honour; everything else
++ * is unchanged. This file emulates it in the dispatch table that sgx_context.c
++ * fills from the DDK library:
++ *
++ * - glPixelStorei keeps the three parameters itself (the DDK would raise
++ *   GL_INVALID_ENUM) and mirrors GL_UNPACK_ALIGNMENT;
++ * - glTexImage2D/glTexSubImage2D, when a parameter is set, hand the DDK a
++ *   tightly packed copy of the selected rows (or the original pointer, offset
++ *   past the skipped pixels, when the rows are already contiguous);
++ * - glGetIntegerv/glGetFloatv/glGetBooleanv answer for the three parameters;
++ * - glGetString(GL_EXTENSIONS) appends the extension name.
++ *
++ * The state is per context, like any pixel-store state, and is reached
++ * through the context current on the calling thread.
++ *
++ * Copyright (c) 2026 Petr Parkan Janda <petronijus@bastla.com>
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "dri_util.h"
++#include "glapi/glapi.h"
++#include "main/dispatch.h"
++#include "util/log.h"
++#include "util/u_call_once.h"
++#include "sgx_mesa.h"
++
++#include "sgx_dri.h"
++
++#ifndef GL_UNPACK_ROW_LENGTH_EXT
++#define GL_UNPACK_ROW_LENGTH_EXT  0x0CF2
++#define GL_UNPACK_SKIP_ROWS_EXT   0x0CF3
++#define GL_UNPACK_SKIP_PIXELS_EXT 0x0CF4
++#endif
++
++#define UNPACK_EXT_NAME "GL_EXT_unpack_subimage"
++
++typedef void (GLAPIENTRY *PixelStorei_t)(GLenum, GLint);
++typedef void (GLAPIENTRY *TexImage2D_t)(GLenum, GLint, GLint, GLsizei, GLsizei,
++                                        GLint, GLenum, GLenum, const void *);
++typedef void (GLAPIENTRY *TexSubImage2D_t)(GLenum, GLint, GLint, GLint,
++                                           GLsizei, GLsizei, GLenum, GLenum,
++                                           const void *);
++typedef void (GLAPIENTRY *GetIntegerv_t)(GLenum, GLint *);
++typedef void (GLAPIENTRY *GetFloatv_t)(GLenum, GLfloat *);
++typedef void (GLAPIENTRY *GetBooleanv_t)(GLenum, GLboolean *);
++typedef const GLubyte *(GLAPIENTRY *GetString_t)(GLenum);
++
++/* The DDK entry points; one GLES2 library per process, so one set. */
++static struct {
++   PixelStorei_t PixelStorei;
++   TexImage2D_t TexImage2D;
++   TexSubImage2D_t TexSubImage2D;
++   GetIntegerv_t GetIntegerv;
++   GetFloatv_t GetFloatv;
++   GetBooleanv_t GetBooleanv;
++   GetString_t GetString;
++} ddk;
++
++static __thread PVRDRIContext *current;
++
++static char *extensions;
++static util_once_flag extensions_once = UTIL_ONCE_FLAG_INIT;
++
++void
++pvrdri_unpack_set_current(PVRDRIContext *psPVRContext)
++{
++   current = psPVRContext;
++}
++
++void
++pvrdri_unpack_init_context(PVRDRIContext *psPVRContext)
++{
++   memset(&psPVRContext->sUnpack, 0, sizeof(psPVRContext->sUnpack));
++   psPVRContext->sUnpack.iAlignment = 4;
++}
++
++static PVRDRIUnpackState *
++state(void)
++{
++   return (current && current->eAPI == PVRDRI_API_GLES2) ? &current->sUnpack : NULL;
++}
++
++static GLboolean
++is_unpack_param(GLenum pname)
++{
++   return pname == GL_UNPACK_ROW_LENGTH_EXT ||
++          pname == GL_UNPACK_SKIP_ROWS_EXT ||
++          pname == GL_UNPACK_SKIP_PIXELS_EXT;
++}
++
++static GLint
++unpack_param(const PVRDRIUnpackState *s, GLenum pname)
++{
++   switch (pname) {
++   case GL_UNPACK_ROW_LENGTH_EXT:
++      return s->iRowLength;
++   case GL_UNPACK_SKIP_ROWS_EXT:
++      return s->iSkipRows;
++   default:
++      return s->iSkipPixels;
++   }
++}
++
++/*
++ * Bytes per pixel for the client formats GLES2 and its extensions accept;
++ * 0 for a combination the DDK will reject anyway (it then sees the original
++ * call and raises the error itself).
++ */
++static unsigned
++bytes_per_pixel(GLenum format, GLenum type)
++{
++   unsigned components;
++
++   switch (type) {
++   case GL_UNSIGNED_SHORT_5_6_5:
++   case GL_UNSIGNED_SHORT_4_4_4_4:
++   case GL_UNSIGNED_SHORT_5_5_5_1:
++      return 2;
++   default:
++      break;
++   }
++
++   switch (format) {
++   case GL_ALPHA:
++   case GL_LUMINANCE:
++   case GL_RED_EXT:
++   case GL_DEPTH_COMPONENT:
++      components = 1;
++      break;
++   case GL_LUMINANCE_ALPHA:
++   case GL_RG_EXT:
++      components = 2;
++      break;
++   case GL_RGB:
++      components = 3;
++      break;
++   case GL_RGBA:
++   case GL_BGRA_EXT:
++      components = 4;
++      break;
++   default:
++      return 0;
++   }
++
++   switch (type) {
++   case GL_UNSIGNED_BYTE:
++      return components;
++   case GL_UNSIGNED_SHORT:
++   case GL_HALF_FLOAT_OES:
++      return components * 2;
++   case GL_UNSIGNED_INT:
++   case GL_FLOAT:
++      return components * 4;
++   default:
++      return 0;
++   }
++}
++
++static size_t
++align_up(size_t v, unsigned a)
++{
++   return (v + a - 1) / a * a;
++}
++
++/*
++ * Resolve the client rows selected by the unpack state. Returns the pointer
++ * to hand the DDK; *scratch is set when that is a packed copy the caller must
++ * free and *repacked when the DDK must read it with alignment 1.
++ */
++static const void *
++select_rows(const PVRDRIUnpackState *s, GLsizei width, GLsizei height,
++            GLenum format, GLenum type, const void *pixels,
++            void **scratch, GLboolean *repacked)
++{
++   unsigned bpp = bytes_per_pixel(format, type);
++   size_t row_pixels, src_stride, packed_stride, row_bytes;
++   const uint8_t *src;
++   uint8_t *dst;
++
++   *scratch = NULL;
++   *repacked = GL_FALSE;
++
++   if (!pixels || !bpp || width <= 0 || height <= 0)
++      return pixels;
++   if (!s->iRowLength && !s->iSkipRows && !s->iSkipPixels)
++      return pixels;
++
++   row_pixels = s->iRowLength ? (size_t)s->iRowLength : (size_t)width;
++   src_stride = align_up(row_pixels * bpp, s->iAlignment);
++   row_bytes = (size_t)width * bpp;
++   packed_stride = align_up(row_bytes, s->iAlignment);
++   src = (const uint8_t *)pixels + (size_t)s->iSkipRows * src_stride +
++         (size_t)s->iSkipPixels * bpp;
++
++   /* Same row pitch as the DDK expects: just start at the first pixel. */
++   if (src_stride == packed_stride)
++      return src;
++
++   dst = malloc(row_bytes * (size_t)height);
++   if (!dst)
++      return NULL;
++   for (GLsizei y = 0; y < height; y++)
++      memcpy(dst + (size_t)y * row_bytes, src + (size_t)y * src_stride, row_bytes);
++
++   *scratch = dst;
++   *repacked = GL_TRUE;
++   return dst;
++}
++
++static void GLAPIENTRY
++unpack_PixelStorei(GLenum pname, GLint param)
++{
++   PVRDRIUnpackState *s = state();
++
++   if (s && is_unpack_param(pname)) {
++      if (param < 0) {
++         /* Let the DDK raise GL_INVALID_VALUE for a negative value. */
++         ddk.PixelStorei(GL_UNPACK_ALIGNMENT, -1);
++         return;
++      }
++      if (pname == GL_UNPACK_ROW_LENGTH_EXT)
++         s->iRowLength = param;
++      else if (pname == GL_UNPACK_SKIP_ROWS_EXT)
++         s->iSkipRows = param;
++      else
++         s->iSkipPixels = param;
++      return;
++   }
++
++   ddk.PixelStorei(pname, param);
++   if (s && pname == GL_UNPACK_ALIGNMENT &&
++       (param == 1 || param == 2 || param == 4 || param == 8))
++      s->iAlignment = param;
++}
++
++static void GLAPIENTRY
++unpack_TexImage2D(GLenum target, GLint level, GLint internalformat,
++                  GLsizei width, GLsizei height, GLint border, GLenum format,
++                  GLenum type, const void *pixels)
++{
++   PVRDRIUnpackState *s = state();
++   void *scratch;
++   GLboolean repacked;
++   const void *p;
++
++   if (!s) {
++      ddk.TexImage2D(target, level, internalformat, width, height, border,
++                     format, type, pixels);
++      return;
++   }
++
++   p = select_rows(s, width, height, format, type, pixels, &scratch, &repacked);
++   if (pixels && !p) {
++      /* Out of memory for the packed copy: report it as GL would. */
++      ddk.TexImage2D(target, level, internalformat, width, height, border,
++                     format, type, NULL);
++      return;
++   }
++   if (repacked)
++      ddk.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
++   ddk.TexImage2D(target, level, internalformat, width, height, border,
++                  format, type, p);
++   if (repacked)
++      ddk.PixelStorei(GL_UNPACK_ALIGNMENT, s->iAlignment);
++   free(scratch);
++}
++
++static void GLAPIENTRY
++unpack_TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
++                     GLsizei width, GLsizei height, GLenum format, GLenum type,
++                     const void *pixels)
++{
++   PVRDRIUnpackState *s = state();
++   void *scratch;
++   GLboolean repacked;
++   const void *p;
++
++   if (!s) {
++      ddk.TexSubImage2D(target, level, xoffset, yoffset, width, height,
++                        format, type, pixels);
++      return;
++   }
++
++   p = select_rows(s, width, height, format, type, pixels, &scratch, &repacked);
++   if (pixels && !p)
++      return;
++   if (repacked)
++      ddk.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
++   ddk.TexSubImage2D(target, level, xoffset, yoffset, width, height,
++                     format, type, p);
++   if (repacked)
++      ddk.PixelStorei(GL_UNPACK_ALIGNMENT, s->iAlignment);
++   free(scratch);
++}
++
++static void GLAPIENTRY
++unpack_GetIntegerv(GLenum pname, GLint *params)
++{
++   PVRDRIUnpackState *s = state();
++
++   if (s && is_unpack_param(pname) && params) {
++      params[0] = unpack_param(s, pname);
++      return;
++   }
++   ddk.GetIntegerv(pname, params);
++}
++
++static void GLAPIENTRY
++unpack_GetFloatv(GLenum pname, GLfloat *params)
++{
++   PVRDRIUnpackState *s = state();
++
++   if (s && is_unpack_param(pname) && params) {
++      params[0] = (GLfloat)unpack_param(s, pname);
++      return;
++   }
++   ddk.GetFloatv(pname, params);
++}
++
++static void GLAPIENTRY
++unpack_GetBooleanv(GLenum pname, GLboolean *params)
++{
++   PVRDRIUnpackState *s = state();
++
++   if (s && is_unpack_param(pname) && params) {
++      params[0] = unpack_param(s, pname) ? GL_TRUE : GL_FALSE;
++      return;
++   }
++   ddk.GetBooleanv(pname, params);
++}
++
++static void
++build_extensions(void)
++{
++   const char *base = (const char *)ddk.GetString(GL_EXTENSIONS);
++   size_t len;
++
++   if (!base)
++      return;
++   len = strlen(base);
++   extensions = malloc(len + 1 + sizeof(UNPACK_EXT_NAME));
++   if (!extensions)
++      return;
++   memcpy(extensions, base, len);
++   if (len && base[len - 1] != ' ')
++      extensions[len++] = ' ';
++   memcpy(extensions + len, UNPACK_EXT_NAME, sizeof(UNPACK_EXT_NAME));
++}
++
++static const GLubyte *GLAPIENTRY
++unpack_GetString(GLenum name)
++{
++   if (name != GL_EXTENSIONS || !state())
++      return ddk.GetString(name);
++   util_call_once(&extensions_once, build_extensions);
++   return extensions ? (const GLubyte *)extensions : ddk.GetString(name);
++}
++
++static _glapi_proc
++swap_slot(struct _glapi_table *psTable, const char *name, _glapi_proc replacement)
++{
++   int offset = _glapi_get_proc_offset(name);
++   _glapi_proc *slots = (_glapi_proc *)psTable;
++   _glapi_proc original;
++
++   if (offset < 0)
++      return NULL;
++   original = slots[offset];
++   slots[offset] = replacement;
++   return original;
++}
++
++/*
++ * Install the emulation into a freshly populated GLES2 dispatch table. All
++ * seven DDK entry points must be present; otherwise the table is left as the
++ * DDK filled it (and the extension is not advertised).
++ */
++void
++pvrdri_unpack_install(struct _glapi_table *psTable, _glapi_proc pfNop)
++{
++   static const char *const names[] = {
++      "glPixelStorei", "glTexImage2D", "glTexSubImage2D", "glGetIntegerv",
++      "glGetFloatv", "glGetBooleanv", "glGetString",
++   };
++   _glapi_proc *slots = (_glapi_proc *)psTable;
++
++   for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
++      int offset = _glapi_get_proc_offset(names[i]);
++      if (offset < 0 || slots[offset] == pfNop || slots[offset] == NULL) {
++         mesa_logw("sgx: %s missing from the DDK, GL_EXT_unpack_subimage not emulated",
++                   names[i]);
++         return;
++      }
++   }
++
++   ddk.PixelStorei = (PixelStorei_t)swap_slot(psTable, "glPixelStorei",
++                                              (_glapi_proc)unpack_PixelStorei);
++   ddk.TexImage2D = (TexImage2D_t)swap_slot(psTable, "glTexImage2D",
++                                            (_glapi_proc)unpack_TexImage2D);
++   ddk.TexSubImage2D = (TexSubImage2D_t)swap_slot(psTable, "glTexSubImage2D",
++                                                  (_glapi_proc)unpack_TexSubImage2D);
++   ddk.GetIntegerv = (GetIntegerv_t)swap_slot(psTable, "glGetIntegerv",
++                                              (_glapi_proc)unpack_GetIntegerv);
++   ddk.GetFloatv = (GetFloatv_t)swap_slot(psTable, "glGetFloatv",
++                                          (_glapi_proc)unpack_GetFloatv);
++   ddk.GetBooleanv = (GetBooleanv_t)swap_slot(psTable, "glGetBooleanv",
++                                              (_glapi_proc)unpack_GetBooleanv);
++   ddk.GetString = (GetString_t)swap_slot(psTable, "glGetString",
++                                          (_glapi_proc)unpack_GetString);
++}
+-- 
+2.55.0
+
