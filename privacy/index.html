@@ -1,0 +1,125 @@
+<!doctype html>
+<!--
+  The companion app's privacy policy, which Google Play requires. This file is
+  the source; it is published by hand to the gh-pages branch as
+  privacy/index.html (https://petronijus.github.io/nexusQ-reloaded/privacy/),
+  next to the OTA landing page whose look it shares. scripts/publish-ota-repo.sh
+  replaces only nexusq/ and the landing page's package table, so it leaves this
+  page alone. Every claim here is checked against the app's code: change the
+  page when the app starts talking to anything new.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus Q Reloaded — Privacy Policy</title>
+<meta name="description" content="Privacy policy of the Nexus Q Reloaded companion app.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c10;
+    --panel-edge: #1d2430;
+    --text: #e7eaef;
+    --muted: #8b93a1;
+    --accent: #4cc2ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 56px 16px 72px; }
+  h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 6px; }
+  h1 .accent { color: var(--accent); }
+  .tagline { color: var(--muted); margin: 0 0 36px; }
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 36px 0 12px;
+  }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin: 0 0 10px; }
+  strong { font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  a:hover { text-decoration: underline; }
+  footer {
+    margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--panel-edge);
+    color: var(--muted); font-size: 13.5px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nexus Q <span class="accent">Reloaded</span></h1>
+  <p class="tagline">Privacy Policy · effective 2026-10-11</p>
+
+  <p>Nexus Q Reloaded is the companion app for Google Nexus Q devices running the
+  Nexus Q Reloaded firmware. It is an independent open-source project and has no
+  server of its own. This policy covers the app on Android and iOS.</p>
+
+  <h2>What the app collects</h2>
+  <p>Nothing. The app has no analytics, no crash reporting, no advertising and no
+  account of its own. It sends no data to the developer or to any third party,
+  other than to the services below that you choose to use.</p>
+
+  <h2>Where the app connects</h2>
+  <ul>
+    <li><strong>Your Nexus Q, on your local network.</strong> The app finds the Q on
+    your home network and sends it your commands: playback, volume, equalizer,
+    settings and updates. When you set up a Q, the WiFi network name and password
+    you enter are sent to that Q so that it can join your network; the app does not
+    keep the password.</li>
+    <li><strong>Spotify, only if you link a Spotify account.</strong> The app signs in
+    with Spotify and uses Spotify's Web API to show and control what is playing.
+    The sign-in tokens are kept in your phone's secure storage and are sent to
+    nobody but Spotify. Spotify's
+    <a href="https://www.spotify.com/legal/privacy-policy/">privacy policy</a>
+    applies to that data.</li>
+    <li><strong>Your own MQTT broker, only if you set one up.</strong> The health view
+    reads your Q's telemetry from a broker you run, such as the one Home Assistant
+    uses. Its address and login are kept in your phone's secure storage.</li>
+    <li><strong>GitHub, only in the version downloaded from GitHub.</strong> That
+    version checks GitHub for a newer app and downloads it from there. Copies
+    installed from Google Play or F-Droid do not.</li>
+  </ul>
+
+  <h2>What stays on your phone</h2>
+  <p>The addresses of your Qs, your settings and the logins above. Uninstalling
+  the app deletes all of it.</p>
+
+  <h2>Permissions</h2>
+  <ul>
+    <li><strong>Bluetooth</strong> — to set up a Q and to pair devices with it.
+    Bluetooth scans are not used to determine your location.</li>
+    <li><strong>Location</strong> — on Android 11 and older only, which require it
+    for Bluetooth scanning.</li>
+    <li><strong>NFC</strong> — only during setup, for tap-to-set-up.</li>
+    <li><strong>Notifications</strong> — to tell you when your Q has a new
+    release.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>The app is not directed at children, and it collects no data from anyone.</p>
+
+  <h2>Changes</h2>
+  <p>Changes to this policy are published on this page, with a new effective
+  date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions and requests:
+  <a href="https://github.com/petronijus/nexusQ-reloaded/issues">github.com/petronijus/nexusQ-reloaded/issues</a></p>
+
+  <footer>
+    Nexus Q Reloaded is not affiliated with, endorsed by or sponsored by Google.
+    Google and Nexus are trademarks of Google LLC. ·
+    <a href="../">OTA repository</a> ·
+    <a href="https://github.com/petronijus/nexusQ-reloaded">source on GitHub</a>
+  </footer>
+</div>
+</body>
+</html>
