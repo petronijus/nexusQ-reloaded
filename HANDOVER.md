@@ -157,7 +157,11 @@ Open, in order:
    signer): uninstall that first. The closed track (Alpha: all countries,
    list "Nexus Q Reloaded testers", feedback = GitHub issues) refused 68
    for its photo/video permissions (open_filex); 1.27.1+69 removes them.
-   Next: a **closed test with 12
+   Internal testing moved to 69 too (68 had to go: Play checks every active
+   bundle). **2026-10-11 18:09 Petr submitted the 15 changes for review**
+   (closed release 69 for 177 countries, the listing, every declaration).
+   Next, once approved: Petr gathers testers into "Nexus Q Reloaded testers"
+   and sends them the closed-test opt-in link; a **closed test with 12
    testers for 14 days**, then apply for production. Petr gathers the
    testers; he confirms each submission.
    Also open: **Android developer verification** (Console, left menu) — the
