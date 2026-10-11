@@ -81,6 +81,44 @@ class SelfContainedAports(unittest.TestCase):
                 self.assertEqual(missing, [], f"source= of pmos/{aport.name} names files that do not exist")
 
 
+class StagedFromUserspace(unittest.TestCase):
+    """Aports whose files docker-build.sh copies in from userspace/ at build time."""
+
+    # aport -> (its sources in userspace/, the docker-build.sh block that stages them)
+    STAGED = {
+        "nexusq-sgx": ("userspace/nexusq-sgx", "NEXUSQSGX_DIR=", "Installed: nexusq-sgx "),
+    }
+
+    def test_every_local_source_exists_and_is_staged(self):
+        build = (ROOT / "docker-build.sh").read_text()
+        for aport, (srcdir, start, end) in self.STAGED.items():
+            with self.subTest(aport=aport):
+                block = build[build.index(start) : build.index(end)]
+                local = [s for s in sources(PMOS / aport / "APKBUILD") if "$" not in s and "://" not in s]
+                self.assertTrue(local, f"pmos/{aport} lists no local source")
+                missing = sorted(s for s in local if not (ROOT / srcdir / s).is_file())
+                self.assertEqual(missing, [], f"source= of pmos/{aport} names files missing from {srcdir}/")
+                unstaged = sorted(s for s in local if not re.search(rf"(?<![\w.-]){re.escape(s)}(?![\w.-])", block))
+                self.assertEqual(unstaged, [], f"docker-build.sh does not stage these {aport} sources")
+
+
+class PrivatePrefixMesa(unittest.TestCase):
+    """nexusq-sgx-mesa installs a second libEGL/libgbm/libGLESv2 in /usr/lib/sgx-mesa.
+
+    abuild must find those sonames in the package (ldpath) and advertise them
+    under a prefix (sonameprefix). Without ldpath the build fails on its own
+    NEEDED libglapi.so.0; without sonameprefix the apk provides so:libEGL.so.1
+    and apk may satisfy another package's libEGL dependency with this private
+    copy instead of Alpine's Mesa.
+    """
+
+    def test_ldpath_and_sonameprefix(self):
+        text = (PMOS / "nexusq-sgx-mesa" / "APKBUILD").read_text()
+        self.assertRegex(text, r'(?m)^ldpath="/usr/lib/sgx-mesa"$')
+        self.assertRegex(text, r'(?m)^sonameprefix="\$pkgname:"$')
+        self.assertRegex(text, r"--libdir=lib/sgx-mesa")
+
+
 class ShippedCopies(unittest.TestCase):
     """One source, two copies: the build packs one, the unit tests read the other."""
 

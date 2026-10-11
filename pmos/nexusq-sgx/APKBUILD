@@ -1,0 +1,83 @@
+# Nexus Q PowerVR SGX540 userspace glue for musl: the glibc-compat shim the TI
+# DDK blobs load as ld-linux-armhf.so.3, our pvrsrvinit, Maemo's open libdbm,
+# the pinned blob fetcher and the GPU unit. No TI binary is in this package:
+# each unit fetches the pinned files itself (nq-sgx-fetch).
+# Sources: userspace/nexusq-sgx/ (README.md there), staged flat next to this
+# APKBUILD by docker-build.sh.
+pkgname=nexusq-sgx
+pkgver=1.17.4948957
+pkgrel=0
+_maemo_commit=a9dbdc75233dc0ca5fe2622dfffc44f164843c1f	# sgx-ddk-um tag 1.17.4948957+leste15
+pkgdesc="Nexus Q SGX540 userspace glue on musl (glibc-compat shim, pvrsrvinit, libdbm, blob fetcher)"
+url="https://github.com/petronijus/nexusQ-reloaded"
+arch="armv7"
+# MIT: our shim, pvrsrvinit and scripts. LGPL-2.0-or-later: Maemo's libdbm
+# (dbm.c names the LGPL without a version, so the LGPL's own rule applies).
+license="MIT AND LGPL-2.0-or-later"
+# ssl_client + ca-certificates-bundle: busybox wget's HTTPS, which nq-sgx-fetch uses.
+depends="kmod libdrm ssl_client ca-certificates-bundle"
+makedepends="libdrm-dev mesa-dev"
+# The shim's mmap reads the 32-bit ARM EABI stack layout (#error elsewhere);
+# the host tests run in `just test-c`, the ARM half on a unit.
+options="!check"
+source="
+	sgx-ddk-um-$_maemo_commit.tar.gz::https://github.com/maemo-leste/sgx-ddk-um/archive/$_maemo_commit.tar.gz
+	Makefile
+	nq-glibc-compat.c
+	nq-glibc-compat-abi.c
+	nq-glibc-compat-mmap.S
+	nq-glibc-compat.h
+	pvrsrvinit.c
+	nq-sgx-fetch
+	nq-sgx-fetch.service
+	nq-sgx-fetch.timer
+	nexusq-sgx.service
+	97-nexusq-sgx.preset
+	sgx-env
+	nexusq-sgx-labwc
+	ti443x.sha256
+	README.md
+	"
+builddir="$srcdir"
+_dbm="$srcdir/sgx-ddk-um-$_maemo_commit/dbm"
+
+build() {
+	make CC="${CC:-gcc}" CFLAGS="$CFLAGS -Wall -Wextra" LDFLAGS="$LDFLAGS"
+	# libdbm: the two LGPL sources, built as the DDK expects (soname
+	# libdbm.so.1). gbm.h is needed for its format constants only. dbm.c
+	# includes autoconf's config.h but uses nothing from it, so an empty one
+	# stands in for running Maemo's whole configure.
+	# It is pre-C23 code (`void (*free)()` takes the device pointer): gnu17.
+	: > config.h
+	${CC:-gcc} $CFLAGS -std=gnu17 -I. -fPIC -shared -Wl,-soname,libdbm.so.1 -o libdbm.so.1 \
+		"$_dbm"/dbm.c "$_dbm"/dbm_helpers.c \
+		$(pkg-config --cflags --libs libdrm) $(pkg-config --cflags gbm) $LDFLAGS
+}
+
+package() {
+	local d="$pkgdir"/usr/lib/sgx-ddk
+	make DESTDIR="$pkgdir" PREFIX=/usr install
+	install -Dm755 libdbm.so.1 "$d"/libdbm.so.1
+	ln -s libdbm.so.1 "$d"/libdbm.so
+
+	install -Dm755 nq-sgx-fetch "$pkgdir"/usr/libexec/sgx-ddk/nq-sgx-fetch
+	install -Dm644 ti443x.sha256 "$pkgdir"/usr/share/nexusq-sgx/ti443x.sha256
+	install -Dm644 sgx-env "$pkgdir"/usr/share/nexusq-sgx/sgx-env
+	# The GPU labwc: the desktop session puts this directory first on PATH.
+	install -Dm755 nexusq-sgx-labwc "$pkgdir"/usr/libexec/nexusq-sgx/bin/labwc
+	install -Dm644 README.md "$pkgdir"/usr/share/doc/nexusq-sgx/README.md
+
+	install -Dm644 nexusq-sgx.service "$pkgdir"/usr/lib/systemd/system/nexusq-sgx.service
+	install -Dm644 nq-sgx-fetch.service "$pkgdir"/usr/lib/systemd/system/nq-sgx-fetch.service
+	install -Dm644 nq-sgx-fetch.timer "$pkgdir"/usr/lib/systemd/system/nq-sgx-fetch.timer
+	install -d "$pkgdir"/usr/lib/systemd/system/timers.target.wants
+	ln -sf ../nq-sgx-fetch.timer \
+		"$pkgdir"/usr/lib/systemd/system/timers.target.wants/nq-sgx-fetch.timer
+	install -Dm644 97-nexusq-sgx.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/97-nexusq-sgx.preset
+
+	# The blobs land here, fetched on the unit; the package owns only the dir.
+	install -d "$pkgdir"/var/lib/sgx-ddk
+}
+
+sha512sums="SKIP"

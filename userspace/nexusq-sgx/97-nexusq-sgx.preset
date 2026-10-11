@@ -1,0 +1,7 @@
+# nexusq-sgx: the blob fetch timer (systemd preset).
+#
+# Shipped by the aport itself, priority 97 like 97-nexusq-kernel-ota.preset:
+# the image build's `systemctl preset-all` would otherwise let 99-default's
+# `disable *` strip the vendor timers.target.wants link. nexusq-sgx.service is
+# not here on purpose: only a GPU consumer starts it.
+enable nq-sgx-fetch.timer

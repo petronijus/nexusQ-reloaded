@@ -489,6 +489,26 @@ cp "$SRC/userspace/nexusq-rootfs-ab/nexusq-rootfs-ab.post-upgrade"      "$NEXUSQ
 cp "$SRC/scripts/make-ab-initramfs.py"                                  "$NEXUSQAB_DIR/"
 echo "  Installed: nexusq-rootfs-ab (aport + tools -> main/nexusq-rootfs-ab)"
 
+# nexusq-sgx: the SGX540 userspace glue on musl (glibc-compat shim, pvrsrvinit,
+# blob fetcher, units). Sources flat next to the APKBUILD; libdbm comes from the
+# pinned Maemo archive in source=. No TI blob is staged: units fetch them.
+NEXUSQSGX_DIR="$PMAPORTS/main/nexusq-sgx"
+mkdir -p "$NEXUSQSGX_DIR"
+cp "$SRC/pmos/nexusq-sgx/APKBUILD" "$NEXUSQSGX_DIR/"
+for _f in Makefile nq-glibc-compat.c nq-glibc-compat-abi.c nq-glibc-compat-mmap.S nq-glibc-compat.h pvrsrvinit.c \
+    nq-sgx-fetch nq-sgx-fetch.service nq-sgx-fetch.timer nexusq-sgx.service \
+    97-nexusq-sgx.preset sgx-env nexusq-sgx-labwc ti443x.sha256 README.md; do
+    cp "$SRC/userspace/nexusq-sgx/$_f" "$NEXUSQSGX_DIR/"
+done
+echo "  Installed: nexusq-sgx (aport + glue -> main/nexusq-sgx)"
+
+# nexusq-sgx-mesa: mesa-sgx pinned to one Maemo commit plus our two patches,
+# all of it inside the aport directory.
+NEXUSQSGXMESA_DIR="$PMAPORTS/main/nexusq-sgx-mesa"
+mkdir -p "$NEXUSQSGXMESA_DIR"
+cp "$SRC/pmos/nexusq-sgx-mesa/"* "$NEXUSQSGXMESA_DIR/"
+echo "  Installed: nexusq-sgx-mesa (aport + patches -> main/nexusq-sgx-mesa)"
+
 # python3: NO local override any more (retired 2026-08-17).
 # We used to stage pmos/python3 over pmaports main/python3 (a rebuild at a higher
 # pkgrel, LTO+PGO dropped) because Alpine's stock python3 SIGSEGVed on armv7. That

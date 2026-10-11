@@ -1,0 +1,20 @@
+# PowerVR SGX540: load the kernel driver and start the SGX services.
+#
+# Not enabled: the module stays blacklisted at boot (CONFIG_CMDLINE), and only
+# a GPU consumer pulls this in (the desktop session's Wants=), so a unit that
+# never shows a GPU client never loads the driver. SrvInit runs once per module
+# load; RemainAfterExit keeps a second start from repeating it. There is no
+# ExecStop: the module is unloaded by a reboot, never under a client.
+[Unit]
+Description=PowerVR SGX540 GPU (driver and SGX services)
+Documentation=file:///usr/share/doc/nexusq-sgx/README.md
+ConditionPathExists=/var/lib/sgx-ddk/lib/.complete
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe pvrsrvkm_omap4_sgx540_120
+ExecStart=/usr/libexec/sgx-ddk/pvrsrvinit
+Environment=LD_LIBRARY_PATH=/usr/lib/sgx-ddk:/var/lib/sgx-ddk/lib
+Environment=LD_PRELOAD=/usr/lib/sgx-ddk/ld-linux-armhf.so.3
+TimeoutStartSec=30

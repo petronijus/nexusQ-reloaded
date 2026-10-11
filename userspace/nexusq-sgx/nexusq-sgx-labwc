@@ -1,0 +1,11 @@
+#!/bin/sh
+# labwc on the SGX540. Installed as /usr/libexec/nexusq-sgx/bin/labwc; the
+# desktop session puts that directory first on PATH when the GPU is ready, so
+# startlxqtwayland's `exec labwc ...` lands here. Only labwc gets the GPU
+# environment (sgx-env, NQ_SGX_SCOPE=process): its children -- lxqt-session
+# and the apps -- start with the environment the session had.
+# shellcheck source=sgx-env
+. /usr/share/nexusq-sgx/sgx-env
+nq_sgx_export
+export WLR_RENDERER=gles2
+exec /usr/bin/labwc "$@"

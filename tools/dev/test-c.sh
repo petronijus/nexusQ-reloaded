@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build and run the C unit tests: nexusqd, nq-healthd, the ALSA volume scale.
+# Build and run the C unit tests: nexusqd, nq-healthd, the ALSA volume scale,
+# the SGX glibc-compat shim.
 #
 # The daemons are written against Linux (SOCK_CLOEXEC, /sys and /proc
 # layouts), so on Linux they build with the host compiler, and anywhere else
@@ -14,7 +15,7 @@ set -euo pipefail
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$root" || exit 1
 
-dirs="nexusqd nq-healthd nexusq-alsa-vol"
+dirs="nexusqd nq-healthd nexusq-alsa-vol nexusq-sgx"
 
 if [[ "$(uname)" == Linux && "${NQ_TEST_C_CONTAINER:-0}" != 1 ]]; then
   for d in $dirs; do

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Two jobs, independent of each other:
+# Independent jobs:
 #   1. (r110) keep systemd-oomd disabled on boxes already in the field;
+#      (r127) move the stock default desktop session to the GPU-capable one;
 #   2. restore the access files .pre-upgrade stashed, if the new package did not
 #      ship them. See device-google-steelhead.pre-upgrade for why that pair exists.
 #
@@ -34,6 +35,18 @@ else
 	rm -f /etc/systemd/system/multi-user.target.wants/systemd-oomd.service \
 	      /etc/systemd/system/sockets.target.wants/systemd-oomd.socket \
 	      /etc/systemd/system/dbus-org.freedesktop.oom1.service
+fi
+
+# --- r127: the desktop session that renders on the SGX540 -----------------
+# Boxes that kept the default session every .post-install set before r127
+# (the stock lxqt-wayland.desktop) move to lxqt-wayland-nexusq.desktop: the same
+# LXQt on labwc, on the GPU when it is ready and on Pixman otherwise. A session
+# someone picked by hand (weston-nexusq.desktop, anything else) is left alone,
+# and a box without the link gets none (tinydm then asks, as it always did).
+# Idempotent; takes effect at the next desktop start, never mid-session.
+_ds=/var/lib/tinydm/default-session.desktop
+if [ "$(readlink "$_ds" 2>/dev/null)" = /usr/share/wayland-sessions/lxqt-wayland.desktop ]; then
+	ln -sf /usr/share/wayland-sessions/lxqt-wayland-nexusq.desktop "$_ds"
 fi
 
 # --- r113+: the first-boot unit's enable link is now the package's ---------

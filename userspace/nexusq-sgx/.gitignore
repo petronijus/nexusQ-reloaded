@@ -1,0 +1,4 @@
+# build outputs of `make` (the aport builds them; never commit ELF files)
+ld-linux-armhf.so.3
+pvrsrvinit
+libdbm.so.1

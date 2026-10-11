@@ -1,0 +1,34 @@
+# Environment for a GPU client of the SGX540 (sourced by its launcher).
+#
+# The client finds mesa-sgx and the DDK on a private library path, so the
+# system Mesa stays what every other program uses, and the glibc-compat shim
+# is preloaded: the TI blobs' mmap/strerror_r must bind to it before musl
+# (nq-glibc-compat.c). The variables are for the ONE process the launcher
+# execs: NQ_SGX_SCOPE=process makes the shim put the earlier values back as it
+# loads, so the process's children never inherit them.
+NQ_SGX_LIBS=/usr/lib/sgx-mesa:/usr/lib/sgx-ddk:/var/lib/sgx-ddk/lib
+NQ_SGX_PRELOAD=/usr/lib/sgx-ddk/ld-linux-armhf.so.3
+# Kill switch: while this file exists nothing uses the GPU (ssh, the app or
+# MQTT can create it; removing it re-enables the GPU at the next start).
+NQ_SGX_OFF=/etc/nexusq/gpu-off
+
+# Can the GPU be used now: not switched off, blobs fetched, mesa-sgx
+# installed, driver loaded and SGX services started.
+nq_sgx_ready() {
+	[ ! -e "$NQ_SGX_OFF" ] && [ -f /var/lib/sgx-ddk/lib/.complete ] &&
+		[ -e /usr/lib/sgx-mesa/libEGL.so.1 ] &&
+		systemctl is-active --quiet nexusq-sgx.service
+}
+
+# Set the GPU environment for the next exec'd process only.
+nq_sgx_export() {
+	if [ "${LD_LIBRARY_PATH+set}" = set ]; then
+		export NQ_SGX_ORIG_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+	fi
+	if [ "${LD_PRELOAD+set}" = set ]; then
+		export NQ_SGX_ORIG_LD_PRELOAD="$LD_PRELOAD"
+	fi
+	export LD_LIBRARY_PATH="$NQ_SGX_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+	export LD_PRELOAD="$NQ_SGX_PRELOAD${LD_PRELOAD:+ $LD_PRELOAD}"
+	export NQ_SGX_SCOPE=process
+}

@@ -6,6 +6,52 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the HDMI desktop renders on the SGX540 (nexusq-sgx **r0** · nexusq-sgx-mesa **r0** · device **r127**, unreleased)
+
+labwc and LXQt stay Alpine's, unpatched; the GPU reaches them through two new
+packages and a session wrapper. Design and on-device measurements:
+`docs/gpu-sgx540/route-a-musl-2026-10-12.md` and
+`docs/gpu-sgx540/b1-b2-desktop-blockers-2026-10-11.md`.
+
+- **nexusq-sgx r0**, the glue that runs TI's glibc DDK blobs, unmodified, in
+  musl processes (`userspace/nexusq-sgx/`):
+  - `ld-linux-armhf.so.3` (`nq-glibc-compat`): satisfies the blobs'
+    `DT_NEEDED` without gcompat, supplies the nine fortify `__*_chk` entry
+    points, and, preloaded, gives code linked against `libc.so.6` glibc's
+    32-bit-offset `mmap@GLIBC_2.4` and GNU `strerror_r` while every musl
+    caller keeps musl's own. Without it `PVRSRVMapDmaBuf` fails with `EINVAL`
+    on every GBM buffer (measured). The `mmap` entry is assembly: a C version
+    let GCC write the computed offset into a glibc caller's locals and crashed
+    the DDK.
+  - `pvrsrvinit` (ours, MIT) and Maemo's LGPL `libdbm`, built for musl.
+  - `nq-sgx-fetch` + timer: **no TI binary ships in any image or the OTA
+    repo**; each unit fetches the seven pinned libraries and TI's licence from
+    TI's git (Maemo's mirror per file as fallback), verifies every sha256 and
+    installs the set atomically in `/var/lib/sgx-ddk/lib`. Retries every
+    15 min until complete, then never wakes again.
+  - `nexusq-sgx.service` (modprobe + `pvrsrvinit`), not enabled: only the
+    desktop pulls it in, so the module stays off on a unit that never starts
+    the desktop.
+- **nexusq-sgx-mesa r0**: Maemo's mesa-sgx `powervr-24.0.9` (`72c93be7`,
+  sha512-pinned, `scripts/bump-sgx-mesa.sh` is the update path) with our two
+  patches — dma-buf import back (B2: `EGL_EXT_image_dma_buf_import`, which
+  wlroots requires; measured working on our kernel over 200 frames per buffer
+  kind) and `GL_EXT_unpack_subimage` emulated in the GLES2 dispatch (B1; 15/15
+  reference checks) — in a private prefix, `/usr/lib/sgx-mesa`. Alpine's Mesa
+  is untouched.
+- **device r127**: the default tinydm session becomes
+  `lxqt-wayland-nexusq.desktop`. Its wrapper gives **labwc alone** the GPU
+  (mesa-sgx, the DDK, the preloaded shim, `WLR_RENDERER=gles2`; the shim
+  scrubs the variables for labwc's children, so nothing reaches the session or
+  the systemd user manager) when the GPU is ready, and starts on Pixman
+  otherwise: switched off with `/etc/nexusq/gpu-off`, blobs not fetched yet,
+  init failed, or a GPU session that already failed to start (exit within
+  30 s) on this kernel + mesa-sgx build. `tinydm.service` wants
+  `nexusq-sgx.service` first. `.post-upgrade` moves only units still on the
+  stock session; a hand-picked one stays. Depends on both packages; both are
+  in `pmos/ota-packages.list`.
+- **Release preflight**: an image carrying any TI SGX blob fails the gate.
+
 ### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25** + **r26**, unreleased)
 
 The second and third kernel steps of the GPU work

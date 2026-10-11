@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=126
+pkgrel=127
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -62,6 +62,8 @@ depends="
 	nexusq-alsa-vol
 	nexusq-kernel-ota
 	nexusq-rootfs-ab
+	nexusq-sgx
+	nexusq-sgx-mesa
 	librespot
 	shairport-sync
 	bubblewrap
@@ -93,6 +95,9 @@ source="
 	weston-nexusq.desktop
 	lxqt-session.conf
 	nexusq-wayland.sh
+	lxqt-wayland-nexusq.desktop
+	nexusq-desktop-session
+	tinydm-nexusq-sgx.conf
 	wifi-powersave-off.conf
 	wifi-stable-mac.conf
 	eth-lan.nmconnection
@@ -224,6 +229,15 @@ package() {
 	#  - pin the LXQt compositor to labwc for the on-demand session
 	install -Dm644 "$srcdir"/lxqt-session.conf \
 		"$pkgdir"/etc/xdg/lxqt/session.conf
+	#  - r127: the session renders on the SGX540 when it is ready (mesa-sgx,
+	#    nexusq-sgx), on Pixman otherwise; tinydm brings the GPU up first.
+	#    The .post-install/.post-upgrade make this the default session.
+	install -Dm644 "$srcdir"/lxqt-wayland-nexusq.desktop \
+		"$pkgdir"/usr/share/wayland-sessions/lxqt-wayland-nexusq.desktop
+	install -Dm755 "$srcdir"/nexusq-desktop-session \
+		"$pkgdir"/usr/libexec/nexusq-desktop-session
+	install -Dm644 "$srcdir"/tinydm-nexusq-sgx.conf \
+		"$pkgdir"/usr/lib/systemd/system/tinydm.service.d/50-nexusq-sgx.conf
 
 	# Fallback session: device-specific weston config (pixman, headless-tolerant)
 	# kept selectable in case LXQt misbehaves. The default tinydm session

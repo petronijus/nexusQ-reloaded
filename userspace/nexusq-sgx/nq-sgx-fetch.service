@@ -1,0 +1,32 @@
+# Fetch the TI SGX540 userspace blobs once per unit (pinned, sha256-verified).
+# Started by nq-sgx-fetch.timer after boot. On failure it retries with a
+# growing delay (15 min, doubling up to 6 h) until the set is complete, then
+# never runs again (the condition skips it).
+[Unit]
+Description=Fetch the PowerVR SGX540 userspace from TI (pinned, verified)
+Documentation=file:///usr/share/doc/nexusq-sgx/README.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/sgx-ddk/lib/.complete
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sgx-ddk/nq-sgx-fetch
+Restart=on-failure
+RestartSec=15min
+RestartSteps=5
+RestartMaxDelaySec=6h
+Nice=10
+TimeoutStartSec=10min
+# A downloader running as root: it writes only its own state directory.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sgx-ddk
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

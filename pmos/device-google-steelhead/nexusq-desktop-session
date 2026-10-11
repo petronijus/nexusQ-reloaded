@@ -1,0 +1,56 @@
+#!/bin/sh
+# The HDMI desktop's session (tinydm's default): LXQt on labwc, rendered by the
+# SGX540 when the GPU is ready, by the Pixman software renderer otherwise.
+#
+# GPU path: nexusq-sgx.service (pulled in before tinydm by its drop-in) has
+# loaded the driver and started the SGX services. The session then runs with
+# /usr/libexec/nexusq-sgx/bin first on PATH, where a `labwc` wrapper gives
+# labwc -- and only labwc -- mesa-sgx, the DDK and the glibc-compat shim
+# (sgx-env). Everything else in the session, and every other program, keeps
+# the system Mesa and a clean environment.
+#
+# Falls back to Pixman when the GPU is not ready (switched off with
+# /etc/nexusq/gpu-off, blobs not fetched yet, init failed, packages absent),
+# and after a GPU session that failed to start: one that exits with an error
+# within 30 s. That failure is recorded for this kernel and this mesa-sgx
+# build; the GPU is tried again only once either changes (or the record in
+# ~/.local/state/nexusq/ is deleted).
+# NQ_SGX_* override the paths for the tests (tests/test_desktop_session_wrapper.sh).
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/nexusq
+FAILED=$STATE/gpu-session-failed
+GPU_BIN=${NQ_SGX_GPU_BIN:-/usr/libexec/nexusq-sgx/bin}
+SGX_ENV=${NQ_SGX_ENV:-/usr/share/nexusq-sgx/sgx-env}
+SGX_DRI=${NQ_SGX_DRI:-/usr/lib/sgx-mesa/dri/sgx_dri.so}
+
+pixman() {
+	export WLR_RENDERER=pixman
+	exec startlxqtwayland "$@"
+}
+
+if [ -r "$SGX_ENV" ]; then
+	# shellcheck source=/dev/null
+	. "$SGX_ENV"
+fi
+if ! command -v nq_sgx_ready >/dev/null 2>&1 || ! nq_sgx_ready || [ ! -x "$GPU_BIN/labwc" ]; then
+	echo "nexusq-desktop-session: software rendering (Pixman); the SGX540 is not ready" >&2
+	pixman "$@"
+fi
+
+# What a recorded failure applies to: this kernel and this mesa-sgx build.
+build="$(uname -r) $(stat -c %Y "$SGX_DRI" 2>/dev/null)"
+if [ "$(cat "$FAILED" 2>/dev/null)" = "$build" ]; then
+	echo "nexusq-desktop-session: software rendering (Pixman); a GPU session failed to start on $build" >&2
+	pixman "$@"
+fi
+
+echo "nexusq-desktop-session: GPU (labwc gles2 on the SGX540)" >&2
+started=$(date +%s)
+PATH="$GPU_BIN:$PATH" startlxqtwayland "$@"
+rc=$?
+if [ "$rc" -ne 0 ] && [ $(($(date +%s) - started)) -lt 30 ]; then
+	mkdir -p "$STATE"
+	echo "$build" >"$FAILED"
+	echo "nexusq-desktop-session: the GPU session exited ($rc) within 30 s; Pixman from now on for $build" >&2
+	pixman "$@"
+fi
+exit "$rc"

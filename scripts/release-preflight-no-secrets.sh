@@ -148,6 +148,16 @@ check_absent "/var/lib/dbus/machine-id" "D-Bus machine-id" || fail=1
 check_absent "/var/lib/systemd/random-seed" "systemd random seed" || fail=1
 check_dir_empty "/var/log/journal" "the persistent journal" || fail=1
 check_dir_empty "/etc/ssh" "ssh HOST KEYS" '^ssh_host_' || fail=1
+# --- no TI SGX blob in a released image ----------------------------------------
+# Not a secret but a licence: the TI DDK userspace (TSPA) is never redistributed
+# by this project. nexusq-sgx ships an empty /var/lib/sgx-ddk and each unit
+# fetches the pinned files itself (nq-sgx-fetch); /usr/lib/sgx-ddk holds only our
+# own glue (the glibc-compat shim, libdbm). A build that baked the blobs in --
+# fetched during image creation, copied from a unit -- fails here.
+TI_SGX='^lib(srv_um|srv_init|usc|glslcompiler|GLESv[12]_PVR_MESA|pvr_dri_support|pvr2d|PVRScopeServices)\.so'
+check_dir_empty "/var/lib/sgx-ddk/lib" "TI SGX userspace blobs (fetched per unit, never shipped)" || fail=1
+check_dir_empty "/usr/lib/sgx-ddk" "TI SGX userspace blobs" "$TI_SGX" || fail=1
+check_dir_empty "/usr/lib" "TI SGX userspace blobs" "$TI_SGX" || fail=1
 
 if [ "$fail" -ne 0 ]; then
     cat >&2 <<'MSG'

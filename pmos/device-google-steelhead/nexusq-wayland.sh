@@ -1,10 +1,12 @@
 # shellcheck shell=sh  # sourced, not run: no shebang
-# Nexus Q (steelhead): no GPU driver — the PowerVR SGX540 has no mainline GLES
-# driver (see docs/2026-06-19-gpu-sgx540-acceleration-research.md). Force the
-# wlroots software (Pixman) renderer for labwc / LXQt-Wayland. Without this,
-# wlroots tries GLES2/EGL and Vulkan, both fail, and labwc aborts at startup
-# with "unable to create renderer". tinydm sources /etc/profile (hence this
-# /etc/profile.d snippet) before launching the session, so labwc inherits it.
+# Nexus Q (steelhead): the default wlroots renderer is the software one (Pixman).
+# The system Mesa has no driver for the PowerVR SGX540; only the desktop
+# session gets the GPU, through mesa-sgx on a private library path
+# (/usr/libexec/nexusq-desktop-session switches to gles2 when the SGX is up).
+# Everything else that starts a wlroots compositor stays on Pixman, because
+# GLES2/EGL and Vulkan would fail and labwc aborts with "unable to create
+# renderer". tinydm sources /etc/profile (hence this /etc/profile.d snippet)
+# before launching the session, so the session wrapper starts from here.
 export WLR_RENDERER=pixman
 export WLR_NO_HARDWARE_CURSORS=1
 

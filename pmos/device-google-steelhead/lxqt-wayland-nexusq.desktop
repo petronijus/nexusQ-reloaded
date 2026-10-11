@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Exec=/usr/libexec/nexusq-desktop-session
+TryExec=startlxqtwayland
+DesktopNames=LXQt
+
+Name=LXQt (Wayland, Nexus Q)
+Comment=LXQt on labwc, GPU-rendered when the SGX540 is ready

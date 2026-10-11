@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 23:38:29 +0200
+Subject: [PATCH 1/2] sgx_ext: bring dma-buf import back (image extension v8)
+
+TI rolled __DRIimageExtension back from 8 to 7 (a698020), dropping
+createImageFromDmaBufs and with it EGL_EXT_image_dma_buf_import, because
+DDK 1.17's buffer import "was never fully functional under Linux". The
+implementation was kept (createImageFromFds still reaches it).
+
+wlroots >= 0.14 refuses to create its GLES2 renderer without the
+extension and renders every frame into dma-buf EGLImages. On the Nexus Q
+(OMAP4460, openpvrsgx 1.17 on Linux 6.18) the import works for that
+case: linear XRGB8888 GBM buffers and omapdrm dumb buffers, imported,
+bound as an FBO and rendered into, read back correctly through
+glReadPixels and through a CPU mmap of the dma-buf over 200 frames
+each. Restore version 8 and the entry point.
+---
+ src/gallium/frontends/sgx/sgx_ext.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/frontends/sgx/sgx_ext.c b/src/gallium/frontends/sgx/sgx_ext.c
+index 6bf0638..b8d2302 100644
+--- a/src/gallium/frontends/sgx/sgx_ext.c
++++ b/src/gallium/frontends/sgx/sgx_ext.c
+@@ -76,7 +76,7 @@
+ /* Maximum version numbers for each supported extension */
+ #define PVR_DRI_TEX_BUFFER_VERSION      2
+ #define PVR_DRI2_FLUSH_VERSION          4
+-#define PVR_DRI_IMAGE_VERSION           7
++#define PVR_DRI_IMAGE_VERSION           8
+ #define PVR_DRI2_ROBUSTNESS_VERSION     1
+ #define PVR_DRI_PRIORITY_VERSION        1
+ #define PVR_DRI2_FENCE_VERSION          1
+@@ -1325,6 +1325,7 @@ static __DRIimageExtension pvrDRIImage = {
+    .fromPlanar = PVRDRIFromPlanar,
+    .createImageFromTexture = PVRDRICreateImageFromTexture,
+    .createImageFromFds = PVRDRICreateImageFromFds,
++   .createImageFromDmaBufs = PVRDRICreateImageFromDmaBufs,
+ #if defined(EGL_IMG_cl_image)
+    .createImageFromBuffer = PVRDRICreateImageFromBuffer,
+ #endif

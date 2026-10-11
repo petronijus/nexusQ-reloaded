@@ -1,0 +1,111 @@
+# Nexus Q mesa-sgx: the GBM/EGL/GLES2 front end for the PowerVR SGX540, i.e.
+# Mesa's gallium "sgx" frontend over the TI DDK (nexusq-sgx fetches the DDK).
+# Maemo Leste's leste-upstream-forks/mesa, tag powervr-24.0.9 (TI's
+# powervr/24.0.1 sgx frontend plus Maemo's __DRI2_CONFIG_QUERY fix), pinned to
+# one commit; scripts/bump-sgx-mesa.sh is the only way the pin moves (commit
+# and sha512 together, patches test-applied). Our patches:
+#   0001  dma-buf import back (image extension v8), measured working on our
+#         kernel: wlroots needs EGL_EXT_image_dma_buf_import (B2)
+#   0002  GL_EXT_unpack_subimage emulated in the GLES2 dispatch (B1)
+# docs/gpu-sgx540/b1-b2-desktop-blockers-2026-10-11.md
+#
+# Installed in a private prefix, /usr/lib/sgx-mesa: Alpine's Mesa (no glvnd)
+# owns libEGL.so.1/libgbm.so.1/libGLESv2.so.2 system-wide and stays what every
+# other program uses. GPU clients get this one through sgx-env.
+pkgname=nexusq-sgx-mesa
+pkgver=24.0.9
+pkgrel=0
+_mesa_branch=maemo/excalibur
+_mesa_commit=72c93be7aa29141dc53168bb5afbc814545ad0fc
+_mesa_sha512=198f6c2ba04b4fa3f38f14e97ab065a0a426cff4479b8b67b55c8f06c6130f7cdc4cb4c630d39427f9a692c1f2158b825dfc44c2309f05d3653773258019f37a
+_mesa_archive="mesa-sgx-$_mesa_commit.tar.gz"
+pkgdesc="Mesa with the SGX540 (PowerVR) frontend, private prefix for the Nexus Q GPU"
+url="https://git.maemo.org/leste-upstream-forks/mesa"
+arch="armv7"
+license="MIT"
+depends="nexusq-sgx"
+makedepends="
+	bison
+	elfutils-dev
+	expat-dev
+	flex
+	libdrm-dev
+	linux-headers
+	meson
+	py3-mako
+	py3-packaging
+	py3-yaml
+	wayland-dev
+	wayland-protocols
+	zlib-dev
+	"
+options="!check"
+# The libraries live in a private prefix: abuild must look there for the
+# package's own sonames (ldpath), and must advertise them under a prefix of
+# their own (so:nexusq-sgx-mesa:libEGL.so.1), never as so:libEGL.so.1 --
+# otherwise apk could satisfy another package's libEGL/libgbm/libGLESv2
+# dependency with this private copy instead of Alpine's Mesa.
+ldpath="/usr/lib/sgx-mesa"
+sonameprefix="$pkgname:"
+source="
+	$_mesa_archive::https://git.maemo.org/leste-upstream-forks/mesa/archive/$_mesa_commit.tar.gz
+	0001-sgx_ext-bring-dma-buf-import-back-image-extension-v8.patch
+	0002-sgx-emulate-GL_EXT_unpack_subimage-in-the-GLES2-disp.patch
+	"
+builddir="$srcdir/mesa"
+
+unpack() {
+	fetch || return 1
+	# The pin, enforced here and not only through sha512sums, which the build
+	# regenerates (same reasoning as linux-google-steelhead's openpvrsgx pin).
+	echo "$_mesa_sha512  $SRCDEST/$_mesa_archive" | sha512sum -c - \
+		|| die "$_mesa_archive does not match the pinned sha512 (scripts/bump-sgx-mesa.sh moves the pin)"
+	mkdir -p "$srcdir"
+	tar -C "$srcdir" -xzf "$SRCDEST/$_mesa_archive" || return 1
+}
+
+build() {
+	abuild-meson \
+		--libdir=lib/sgx-mesa \
+		-Dgallium-drivers=sgx \
+		-Dvulkan-drivers= \
+		-Dplatforms=wayland \
+		-Dglvnd=false \
+		-Dshared-glapi=enabled \
+		-Dgbm=enabled \
+		-Degl=enabled \
+		-Dgles1=disabled \
+		-Dgles2=enabled \
+		-Dopengl=true \
+		-Dglx=disabled \
+		-Dllvm=disabled \
+		-Dvalgrind=disabled \
+		-Dlibunwind=disabled \
+		-Dzstd=disabled \
+		-Dbuild-tests=false \
+		-Dgallium-vdpau=disabled \
+		-Dgallium-va=disabled \
+		-Dgallium-xa=disabled \
+		-Dgallium-nine=false \
+		-Dgallium-opencl=disabled \
+		-Dvideo-codecs= \
+		-Ddri-drivers-path=/usr/lib/sgx-mesa/dri \
+		-Ddri-search-path=/usr/lib/sgx-mesa/dri \
+		. output
+	meson compile -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+	# Runtime libraries only, all under /usr/lib/sgx-mesa: headers, pkg-config
+	# files and /usr/share (drirc.d) would collide with Alpine's Mesa.
+	rm -rf "$pkgdir"/usr/include "$pkgdir"/usr/share "$pkgdir"/usr/lib/sgx-mesa/pkgconfig
+	local _stray
+	_stray=$(find "$pkgdir" -mindepth 1 \( -path "$pkgdir/usr" -o -path "$pkgdir/usr/lib" \
+		-o -path "$pkgdir/usr/lib/sgx-mesa" -o -path "$pkgdir/usr/lib/sgx-mesa/*" \) -prune -o -print)
+	[ -z "$_stray" ] || die "files outside /usr/lib/sgx-mesa: $_stray"
+	[ -e "$pkgdir"/usr/lib/sgx-mesa/libEGL.so.1 ] && [ -e "$pkgdir"/usr/lib/sgx-mesa/dri/sgx_dri.so ] \
+		|| die "libEGL.so.1 or dri/sgx_dri.so missing"
+}
+
+sha512sums="SKIP"

@@ -1,0 +1,10 @@
+# One shot per boot, two minutes in: off the boot path, and a no-op (condition
+# skip, no wakeup) once the blobs are installed.
+[Unit]
+Description=Fetch the PowerVR SGX540 userspace after boot
+
+[Timer]
+OnBootSec=2min
+
+[Install]
+WantedBy=timers.target

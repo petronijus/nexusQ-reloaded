@@ -1,0 +1,101 @@
+#!/bin/sh
+# nq-sgx-fetch: download the PowerVR SGX540 userspace blobs (TI DDK
+# 1.17.4948957, ti443x) onto this unit, verify them, install them.
+#
+# The blobs are TI's, under the TI TSPA, and are not redistributed by this
+# project: no image and no OTA repo carries them. Each unit fetches the
+# pinned, unmodified files itself, the first time it has network, and checks
+# every byte against the sha256 list shipped in the nexusq-sgx package.
+#
+#   1. each file from TI's git at the pinned commit; per file, Maemo Leste's
+#      mirror of the same files is the fallback origin;
+#   2. every file must match its pinned sha256, or nothing is installed;
+#   3. the verified set replaces $NQ_SGX_DIR/lib (two renames, the old set
+#      out of the way first), with the .so.1 and .so names the DDK dlopen()s,
+#      and .complete marks it whole.
+#
+# Exit status: 0 installed or already complete, 1 download or verification
+# failed (the old set, if any, stays in place).
+set -eu
+
+DIR=${NQ_SGX_DIR:-/var/lib/sgx-ddk}
+SUMS=${NQ_SGX_SUMS:-/usr/share/nexusq-sgx/ti443x.sha256}
+WGET=${NQ_SGX_WGET:-wget}
+TI_COMMIT=84a396a4fb379f10931421e489ac8a199d6a9f2c
+MAEMO_COMMIT=a9dbdc75233dc0ca5fe2622dfffc44f164843c1f
+TI_URL=${NQ_SGX_TI_URL:-https://git.ti.com/cgit/graphics/omap5-sgx-ddk-um-linux/plain}
+MAEMO_URL=${NQ_SGX_MAEMO_URL:-https://raw.githubusercontent.com/maemo-leste/sgx-ddk-um/$MAEMO_COMMIT}
+
+log() { echo "nq-sgx-fetch: $*"; }
+
+if [ -f "$DIR/lib/.complete" ] && (cd "$DIR/lib" && sha256sum -c "$SUMS" >/dev/null 2>&1); then
+	log "already installed and verified in $DIR/lib"
+	exit 0
+fi
+
+mkdir -p "$DIR"
+# A run killed mid-download (TimeoutStartSec, shutdown) leaves its temp dir;
+# only one run is ever active (systemd), so every leftover is stale.
+rm -rf "$DIR"/.fetch.* "$DIR"/lib.old
+tmp=$(mktemp -d "$DIR/.fetch.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' INT TERM
+
+# Primary and fallback URL of one pinned file.
+urls() {
+	case $1 in
+	LICENSE)
+		echo "$TI_URL/LICENSE?id=$TI_COMMIT"
+		;;
+	*)
+		echo "$TI_URL/targetfs/ti443x_linux/lws-generic/release/usr/lib/$1?id=$TI_COMMIT"
+		echo "$MAEMO_URL/ti443x/usr/lib/$1"
+		;;
+	esac
+}
+
+fetch_one() {
+	name=$1 want=$2
+	for url in $(urls "$name"); do
+		rm -f "$tmp/$name"
+		if "$WGET" -q -T 30 -O "$tmp/$name" "$url" 2>/dev/null &&
+			[ "$(sha256sum "$tmp/$name" | cut -d' ' -f1)" = "$want" ]; then
+			return 0
+		fi
+		log "$name: not usable from ${url%%\?*}"
+	done
+	return 1
+}
+
+while read -r sum name; do
+	[ -n "$name" ] || continue
+	fetch_one "$name" "$sum" || {
+		log "$name: no origin delivered the pinned file; nothing installed"
+		exit 1
+	}
+done <"$SUMS"
+
+(cd "$tmp" && sha256sum -c "$SUMS" >/dev/null 2>&1) || {
+	log "verification of the whole set failed; nothing installed"
+	exit 1
+}
+
+for f in "$tmp"/*.so.*; do
+	base=${f##*/}
+	stem=${base%%.so.*}
+	chmod 0755 "$f"
+	ln -s "$base" "$tmp/$stem.so.1"
+	ln -s "$base" "$tmp/$stem.so"
+done
+chmod 0644 "$tmp/LICENSE"
+touch "$tmp/.complete"
+chmod 0755 "$tmp"
+
+# Swap in the new set; the old one (if any) goes only after the new is in place.
+if [ -d "$DIR/lib" ]; then
+	mv "$DIR/lib" "$DIR/lib.old"
+fi
+mv "$tmp" "$DIR/lib"
+trap - EXIT
+rm -rf "$DIR/lib.old"
+log "installed TI DDK ti443x @${TI_COMMIT%"${TI_COMMIT#????????}"} in $DIR/lib"

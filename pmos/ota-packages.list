@@ -82,3 +82,12 @@ shairport-sync
 alsa-utils
 alsa-utils-systemd
 alsa-utils-udev
+
+# The SGX540 GPU for the HDMI desktop (device r127 depends on both, so an OTA
+# without them would hold the device package back). nexusq-sgx is our glue only;
+# NO TI binary is in it or anywhere in the repo: each unit fetches the pinned
+# blobs itself (nq-sgx-fetch). nexusq-sgx-mesa is Mesa's sgx frontend in a
+# private prefix (/usr/lib/sgx-mesa), never replacing Alpine's Mesa.
+# docs/gpu-sgx540/route-a-musl-2026-10-12.md
+nexusq-sgx
+nexusq-sgx-mesa
