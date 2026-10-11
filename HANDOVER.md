@@ -122,8 +122,10 @@ Open, in order:
    (`companion/app/tool/store/make_store_art.sh` renders both), and five
    phone screenshots (2026-10-11, Petr's Pixel 9 Pro Fold, outer display, app
    1.27.1+68 debug against the Prague Q): home, equalizer, settings, devices,
-   health. Cropped to Play's 2:1 limit and clear of personal data (the Spotify
-   account name, the WiFi SSID). Not shot: the setup wizard, because a debug
+   health. Clear of personal data (the Spotify account name, the WiFi SSID),
+   and fitted onto a black 1080x1920 canvas, because Play now takes phone
+   screenshots only at exactly 9:16 or 16:9 (taller shots scaled down,
+   shorter ones padded below). Not shot: the setup wizard, because a debug
    build shows the original app's stock imagery that a release does not carry.
 3. ✅ **Privacy policy page** (Play requires one), published 2026-10-11 at
    https://petronijus.github.io/nexusQ-reloaded/privacy/ (text approved by
@@ -131,11 +133,27 @@ Open, in order:
    copied by hand to gh-pages `privacy/index.html`; the OTA publish leaves it
    alone. That URL goes into the Play Console's privacy policy field, and the
    data safety form follows it: no data collected or shared.
-4. **Play Console** (Petr's personal account, created after Nov 2023): create
-   the app (Google-generated app signing key; our release key is the upload
-   key), store listing, data safety, content rating, then a **closed test with
-   12 testers for 14 days** before production. Petr gathers the testers. I can
-   drive the console in Chrome; Petr confirms each submission.
+4. **Play Console** — the developer account is on **Petr's gmail Google
+   account**, not on petronijus@bastla.com (that developer account was
+   closed by Google on 2024-04-07 for inactivity; ignore it). Done
+   2026-10-11: app "Nexus Q Reloaded" (`org.nexusq.nexusq_companion`, app id
+   4973283573535202951) created, free, automatic protection on; every App
+   content declaration saved (privacy policy URL; sign-in: no account, the
+   reviewer uses the connect screen's **Demo** button; no ads; 18+; content
+   rating PEGI 3 / ESRB Everyone with petronijus@bastla.com as the IARC
+   contact; data safety: nothing collected or shared; no advertising ID;
+   not a government, financial or health app); store settings (Music &
+   Audio, contact petronijus@bastla.com, website the GitHub repo); the
+   default store listing from fastlane (texts, icon, feature graphic, five
+   screenshots; AI label: none, the art is hand-written SVG). Next: build
+   the `play` flavor AAB signed with our release key (it becomes the upload
+   key, Google generates the app signing key), a **closed test with 12
+   testers for 14 days**, then apply for production. Petr gathers the
+   testers; he confirms each submission.
+   Also open: **Android developer verification** (Console, left menu) — the
+   GitHub APK's package name and our signing key must be registered there,
+   or certified devices in the countries where it applies stop installing
+   the sideloaded app (the deadline was 2026-09-30).
 5. **F-Droid — on hold:** with the original Google assets F-Droid refuses
    the app (non-free assets); it needs free art in the fdroid flavor first.
    Then: a merge request to `fdroiddata` (Petr's GitLab account) with a
