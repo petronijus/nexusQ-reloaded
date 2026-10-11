@@ -6,6 +6,21 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Changed — the SGX clock runs from DPLL_PER like stock (kernel **6.18.48-r21**, unreleased)
+
+First kernel step of the GPU work (`docs/2026-10-11-gpu-sgx540-groundwork.md`).
+On the 4460 mainline left the SGX functional-clock mux on `dpll_core_m7x2_ck`
+(266.67 MHz, live on r20); stock reparents `gpu_fck` to `dpll_per_m7x2_ck`
+(`vmlinux.bin @0xc0075f40`) and every stock GPU OPP is a divider of DPLL_PER.
+Patch 0062 adds the `&sgx_module` assigned-clocks block mainline carries only
+for the 4430: parent `dpll_per_m7x2_ck`, 307.2 MHz (stock OPP100). Nothing uses
+the GPU yet, so the clock runs only for ti-sysc's revision read at probe.
+307.2 MHz needs VDD_CORE ≥ 1.127 V; the stock x-loader programs VCORE1 to
+1.139 V on every boot (`docs/gpu-sgx540/power-clocks-pm.md` Addendum §7).
+384 MHz needs 1.25 V and stays unused. DPLL_PER's other outputs (the TAS5713
+MCLK included) do not move: the M7 divider already ran at 307.2 MHz and has no
+`ti,set-rate-parent`.
+
 ### Fixed — the output picker spoke Czech (`nexusq-control` **r65**, app **1.27.1+68**, unreleased)
 
 Found on 2026-10-11 while taking the store screenshots: the home screen's

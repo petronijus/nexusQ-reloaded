@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000062 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 11 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ARM: dts: omap4-steelhead: run the SGX from DPLL_PER like stock
+
+On the 4460 mainline leaves the SGX functional-clock mux on its reset
+parent, dpll_core_m7x2_ck, so the GPU would run at 266.67 MHz (live on
+6.18.48-r20: l3-gfx-clkctrl:0000:24 <- dpll_core_m7x2_ck 266666667).
+Stock reparents gpu_fck to dpll_per_m7x2_ck in
+omap4_steelhead_display_init() (vmlinux.bin @0xc0075f40), and all three
+stock 446x GPU OPPs (153.6/307.2/384 MHz) are dividers of DPLL_PER.
+Mainline carries the same block only in omap443x.dtsi.
+
+Assign the parent and stock's OPP100 rate, 307.2 MHz, on the ti-sysc
+target module (the binding forbids clocks on gpu@0). It needs VDD_CORE
+>= 1.127 V; the stock x-loader programs VCORE1 to 1.139 V on every boot.
+384 MHz needs 1.25 V and mainline cannot scale VDD_CORE, so it is not
+used. dpll_per_m7x2_ck has no ti,set-rate-parent and already runs at
+307.2 MHz, so no other DPLL_PER output moves (M3 -> TAS5713 MCLK
+included). ti-sysc enables the clock only briefly at probe for the
+revision read; it runs only once a GPU driver binds.
+
+Precondition: 307.2 MHz relies on the x-loader's VCORE1 setpoint and
+on CORE never entering RET (0055/0057 keep it out), so the TWL6030
+never drops VCORE1 to its sleep value. Enabling CORE RET, or binding a
+GPU driver before the kernel sends the CORE ON voltage itself, voids it.
+
+Audited against stock: docs/gpu-sgx540/stock-ground-truth.md §4,
+docs/gpu-sgx540/power-clocks-pm.md Addendum §7.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+diff --git a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+--- a/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
+@@ -908,6 +908,31 @@
+ };
+ 
+ /*
++ * GPU (PowerVR SGX540 rev 1.2.0): run the functional clock from DPLL_PER M7,
++ * as stock does. Stock omap4_steelhead_display_init() calls
++ * clk_set_parent(gpu_fck, dpll_per_m7x2_ck), and every stock 446x GPU OPP
++ * (153.6 / 307.2 / 384 MHz at VDD_CORE 962 / 1127 / 1250 mV) is a divider of
++ * DPLL_PER x2 = 1536 MHz. Mainline does this only for the 4430
++ * (omap443x.dtsi, 307.2 MHz, "like droid4 stock"); omap4460.dtsi has no such
++ * block, so without it the SGX runs from dpll_core_m7x2_ck at 266.67 MHz.
++ *
++ * 307.2 MHz is stock OPP100 and needs VDD_CORE >= 1.127 V; the x-loader sets
++ * VCORE1 to 1.139 V on every boot. Mainline has no VDD_CORE scaling, so
++ * 384 MHz (OPP-OV, 1.25 V) is deliberately not used. dpll_per_m7x2_ck has no
++ * ti,set-rate-parent, so the rate request cannot move DPLL_PER or its other
++ * outputs. The img,powervr-sgx binding forbids clocks on the gpu@0 child for
++ * ti,omap4430-gpu, so the assignment sits on the ti-sysc target module.
++ * Applied when ti-sysc probes the module; the clock is enabled only briefly
++ * for the ti-sysc revision read at probe and runs only once a GPU driver binds.
++ */
++&sgx_module {
++	assigned-clocks = <&l3_gfx_clkctrl OMAP4_GPU_CLKCTRL 24>,
++			  <&dpll_per_m7x2_ck>;
++	assigned-clock-rates = <0>, <307200000>;
++	assigned-clock-parents = <&dpll_per_m7x2_ck>;
++};
++
++/*
+  * MPU cpufreq: cpu-supply = the VC-bridge regulator (drives the TPS62361 via the
+  * Voltage Controller, VP force-update). OPP table = OPP50/100/Turbo/Nitro
+  * (350 / 700 / 920 / 1200 MHz); the cpu-supply scales VDD_MPU 1025..1380 mV with
