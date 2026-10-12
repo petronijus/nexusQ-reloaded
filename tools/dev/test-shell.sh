@@ -16,7 +16,7 @@ set -uo pipefail
 lane="${1:-}"
 [[ "$lane" == host || "$lane" == docker ]] || { echo "usage: $0 host|docker" >&2; exit 2; }
 
-root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root" || exit 1
 
 # Suites build ext4 images (mkfs.ext4 -d, debugfs). Homebrew's e2fsprogs is

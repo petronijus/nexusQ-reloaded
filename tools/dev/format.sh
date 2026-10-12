@@ -29,7 +29,7 @@ set -uo pipefail
 # One ruff for every machine: formatter output changes between releases.
 RUFF=ruff@0.16.9
 
-root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root" || exit 1
 
 check=false mid_edit=false

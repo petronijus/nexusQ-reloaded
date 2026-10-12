@@ -20,20 +20,51 @@ ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad() { printf '  \033[31m✗\033[0m %s\n      → %s\n' "$1" "$2"; fail=1; }
 warn() { printf '  \033[33m!\033[0m %s\n      → %s\n' "$1" "$2"; }
 has() { command -v "$1" >/dev/null 2>&1; }
-if [[ "$(uname)" == Darwin ]]; then pkg="brew install"; else pkg="brew install (or your distro's package)"; fi
+
+# The first version number in a command's output.
+ver() { "$@" 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
+# at_least <have> <want>: version comparison by sort -V.
+at_least() { [[ -n "$1" && "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; }
+# The pacman package that owns a tool, if pacman installed it.
+pacman_pkg() { has pacman && has "$1" && pacman -Qqo "$(command -v "$1")" 2>/dev/null; }
+# tool_ver <tool> <args…>: the tool's own answer, else its package's version
+# (distro builds can lack the stamp: Arch's gitleaks prints "version is set
+# by build process").
+tool_ver() {
+  local v pkg
+  v="$(ver "$@")"
+  if [[ -z "$v" ]] && pkg="$(pacman_pkg "$1")"; then
+    v="$(pacman -Q "$pkg" | awk '{print $2}' | grep -Eo '^[0-9]+\.[0-9]+(\.[0-9]+)?')"
+  fi
+  printf '%s' "$v"
+}
+# install <brew-pkg> [apt-pkg] [pacman-pkg]: how to install a package on this
+# machine. A package given an apt name comes from apt on Ubuntu even when
+# Homebrew is there (docs/development.md, Linux); the rest from Homebrew.
+install() {
+  if has pacman; then echo "sudo pacman -S ${3:-$1}"
+  elif [[ -n "${2:-}" ]] && has apt-get; then echo "sudo apt install $2"
+  elif has brew; then echo "brew install $1"
+  elif has apt-get; then echo "sudo apt install $1"
+  else echo "install $1 (docs/development.md, Toolchain)"; fi
+}
 
 echo "Dev tools"
-for t in just lefthook gitleaks uv shellcheck; do
-  has "$t" && ok "$t" || bad "$t missing" "$pkg $t"
+for t in just lefthook uv; do
+  has "$t" && ok "$t" || bad "$t missing" "$(install "$t")"
 done
+has shellcheck && ok shellcheck || bad "shellcheck missing" "$(install shellcheck shellcheck)"
+# The pre-commit hook runs `gitleaks git --pre-commit --staged` (8.19+).
+v="$(tool_ver gitleaks version)"
+at_least "$v" 8.19 && ok "gitleaks $v" || bad "gitleaks ${v:-missing or unknown version} (want ≥ 8.19)" "$(install gitleaks)"
 if has ktlint; then
   v="$(ktlint --version 2>/dev/null | awk '{print $NF}')"
-  [[ "$v" == "$KTLINT" ]] && ok "ktlint $v" || bad "ktlint $v (want $KTLINT: its output changes between releases)" "$pkg ktlint (pin $KTLINT)"
+  [[ "$v" == "$KTLINT" ]] && ok "ktlint $v" || bad "ktlint $v (want $KTLINT: its output changes between releases)" "$(install ktlint) (pin $KTLINT)"
 else
-  bad "ktlint missing" "$pkg ktlint"
+  bad "ktlint missing" "$(install ktlint)"
 fi
 has python3 && ok "python3 $(python3 -c 'import sys; print(sys.version.split()[0])') (Claude Code hooks, docs check)" \
-  || bad "python3 missing (the Claude Code hooks and the docs check need it)" "$pkg python3"
+  || bad "python3 missing (the Claude Code hooks and the docs check need it)" "$(install python python3 python)"
 
 echo "Toolchain"
 if has uv; then
@@ -50,9 +81,9 @@ else
 fi
 if [[ "$(uname)" == Linux ]]; then
   if has cc && has make; then ok "C compiler and make (nexusqd, nq-healthd, alsa-vol unit tests)"
-  else bad "cc or make missing (the C unit tests build on the host)" "apt install build-essential"; fi
+  else bad "cc or make missing (the C unit tests build on the host)" "$(install gcc build-essential base-devel)"; fi
   if printf '#include <pulse/volume.h>\n' | cc -E -x c - >/dev/null 2>&1; then ok "PulseAudio headers (alsa-vol scale test)"
-  else bad "pulse/volume.h missing (the alsa-vol scale test includes it)" "apt install libpulse-dev"; fi
+  else bad "pulse/volume.h missing (the alsa-vol scale test includes it)" "$(install pulseaudio libpulse-dev libpulse)"; fi
 else
   # The daemons use Linux APIs: off Linux, tools/dev/test-c.sh builds them in Alpine.
   if docker info >/dev/null 2>&1; then ok "Docker running (the C unit tests build in Alpine off Linux)"
@@ -63,7 +94,7 @@ e2fs=""
 has brew && e2fs="$(brew --prefix e2fsprogs 2>/dev/null)"
 if has mkfs.ext4 && has debugfs; then ok "e2fsprogs (mkfs.ext4, debugfs)"
 elif [[ -n "$e2fs" && -x "$e2fs/sbin/mkfs.ext4" ]]; then ok "e2fsprogs (Homebrew, keg-only; tools/dev/test-shell.sh adds it to PATH)"
-else bad "e2fsprogs missing (the OTA-parity and A/B suites build ext4 images)" "$pkg e2fsprogs"; fi
+else bad "e2fsprogs missing (the OTA-parity and A/B suites build ext4 images)" "$(install e2fsprogs e2fsprogs)"; fi
 
 echo "Full gate and image build (warnings)"
 if has docker; then
@@ -79,8 +110,11 @@ else
 fi
 
 echo "Project"
-root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-[[ -x "$root/.git/hooks/pre-commit" ]] && grep -q lefthook "$root/.git/hooks/pre-commit" \
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# --git-path: in a linked worktree `.git` is a file and the hooks live in the
+# main checkout's git directory.
+pre_commit="$(git -C "$root" rev-parse --path-format=absolute --git-path hooks/pre-commit)"
+[[ -x "$pre_commit" ]] && grep -q lefthook "$pre_commit" \
   && ok "git hooks installed" || warn "git hooks not installed" "just setup (runs lefthook install)"
 [[ -d "$root/companion/app/.dart_tool" ]] && ok "companion app dependencies fetched" \
   || warn "companion app dependencies not fetched" "just setup (runs flutter pub get)"

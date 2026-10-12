@@ -18,8 +18,11 @@ Project configuration lives in `.claude/` (committed). What it does for you:
     `git grep`, which skip gitignored files); a call the guard cannot parse
     is denied;
     editing `kernel/patches/*.patch` by hand asks first;
-  - when you finish a turn with code changes, `just check` runs; if it fails,
-    you get the output and must fix it before stopping.
+  - when you finish a turn with code changes, `just check` runs (not while
+    background agents of the session are still working: it waits for the
+    turn in which the last one reports back); if it fails, you get the output
+    and must fix it before stopping. There is no `check-affected` lane: the
+    components name each other, so a change reaches the whole repo.
 - **fastboot**: `fastboot flash boot|userdata` and friends are allowed without
   asking; writing the `bootloader` or `xloader` partition — by fastboot, or
   `dd` on the unit — is denied by the guard hook, whatever the allow rules say.
@@ -38,6 +41,15 @@ Project configuration lives in `.claude/` (committed). What it does for you:
 | `nexusq-diag` | after every flash or upgrade, and to diagnose a unit |
 | `stock-parity-auditor` | before building a kernel/DTS/driver fix, to compare with stock |
 | `nexusq-ios-release` | to ship the app's iOS build to TestFlight |
+
+## Committing
+
+When Petr asks to run the checks and commit a stretch of work, follow the
+global `commit-in-background` skill: snapshot the finished tree, let a
+background fork split it into small commits and verify each one in its own
+git worktree (`just ci` after the last), keep working meanwhile, then adopt
+its commits with `git reset --mixed`. Small diffs are committed inline.
+Never push without its own word.
 
 ## Skills
 

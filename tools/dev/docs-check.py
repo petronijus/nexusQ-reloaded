@@ -384,18 +384,37 @@ class Repo:
         return True
 
     def ignored(self, rels: list[str]) -> set[str]:
+        """The paths of `rels` git ignores.
+
+        git refuses a path that runs through a symlink ("beyond a symbolic
+        link") and fails the whole call, so such a path is asked about
+        through the link: what lies under an ignored link (a private overlay
+        linked into the tree) is ignored with it, and under a link git does
+        not ignore, a clone has nothing either way.
+        """
         if not rels:
             return set()
+        asked = {rel: self._through_symlink(rel) for rel in rels}
         out = git(
             self.root,
             "check-ignore",
             "--no-index",
             "--stdin",
             "-z",
-            stdin="\0".join(rels) + "\0",
+            stdin="\0".join(sorted(set(asked.values()))) + "\0",
             ok=(0, 1),
         )
-        return {p for p in out.split("\0") if p}
+        hits = {p for p in out.split("\0") if p}
+        return {rel for rel, path in asked.items() if path in hits}
+
+    def _through_symlink(self, rel: str) -> str:
+        """`rel`, or its outermost ancestor that is a symlink on disk."""
+        parts = rel.split("/")
+        for n in range(1, len(parts)):
+            prefix = "/".join(parts[:n])
+            if (self.root / prefix).is_symlink():
+                return prefix
+        return rel
 
 
 def git(root: Path, *args: str, stdin: str | None = None, ok=(0,)) -> str:

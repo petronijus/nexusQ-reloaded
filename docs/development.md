@@ -29,7 +29,8 @@ hook runs the fast lane on every push.
 | e2fsprogs | any | the OTA-parity and A/B suites build ext4 images (`mkfs.ext4 -d`, `debugfs`) |
 | cc, make, libpulse headers | any | Linux: the C unit tests build on the host. macOS: they build in an Alpine container (the daemons use Linux APIs), so Docker is part of the fast lane there |
 | Docker | any | the docker test lane, the ALSA integration test, the image build |
-| just, lefthook, gitleaks, uv | current | task runner, git hooks, secret scan, Python |
+| just, lefthook, uv | current | task runner, git hooks, Python |
+| gitleaks | ≥ 8.19 | the pre-commit secret scan (`gitleaks git --pre-commit --staged`) |
 
 `just doctor` checks all of it and prints the fix for anything missing.
 
@@ -46,7 +47,9 @@ Flutter is a git checkout of the tag.
 
 `apt install shellcheck e2fsprogs build-essential libpulse-dev docker.io`; the rest from
 Homebrew on Linux (`brew install just lefthook gitleaks uv ktlint`) or the
-projects' own installers. Flutter is a git checkout of the tag.
+projects' own installers. Flutter is a git checkout of the tag. On Arch
+(Omarchy) `just doctor` names the pacman package for anything missing, and
+reads gitleaks' version from pacman (Arch's build prints no version).
 
 ### Then, in every clone
 
