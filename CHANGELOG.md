@@ -6,6 +6,21 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — the kernel apk's /boot layout no longer follows postmarketos-installkernel (kernel **6.18.48-r27**, unreleased)
+
+- `postmarketos-installkernel 3-r0`, pulled from the binary repo by the
+  2026-10-12 image build (local pmaports pin 2-r0), makes `zinstall` write
+  `boot/vmlinuz-<release>` and `boot/System.map-<release>` and no
+  `boot/config`. The image build then shipped an **empty rootfs `/boot`** with
+  a green exit (the on-device mkinitfs trigger fails on every apk transaction,
+  the app reports every update as failed), and `nq-kernel-ota` would refuse
+  such a kernel apk ("apk has no /boot/vmlinuz"). The kernel `package()` now
+  pins `boot/vmlinuz`, `boot/System.map`, `boot/config` and dies on any other
+  layout; `docker-build.sh` fails the build instead of warning when the
+  payload is missing; `scripts/verify-rootfs.sh` gained the check (seen red on
+  the defective image: 3 FAIL). The r26 apk built that evening is not
+  published and must not be.
+
 ### Fixed — PID 1 hung after a USB cable pull until a host was plugged in again (device **r128**, unreleased)
 
 - `serial-getty@ttyGS0` gets `TTYReset=no` (drop-in

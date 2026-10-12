@@ -2025,7 +2025,16 @@ PYEOF
             done
             echo "  Populated rootfs /boot with the kernel payload (vmlinuz + dtbs) so the mkinitfs trigger succeeds on-device"
         else
-            echo "  WARNING: $ROOTFS/boot/vmlinuz not found -- shipped /boot stays EMPTY, the mkinitfs trigger WILL fail on-device"
+            # An empty /boot is a broken image (every apk transaction fails on
+            # the unit), not a warning: on 2026-10-12 a renamed vmlinuz-<release>
+            # from postmarketos-installkernel 3 got through as a green build.
+            # The kernel aport now pins boot/vmlinuz; this stops any drift.
+            echo "  SHIP GATE FAILED: $ROOTFS/boot/vmlinuz not found -- the shipped /boot"
+            echo "  would be EMPTY and the mkinitfs trigger would fail on-device. Refusing"
+            echo "  to emit a flashable image. $ROOTFS/boot has:"
+            ls -la "$ROOTFS/boot" || true
+            sync; sudo umount "$RP_MNT"; sudo losetup -d "$RP_LOOP"; rmdir "$RP_MNT"
+            exit 1
         fi
         # --- Baked-in device access, written into the ROOTFS, not into a package ---
         # Until r90 these three files were installed BY device-google-steelhead,

@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=26
+pkgrel=27
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -221,10 +221,30 @@ package() {
 	install -D "$builddir"/include/config/kernel.release \
 		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
 
+	local _rel _ko _f
+	_rel=$(cat "$builddir"/include/config/kernel.release)
+
+	# /boot keeps the layout every consumer reads -- boot/vmlinuz,
+	# boot/System.map, boot/config: the image's rootfs /boot (docker-build.sh
+	# Phase 10, which the on-device mkinitfs trigger needs), nq-kernel-ota and
+	# nq-rootfs-ab. zinstall's names come from postmarketos-installkernel, and
+	# version 3 (pulled from the binary repo on 2026-10-12) installs
+	# vmlinuz-<release> and System.map-<release> and no config, which shipped an
+	# empty rootfs /boot. Pin the names here instead of following it.
+	for _f in vmlinuz System.map config; do
+		if [ -e "$pkgdir/boot/$_f-$_rel" ]; then
+			mv "$pkgdir/boot/$_f-$_rel" "$pkgdir/boot/$_f"
+		fi
+	done
+	[ -e "$pkgdir/boot/config" ] || install -m644 "$builddir/.config" "$pkgdir/boot/config"
+	for _f in vmlinuz System.map config; do
+		[ -f "$pkgdir/boot/$_f" ] || die "boot/$_f is missing from the package"
+	done
+	[ -z "$(find "$pkgdir/boot" -maxdepth 1 -name '*-[0-9]*' -type f)" ] \
+		|| die "a versioned file is left in boot/: $(ls "$pkgdir/boot")"
+
 	# The SGX540 module is part of THIS package on purpose: nq-kernel-ota
 	# carries /lib/modules/<release> only from the kernel apk. Never split it.
-	local _rel _ko
-	_rel=$(cat "$builddir"/include/config/kernel.release)
 	_ko=$(find "$pkgdir/lib/modules/$_rel" -name pvrsrvkm_omap4_sgx540_120.ko)
 	[ -n "$_ko" ] || die "pvrsrvkm_omap4_sgx540_120.ko is missing from the package"
 	[ -z "$(find "$pkgdir/lib/modules/$_rel" -name 'pvrsrvkm_omap4_sgx544_*.ko')" ] \

@@ -176,6 +176,23 @@ else
 fi
 
 say ""
+say "=== 5b. kernel payload in the rootfs /boot (2026-10-12) ==="
+# The on-device mkinitfs trigger runs on every apk transaction and fails with
+# "No kernel found in /boot" when this is empty -- the app then reports every
+# system update as failed. nq-kernel-ota and nq-rootfs-ab read boot/config.
+# installkernel 3 renamed zinstall's output once and docker-build.sh shipped an
+# empty /boot with a green build; this is the gate that was missing.
+for f in boot/vmlinuz boot/config; do
+    if [ -s "$MNT/$f" ]; then ok "$f present" "$(stat -c %s "$MNT/$f") B"
+    else bad "$f present" "missing or empty: the mkinitfs trigger fails on-device"; fi
+done
+if [ -n "$(find "$MNT/boot/dtbs" -name '*steelhead*.dtb' 2>/dev/null | head -1)" ]; then
+    ok "boot/dtbs has the steelhead DTB"
+else
+    bad "boot/dtbs has the steelhead DTB" "missing"
+fi
+
+say ""
 say "=== 6. python3 integrity gate ==="
 # The gate takes the .so itself, not a rootfs root — find it inside the image.
 # This is the [[sparse-dontcare-stale-emmc-corrupts-flash]] backstop: a
