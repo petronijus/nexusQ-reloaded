@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# nq-gpu-bench -- how fast the SGX540 renders, against the recorded baseline.
+#
+# Runs glmark2-es2-wayland on the unit's HDMI desktop through mesa-sgx (the
+# client gets the GPU environment from sgx-env, the way the desktop's labwc
+# does), with a 1 Hz log of the CPU clock, the die temperature and the GPU's
+# runtime-PM state, and compares the score with BASELINE below.
+#
+# Preconditions on the unit: the desktop runs on the GPU (start it from the
+# app; nexusq-desktop-session logs "GPU (labwc gles2 on the SGX540)"), and
+# glmark2 is installed (`apk add glmark2`; a test tool, not in the image).
+# Nothing else is touched: no governor, no module, no audio. The run takes
+# about six minutes and puts the GPU and one core under load; the die reached
+# 88 C in the baseline run. The screen shows the benchmark while it runs.
+#
+# Usage:
+#   nq-gpu-bench [OUTDIR] [-- extra glmark2 args, e.g. -b build -b texture]
+# Results: OUTDIR/<timestamp>/{glmark2.txt,monitor.txt,summary.txt}
+#
+# What the numbers mean and the baseline's conditions:
+# docs/gpu-sgx540/performance-2026-10-13.md.
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+NQCTL="${NQCTL:-$HERE/nqctl}"   # NQCTL: the test points it at a fake
+REPO="$(cd "$HERE/../.." && pwd)"
+
+# Kernel 6.18.48-r27, device r128, mesa-sgx 24.0.9-r0, DDK 1.17.4948957, SGX at
+# 307.2 MHz, 1280x720 fullscreen, RGBA8888 + depth 24 + stencil 8 (2026-10-13).
+BASELINE=81
+# A run below this share of the baseline is a regression worth a look; glmark2
+# repeats within a few points on this unit (72 and 72 for the same five scenes).
+REGRESSION=0.90
+# The SGX540 offers no 8888 config without depth/stencil and no 565 one, and
+# glmark2's default asks for depth 32: name the one it has.
+VISUAL="red=8:green=8:blue=8:alpha=8:depth=24:stencil=8"
+
+OUTROOT="$REPO/nq-captures/gpu-bench"
+extra=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--) shift; extra=("$@"); break ;;
+	*) OUTROOT="$1"; shift ;;
+	esac
+done
+DIR="$OUTROOT/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$DIR"
+say() { printf '%s\n' "$*" >&2; }
+
+host=$("$NQCTL" run hostname 2>/dev/null) || { say "unit unreachable (nqctl)"; exit 1; }
+[ "$host" = steelhead ] || { say "hostname is '$host', not steelhead; refusing"; exit 1; }
+
+# The device side, sent over stdin: no file is left on the unit.
+"$NQCTL" run "sh -s -- $(printf '%q ' "$VISUAL" "${extra[@]}")" >"$DIR/raw.txt" 2>&1 <<'DEVICE'
+VISUAL=$1; shift
+command -v glmark2-es2-wayland >/dev/null || { echo "NQB-ERR glmark2 not installed (apk add glmark2)"; exit 2; }
+S=$(pgrep -x lxqt-session | head -1)
+[ -n "$S" ] || { echo "NQB-ERR no desktop session running"; exit 2; }
+grep -q "GPU (labwc gles2" /home/user/.local/state/tinydm.log 2>/dev/null \
+	|| { echo "NQB-ERR the desktop does not run on the GPU (see tinydm.log)"; exit 2; }
+ENVS=$(tr '\0' '\n' </proc/"$S"/environ | grep -E '^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|HOME|USER|PATH|XDG_SESSION_TYPE)=' | tr '\n' ' ')
+GPM=/sys/devices/platform/ocp/5600fe00.target-module/power
+# Bounded on its own (the glmark2 timeout plus a margin): an ssh that drops
+# mid-run must not leave it looping on the unit.
+(i=0; while [ $i -lt 960 ]; do
+	i=$((i + 1))
+	echo "NQB-MON $(cut -d' ' -f1 /proc/uptime) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/class/thermal/thermal_zone0/temp) $(cat $GPM/runtime_status)"
+	sleep 1
+done) &
+MON=$!
+# sgx-env scopes the GPU environment to the process it execs (its children get
+# a clean one), so glmark2 must be that process: the timeout goes outside.
+timeout 900 su user -s /bin/sh -c "env -i $ENVS sh -c '. /usr/share/nexusq-sgx/sgx-env; nq_sgx_ready && nq_sgx_export || { echo NQB-ERR GPU not ready; exit 9; }; exec glmark2-es2-wayland --fullscreen --visual-config $VISUAL $*'" 2>&1
+echo "NQB-RC $?"
+kill $MON
+DEVICE
+
+grep '^NQB-MON ' "$DIR/raw.txt" | cut -d' ' -f2- >"$DIR/monitor.txt"
+grep -v '^NQB-MON ' "$DIR/raw.txt" >"$DIR/glmark2.txt"
+
+{
+	if grep -q '^NQB-ERR' "$DIR/glmark2.txt"; then
+		grep '^NQB-ERR' "$DIR/glmark2.txt"
+		exit 2
+	fi
+	renderer=$(sed -n 's/^ *GL_RENDERER: *//p' "$DIR/glmark2.txt")
+	score=$(sed -n 's/.*glmark2 Score: *\([0-9]*\).*/\1/p' "$DIR/glmark2.txt")
+	echo "renderer  $renderer"
+	echo "score     ${score:-none}   (baseline $BASELINE)"
+	awk '{n++; f[$2]++; if ($3 > t) t = $3; if ($4 == "active") a++}
+	     END { if (!n) exit; printf "die peak  %.1f C over %d s; GPU runtime-active %d%% of the samples\n", t / 1000, n, 100 * a / n;
+	           printf "cpu MHz  "; for (k in f) printf " %d:%d%%", k / 1000, 100 * f[k] / n; print "" }' "$DIR/monitor.txt"
+	grep -E '^PVR|Error' "$DIR/glmark2.txt" | sort | uniq -c | sed 's/^/driver    /'
+	case "$renderer" in
+	*"SGX 540"*) ;;
+	*) echo "VERDICT   FAIL: not rendered on the SGX540"; exit 1 ;;
+	esac
+	if [ "${#extra[@]}" -gt 0 ]; then
+		echo "VERDICT   scenes chosen by hand: no comparison with the full-suite baseline"
+	elif [ -z "$score" ]; then
+		echo "VERDICT   FAIL: no score"; exit 1
+	elif awk -v s="$score" -v b="$BASELINE" -v r="$REGRESSION" 'BEGIN { exit !(s < b * r) }'; then
+		echo "VERDICT   REGRESSION: $score is below $(awk -v b="$BASELINE" -v r="$REGRESSION" 'BEGIN { print int(b * r) }')"
+		exit 1
+	else
+		echo "VERDICT   ok"
+	fi
+} | tee "$DIR/summary.txt"
+rc=${PIPESTATUS[0]}
+say "results in $DIR"
+exit "$rc"

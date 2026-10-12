@@ -196,6 +196,14 @@ MEM_WARN_DAYS = 14.0  # MemAvailable gone within this at the anon growth rate
 MEM_GROWER_KB_H = 50.0  # a service growing slower than this is noise
 MEM_SLICES = ("system.slice", "user.slice", "init.scope")
 
+# The SGX540 (healthd >= device r129: gpu_drv, gpu_rpm, gpu_active_ms, hdmi_on).
+# Idle, the GPU target module runtime-suspends and the GFX domain is off; it is
+# awake only while something renders. docs/gpu-sgx540/power-clocks-pm.md 8.2.
+GPU_AWAKE_FULL = 0.95  # share of an interval that counts as "awake the whole time"
+GPU_NEVER_SLEEPS_S = 600  # a run of fully-awake intervals this long is a finding
+GPU_CLOCK_HZ = "307200000"  # stock OPP100 from dpll_per_m7x2_ck (patch 0062)
+GPU_HEADLESS_PCT = 1.0  # % awake while nothing is on screen that is a finding
+
 
 def slope_per_h(points):
     """Least-squares slope of [(t_s, value)] per hour; None without two
@@ -369,6 +377,40 @@ def busy_run(rows, interval, pred):
         else:
             run = 0
     return best
+
+
+def gpu_window(rows, interval):
+    """What the SGX540 did in the window, from healthd's gpu_* fields; None when
+    the capture predates them. awake_pct is runtime-active ms over wall time;
+    never_sleeps_s is the longest run of intervals it was awake almost entirely;
+    headless_pct is the awake share of the samples with nothing on HDMI."""
+    g = [r for r in rows if "gpu_rpm" in r]
+    if not g:
+        return None
+    measured = [r for r in g if isinstance(r.get("gpu_active_ms"), int) and r["gpu_active_ms"] >= 0]
+    wall_ms = len(measured) * interval * 1000
+    awake_ms = sum(r["gpu_active_ms"] for r in measured)
+    best = run = 0
+    for r in g:
+        a = r.get("gpu_active_ms")
+        if isinstance(a, int) and a >= GPU_AWAKE_FULL * interval * 1000:
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    headless = [r for r in measured if r.get("hdmi_on") == 0]
+    head_wall = len(headless) * interval * 1000
+    head_awake = sum(r["gpu_active_ms"] for r in headless)
+    hot = [r.get("temp_mC") for r in measured if r["gpu_active_ms"] > 0 and isinstance(r.get("temp_mC"), int)]
+    return {
+        "driver_loaded": any(r.get("gpu_drv") == 1 for r in g),
+        "awake_pct": (100.0 * awake_ms / wall_ms) if wall_ms else None,
+        "never_sleeps_s": best * interval,
+        "headless_s": len(headless) * interval,
+        "headless_pct": (100.0 * head_awake / head_wall) if head_wall else None,
+        "temp_peak_awake_C": (max(hot) / 1000 if hot else None),
+        "rpm_last": g[-1].get("gpu_rpm"),
+    }
 
 
 def analyze(rows, events, snap_text, mem_rows=None):
@@ -658,6 +700,36 @@ def analyze(rows, events, snap_text, mem_rows=None):
                     ),
                 )
 
+    # ---- the SGX540: does it sleep when nothing renders (device r129) ----
+    gpu = gpu_window(rows, interval)
+    if gpu and gpu["driver_loaded"]:
+        add(
+            "info",
+            "gpu",
+            "SGX540 awake "
+            + (f"{gpu['awake_pct']:.1f}%" if gpu["awake_pct"] is not None else "?")
+            + f" of the window, runtime PM now '{gpu['rpm_last']}'"
+            + (
+                f"; die peak {gpu['temp_peak_awake_C']:.1f} C while it was awake"
+                if gpu["temp_peak_awake_C"] is not None
+                else ""
+            ),
+        )
+        if gpu["headless_pct"] is not None and gpu["headless_pct"] > GPU_HEADLESS_PCT:
+            add(
+                "warn",
+                "gpu_awake_headless",
+                f"the GPU was awake {gpu['headless_pct']:.1f}% of {gpu['headless_s']} s with nothing on HDMI "
+                "-- a client holding a context, or runtime PM / APM not letting it sleep",
+            )
+        if gpu["never_sleeps_s"] >= GPU_NEVER_SLEEPS_S:
+            add(
+                "warn",
+                "gpu_never_sleeps",
+                f"the GPU stayed awake for {gpu['never_sleeps_s']} s on end -- right only if something "
+                "rendered all that time (video, a visualizer); an idle desktop lets it suspend",
+            )
+
     # ---- kernel errors / pstore ----
     if any(r.get("dmesg_err_new", 0) for r in rows):
         n = sum(r.get("dmesg_err_new", 0) for r in rows)
@@ -681,6 +753,19 @@ def analyze(rows, events, snap_text, mem_rows=None):
             add("warn", "snapshot_truncated", "nq-diag-snapshot did not finish (truncated/blocked)")
         for line in snapshot_block(snap_text, "SYSTEMD", "systemctl --failed --no-legend"):
             add("warn", "failed_unit", f"systemd failed unit: {line[:120]}")
+        # The SGX clock: stock runs it from dpll_per_m7x2_ck at 307.2 MHz (patch
+        # 0062). Anything faster needs VDD_CORE at 1.25 V, which this kernel
+        # neither sets nor measures; anything else means the DT block is gone.
+        for line in snapshot_block(snap_text, "GPU_SGX540", "gpu clock"):
+            f = line.split()
+            if f and f[0] == "l3-gfx-clkctrl:0000:24" and len(f) > 4:
+                if f[4] != GPU_CLOCK_HZ:
+                    add(
+                        "warn",
+                        "gpu_clock",
+                        f"SGX540 functional clock {f[4]} Hz, expected {GPU_CLOCK_HZ} from dpll_per_m7x2_ck "
+                        "(above it needs VDD_CORE 1.25 V; docs/gpu-sgx540/power-clocks-pm.md)",
+                    )
 
     summary = {
         "accounting": acc,
@@ -693,6 +778,7 @@ def analyze(rows, events, snap_text, mem_rows=None):
         "led_frozen_events": len(distressed),
         "led_static_events": len(frozen) - len(distressed),
         "vdd_mismatch_samples": len(mism),
+        "gpu": gpu,
         "worst_severity": (
             "crit"
             if any(f["sev"] == "crit" for f in findings)

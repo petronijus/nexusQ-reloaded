@@ -728,6 +728,54 @@ static void mem_line(char *out, size_t n, long long mono, const char *wall, cons
              mono, wall, bid, avail, anon, shmem, units);
 }
 
+/* ---------- the SGX540 and the HDMI output (device r129) --------------------
+ *
+ * What says whether the GPU sleeps as it should: the driver bound or not, the
+ * GPU target module's runtime-PM state, and how many ms of the last interval
+ * it was runtime-active (genpd powers prm_gfx on exactly while it is). Plain
+ * sysfs reads, no debugfs and no fork. hdmi_on tells nq-health-report whether
+ * anything is on screen, so a GPU kept awake with HDMI off stands out
+ * (docs/gpu-sgx540/power-clocks-pm.md section 8.2).
+ *
+ * gpu_rpm is "none" when the target module has no power directory (a kernel
+ * without the GPU node); gpu_active_ms is -1 on the first sample, and 0 when
+ * the counter went backwards (the module was re-probed). */
+#ifndef GPU_PM
+#define GPU_PM    "/sys/devices/platform/ocp/5600fe00.target-module/power"
+#endif
+#ifndef GPU_MOD
+#define GPU_MOD   "/sys/module/pvrsrvkm_omap4_sgx540_120"
+#endif
+#ifndef HDMI_CONN
+#define HDMI_CONN "/sys/class/drm/card0-HDMI-A-1"
+#endif
+
+struct gpu_reading {
+    int drv;                /* 1 when the SGX module is loaded */
+    char rpm[16];           /* runtime_status: active, suspended, ..., none */
+    long long active_ms;    /* runtime-active ms since the previous sample */
+    int hdmi_on;            /* 1 when the connector is enabled with DPMS On */
+};
+
+static void gpu_sample(struct gpu_reading *g, long long *prev_active)
+{
+    struct stat st;
+    g->drv = stat(GPU_MOD, &st) == 0;
+
+    slurp_line(GPU_PM "/runtime_status", g->rpm, sizeof g->rpm, "none");
+    long long act = slurp_ll(GPU_PM "/runtime_active_time", -1);
+    if (act < 0 || *prev_active < 0)
+        g->active_ms = -1;
+    else
+        g->active_ms = act >= *prev_active ? act - *prev_active : 0;
+    *prev_active = act;
+
+    char en[16], dpms[16];
+    slurp_line(HDMI_CONN "/enabled", en, sizeof en, "");
+    slurp_line(HDMI_CONN "/dpms", dpms, sizeof dpms, "");
+    g->hdmi_on = strcmp(en, "enabled") == 0 && strcmp(dpms, "On") == 0;
+}
+
 /* nexusqd's own counters, cumulative since it started (the report diffs them
  * and uses nq_pid to see a restart): renders = frames computed, ctl = control
  * commands received, this probe's own `debug` included. Asked once a minute,
@@ -1453,6 +1501,7 @@ int main(int argc, char **argv)
     long long prev_nq_ticks = -1, nq_last_tick_move = -1;
     int prev_nq_resp = 1;
     long long prev_pstore = -1, prev_derr = -1, derr_cache = -1;
+    long long prev_gpu_active = -1;
 
     FILE *out = NULL, *ev = NULL;
     if (!once) {
@@ -1638,11 +1687,17 @@ int main(int argc, char **argv)
         long long memav, anon_kb, shmem_kb;
         meminfo_sample(&memav, &anon_kb, &shmem_kb);
 
+        struct gpu_reading gpu;
+        gpu_sample(&gpu, &prev_gpu_active);
+        char gr[32];
+        jstr(gpu.rpm, gr, sizeof gr);
+
         /* --- the sample. Schema frozen: nexusq-mqtt, HA and the app read it.
          * Fields are only ever APPENDED (cstate_*, qos_us since device r106; busy_ms,
          * forks, irqs, unit_us, nq_renders, nq_ctl, ambient_wakes, tap_fixes
          * since r119 -- unit_us only on every 12th sample, see above; nice_ms
-         * since r124; anon_kB, shmem_kB since r125). */
+         * since r124; anon_kB, shmem_kB since r125; gpu_drv, gpu_rpm,
+         * gpu_active_ms, hdmi_on since r129). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -1671,7 +1726,8 @@ int main(int argc, char **argv)
                 "\"busy_ms\":%lld,\"forks\":%lld,\"irqs\":%lld,%s%s%s"
                 "\"nq_renders\":%lld,\"nq_ctl\":%lld,"
                 "\"ambient_wakes\":%lld,\"tap_fixes\":%lld,\"nice_ms\":%lld,"
-                "\"anon_kB\":%lld,\"shmem_kB\":%lld}\n",
+                "\"anon_kB\":%lld,\"shmem_kB\":%lld,"
+                "\"gpu_drv\":%d,\"gpu_rpm\":\"%s\",\"gpu_active_ms\":%lld,\"hdmi_on\":%d}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
@@ -1683,7 +1739,8 @@ int main(int argc, char **argv)
                 *unit_us ? "\"unit_us\":" : "", unit_us, *unit_us ? "," : "",
                 nq_renders, nq_ctl,
                 amb_wakes, tap_fixes, nice_ms,
-                anon_kb, shmem_kb);
+                anon_kb, shmem_kb,
+                gpu.drv, gr, gpu.active_ms, gpu.hdmi_on);
         fflush(dst);
 
         if (once)

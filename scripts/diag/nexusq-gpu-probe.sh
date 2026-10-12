@@ -1,5 +1,7 @@
 #!/bin/sh
-# DRAFT — not built, not tested, not in any build (2026-10-11)
+# Read-only SGX540 probe; used by nq-opp-study2.sh GPU=1 (moved from the GPU
+# drafts 2026-10-11). The everyday GPU checks are in nq-diag-snapshot's
+# GPU_SGX540 section (device r129); this one adds --pmic and --regs.
 #
 # nexusq-gpu-probe.sh -- read-only state of the PowerVR SGX540 on a Nexus Q.
 #

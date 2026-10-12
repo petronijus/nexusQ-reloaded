@@ -407,6 +407,33 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   (97.2 °C on the 2026-07-13 v1.8.2 acceptance, bounded load) —
   still below the 100 °C passive trip, no throttle, but the headroom is thin;
   this is an active watch-item, always report the peak.
+- **GPU — PowerVR SGX540** (device r127+: `nexusq-sgx`, `nexusq-sgx-mesa`; the
+  module `pvrsrvkm_omap4_sgx540_120` is blacklisted on the cmdline and loaded only by
+  `nexusq-sgx.service` when the HDMI desktop starts). The snapshot's `GPU_SGX540`
+  section (device r129+) has all of it; on an older image read it by hand:
+  - **Userspace fetched:** `/var/lib/sgx-ddk/lib/.complete` exists (`nq-sgx-fetch`
+    downloads TI's blobs per unit after boot; they are never in the image).
+    `/etc/nexusq/gpu-off` set = the kill switch, the desktop runs on Pixman.
+  - **Clock:** `clk_summary` shows `l3-gfx-clkctrl:0000:24` under `dpll_per_m7x2_ck` at
+    **307200000** (stock OPP100, patch 0062). Anything else is a finding (`gpu_clock`):
+    266666667 means the DT block is gone, anything above 307.2 MHz needs VDD_CORE at
+    1.25 V, which this kernel neither sets nor measures.
+  - **It sleeps:** with nothing rendering, `/sys/devices/platform/ocp/5600fe00.target-module/power/runtime_status`
+    = `suspended`, `runtime_active_time` does not grow, genpd `prm_gfx` = `off-0`. healthd
+    (r129+) logs `gpu_rpm`/`gpu_active_ms`/`hdmi_on`; the report warns
+    `gpu_never_sleeps` (awake 10 min on end) and `gpu_awake_headless` (awake with
+    nothing on HDMI). C3 stays well used with the desktop up (52 % of cpu0's time,
+    2026-10-13).
+  - **Desktop renderer:** `~user/.local/state/tinydm.log` says
+    `nexusq-desktop-session: GPU (labwc gles2 on the SGX540)` or why it fell back to Pixman.
+  - **Performance (only when asked, it loads the box for ~6 min):**
+    `NQ_WIFI_HOST=<ip> scripts/diag/nq-gpu-bench` -- glmark2 on the SGX540 against the
+    baseline (score 81, 2026-10-13); needs `apk add glmark2` on the unit and the desktop
+    up on the GPU. A score of ~5 or `GL_RENDERER: llvmpipe` means the client never got
+    mesa-sgx.
+  - ⚠️ **Never `devmem` inside `0x5600_0000-0x57ff_ffff`** (the SGX window): a read of a
+    powered-down L3 target can abort the bus. **Never read `/proc/tty/driver/*`** either:
+    on 2026-10-12 it hung CPU0 for good (RCU stall) and the unit needed a power cycle.
 - **SMP** (`nproc` should be **2**, `cat /sys/devices/system/cpu/online` = `0-1`) —
   dual-core works since v1.2.0; flag any single-core boot as a regression.
 - **Audio / TAS5713** (ALSA card `NexusQSpeaker`, McBSP2 → TAS5713): `aplay -l` shows
@@ -766,7 +793,8 @@ BLOCKED (resume hang can't be debugged blind), not a diag finding.
 
 Return:
 1. A **yes/no hardware table**: BT | WiFi (firmware OK? sees 5 GHz? connected?) |
-   eth (carrier) | CPU reaches 1.2 GHz — one evidence line each.
+   eth (carrier) | CPU reaches 1.2 GHz | GPU (userspace fetched? clock 307.2 MHz?
+   sleeps when idle?) — one evidence line each.
 2. The **runtime verdict** (`worst_severity`) + each finding with its evidence
    (quote the timeline/snapshot section), and—if a finding implies a code fix—name
    the file to change (e.g. `pmos/nexusqd/`), not a workaround.

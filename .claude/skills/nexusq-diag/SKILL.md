@@ -62,6 +62,17 @@ directly (`nqctl status`, `nqctl run '<cmd>'`, `nqctl logs --follow`).
 Start with `report.txt` / `report.json`. `summary.worst_severity` is the verdict.
 Findings are tagged by `kind`; interpret them like this:
 
+- **gpu** (info), **gpu_never_sleeps** / **gpu_awake_headless** / **gpu_clock** (warn) —
+  the SGX540 (healthd r129+, snapshot section `GPU_SGX540`). Idle, the GPU target
+  module runtime-suspends and genpd `prm_gfx` is `off-0`; it is awake only while a
+  client renders. `gpu_never_sleeps` is right only if something rendered the whole
+  time (video, a visualizer); `gpu_awake_headless` means awake with nothing on HDMI
+  (a client holding a context, or runtime PM / APM broken). `gpu_clock`: the SGX must
+  run at 307.2 MHz from `dpll_per_m7x2_ck`; above that needs VDD_CORE 1.25 V. Speed is
+  a separate, on-demand check: `scripts/diag/nq-gpu-bench` (baseline score 81).
+  Never `devmem` the SGX window and never read `/proc/tty/driver/*` (hung a unit,
+  2026-10-12).
+
 - **nexusqd_hang** (crit) — the LED daemon is alive but its control socket
   (`nexusled status`) does not answer. This is the classic "ring rotation froze
   and never came back": a *hang*, not a crash, so `Restart=on-failure` never

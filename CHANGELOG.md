@@ -6,6 +6,23 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — the diagnostics watch the GPU (device **r129**, unreleased; host tools)
+
+- `nq-healthd` logs the SGX540 per sample: `gpu_drv`, `gpu_rpm`,
+  `gpu_active_ms` (runtime-active ms in the interval), `hdmi_on`.
+- `nq-diag-snapshot` gained a `GPU_SGX540` section (driver, runtime PM, genpd
+  `prm_gfx`, `gfx_pwrdm` counters, clock, interrupt, fetched userspace, the
+  desktop's renderer, GPU kernel log; no SGX register access).
+- `nq-health-report`: `gpu` (info), `gpu_never_sleeps` and `gpu_awake_headless`
+  (the GPU should be off whenever nothing renders) and `gpu_clock` (it must run
+  at 307.2 MHz from `dpll_per_m7x2_ck`).
+- `scripts/diag/nq-gpu-bench`: glmark2 on the SGX540 against the baseline
+  (score 81 at 1280x720, 2026-10-13); fails a run that fell back to llvmpipe.
+- `nqctl`: the host-identity probe no longer swallows the stdin of
+  `nqctl run 'sh -s' <script`.
+- Measured: `docs/gpu-sgx540/performance-2026-10-13.md` (score 81 against 5 on
+  llvmpipe, GPU-bound, clock 307.2 MHz, GFX off when idle, die peak 88 °C).
+
 ### Fixed — the kernel apk's /boot layout no longer follows postmarketos-installkernel (kernel **6.18.48-r27**, unreleased)
 
 - `postmarketos-installkernel 3-r0`, pulled from the binary repo by the

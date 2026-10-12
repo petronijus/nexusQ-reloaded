@@ -72,7 +72,9 @@ NQ_EXPECT_HOST="${NQ_EXPECT_HOST:-steelhead}"
 
 reachable() { # reachable <host> -- true only if it answers AND is the device
 	local got
-	got=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" hostname 2>/dev/null) || return 1
+	# </dev/null: this probe runs before `nqctl run`'s own ssh, and an ssh reads
+	# its stdin -- it swallowed the script of every `nqctl run 'sh -s' <file`.
+	got=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$NQ_USER@$1" hostname 2>/dev/null </dev/null) || return 1
 	[ "$got" = "$NQ_EXPECT_HOST" ] && return 0
 	[ -n "$got" ] && say "nqctl: $1 answered as '$got', not '$NQ_EXPECT_HOST' -- skipping (wrong device)"
 	return 1

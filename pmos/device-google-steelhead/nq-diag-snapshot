@@ -124,6 +124,32 @@ for cd in /sys/class/thermal/cooling_device*; do
 		"$(cat $cd/max_state 2>/dev/null)" "$(cat $cd/type 2>/dev/null)"
 done
 
+sec GPU_SGX540
+# Read-only, cheap (docs/gpu-sgx540/power-clocks-pm.md section 8.1): sysfs and
+# debugfs reads only. No access to the SGX registers -- a read of a powered-down
+# L3 target can abort the bus -- and no /proc/tty/driver (it hung a unit).
+sub "driver"; lsmod 2>/dev/null | grep -iE '^pvr|sgx' || echo "(SGX module not loaded)"
+sub "drm devices"; t sh -c 'for c in /sys/class/drm/card*; do [ -e "$c/device/driver" ] && echo "$(basename "$c") $(basename "$(readlink "$c/device/driver")")"; done' 2>/dev/null
+sub "target module runtime PM"
+for f in runtime_status runtime_active_time runtime_suspended_time control; do
+	printf '%s=' "$f"; t cat "/sys/devices/platform/ocp/5600fe00.target-module/power/$f" 2>/dev/null || echo "?"
+done
+sub "genpd prm_gfx"
+for f in current_state active_time total_idle_time; do
+	printf '%s=' "$f"; t cat "/sys/kernel/debug/pm_genpd/prm_gfx/$f" 2>/dev/null || echo "?"
+done
+sub "gfx_pwrdm counters"; t sh -c 'grep -E "gfx_pwrdm" /sys/kernel/debug/pm_debug/count /sys/kernel/debug/pm_debug/time' 2>/dev/null
+# Expect l3-gfx-clkctrl:0000:24 under dpll_per_m7x2_ck at 307200000 (nq-health-report checks it).
+sub "gpu clock"
+t grep -E 'dpll_(core|per)_m7x2_ck|l3-gfx-clkctrl' /sys/kernel/debug/clk/clk_summary 2>/dev/null
+sub "gpu irq"; grep -iE 'sgx|pvr' /proc/interrupts 2>/dev/null || echo "(no SGX interrupt registered)"
+sub "userspace (fetched per unit)"
+if [ -e /var/lib/sgx-ddk/lib/.complete ]; then echo "DDK blobs complete: $(ls /var/lib/sgx-ddk/lib | tr '\n' ' ')"; else echo "DDK blobs NOT complete"; fi
+[ -e /etc/nexusq/gpu-off ] && echo "kill switch /etc/nexusq/gpu-off is SET"
+for u in nexusq-sgx.service nq-sgx-fetch.service nq-sgx-fetch.timer; do echo "$u $(t systemctl is-active "$u" 2>/dev/null)"; done
+sub "desktop session renderer"; t sh -c 'grep -h "nexusq-desktop-session" /home/*/.local/state/tinydm.log 2>/dev/null | tail -2'
+sub "gpu kernel log"; dmesg 2>/dev/null | grep -iE 'pvr|sgx|56000000' | tail -20
+
 sec LED_AVR_NEXUSQD
 sub "nexusqd / librespot units"
 for u in nexusqd librespot; do
