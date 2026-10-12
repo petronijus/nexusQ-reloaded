@@ -10,21 +10,26 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ## Prague Q — 2026-10-12: GPU desktop work in progress, the unit is NOT in a release state
 
-- **Kernel:** slot A r21 (booted after a panic), slot B r25; the
-  `nexusq-kernel-ota-promote.service` is **masked** on purpose (no GPU kernel
-  gets promoted until the stall below is fixed). Unmask it, or roll slot B
-  back, before leaving the unit for good: a mask is ssh state no package
-  carries, and while it stays no kernel OTA can promote here.
+- **Kernel:** running **r26 from the trial slot B** (slot A r21). It came up
+  on r26 even after a power cycle at 21:00 — check why before trusting the A/B
+  fallback. `nexusq-kernel-ota-promote.service` is **masked** on purpose.
+  Unmask it, or roll slot B back, before leaving the unit for good: a mask is
+  ssh state no package carries, and while it stays no kernel OTA can promote
+  here.
 - **Installed by hand** from local builds (`apk add`, not from the OTA repo):
   device r127, nexusq-sgx r0, nexusq-sgx-mesa r0; TI blobs fetched into
-  `/var/lib/sgx-ddk/lib`. On r21 the desktop starts on Pixman by itself.
-  The next OTA or image brings the published versions back; none of these is
-  published, and they must not be until the measurement gate passes.
-- **Open:** the 8-minute PID 1 stall around the SGX driver load/unload and the
-  `dma_fence_release` panic — `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
-  r26 (patch 0075 for the panic) is built, not booted; the next run needs Petr
-  at the unit (trial boot, USB as the rescue) and
-  `docs/gpu-sgx540/drafts/stall/stall-monitor.sh`.
+  `/var/lib/sgx-ddk/lib`; plus the device r128 drop-in
+  `/usr/lib/systemd/system/serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf`
+  copied by hand to the path r128 installs it to, so the package takes it over
+  (r128 itself is not built). The desktop runs on the GPU. None of this is
+  published, and it must not be until the measurement gate passes.
+- **Solved 2026-10-12:** the PID 1 stall was the ttyGS0 getty holding the
+  console lock after a cable pull, not the GPU (device r128); the
+  `dma_fence_release` panic is fixed by kernel r26 (patch 0075; the rmmod
+  EBUSY path is not exercised yet) —
+  `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
+- **Open:** reading `/proc/tty/driver/*` hung the unit hard (RCU stall on
+  CPU0); do not read it on a unit until it is understood.
 - **Decision pending:** the runtime hardware watchdog is not armed on the units
   (`RuntimeWatchdogUSec=0`); a kernel-side GPU hang would not recover.
 
