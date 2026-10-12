@@ -6,6 +6,21 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — PID 1 hung after a USB cable pull until a host was plugged in again (device **r128**, unreleased)
+
+- `serial-getty@ttyGS0` gets `TTYReset=no` (drop-in
+  `serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf`). systemd 262's
+  executor writes the TTY reset to the unit's tty while holding the
+  `/dev/console` lock, and the USB gadget console takes no byte without a host
+  (`gs_write_room()` is 0). After a cable pull the restarted getty's executor
+  kept the lock forever; the next TTY reset in PID 1 — the HDMI desktop
+  starting or stopping, getty@tty1 — blocked PID 1 in `flock()`, and with it
+  logind, ssh logins and `systemctl`. This was the "8-minute stall" of the GPU
+  bring-up; the GPU had nothing to do with it. Reproduced and verified without
+  a cable by unbinding the gadget's UDC: PID 1 silent 30 s without the drop-in,
+  answering throughout with it, for a getty@tty1 restart and for the desktop
+  start and stop. `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
+
 ### Added — the HDMI desktop renders on the SGX540 (nexusq-sgx **r0** · nexusq-sgx-mesa **r0** · device **r127**, unreleased)
 
 labwc and LXQt stay Alpine's, unpatched; the GPU reaches them through two new

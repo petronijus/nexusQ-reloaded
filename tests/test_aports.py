@@ -119,6 +119,35 @@ class PrivatePrefixMesa(unittest.TestCase):
         self.assertRegex(text, r"--libdir=lib/sgx-mesa")
 
 
+class GadgetConsoleNoTtyReset(unittest.TestCase):
+    """The USB gadget getty must not reset its TTY (device r128).
+
+    systemd's executor holds the /dev/console lock while it writes the reset
+    to the service's tty; ttyGS0 takes no byte without a USB host, so a getty
+    restart after a cable pull kept the lock forever and PID 1 hung at its
+    next TTY reset (docs/gpu-sgx540/stall-and-panic-2026-10-12.md).
+    """
+
+    DEVICE = PMOS / "device-google-steelhead"
+    DROPIN = "serial-getty-ttyGS0-no-tty-reset.conf"
+    TARGET = "/usr/lib/systemd/system/serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf"
+
+    def test_the_drop_in_turns_tty_reset_off(self):
+        lines = [ln.strip() for ln in (self.DEVICE / self.DROPIN).read_text().splitlines() if not ln.startswith("#")]
+        lines = [ln for ln in lines if ln]
+        self.assertEqual(lines[0], "[Service]")
+        self.assertIn("TTYReset=no", lines)
+
+    def test_package_installs_it_for_ttyGS0(self):
+        apkbuild = (self.DEVICE / "APKBUILD").read_text()
+        self.assertIn(self.DROPIN, sources(self.DEVICE / "APKBUILD"))
+        install = re.search(
+            r'install -Dm644 "\$srcdir"/' + re.escape(self.DROPIN) + r'\s*\\\s*\n\s*"\$pkgdir"(\S+)', apkbuild
+        )
+        self.assertIsNotNone(install, "package() does not install the drop-in")
+        self.assertEqual(install.group(1), self.TARGET)
+
+
 class ShippedCopies(unittest.TestCase):
     """One source, two copies: the build packs one, the unit tests read the other."""
 

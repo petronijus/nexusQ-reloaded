@@ -3,7 +3,7 @@
 pkgname=device-google-steelhead
 pkgdesc="Google Nexus Q"
 pkgver=1.0
-pkgrel=127
+pkgrel=128
 url="https://postmarketos.org"
 license="MIT"
 arch="armv7"
@@ -131,6 +131,7 @@ source="
 	nm-lo-unmanaged.conf
 	nexusq-usb-acm-console.sh
 	nexusq-usb-acm-console.service
+	serial-getty-ttyGS0-no-tty-reset.conf
 	nexusq-usb-gadget.sh
 	nexusq-usb-gadget.service
 	unudhcpd.conf
@@ -490,6 +491,11 @@ package() {
 		"$pkgdir"/usr/bin/nexusq-usb-acm-console.sh
 	install -Dm644 "$srcdir"/nexusq-usb-acm-console.service \
 		"$pkgdir"/etc/systemd/system/nexusq-usb-acm-console.service
+	# r128: no TTY reset on the gadget console. Its executor would hold the
+	# /dev/console lock in a write that never ends without a USB host, and
+	# PID 1 hangs at its next TTY reset (see the drop-in's header).
+	install -Dm644 "$srcdir"/serial-getty-ttyGS0-no-tty-reset.conf \
+		"$pkgdir"/usr/lib/systemd/system/serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf
 
 	# Diagnostics: the comprehensive one-shot snapshot collector and the
 	# continuous runtime health monitor. nq-healthd watches the things that
