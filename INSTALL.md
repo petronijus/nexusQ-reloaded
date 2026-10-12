@@ -353,6 +353,28 @@ two newest releases before those. `nq-kernel-ota status` ends with the trees tha
 there (`module trees  6.18.48-r19 6.18.48-r20 …`): if the release of the image
 you are about to flash is not in that line, flash userdata too.
 
+**A unit running from rootfs slot B needs one more step.** `fastboot flash
+userdata` writes slot A (p13). The initramfs boots the *committed* slot, and a
+unit that took a whole-rootfs update may have committed slot B (p14): after the
+flash it boots the new kernel on the old rootfs in B, which has no
+`/lib/modules` for that kernel — no WiFi, no nftables, no zram (Prague Q,
+2026-10-12). Before entering fastboot, check over ssh:
+
+```bash
+ssh root@<device> nq-rootfs-ab status | grep 'committed slot'
+# committed slot : b  -> point the next boots at the slot you are about to flash:
+ssh root@<device> nq-slot set a
+```
+
+Do `nq-slot set a` and the flash in one sitting, with the unit within reach:
+once set, a slot A that does not boot has no automatic way back to B, only
+another fastboot flash -- never on a unit nobody can get to.
+
+Already flashed and up on slot B? Over USB (`root@172.16.43.1`): `nq-slot try
+a && systemctl reboot`, check the new system (`findmnt -no SOURCE /` shows
+`/dev/mmcblk0p13`), then `nq-slot promote a`. A trial that does not come up
+falls back to B by itself.
+
 **What a flash keeps (device r103+, 2026-09-19):** `boot` and `userdata` are
 the only partitions written, and the unit's own state lives on the `cache`
 partition (`/var/lib/nexusq/persist`, `nq-persist status`), which a flash — and

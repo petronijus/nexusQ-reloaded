@@ -8,28 +8,43 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Prague Q — 2026-10-12: GPU desktop work in progress, the unit is NOT in a release state
+## Next, 2026-10-13: GPU speed and frequency scaling (agreed with Petr)
 
-- **Kernel:** running **r26 from the trial slot B** (slot A r21). It came up
-  on r26 even after a power cycle at 21:00 — check why before trusting the A/B
-  fallback. `nexusq-kernel-ota-promote.service` is **masked** on purpose.
-  Unmask it, or roll slot B back, before leaving the unit for good: a mask is
-  ssh state no package carries, and while it stays no kernel OTA can promote
-  here.
-- **Installed by hand** from local builds (`apk add`, not from the OTA repo):
-  device r127, nexusq-sgx r0, nexusq-sgx-mesa r0; TI blobs fetched into
-  `/var/lib/sgx-ddk/lib`; plus the device r128 drop-in
-  `/usr/lib/systemd/system/serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf`
-  copied by hand to the path r128 installs it to, so the package takes it over
-  (r128 itself is not built). The desktop runs on the GPU. None of this is
-  published, and it must not be until the measurement gate passes.
-- **Solved 2026-10-12:** the PID 1 stall was the ttyGS0 getty holding the
-  console lock after a cable pull, not the GPU (device r128); the
-  `dma_fence_release` panic is fixed by kernel r26 (patch 0075; the rmmod
-  EBUSY path is not exercised yet) —
-  `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
+From `docs/gpu-sgx540/performance-2026-10-13.md` "How to make it faster":
+1. Measure VDD_CORE at runtime, then give Linux a VDD_CORE regulator; only then
+   384 MHz (stock's top GPU OPP, up to +25 %). Never on the 1.2 V VC ON value.
+2. GPU DVFS like stock: 153.6 / 307.2 / 384 MHz with VDD_CORE, devfreq (and
+   `devfreq_cooling`), measured with `nq-opp-study2.sh GPU=1` and `nq-gpu-bench`.
+3. Parameter buffer size in `powervr.ini` (terrain overflowed the TA).
+Also: build device r129 (GPU diagnostics) and verify healthd's new fields and
+the snapshot section on the unit; `glmark2` is installed by hand on the Prague
+Q as a test tool.
+
+## Prague Q — 2026-10-12: GPU desktop image flashed, NOT a release
+
+- **Flashed 2026-10-12 ~23:10** from the private image of `26b5af2`: boot p9 =
+  kernel **6.18.48-r27**, rootfs slot A (p13, committed) = device **r128**,
+  nexusq-sgx r0, nexusq-sgx-mesa r0. Slot B (p14) still holds the previous,
+  hand-patched rootfs; kernel trial slot p8 holds r26. The unit had committed
+  rootfs slot B, so the flash first booted the old rootfs (no modules for
+  r27); fixed with `nq-slot try a` → `promote a` (INSTALL.md §2 now says so).
+  `nexusq-kernel-ota-promote` is enabled again (fresh rootfs, no mask).
+- **Full diag after the flash: clean** (`nq-captures/20261012-233023/`): only
+  the known boot-storm thermal peak (94 °C), one RoonBridge CLR crash at boot
+  (restarted itself; watch whether it recurs) and one boot-time
+  `pactl suspend-source roon_in 1 FAILED` from nq-uac2-silence.
+- **Cable-pull test on the packaged r128 passed** (USB physically pulled,
+  `docs/gpu-sgx540/drafts/stall/cable-pull-test.sh`): ttyGS0 getty restarted,
+  no console lock held, PID 1 answered through two desktop stop/starts and a
+  getty@tty1 restart; a reboot without USB came up clean and the desktop
+  started on the GPU.
+- **Not published**, and must not be until the measurement gate (groundwork
+  §4 Phase 5) passes. Kernel r26 must never be published (empty /boot layout,
+  see CHANGELOG r27).
 - **Open:** reading `/proc/tty/driver/*` hung the unit hard (RCU stall on
-  CPU0); do not read it on a unit until it is understood.
+  CPU0); do not read it on a unit until it is understood. A reflash of
+  `userdata` on a unit with committed slot B boots the old rootfs — today a
+  documented manual step; the initramfs could detect a freshly flashed slot A.
 - **Decision pending:** the runtime hardware watchdog is not armed on the units
   (`RuntimeWatchdogUSec=0`); a kernel-side GPU hang would not recover.
 

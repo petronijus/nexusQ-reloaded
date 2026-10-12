@@ -112,6 +112,12 @@ mostly the HDMI desktop. `tests/test_aports.py` (`GadgetConsoleNoTtyReset`)
 guards the drop-in and its install path (seen red with `TTYReset=yes` and with
 the install removed).
 
+**On the packaged build (2026-10-12 23:48, kernel r27, device r128, flashed):**
+the USB cable physically pulled (`drafts/stall/cable-pull-test.sh`): the ttyGS0
+getty restarted, no console lock was held, and PID 1 answered through two
+desktop stop/starts and a getty@tty1 restart; a reboot without USB came up
+clean and the desktop started on the GPU.
+
 The root cause upstream — a blocking write under the global console lock — is
 worth reporting to systemd (not filed; needs Petr's word).
 
