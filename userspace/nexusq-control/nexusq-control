@@ -3177,6 +3177,51 @@ def check_nexus_update():
         raise Err("timeout", "apk did not respond") from None
 
 
+_APK_TRIGGER_ERR = re.compile(r"^ERROR: (?:lib/apk/exec/)?(\S+?)\.trigger: ")
+# Triggers whose failure leaves this unit as it would have been with them: only
+# these are tolerated. postmarketos-mkinitfs builds an initramfs into /boot that
+# the Q never boots (it boots the flashed boot partition). NOT every trigger is
+# like that -- device-google-steelhead's pins the TAS5713 Speaker at unity and
+# sets PulseAudio's tsched=0, and a failure there must stay a failed update.
+_INERT_TRIGGERS = frozenset({"postmarketos-mkinitfs"})
+
+
+def _apk_failed(r):
+    """None when an `apk add/upgrade` committed its transaction, else the reason.
+
+    apk exits non-zero both when the transaction failed and when it committed
+    but a package's TRIGGER script failed afterwards ("ERROR: lib/apk/exec/
+    <pkg>.trigger: exited with error N"; "1 error; ... in N packages"). The
+    second is not a failed update: the packages are installed, and skipping the
+    restart tail would leave the old daemons running while the app reports an
+    error. postmarketos-mkinitfs 2.12.0-r1 (2026-10-12) did exactly that on
+    every transaction -- its trigger runs /usr/sbin/mkinitfs, the package moved
+    it to /usr/bin (pmaports MR !9764) -- and on this unit the mkinitfs trigger
+    is inert anyway (the Q boots from the flashed boot partition, never from
+    /boot). So only a failed trigger of a package in _INERT_TRIGGERS is
+    tolerated; any other ERROR line, or a non-zero exit with no ERROR line at
+    all, means the update failed."""
+    if r.returncode == 0:
+        return None
+    text = (r.stdout or "") + "\n" + (r.stderr or "")
+    errors = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("ERROR:")]
+    real = [ln for ln in errors if not _inert_trigger_error(ln)]
+    if real or not errors:
+        return (real[0] if real else (r.stderr or "").strip())[:160]
+    return None
+
+
+def _inert_trigger_error(line):
+    m = _APK_TRIGGER_ERR.match(line)
+    return bool(m) and _pkg_name(m.group(1)) in _INERT_TRIGGERS
+
+
+def _apk_trigger_errors(r):
+    """The packages whose trigger failed in an otherwise committed transaction."""
+    text = (r.stdout or "") + "\n" + (r.stderr or "")
+    return [m.group(1) for m in (_APK_TRIGGER_ERR.match(ln.strip()) for ln in text.splitlines()) if m]
+
+
 def _apk_changed(r):
     """Names of packages an `apk add/upgrade` actually changed. Parses BOTH streams
     because apk-tools writes its '(N/M) Upgrading <name> (...)' progress lines to
@@ -3203,14 +3248,19 @@ def install_nexus_update():
     try:
         _apk("update", timeout=60)
         r = _apk("upgrade", *OTA_PACKAGES, timeout=150)
-        if r.returncode != 0:
-            raise Err("unavailable", f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+        why = _apk_failed(r)
+        if why:
+            raise Err("unavailable", f"apk upgrade failed: {why}")
         changed = _apk_changed(r)
         upgraded = [p for p in OTA_PACKAGES if p in changed]
+        trig = _apk_trigger_errors(r)
+        if trig:
+            log("apk upgrade committed; trigger(s) failed:", ", ".join(trig))
         return {
             "ok": True,
             "upgraded": upgraded,
             "restarting": bool(upgraded),
+            "triggerErrors": trig,
             "output": ((r.stdout or "") + (r.stderr or "")).strip()[-400:],
         }
     except (OSError, subprocess.SubprocessError):
@@ -3376,9 +3426,13 @@ def install_system_update():
         # boot comes up on the old kernel with no modules: no cfg80211, no WiFi,
         # no way back in. The kernel is applied by nq-kernel-ota, never by apk.
         r = _apk("upgrade", "--available", "--ignore", _KERNEL_PKG, timeout=600)
-        if r.returncode != 0:
-            raise Err("unavailable", f"apk upgrade failed: {(r.stderr or '').strip()[:160]}")
+        why = _apk_failed(r)
+        if why:
+            raise Err("unavailable", f"apk upgrade failed: {why}")
         changed = _apk_changed(r)
+        trig = _apk_trigger_errors(r)
+        if trig:
+            log("system upgrade committed; trigger(s) failed:", ", ".join(trig))
         # Services (not package names) to restart — nq-healthd lives inside
         # device-google-steelhead and nexusq-mqtt is its own daemon, both of
         # which the old package-name list silently skipped (r29).
@@ -3390,6 +3444,7 @@ def install_system_update():
             "daemons": daemons,
             "rebootRecommended": reboot,
             "systemdChanged": _systemd_changed(changed),
+            "triggerErrors": trig,
             "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:],
         }
     except (OSError, subprocess.SubprocessError):
