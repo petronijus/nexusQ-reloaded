@@ -1,0 +1,143 @@
+From d1b906880a4b3cd8a57aac15ffaacb2ded819dfb Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Tue, 13 Oct 2026 22:24:42 +0200
+Subject: [PATCH] ARM: OMAP4460: steelhead: stock VDD_CORE nominals and boot
+ voltage
+
+Use stock's 4460 VDD_CORE nominals, 962/1127/1250 mV (Nexus Q stock
+kernel, omap446x_vdd_core_volt_data @0xc0706920), instead of mainline's
+1025/1200/1250 mV. voltdm_scale() snaps a request up to the next table
+entry, so with mainline's table an OPP100 request of 1127 mV is sent as
+1200 mV, the over-volt patch 0016 removed from VDD_MPU.
+
+And set the CORE voltage at boot, as stock does with
+omap2_set_init_voltage("core", "virt_l3_ck") (@0xc001090c): the core
+VP force-updates VCORE1 to 1127 mV. Until now nothing in Linux set it;
+the rail stayed at the x-loader's vsel 0x23 (1139440 uV), unobserved,
+PRM_VP_CORE_VOLTAGE read 0x00 and the voltdm's nominal_volt was 0.
+Afterwards PRM_VP_CORE_VOLTAGE reads back the commanded vsel, the
+starting point a VDD_CORE regulator (and SGX DVFS) needs. The boot log
+reports that readback (vsel and uV) rather than the request, because
+the force-update returns 0 even when TRANXDONE never sets.
+
+It runs from the VDD_MPU retask work, after a clean hand-over, when
+the VC channels are in their final configuration and SMPS_OFFSET is
+the real efuse. 1127 mV is inside the core VP's 830-1200 mV limits.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ arch/arm/mach-omap2/omap_twl.c     | 61 +++++++++++++++++++++++++++++-
+ arch/arm/mach-omap2/opp4xxx_data.c | 11 +++++-
+ 2 files changed, 69 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index ced7e71a8..964769d2e 100644
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -20,6 +20,7 @@
+ #include "soc.h"
+ #include "voltage.h"
+ #include "vc.h"
++#include "vp.h"
+ 
+ #include "pm.h"
+ 
+@@ -439,6 +440,61 @@ static int omap4460_vdd_mpu_do_retask(void)
+ 	return ret;
+ }
+ 
++/*
++ * steelhead: drive VDD_CORE (TWL6030 VCORE1, on the SR-I2C) to stock's OPP100
++ * nominal through the core VP, as stock does at boot with
++ * omap2_set_init_voltage("core", "virt_l3_ck") (vmlinux.bin @0xc001090c). Nothing
++ * in Linux set it before: the rail sat at whatever the x-loader left (vsel 0x23,
++ * 1139440 uV by construction, never observed), PRM_VP_CORE_VOLTAGE read 0x00 and
++ * the core voltdm's nominal_volt was 0. Afterwards PRM_VP_CORE_VOLTAGE
++ * (0x4a307b4c, bits 7:0) reads back the commanded vsel, and a VDD_CORE regulator
++ * has a known starting point. 1127 mV is OPP100, the floor for L3 at 200 MHz
++ * and the MPU's CORE dependency; it is inside the VP's 830-1200 mV limits.
++ *
++ * Run from the retask work, after the VDD_MPU hand-over: the VC channels are
++ * then in the configuration they keep (MPU on the TPS62361, CORE on VCORE1) and
++ * SMPS_OFFSET is the real efuse rather than the boot-time seed.
++ */
++#define OMAP4460_STEELHEAD_VDD_CORE_INIT_UV	1127000
++
++/* What the core VP last sent the PMIC (PRM_VP_CORE_VOLTAGE), as a vsel. */
++static u8 omap4460_vdd_core_vp_vsel(struct voltagedomain *voltdm)
++{
++	u32 mask = voltdm->vp->common->vpvoltage_mask;
++
++	return (voltdm->read(voltdm->vp->voltage) & mask) >> __ffs(mask);
++}
++
++static void omap4460_vdd_core_init_voltage(void)
++{
++	struct voltagedomain *voltdm = voltdm_lookup("core");
++	u8 want, got;
++	int ret;
++
++	if (!voltdm || !voltdm->vp || !voltdm->pmic || !voltdm->pmic->vsel_to_uv ||
++	    !voltdm->pmic->uv_to_vsel) {
++		pr_err("steelhead: vdd_core: no core voltdm/VP/PMIC; VP not driven, rail stays at the x-loader's\n");
++		return;
++	}
++	want = voltdm->pmic->uv_to_vsel(OMAP4460_STEELHEAD_VDD_CORE_INIT_UV);
++	ret = omap_voltage_scale_voltage(voltdm, OMAP4460_STEELHEAD_VDD_CORE_INIT_UV);
++	got = omap4460_vdd_core_vp_vsel(voltdm);
++	/*
++	 * Report what the VP sent, not what was asked: the force-update returns 0
++	 * even when TRANXDONE never sets. A failure before the force-update has
++	 * still written the VC's CORE ON value (omap_vc_pre_scale), so say so.
++	 */
++	if (ret)
++		pr_err("steelhead: vdd_core: %u uV failed (%d); VP sent vsel 0x%02x, VC ON already 0x%02x\n",
++		       OMAP4460_STEELHEAD_VDD_CORE_INIT_UV, ret, got, want);
++	else if (got != want)
++		pr_err("steelhead: vdd_core: asked vsel 0x%02x (%u uV), VP reads back 0x%02x (%lu uV)\n",
++		       want, OMAP4460_STEELHEAD_VDD_CORE_INIT_UV, got, voltdm->pmic->vsel_to_uv(got));
++	else
++		pr_info("steelhead: VDD_CORE at vsel 0x%02x = %lu uV through the core VP (stock OPP100, %u uV)\n",
++			got, voltdm->pmic->vsel_to_uv(got), OMAP4460_STEELHEAD_VDD_CORE_INIT_UV);
++}
++
+ /*
+  * The TWL6030 control i2c (where Phase B writes go) only comes up well after the
+  * arch/late init calls -- the OMAP i2c controllers probe asynchronously ~3-4 s into
+@@ -471,7 +527,10 @@ static void omap4460_vdd_mpu_retask_work(struct work_struct *work)
+ 	 * steelhead seed; idempotent once valid). */
+ 	twl6030_read_smps_offset();
+ 
+-	omap4460_vdd_mpu_do_retask();
++	/* Only on a clean hand-over: after a failed one the VC channels are in an
++	 * uncertain state, and the x-loader's CORE voltage is the safer one. */
++	if (!omap4460_vdd_mpu_do_retask())
++		omap4460_vdd_core_init_voltage();
+ }
+ static DECLARE_DELAYED_WORK(omap4460_mpu_retask_dwork,
+ 			    omap4460_vdd_mpu_retask_work);
+diff --git a/arch/arm/mach-omap2/opp4xxx_data.c b/arch/arm/mach-omap2/opp4xxx_data.c
+index e1bb13f8b..2cc628ef9 100644
+--- a/arch/arm/mach-omap2/opp4xxx_data.c
++++ b/arch/arm/mach-omap2/opp4xxx_data.c
+@@ -91,8 +91,15 @@ struct omap_volt_data omap446x_vdd_iva_volt_data[] = {
+ 	VOLT_DATA_DEFINE(0, 0, 0, 0),
+ };
+ 
+-#define OMAP4460_VDD_CORE_OPP50_UV		1025000
+-#define OMAP4460_VDD_CORE_OPP100_UV		1200000
++/*
++ * Stock's 4460 VDD_CORE nominals (Nexus Q stock kernel, omap446x_vdd_core_volt_data
++ * @0xc0706920): 962 / 1127 / 1250 mV, the 4430 values plus OPP100-OV. Mainline's
++ * 1025 / 1200 mV are not what TI's 4460 data uses, and voltdm_scale() snaps a
++ * request up to the next table entry, so a 1127 mV OPP100 request would be sent
++ * as 1200 mV -- the over-volt patch 0016 removed from VDD_MPU.
++ */
++#define OMAP4460_VDD_CORE_OPP50_UV		 962000
++#define OMAP4460_VDD_CORE_OPP100_UV		1127000
+ #define OMAP4460_VDD_CORE_OPP100_OV_UV		1250000
+ 
+ struct omap_volt_data omap446x_vdd_core_volt_data[] = {
+-- 
+2.55.0
+

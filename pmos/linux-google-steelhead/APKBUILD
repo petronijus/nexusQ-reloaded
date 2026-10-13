@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=27
+pkgrel=29
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -121,6 +121,7 @@ source="
 	0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
 	0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
 	0075-drm-pvrsgx-1.17-keep-the-module-loaded-once-it-has-created-a-fence.patch
+	0076-ARM-OMAP4460-steelhead-stock-VDD_CORE-nominals-and-boot-voltage.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -328,4 +329,5 @@ SKIP  0072-drm-pvrsgx-drop-select-DRM_LEGACY.patch
 SKIP  0073-drm-pvrsgx-1.17-fix-warnings-in-sgxinfokm.h.patch
 SKIP  0074-drm-pvrsgx-1.17-map-only-the-SGX-register-window-on-OMAP4.patch
 SKIP  0075-drm-pvrsgx-1.17-keep-the-module-loaded-once-it-has-created-a-fence.patch
+SKIP  0076-ARM-OMAP4460-steelhead-stock-VDD_CORE-nominals-and-boot-voltage.patch
 "
