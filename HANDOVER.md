@@ -8,17 +8,44 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
-## Next, 2026-10-13: GPU speed and frequency scaling (agreed with Petr)
+## GPU speed and frequency scaling — state 2026-10-13 evening
 
-From `docs/gpu-sgx540/performance-2026-10-13.md` "How to make it faster":
-1. Measure VDD_CORE at runtime, then give Linux a VDD_CORE regulator; only then
-   384 MHz (stock's top GPU OPP, up to +25 %). Never on the 1.2 V VC ON value.
-2. GPU DVFS like stock: 153.6 / 307.2 / 384 MHz with VDD_CORE, devfreq (and
+Done 2026-10-13: device r129 built and installed on the Prague Q by hand
+(`apk add`; healthd's gpu_* fields and the snapshot's GPU_SGX540 section
+verified live); the parameter buffer (nexusq-sgx r1, `/etc/powervr.ini`, copied
+to the unit by hand, package not built yet): benchmark 83, terrain clean.
+
+Done the same evening: kernel r28 (patch 0076: stock CORE table, VDD_CORE set
+to 1127 mV through the core VP at boot) trial-booted and autopromoted on the
+Prague Q; `VP_CORE_VOLTAGE` reads vsel 0x23 = 1 139 440 µV, stable under the
+GPU benchmark (82 against 83); full diag clean apart from the known keypad
+clkctrl failure, which fired before the VDD_CORE write. Slot-A backup = r27.
+
+2026-10-14 00:10: kernel r29 (= r28 + the review's readback logging) trial-booted;
+stock RAM boot measured stock's VDD_CORE: nominal 1127 mV, SmartReflex-calibrated
+**1076 mV** — we sit 63 mV above it, open loop (power-clocks-pm.md, Addendum).
+nexusq-control r66 installed by hand on the Prague Q (superseded by r67, not built yet).
+For kernel r30 (review, minor): the failure log line should say "VC ON may already be"
+(a NULL scale returns before pre_scale writes it).
+
+Next, in this order (`docs/gpu-sgx540/power-clocks-pm.md` Addendum 2026-10-13):
+1. ~~Stock RAM boot~~ done (idle only: no GL client without `/system`, so
+   stock's behaviour at 384 MHz stays unmeasured).
+2. VP ceiling (VDDMAX 1.2027 V < 1.25 V), a VDD_CORE regulator on the patch 0015
+   pattern, then 384 MHz inside the GPU's runtime PM only.
+3. GPU DVFS 153.6/307.2/384 MHz (OPP table, `dev_pm_opp_set_rate`, devfreq +
    `devfreq_cooling`), measured with `nq-opp-study2.sh GPU=1` and `nq-gpu-bench`.
-3. Parameter buffer size in `powervr.ini` (terrain overflowed the TA).
-Also: build device r129 (GPU diagnostics) and verify healthd's new fields and
-the snapshot section on the unit; `glmark2` is installed by hand on the Prague
-Q as a test tool.
+Upstream known issue: `postmarketos-mkinitfs 2.12.0-r1` trigger fails
+(pmaports MR !9764); the Prague Q shows "1 error" on every apk transaction
+until the fixed package lands. Up to nexusq-control r65 the app's
+updates treat that as a failure (packages installed, restarts skipped, error
+shown); **r67 tolerates the mkinitfs trigger error only** (`triggerErrors`). Until
+r67 is on a unit, do not run its system update from the app. The Prague Q
+runs a hand-installed r66 (tolerated every trigger): replace it with r67.
+
+Kernel r29 = r28 + the review's fixes (the boot log reports the VP readback,
+the failure message names the VC ON value). Before an OTA: rebuild r28/r1 from the committed tree, check the kernel apk's /boot
+layout, `apk upgrade` the Prague Q, full diag incl. VDD_MPU vs OPP.
 
 ## Prague Q — 2026-10-12: GPU desktop image flashed, NOT a release
 

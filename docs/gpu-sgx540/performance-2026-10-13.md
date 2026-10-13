@@ -29,6 +29,12 @@ SGX540 offers neither that nor 8888 without depth/stencil nor 565.
 - **terrain** aborted with `PVR:(Error): SGXKickTA: TA went out of Mem and SPM
   occurred during last TA kick`: the scene overflowed the parameter buffer.
   The driver recovered and the next scenes ran normally; no kernel error.
+  **Fixed the next evening (nexusq-sgx r1):** the DDK reads application hints
+  from `/etc/powervr.ini` (`libsrv_um`'s `PVRSRVGetAppHint`; `libpvr_dri_support`
+  knows `ParamBufferSize`/`MaxParamBufferSize`). With `[default]
+  ParamBufferSize=8388608` terrain renders without an overflow (2 FPS: it is
+  a heavy scene, 0.05 FPS on llvmpipe), 16 MiB behaves the same, and the full
+  run scores **83** (die peak 81 °C). That is the baseline from then on.
 - Two benchmark runs the same evening scored 5 because the client never got
   mesa-sgx: `sgx-env` scopes the GPU environment to the process it execs and
   `timeout` stood in between. `nq-gpu-bench` therefore fails any run whose
@@ -87,8 +93,8 @@ section 7).
    idle-ish and rises under load; `devfreq_cooling` on `thermal_zone0` would
    also give the thermal trip a GPU knob. Measure each step with
    `nq-opp-study2.sh GPU=1` and `nq-gpu-bench`.
-3. **Parameter buffer.** Size it up through the DDK's `powervr.ini` so complex
-   scenes (terrain) do not overflow the TA. Robustness, not speed.
+3. ~~**Parameter buffer.**~~ Done 2026-10-13: `/etc/powervr.ini` from
+   nexusq-sgx r1 (8 MiB), score 83, terrain without an overflow.
 4. **Clients:** cap animations at 30 fps and keep them at 720p.
 
 ## Coverage added the same night (device r129, host tools)

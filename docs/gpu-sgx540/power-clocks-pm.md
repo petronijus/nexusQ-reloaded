@@ -1609,3 +1609,65 @@ observed directly). Every boot re-applies the same value through the x-loader, s
 proper fix is in the build, not in a one-off: the kernel should send the stock CORE ON
 voltage itself (patch 0027 sets the VC ON value but it is never transmitted), tracked
 as a Phase 0 item.
+
+---
+
+## Addendum 2026-10-13: VDD_CORE against stock, before any GPU DVFS
+
+Stock-parity audit (reverse-eng/vmlinux.bin) with read-only PRM reads on the
+Prague unit (kernel r27). What it settles:
+
+- **Routing matches stock:** VDD_CORE is TWL6030 VCORE1 on the SR-I2C (slave
+  0x12, volt/cmd 0x55/0x56), `VC_SMPS_SA`=0x00601212, `RA_VOL`=0x00015b55,
+  `RA_CMD`=0x00015c56; vsel → µV = 709000 + (vsel−1)·12660 (SMPS_OFFSET set);
+  VP limits 830-1200 mV, vstep 1/4, scale method VP force-update — all as stock.
+- **It cannot be read today.** `PRM_VP_CORE_VOLTAGE` (0x4a307b4c) reads vsel
+  0x00 because the VP has never driven CORE (`VP_CORE_CONFIG`=0x8, VP off);
+  the rail sits at whatever the x-loader set (vsel 0x23 = 1 139 440 µV by
+  construction, not observed). The TWL6030 control-bus pair 0x55/0x56 does not
+  show the SR-written setpoint. A real number needs a multimeter on VCORE1, or a
+  stock RAM boot reading `/sys/kernel/debug/voltage/vdd_core/curr_*`.
+- **Three gaps before a VDD_CORE regulator is safe:**
+  1. Mainline's 4460 CORE table is 1025/1200/1250 mV; stock's is
+     **962/1127/1250 mV** (`omap446x_vdd_core_volt_data` @0xc0706920).
+     `voltdm_scale()` rounds up to a table entry, so 1127 mV would become 1.2 V
+     — the trap patch 0016 fixed for the MPU.
+  2. Nothing sets a boot voltage for CORE; stock calls
+     `omap2_set_init_voltage("core", "virt_l3_ck")` → VP force-update to 1127 mV.
+     Doing the same would make `VP_CORE_VOLTAGE` a live readback.
+  3. The VP ceiling VDDMAX 0x28 (1.2027 V) is below OPP-OV's 1.25 V (0x2c), in
+     stock too; whether the limiter clamps a force-update is not established.
+- Smaller mismatches: CORE slew 4000 vs stock 9000 (we ramp slower, benign);
+  VC RET/OFF 837.5/0 mV vs stock 830/830 and TWL6030 0x52/0x53 not written —
+  dormant until CORE retention is enabled.
+- **Design, in order:** stock CORE table → kernel-side init voltage 1127 mV →
+  VP ceiling (or prove it does not clamp) → a VDD_CORE regulator on the patch
+  0015 pattern (min 1127 mV, max 1250 mV) → 384 MHz only inside the GPU's
+  runtime PM, voltage up before the clock and down after it, never a static
+  1.25 V → an OPP table 153.6/307.2/384 MHz with `dev_pm_opp_set_rate()` and a
+  devfreq policy plus `devfreq_cooling`. 153.6 MHz cannot lower the voltage on
+  mainline (L3 stays at 200 MHz, CORE ≥ 1127 mV): it saves dynamic power only.
+
+**Implemented 2026-10-13 (kernel r28, patch 0076):** steps 1 and 2 above — the
+stock CORE table and the boot-time CORE voltage. Trial boot on the Prague Q:
+`steelhead: VDD_CORE set to 1127000 uV through the core VP (stock OPP100)`,
+`VP_CORE_CONFIG` = 0x00162308 (INITVOLTAGE 0x23), `VP_CORE_VOLTAGE` = vsel
+0x23 = 1 139 440 µV (r27: 0x00), `VC_VAL_CMD_VDD_CORE_L` ON = 0x23, no
+TRANXDONE timeout. 1127 mV rounds up to the x-loader's own vsel, so the rail
+itself did not move. Next: the VP ceiling, then the VDD_CORE regulator.
+
+**Stock's VDD_CORE, measured 2026-10-14** (stock 3.0.8 RAM boot,
+`fastboot boot output/stock-adb-boot.img`, idle, no GL client):
+`/sys/kernel/debug/voltage/vdd_core`: `curr_nominal_volt` 1 127 000,
+`curr_dyn_nominal_volt` 1 126 140, `curr_margin_volt` 13 000,
+**`curr_calibrated_volt` = `curr_vp_volt` = 1 076 140 µV**; `sr_core` `autocomp=1`;
+PRM `VP_CORE_VOLTAGE` 0x0001111E (vsel 0x1E), `VP_CORE_CONFIG` 0x00161E08,
+`VC_VAL_CMD_VDD_CORE_L` 0x1E1E0B0B (ON/ONLP 0x1E, RET/OFF 0x0B = 830 mV).
+(VDD_MPU at 1.2 GHz: nominal 1 380 000, calibrated 1 230 000.) So stock ran
+CORE 63 mV *below* our open-loop 1 139 440 µV once SmartReflex class 1.5 had
+calibrated it: we sit on the safe side, and the nominal table is the right
+ceiling for an open-loop kernel. Whether stock's VP reaches 1.25 V under GPU
+load was not measurable here (no `/system`, so no GL client in the RAM boot).
+Kernel r29 (patch 0076, after the review) logs the VP readback:
+`steelhead: VDD_CORE at vsel 0x23 = 1139440 uV through the core VP (stock
+OPP100, 1127000 uV)`.

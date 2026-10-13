@@ -6,6 +6,51 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — an update whose packages installed is no longer reported as failed (nexusq-control **r67**, unreleased)
+
+- apk exits non-zero both for a failed transaction and for a committed one in
+  which a package's trigger failed. Since `postmarketos-mkinitfs 2.12.0-r1`
+  (its trigger runs a binary the package moved; pmaports MR !9764) every apk
+  transaction on the units did the second, so the app's daemon and system
+  updates reported "apk upgrade failed" and skipped the daemon restarts while
+  the new packages were installed. Now a failed trigger is tolerated only for
+  packages whose trigger is inert on the Q (`postmarketos-mkinitfs`: it builds
+  an initramfs the Q never boots); the result lists it in `triggerErrors`
+  (PROTOCOL §12a/§12b). Any other failure -- our own device trigger, which pins
+  the TAS5713 Speaker gain, above all -- still fails the update (r67, after the
+  fleet-safety review of r66, which tolerated every trigger).
+  `tests/test_apk_trigger_errors.py` uses the Prague Q's verbatim output.
+
+### Changed — Linux sets VDD_CORE itself, at stock's OPP100 (kernel **6.18.48-r29**, unreleased)
+
+- Patch 0076: the 4460 VDD_CORE table carries stock's nominals, 962 / 1127 /
+  1250 mV (mainline had 1025 / 1200), and the kernel drives VDD_CORE to
+  1127 mV through the core VP at boot, as stock's `omap2_set_init_voltage`
+  did. Before, nothing in Linux set the rail; it sat at the x-loader's value
+  and could not be read back. The TWL6030 rounds 1127 mV to vsel 0x23
+  (1 139 440 µV), the x-loader's own value, so the rail does not move; what
+  changes is that `PRM_VP_CORE_VOLTAGE` now reads it back (vsel 0x23 on the
+  Prague Q, trial boot of r28 2026-10-13) and a VDD_CORE regulator, the
+  precondition for running the GPU at 384 MHz, has a known starting point.
+  r29 (after the fleet-safety review) logs that readback, vsel and µV, instead
+  of the requested voltage: the VP force-update returns 0 even when TRANXDONE
+  never sets. r28 was a trial build only.
+
+### Fixed — complex GL scenes no longer overflow the SGX540's parameter buffer (nexusq-sgx **r1**, unreleased)
+
+- nexusq-sgx installs `/etc/powervr.ini`, the DDK's application hints, with an
+  8 MiB `ParamBufferSize` (the TI blobs stay untouched). glmark2's terrain
+  overflowed the default ("SGXKickTA: TA went out of Mem and SPM occurred");
+  with the hint it renders without it, and the full benchmark scores 83 (81
+  before), the new `nq-gpu-bench` baseline. `tests/test_aports.py` guards it.
+- `nq-gpu-bench` writes its 1 Hz monitor to its own file: sharing glmark2's
+  stdout, its lines broke the per-scene FPS lines.
+- Known issue, upstream: `postmarketos-mkinitfs 2.12.0-r1` (pmaports, built
+  2026-10-12) moved the binary to `/usr/bin` but its trigger still runs
+  `/usr/sbin/mkinitfs`, so every apk transaction that fires it ends with
+  "1 error" (the app would report the update as failed). The fix is in
+  pmaports MR !9764 (draft, 2026-10-13); nothing of ours to change.
+
 ### Added — the diagnostics watch the GPU (device **r129**, unreleased; host tools)
 
 - `nq-healthd` logs the SGX540 per sample: `gpu_drv`, `gpu_rpm`,
