@@ -6,7 +6,7 @@
 # APKBUILD by docker-build.sh.
 pkgname=nexusq-sgx
 pkgver=1.17.4948957
-pkgrel=0
+pkgrel=1
 _maemo_commit=a9dbdc75233dc0ca5fe2622dfffc44f164843c1f	# sgx-ddk-um tag 1.17.4948957+leste15
 pkgdesc="Nexus Q SGX540 userspace glue on musl (glibc-compat shim, pvrsrvinit, libdbm, blob fetcher)"
 url="https://github.com/petronijus/nexusQ-reloaded"
@@ -36,6 +36,7 @@ source="
 	sgx-env
 	nexusq-sgx-labwc
 	ti443x.sha256
+	powervr.ini
 	README.md
 	"
 builddir="$srcdir"
@@ -66,6 +67,8 @@ package() {
 	# The GPU labwc: the desktop session puts this directory first on PATH.
 	install -Dm755 nexusq-sgx-labwc "$pkgdir"/usr/libexec/nexusq-sgx/bin/labwc
 	install -Dm644 README.md "$pkgdir"/usr/share/doc/nexusq-sgx/README.md
+	# r1: the DDK application hints (parameter buffer size); see the file.
+	install -Dm644 powervr.ini "$pkgdir"/etc/powervr.ini
 
 	install -Dm644 nexusq-sgx.service "$pkgdir"/usr/lib/systemd/system/nexusq-sgx.service
 	install -Dm644 nq-sgx-fetch.service "$pkgdir"/usr/lib/systemd/system/nq-sgx-fetch.service

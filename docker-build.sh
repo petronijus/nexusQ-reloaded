@@ -497,7 +497,7 @@ mkdir -p "$NEXUSQSGX_DIR"
 cp "$SRC/pmos/nexusq-sgx/APKBUILD" "$NEXUSQSGX_DIR/"
 for _f in Makefile nq-glibc-compat.c nq-glibc-compat-abi.c nq-glibc-compat-mmap.S nq-glibc-compat.h pvrsrvinit.c \
     nq-sgx-fetch nq-sgx-fetch.service nq-sgx-fetch.timer nexusq-sgx.service \
-    97-nexusq-sgx.preset sgx-env nexusq-sgx-labwc ti443x.sha256 README.md; do
+    97-nexusq-sgx.preset sgx-env nexusq-sgx-labwc ti443x.sha256 powervr.ini README.md; do
     cp "$SRC/userspace/nexusq-sgx/$_f" "$NEXUSQSGX_DIR/"
 done
 echo "  Installed: nexusq-sgx (aport + glue -> main/nexusq-sgx)"

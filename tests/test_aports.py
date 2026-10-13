@@ -148,6 +148,24 @@ class GadgetConsoleNoTtyReset(unittest.TestCase):
         self.assertEqual(install.group(1), self.TARGET)
 
 
+class SgxAppHints(unittest.TestCase):
+    """nexusq-sgx r1 ships /etc/powervr.ini with a parameter buffer big enough
+    that glmark2's terrain no longer overflows the tile accelerator."""
+
+    INI = ROOT / "userspace" / "nexusq-sgx" / "powervr.ini"
+
+    def test_default_section_sets_the_parameter_buffer(self):
+        lines = [ln.strip() for ln in self.INI.read_text().splitlines() if ln.strip() and not ln.startswith(";")]
+        self.assertEqual(lines[0], "[default]")
+        hint = dict(ln.split("=", 1) for ln in lines[1:])
+        self.assertGreaterEqual(int(hint["ParamBufferSize"]), 8 << 20)
+
+    def test_package_installs_it_in_etc(self):
+        apkbuild = (PMOS / "nexusq-sgx" / "APKBUILD").read_text()
+        self.assertIn("powervr.ini", sources(PMOS / "nexusq-sgx" / "APKBUILD"))
+        self.assertRegex(apkbuild, r'install -Dm644 powervr\.ini "\$pkgdir"/etc/powervr\.ini')
+
+
 class ShippedCopies(unittest.TestCase):
     """One source, two copies: the build packs one, the unit tests read the other."""
 
