@@ -24,9 +24,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 NQCTL="${NQCTL:-$HERE/nqctl}"   # NQCTL: the test points it at a fake
 REPO="$(cd "$HERE/../.." && pwd)"
 
-# Kernel 6.18.48-r27, device r128, mesa-sgx 24.0.9-r0, DDK 1.17.4948957, SGX at
-# 307.2 MHz, 1280x720 fullscreen, RGBA8888 + depth 24 + stencil 8 (2026-10-13).
-BASELINE=81
+# Kernel 6.18.48-r27, device r129, nexusq-sgx r1 (/etc/powervr.ini: 8 MiB
+# parameter buffer), mesa-sgx 24.0.9-r0, DDK 1.17.4948957, SGX at 307.2 MHz,
+# 1280x720 fullscreen, RGBA8888 + depth 24 + stencil 8 (2026-10-13). Without the
+# ini the score was 81 and terrain overflowed the TA.
+BASELINE=83
 # A run below this share of the baseline is a regression worth a look; glmark2
 # repeats within a few points on this unit (72 and 72 for the same five scenes).
 REGRESSION=0.90
@@ -60,18 +62,23 @@ grep -q "GPU (labwc gles2" /home/user/.local/state/tinydm.log 2>/dev/null \
 ENVS=$(tr '\0' '\n' </proc/"$S"/environ | grep -E '^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|HOME|USER|PATH|XDG_SESSION_TYPE)=' | tr '\n' ' ')
 GPM=/sys/devices/platform/ocp/5600fe00.target-module/power
 # Bounded on its own (the glmark2 timeout plus a margin): an ssh that drops
-# mid-run must not leave it looping on the unit.
+# mid-run must not leave it looping on the unit. It writes to its own file:
+# sharing glmark2's stdout, its lines landed inside glmark2's and broke the
+# per-scene FPS lines.
+MONF=$(mktemp)
 (i=0; while [ $i -lt 960 ]; do
 	i=$((i + 1))
 	echo "NQB-MON $(cut -d' ' -f1 /proc/uptime) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/class/thermal/thermal_zone0/temp) $(cat $GPM/runtime_status)"
 	sleep 1
-done) &
+done) >"$MONF" &
 MON=$!
 # sgx-env scopes the GPU environment to the process it execs (its children get
 # a clean one), so glmark2 must be that process: the timeout goes outside.
 timeout 900 su user -s /bin/sh -c "env -i $ENVS sh -c '. /usr/share/nexusq-sgx/sgx-env; nq_sgx_ready && nq_sgx_export || { echo NQB-ERR GPU not ready; exit 9; }; exec glmark2-es2-wayland --fullscreen --visual-config $VISUAL $*'" 2>&1
 echo "NQB-RC $?"
 kill $MON
+cat "$MONF"
+rm -f "$MONF"
 DEVICE
 
 grep '^NQB-MON ' "$DIR/raw.txt" | cut -d' ' -f2- >"$DIR/monitor.txt"

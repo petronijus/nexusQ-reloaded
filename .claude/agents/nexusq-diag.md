@@ -428,7 +428,7 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
     `nexusq-desktop-session: GPU (labwc gles2 on the SGX540)` or why it fell back to Pixman.
   - **Performance (only when asked, it loads the box for ~6 min):**
     `NQ_WIFI_HOST=<ip> scripts/diag/nq-gpu-bench` -- glmark2 on the SGX540 against the
-    baseline (score 81, 2026-10-13); needs `apk add glmark2` on the unit and the desktop
+    baseline (score 83 with nexusq-sgx r1, 2026-10-13); needs `apk add glmark2` on the unit and the desktop
     up on the GPU. A score of ~5 or `GL_RENDERER: llvmpipe` means the client never got
     mesa-sgx.
   - ⚠️ **Never `devmem` inside `0x5600_0000-0x57ff_ffff`** (the SGX window): a read of a

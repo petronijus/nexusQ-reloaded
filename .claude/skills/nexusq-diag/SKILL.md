@@ -69,7 +69,7 @@ Findings are tagged by `kind`; interpret them like this:
   time (video, a visualizer); `gpu_awake_headless` means awake with nothing on HDMI
   (a client holding a context, or runtime PM / APM broken). `gpu_clock`: the SGX must
   run at 307.2 MHz from `dpll_per_m7x2_ck`; above that needs VDD_CORE 1.25 V. Speed is
-  a separate, on-demand check: `scripts/diag/nq-gpu-bench` (baseline score 81).
+  a separate, on-demand check: `scripts/diag/nq-gpu-bench` (baseline score 83).
   Never `devmem` the SGX window and never read `/proc/tty/driver/*` (hung a unit,
   2026-10-12).
 
