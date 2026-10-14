@@ -28,6 +28,16 @@ int keywatch_tick(struct keywatch *kw, double now, keys_open_fn open_fn, void *c
 /* The node went away (POLLHUP/POLLERR, or a read error): close it and look for
  * the next one soon. */
 void keywatch_lost(struct keywatch *kw, double now);
-/* The real opener: keys_find_node() + open(O_RDONLY | O_NONBLOCK | O_CLOEXEC). */
+/* nexusqd is the only consumer of the front-panel keys, so it takes the node
+ * exclusively (EVIOCGRAB). Without the grab the kernel's console keyboard
+ * handler (kbd) receives the same events: every detent typed an escape
+ * sequence or an Enter into the getty on tty1, which the HDMI monitor shows
+ * whenever the on-demand desktop is not holding the VT. keys_open_path opens
+ * the node and grabs it; when the grab fails the fd is closed and -1 returned,
+ * so keywatch retries instead of reading a node another process owns. */
+typedef int (*keys_grab_fn)(int fd);   /* 0 on success, -1 with errno set */
+int keys_grab_evdev(int fd);           /* ioctl(fd, EVIOCGRAB, 1) */
+int keys_open_path(const char *path, keys_grab_fn grab);
+/* The real opener: keys_find_node() + keys_open_path(node, keys_grab_evdev). */
 int keys_open_node(void *ctx);
 #endif

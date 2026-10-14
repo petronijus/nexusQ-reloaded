@@ -6,6 +6,8 @@
 #include <glob.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/ioctl.h>
 
 int keys_decode(const uint8_t *buf, int len, struct keyev *out, int max) {
     int n = 0;
@@ -61,9 +63,29 @@ void keywatch_lost(struct keywatch *kw, double now) {
     kw->fd = -1;   /* backoff is at the minimum since the open that set fd */
     kw->retry_at = now + KEYS_RETRY_MIN_S;   /* the old node is still going away */
 }
+/* <linux/input.h> would clash with the codes keys.h defines for the host
+ * tests; the uapi value is _IOW('E', 0x90, int). */
+#define NQ_EVIOCGRAB _IOW('E', 0x90, int)
+int keys_grab_evdev(int fd) {
+    return ioctl(fd, NQ_EVIOCGRAB, 1) == 0 ? 0 : -1;
+}
+int keys_open_path(const char *path, keys_grab_fn grab) {
+    static int grab_warned;   /* keywatch retries up to every 8 s: say it once */
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    if (grab(fd) != 0) {
+        if (!grab_warned)
+            fprintf(stderr, "[nexusqd] cannot grab %s: %s\n", path, strerror(errno));
+        grab_warned = 1;
+        close(fd);
+        return -1;
+    }
+    grab_warned = 0;
+    return fd;
+}
 int keys_open_node(void *ctx) {
     (void)ctx;
     char node[64];
     if (keys_find_node(node, sizeof(node)) != 0) return -1;
-    return open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    return keys_open_path(node, keys_grab_evdev);
 }

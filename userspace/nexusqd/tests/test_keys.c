@@ -3,6 +3,8 @@
 #include "keys.h"
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 /* Build one input_event record at buf using the host's native struct layout
  * (long sec; long usec; u16 type; u16 code; s32 value) — self-consistent with
  * keys_decode's INPUT_EVENT_SIZE on both 64-bit host and 32-bit ARM target. */
@@ -70,8 +72,31 @@ static void test_keywatch_lost_node_comes_back(void) {
     CHECK(keywatch_tick(&kw, 2001.0, fake_open, &f) == 1 && kw.fd >= 0);  /* 0.5 s on, not 8 s */
     keywatch_lost(&kw, 2002.0);
 }
+/* stand-ins for keys_grab_evdev: record the fd, succeed or fail */
+static int grabbed_fd = -1;
+static int grab_ok(int fd) { grabbed_fd = fd; return 0; }
+static int grab_busy(int fd) { grabbed_fd = fd; errno = EBUSY; return -1; }
+static void test_open_grabs_the_node(void) {
+    /* unless nexusqd holds the keys exclusively, the console keyboard types
+     * every detent into the getty on tty1 */
+    grabbed_fd = -1;
+    int fd = keys_open_path("/dev/null", grab_ok);
+    CHECK(fd >= 0 && grabbed_fd == fd);
+    if (fd >= 0) close(fd);
+}
+static void test_open_fails_when_grab_fails(void) {
+    /* another process holds the node: report absent so keywatch retries */
+    grabbed_fd = -1;
+    CHECK(keys_open_path("/dev/null", grab_busy) == -1);
+    CHECK(grabbed_fd >= 0 && fcntl(grabbed_fd, F_GETFD) == -1);   /* not leaked */
+}
+static void test_open_missing_node(void) {
+    grabbed_fd = -1;
+    CHECK(keys_open_path("/nonexistent/event9", grab_ok) == -1 && grabbed_fd == -1);
+}
 int main(void){
     RUN(test_decode); RUN(test_keywatch_absent_backs_off); RUN(test_keywatch_late_driver);
     RUN(test_keywatch_lost_node_comes_back);
+    RUN(test_open_grabs_the_node); RUN(test_open_fails_when_grab_fails); RUN(test_open_missing_node);
     return REPORT();
 }
