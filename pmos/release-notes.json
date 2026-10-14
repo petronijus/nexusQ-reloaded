@@ -1,18 +1,23 @@
 {
   "schema": 1,
-  "version": "2.0.2",
-  "date": "2026-10-10",
-  "headline": "AirPlay security fixes, and an idle Q that stays idle",
+  "version": "2.1.0",
+  "date": "2026-10-14",
+  "headline": "The desktop on the graphics chip, fast only when it needs to be",
   "items": [
     {
-      "icon": "security",
-      "title": "AirPlay security fixes",
-      "text": "AirPlay moves to Shairport Sync 5.5.2, which fixes a flaw a device on your network could use to corrupt its memory."
+      "icon": "new",
+      "title": "The desktop uses the graphics chip",
+      "text": "The HDMI desktop now draws on the Q's own graphics chip instead of the processor, so it is smoother and leaves the processor free."
     },
     {
       "icon": "power",
-      "title": "A quieter idle",
-      "text": "AirPlay no longer wakes the processor ten times a second while nothing is playing."
+      "title": "Fast only while it draws",
+      "text": "The graphics chip speeds up to 384 MHz while something moves and drops to its lowest speed and voltage the moment the screen is still."
+    },
+    {
+      "icon": "fix",
+      "title": "Updates finish cleanly",
+      "text": "A system update no longer reports a failure when only an unused postmarketOS step complained, and the services restart as they should."
     }
   ]
 }

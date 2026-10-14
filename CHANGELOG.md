@@ -6,295 +6,6 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Fixed — app updates no longer fail on apk's remembered mkinitfs error (nexusq-control **r68**, unreleased)
-
-- After the postmarketos-mkinitfs 2.12.0-r1 trigger fails once, apk keeps the
-  package flagged, and every later transaction -- even one that runs no
-  trigger, such as upgrading nexusq-control alone -- ends "1 error" and exits
-  1 without an `ERROR:` line. r67 called that a failed update (seen on the
-  Prague Q, 2026-10-14). The daemon now asks `apk fix --simulate` which
-  packages are flagged and tolerates the error count only when the inert
-  trigger lines plus the flagged inert packages explain it.
-
-### Added — GPU frequency scaling 153.6 / 307.2 / 384 MHz like stock (kernel **6.18.48-r32**, device **r130**, unreleased)
-
-- Patches 0078-0080: the SGX540 gets stock's three OPPs (153.6 / 307.2 /
-  384 MHz, dividers of `dpll_per_m7x2_ck`) with VDD_CORE from the r30
-  regulator (1250 mV at 384 MHz, 1127 mV below). The pvrsgx glue
-  (`pvr-dvfs.c`) drives them with devfreq `simple_ondemand`; the load is the
-  share of time the DDK reported the SGX busy, from the same hooks stock's
-  `RequestSGXFreq` used. `dev_pm_opp_set_rate()` raises the rail before the
-  clock and lowers it after. A runtime-suspended GPU parks at 153.6 MHz, so
-  1.25 V is held only while the SGX runs at 384 MHz; a resumed GPU goes back
-  to the OPP it ran at (devfreq alone would restart at 153.6 MHz). The DDK is
-  told the highest OPP for its timers, so a lower OPP only lengthens its
-  timeouts. glmark2 on the Prague Q: 81 at 307.2 MHz, **91 at 384 MHz and 91
-  with DVFS** (die peak 89.4 °C, `docs/gpu-sgx540/performance-2026-10-13.md`).
-- The VP force-update returns -ETIMEDOUT when TRANXDONE never sets (it
-  returned 0), for VDD_MPU too, and the VDD_CORE regulator fails unless the VP
-  reads back the voltage asked for: no clock goes up on a rail that did not.
-  The r30 debugfs write knob is gone; `steelhead_vdd_core/vp` stays read-only.
-  (r31 was the same without these review fixes; it ran the benchmark.)
-- The GPU is a devfreq cooling device on the CPU's 100 °C passive trip (stock
-  had no GPU cooling; the die is shared).
-- Kernel config: `PM_DEVFREQ`, `DEVFREQ_GOV_SIMPLE_ONDEMAND`, `DEVFREQ_THERMAL`.
-  The SGX binding allows the OMAP4 GPU a "core" clock, an OPP table, a
-  `vdd-core` supply and `#cooling-cells` (patch 0078).
-- Diagnostics (device r130): healthd logs `gpu_freq`, `gpu_freq_ms` (ms per
-  OPP) and `gpu_trans`; `nq-diag-snapshot` shows the GPU devfreq device and
-  reads VDD_CORE on both sides of the clock; `nq-health-report` accepts any
-  OPP once DVFS is present, adds the residency to its `gpu` line and raises
-  `gpu_vdd_core` (crit) for 384 MHz with VDD_CORE below 1.25 V; `nq-gpu-bench`
-  reports the time per GPU clock.
-
-### Added — a Linux regulator for VDD_CORE (kernel **6.18.48-r30**, unreleased)
-
-- Patch 0077 and a `regulator-vc-core` DTS node: a VC-bridge regulator for
-  VDD_CORE (TWL6030 VCORE1 on the VC SR-I2C), like the VDD_MPU one. It scales
-  the core voltage domain through the VP force-update and reports what the VP
-  actually sent. Range: stock's CORE OPP100 .. OPP100-OV, 1127..1250 mV, the
-  latter being what the SGX540 needs at 384 MHz. Nothing asks for more than the
-  boot 1127 mV yet. A root-only debugfs directory `steelhead_vdd_core/` can
-  request a voltage in that range and shows the VP readback and VLIMITTO, to
-  measure whether the VP's 1202.7 mV VDDMAX clamps a force-update. **It does
-  not** (Prague Q, 2026-10-14): a 1250000 µV request made the VP send vsel 0x2c
-  = 1253380 µV, and 1127000 µV brought it back to 0x23 = 1139440 µV.
-- The CORE boot voltage's failure line says the VC ON value "may" already be
-  written (fleet-safety review of r29).
-
-### Fixed — an update whose packages installed is no longer reported as failed (nexusq-control **r67**, unreleased)
-
-- apk exits non-zero both for a failed transaction and for a committed one in
-  which a package's trigger failed. Since `postmarketos-mkinitfs 2.12.0-r1`
-  (its trigger runs a binary the package moved; pmaports MR !9764) every apk
-  transaction on the units did the second, so the app's daemon and system
-  updates reported "apk upgrade failed" and skipped the daemon restarts while
-  the new packages were installed. Now a failed trigger is tolerated only for
-  packages whose trigger is inert on the Q (`postmarketos-mkinitfs`: it builds
-  an initramfs the Q never boots); the result lists it in `triggerErrors`
-  (PROTOCOL §12a/§12b). Any other failure -- our own device trigger, which pins
-  the TAS5713 Speaker gain, above all -- still fails the update (r67, after the
-  fleet-safety review of r66, which tolerated every trigger).
-  `tests/test_apk_trigger_errors.py` uses the Prague Q's verbatim output.
-
-### Changed — Linux sets VDD_CORE itself, at stock's OPP100 (kernel **6.18.48-r29**, unreleased)
-
-- Patch 0076: the 4460 VDD_CORE table carries stock's nominals, 962 / 1127 /
-  1250 mV (mainline had 1025 / 1200), and the kernel drives VDD_CORE to
-  1127 mV through the core VP at boot, as stock's `omap2_set_init_voltage`
-  did. Before, nothing in Linux set the rail; it sat at the x-loader's value
-  and could not be read back. The TWL6030 rounds 1127 mV to vsel 0x23
-  (1 139 440 µV), the x-loader's own value, so the rail does not move; what
-  changes is that `PRM_VP_CORE_VOLTAGE` now reads it back (vsel 0x23 on the
-  Prague Q, trial boot of r28 2026-10-13) and a VDD_CORE regulator, the
-  precondition for running the GPU at 384 MHz, has a known starting point.
-  r29 (after the fleet-safety review) logs that readback, vsel and µV, instead
-  of the requested voltage: the VP force-update returns 0 even when TRANXDONE
-  never sets. r28 was a trial build only.
-
-### Fixed — complex GL scenes no longer overflow the SGX540's parameter buffer (nexusq-sgx **r1**, unreleased)
-
-- nexusq-sgx installs `/etc/powervr.ini`, the DDK's application hints, with an
-  8 MiB `ParamBufferSize` (the TI blobs stay untouched). glmark2's terrain
-  overflowed the default ("SGXKickTA: TA went out of Mem and SPM occurred");
-  with the hint it renders without it, and the full benchmark scores 83 (81
-  before), the new `nq-gpu-bench` baseline. `tests/test_aports.py` guards it.
-- `nq-gpu-bench` writes its 1 Hz monitor to its own file: sharing glmark2's
-  stdout, its lines broke the per-scene FPS lines.
-- Known issue, upstream: `postmarketos-mkinitfs 2.12.0-r1` (pmaports, built
-  2026-10-12) moved the binary to `/usr/bin` but its trigger still runs
-  `/usr/sbin/mkinitfs`, so every apk transaction that fires it ends with
-  "1 error" (the app would report the update as failed). The fix is in
-  pmaports MR !9764 (draft, 2026-10-13); nothing of ours to change.
-
-### Added — the diagnostics watch the GPU (device **r129**, unreleased; host tools)
-
-- `nq-healthd` logs the SGX540 per sample: `gpu_drv`, `gpu_rpm`,
-  `gpu_active_ms` (runtime-active ms in the interval), `hdmi_on`.
-- `nq-diag-snapshot` gained a `GPU_SGX540` section (driver, runtime PM, genpd
-  `prm_gfx`, `gfx_pwrdm` counters, clock, interrupt, fetched userspace, the
-  desktop's renderer, GPU kernel log; no SGX register access).
-- `nq-health-report`: `gpu` (info), `gpu_never_sleeps` and `gpu_awake_headless`
-  (the GPU should be off whenever nothing renders) and `gpu_clock` (it must run
-  at 307.2 MHz from `dpll_per_m7x2_ck`).
-- `scripts/diag/nq-gpu-bench`: glmark2 on the SGX540 against the baseline
-  (score 81 at 1280x720, 2026-10-13); fails a run that fell back to llvmpipe.
-- `nqctl`: the host-identity probe no longer swallows the stdin of
-  `nqctl run 'sh -s' <script`.
-- Measured: `docs/gpu-sgx540/performance-2026-10-13.md` (score 81 against 5 on
-  llvmpipe, GPU-bound, clock 307.2 MHz, GFX off when idle, die peak 88 °C).
-
-### Fixed — the kernel apk's /boot layout no longer follows postmarketos-installkernel (kernel **6.18.48-r27**, unreleased)
-
-- `postmarketos-installkernel 3-r0`, pulled from the binary repo by the
-  2026-10-12 image build (local pmaports pin 2-r0), makes `zinstall` write
-  `boot/vmlinuz-<release>` and `boot/System.map-<release>` and no
-  `boot/config`. The image build then shipped an **empty rootfs `/boot`** with
-  a green exit (the on-device mkinitfs trigger fails on every apk transaction,
-  the app reports every update as failed), and `nq-kernel-ota` would refuse
-  such a kernel apk ("apk has no /boot/vmlinuz"). The kernel `package()` now
-  pins `boot/vmlinuz`, `boot/System.map`, `boot/config` and dies on any other
-  layout; `docker-build.sh` fails the build instead of warning when the
-  payload is missing; `scripts/verify-rootfs.sh` gained the check (seen red on
-  the defective image: 3 FAIL). The r26 apk built that evening is not
-  published and must not be.
-
-### Fixed — PID 1 hung after a USB cable pull until a host was plugged in again (device **r128**, unreleased)
-
-- `serial-getty@ttyGS0` gets `TTYReset=no` (drop-in
-  `serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf`). systemd 262's
-  executor writes the TTY reset to the unit's tty while holding the
-  `/dev/console` lock, and the USB gadget console takes no byte without a host
-  (`gs_write_room()` is 0). After a cable pull the restarted getty's executor
-  kept the lock forever; the next TTY reset in PID 1 — the HDMI desktop
-  starting or stopping, getty@tty1 — blocked PID 1 in `flock()`, and with it
-  logind, ssh logins and `systemctl`. This was the "8-minute stall" of the GPU
-  bring-up; the GPU had nothing to do with it. Reproduced and verified without
-  a cable by unbinding the gadget's UDC: PID 1 silent 30 s without the drop-in,
-  answering throughout with it, for a getty@tty1 restart and for the desktop
-  start and stop. `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
-
-### Added — the HDMI desktop renders on the SGX540 (nexusq-sgx **r0** · nexusq-sgx-mesa **r0** · device **r127**, unreleased)
-
-labwc and LXQt stay Alpine's, unpatched; the GPU reaches them through two new
-packages and a session wrapper. Design and on-device measurements:
-`docs/gpu-sgx540/route-a-musl-2026-10-12.md` and
-`docs/gpu-sgx540/b1-b2-desktop-blockers-2026-10-11.md`.
-
-- **nexusq-sgx r0**, the glue that runs TI's glibc DDK blobs, unmodified, in
-  musl processes (`userspace/nexusq-sgx/`):
-  - `ld-linux-armhf.so.3` (`nq-glibc-compat`): satisfies the blobs'
-    `DT_NEEDED` without gcompat, supplies the nine fortify `__*_chk` entry
-    points, and, preloaded, gives code linked against `libc.so.6` glibc's
-    32-bit-offset `mmap@GLIBC_2.4` and GNU `strerror_r` while every musl
-    caller keeps musl's own. Without it `PVRSRVMapDmaBuf` fails with `EINVAL`
-    on every GBM buffer (measured). The `mmap` entry is assembly: a C version
-    let GCC write the computed offset into a glibc caller's locals and crashed
-    the DDK.
-  - `pvrsrvinit` (ours, MIT) and Maemo's LGPL `libdbm`, built for musl.
-  - `nq-sgx-fetch` + timer: **no TI binary ships in any image or the OTA
-    repo**; each unit fetches the seven pinned libraries and TI's licence from
-    TI's git (Maemo's mirror per file as fallback), verifies every sha256 and
-    installs the set atomically in `/var/lib/sgx-ddk/lib`. Retries every
-    15 min until complete, then never wakes again.
-  - `nexusq-sgx.service` (modprobe + `pvrsrvinit`), not enabled: only the
-    desktop pulls it in, so the module stays off on a unit that never starts
-    the desktop.
-- **nexusq-sgx-mesa r0**: Maemo's mesa-sgx `powervr-24.0.9` (`72c93be7`,
-  sha512-pinned, `scripts/bump-sgx-mesa.sh` is the update path) with our two
-  patches — dma-buf import back (B2: `EGL_EXT_image_dma_buf_import`, which
-  wlroots requires; measured working on our kernel over 200 frames per buffer
-  kind) and `GL_EXT_unpack_subimage` emulated in the GLES2 dispatch (B1; 15/15
-  reference checks) — in a private prefix, `/usr/lib/sgx-mesa`. Alpine's Mesa
-  is untouched.
-- **device r127**: the default tinydm session becomes
-  `lxqt-wayland-nexusq.desktop`. Its wrapper gives **labwc alone** the GPU
-  (mesa-sgx, the DDK, the preloaded shim, `WLR_RENDERER=gles2`; the shim
-  scrubs the variables for labwc's children, so nothing reaches the session or
-  the systemd user manager) when the GPU is ready, and starts on Pixman
-  otherwise: switched off with `/etc/nexusq/gpu-off`, blobs not fetched yet,
-  init failed, or a GPU session that already failed to start (exit within
-  30 s) on this kernel + mesa-sgx build. `tinydm.service` wants
-  `nexusq-sgx.service` first. `.post-upgrade` moves only units still on the
-  stock session; a hand-picked one stays. Depends on both packages; both are
-  in `pmos/ota-packages.list`.
-- **Release preflight**: an image carrying any TI SGX blob fails the gate.
-
-### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25** + **r26**, unreleased)
-
-The second and third kernel steps of the GPU work
-(`docs/2026-10-11-gpu-sgx540-groundwork.md`, §8 "Decisions").
-
-- **r22, `CONFIG_PREEMPT`.** The kernel was `PREEMPT_NONE`; the openpvrsgx DDK
-  1.17 stops with an `#error` on a non-preemptible kernel (`osfunc.c`), and the
-  stock 3.0.8 kernel was `SMP PREEMPT`. Full preemption rather than upstream
-  omap2plus' `PREEMPT_VOLUNTARY`: stock parity, and the configuration the DDK
-  is known to work with on OMAP4 (kc1, Maemo, Letux). Side effects in the
-  defconfig: `PREEMPT_RCU`, `TASKS_RCU`, `UNINLINE_SPIN_UNLOCK`; module
-  vermagic now carries `preempt`. About +45 KB of boot image (compile gate,
-  2026-10-11); the SGX module adds nothing to the zImage. The r23 kernel
-  stages at 6 774 784 B with the A/B ramdisk, 40 960 B under the
-  6 815 744 B ceiling.
-- **r23, the PowerVR SGX540 kernel driver** (`pvrsrvkm_omap4_sgx540_120.ko`,
-  `CONFIG_SGX_OMAP=m`), built in-tree inside `linux-google-steelhead`, because
-  `nq-kernel-ota` stages only `/lib/modules/<release>` out of the kernel apk —
-  a separate package would miss every kernel OTA and every rollback. Not a
-  copy in `kernel/patches`: the aport fetches openpvrsgx `pvrsrvkm-6.18-rc6` @
-  `d2f1e031d58a` as a GitHub archive pinned by sha512 (checked in `unpack()`,
-  because the build regenerates `sha512sums`), extracts only
-  `drivers/gpu/drm/pvrsgx`, copies the 1.17.4948957 tree in `prepare()` and
-  applies patches **0063–0073**: the DRM Kconfig/Makefile hook; runtime-PM
-  autosuspend (Lindgren 2cd8d74ec61a, probe half) and the
-  `blocking_fence_count` fix (ff422e4ab0bb) and the `sgxinfokm.h` warnings
-  (3f5f503efcc6) from upstream; and ours — VMAP memory areas with
-  `vmap(..., VM_MAP, prot)`, cached allocations through plain `__vmalloc()`
-  (no core-mm export), an OMAP4 SGX540 sysconfig at stock timing (307.2 MHz,
-  100 Hz recovery, 1000 Hz PDS, 100 ms APM latency, `PVR_NO_OMAP_TIMER`), an
-  ordered `pvr_remove()` with balanced runtime PM, the `_unlocked` dma-buf
-  helpers, the OMAP4470 SGX544 module only on request (`SGX_OMAP4470`, off),
-  no `select DRM_LEGACY`. `build()` dies if `olddefconfig` drops an SGX
-  symbol or the kernel is not preemptible; `package()` dies if the module is
-  missing or the SGX544 one was built.
-- **r24/r25, patch 0074: map only the SGX register window.** Both the DRM
-  wrapper's `pvr_probe()` and the DDK's `SysLocateDevices()` ioremapped the
-  whole DT resource, and `gpu@0` spans the 32 MB SGX target module. Right
-  after boot the 248 MB vmalloc area has two such holes, so r23 loaded
-  cleanly 11 times in a row; after an hour of uptime (HDMI connected, zram
-  up) it did not: `vmalloc_node_range for size 33558528 failed` and
-  `SysLocateDevices: Failed to map SGX registers`. Stock maps 64 KB (the
-  `omap44xx_gpu` hwmod resource `0x56000000-0x5600FFFF`,
-  `OSMapPhysToLin(base, 0xFFFF)` in `SysInitialise`; stock-parity audit
-  2026-10-11), and the OCP registers the driver touches (`0xFE10`-`0xFE50`)
-  are inside it. Both mappings are now capped at 64 KB (`resource_size()`,
-  which also fixes the DDK's size being one byte short). r24 carried only
-  the DDK half and was trial-booted on the Prague unit: `pvrsrvinit`
-  passed and **kmscube ran on HDMI, rendered by the SGX540** (with an
-  `LD_PRELOAD` shim for the sandbox kmscube, which passes
-  `DRM_FORMAT_MOD_INVALID` to AddFB2 with `DRM_MODE_FB_MODIFIERS`); its
-  `/proc/vmallocinfo` still showed the probe's 32 MB mapping, which r25
-  removes.
-- **r26, patch 0075: the driver stays loaded once it has created a fence.**
-  A pvr fence goes into the reservation object of the buffer the client
-  rendered to, which can be another driver's (omapdrm: labwc's scanout
-  buffers) and outlive the module; `dma_fence_release` then reads the freed
-  `fence_ops`. Seen on the Prague unit 2026-10-12: `PVRLinuxFenceDeInit: 1
-  fences leaked` at rmmod, then an oops when PID 1 closed the buffer. The
-  first fence pins the module; rmmod returns EBUSY until reboot. Built, not
-  booted yet. Open next to it: an 8-minute PID 1 stall around the driver
-  load/unload (`docs/gpu-sgx540/stall-and-panic-2026-10-12.md`).
-- **Not loaded by default.** `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120`
-  is in `CONFIG_CMDLINE` (`CONFIG_CMDLINE_FORCE=y`), so it is part of the
-  zImage and travels and rolls back with the kernel slot. A `modprobe.d` file
-  in the kernel apk would not protect a kernel OTA's trial boot: `stage-apk`
-  takes only `/lib/modules/<release>` and `/boot` out of the apk, and the
-  package (with any file of its own) is installed only at `promote`. The
-  blacklist stops udev's alias autoload; an explicit
-  `modprobe pvrsrvkm_omap4_sgx540_120` still loads it for bring-up. `build()`
-  refuses an SGX build without it; the revision that lets the module
-  autoload removes both.
-- **The update path:** `scripts/bump-pvrsgx.sh [<commit>|<branch>]` resolves
-  a new upstream commit, hashes its archive, test-applies the whole series on
-  a pristine tree with the aport's own `unpack()`/`prepare()`, checks that
-  `olddefconfig` keeps the SGX symbols, and only then rewrites the pin;
-  `--check` re-verifies the current one. Tested by
-  `scripts/tests/test-bump-pvrsgx.sh` (a conflicting upstream commit, a
-  tampered archive, a hook that misses, a kernel that ships its own pvrsgx).
-
-### Changed — the SGX clock runs from DPLL_PER like stock (kernel **6.18.48-r21**, unreleased)
-
-First kernel step of the GPU work (`docs/2026-10-11-gpu-sgx540-groundwork.md`).
-On the 4460 mainline left the SGX functional-clock mux on `dpll_core_m7x2_ck`
-(266.67 MHz, live on r20); stock reparents `gpu_fck` to `dpll_per_m7x2_ck`
-(`vmlinux.bin @0xc0075f40`) and every stock GPU OPP is a divider of DPLL_PER.
-Patch 0062 adds the `&sgx_module` assigned-clocks block mainline carries only
-for the 4430: parent `dpll_per_m7x2_ck`, 307.2 MHz (stock OPP100). Nothing uses
-the GPU yet, so the clock runs only for ti-sysc's revision read at probe.
-307.2 MHz needs VDD_CORE ≥ 1.127 V; the stock x-loader programs VCORE1 to
-1.139 V on every boot (`docs/gpu-sgx540/power-clocks-pm.md` Addendum §7).
-384 MHz needs 1.25 V and stays unused. DPLL_PER's other outputs (the TAS5713
-MCLK included) do not move: the M7 divider already ran at 307.2 MHz and has no
-`ti,set-rate-parent`.
-
 ### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:
@@ -380,6 +91,319 @@ the kernel. The fix needs the manifest to carry the released kernel apart from
 the apk packages and the watch to compare it with the running kernel, with the
 app saying that the kernel goes through `nq-kernel-ota` (it is not an apk
 upgrade and needs someone in reach for the trial boot).
+
+## [2.1.0] — 2026-10-14 — the desktop on the GPU, and the GPU at 384 MHz when it must
+
+Kernel **6.18.48-r32** (preemptible, the SGX540 driver, a VDD_CORE regulator
+and GPU DVFS), device **r130**, `nexusq-control` **r68**, `nexusq-sgx` **r1**,
+`nexusq-sgx-mesa` **r0**; everything else as in 2.0.2 (`nexusqd` r26,
+`nexusq-mqtt` r17, `nexusq-kernel-ota` r11, `nexusq-rootfs-ab` r6, WiFi/BT
+firmware r3, `shairport-sync` 5.5.2-r102). Released 2026-10-14 from the Linux desktop
+with `nexusq-boot-v2.1.0.img` (6.47 MiB) + `nexusq-rootfs-v2.1.0-sparse.img.zst`
+(684 MiB), the OTA repo published beside it (parity gate 21/0); the companion
+app is released on its own track.
+
+The HDMI desktop now renders on the PowerVR SGX540 instead of the CPU, and the
+GPU scales its clock like stock: 153.6 MHz idle, 384 MHz at 1.25 V under load
+(glmark2 81 → 91 against a fixed 307.2 MHz), with Linux now owning VDD_CORE.
+App updates no longer report a failure when only postmarketOS's broken
+mkinitfs trigger complained. The image was tested on the Prague Q from rootfs
+slot B (full diag clean) before the release build.
+
+**Coming from 2.0.2:** take the app's system update, then the kernel (r20 →
+r32) through `nq-kernel-ota` with someone in reach for the trial boot: the app
+does not offer kernels yet ("the release watch cannot see a kernel" under Unreleased). A flash
+needs `boot` and `userdata`; a unit running from rootfs slot B needs
+`nq-slot set a` first (INSTALL.md).
+
+### Fixed — app updates no longer fail on apk's remembered mkinitfs error (nexusq-control **r68**)
+
+- After the postmarketos-mkinitfs 2.12.0-r1 trigger fails once, apk keeps the
+  package flagged, and every later transaction -- even one that runs no
+  trigger, such as upgrading nexusq-control alone -- ends "1 error" and exits
+  1 without an `ERROR:` line. r67 called that a failed update (seen on the
+  Prague Q, 2026-10-14). The daemon now asks `apk fix --simulate` which
+  packages are flagged and tolerates the error count only when the inert
+  trigger lines plus the flagged inert packages explain it.
+
+### Added — GPU frequency scaling 153.6 / 307.2 / 384 MHz like stock (kernel **6.18.48-r32**, device **r130**)
+
+- Patches 0078-0080: the SGX540 gets stock's three OPPs (153.6 / 307.2 /
+  384 MHz, dividers of `dpll_per_m7x2_ck`) with VDD_CORE from the r30
+  regulator (1250 mV at 384 MHz, 1127 mV below). The pvrsgx glue
+  (`pvr-dvfs.c`) drives them with devfreq `simple_ondemand`; the load is the
+  share of time the DDK reported the SGX busy, from the same hooks stock's
+  `RequestSGXFreq` used. `dev_pm_opp_set_rate()` raises the rail before the
+  clock and lowers it after. A runtime-suspended GPU parks at 153.6 MHz, so
+  1.25 V is held only while the SGX runs at 384 MHz; a resumed GPU goes back
+  to the OPP it ran at (devfreq alone would restart at 153.6 MHz). The DDK is
+  told the highest OPP for its timers, so a lower OPP only lengthens its
+  timeouts. glmark2 on the Prague Q: 81 at 307.2 MHz, **91 at 384 MHz and 91
+  with DVFS** (die peak 89.4 °C, `docs/gpu-sgx540/performance-2026-10-13.md`).
+- The VP force-update returns -ETIMEDOUT when TRANXDONE never sets (it
+  returned 0), for VDD_MPU too, and the VDD_CORE regulator fails unless the VP
+  reads back the voltage asked for: no clock goes up on a rail that did not.
+  The r30 debugfs write knob is gone; `steelhead_vdd_core/vp` stays read-only.
+  (r31 was the same without these review fixes; it ran the benchmark.)
+- The GPU is a devfreq cooling device on the CPU's 100 °C passive trip (stock
+  had no GPU cooling; the die is shared).
+- Kernel config: `PM_DEVFREQ`, `DEVFREQ_GOV_SIMPLE_ONDEMAND`, `DEVFREQ_THERMAL`.
+  The SGX binding allows the OMAP4 GPU a "core" clock, an OPP table, a
+  `vdd-core` supply and `#cooling-cells` (patch 0078).
+- Diagnostics (device r130): healthd logs `gpu_freq`, `gpu_freq_ms` (ms per
+  OPP) and `gpu_trans`; `nq-diag-snapshot` shows the GPU devfreq device and
+  reads VDD_CORE on both sides of the clock; `nq-health-report` accepts any
+  OPP once DVFS is present, adds the residency to its `gpu` line and raises
+  `gpu_vdd_core` (crit) for 384 MHz with VDD_CORE below 1.25 V; `nq-gpu-bench`
+  reports the time per GPU clock.
+
+### Added — a Linux regulator for VDD_CORE (kernel **6.18.48-r30**)
+
+- Patch 0077 and a `regulator-vc-core` DTS node: a VC-bridge regulator for
+  VDD_CORE (TWL6030 VCORE1 on the VC SR-I2C), like the VDD_MPU one. It scales
+  the core voltage domain through the VP force-update and reports what the VP
+  actually sent. Range: stock's CORE OPP100 .. OPP100-OV, 1127..1250 mV, the
+  latter being what the SGX540 needs at 384 MHz. Nothing asks for more than the
+  boot 1127 mV yet. A root-only debugfs directory `steelhead_vdd_core/` can
+  request a voltage in that range and shows the VP readback and VLIMITTO, to
+  measure whether the VP's 1202.7 mV VDDMAX clamps a force-update. **It does
+  not** (Prague Q, 2026-10-14): a 1250000 µV request made the VP send vsel 0x2c
+  = 1253380 µV, and 1127000 µV brought it back to 0x23 = 1139440 µV.
+- The CORE boot voltage's failure line says the VC ON value "may" already be
+  written (fleet-safety review of r29).
+
+### Fixed — an update whose packages installed is no longer reported as failed (nexusq-control **r67**)
+
+- apk exits non-zero both for a failed transaction and for a committed one in
+  which a package's trigger failed. Since `postmarketos-mkinitfs 2.12.0-r1`
+  (its trigger runs a binary the package moved; pmaports MR !9764) every apk
+  transaction on the units did the second, so the app's daemon and system
+  updates reported "apk upgrade failed" and skipped the daemon restarts while
+  the new packages were installed. Now a failed trigger is tolerated only for
+  packages whose trigger is inert on the Q (`postmarketos-mkinitfs`: it builds
+  an initramfs the Q never boots); the result lists it in `triggerErrors`
+  (PROTOCOL §12a/§12b). Any other failure -- our own device trigger, which pins
+  the TAS5713 Speaker gain, above all -- still fails the update (r67, after the
+  fleet-safety review of r66, which tolerated every trigger).
+  `tests/test_apk_trigger_errors.py` uses the Prague Q's verbatim output.
+
+### Changed — Linux sets VDD_CORE itself, at stock's OPP100 (kernel **6.18.48-r29**)
+
+- Patch 0076: the 4460 VDD_CORE table carries stock's nominals, 962 / 1127 /
+  1250 mV (mainline had 1025 / 1200), and the kernel drives VDD_CORE to
+  1127 mV through the core VP at boot, as stock's `omap2_set_init_voltage`
+  did. Before, nothing in Linux set the rail; it sat at the x-loader's value
+  and could not be read back. The TWL6030 rounds 1127 mV to vsel 0x23
+  (1 139 440 µV), the x-loader's own value, so the rail does not move; what
+  changes is that `PRM_VP_CORE_VOLTAGE` now reads it back (vsel 0x23 on the
+  Prague Q, trial boot of r28 2026-10-13) and a VDD_CORE regulator, the
+  precondition for running the GPU at 384 MHz, has a known starting point.
+  r29 (after the fleet-safety review) logs that readback, vsel and µV, instead
+  of the requested voltage: the VP force-update returns 0 even when TRANXDONE
+  never sets. r28 was a trial build only.
+
+### Fixed — complex GL scenes no longer overflow the SGX540's parameter buffer (nexusq-sgx **r1**)
+
+- nexusq-sgx installs `/etc/powervr.ini`, the DDK's application hints, with an
+  8 MiB `ParamBufferSize` (the TI blobs stay untouched). glmark2's terrain
+  overflowed the default ("SGXKickTA: TA went out of Mem and SPM occurred");
+  with the hint it renders without it, and the full benchmark scores 83 (81
+  before), the new `nq-gpu-bench` baseline. `tests/test_aports.py` guards it.
+- `nq-gpu-bench` writes its 1 Hz monitor to its own file: sharing glmark2's
+  stdout, its lines broke the per-scene FPS lines.
+- Known issue, upstream: `postmarketos-mkinitfs 2.12.0-r1` (pmaports, built
+  2026-10-12) moved the binary to `/usr/bin` but its trigger still runs
+  `/usr/sbin/mkinitfs`, so every apk transaction that fires it ends with
+  "1 error" (the app would report the update as failed). The fix is in
+  pmaports MR !9764 (draft, 2026-10-13); nothing of ours to change.
+
+### Added — the diagnostics watch the GPU (device **r129**; host tools)
+
+- `nq-healthd` logs the SGX540 per sample: `gpu_drv`, `gpu_rpm`,
+  `gpu_active_ms` (runtime-active ms in the interval), `hdmi_on`.
+- `nq-diag-snapshot` gained a `GPU_SGX540` section (driver, runtime PM, genpd
+  `prm_gfx`, `gfx_pwrdm` counters, clock, interrupt, fetched userspace, the
+  desktop's renderer, GPU kernel log; no SGX register access).
+- `nq-health-report`: `gpu` (info), `gpu_never_sleeps` and `gpu_awake_headless`
+  (the GPU should be off whenever nothing renders) and `gpu_clock` (it must run
+  at 307.2 MHz from `dpll_per_m7x2_ck`).
+- `scripts/diag/nq-gpu-bench`: glmark2 on the SGX540 against the baseline
+  (score 81 at 1280x720, 2026-10-13); fails a run that fell back to llvmpipe.
+- `nqctl`: the host-identity probe no longer swallows the stdin of
+  `nqctl run 'sh -s' <script`.
+- Measured: `docs/gpu-sgx540/performance-2026-10-13.md` (score 81 against 5 on
+  llvmpipe, GPU-bound, clock 307.2 MHz, GFX off when idle, die peak 88 °C).
+
+### Fixed — the kernel apk's /boot layout no longer follows postmarketos-installkernel (kernel **6.18.48-r27**)
+
+- `postmarketos-installkernel 3-r0`, pulled from the binary repo by the
+  2026-10-12 image build (local pmaports pin 2-r0), makes `zinstall` write
+  `boot/vmlinuz-<release>` and `boot/System.map-<release>` and no
+  `boot/config`. The image build then shipped an **empty rootfs `/boot`** with
+  a green exit (the on-device mkinitfs trigger fails on every apk transaction,
+  the app reports every update as failed), and `nq-kernel-ota` would refuse
+  such a kernel apk ("apk has no /boot/vmlinuz"). The kernel `package()` now
+  pins `boot/vmlinuz`, `boot/System.map`, `boot/config` and dies on any other
+  layout; `docker-build.sh` fails the build instead of warning when the
+  payload is missing; `scripts/verify-rootfs.sh` gained the check (seen red on
+  the defective image: 3 FAIL). The r26 apk built that evening is not
+  published and must not be.
+
+### Fixed — PID 1 hung after a USB cable pull until a host was plugged in again (device **r128**)
+
+- `serial-getty@ttyGS0` gets `TTYReset=no` (drop-in
+  `serial-getty@ttyGS0.service.d/10-nexusq-no-tty-reset.conf`). systemd 262's
+  executor writes the TTY reset to the unit's tty while holding the
+  `/dev/console` lock, and the USB gadget console takes no byte without a host
+  (`gs_write_room()` is 0). After a cable pull the restarted getty's executor
+  kept the lock forever; the next TTY reset in PID 1 — the HDMI desktop
+  starting or stopping, getty@tty1 — blocked PID 1 in `flock()`, and with it
+  logind, ssh logins and `systemctl`. This was the "8-minute stall" of the GPU
+  bring-up; the GPU had nothing to do with it. Reproduced and verified without
+  a cable by unbinding the gadget's UDC: PID 1 silent 30 s without the drop-in,
+  answering throughout with it, for a getty@tty1 restart and for the desktop
+  start and stop. `docs/gpu-sgx540/stall-and-panic-2026-10-12.md`.
+
+### Added — the HDMI desktop renders on the SGX540 (nexusq-sgx **r0** · nexusq-sgx-mesa **r0** · device **r127**)
+
+labwc and LXQt stay Alpine's, unpatched; the GPU reaches them through two new
+packages and a session wrapper. Design and on-device measurements:
+`docs/gpu-sgx540/route-a-musl-2026-10-12.md` and
+`docs/gpu-sgx540/b1-b2-desktop-blockers-2026-10-11.md`.
+
+- **nexusq-sgx r0**, the glue that runs TI's glibc DDK blobs, unmodified, in
+  musl processes (`userspace/nexusq-sgx/`):
+  - `ld-linux-armhf.so.3` (`nq-glibc-compat`): satisfies the blobs'
+    `DT_NEEDED` without gcompat, supplies the nine fortify `__*_chk` entry
+    points, and, preloaded, gives code linked against `libc.so.6` glibc's
+    32-bit-offset `mmap@GLIBC_2.4` and GNU `strerror_r` while every musl
+    caller keeps musl's own. Without it `PVRSRVMapDmaBuf` fails with `EINVAL`
+    on every GBM buffer (measured). The `mmap` entry is assembly: a C version
+    let GCC write the computed offset into a glibc caller's locals and crashed
+    the DDK.
+  - `pvrsrvinit` (ours, MIT) and Maemo's LGPL `libdbm`, built for musl.
+  - `nq-sgx-fetch` + timer: **no TI binary ships in any image or the OTA
+    repo**; each unit fetches the seven pinned libraries and TI's licence from
+    TI's git (Maemo's mirror per file as fallback), verifies every sha256 and
+    installs the set atomically in `/var/lib/sgx-ddk/lib`. Retries every
+    15 min until complete, then never wakes again.
+  - `nexusq-sgx.service` (modprobe + `pvrsrvinit`), not enabled: only the
+    desktop pulls it in, so the module stays off on a unit that never starts
+    the desktop.
+- **nexusq-sgx-mesa r0**: Maemo's mesa-sgx `powervr-24.0.9` (`72c93be7`,
+  sha512-pinned, `scripts/bump-sgx-mesa.sh` is the update path) with our two
+  patches — dma-buf import back (B2: `EGL_EXT_image_dma_buf_import`, which
+  wlroots requires; measured working on our kernel over 200 frames per buffer
+  kind) and `GL_EXT_unpack_subimage` emulated in the GLES2 dispatch (B1; 15/15
+  reference checks) — in a private prefix, `/usr/lib/sgx-mesa`. Alpine's Mesa
+  is untouched.
+- **device r127**: the default tinydm session becomes
+  `lxqt-wayland-nexusq.desktop`. Its wrapper gives **labwc alone** the GPU
+  (mesa-sgx, the DDK, the preloaded shim, `WLR_RENDERER=gles2`; the shim
+  scrubs the variables for labwc's children, so nothing reaches the session or
+  the systemd user manager) when the GPU is ready, and starts on Pixman
+  otherwise: switched off with `/etc/nexusq/gpu-off`, blobs not fetched yet,
+  init failed, or a GPU session that already failed to start (exit within
+  30 s) on this kernel + mesa-sgx build. `tinydm.service` wants
+  `nexusq-sgx.service` first. `.post-upgrade` moves only units still on the
+  stock session; a hand-picked one stays. Depends on both packages; both are
+  in `pmos/ota-packages.list`.
+- **Release preflight**: an image carrying any TI SGX blob fails the gate.
+
+### Added — a preemptible kernel and the SGX540 GPU driver, not loaded by default (kernel **6.18.48-r22** + **r23** + **r25** + **r26**)
+
+The second and third kernel steps of the GPU work
+(`docs/2026-10-11-gpu-sgx540-groundwork.md`, §8 "Decisions").
+
+- **r22, `CONFIG_PREEMPT`.** The kernel was `PREEMPT_NONE`; the openpvrsgx DDK
+  1.17 stops with an `#error` on a non-preemptible kernel (`osfunc.c`), and the
+  stock 3.0.8 kernel was `SMP PREEMPT`. Full preemption rather than upstream
+  omap2plus' `PREEMPT_VOLUNTARY`: stock parity, and the configuration the DDK
+  is known to work with on OMAP4 (kc1, Maemo, Letux). Side effects in the
+  defconfig: `PREEMPT_RCU`, `TASKS_RCU`, `UNINLINE_SPIN_UNLOCK`; module
+  vermagic now carries `preempt`. About +45 KB of boot image (compile gate,
+  2026-10-11); the SGX module adds nothing to the zImage. The r23 kernel
+  stages at 6 774 784 B with the A/B ramdisk, 40 960 B under the
+  6 815 744 B ceiling.
+- **r23, the PowerVR SGX540 kernel driver** (`pvrsrvkm_omap4_sgx540_120.ko`,
+  `CONFIG_SGX_OMAP=m`), built in-tree inside `linux-google-steelhead`, because
+  `nq-kernel-ota` stages only `/lib/modules/<release>` out of the kernel apk —
+  a separate package would miss every kernel OTA and every rollback. Not a
+  copy in `kernel/patches`: the aport fetches openpvrsgx `pvrsrvkm-6.18-rc6` @
+  `d2f1e031d58a` as a GitHub archive pinned by sha512 (checked in `unpack()`,
+  because the build regenerates `sha512sums`), extracts only
+  `drivers/gpu/drm/pvrsgx`, copies the 1.17.4948957 tree in `prepare()` and
+  applies patches **0063–0073**: the DRM Kconfig/Makefile hook; runtime-PM
+  autosuspend (Lindgren 2cd8d74ec61a, probe half) and the
+  `blocking_fence_count` fix (ff422e4ab0bb) and the `sgxinfokm.h` warnings
+  (3f5f503efcc6) from upstream; and ours — VMAP memory areas with
+  `vmap(..., VM_MAP, prot)`, cached allocations through plain `__vmalloc()`
+  (no core-mm export), an OMAP4 SGX540 sysconfig at stock timing (307.2 MHz,
+  100 Hz recovery, 1000 Hz PDS, 100 ms APM latency, `PVR_NO_OMAP_TIMER`), an
+  ordered `pvr_remove()` with balanced runtime PM, the `_unlocked` dma-buf
+  helpers, the OMAP4470 SGX544 module only on request (`SGX_OMAP4470`, off),
+  no `select DRM_LEGACY`. `build()` dies if `olddefconfig` drops an SGX
+  symbol or the kernel is not preemptible; `package()` dies if the module is
+  missing or the SGX544 one was built.
+- **r24/r25, patch 0074: map only the SGX register window.** Both the DRM
+  wrapper's `pvr_probe()` and the DDK's `SysLocateDevices()` ioremapped the
+  whole DT resource, and `gpu@0` spans the 32 MB SGX target module. Right
+  after boot the 248 MB vmalloc area has two such holes, so r23 loaded
+  cleanly 11 times in a row; after an hour of uptime (HDMI connected, zram
+  up) it did not: `vmalloc_node_range for size 33558528 failed` and
+  `SysLocateDevices: Failed to map SGX registers`. Stock maps 64 KB (the
+  `omap44xx_gpu` hwmod resource `0x56000000-0x5600FFFF`,
+  `OSMapPhysToLin(base, 0xFFFF)` in `SysInitialise`; stock-parity audit
+  2026-10-11), and the OCP registers the driver touches (`0xFE10`-`0xFE50`)
+  are inside it. Both mappings are now capped at 64 KB (`resource_size()`,
+  which also fixes the DDK's size being one byte short). r24 carried only
+  the DDK half and was trial-booted on the Prague unit: `pvrsrvinit`
+  passed and **kmscube ran on HDMI, rendered by the SGX540** (with an
+  `LD_PRELOAD` shim for the sandbox kmscube, which passes
+  `DRM_FORMAT_MOD_INVALID` to AddFB2 with `DRM_MODE_FB_MODIFIERS`); its
+  `/proc/vmallocinfo` still showed the probe's 32 MB mapping, which r25
+  removes.
+- **r26, patch 0075: the driver stays loaded once it has created a fence.**
+  A pvr fence goes into the reservation object of the buffer the client
+  rendered to, which can be another driver's (omapdrm: labwc's scanout
+  buffers) and outlive the module; `dma_fence_release` then reads the freed
+  `fence_ops`. Seen on the Prague unit 2026-10-12: `PVRLinuxFenceDeInit: 1
+  fences leaked` at rmmod, then an oops when PID 1 closed the buffer. The
+  first fence pins the module; rmmod returns EBUSY until reboot. Built, not
+  booted yet. Open next to it: an 8-minute PID 1 stall around the driver
+  load/unload (`docs/gpu-sgx540/stall-and-panic-2026-10-12.md`).
+- **Not loaded by default.** `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120`
+  is in `CONFIG_CMDLINE` (`CONFIG_CMDLINE_FORCE=y`), so it is part of the
+  zImage and travels and rolls back with the kernel slot. A `modprobe.d` file
+  in the kernel apk would not protect a kernel OTA's trial boot: `stage-apk`
+  takes only `/lib/modules/<release>` and `/boot` out of the apk, and the
+  package (with any file of its own) is installed only at `promote`. The
+  blacklist stops udev's alias autoload; an explicit
+  `modprobe pvrsrvkm_omap4_sgx540_120` still loads it for bring-up. `build()`
+  refuses an SGX build without it; the revision that lets the module
+  autoload removes both.
+- **The update path:** `scripts/bump-pvrsgx.sh [<commit>|<branch>]` resolves
+  a new upstream commit, hashes its archive, test-applies the whole series on
+  a pristine tree with the aport's own `unpack()`/`prepare()`, checks that
+  `olddefconfig` keeps the SGX symbols, and only then rewrites the pin;
+  `--check` re-verifies the current one. Tested by
+  `scripts/tests/test-bump-pvrsgx.sh` (a conflicting upstream commit, a
+  tampered archive, a hook that misses, a kernel that ships its own pvrsgx).
+
+### Changed — the SGX clock runs from DPLL_PER like stock (kernel **6.18.48-r21**)
+
+First kernel step of the GPU work (`docs/2026-10-11-gpu-sgx540-groundwork.md`).
+On the 4460 mainline left the SGX functional-clock mux on `dpll_core_m7x2_ck`
+(266.67 MHz, live on r20); stock reparents `gpu_fck` to `dpll_per_m7x2_ck`
+(`vmlinux.bin @0xc0075f40`) and every stock GPU OPP is a divider of DPLL_PER.
+Patch 0062 adds the `&sgx_module` assigned-clocks block mainline carries only
+for the 4430: parent `dpll_per_m7x2_ck`, 307.2 MHz (stock OPP100). Nothing uses
+the GPU yet, so the clock runs only for ti-sysc's revision read at probe.
+307.2 MHz needs VDD_CORE ≥ 1.127 V; the stock x-loader programs VCORE1 to
+1.139 V on every boot (`docs/gpu-sgx540/power-clocks-pm.md` Addendum §7).
+384 MHz needs 1.25 V and stays unused. DPLL_PER's other outputs (the TAS5713
+MCLK included) do not move: the M7 divider already ran at 307.2 MHz and has no
+`ti,set-rate-parent`.
 
 ## [2.0.2] — 2026-10-10 — AirPlay security fixes, and an idle Q that stays idle
 
