@@ -3186,6 +3186,9 @@ _APK_TRIGGER_ERR = re.compile(r"^ERROR: (?:lib/apk/exec/)?(\S+?)\.trigger: ")
 _INERT_TRIGGERS = frozenset({"postmarketos-mkinitfs"})
 
 
+_APK_ERROR_COUNT = re.compile(r"^(\d+) errors?;", re.M)
+
+
 def _apk_failed(r):
     """None when an `apk add/upgrade` committed its transaction, else the reason.
 
@@ -3199,16 +3202,48 @@ def _apk_failed(r):
     it to /usr/bin (pmaports MR !9764) -- and on this unit the mkinitfs trigger
     is inert anyway (the Q boots from the flashed boot partition, never from
     /boot). So only a failed trigger of a package in _INERT_TRIGGERS is
-    tolerated; any other ERROR line, or a non-zero exit with no ERROR line at
-    all, means the update failed."""
+    tolerated; any other ERROR line means the update failed.
+
+    apk also REMEMBERS a failed trigger: the package stays flagged (`apk fix`
+    would reinstall it) and every later transaction, even one that runs no
+    trigger at all, ends "1 error" and exits 1 with no ERROR line (seen
+    2026-10-14 on r67: upgrading nexusq-control alone). So the summary's error
+    count is checked against what is accounted for: the inert ERROR lines of
+    this run plus the inert packages apk keeps flagged (`apk fix --simulate`).
+    More errors than that -- or a non-zero exit without a summary -- is a
+    failure."""
     if r.returncode == 0:
         return None
     text = (r.stdout or "") + "\n" + (r.stderr or "")
     errors = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("ERROR:")]
     real = [ln for ln in errors if not _inert_trigger_error(ln)]
-    if real or not errors:
-        return (real[0] if real else (r.stderr or "").strip())[:160]
+    if real:
+        return real[0][:160]
+    m = _APK_ERROR_COUNT.search(text)
+    if not m:
+        return ((r.stderr or "").strip() or f"apk exited {r.returncode}")[:160]
+    flagged = _apk_flagged()
+    if flagged is None:
+        return f"apk reported {m.group(1)} error(s) and `apk fix --simulate` could not say which"
+    inert_flagged = [n for n in flagged if _pkg_name(n) in _INERT_TRIGGERS]
+    other = [n for n in flagged if _pkg_name(n) not in _INERT_TRIGGERS]
+    if other:
+        return f"apk keeps {', '.join(other)} in an error state"
+    if int(m.group(1)) > len(errors) + len(inert_flagged):
+        return f"apk reported {m.group(1)} error(s), only {len(errors) + len(inert_flagged)} accounted for"
     return None
+
+
+def _apk_flagged():
+    """Installed packages apk keeps in an error state -- the ones `apk fix`
+    would reinstall -- or None when apk cannot be asked. --simulate changes
+    nothing; it exits non-zero for the same remembered errors, so its exit
+    status says nothing and only its "Reinstalling <name>" lines count."""
+    try:
+        r = _apk("fix", "--simulate", timeout=60)
+    except (Err, subprocess.TimeoutExpired, OSError):
+        return None
+    return _apk_changed(r)
 
 
 def _inert_trigger_error(line):

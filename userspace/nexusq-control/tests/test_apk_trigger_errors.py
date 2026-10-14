@@ -1,4 +1,4 @@
-"""nexusq-control r66/r67: a committed apk transaction whose trigger failed is not a
+"""nexusq-control r66-r68: a committed apk transaction whose trigger failed is not a
 failed update.
 
 postmarketos-mkinitfs 2.12.0-r1 (2026-10-12) moved its binary to /usr/bin but
@@ -48,9 +48,39 @@ REAL_FAILURE = """ERROR: unable to select packages:
 """
 
 
+# Verbatim from the Prague Q's /var/log/apk.log, 2026-10-14: apk remembers the
+# failed mkinitfs trigger, so a transaction that runs no trigger at all still
+# ends "1 error" and exits 1 (r67 called this a failed update) ...
+REMEMBERED_ONLY = """(1/1) Upgrading nexusq-control (0.1.0-r66 -> 0.1.0-r67)
+Executing busybox-1.38.0-r7.trigger
+Executing systemd-262-r4.trigger
+Executing postmarketos-base-systemd-92-r0.trigger
+* No new system units to preset
+* No new user units to preset
+1 error; 2141.5 MiB in 993 packages
+"""
+
+# ... and one that runs it again counts it twice.
+KERNEL_UPGRADE = """(1/1) Upgrading linux-google-steelhead (6.18.48-r30 -> 6.18.48-r31)
+Executing busybox-1.38.0-r7.trigger
+Executing kmod-34.2-r1.trigger
+Executing postmarketos-mkinitfs-2.12.0-r1.trigger
+* /proc/self/fd/7: line 20: /usr/sbin/mkinitfs: not found
+ERROR: lib/apk/exec/postmarketos-mkinitfs-2.12.0-r1.trigger: exited with error 127
+2 errors; 2141.5 MiB in 993 packages
+"""
+
+# `apk fix --simulate` on that unit: the package apk keeps flagged.
+FIX_MKINITFS = """(1/1) Reinstalling postmarketos-mkinitfs (2.12.0-r1)
+1 error; 2141.6 MiB in 993 packages
+"""
+
+
 class ApkFailed(unittest.TestCase):
     def setUp(self):
         self.mod = load_daemon()
+        self.flagged = []
+        self.mod._apk_flagged = lambda: self.flagged
 
     def test_success_is_not_a_failure(self):
         self.assertIsNone(self.mod._apk_failed(run(0, "OK: 2141.5 MiB in 993 packages\n")))
@@ -82,6 +112,31 @@ class ApkFailed(unittest.TestCase):
     def test_nonzero_exit_without_an_error_line_is_a_failure(self):
         self.assertTrue(self.mod._apk_failed(run(1, "fetch failed\n")))
 
+    def test_remembered_inert_trigger_error_is_not_a_failure(self):
+        self.flagged = ["postmarketos-mkinitfs"]
+        self.assertIsNone(self.mod._apk_failed(run(1, REMEMBERED_ONLY)))
+        self.assertIsNone(self.mod._apk_failed(run(1, KERNEL_UPGRADE)))
+
+    def test_an_error_nothing_accounts_for_is_a_failure(self):
+        # "1 error" with no ERROR line and nothing flagged: something else failed.
+        self.assertIn("1 error(s)", self.mod._apk_failed(run(1, REMEMBERED_ONLY)))
+        # One more error than the inert trigger line and the flag explain.
+        self.flagged = ["postmarketos-mkinitfs"]
+        self.assertTrue(self.mod._apk_failed(run(1, KERNEL_UPGRADE.replace("2 errors", "3 errors"))))
+
+    def test_another_flagged_package_is_a_failure(self):
+        self.flagged = ["postmarketos-mkinitfs", "device-google-steelhead"]
+        self.assertIn("device-google-steelhead", self.mod._apk_failed(run(1, REMEMBERED_ONLY)))
+
+    def test_apk_fix_unavailable_is_a_failure(self):
+        self.flagged = None
+        self.assertTrue(self.mod._apk_failed(run(1, REMEMBERED_ONLY)))
+
+    def test_flagged_packages_come_from_apk_fix(self):
+        mod = load_daemon()
+        mod._apk = lambda *a, timeout=90: run(1, FIX_MKINITFS) if a[:2] == ("fix", "--simulate") else None
+        self.assertEqual(mod._apk_flagged(), ["postmarketos-mkinitfs"])
+
 
 class InstallPathsUseIt(unittest.TestCase):
     """Both OTA tracks go through _apk_failed, so a trigger-only error reaches the
@@ -90,6 +145,7 @@ class InstallPathsUseIt(unittest.TestCase):
     def setUp(self):
         self.mod = load_daemon()
         self.mod._ensure_ota_repo = lambda: None
+        self.mod._apk_flagged = lambda: []
 
     def fake_apk(self, upgrade_result):
         def _apk(*args, timeout=90):
