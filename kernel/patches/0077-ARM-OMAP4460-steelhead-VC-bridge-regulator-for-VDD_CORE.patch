@@ -1,0 +1,335 @@
+From c9d569b2f9eac8568b226fcacce4e841ffa07255 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 14 Oct 2026 08:23:21 +0200
+Subject: [PATCH 77/77] ARM: OMAP4460: steelhead: VC-bridge regulator for VDD_CORE
+
+VDD_CORE (TWL6030 VCORE1) sits on the write-only VC SR-I2C, like the
+TPS62361 VDD_MPU, so it has no Linux i2c regulator. Add the same kind
+of bridge for it ("steelhead,vc-core-supply"): set_voltage() scales
+the core voltage domain through the VP force-update, get_voltage()
+reads back what the VP sent (PRM_VP_CORE_VOLTAGE). The range is
+stock's CORE OPP100 .. OPP100-OV, 1127..1250 mV; 1250 mV is what the
+SGX540 at 384 MHz needs (stock GPU OPP table @0xc0043ec4).
+
+set_voltage() fails (-EIO) unless the VP reads back at least the
+voltage asked for, and the VP force-update now returns -ETIMEDOUT when
+TRANXDONE never sets after the update (it logged that and returned 0):
+a consumer raising a clock on top of the rail -- the GPU's OPPs here,
+cpufreq on VDD_MPU -- then stops instead of running fast on a rail
+that never rose. A failed MPU step leaves cpufreq at the old OPP.
+
+A root-only, read-only debugfs file, steelhead_vdd_core/vp, shows the
+VP readback, the last request and VLIMITTO. The VP's VDDMAX (0x28,
+1202.7 mV, stock's too) is below 1250 mV but does not clamp a
+force-update: a 1250 mV request read back vsel 0x2c on the unit
+(measured with a bring-up write knob that is not kept, so nothing can
+move the rail behind the regulator core).
+
+omap_vp_get_vsel() moves to vp.c for both users, and the CORE boot
+voltage's failure line says the VC ON value "may" already be written
+(a missing scale method returns before omap_vc_pre_scale).
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ arch/arm/mach-omap2/Makefile                  |   1 +
+ arch/arm/mach-omap2/omap_twl.c                |  20 +-
+ .../mach-omap2/steelhead-vc-core-regulator.c  | 172 ++++++++++++++++++
+ arch/arm/mach-omap2/vp.c                      |  24 ++-
+ arch/arm/mach-omap2/vp.h                      |   1 +
+ 5 files changed, 203 insertions(+), 15 deletions(-)
+ create mode 100644 arch/arm/mach-omap2/steelhead-vc-core-regulator.c
+
+diff --git a/arch/arm/mach-omap2/Makefile b/arch/arm/mach-omap2/Makefile
+index c79579f3e..3cf5013df 100644
+--- a/arch/arm/mach-omap2/Makefile
++++ b/arch/arm/mach-omap2/Makefile
+@@ -129,6 +129,7 @@ obj-$(CONFIG_ARCH_OMAP3)		+= voltagedomains3xxx_data.o
+ obj-$(CONFIG_ARCH_OMAP4)		+= $(voltagedomain-common)
+ obj-$(CONFIG_ARCH_OMAP4)		+= voltagedomains44xx_data.o
+ obj-$(CONFIG_ARCH_OMAP4)		+= steelhead-vc-mpu-regulator.o
++obj-$(CONFIG_ARCH_OMAP4)		+= steelhead-vc-core-regulator.o
+ obj-$(CONFIG_SOC_AM33XX)		+= $(voltagedomain-common)
+ obj-$(CONFIG_SOC_AM43XX)		+= $(voltagedomain-common)
+ obj-$(CONFIG_SOC_OMAP5)			+= $(voltagedomain-common)
+diff --git a/arch/arm/mach-omap2/omap_twl.c b/arch/arm/mach-omap2/omap_twl.c
+index 964769d2e..f1a545948 100644
+--- a/arch/arm/mach-omap2/omap_twl.c
++++ b/arch/arm/mach-omap2/omap_twl.c
+@@ -457,14 +457,6 @@ static int omap4460_vdd_mpu_do_retask(void)
+  */
+ #define OMAP4460_STEELHEAD_VDD_CORE_INIT_UV	1127000
+ 
+-/* What the core VP last sent the PMIC (PRM_VP_CORE_VOLTAGE), as a vsel. */
+-static u8 omap4460_vdd_core_vp_vsel(struct voltagedomain *voltdm)
+-{
+-	u32 mask = voltdm->vp->common->vpvoltage_mask;
+-
+-	return (voltdm->read(voltdm->vp->voltage) & mask) >> __ffs(mask);
+-}
+-
+ static void omap4460_vdd_core_init_voltage(void)
+ {
+ 	struct voltagedomain *voltdm = voltdm_lookup("core");
+@@ -478,14 +470,16 @@ static void omap4460_vdd_core_init_voltage(void)
+ 	}
+ 	want = voltdm->pmic->uv_to_vsel(OMAP4460_STEELHEAD_VDD_CORE_INIT_UV);
+ 	ret = omap_voltage_scale_voltage(voltdm, OMAP4460_STEELHEAD_VDD_CORE_INIT_UV);
+-	got = omap4460_vdd_core_vp_vsel(voltdm);
++	got = omap_vp_get_vsel(voltdm);
+ 	/*
+-	 * Report what the VP sent, not what was asked: the force-update returns 0
+-	 * even when TRANXDONE never sets. A failure before the force-update has
+-	 * still written the VC's CORE ON value (omap_vc_pre_scale), so say so.
++	 * Report what the VP sent, not what was asked: a missing TRANXDONE is
++	 * -ETIMEDOUT (vp.c), but the VP may have sent the new vsel all the same,
++	 * and a lost transaction reads back as sent. A failure after omap_vc_pre_scale has
++	 * already written the VC's CORE ON value; one before it (no scale method)
++	 * has not -- hence "may".
+ 	 */
+ 	if (ret)
+-		pr_err("steelhead: vdd_core: %u uV failed (%d); VP sent vsel 0x%02x, VC ON already 0x%02x\n",
++		pr_err("steelhead: vdd_core: %u uV failed (%d); VP sent vsel 0x%02x, VC ON may already be 0x%02x\n",
+ 		       OMAP4460_STEELHEAD_VDD_CORE_INIT_UV, ret, got, want);
+ 	else if (got != want)
+ 		pr_err("steelhead: vdd_core: asked vsel 0x%02x (%u uV), VP reads back 0x%02x (%lu uV)\n",
+diff --git a/arch/arm/mach-omap2/steelhead-vc-core-regulator.c b/arch/arm/mach-omap2/steelhead-vc-core-regulator.c
+new file mode 100644
+index 000000000..ca7f5034f
+--- /dev/null
++++ b/arch/arm/mach-omap2/steelhead-vc-core-regulator.c
+@@ -0,0 +1,172 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * steelhead-vc-core-regulator.c - VC-bridge regulator for the Nexus Q VDD_CORE.
++ *
++ * VDD_CORE is TWL6030 VCORE1 on the PRM Voltage-Controller SR-I2C (slave 0x12),
++ * so, like VDD_MPU on the TPS62361, it has no Linux i2c regulator. Stock scales
++ * it through the OMAP voltage layer when a CORE user asks for a higher OPP: the
++ * SGX540 at 384 MHz needs OPP100-OV, 1250 mV (stock omap446x_opp_def_list
++ * @0xc0043ec4, omap_device_scale). This regulator gives Linux that handle:
++ * set_voltage() scales the core voltage domain through the VP force-update, as
++ * the VDD_MPU bridge does; get_voltage() reads back what the VP actually sent
++ * (PRM_VP_CORE_VOLTAGE), not what was asked.
++ *
++ * The range is stock's: OPP100 1127 mV (the floor while L3 runs at 200 MHz and
++ * the MPU above 350 MHz) to OPP100-OV 1250 mV. Patch 0076 sets 1127 mV at boot.
++ *
++ * set_voltage() fails unless the VP reads back at least the voltage asked
++ * for: the OPP core then never raises the GPU clock on a rail that did not
++ * rise (vp.c reports a missing TRANXDONE as -ETIMEDOUT for the same reason).
++ *
++ * debugfs steelhead_vdd_core/vp (root only, read-only) shows the VP's
++ * readback, the last request and VLIMITTO. The VP's VDDMAX (0x28, 1202.7 mV,
++ * stock's too) does not clamp a force-update: a 1250 mV request reads back
++ * vsel 0x2c (measured 2026-10-14 with a bring-up write knob, since removed so
++ * nothing can move the rail behind the regulator core's back).
++ */
++
++#include <linux/debugfs.h>
++#include <linux/err.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++#include <linux/seq_file.h>
++
++#include "voltage.h"
++#include "vp.h"
++
++#define VC_CORE_MIN_UV	1127000		/* stock OPP100 */
++#define VC_CORE_MAX_UV	1250000		/* stock OPP100-OV */
++
++struct vc_core_reg {
++	struct voltagedomain	*voltdm;
++	struct mutex		lock;		/* serialises the scales */
++	int			requested_uV;
++	struct dentry		*dbg;
++};
++
++static int vc_core_scale(struct vc_core_reg *vr, int uV)
++{
++	int ret;
++
++	mutex_lock(&vr->lock);
++	ret = omap_voltage_scale_voltage(vr->voltdm, uV);
++	if (!ret)
++		vr->requested_uV = uV;
++	mutex_unlock(&vr->lock);
++	return ret;
++}
++
++static int vc_core_readback_uV(struct vc_core_reg *vr)
++{
++	u8 vsel = omap_vp_get_vsel(vr->voltdm);
++
++	return vsel ? (int)vr->voltdm->pmic->vsel_to_uv(vsel) : 0;
++}
++
++static int vc_core_set_voltage(struct regulator_dev *rdev, int min_uV,
++			       int max_uV, unsigned int *selector)
++{
++	struct vc_core_reg *vr = rdev_get_drvdata(rdev);
++	int ret, uV;
++
++	ret = vc_core_scale(vr, min_uV);
++	if (ret)
++		return ret;
++
++	uV = vc_core_readback_uV(vr);
++	if (uV < min_uV) {
++		dev_err(&rdev->dev, "steelhead: VDD_CORE asked for %d uV, VP reads back %d uV\n",
++			min_uV, uV);
++		return -EIO;
++	}
++	return 0;
++}
++
++static int vc_core_get_voltage(struct regulator_dev *rdev)
++{
++	struct vc_core_reg *vr = rdev_get_drvdata(rdev);
++	int uV = vc_core_readback_uV(vr);
++
++	/* VP never driven (no boot voltage set): report the request, or the floor. */
++	return uV ? uV : (vr->requested_uV ? vr->requested_uV : VC_CORE_MIN_UV);
++}
++
++static const struct regulator_ops vc_core_ops = {
++	.set_voltage	= vc_core_set_voltage,
++	.get_voltage	= vc_core_get_voltage,
++};
++
++static const struct regulator_desc vc_core_desc = {
++	.name			= "vdd_core",
++	.ops			= &vc_core_ops,
++	.type			= REGULATOR_VOLTAGE,
++	.owner			= THIS_MODULE,
++	.continuous_voltage_range = true,
++};
++
++static int vc_core_vp_show(struct seq_file *s, void *unused)
++{
++	struct vc_core_reg *vr = s->private;
++	struct voltagedomain *vd = vr->voltdm;
++	u8 vsel = omap_vp_get_vsel(vd);
++
++	seq_printf(s, "vp_vsel 0x%02x\nvp_uV %d\nrequested_uV %d\nvlimitto 0x%08x\n",
++		   vsel, vc_core_readback_uV(vr), vr->requested_uV,
++		   vd->read(vd->vp->vlimitto));
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(vc_core_vp);
++
++static int vc_core_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct regulator_config cfg = { };
++	struct regulator_dev *rdev;
++	struct vc_core_reg *vr;
++
++	vr = devm_kzalloc(dev, sizeof(*vr), GFP_KERNEL);
++	if (!vr)
++		return -ENOMEM;
++	mutex_init(&vr->lock);
++
++	vr->voltdm = voltdm_lookup("core");
++	if (IS_ERR_OR_NULL(vr->voltdm) || !vr->voltdm->vp || !vr->voltdm->pmic ||
++	    !vr->voltdm->pmic->vsel_to_uv || !vr->voltdm->read)
++		return -EPROBE_DEFER;	/* omap voltage layer not up yet */
++
++	cfg.dev = dev;
++	cfg.of_node = dev->of_node;
++	cfg.init_data = of_get_regulator_init_data(dev, dev->of_node, &vc_core_desc);
++	cfg.driver_data = vr;
++
++	rdev = devm_regulator_register(dev, &vc_core_desc, &cfg);
++	if (IS_ERR(rdev))
++		return PTR_ERR(rdev);
++
++	vr->dbg = debugfs_create_dir("steelhead_vdd_core", NULL);
++	debugfs_create_file("vp", 0400, vr->dbg, vr, &vc_core_vp_fops);
++
++	dev_info(dev, "steelhead: VDD_CORE VC-bridge regulator registered (VP reads %d uV)\n",
++		 vc_core_readback_uV(vr));
++	return 0;
++}
++
++static const struct of_device_id vc_core_of_match[] = {
++	{ .compatible = "steelhead,vc-core-supply" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, vc_core_of_match);
++
++static struct platform_driver vc_core_driver = {
++	.probe	= vc_core_probe,
++	.driver	= {
++		.name			= "steelhead-vc-core-supply",
++		.of_match_table		= vc_core_of_match,
++		.suppress_bind_attrs	= true,
++	},
++};
++builtin_platform_driver(vc_core_driver);
+diff --git a/arch/arm/mach-omap2/vp.c b/arch/arm/mach-omap2/vp.c
+index 03c481c47..92e8df96b 100644
+--- a/arch/arm/mach-omap2/vp.c
++++ b/arch/arm/mach-omap2/vp.c
+@@ -125,6 +125,7 @@ int omap_vp_forceupdate_scale(struct voltagedomain *voltdm,
+ 	u32 vpconfig;
+ 	u8 target_vsel, current_vsel;
+ 	int ret, timeout = 0;
++	bool txdone_missed;
+ 
+ 	ret = omap_vc_pre_scale(voltdm, target_volt, &target_vsel, &current_vsel);
+ 	if (ret)
+@@ -159,7 +160,8 @@ int omap_vp_forceupdate_scale(struct voltagedomain *voltdm,
+ 	timeout = 0;
+ 	omap_test_timeout(vp->common->ops->check_txdone(vp->id),
+ 			  VP_TRANXDONE_TIMEOUT, timeout);
+-	if (timeout >= VP_TRANXDONE_TIMEOUT)
++	txdone_missed = timeout >= VP_TRANXDONE_TIMEOUT;
++	if (txdone_missed)
+ 		pr_err("%s: vdd_%s TRANXDONE timeout exceeded. TRANXDONE never got set after the voltage update\n",
+ 		       __func__, voltdm->name);
+ 
+@@ -184,7 +186,25 @@ int omap_vp_forceupdate_scale(struct voltagedomain *voltdm,
+ 	/* Clear force bit */
+ 	voltdm->write(vpconfig, vp->vpconfig);
+ 
+-	return 0;
++	/*
++	 * Nothing confirmed that the PMIC got the new voltage: say so, so a
++	 * caller about to raise a clock on top of it (cpufreq, an OPP) stops.
++	 */
++	return txdone_missed ? -ETIMEDOUT : 0;
++}
++
++/**
++ * omap_vp_get_vsel() - the vsel this VP last sent the PMIC
++ * @voltdm: the voltage domain whose VP to read
++ *
++ * PRM_VP_<x>_VOLTAGE holds the value the VP last transmitted, whether by a
++ * force-update or by SmartReflex; vsel_to_uv() turns it into uV.
++ */
++u8 omap_vp_get_vsel(struct voltagedomain *voltdm)
++{
++	u32 mask = voltdm->vp->common->vpvoltage_mask;
++
++	return (voltdm->read(voltdm->vp->voltage) & mask) >> __ffs(mask);
+ }
+ 
+ /**
+diff --git a/arch/arm/mach-omap2/vp.h b/arch/arm/mach-omap2/vp.h
+index 4d7dd204e..74dffed8e 100644
+--- a/arch/arm/mach-omap2/vp.h
++++ b/arch/arm/mach-omap2/vp.h
+@@ -119,5 +119,6 @@ int omap_vp_forceupdate_scale(struct voltagedomain *voltdm,
+ 			      unsigned long target_volt);
+ int omap_vp_update_errorgain(struct voltagedomain *voltdm,
+ 			     unsigned long target_volt);
++u8 omap_vp_get_vsel(struct voltagedomain *voltdm);
+ 
+ #endif
+-- 
+2.55.0
+

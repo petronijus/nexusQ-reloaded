@@ -12,8 +12,8 @@ TAS5713 25W Class-D amplifier, NXP PN544 NFC, SMSC LAN9500A Ethernet
 Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
 ---
  arch/arm/boot/dts/ti/omap/Makefile             |   1 +
- arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 999 +
- 2 files changed, 1000 insertions(+)
+ arch/arm/boot/dts/ti/omap/omap4-steelhead.dts  | 1016 +
+ 2 files changed, 1017 insertions(+)
  create mode 100644 arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
 ---
 diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
@@ -33,7 +33,7 @@ new file mode 100644
 index 000000000..7164fe274
 --- /dev/null
 +++ b/arch/arm/boot/dts/ti/omap/omap4-steelhead.dts
-@@ -0,0 +1,999 @@
+@@ -0,0 +1,1016 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Device Tree Source for Google Nexus Q (steelhead)
@@ -173,6 +173,23 @@ index 000000000..7164fe274
 +		regulator-boot-on;
 +		regulator-always-on;
 +		vbb-supply = <&abb_mpu>;
++	};
++
++	/*
++	 * VDD_CORE: TWL6030 VCORE1 on the same write-only VC SR-I2C, so the same
++	 * kind of VC bridge (steelhead-vc-core-regulator.c) scales the core voltage
++	 * domain through the VP force-update and reads back what the VP sent. Range
++	 * is stock's CORE OPP100 .. OPP100-OV (1127..1250 mV): 1250 mV is what the
++	 * SGX540 at 384 MHz needs (stock GPU OPP table). Patch 0076 sets 1127 mV at
++	 * boot; no consumer asks for more yet.
++	 */
++	vc_core_supply: regulator-vc-core {
++		compatible = "steelhead,vc-core-supply";
++		regulator-name = "vdd_core";
++		regulator-min-microvolt = <1127000>;
++		regulator-max-microvolt = <1250000>;
++		regulator-boot-on;
++		regulator-always-on;
 +	};
 +
 +	/* HDMI level converter: TPD12S015A */

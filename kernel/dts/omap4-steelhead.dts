@@ -139,6 +139,24 @@
 		vbb-supply = <&abb_mpu>;
 	};
 
+	/*
+	 * VDD_CORE: TWL6030 VCORE1 on the same write-only VC SR-I2C, so the same
+	 * kind of VC bridge (steelhead-vc-core-regulator.c) scales the core voltage
+	 * domain through the VP force-update and reads back what the VP sent. Range
+	 * is stock's CORE OPP100 .. OPP100-OV (1127..1250 mV): 1250 mV is what the
+	 * SGX540 at 384 MHz needs (stock GPU OPP table). Patch 0076 sets 1127 mV at
+	 * boot; the GPU's DVFS (sgx_opp_table) is its consumer and raises it only
+	 * while the SGX runs at 384 MHz.
+	 */
+	vc_core_supply: regulator-vc-core {
+		compatible = "steelhead,vc-core-supply";
+		regulator-name = "vdd_core";
+		regulator-min-microvolt = <1127000>;
+		regulator-max-microvolt = <1250000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
 	/* HDMI level converter: TPD12S015A */
 	tpd12s015: encoder0 {
 		compatible = "ti,tpd12s015";
@@ -915,21 +933,65 @@
  * DPLL_PER x2 = 1536 MHz. Mainline does this only for the 4430
  * (omap443x.dtsi, 307.2 MHz, "like droid4 stock"); omap4460.dtsi has no such
  * block, so without it the SGX runs from dpll_core_m7x2_ck at 266.67 MHz.
+ * The parent assignment sits on the ti-sysc target module, whose functional
+ * clock this mux is; ti-sysc applies it when it probes the module.
+ * 307.2 MHz is the boot rate, until the GPU driver's DVFS takes over.
  *
- * 307.2 MHz is stock OPP100 and needs VDD_CORE >= 1.127 V; the x-loader sets
- * VCORE1 to 1.139 V on every boot. Mainline has no VDD_CORE scaling, so
- * 384 MHz (OPP-OV, 1.25 V) is deliberately not used. dpll_per_m7x2_ck has no
- * ti,set-rate-parent, so the rate request cannot move DPLL_PER or its other
- * outputs. The img,powervr-sgx binding forbids clocks on the gpu@0 child for
- * ti,omap4430-gpu, so the assignment sits on the ti-sysc target module.
- * Applied when ti-sysc probes the module; the clock is enabled only briefly
- * for the ti-sysc revision read at probe and runs only once a GPU driver binds.
+ * DVFS (patch 0079, stock omap446x_opp_def_list @0xc0043e94-0xc0043ed8 and
+ * RequestSGXFreq/omap_device_scale): the pvrsgx glue drives this OPP table
+ * with devfreq (simple_ondemand on the DDK's busy time), setting the rate of
+ * dpll_per_m7x2_ck -- the clock stock's GPU OPPs name; it has no
+ * ti,set-rate-parent, so DPLL_PER and its other outputs never move -- and
+ * VDD_CORE through vc_core_supply, voltage up before the clock and down after.
+ * Runtime suspended, the GPU parks at 153.6 MHz and VDD_CORE goes back to
+ * 1127 mV: 1.25 V is held only while the GPU runs at 384 MHz. Stock's
+ * 153.6 MHz voltage is 962 mV (CORE OPP50), which mainline cannot reach (L3
+ * stays at 200 MHz, the regulator's floor is OPP100); the table says 1127 mV,
+ * what the rail really gets. The GPU also cools at the CPU's 100 C passive
+ * trip; stock had no GPU cooling.
  */
 &sgx_module {
 	assigned-clocks = <&l3_gfx_clkctrl OMAP4_GPU_CLKCTRL 24>,
 			  <&dpll_per_m7x2_ck>;
 	assigned-clock-rates = <0>, <307200000>;
 	assigned-clock-parents = <&dpll_per_m7x2_ck>;
+
+	sgx_gpu: gpu@0 {
+		clocks = <&dpll_per_m7x2_ck>;
+		clock-names = "core";
+		vdd-core-supply = <&vc_core_supply>;
+		operating-points-v2 = <&sgx_opp_table>;
+		#cooling-cells = <2>;
+	};
+};
+
+/ {
+	sgx_opp_table: opp-table-sgx {
+		compatible = "operating-points-v2";
+
+		opp-153600000 {
+			opp-hz = /bits/ 64 <153600000>;
+			opp-microvolt = <1127000>;
+			opp-suspend;
+		};
+
+		opp-307200000 {
+			opp-hz = /bits/ 64 <307200000>;
+			opp-microvolt = <1127000>;
+		};
+
+		opp-384000000 {
+			opp-hz = /bits/ 64 <384000000>;
+			opp-microvolt = <1250000>;
+		};
+	};
+};
+
+&cpu_cooling_maps {
+	map1 {
+		trip = <&cpu_alert0>;
+		cooling-device = <&sgx_gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+	};
 };
 
 /*

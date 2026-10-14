@@ -1,0 +1,576 @@
+From 84f2b1eb87e0f4b899288019a6b6714a4262eaf1 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 14 Oct 2026 13:05:03 +0200
+Subject: [PATCH 79/80] drm/pvrsgx: scale the SGX core clock and voltage with devfreq
+
+The OMAP4 vendor kernels scaled the SGX between its OPPs from the DDK's
+power hooks: RequestSGXFreq() asked omap_device_scale() for the highest
+OPP when work was queued and for the lowest one after an idle timeout,
+and omap_device_scale() raised the voltage domain before the clock and
+lowered it after. The 1.17 DDK still calls those hooks
+(SysSGXCommandPending, SysSGXIdleEntered), but its sgxfreq backend is
+not built for OMAP4, so the SGX runs at whatever rate the DT assigned.
+
+Do the same the mainline way. When the gpu node has an
+operating-points-v2 table, a "core" clock and a "vdd-core" supply, the
+glue (pvr-dvfs.c) registers a devfreq device with simple_ondemand: the
+load is the share of time the DDK reported the SGX busy, from a command
+queued on an idle SGX to the microkernel's idle event or a power down,
+and dev_pm_opp_set_rate() orders voltage and clock. devfreq follows the
+device's runtime PM, so a suspended GPU parks at the "opp-suspend" OPP
+and resumes at the OPP it left, within the current PM QoS limits
+(devfreq alone resumes at the suspend OPP and needs a polling window
+to ramp up again, which a GPU sleeping between bursts may never get). With #cooling-cells the device is also
+a devfreq cooling device.
+
+The DDK derives its microkernel timer and its APM and recovery timeouts
+from the core clock it is told at SGX power-up. Tell it the highest OPP
+when scaling (lower OPPs then only lengthen those timeouts, as TI's
+sgxfreq does), else the actual rate of the "core" clock, else the
+built-in SYS_SGX_CLOCK_SPEED. Without a table, or without
+CONFIG_PM_DEVFREQ, nothing changes.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ .../pvrsgx/1.17.4948957/eurasia_km/Makefile   |   2 +
+ .../services4/system/omap/sysutils_linux.c    |  18 +-
+ drivers/gpu/drm/pvrsgx/pvr-drv.c              |  48 ++-
+ drivers/gpu/drm/pvrsgx/pvr-dvfs.c             | 301 ++++++++++++++++++
+ drivers/gpu/drm/pvrsgx/pvr-dvfs.h             |  48 +++
+ 5 files changed, 410 insertions(+), 7 deletions(-)
+ create mode 100644 drivers/gpu/drm/pvrsgx/pvr-dvfs.c
+ create mode 100644 drivers/gpu/drm/pvrsgx/pvr-dvfs.h
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+index a0a810e..b740443 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/Makefile
+@@ -44,6 +44,7 @@ ccflags-y += \
+ 	-I$(srctree)/arch/arm/mach-omap2 \
+ 	-I$(srctree)/drivers/video/fbdev/omap2 \
+ 	-I$(src)/ \
++	-I$(src)/../.. \
+ 	-I$(src)/include4 \
+ 	-I$(src)/services4/include \
+ 	-I$(src)/services4/include/env/linux \
+@@ -171,6 +172,7 @@ endif
+ # Add rewritten driver components here for now
+ $(TARGET) += \
+ 	../../pvr-drv.o \
++	../../pvr-dvfs.o \
+ 
+ # Keep Imagination SDK components here
+ $(TARGET) += \
+diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysutils_linux.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysutils_linux.c
+index 58936b6..23d49e8 100644
+--- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysutils_linux.c
++++ b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/system/omap/sysutils_linux.c
+@@ -54,6 +54,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #include "sgxinfokm.h"
+ #include "syslocal.h"
+ #include "dm_timer_wrapper.h"
++#include "pvr-dvfs.h"
+ 
+ #include <linux/platform_device.h>
+ #include <linux/pm_runtime.h>
+@@ -170,7 +171,16 @@ IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
+ 	 */
+ 	psTimingInfo->ui32CoreClockSpeed = (IMG_UINT32)sgxfreq_get_freq_max();
+ #else /* defined(SYS_OMAP_HAS_DVFS_FRAMEWORK) */
+-	psTimingInfo->ui32CoreClockSpeed = SYS_SGX_CLOCK_SPEED;
++	{
++		/*
++		 * The rate of the "core" clock, or the highest OPP when the
++		 * glue scales it (pvr-dvfs.c): timeouts derived from it are
++		 * then only ever longer than meant, never shorter.
++		 */
++		unsigned long rate = pvr_sgx_timing_clock_rate();
++
++		psTimingInfo->ui32CoreClockSpeed = rate ? (IMG_UINT32)rate : SYS_SGX_CLOCK_SPEED;
++	}
+ #endif
+ 	psTimingInfo->ui32HWRecoveryFreq = SYS_SGX_HWRECOVERY_TIMEOUT_FREQ;
+ 	psTimingInfo->ui32uKernelFreq = SYS_SGX_PDS_TIMER_FREQ;
+@@ -257,6 +267,7 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
+ 	PVR_DPF((PVR_DBG_MESSAGE, "DisableSGXClocks: Disabling SGX Clocks"));
+ 
+ #if defined(LDM_PLATFORM) && !defined(PVR_DRI_DRM_NOT_PCI)
++	pvr_sgx_set_busy(IMG_FALSE);
+ 	pm_runtime_mark_last_busy(&gpsPVRLDMDev->dev);
+ 	pm_runtime_put_autosuspend(&gpsPVRLDMDev->dev);
+ #if defined(SYS_OMAP_HAS_DVFS_FRAMEWORK)
+@@ -705,6 +716,8 @@ IMG_VOID SysSGXIdleEntered(IMG_VOID)
+ {
+ #if defined(SYS_OMAP_HAS_DVFS_FRAMEWORK)
+ 	sgxfreq_notif_sgx_idle();
++#else
++	pvr_sgx_set_busy(IMG_FALSE);
+ #endif
+ }
+ 
+@@ -714,6 +727,7 @@ IMG_VOID SysSGXCommandPending(IMG_BOOL bSGXIdle)
+ 	if (bSGXIdle)
+ 		sgxfreq_notif_sgx_active();
+ #else
+-	PVR_UNREFERENCED_PARAMETER(bSGXIdle);
++	if (bSGXIdle)
++		pvr_sgx_set_busy(IMG_TRUE);
+ #endif
+ }
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-drv.c b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+index 63cd448..0447af7 100644
+--- a/drivers/gpu/drm/pvrsgx/pvr-drv.c
++++ b/drivers/gpu/drm/pvrsgx/pvr-drv.c
+@@ -26,6 +26,7 @@
+ #include <drm/drm_modeset_helper.h>
+ 
+ #include "pvr-drv.h"
++#include "pvr-dvfs.h"
+ 
+ /* Currently used Imagination SDK includes */
+ #include "services.h"
+@@ -55,11 +56,41 @@ struct pvr {
+ 	struct drm_device *ddev;
+ 	const struct pvr_capabilities *cap;
+ 	u32 quirks;
++	struct pvr_dvfs dvfs;
+ };
+ 
+ struct platform_device *gpsPVRLDMDev;
+ static struct drm_device *gpsPVRDRMDev;
+ 
++struct pvr_dvfs *pvr_get_dvfs(struct device *dev)
++{
++	struct pvr *ddata = dev_get_drvdata(dev);
++
++	return &ddata->dvfs;
++}
++
++static struct pvr *pvr_sgx_ddata(void)
++{
++	return gpsPVRLDMDev ? platform_get_drvdata(gpsPVRLDMDev) : NULL;
++}
++
++/* The core clock the DDK derives its timers from; 0 = its built-in rate. */
++unsigned long pvr_sgx_timing_clock_rate(void)
++{
++	struct pvr *ddata = pvr_sgx_ddata();
++
++	return ddata ? pvr_dvfs_timing_rate(&ddata->dvfs) : 0;
++}
++
++/* The DDK's busy/idle transitions, the load DVFS scales on. */
++void pvr_sgx_set_busy(bool busy)
++{
++	struct pvr *ddata = pvr_sgx_ddata();
++
++	if (ddata)
++		pvr_dvfs_set_busy(&ddata->dvfs, busy);
++}
++
+ u32 pvr_sgx_readl(struct pvr *ddata, unsigned short offset)
+ {
+ 	return readl_relaxed(ddata->sgx_base + offset);
+@@ -217,11 +248,11 @@ static int __maybe_unused pvr_runtime_suspend(struct device *dev)
+ 
+ 	dev_dbg(dev, "%s\n", __func__);
+ 
+-	/* Nothing to do if no OCP */
+-	if (!ddata->ocp_base)
+-		return 0;
++	if (ddata->ocp_base)
++		pvr_ocp_writel(ddata, BIT(0), SGX_OCP_IRQENABLE_CLR_2);
+ 
+-	pvr_ocp_writel(ddata, BIT(0), SGX_OCP_IRQENABLE_CLR_2);
++	/* Park the core clock and its supply at the suspend OPP. */
++	pvr_dvfs_suspend(&ddata->dvfs);
+ 
+ 	return 0;
+ }
+@@ -232,7 +263,10 @@ static int __maybe_unused pvr_runtime_resume(struct device *dev)
+ 
+ 	dev_dbg(dev, "%s\n", __func__);
+ 
+-	/* Nothing to do if no OCP */
++	/* Supply up, then the clock, before the DDK runs the SGX again. */
++	pvr_dvfs_resume(&ddata->dvfs);
++
++	/* Nothing more to do if no OCP */
+ 	if (!ddata->ocp_base)
+ 		return 0;
+ 
+@@ -453,6 +487,10 @@ static int pvr_probe(struct platform_device *pdev)
+ 	if (ddata->cap->ocp_offset)
+ 		ddata->ocp_base = ddata->sgx_base + ddata->cap->ocp_offset;
+ 
++	error = pvr_dvfs_init(&ddata->dvfs, ddata->dev);
++	if (error)
++		return error;
++
+ 	pm_runtime_enable(ddata->dev);
+ 	pm_runtime_use_autosuspend(ddata->dev);
+ 	pm_runtime_set_autosuspend_delay(ddata->dev, 100);
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-dvfs.c b/drivers/gpu/drm/pvrsgx/pvr-dvfs.c
+new file mode 100644
+index 0000000..cf2f0ee
+--- /dev/null
++++ b/drivers/gpu/drm/pvrsgx/pvr-dvfs.c
+@@ -0,0 +1,301 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/*
++ * pvr-dvfs.c - SGX core clock and voltage scaling through devfreq.
++ *
++ * The OMAP4 vendor kernels scaled the SGX between its OPPs from the DDK's
++ * power hooks (RequestSGXFreq: max when work is queued, min after an idle
++ * timeout, through omap_device_scale, which raised the voltage domain before
++ * the clock and lowered it after). This is the mainline form of the same
++ * thing: the gpu node's OPP table (clock "core" + supply "vdd-core") is
++ * driven by devfreq's simple_ondemand governor, dev_pm_opp_set_rate() orders
++ * voltage and clock, and the load is the share of time the DDK reported the
++ * SGX busy -- from a command queued on an idle SGX (SysSGXCommandPending) to
++ * the microkernel's idle event or a power down (SysSGXIdleEntered,
++ * DisableSGXClocks).
++ *
++ * devfreq follows the device's runtime PM: suspended, the core parks at the
++ * "opp-suspend" OPP and the supply drops with it; resumed, it goes back to the
++ * OPP it ran at before the DDK runs again (within the current PM QoS limits,
++ * i.e. the cooling device and sysfs min/max_freq). devfreq on its own would
++ * resume at the suspend OPP and need a whole polling window to ramp up again,
++ * which a GPU that sleeps between bursts may never see.
++ *
++ * The DDK derives its microkernel timer and its APM and recovery timeouts from
++ * the core clock it is told at SGX power-up. It is told the highest OPP, so a
++ * lower OPP only makes those timeouts longer, never shorter (TI's sgxfreq
++ * does the same).
++ *
++ * Without an operating-points-v2 table, or without CONFIG_PM_DEVFREQ, the
++ * clock stays where the DT assigned it and the DDK is told that rate.
++ */
++
++#include <linux/clk.h>
++#include <linux/devfreq.h>
++#include <linux/devfreq_cooling.h>
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/ktime.h>
++#include <linux/math64.h>
++#include <linux/of.h>
++#include <linux/pm_opp.h>
++#include <linux/pm_qos.h>
++#include <linux/spinlock.h>
++#include <linux/units.h>
++
++#include "pvr-dvfs.h"
++
++/*
++ * The vendor DDK reacted within 1-3 ms of idle; a devfreq window this long
++ * still sees whole frames at 20 fps and costs one deferrable timer per window
++ * while the GPU is awake (none while it is runtime suspended).
++ */
++#define PVR_DVFS_POLL_MS	50
++
++void pvr_dvfs_set_busy(struct pvr_dvfs *dvfs, bool busy)
++{
++	ktime_t now = ktime_get();
++	unsigned long flags;
++
++	spin_lock_irqsave(&dvfs->lock, flags);
++	if (dvfs->busy)
++		dvfs->busy_ns += ktime_to_ns(ktime_sub(now, dvfs->since));
++	dvfs->busy = busy;
++	dvfs->since = now;
++	spin_unlock_irqrestore(&dvfs->lock, flags);
++}
++
++static void pvr_dvfs_reset_window(struct pvr_dvfs *dvfs)
++{
++	ktime_t now = ktime_get();
++	unsigned long flags;
++
++	spin_lock_irqsave(&dvfs->lock, flags);
++	dvfs->since = now;
++	dvfs->window = now;
++	dvfs->busy_ns = 0;
++	spin_unlock_irqrestore(&dvfs->lock, flags);
++}
++
++static int pvr_dvfs_target(struct device *dev, unsigned long *freq, u32 flags)
++{
++	struct dev_pm_opp *opp;
++	int error;
++
++	opp = devfreq_recommended_opp(dev, freq, flags);
++	if (IS_ERR(opp))
++		return PTR_ERR(opp);
++	dev_pm_opp_put(opp);
++
++	error = dev_pm_opp_set_rate(dev, *freq);
++	if (error)
++		dev_err(dev, "SGX DVFS: setting %lu Hz failed: %d\n", *freq, error);
++
++	return error;
++}
++
++static int pvr_dvfs_get_dev_status(struct device *dev,
++				   struct devfreq_dev_status *stat)
++{
++	struct pvr_dvfs *dvfs = pvr_get_dvfs(dev);
++	ktime_t now = ktime_get();
++	unsigned long flags;
++	u64 busy_ns, total_ns;
++
++	spin_lock_irqsave(&dvfs->lock, flags);
++	if (dvfs->busy) {
++		dvfs->busy_ns += ktime_to_ns(ktime_sub(now, dvfs->since));
++		dvfs->since = now;
++	}
++	busy_ns = dvfs->busy_ns;
++	total_ns = ktime_to_ns(ktime_sub(now, dvfs->window));
++	dvfs->busy_ns = 0;
++	dvfs->window = now;
++	spin_unlock_irqrestore(&dvfs->lock, flags);
++
++	/* Microseconds: an unsigned long of nanoseconds wraps after 4.3 s. */
++	stat->busy_time = div_u64(min(busy_ns, total_ns), NSEC_PER_USEC);
++	stat->total_time = div_u64(total_ns, NSEC_PER_USEC);
++	stat->current_frequency = clk_get_rate(dvfs->clk);
++
++	return 0;
++}
++
++static int pvr_dvfs_get_cur_freq(struct device *dev, unsigned long *freq)
++{
++	*freq = clk_get_rate(pvr_get_dvfs(dev)->clk);
++
++	return 0;
++}
++
++/* @rate inside what devfreq may use right now, rounded down to an OPP. */
++static unsigned long pvr_dvfs_allowed(struct pvr_dvfs *dvfs, unsigned long rate)
++{
++	struct devfreq *df = dvfs->df;
++	s32 qos_min = dev_pm_qos_read_value(dvfs->dev, DEV_PM_QOS_MIN_FREQUENCY);
++	s32 qos_max = dev_pm_qos_read_value(dvfs->dev, DEV_PM_QOS_MAX_FREQUENCY);
++	unsigned long lo, hi;
++	struct dev_pm_opp *opp;
++
++	lockdep_assert_held(&df->lock);
++
++	lo = max(df->scaling_min_freq, (unsigned long)qos_min * HZ_PER_KHZ);
++	hi = df->scaling_max_freq;
++	if (qos_max != PM_QOS_MAX_FREQUENCY_DEFAULT_VALUE)
++		hi = min(hi, (unsigned long)qos_max * HZ_PER_KHZ);
++	rate = clamp(rate, lo, max(lo, hi));
++
++	opp = dev_pm_opp_find_freq_floor(dvfs->dev, &rate);
++	if (IS_ERR(opp))
++		return lo;
++	dev_pm_opp_put(opp);
++
++	return rate;
++}
++
++void pvr_dvfs_suspend(struct pvr_dvfs *dvfs)
++{
++	int error;
++
++	if (!dvfs->df || dvfs->suspended)
++		return;
++
++	mutex_lock(&dvfs->df->lock);
++	dvfs->resume_rate = dvfs->df->previous_freq;
++	mutex_unlock(&dvfs->df->lock);
++	error = devfreq_suspend_device(dvfs->df);
++	if (error)
++		dev_warn(dvfs->dev, "SGX DVFS: suspend failed: %d\n", error);
++	dvfs->suspended = true;
++}
++
++void pvr_dvfs_resume(struct pvr_dvfs *dvfs)
++{
++	int error;
++
++	if (!dvfs->df || !dvfs->suspended)
++		return;
++
++	/* The window restarts: time spent suspended is neither busy nor idle. */
++	pvr_dvfs_reset_window(dvfs);
++
++	/* devfreq set resume_freq to the suspend OPP when it parked there. */
++	mutex_lock(&dvfs->df->lock);
++	dvfs->df->resume_freq = pvr_dvfs_allowed(dvfs, dvfs->resume_rate);
++	mutex_unlock(&dvfs->df->lock);
++
++	error = devfreq_resume_device(dvfs->df);
++	if (error)
++		dev_warn(dvfs->dev, "SGX DVFS: resume failed: %d\n", error);
++	dvfs->suspended = false;
++}
++
++unsigned long pvr_dvfs_timing_rate(struct pvr_dvfs *dvfs)
++{
++	if (dvfs->df)
++		return dvfs->max_rate;
++
++	return dvfs->clk ? clk_get_rate(dvfs->clk) : 0;
++}
++
++static void pvr_dvfs_cooling_unregister(void *data)
++{
++	devfreq_cooling_unregister(data);
++}
++
++/*
++ * Called from probe before runtime PM is enabled: the device is still
++ * runtime suspended, so devfreq starts suspended as well.
++ */
++int pvr_dvfs_init(struct pvr_dvfs *dvfs, struct device *dev)
++{
++	static const char * const clk_names[] = { "core", NULL };
++	static const char * const regulator_names[] = { "vdd-core", NULL };
++	struct dev_pm_opp_config config = {
++		.clk_names = clk_names,
++		.regulator_names = regulator_names,
++	};
++	struct device_node *np = dev->of_node;
++	unsigned long rate, min_rate;
++	struct dev_pm_opp *opp;
++	int error;
++
++	dvfs->dev = dev;
++	spin_lock_init(&dvfs->lock);
++	pvr_dvfs_reset_window(dvfs);
++
++	dvfs->clk = devm_clk_get_optional(dev, "core");
++	if (IS_ERR(dvfs->clk))
++		return dev_err_probe(dev, PTR_ERR(dvfs->clk), "SGX core clock\n");
++
++	if (!IS_ENABLED(CONFIG_PM_DEVFREQ) || !dvfs->clk ||
++	    !of_property_present(np, "operating-points-v2"))
++		return 0;
++
++	error = devm_pm_opp_set_config(dev, &config);
++	if (error < 0)
++		return dev_err_probe(dev, error, "SGX OPP config\n");
++
++	error = devm_pm_opp_of_add_table(dev);
++	if (error)
++		return dev_err_probe(dev, error, "SGX OPP table\n");
++
++	rate = ULONG_MAX;
++	opp = dev_pm_opp_find_freq_floor(dev, &rate);
++	if (IS_ERR(opp))
++		return dev_err_probe(dev, PTR_ERR(opp), "SGX OPP table has no usable OPP\n");
++	dev_pm_opp_put(opp);
++	dvfs->max_rate = rate;
++
++	min_rate = 0;
++	opp = dev_pm_opp_find_freq_ceil(dev, &min_rate);
++	if (IS_ERR(opp))
++		return PTR_ERR(opp);
++	dev_pm_opp_put(opp);
++
++	/* Start from the OPP at or above the DT-assigned rate, and claim it. */
++	rate = clk_get_rate(dvfs->clk);
++	opp = devfreq_recommended_opp(dev, &rate, 0);
++	if (IS_ERR(opp))
++		return dev_err_probe(dev, PTR_ERR(opp), "SGX OPP for %lu Hz\n", rate);
++	dev_pm_opp_put(opp);
++	error = dev_pm_opp_set_rate(dev, rate);
++	if (error)
++		return dev_err_probe(dev, error, "SGX OPP %lu Hz\n", rate);
++
++	dvfs->profile.initial_freq = rate;
++	dvfs->profile.polling_ms = PVR_DVFS_POLL_MS;
++	dvfs->profile.timer = DEVFREQ_TIMER_DELAYED;
++	dvfs->profile.target = pvr_dvfs_target;
++	dvfs->profile.get_dev_status = pvr_dvfs_get_dev_status;
++	dvfs->profile.get_cur_freq = pvr_dvfs_get_cur_freq;
++
++	dvfs->df = devm_devfreq_add_device(dev, &dvfs->profile,
++					   DEVFREQ_GOV_SIMPLE_ONDEMAND, NULL);
++	if (IS_ERR(dvfs->df)) {
++		error = PTR_ERR(dvfs->df);
++		dvfs->df = NULL;
++		return dev_err_probe(dev, error, "SGX devfreq\n");
++	}
++
++	if (IS_ENABLED(CONFIG_DEVFREQ_THERMAL) &&
++	    of_property_present(np, "#cooling-cells")) {
++		dvfs->cooling = of_devfreq_cooling_register(np, dvfs->df);
++		if (IS_ERR(dvfs->cooling)) {
++			dev_warn(dev, "SGX DVFS: no cooling device: %ld\n",
++				 PTR_ERR(dvfs->cooling));
++			dvfs->cooling = NULL;
++		} else {
++			error = devm_add_action_or_reset(dev, pvr_dvfs_cooling_unregister,
++							 dvfs->cooling);
++			if (error)
++				return error;
++		}
++	}
++
++	dev_info(dev, "SGX DVFS: %d OPPs %lu..%lu Hz, starts at %lu Hz, simple_ondemand%s\n",
++		 dev_pm_opp_get_opp_count(dev), min_rate, dvfs->max_rate, rate,
++		 dvfs->cooling ? ", cooling device" : "");
++	pvr_dvfs_suspend(dvfs);
++
++	return 0;
++}
+diff --git a/drivers/gpu/drm/pvrsgx/pvr-dvfs.h b/drivers/gpu/drm/pvrsgx/pvr-dvfs.h
+new file mode 100644
+index 0000000..6e0766e
+--- /dev/null
++++ b/drivers/gpu/drm/pvrsgx/pvr-dvfs.h
+@@ -0,0 +1,48 @@
++/* SPDX-License-Identifier: (GPL-2.0 OR MIT) */
++/*
++ * SGX core clock and voltage scaling (pvr-dvfs.c). The DDK's OMAP system
++ * layer includes this too, for the two pvr_sgx_* calls at the bottom.
++ */
++#ifndef PVR_DVFS_H
++#define PVR_DVFS_H
++
++#include <linux/devfreq.h>
++#include <linux/ktime.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++struct clk;
++struct device;
++struct thermal_cooling_device;
++
++struct pvr_dvfs {
++	struct device *dev;
++	struct clk *clk;			/* "core", the rate the OPPs set */
++	struct devfreq_dev_profile profile;
++	struct devfreq *df;			/* NULL: fixed clock */
++	bool suspended;				/* devfreq_suspend_device() done */
++	unsigned long resume_rate;		/* the OPP it ran at when suspended */
++	struct thermal_cooling_device *cooling;
++	unsigned long max_rate;			/* highest available OPP */
++
++	spinlock_t lock;			/* the load accounting below */
++	bool busy;
++	ktime_t since;				/* last busy/idle change or read */
++	ktime_t window;				/* start of the devfreq window */
++	u64 busy_ns;				/* busy time inside the window */
++};
++
++int pvr_dvfs_init(struct pvr_dvfs *dvfs, struct device *dev);
++void pvr_dvfs_suspend(struct pvr_dvfs *dvfs);
++void pvr_dvfs_resume(struct pvr_dvfs *dvfs);
++void pvr_dvfs_set_busy(struct pvr_dvfs *dvfs, bool busy);
++unsigned long pvr_dvfs_timing_rate(struct pvr_dvfs *dvfs);
++
++/* pvr-drv.c: the device's pvr_dvfs. */
++struct pvr_dvfs *pvr_get_dvfs(struct device *dev);
++
++/* For the DDK (pvr-drv.c resolves the one SGX device). */
++unsigned long pvr_sgx_timing_clock_rate(void);
++void pvr_sgx_set_busy(bool busy);
++
++#endif /* PVR_DVFS_H */
+-- 
+2.55.0
+

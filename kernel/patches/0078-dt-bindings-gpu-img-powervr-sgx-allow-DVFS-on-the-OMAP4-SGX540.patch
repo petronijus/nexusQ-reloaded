@@ -1,0 +1,76 @@
+From 31adfd1d2048e71be7bac82b0605c7f529ed8c67 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 14 Oct 2026 11:25:33 +0200
+Subject: [PATCH 78/80] dt-bindings: gpu: img,powervr-sgx: allow DVFS on the
+ OMAP4 SGX540
+
+On OMAP4 the SGX's functional clock is gated by its ti,sysc target
+module, and its rate is a divider of DPLL_PER (stock OMAP4460 runs the
+GPU at 153.6, 307.2 or 384 MHz with VDD_CORE scaled to match). Allow the
+ti,omap4430-gpu node an optional "core" clock naming that source, an
+operating-points-v2 table, the supply the table scales (vdd-core) and
+#cooling-cells, so a driver can do DVFS and act as a thermal cooling
+device.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ .../bindings/gpu/img,powervr-sgx.yaml         | 36 ++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml b/Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml
+index f5898b043..2e304eac1 100644
+--- a/Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml
++++ b/Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml
+@@ -53,6 +53,15 @@ properties:
+   power-domains:
+     maxItems: 1
+ 
++  operating-points-v2: true
++
++  vdd-core-supply:
++    description:
++      Supply whose voltage the OPP table scales with the "core" clock.
++
++  "#cooling-cells":
++    const: 2
++
+ required:
+   - compatible
+   - reg
+@@ -81,7 +90,32 @@ allOf:
+       required:
+         - clocks
+         - clock-names
+-    else:
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: ti,omap4430-gpu
++    then:
++      description:
++        The functional clock is gated by the parent ti,sysc target module.
++        An optional "core" clock names the source whose rate the OPP table
++        sets (DVFS); without it the GPU runs at the rate assigned to the
++        target module's clock.
++      properties:
++        clocks:
++          maxItems: 1
++        clock-names:
++          maxItems: 1
++  - if:
++      not:
++        properties:
++          compatible:
++            contains:
++              enum:
++                - allwinner,sun6i-a31-gpu
++                - ingenic,jz4780-gpu
++                - ti,omap4430-gpu
++    then:
+       properties:
+         clocks: false
+         clock-names: false
+-- 
+2.55.0
+
