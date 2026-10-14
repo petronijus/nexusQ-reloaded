@@ -129,7 +129,7 @@ touch the `bootloader` partition -- everything else can always be reflashed.
   `android-tools`)
 - optional: micro-HDMI cable + display (to watch it boot)
 - release artifacts: `nexusq-boot-v2.1.1.img` (6.47 MiB), `nexusq-rootfs-v2.1.1-sparse.img.zst`
-  (**684 MiB** compressed, **2.92 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v2.1.1.txt`
+  (**683 MiB** compressed, **2.92 GiB** decompressed; install `zstd` to decompress it, see §2), `sha256sums-v2.1.1.txt`
   - _(History, kept because the upgrade advice still applies — the CURRENT kernel is
     `6.18.48-r0`; see the top of this guide.)_
     **The v1.11.0 kernel bumped to `6.12.12-r45` (`#46`; 44 patches through 0044)** --
@@ -349,7 +349,7 @@ fastboot flash boot nexusq-boot-v2.1.1.img
 # zeros included, so the flash is correct even though U-Boot never erases userdata.
 # (A previous DONT_CARE-chunked sparse skipped zero blocks and left STALE eMMC data
 #  behind, which re-corrupted libpython and crashed python3 -- see CHANGELOG 1.6.0.)
-# The rootfs ships zstd-compressed (684 MiB -> 2.92 GiB sparse) -- decompress it first:
+# The rootfs ships zstd-compressed (683 MiB -> 2.92 GiB sparse) -- decompress it first:
 zstd -d nexusq-rootfs-v2.1.1-sparse.img.zst   # -> nexusq-rootfs-v2.1.1-sparse.img
 fastboot -S 100M flash userdata nexusq-rootfs-v2.1.1-sparse.img
 ```
