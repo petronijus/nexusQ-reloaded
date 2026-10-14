@@ -8,6 +8,17 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Release v2.1.0 — 2026-10-14
+
+Released 16:09 (GitHub release + OTA repo, parity 21/0). The Prague Q runs the
+v2.1.0 content as a dev image from **rootfs slot B** (p14, committed 15:09;
+slot A holds the older system with the same packages installed by hand): before
+any `fastboot flash userdata` there, `nq-slot set a` first (INSTALL.md). The
+cottage Q has none of 2.1.0 yet: system update from the app, then kernel r32
+through `nq-kernel-ota` with someone in reach. During the release push the
+pre-push `flutter test` hung for 15 min (frontend_server, no output) while
+another project's e2e suite loaded the desktop; killed, the push went through.
+
 ## GPU speed and frequency scaling — state 2026-10-13 evening
 
 Done 2026-10-13: device r129 built and installed on the Prague Q by hand
