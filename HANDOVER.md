@@ -8,6 +8,28 @@ list for the other machines.** Matching tasks live in Todoist → **AI-handover*
 
 ---
 
+## Release v2.1.1 — 2026-10-14 (power-cut hotfix)
+
+Released 19:44 (GitHub release + OTA repo, parity 21/0). The Prague Q took it
+by apk upgrade + `nq-kernel-ota` trial boot of r33 (promoted); full diag after
+it clean. Still open:
+
+- **Prague Q, someone at home:** the r33 RTC fix has only seen warm boots.
+  Pull mains for 30 s, plug back in, then check (`scripts/diag/README.md`
+  RTC rules): dmesg `Power up reset detected, time invalid until set.` +
+  `hctosys: unable to read the hardware clock`, no "Time jumped backwards"
+  in the journal, `health.jsonl` boundary without a NUL-glued line; after the
+  first NTP sync `hwclock -r` real time, and on the next warm boot
+  `/dev/rtc` back. If the RTC stays invalid on every boot, STATUS.POWER_UP is
+  not write-1-to-clear on this PMIC (reasoned from upstream code, unmeasured).
+- **Cottage Q:** none of 2.1.x yet — system update from the app, then the
+  kernel (r33) through `nq-kernel-ota` with someone in reach.
+- **Test nits from `just ci` (no fault, not in the hotfix):**
+  `companion/app/test/eq_card_test.dart:954` taps "Reset to flat" at an
+  off-screen offset (the reset step may be untested);
+  `pmos/device-google-steelhead/tests/test_uac2_silence_producer.py:190`
+  leaves a file open (ResourceWarning).
+
 ## Release v2.1.0 — 2026-10-14
 
 Released 16:09 (GitHub release + OTA repo, parity 21/0). The Prague Q runs the
