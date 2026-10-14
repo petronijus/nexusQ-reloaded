@@ -187,7 +187,7 @@ static void opp_sample(char *ms_out, size_t ms_n, long long *trans_out)
             reset = 1;                       /* first sample, or a new OPP */
         else if (ticks < p)
             reset = 1;                       /* counters reset under us */
-        else
+        else if (jo < sizeof json)
             jo += (size_t)snprintf(json + jo, sizeof json - jo, "%s\"%lld\":%lld",
                                    jo ? "," : "", khz, (ticks - p) * 10);
     }
@@ -196,7 +196,7 @@ static void opp_sample(char *ms_out, size_t ms_n, long long *trans_out)
     memcpy(prev_tis, cur, sizeof(struct opp_prev) * (size_t)n);
     prev_tis_n = n;
     /* `{}` on a reset is an honest gap, not a poisoned window. */
-    if (!reset && jo)
+    if (!reset && jo && jo < sizeof json)
         snprintf(ms_out, ms_n, "{%s}", json);
 
     long long tr = slurp_ll(TRANS, -1);
@@ -749,13 +749,117 @@ static void mem_line(char *out, size_t n, long long mono, const char *wall, cons
 #ifndef HDMI_CONN
 #define HDMI_CONN "/sys/class/drm/card0-HDMI-A-1"
 #endif
+/* The SGX's devfreq device (kernel r31, patch 0079): its OPPs are 153.6 /
+ * 307.2 / 384 MHz, and it parks at 153.6 MHz while runtime suspended. */
+#ifndef GPU_DEVFREQ
+#define GPU_DEVFREQ "/sys/class/devfreq/56000000.gpu"
+#endif
+
+#define MAX_GPU_OPP 8
 
 struct gpu_reading {
     int drv;                /* 1 when the SGX module is loaded */
     char rpm[16];           /* runtime_status: active, suspended, ..., none */
     long long active_ms;    /* runtime-active ms since the previous sample */
     int hdmi_on;            /* 1 when the connector is enabled with DPMS On */
+    long long freq;         /* devfreq cur_freq in Hz, -1 without devfreq */
+    char freq_ms[256];      /* ms per OPP (Hz) since the previous sample */
+    long long trans;        /* OPP transitions since the previous sample */
 };
+
+struct gpu_opp_prev { long long hz, ms; };
+static struct gpu_opp_prev prev_gpu_tis[MAX_GPU_OPP];
+static int prev_gpu_tis_n;
+static long long prev_gpu_trans = -1;
+
+/* devfreq's trans_stat (drivers/devfreq/devfreq.c trans_stat_show):
+ *
+ *          From  :   To
+ *                : 153600000 307200000 384000000   time(ms)
+ *     * 153600000:         0         3         1     24590
+ *       ...
+ *     Total transition : 9
+ *
+ * Fixed width with no separator: each row is a mark ('*' = current), the OPP
+ * as %10lu, ':', one %10u count per OPP, then the cumulative time as %10llu.
+ * The time therefore runs into the last count once it has more than ten
+ * digits (11.6 days at one OPP), so it is read at its column, after the
+ * counts, never as "the last number on the line". Residency is the difference
+ * of the cumulative per-OPP times, as opp_sample() does for the CPU; `{}` on
+ * the first sample or after the counters moved backwards. devfreq stops
+ * counting while the GPU is suspended and books that time at the next
+ * transition, so a single interval can carry time from before it. */
+#define TS_HZ_W 10      /* %10lu */
+#define TS_CNT_W 10     /* %10u per OPP */
+static void gpu_dvfs_sample(struct gpu_reading *g)
+{
+    snprintf(g->freq_ms, sizeof g->freq_ms, "{}");
+    g->trans = -1;
+    g->freq = slurp_ll(GPU_DEVFREQ "/cur_freq", -1);
+
+    FILE *f = fopen(GPU_DEVFREQ "/trans_stat", "re");
+    if (!f)
+        return;
+
+    struct gpu_opp_prev cur[MAX_GPU_OPP];
+    int n = 0, reset = 0, nopp = -1;
+    long long total = -1;
+    char line[512], json[256];
+    size_t jo = 0;
+    json[0] = '\0';
+
+    while (fgets(line, sizeof line, f)) {
+        if (sscanf(line, "Total transition : %lld", &total) == 1)
+            continue;
+        if (strstr(line, "time(ms)")) {         /* the header: count the OPPs */
+            nopp = 0;
+            char *p = strchr(line, ':'), *end;
+            for (p = p ? p + 1 : line;; p = end) {
+                strtoll(p, &end, 10);
+                if (end == p)
+                    break;
+                nopp++;
+            }
+            continue;
+        }
+        size_t len = strlen(line);
+        if (nopp <= 0 || n >= MAX_GPU_OPP || len < (size_t)(1 + TS_HZ_W + 1 + nopp * TS_CNT_W + 1)
+            || line[1 + TS_HZ_W] != ':')
+            continue;
+        char *end;
+        long long hz = strtoll(line + 1, &end, 10);
+        if (end == line + 1)
+            continue;
+        const char *tp = line + 1 + TS_HZ_W + 1 + nopp * TS_CNT_W;
+        long long ms = strtoll(tp, &end, 10);
+        if (end == tp || ms < 0)
+            continue;
+        cur[n].hz = hz;
+        cur[n].ms = ms;
+        n++;
+
+        long long prev = -1;
+        for (int i = 0; i < prev_gpu_tis_n; i++)
+            if (prev_gpu_tis[i].hz == hz) { prev = prev_gpu_tis[i].ms; break; }
+        if (prev < 0 || ms < prev)
+            reset = 1;
+        else if (jo < sizeof json)
+            jo += (size_t)snprintf(json + jo, sizeof json - jo, "%s\"%lld\":%lld",
+                                   jo ? "," : "", hz, ms - prev);
+    }
+    fclose(f);
+
+    memcpy(prev_gpu_tis, cur, sizeof(struct gpu_opp_prev) * (size_t)n);
+    prev_gpu_tis_n = n;
+    if (!reset && jo && jo < sizeof json)
+        snprintf(g->freq_ms, sizeof g->freq_ms, "{%s}", json);
+
+    if (total >= 0) {
+        if (prev_gpu_trans >= 0 && total >= prev_gpu_trans)
+            g->trans = total - prev_gpu_trans;
+        prev_gpu_trans = total;
+    }
+}
 
 static void gpu_sample(struct gpu_reading *g, long long *prev_active)
 {
@@ -774,6 +878,8 @@ static void gpu_sample(struct gpu_reading *g, long long *prev_active)
     slurp_line(HDMI_CONN "/enabled", en, sizeof en, "");
     slurp_line(HDMI_CONN "/dpms", dpms, sizeof dpms, "");
     g->hdmi_on = strcmp(en, "enabled") == 0 && strcmp(dpms, "On") == 0;
+
+    gpu_dvfs_sample(g);
 }
 
 /* nexusqd's own counters, cumulative since it started (the report diffs them
@@ -1697,7 +1803,8 @@ int main(int argc, char **argv)
          * forks, irqs, unit_us, nq_renders, nq_ctl, ambient_wakes, tap_fixes
          * since r119 -- unit_us only on every 12th sample, see above; nice_ms
          * since r124; anon_kB, shmem_kB since r125; gpu_drv, gpu_rpm,
-         * gpu_active_ms, hdmi_on since r129). */
+         * gpu_active_ms, hdmi_on since r129; gpu_freq, gpu_freq_ms,
+         * gpu_trans since r130). */
         char nqa[64], lsa[64], gv[64];
         jstr(nq_active, nqa, sizeof nqa);
         jstr(ls_active, lsa, sizeof lsa);
@@ -1727,7 +1834,8 @@ int main(int argc, char **argv)
                 "\"nq_renders\":%lld,\"nq_ctl\":%lld,"
                 "\"ambient_wakes\":%lld,\"tap_fixes\":%lld,\"nice_ms\":%lld,"
                 "\"anon_kB\":%lld,\"shmem_kB\":%lld,"
-                "\"gpu_drv\":%d,\"gpu_rpm\":\"%s\",\"gpu_active_ms\":%lld,\"hdmi_on\":%d}\n",
+                "\"gpu_drv\":%d,\"gpu_rpm\":\"%s\",\"gpu_active_ms\":%lld,\"hdmi_on\":%d,"
+                "\"gpu_freq\":%lld,\"gpu_freq_ms\":%s,\"gpu_trans\":%lld}\n",
                 mono, wall, gv, freq, opp_ms, opp_trans, temp, cool,
                 vdd, vexp, vmismatch, abb,
                 nqa, nq_pid, nq_alive, nq_state, nq_resp, nq_progress, nq_restarts,
@@ -1740,7 +1848,8 @@ int main(int argc, char **argv)
                 nq_renders, nq_ctl,
                 amb_wakes, tap_fixes, nice_ms,
                 anon_kb, shmem_kb,
-                gpu.drv, gr, gpu.active_ms, gpu.hdmi_on);
+                gpu.drv, gr, gpu.active_ms, gpu.hdmi_on,
+                gpu.freq, gpu.freq_ms, gpu.trans);
         fflush(dst);
 
         if (once)

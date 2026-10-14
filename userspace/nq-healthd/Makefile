@@ -15,7 +15,8 @@ ACCTDIRS = -DTEST_PROCSTAT='"/tmp/nqh-test-procstat"' -DTEST_CGROOT='"/tmp/nqh-t
            -DTEST_CTLSTATS='"/tmp/nqh-test-ctlstats"' -DTEST_NQSOCK='"/tmp/nqh-test-nq.sock"'
 MEMDIRS  = -DTEST_CGROOT='"/tmp/nqh-test-memcg"' -DTEST_MEMINFO='"/tmp/nqh-test-meminfo"'
 GPUDIRS  = -DTEST_GPUROOT='"/tmp/nqh-test-gpu"' -DGPU_PM='"/tmp/nqh-test-gpu/power"' \
-           -DGPU_MOD='"/tmp/nqh-test-gpu/module"' -DHDMI_CONN='"/tmp/nqh-test-gpu/hdmi"'
+           -DGPU_MOD='"/tmp/nqh-test-gpu/module"' -DHDMI_CONN='"/tmp/nqh-test-gpu/hdmi"' \
+           -DGPU_DEVFREQ='"/tmp/nqh-test-gpu/devfreq"'
 LEDDIRS  = -DTEST_LEDSROOT='"/tmp/nqh-test-leds"' -DTEST_I2CDEVS='"/tmp/nqh-test-i2c"'
 test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c tests/test_accounting.c tests/test_memory.c tests/test_led_frame.c tests/test_judgements.c tests/test_gpu.c nq-healthd.c
 	$(CC) $(CFLAGS) -I. $(TESTDIRS) -o /tmp/nqh-test-pstore tests/test_pstore_count.c

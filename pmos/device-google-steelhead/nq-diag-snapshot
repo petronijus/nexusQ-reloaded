@@ -139,9 +139,42 @@ for f in current_state active_time total_idle_time; do
 	printf '%s=' "$f"; t cat "/sys/kernel/debug/pm_genpd/prm_gfx/$f" 2>/dev/null || echo "?"
 done
 sub "gfx_pwrdm counters"; t sh -c 'grep -E "gfx_pwrdm" /sys/kernel/debug/pm_debug/count /sys/kernel/debug/pm_debug/time' 2>/dev/null
-# Expect l3-gfx-clkctrl:0000:24 under dpll_per_m7x2_ck at 307200000 (nq-health-report checks it).
+# GPU DVFS (kernel r31): the SGX's devfreq device. Without it the clock below
+# must be 307200000; with it, one of the OPPs 153.6/307.2/384 MHz.
+sub "gpu devfreq"
+gdf=""
+for d in /sys/class/devfreq/*; do
+	[ -e "$d/device/of_node/compatible" ] && grep -q 'img,powervr-sgx' "$d/device/of_node/compatible" 2>/dev/null && gdf=$d
+done
+if [ -n "$gdf" ]; then
+	echo "device=$(basename "$gdf")"
+	for f in governor cur_freq target_freq min_freq max_freq available_frequencies polling_interval; do
+		printf '%s=' "$f"; t cat "$gdf/$f" 2>/dev/null || echo "?"
+	done
+	t cat "$gdf/trans_stat" 2>/dev/null
+else
+	echo "(no GPU devfreq device)"
+fi
+# 384 MHz needs VDD_CORE at 1.25 V. DVFS raises the rail before the clock and
+# lowers it after, so the rail is read on both sides of the clock, by ONE cat
+# of three small files (no fork in between, well under a millisecond):
+# 384 MHz with both reads below 1250000 is an ordering fault, one low read a
+# step in between (nq-health-report gpu_vdd_core).
+sub "vdd_core / gpu clock / vdd_core"
+vreg=
+for r in /sys/class/regulator/regulator.*; do
+	[ "$(cat "$r/name" 2>/dev/null)" = vdd_core ] && vreg=$r/microvolts
+done
+grate=/sys/kernel/debug/clk/l3-gfx-clkctrl:0000:24/clk_rate
+if [ -n "$vreg" ] && [ -r "$grate" ]; then
+	t cat "$vreg" "$grate" "$vreg" 2>/dev/null | { read -r v1; read -r c; read -r v2; echo "microvolts_before=$v1"; echo "clk_rate=$c"; echo "microvolts_after=$v2"; }
+else
+	echo "(no vdd_core regulator or no GPU clock in debugfs)"
+fi
+# Expect l3-gfx-clkctrl:0000:24 under dpll_per_m7x2_ck (nq-health-report checks the rate).
 sub "gpu clock"
 t grep -E 'dpll_(core|per)_m7x2_ck|l3-gfx-clkctrl' /sys/kernel/debug/clk/clk_summary 2>/dev/null
+sub "vdd_core VP (debugfs)"; t cat /sys/kernel/debug/steelhead_vdd_core/vp 2>/dev/null || echo "(no steelhead_vdd_core debugfs)"
 sub "gpu irq"; grep -iE 'sgx|pvr' /proc/interrupts 2>/dev/null || echo "(no SGX interrupt registered)"
 sub "userspace (fetched per unit)"
 if [ -e /var/lib/sgx-ddk/lib/.complete ]; then echo "DDK blobs complete: $(ls /var/lib/sgx-ddk/lib | tr '\n' ' ')"; else echo "DDK blobs NOT complete"; fi
