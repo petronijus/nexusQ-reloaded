@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "2.1.0",
+  "version": "2.1.1",
   "date": "2026-10-14",
-  "headline": "The desktop on the graphics chip, fast only when it needs to be",
+  "headline": "Back to normal after a power cut",
   "items": [
     {
-      "icon": "new",
-      "title": "The desktop uses the graphics chip",
-      "text": "The HDMI desktop now draws on the Q's own graphics chip instead of the processor, so it is smoother and leaves the processor free."
-    },
-    {
-      "icon": "power",
-      "title": "Fast only while it draws",
-      "text": "The graphics chip speeds up to 384 MHz while something moves and drops to its lowest speed and voltage the moment the screen is still."
+      "icon": "fix",
+      "title": "The volume ring stays off the screen",
+      "text": "Turning the volume ring no longer types stray characters onto a monitor connected over HDMI."
     },
     {
       "icon": "fix",
-      "title": "Updates finish cleanly",
-      "text": "A system update no longer reports a failure when only an unused postmarketOS step complained, and the services restart as they should."
+      "title": "The right time after a power cut",
+      "text": "After a power cut the Q keeps the time it had instead of falling back to the year 2000 until it reaches the internet."
+    },
+    {
+      "icon": "fix",
+      "title": "No lost health record",
+      "text": "The first health record after a power cut is no longer lost with the one the cut interrupted."
     }
   ]
 }

@@ -6,43 +6,6 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Fixed — the volume ring typed into the HDMI console (nexusqd **r27**, device **r131**)
-
-Found on 2026-10-14, after a power cut had rebooted the Prague Q into its
-default state (no desktop, a getty on tty1): turning the dome knob printed
-`^[[26~` and fresh `steelhead login:` prompts on the HDMI monitor. The
-kernel's console keyboard handler (kbd) is bound to `steelhead-avr-keys` as
-well as the evdev node nexusqd reads, so every detent also went to the getty;
-it only showed while no desktop held the VT. nexusqd now takes the node
-exclusively (`EVIOCGRAB`); a failed grab closes the node and keywatch retries,
-so it never reads a node another process owns (`test_keys.c`, seen failing
-without the grab). The udev rule that handed the node to labwc as a seat
-keyboard (`92-steelhead-avr-keyboard.rules`, v1.6.16) is gone: labwc's audio
-keybinds were removed in nexusqd r12 and the grab would starve it anyway.
-
-### Fixed — the clock jumped back to 2000 after a power cut (kernel **6.18.48-r33**, patch 0081)
-
-The TWL6030 RTC has no backup battery: after a mains loss its counters restart
-at 2000-01-01 and STATUS.POWER_UP is set. rtc-twl cleared the flag and reported
-2000-01-01 as a valid time; built as a module, it registers at ~16 s, after
-systemd has restored the time from timesyncd's clock file, and hctosys set
-the clock back to 2000 until NTP synced (17 minutes on 2026-10-14, the router
-booting after the Q). Stock did the same, but before `/init`. rtc-twl now keeps
-POWER_UP set and returns `-EINVAL` from read_time while it is, the way ds1307
-treats a stopped oscillator: hctosys skips with "unable to read the hardware
-clock" and systemd's time stands. set_time clears the flag (the 11-minute
-`RTC_SYSTOHC` write after the first NTP sync); `RTC_VL_READ` reports it.
-
-### Fixed — a power cut no longer costs the next boot's first health sample (device **r131**, `nq-health-report`)
-
-ext4 left the tail of `health.jsonl` written during the cut as 2664 NULs with
-no newline, and nq-healthd appended the next boot's first sample to that same
-line, so every reader dropped both. nq-healthd now seals a torn tail with a
-newline before it appends to `health.jsonl`, `events.jsonl` or `mem.jsonl`
-(`open_jsonl`, `test_logopen.c`); `nq-health-report` strips the leading NULs
-so logs written before r131 give the sample back (`test_health_report_torn_log`).
-Both tests were seen failing without their fix.
-
 ### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:
@@ -128,6 +91,55 @@ the kernel. The fix needs the manifest to carry the released kernel apart from
 the apk packages and the watch to compare it with the running kernel, with the
 app saying that the kernel goes through `nq-kernel-ota` (it is not an apk
 upgrade and needs someone in reach for the trial boot).
+
+## [2.1.1] — 2026-10-14 — back to normal after a power cut
+
+A hotfix for what a mains power cut on 2026-10-14 showed on the Prague Q:
+nexusqd **r27**, device **r131**, kernel **6.18.48-r33** (patch 0081); every
+other package as in v2.1.0. The kernel reaches a running Q through
+`nq-kernel-ota` (INSTALL.md §2), the rest through the app's system update.
+Tested on the Prague Q (apk upgrade + kernel trial boot, promoted): the
+volume ring no longer types into the HDMI console, the RTC reads real time on
+a warm boot. **Not yet verified on hardware:** the first boot after a real
+mains cut on r33 (expected: `time invalid until set`, no jump back to 2000;
+reading rules in `scripts/diag/README.md`).
+
+### Fixed — the volume ring typed into the HDMI console (nexusqd **r27**, device **r131**)
+
+Found on 2026-10-14, after a power cut had rebooted the Prague Q into its
+default state (no desktop, a getty on tty1): turning the dome knob printed
+`^[[26~` and fresh `steelhead login:` prompts on the HDMI monitor. The
+kernel's console keyboard handler (kbd) is bound to `steelhead-avr-keys` as
+well as the evdev node nexusqd reads, so every detent also went to the getty;
+it only showed while no desktop held the VT. nexusqd now takes the node
+exclusively (`EVIOCGRAB`); a failed grab closes the node and keywatch retries,
+so it never reads a node another process owns (`test_keys.c`, seen failing
+without the grab). The udev rule that handed the node to labwc as a seat
+keyboard (`92-steelhead-avr-keyboard.rules`, v1.6.16) is gone: labwc's audio
+keybinds were removed in nexusqd r12 and the grab would starve it anyway.
+
+### Fixed — the clock jumped back to 2000 after a power cut (kernel **6.18.48-r33**, patch 0081)
+
+The TWL6030 RTC has no backup battery: after a mains loss its counters restart
+at 2000-01-01 and STATUS.POWER_UP is set. rtc-twl cleared the flag and reported
+2000-01-01 as a valid time; built as a module, it registers at ~16 s, after
+systemd has restored the time from timesyncd's clock file, and hctosys set
+the clock back to 2000 until NTP synced (17 minutes on 2026-10-14, the router
+booting after the Q). Stock did the same, but before `/init`. rtc-twl now keeps
+POWER_UP set and returns `-EINVAL` from read_time while it is, the way ds1307
+treats a stopped oscillator: hctosys skips with "unable to read the hardware
+clock" and systemd's time stands. set_time clears the flag (the 11-minute
+`RTC_SYSTOHC` write after the first NTP sync); `RTC_VL_READ` reports it.
+
+### Fixed — a power cut no longer costs the next boot's first health sample (device **r131**, `nq-health-report`)
+
+ext4 left the tail of `health.jsonl` written during the cut as 2664 NULs with
+no newline, and nq-healthd appended the next boot's first sample to that same
+line, so every reader dropped both. nq-healthd now seals a torn tail with a
+newline before it appends to `health.jsonl`, `events.jsonl` or `mem.jsonl`
+(`open_jsonl`, `test_logopen.c`); `nq-health-report` strips the leading NULs
+so logs written before r131 give the sample back (`test_health_report_torn_log`).
+Both tests were seen failing without their fix.
 
 ## [2.1.0] — 2026-10-14 — the desktop on the GPU, and the GPU at 384 MHz when it must
 
