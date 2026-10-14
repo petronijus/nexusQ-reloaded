@@ -201,7 +201,12 @@ MEM_SLICES = ("system.slice", "user.slice", "init.scope")
 # awake only while something renders. docs/gpu-sgx540/power-clocks-pm.md 8.2.
 GPU_AWAKE_FULL = 0.95  # share of an interval that counts as "awake the whole time"
 GPU_NEVER_SLEEPS_S = 600  # a run of fully-awake intervals this long is a finding
-GPU_CLOCK_HZ = "307200000"  # stock OPP100 from dpll_per_m7x2_ck (patch 0062)
+GPU_CLOCK_HZ = "307200000"  # stock OPP100 from dpll_per_m7x2_ck (patch 0062), the rate without DVFS
+# With GPU DVFS (kernel r31, patch 0079) the rate is one of stock's three OPPs,
+# and 384 MHz needs VDD_CORE at 1.25 V (vdd_core regulator, patch 0077).
+GPU_OPP_HZ = ("153600000", "307200000", "384000000")
+GPU_OV_HZ = "384000000"
+GPU_OV_MIN_UV = 1250000
 GPU_HEADLESS_PCT = 1.0  # % awake while nothing is on screen that is a finding
 
 
@@ -402,6 +407,17 @@ def gpu_window(rows, interval):
     head_wall = len(headless) * interval * 1000
     head_awake = sum(r["gpu_active_ms"] for r in headless)
     hot = [r.get("temp_mC") for r in measured if r["gpu_active_ms"] > 0 and isinstance(r.get("temp_mC"), int)]
+    # DVFS residency (healthd >= device r130, kernel r31): ms per OPP over the
+    # window. devfreq books the suspended time at 153.6 MHz, so an idle GPU
+    # shows mostly there.
+    freq_ms = {}
+    for r in g:
+        per = r.get("gpu_freq_ms")
+        if isinstance(per, dict):
+            for hz, ms in per.items():
+                if isinstance(ms, int) and ms >= 0:
+                    freq_ms[hz] = freq_ms.get(hz, 0) + ms
+    trans = [r["gpu_trans"] for r in g if isinstance(r.get("gpu_trans"), int) and r["gpu_trans"] >= 0]
     return {
         "driver_loaded": any(r.get("gpu_drv") == 1 for r in g),
         "awake_pct": (100.0 * awake_ms / wall_ms) if wall_ms else None,
@@ -410,7 +426,43 @@ def gpu_window(rows, interval):
         "headless_pct": (100.0 * head_awake / head_wall) if head_wall else None,
         "temp_peak_awake_C": (max(hot) / 1000 if hot else None),
         "rpm_last": g[-1].get("gpu_rpm"),
+        "freq_ms": freq_ms or None,
+        "freq_trans": sum(trans) if trans else None,
+        "freq_last": g[-1].get("gpu_freq") if isinstance(g[-1].get("gpu_freq"), int) else None,
     }
+
+
+def gpu_dvfs_text(gpu):
+    """'; DVFS 153.6 MHz 97.0%, 307.2 MHz 1.0%, 384 MHz 2.0% (12 transitions)',
+    or '' for a capture without DVFS fields."""
+    per = gpu.get("freq_ms")
+    if not per:
+        return ""
+    total = sum(per.values())
+    if not total:
+        return ""
+    parts = [
+        f"{int(hz) / 1e6:g} MHz {100.0 * ms / total:.1f}%" for hz, ms in sorted(per.items(), key=lambda kv: int(kv[0]))
+    ]
+    tr = gpu.get("freq_trans")
+    return "; DVFS " + ", ".join(parts) + (f" ({tr} transitions)" if tr is not None else "")
+
+
+def snapshot_gpu_dvfs(snap_text):
+    """The snapshot's devfreq and VDD_CORE reads (nq-diag-snapshot, device
+    r130): ({'governor': ..., 'cur_freq': ...} or None, {'microvolts_before',
+    'clk_rate', 'microvolts_after'} as ints, empty when missing)."""
+    dvfs = {}
+    for line in snapshot_block(snap_text, "GPU_SGX540", "gpu devfreq"):
+        k, sep, v = line.partition("=")
+        if sep:
+            dvfs[k.strip()] = v.strip()
+    rail = {}
+    for line in snapshot_block(snap_text, "GPU_SGX540", "vdd_core / gpu clock / vdd_core"):
+        k, sep, v = line.partition("=")
+        if sep and v.strip().isdigit():
+            rail[k.strip()] = int(v.strip())
+    return (dvfs if "governor" in dvfs else None), rail
 
 
 def analyze(rows, events, snap_text, mem_rows=None):
@@ -713,7 +765,8 @@ def analyze(rows, events, snap_text, mem_rows=None):
                 f"; die peak {gpu['temp_peak_awake_C']:.1f} C while it was awake"
                 if gpu["temp_peak_awake_C"] is not None
                 else ""
-            ),
+            )
+            + gpu_dvfs_text(gpu),
         )
         if gpu["headless_pct"] is not None and gpu["headless_pct"] > GPU_HEADLESS_PCT:
             add(
@@ -753,19 +806,50 @@ def analyze(rows, events, snap_text, mem_rows=None):
             add("warn", "snapshot_truncated", "nq-diag-snapshot did not finish (truncated/blocked)")
         for line in snapshot_block(snap_text, "SYSTEMD", "systemctl --failed --no-legend"):
             add("warn", "failed_unit", f"systemd failed unit: {line[:120]}")
-        # The SGX clock: stock runs it from dpll_per_m7x2_ck at 307.2 MHz (patch
-        # 0062). Anything faster needs VDD_CORE at 1.25 V, which this kernel
-        # neither sets nor measures; anything else means the DT block is gone.
+        # The SGX clock comes from dpll_per_m7x2_ck (patch 0062). Without DVFS
+        # it stays at stock's OPP100, 307.2 MHz; with DVFS (kernel r31) it is
+        # one of stock's three OPPs, and 384 MHz must come with VDD_CORE at
+        # 1.25 V. Anything else means the DT block is gone or the OPP table is
+        # not what the kernel runs.
+        dvfs, rail = snapshot_gpu_dvfs(snap_text)
         for line in snapshot_block(snap_text, "GPU_SGX540", "gpu clock"):
             f = line.split()
-            if f and f[0] == "l3-gfx-clkctrl:0000:24" and len(f) > 4:
-                if f[4] != GPU_CLOCK_HZ:
-                    add(
-                        "warn",
-                        "gpu_clock",
-                        f"SGX540 functional clock {f[4]} Hz, expected {GPU_CLOCK_HZ} from dpll_per_m7x2_ck "
-                        "(above it needs VDD_CORE 1.25 V; docs/gpu-sgx540/power-clocks-pm.md)",
-                    )
+            if not (f and f[0] == "l3-gfx-clkctrl:0000:24" and len(f) > 4):
+                continue
+            hz = f[4]
+            if hz not in GPU_OPP_HZ:
+                add(
+                    "warn",
+                    "gpu_clock",
+                    f"SGX540 functional clock {hz} Hz is none of the GPU OPPs {', '.join(GPU_OPP_HZ)} "
+                    "(266666667: the 0062 DT block is gone; docs/gpu-sgx540/power-clocks-pm.md)",
+                )
+            elif dvfs is None and hz != GPU_CLOCK_HZ:
+                # A kernel with DVFS under an older snapshot (no devfreq block),
+                # or a kernel without DVFS off its fixed 307.2 MHz.
+                add(
+                    "info",
+                    "gpu_clock",
+                    f"SGX540 functional clock {hz} Hz: a GPU OPP, but the snapshot shows no GPU devfreq "
+                    f"device; without DVFS the clock is {GPU_CLOCK_HZ}",
+                )
+        # The rail and the clock, read by one cat (rail, clock, rail): DVFS
+        # raises the rail before the clock and lowers it after, so one low read
+        # next to 384 MHz is a step in between; both low cannot be one, inside
+        # a window that short.
+        if (
+            str(rail.get("clk_rate")) == GPU_OV_HZ
+            and "microvolts_before" in rail
+            and "microvolts_after" in rail
+            and max(rail["microvolts_before"], rail["microvolts_after"]) < GPU_OV_MIN_UV
+        ):
+            add(
+                "crit",
+                "gpu_vdd_core",
+                f"SGX540 at {int(GPU_OV_HZ) / 1e6:g} MHz with VDD_CORE {rail['microvolts_before']}/"
+                f"{rail['microvolts_after']} uV (before/after), below the {GPU_OV_MIN_UV} uV it needs "
+                "(stock OPP100-OV): DVFS ordered clock and rail wrongly",
+            )
 
     summary = {
         "accounting": acc,

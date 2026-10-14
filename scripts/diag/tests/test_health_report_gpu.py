@@ -105,10 +105,83 @@ class GpuClock(unittest.TestCase):
         self.assertNotIn("gpu_clock", kinds(f))
 
     def test_other_clock_is_a_warning(self):
-        # The 4460 default without the 0062 DT block (dpll_core_m7x2_ck), and 384 MHz.
-        for hz in ("266666667", "384000000"):
+        # The 4460 default without the 0062 DT block (dpll_core_m7x2_ck).
+        f, _ = MOD.analyze(rows(10, 0), [], SNAP.format(hz="266666667"))
+        self.assertEqual(kinds(f)["gpu_clock"]["sev"], "warn")
+
+    def test_another_opp_without_a_devfreq_block_is_info(self):
+        # Kernel r31 (DVFS) under a device r129 snapshot, which has no devfreq
+        # block: an idle GPU at 153.6 MHz is not a fault.
+        for hz in ("153600000", "384000000"):
             f, _ = MOD.analyze(rows(10, 0), [], SNAP.format(hz=hz))
-            self.assertIn("gpu_clock", kinds(f), hz)
+            self.assertEqual(kinds(f)["gpu_clock"]["sev"], "info", hz)
+
+
+# The same section from a kernel with GPU DVFS (r31) and a device r130 snapshot.
+SNAP_DVFS = """
+==================== GPU_SGX540 ====================
+
+--- gpu devfreq ---
+device=56000000.gpu
+governor=simple_ondemand
+cur_freq={hz}
+
+--- vdd_core / gpu clock / vdd_core ---
+microvolts_before={before}
+clk_rate={hz}
+microvolts_after={after}
+
+--- gpu clock ---
+             dpll_per_m7x2_ck        0       1        0        {hz}   0          0     50000      Y
+                l3-gfx-clkctrl:0000:24 0       1        0        {hz}   0          0     50000      Y
+
+########## SNAPSHOT END ##########
+"""
+
+
+def dvfs_snap(hz, before=1139440, after=1139440):
+    return SNAP_DVFS.format(hz=hz, before=before, after=after)
+
+
+class GpuDvfs(unittest.TestCase):
+    def test_every_opp_is_quiet(self):
+        for hz in MOD.GPU_OPP_HZ:
+            uv = 1253380 if hz == MOD.GPU_OV_HZ else 1139440
+            f, _ = MOD.analyze(rows(10, 0), [], dvfs_snap(hz, uv, uv))
+            self.assertFalse({"gpu_clock", "gpu_vdd_core"} & set(kinds(f)), hz)
+
+    def test_a_rate_outside_the_table_is_a_warning(self):
+        f, _ = MOD.analyze(rows(10, 0), [], dvfs_snap("266666667"))
+        self.assertIn("gpu_clock", kinds(f))
+
+    def test_384_mhz_on_the_low_rail_is_critical(self):
+        f, _ = MOD.analyze(rows(10, 0), [], dvfs_snap("384000000"))
+        k = kinds(f)
+        self.assertIn("gpu_vdd_core", k)
+        self.assertEqual(k["gpu_vdd_core"]["sev"], "crit")
+
+    def test_a_step_between_the_reads_is_not_a_fault(self):
+        # Down: 384 MHz read, then clock and rail drop before the second read.
+        # Up: the first read is from before the rail rose.
+        for before, after in ((1253380, 1139440), (1139440, 1253380)):
+            f, _ = MOD.analyze(rows(10, 0), [], dvfs_snap("384000000", before, after))
+            self.assertNotIn("gpu_vdd_core", kinds(f), (before, after))
+
+    def test_residency_goes_into_the_gpu_line(self):
+        r = rows(4, 300)
+        for i, x in enumerate(r):
+            x["gpu_freq"] = 384000000
+            x["gpu_freq_ms"] = {} if i == 0 else {"153600000": 1000, "307200000": 1000, "384000000": 3000}
+            x["gpu_trans"] = -1 if i == 0 else 2
+        f, s = MOD.analyze(r, [], "")
+        self.assertEqual(s["gpu"]["freq_ms"], {"153600000": 3000, "307200000": 3000, "384000000": 9000})
+        self.assertEqual(s["gpu"]["freq_trans"], 6)
+        self.assertIn("DVFS 153.6 MHz 20.0%, 307.2 MHz 20.0%, 384 MHz 60.0% (6 transitions)", kinds(f)["gpu"]["msg"])
+
+    def test_capture_without_dvfs_fields_has_no_dvfs_text(self):
+        f, s = MOD.analyze(rows(10, 300), [], "")
+        self.assertIsNone(s["gpu"]["freq_ms"])
+        self.assertNotIn("DVFS", kinds(f)["gpu"]["msg"])
 
 
 if __name__ == "__main__":

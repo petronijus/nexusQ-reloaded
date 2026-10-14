@@ -61,6 +61,11 @@ grep -q "GPU (labwc gles2" /home/user/.local/state/tinydm.log 2>/dev/null \
 	|| { echo "NQB-ERR the desktop does not run on the GPU (see tinydm.log)"; exit 2; }
 ENVS=$(tr '\0' '\n' </proc/"$S"/environ | grep -E '^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|HOME|USER|PATH|XDG_SESSION_TYPE)=' | tr '\n' ' ')
 GPM=/sys/devices/platform/ocp/5600fe00.target-module/power
+# The SGX's devfreq device on a kernel with GPU DVFS (r31+); "-" without it.
+GDF=
+for d in /sys/class/devfreq/*; do
+	grep -q 'img,powervr-sgx' "$d/device/of_node/compatible" 2>/dev/null && GDF=$d
+done
 # Bounded on its own (the glmark2 timeout plus a margin): an ssh that drops
 # mid-run must not leave it looping on the unit. It writes to its own file:
 # sharing glmark2's stdout, its lines landed inside glmark2's and broke the
@@ -68,7 +73,7 @@ GPM=/sys/devices/platform/ocp/5600fe00.target-module/power
 MONF=$(mktemp)
 (i=0; while [ $i -lt 960 ]; do
 	i=$((i + 1))
-	echo "NQB-MON $(cut -d' ' -f1 /proc/uptime) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/class/thermal/thermal_zone0/temp) $(cat $GPM/runtime_status)"
+	echo "NQB-MON $(cut -d' ' -f1 /proc/uptime) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/class/thermal/thermal_zone0/temp) $(cat $GPM/runtime_status) $( [ -n "$GDF" ] && cat "$GDF/cur_freq" || echo -)"
 	sleep 1
 done) >"$MONF" &
 MON=$!
@@ -93,9 +98,10 @@ grep -v '^NQB-MON ' "$DIR/raw.txt" >"$DIR/glmark2.txt"
 	score=$(sed -n 's/.*glmark2 Score: *\([0-9]*\).*/\1/p' "$DIR/glmark2.txt")
 	echo "renderer  $renderer"
 	echo "score     ${score:-none}   (baseline $BASELINE)"
-	awk '{n++; f[$2]++; if ($3 > t) t = $3; if ($4 == "active") a++}
+	awk '{n++; f[$2]++; if ($3 > t) t = $3; if ($4 == "active") a++; if ($5 != "" && $5 != "-") { g[$5]++; gn++ }}
 	     END { if (!n) exit; printf "die peak  %.1f C over %d s; GPU runtime-active %d%% of the samples\n", t / 1000, n, 100 * a / n;
-	           printf "cpu MHz  "; for (k in f) printf " %d:%d%%", k / 1000, 100 * f[k] / n; print "" }' "$DIR/monitor.txt"
+	           printf "cpu MHz  "; for (k in f) printf " %d:%d%%", k / 1000, 100 * f[k] / n; print "";
+	           if (gn) { printf "gpu MHz  "; for (k in g) printf " %g:%d%%", k / 1e6, 100 * g[k] / gn; print "" } }' "$DIR/monitor.txt"
 	grep -E '^PVR|Error' "$DIR/glmark2.txt" | sort | uniq -c | sed 's/^/driver    /'
 	case "$renderer" in
 	*"SGX 540"*) ;;

@@ -414,10 +414,17 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   - **Userspace fetched:** `/var/lib/sgx-ddk/lib/.complete` exists (`nq-sgx-fetch`
     downloads TI's blobs per unit after boot; they are never in the image).
     `/etc/nexusq/gpu-off` set = the kill switch, the desktop runs on Pixman.
-  - **Clock:** `clk_summary` shows `l3-gfx-clkctrl:0000:24` under `dpll_per_m7x2_ck` at
-    **307200000** (stock OPP100, patch 0062). Anything else is a finding (`gpu_clock`):
-    266666667 means the DT block is gone, anything above 307.2 MHz needs VDD_CORE at
-    1.25 V, which this kernel neither sets nor measures.
+  - **Clock:** `clk_summary` shows `l3-gfx-clkctrl:0000:24` under `dpll_per_m7x2_ck`.
+    Without GPU DVFS (kernel < r31) the rate is **307200000** (stock OPP100, patch 0062);
+    266666667 means the DT block is gone. With DVFS (kernel r31+, patch 0079) the
+    snapshot's `gpu devfreq` block shows the SGX's devfreq device (`simple_ondemand`)
+    and the rate is one of **153600000 / 307200000 / 384000000** (idle: 153.6 MHz, the
+    suspend OPP). Anything else is `gpu_clock`. 384 MHz needs VDD_CORE at 1.25 V: the
+    snapshot reads `vdd_core` before and after the clock, and 384 MHz with both reads
+    below 1250000 µV is `gpu_vdd_core` (crit: DVFS ordered clock and rail wrongly).
+    healthd (device r130+) logs `gpu_freq`, `gpu_freq_ms` (ms per OPP) and `gpu_trans`;
+    the report's `gpu` line gives the DVFS residency. Never write the debugfs
+    `steelhead_vdd_core/request_uV` knob in a diag: it moves the rail under the GPU.
   - **It sleeps:** with nothing rendering, `/sys/devices/platform/ocp/5600fe00.target-module/power/runtime_status`
     = `suspended`, `runtime_active_time` does not grow, genpd `prm_gfx` = `off-0`. healthd
     (r129+) logs `gpu_rpm`/`gpu_active_ms`/`hdmi_on`; the report warns
@@ -793,7 +800,7 @@ BLOCKED (resume hang can't be debugged blind), not a diag finding.
 
 Return:
 1. A **yes/no hardware table**: BT | WiFi (firmware OK? sees 5 GHz? connected?) |
-   eth (carrier) | CPU reaches 1.2 GHz | GPU (userspace fetched? clock 307.2 MHz?
+   eth (carrier) | CPU reaches 1.2 GHz | GPU (userspace fetched? clock an OPP, and 307.2 MHz without DVFS?
    sleeps when idle?) — one evidence line each.
 2. The **runtime verdict** (`worst_severity`) + each finding with its evidence
    (quote the timeline/snapshot section), and—if a finding implies a code fix—name
