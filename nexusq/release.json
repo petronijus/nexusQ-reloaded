@@ -1,22 +1,27 @@
 {
   "schema": 1,
-  "version": "2.0.2",
-  "date": "2026-10-10",
-  "headline": "AirPlay security fixes, and an idle Q that stays idle",
+  "version": "2.1.0",
+  "date": "2026-10-14",
+  "headline": "The desktop on the graphics chip, fast only when it needs to be",
   "items": [
     {
-      "icon": "security",
-      "title": "AirPlay security fixes",
-      "text": "AirPlay moves to Shairport Sync 5.5.2, which fixes a flaw a device on your network could use to corrupt its memory."
+      "icon": "new",
+      "title": "The desktop uses the graphics chip",
+      "text": "The HDMI desktop now draws on the Q's own graphics chip instead of the processor, so it is smoother and leaves the processor free."
     },
     {
       "icon": "power",
-      "title": "A quieter idle",
-      "text": "AirPlay no longer wakes the processor ten times a second while nothing is playing."
+      "title": "Fast only while it draws",
+      "text": "The graphics chip speeds up to 384 MHz while something moves and drops to its lowest speed and voltage the moment the screen is still."
+    },
+    {
+      "icon": "fix",
+      "title": "Updates finish cleanly",
+      "text": "A system update no longer reports a failure when only an unused postmarketOS step complained, and the services restart as they should."
     }
   ],
   "packages": {
-    "nexusq-control": "0.1.0-r64",
+    "nexusq-control": "0.1.0-r68",
     "nexusqd": "0.1.0-r26",
     "nexusq-btagent": "0.1.0-r8",
     "nexusq-setupd": "0.1.0-r8",
@@ -24,13 +29,15 @@
     "nexusq-alsa-vol": "0.1.0-r1",
     "nexusq-kernel-ota": "0.1.0-r11",
     "nexusq-rootfs-ab": "0.1.0-r6",
-    "device-google-steelhead": "1.0-r126",
-    "device-google-steelhead-nonfree-firmware": "1.0-r126",
+    "device-google-steelhead": "1.0-r130",
+    "device-google-steelhead-nonfree-firmware": "1.0-r130",
     "firmware-google-steelhead": "1-r3",
     "speexdsp": "1.2.1-r100",
     "shairport-sync": "5.5.2-r102",
     "alsa-utils": "1.2.16-r100",
     "alsa-utils-systemd": "1.2.16-r100",
-    "alsa-utils-udev": "1.2.16-r100"
+    "alsa-utils-udev": "1.2.16-r100",
+    "nexusq-sgx": "1.17.4948957-r1",
+    "nexusq-sgx-mesa": "24.0.9-r0"
   }
 }
