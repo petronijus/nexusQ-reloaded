@@ -506,11 +506,20 @@ inline fallback).
   image until it takes the kernel OTA — the cottage Q as of its last record),
   and on **any** unit's first boot after a **mains unplug** (no backup cell — the
   RTC resets to 2000-01-01 and prints `twl_rtc … Power up reset detected.`, the
-  one expected warn line), PID 1 jumps the clock to systemd's compiled-in
-  `TIME_EPOCH` = the systemd package's **build** timestamp (261.2-r1 →
-  2026-08-23 00:03:32 UTC), so every journal line **before `systemd-timesyncd`
-  syncs carries that date, not the real one** — do not read pre-NTP timestamps
-  as evidence of when something happened (issue #4 did); (b) on r2 after a warm
-  reboot the pre-NTP timestamps are real. `since_epoch` not advancing over 3 s
-  on r2 is a **regression**.
+  one expected warn line), PID 1 moves the clock forward to the newer of
+  `/var/lib/systemd/timesync/clock` (the last time the unit saw, minus however
+  long it was off) and systemd's compiled-in `TIME_EPOCH` = the systemd
+  package's **build** timestamp (261.2-r1 → 2026-08-23 00:03:32 UTC), so every
+  journal line **before `systemd-timesyncd` syncs is behind the real time** —
+  do not read pre-NTP timestamps as evidence of when something happened (issue
+  #4 did). Through kernel **r32** rtc-twl then reported its reset 2000-01-01
+  as valid and hctosys set the clock **back to 2000** at ~16 s (journald:
+  "Time jumped backwards"), until NTP. From **r33** (patch 0081) it reads
+  `Power up reset detected, time invalid until set.` followed by `hctosys:
+  unable to read the hardware clock` — both expected on that boot — and the
+  clock stays on systemd's time; `timedatectl` shows no RTC time and
+  `/dev/rtc` is missing until the first NTP sync writes the RTC (11-minute
+  mode) and the next boot. A jump back to 2000 on r33+ is a **regression**.
+  (b) on r2 after a warm reboot the pre-NTP timestamps are real.
+  `since_epoch` not advancing over 3 s on r2 is a **regression**.
   `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.

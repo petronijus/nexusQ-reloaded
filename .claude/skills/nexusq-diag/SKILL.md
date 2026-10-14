@@ -254,7 +254,12 @@ Findings are tagged by `kind`; interpret them like this:
   `hwclock -r` real time — anything else is a regression; a clean r2 boot has
   exactly **one** `dmesg -l err,warn` line, `twl_rtc … Power up reset
   detected.`, **expected after a mains unplug** (no backup cell — the RTC resets
-  to 2000-01-01; warm reboots keep time). **On ≤ r1** (v1.16.0 images until they
+  to 2000-01-01; warm reboots keep time). **From r33** (patch 0081) that boot
+  reads `Power up reset detected, time invalid until set.` plus `hctosys:
+  unable to read the hardware clock`, and `hwclock -r` / `since_epoch` fail
+  with EINVAL until the first NTP sync writes the RTC — expected, not a
+  regression; the clock must NOT jump back to 2000 ("Time jumped backwards"),
+  and on a warm reboot after the sync the RTC must read real time again. **On ≤ r1** (v1.16.0 images until they
   take the kernel OTA; r2 is not yet published) and on any unit's first boot
   after a mains unplug: until NTP syncs the clock is systemd's compiled-in
   `TIME_EPOCH` = the systemd package's **build date** (261.2-r1 → 2026-08-23),

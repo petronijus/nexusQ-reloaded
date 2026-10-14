@@ -317,6 +317,18 @@ the r2 apk is **not published** to the OTA repo and no release is cut; the
 cottage Q is still on v1.15.2 (last recorded 2026-09-05). The full `nexusq-diag`
 sweep on r2 ran separately and is not reported here.
 
+### Addendum 2026-10-14 — the jump back to 2000 after a mains loss (kernel r33)
+
+"A mains unplug resets it to 2000-01-01 until NTP" undersold it. On the Prague
+Q's first boot after a power cut (2026-10-14), PID 1 had restored a sane time
+from timesyncd's clock file at 9.9 s; at 16.4 s rtc-twl (a module) registered,
+cleared STATUS.POWER_UP, reported 2000-01-01 as valid, and hctosys set the
+system clock back to it ("Time jumped backwards") for 17 minutes, until NTP.
+Stock behaved the same, only before `/init` (built-in driver). Patch 0081
+(kernel 6.18.48-r33) keeps POWER_UP set and makes read_time return `-EINVAL`
+while it is, so hctosys skips and systemd's time stands; set_time clears it.
+Reading rules: `scripts/diag/README.md`.
+
 ---
 
 ## 5. What else a first-timer hits (found by reading the guide as a stranger)
