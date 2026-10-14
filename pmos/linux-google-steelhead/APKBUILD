@@ -3,7 +3,7 @@
 # Modeled after linux-postmarketos-omap
 pkgname=linux-google-steelhead
 pkgver=6.18.48
-pkgrel=32
+pkgrel=33
 pkgdesc="Mainline kernel for Google Nexus Q"
 url="https://kernel.org"
 arch="armv7"
@@ -126,6 +126,7 @@ source="
 	0078-dt-bindings-gpu-img-powervr-sgx-allow-DVFS-on-the-OMAP4-SGX540.patch
 	0079-drm-pvrsgx-scale-the-SGX-core-clock-and-voltage-with-devfreq.patch
 	0080-ARM-dts-omap4-steelhead-GPU-DVFS-153.6-307.2-384-MHz-like-stock.patch
+	0081-rtc-twl-report-the-time-as-invalid-after-a-power-up-reset.patch
 "
 
 builddir="$srcdir/linux-$pkgver"
@@ -338,4 +339,5 @@ SKIP  0077-ARM-OMAP4460-steelhead-VC-bridge-regulator-for-VDD_CORE.patch
 SKIP  0078-dt-bindings-gpu-img-powervr-sgx-allow-DVFS-on-the-OMAP4-SGX540.patch
 SKIP  0079-drm-pvrsgx-scale-the-SGX-core-clock-and-voltage-with-devfreq.patch
 SKIP  0080-ARM-dts-omap4-steelhead-GPU-DVFS-153.6-307.2-384-MHz-like-stock.patch
+SKIP  0081-rtc-twl-report-the-time-as-invalid-after-a-power-up-reset.patch
 "

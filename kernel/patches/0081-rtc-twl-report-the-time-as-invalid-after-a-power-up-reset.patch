@@ -1,0 +1,139 @@
+From 05a1aa7e7d84837899bf274e69f66f4f8dbcad7c Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Wed, 14 Oct 2026 18:50:00 +0200
+Subject: [PATCH 81/81] rtc: twl: report the time as invalid after a power-up
+ reset
+
+When the TWL RTC loses power its counters restart from 2000-01-01 and
+STATUS.POWER_UP is set. The driver warned about it, cleared the flag in
+probe and then reported 2000-01-01 as a valid time. With the driver
+built as a module, hctosys runs when it registers, long after userspace
+has restored a sane time, so the clock jumped back to 2000 until NTP
+synced (17 minutes on a Nexus Q whose router came up after it).
+
+Keep POWER_UP set in probe and return -EINVAL from read_time while it
+is, the way ds1307 treats a stopped oscillator and pcf8563 a low
+voltage: hctosys then leaves the system clock alone. set_time clears
+the flag once a real time is written (the 11-minute NTP sync with
+RTC_SYSTOHC). Since the flag lives in the PMIC, a module reload or a
+warm reboot before that still knows the time is invalid. RTC_VL_READ
+reports the state as RTC_VL_DATA_INVALID.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ drivers/rtc/rtc-twl.c | 55 +++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 51 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/rtc/rtc-twl.c b/drivers/rtc/rtc-twl.c
+index e6106e6..cfec118 100644
+--- a/drivers/rtc/rtc-twl.c
++++ b/drivers/rtc/rtc-twl.c
+@@ -26,6 +26,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/interrupt.h>
+ #include <linux/of.h>
++#include <linux/uaccess.h>
+ 
+ #include <linux/mfd/twl.h>
+ 
+@@ -146,6 +147,12 @@ struct twl_rtc {
+ 	 */
+ 	unsigned char rtc_irq_bits;
+ 	bool wake_enabled;
++	/*
++	 * The RTC lost power and its time was never set since: the counters
++	 * restarted from 2000-01-01. Mirrors STATUS.POWER_UP, which stays set
++	 * in the PMIC until twl_rtc_set_time() clears it.
++	 */
++	bool time_invalid;
+ #ifdef CONFIG_PM_SLEEP
+ 	unsigned char irqstat;
+ #endif
+@@ -263,6 +270,10 @@ static int twl_rtc_read_time(struct device *dev, struct rtc_time *tm)
+ 	u8 save_control;
+ 	u8 rtc_control;
+ 
++	/* a made-up date must not reach hctosys or userspace as the time */
++	if (twl_rtc->time_invalid)
++		return -EINVAL;
++
+ 	ret = twl_rtc_read_u8(twl_rtc, &save_control, REG_RTC_CTRL_REG);
+ 	if (ret < 0) {
+ 		dev_err(dev, "%s: reading CTRL_REG, error %d\n", __func__, ret);
+@@ -358,11 +369,38 @@ static int twl_rtc_set_time(struct device *dev, struct rtc_time *tm)
+ 	/* Start back RTC */
+ 	save_control |= BIT_RTC_CTRL_REG_STOP_RTC_M;
+ 	ret = twl_rtc_write_u8(twl_rtc, save_control, REG_RTC_CTRL_REG);
++	if (ret < 0)
++		goto out;
++
++	/* the time is valid again: clear the power-up flag (write 1 to clear) */
++	if (twl_rtc->time_invalid) {
++		ret = twl_rtc_write_u8(twl_rtc, BIT_RTC_STATUS_REG_POWER_UP_M,
++				       REG_RTC_STATUS_REG);
++		if (ret < 0)
++			goto out;
++		twl_rtc->time_invalid = false;
++	}
+ 
+ out:
+ 	return ret;
+ }
+ 
++static int twl_rtc_ioctl(struct device *dev, unsigned int cmd,
++			 unsigned long arg)
++{
++	struct twl_rtc *twl_rtc = dev_get_drvdata(dev);
++	unsigned int vl = 0;
++
++	switch (cmd) {
++	case RTC_VL_READ:
++		if (twl_rtc->time_invalid)
++			vl |= RTC_VL_DATA_INVALID;
++		return put_user(vl, (unsigned int __user *)arg);
++	default:
++		return -ENOIOCTLCMD;
++	}
++}
++
+ /*
+  * Gets current TWL RTC alarm time.
+  */
+@@ -482,6 +520,7 @@ out:
+ static const struct rtc_class_ops twl_rtc_ops = {
+ 	.read_time	= twl_rtc_read_time,
+ 	.set_time	= twl_rtc_set_time,
++	.ioctl		= twl_rtc_ioctl,
+ 	.read_alarm	= twl_rtc_read_alarm,
+ 	.set_alarm	= twl_rtc_set_alarm,
+ 	.alarm_irq_enable = twl_rtc_alarm_irq_enable,
+@@ -537,14 +576,22 @@ static int twl_rtc_probe(struct platform_device *pdev)
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	if (rd_reg & BIT_RTC_STATUS_REG_POWER_UP_M)
+-		dev_warn(&pdev->dev, "Power up reset detected.\n");
++	if (rd_reg & BIT_RTC_STATUS_REG_POWER_UP_M) {
++		dev_warn(&pdev->dev,
++			 "Power up reset detected, time invalid until set.\n");
++		twl_rtc->time_invalid = true;
++	}
+ 
+ 	if (rd_reg & BIT_RTC_STATUS_REG_ALARM_M)
+ 		dev_warn(&pdev->dev, "Pending Alarm interrupt detected.\n");
+ 
+-	/* Clear RTC Power up reset and pending alarm interrupts */
+-	ret = twl_rtc_write_u8(twl_rtc, rd_reg, REG_RTC_STATUS_REG);
++	/*
++	 * Clear a pending alarm interrupt. The power-up flag stays set until
++	 * the time is set, so a reload or a warm reboot before then still
++	 * knows the time is invalid.
++	 */
++	ret = twl_rtc_write_u8(twl_rtc, rd_reg & BIT_RTC_STATUS_REG_ALARM_M,
++			       REG_RTC_STATUS_REG);
+ 	if (ret < 0)
+ 		return ret;
+ 
+-- 
+2.55.0
+
