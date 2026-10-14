@@ -6,6 +6,62 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — app updates no longer fail on apk's remembered mkinitfs error (nexusq-control **r68**, unreleased)
+
+- After the postmarketos-mkinitfs 2.12.0-r1 trigger fails once, apk keeps the
+  package flagged, and every later transaction -- even one that runs no
+  trigger, such as upgrading nexusq-control alone -- ends "1 error" and exits
+  1 without an `ERROR:` line. r67 called that a failed update (seen on the
+  Prague Q, 2026-10-14). The daemon now asks `apk fix --simulate` which
+  packages are flagged and tolerates the error count only when the inert
+  trigger lines plus the flagged inert packages explain it.
+
+### Added — GPU frequency scaling 153.6 / 307.2 / 384 MHz like stock (kernel **6.18.48-r32**, device **r130**, unreleased)
+
+- Patches 0078-0080: the SGX540 gets stock's three OPPs (153.6 / 307.2 /
+  384 MHz, dividers of `dpll_per_m7x2_ck`) with VDD_CORE from the r30
+  regulator (1250 mV at 384 MHz, 1127 mV below). The pvrsgx glue
+  (`pvr-dvfs.c`) drives them with devfreq `simple_ondemand`; the load is the
+  share of time the DDK reported the SGX busy, from the same hooks stock's
+  `RequestSGXFreq` used. `dev_pm_opp_set_rate()` raises the rail before the
+  clock and lowers it after. A runtime-suspended GPU parks at 153.6 MHz, so
+  1.25 V is held only while the SGX runs at 384 MHz; a resumed GPU goes back
+  to the OPP it ran at (devfreq alone would restart at 153.6 MHz). The DDK is
+  told the highest OPP for its timers, so a lower OPP only lengthens its
+  timeouts. glmark2 on the Prague Q: 81 at 307.2 MHz, **91 at 384 MHz and 91
+  with DVFS** (die peak 89.4 °C, `docs/gpu-sgx540/performance-2026-10-13.md`).
+- The VP force-update returns -ETIMEDOUT when TRANXDONE never sets (it
+  returned 0), for VDD_MPU too, and the VDD_CORE regulator fails unless the VP
+  reads back the voltage asked for: no clock goes up on a rail that did not.
+  The r30 debugfs write knob is gone; `steelhead_vdd_core/vp` stays read-only.
+  (r31 was the same without these review fixes; it ran the benchmark.)
+- The GPU is a devfreq cooling device on the CPU's 100 °C passive trip (stock
+  had no GPU cooling; the die is shared).
+- Kernel config: `PM_DEVFREQ`, `DEVFREQ_GOV_SIMPLE_ONDEMAND`, `DEVFREQ_THERMAL`.
+  The SGX binding allows the OMAP4 GPU a "core" clock, an OPP table, a
+  `vdd-core` supply and `#cooling-cells` (patch 0078).
+- Diagnostics (device r130): healthd logs `gpu_freq`, `gpu_freq_ms` (ms per
+  OPP) and `gpu_trans`; `nq-diag-snapshot` shows the GPU devfreq device and
+  reads VDD_CORE on both sides of the clock; `nq-health-report` accepts any
+  OPP once DVFS is present, adds the residency to its `gpu` line and raises
+  `gpu_vdd_core` (crit) for 384 MHz with VDD_CORE below 1.25 V; `nq-gpu-bench`
+  reports the time per GPU clock.
+
+### Added — a Linux regulator for VDD_CORE (kernel **6.18.48-r30**, unreleased)
+
+- Patch 0077 and a `regulator-vc-core` DTS node: a VC-bridge regulator for
+  VDD_CORE (TWL6030 VCORE1 on the VC SR-I2C), like the VDD_MPU one. It scales
+  the core voltage domain through the VP force-update and reports what the VP
+  actually sent. Range: stock's CORE OPP100 .. OPP100-OV, 1127..1250 mV, the
+  latter being what the SGX540 needs at 384 MHz. Nothing asks for more than the
+  boot 1127 mV yet. A root-only debugfs directory `steelhead_vdd_core/` can
+  request a voltage in that range and shows the VP readback and VLIMITTO, to
+  measure whether the VP's 1202.7 mV VDDMAX clamps a force-update. **It does
+  not** (Prague Q, 2026-10-14): a 1250000 µV request made the VP send vsel 0x2c
+  = 1253380 µV, and 1127000 µV brought it back to 0x23 = 1139440 µV.
+- The CORE boot voltage's failure line says the VC ON value "may" already be
+  written (fleet-safety review of r29).
+
 ### Fixed — an update whose packages installed is no longer reported as failed (nexusq-control **r67**, unreleased)
 
 - apk exits non-zero both for a failed transaction and for a committed one in

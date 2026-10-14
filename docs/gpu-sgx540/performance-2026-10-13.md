@@ -107,3 +107,34 @@ section 7).
   `gpu_clock` (warn).
 - `scripts/diag/nq-gpu-bench`: this benchmark against this baseline.
 - The nexusq-diag agent and skill check the GPU in every sweep.
+
+## 307.2 vs 384 MHz and DVFS, 2026-10-14 (kernel r31)
+
+Prague unit, kernel 6.18.48-r31 (GPU DVFS, patches 0077-0080), otherwise the
+baseline's conditions: device r129, nexusq-sgx r1, glmark2-es2-wayland
+fullscreen 1280x720, nothing playing, each run started below 65 °C die.
+The clock was held through the devfreq device's `min_freq`/`max_freq`
+(`/sys/class/devfreq/56000000.gpu`). Captures:
+`nq-captures/gpu-bench-dvfs-20261014-{307,384,auto}/`.
+
+| | 307.2 MHz pinned | 384 MHz pinned | DVFS (simple_ondemand) |
+|---|---|---|---|
+| **glmark2 Score** | **81** | **91** (+12 %) | **91** |
+| GPU clock while sampled | 307.2: 97 % | 384: 98 % | 384: 90 %, 153.6: 9 % |
+| die peak | 84.5 °C | 88.3 °C | 89.4 °C |
+| VDD_CORE (VP readback) | 1 139 440 µV | 1 253 380 µV during the run | idle: 1 139 440 µV |
+
+Per scene, 384 against 307.2 MHz: shader-bound scenes gain the most, up to
++21 % (`function`, `loop`, `jellyfish` 34 → 41 FPS, `build use-vbo=false`
++19 %); texture and `build use-vbo=true` +6-9 %; the `buffer` scenes (CPU
+uploads) and `terrain`/`refract` (2 and 6 FPS) do not move. The gain is below
+the clock's +25 % because part of each frame is CPU and memory bound (the CPU
+stayed at 350 MHz 75 % of the time, as in the baseline).
+
+With DVFS the score equals the pinned 384 MHz: under load the governor sits at
+384 MHz, and the GPU parks at 153.6 MHz (VDD_CORE 1127 mV) whenever it idles.
+The run made ~250 OPP transitions without an error in the kernel log. No
+thermal throttling: the die stayed 10 °C below the 100 °C passive trip.
+
+The r31 run on 307.2 MHz scored 81 against the r29 baseline's 83, within the
+benchmark's spread (the 2026-10-13 r28 run scored 82).

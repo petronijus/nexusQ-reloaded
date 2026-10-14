@@ -24,24 +24,42 @@ clkctrl failure, which fired before the VDD_CORE write. Slot-A backup = r27.
 2026-10-14 00:10: kernel r29 (= r28 + the review's readback logging) trial-booted;
 stock RAM boot measured stock's VDD_CORE: nominal 1127 mV, SmartReflex-calibrated
 **1076 mV** — we sit 63 mV above it, open loop (power-clocks-pm.md, Addendum).
-nexusq-control r66 installed by hand on the Prague Q (superseded by r67, not built yet).
-For kernel r30 (review, minor): the failure log line should say "VC ON may already be"
-(a NULL scale returns before pre_scale writes it).
+nexusq-control r67 installed by hand on the Prague Q 2026-10-14 (replaces the hand r66).
+2026-10-14 11:15: kernel r30 (patch 0077, the VDD_CORE VC-bridge regulator)
+trial-booted and autopromoted on the Prague Q; VP ceiling measured: VDDMAX 0x28
+does not clamp a force-update (1.25 V request → vsel 0x2c, back to 0x23). Full
+diag clean apart from the keypad clkctrl failure, which hit this boot.
+Slot-A backup = r29.
+2026-10-14 12:13: kernel r31 (GPU DVFS, patches 0078-0080) trial-booted and
+autopromoted on the Prague Q (slot-A backup = r30); devfreq up, idle 153.6 MHz,
+VDD_CORE 1253380 µV at 384 MHz. glmark2: 81 at 307.2, 91 at 384, 91 with DVFS.
+The fleet-safety review's fixes make r32 (VP TRANXDONE error propagated,
+regulator readback check, debugfs write knob removed, resume at the previous
+OPP) together with device r130 (healthd/snapshot GPU DVFS fields). r30-r32 and
+r130 are not committed yet. The cottage Q runs none of this.
+2026-10-14 13:22: kernel r32 trial-booted and autopromoted on the Prague Q
+(slot-A backup = r31), with device r130 and nexusq-control r68 installed by
+hand. Under load 384 MHz at VDD_CORE 1253380 µV (rail/clock/rail one read),
+idle 153.6 MHz at 1139440 µV, resumes go 153.6 -> 384 directly; full diag
+clean apart from thermal: a 12 s dual-core CPU load with the desktop up peaked
+at 98.9 °C, the highest so far, 1.1 °C under the 100 °C passive trip
+(`nq-captures/20261014-132814/`). Watch item, not throttled.
 
 Next, in this order (`docs/gpu-sgx540/power-clocks-pm.md` Addendum 2026-10-13):
 1. ~~Stock RAM boot~~ done (idle only: no GL client without `/system`, so
    stock's behaviour at 384 MHz stays unmeasured).
-2. VP ceiling (VDDMAX 1.2027 V < 1.25 V), a VDD_CORE regulator on the patch 0015
-   pattern, then 384 MHz inside the GPU's runtime PM only.
-3. GPU DVFS 153.6/307.2/384 MHz (OPP table, `dev_pm_opp_set_rate`, devfreq +
-   `devfreq_cooling`), measured with `nq-opp-study2.sh GPU=1` and `nq-gpu-bench`.
+2. ~~VP ceiling, VDD_CORE regulator~~ done (r30). ~~384 MHz inside the GPU's
+   runtime PM~~ done with step 3 (r31/r32).
+3. ~~GPU DVFS 153.6/307.2/384 MHz~~ done (r31, review fixes in r32); measured
+   with `nq-gpu-bench`. Not yet measured: the idle/active power cost
+   (`nq-opp-study2.sh GPU=1`).
 Upstream known issue: `postmarketos-mkinitfs 2.12.0-r1` trigger fails
 (pmaports MR !9764); the Prague Q shows "1 error" on every apk transaction
 until the fixed package lands. Up to nexusq-control r65 the app's
 updates treat that as a failure (packages installed, restarts skipped, error
 shown); **r67 tolerates the mkinitfs trigger error only** (`triggerErrors`). Until
-r67 is on a unit, do not run its system update from the app. The Prague Q
-runs a hand-installed r66 (tolerated every trigger): replace it with r67.
+r67 is on a unit, do not run its system update from the app. The Prague Q runs
+r67 (by hand, 2026-10-14); the cottage Q does not.
 
 Kernel r29 = r28 + the review's fixes (the boot log reports the VP readback,
 the failure message names the VC ON value). Before an OTA: rebuild r28/r1 from the committed tree, check the kernel apk's /boot

@@ -1671,3 +1671,47 @@ load was not measurable here (no `/system`, so no GL client in the RAM boot).
 Kernel r29 (patch 0076, after the review) logs the VP readback:
 `steelhead: VDD_CORE at vsel 0x23 = 1139440 uV through the core VP (stock
 OPP100, 1127000 uV)`.
+
+**VDD_CORE regulator and the VP ceiling, 2026-10-14 (kernel r30, patch 0077).**
+Trial-booted and autopromoted on the Prague Q at 11:15. The regulator probes at
+0.9 s (`steelhead: VDD_CORE VC-bridge regulator registered (VP reads 1139440
+uV)`) and `/sys/class/regulator/*/` `vdd_core` reads 1 139 440 µV. The ceiling
+test, at uptime 61 s through debugfs `steelhead_vdd_core/request_uV`:
+
+| request | rc | `VP_CORE_VOLTAGE` | `VP_CORE_CONFIG` | `VC_VAL_CMD_VDD_CORE_L` |
+|---|---|---|---|---|
+| 1 250 000 µV | 0 | 0x0001112C, vsel **0x2c = 1 253 380 µV** | 0x00162C08 | 0x2C280C00 |
+| 1 127 000 µV | 0 | 0x00011123, vsel 0x23 = 1 139 440 µV | 0x00162308 | 0x23280C00 |
+
+`VLIMITTO` stayed 0x280B1E00 (VDDMAX 0x28, VDDMIN 0x0B). **VDDMAX does not
+clamp a force-update:** the VP sent 0x2c, above its 0x28 limit, and TRANXDONE
+arrived (rc 0, no timeout in the log). That is consistent with VLIMITTO bounding the
+SmartReflex-driven (auto-compensation) updates only (not checked in the TRM),
+which mainline does not run for CORE. 1.25 V for
+OPP100-OV therefore needs no VP-limit change. The full diag after the boot was
+clean apart from the known intermittent keypad clkctrl failure, which hit this
+boot (`l4-wkup-clkctrl:0058:0: failed to enable`); capture
+`nq-captures/20261014-111625/`.
+
+**GPU DVFS, 2026-10-14 (kernel r31, patches 0078-0080; r32 after the review).**
+Trial-booted and autopromoted on the Prague Q at 12:13. When the desktop loads
+the SGX module: `pvrsrvkm 56000000.gpu: SGX DVFS: 3 OPPs 153600000..384000000
+Hz, starts at 307200000 Hz, simple_ondemand, cooling device`; idle it parks at
+153.6 MHz with VDD_CORE back at vsel 0x23. Under glmark2 at 384 MHz the VP read
+vsel 0x2c = 1 253 380 µV, read together with the clock (rail, clock, rail in
+one `cat`: 1253380 / 384000000 / 1253380). Benchmark: 81 at 307.2 MHz, 91 at
+384 MHz and 91 with DVFS (`performance-2026-10-13.md`), die peak 89.4 °C.
+
+Fleet-safety review of r31, fixed for r32:
+- `omap_vp_forceupdate_scale()` logged a missing TRANXDONE and returned 0, so
+  a lost SR-I2C transaction could leave the rail low while the OPP core raised
+  the clock. It now returns -ETIMEDOUT (VDD_MPU too: cpufreq stays at the old
+  OPP), and the VDD_CORE regulator fails with -EIO unless the VP reads back at
+  least the voltage asked for.
+- The debugfs `request_uV` knob wrote the VP behind the regulator core's back
+  (a write of 1127 mV under a 384 MHz GPU would have stuck). Removed; `vp` is
+  read-only.
+- devfreq 6.18 sets `resume_freq` on every transition, the suspend one
+  included, so every runtime resume started at 153.6 MHz and waited a 50 ms
+  window to ramp. The glue now restores the OPP it ran at before suspend,
+  clamped to the PM QoS limits (cooling device, sysfs min/max_freq).
