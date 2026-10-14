@@ -1426,6 +1426,29 @@ static int unit_probe(const char *unit, int user_scope,
     return got;
 }
 
+/* ---------- appending to a log ------------------------------------------- */
+/* Open a JSONL log for appending, first sealing a line a power cut tore. ext4
+ * grows the file before the delayed data reaches the flash, so a cut mid-write
+ * leaves the tail as a run of NULs with no newline (2026-10-14: 2664 NULs). The
+ * next boot's first record then landed on that same line and every reader
+ * threw it away together with the NULs. A newline after any tail that does not
+ * end in one puts the damage on a line of its own. */
+static FILE *open_jsonl(const char *path)
+{
+    FILE *f = fopen(path, "a+e");
+    if (!f)
+        return NULL;
+    if (fseek(f, -1, SEEK_END) == 0) {
+        int c = fgetc(f);
+        fseek(f, 0, SEEK_END);   /* input -> output needs a positioning call */
+        if (c != EOF && c != '\n') {
+            fputc('\n', f);
+            fflush(f);
+        }
+    }
+    return f;
+}
+
 /* ---------- log rotation ------------------------------------------------- */
 static void rotate_if_big(const char *path, FILE **outp)
 {
@@ -1612,7 +1635,7 @@ int main(int argc, char **argv)
     FILE *out = NULL, *ev = NULL;
     if (!once) {
         mkdir(logdir, 0755);
-        ev = fopen(eventpath, "ae");
+        ev = open_jsonl(eventpath);
     }
 
     for (;;) {
@@ -1815,7 +1838,7 @@ int main(int argc, char **argv)
             if (tickn % 12 == 0)
                 rotate_if_big(logpath, &out);
             if (!out)
-                out = fopen(logpath, "ae");
+                out = open_jsonl(logpath);
             dst = out ? out : stdout;
         }
         fprintf(dst,
@@ -1861,7 +1884,7 @@ int main(int argc, char **argv)
             char ml[4800];
             mem_line(ml, sizeof ml, mono, wall, boot_id);
             rotate_if_big(mempath, NULL);
-            FILE *mf = fopen(mempath, "ae");
+            FILE *mf = open_jsonl(mempath);
             if (mf) {
                 fputs(ml, mf);
                 fclose(mf);

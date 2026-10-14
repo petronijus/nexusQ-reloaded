@@ -18,7 +18,7 @@ GPUDIRS  = -DTEST_GPUROOT='"/tmp/nqh-test-gpu"' -DGPU_PM='"/tmp/nqh-test-gpu/pow
            -DGPU_MOD='"/tmp/nqh-test-gpu/module"' -DHDMI_CONN='"/tmp/nqh-test-gpu/hdmi"' \
            -DGPU_DEVFREQ='"/tmp/nqh-test-gpu/devfreq"'
 LEDDIRS  = -DTEST_LEDSROOT='"/tmp/nqh-test-leds"' -DTEST_I2CDEVS='"/tmp/nqh-test-i2c"'
-test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c tests/test_accounting.c tests/test_memory.c tests/test_led_frame.c tests/test_judgements.c tests/test_gpu.c nq-healthd.c
+test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c tests/test_accounting.c tests/test_memory.c tests/test_led_frame.c tests/test_judgements.c tests/test_gpu.c tests/test_logopen.c nq-healthd.c
 	$(CC) $(CFLAGS) -I. $(TESTDIRS) -o /tmp/nqh-test-pstore tests/test_pstore_count.c
 	@/tmp/nqh-test-pstore
 	$(CC) $(CFLAGS) -I. $(CSTDIRS) -o /tmp/nqh-test-cstate tests/test_cstate.c
@@ -46,6 +46,9 @@ test: tests/test_pstore_count.c tests/test_cstate.c tests/test_kmsg_count.c test
 	# and whether HDMI shows anything (device r129), against a fixture sysfs.
 	$(CC) $(CFLAGS) -I. $(GPUDIRS) -o /tmp/nqh-test-gpu-bin tests/test_gpu.c
 	@/tmp/nqh-test-gpu-bin
+	# open_jsonl(): a log tail torn by a power cut is sealed before appending.
+	$(CC) $(CFLAGS) -I. -o /tmp/nqh-test-logopen tests/test_logopen.c
+	@/tmp/nqh-test-logopen
 
 install: nq-healthd
 	install -Dm755 nq-healthd $(DESTDIR)$(PREFIX)/bin/nq-healthd

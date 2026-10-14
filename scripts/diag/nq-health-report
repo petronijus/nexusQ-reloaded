@@ -36,7 +36,10 @@ def load_jsonl(path):
         return out
     with open(path, errors="replace") as fh:
         for line in fh:
-            line = line.strip()
+            # A power cut leaves the tail as NULs with no newline, and until
+            # device r131 nq-healthd appended the next boot's first record to
+            # that same line: dropping the NULs recovers it.
+            line = line.strip().lstrip("\0")
             if not line:
                 continue
             try:
