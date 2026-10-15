@@ -517,9 +517,12 @@ inline fallback).
   "Time jumped backwards"), until NTP. From **r33** (patch 0081) it reads
   `Power up reset detected, time invalid until set.` followed by `hctosys:
   unable to read the hardware clock` — both expected on that boot — and the
-  clock stays on systemd's time; `timedatectl` shows no RTC time and
-  `/dev/rtc` is missing until the first NTP sync writes the RTC (11-minute
-  mode) and the next boot. A jump back to 2000 on r33+ is a **regression**.
+  clock stays on systemd's time until NTP steps it forward. `hwclock -r`,
+  `since_epoch` and `timedatectl`'s RTC time fail until the first NTP sync
+  writes the RTC (11-minute mode) and clears the flag; `/dev/rtc` exists
+  throughout (measured on the Prague Q's first cold boot on r33, 2026-10-15:
+  synced at 38 s, RTC real time well within the 11-minute window). A jump
+  back to 2000 on r33+ is a **regression**.
   (b) on r2 after a warm reboot the pre-NTP timestamps are real.
   `since_epoch` not advancing over 3 s on r2 is a **regression**.
   `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md` §4 + addendum.

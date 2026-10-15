@@ -758,16 +758,17 @@ report it:
     r2 boot `dmesg -l err,warn` is exactly **one** line, `twl_rtc … Power up
     reset detected.` — **expected after a mains unplug** (no backup cell; the RTC
     resets to 2000-01-01, warm reboots keep time), not a finding; a second
-    err/warn line IS one.
+    err/warn line IS one. The (Prague, r2, 2026-09-17) r1 boot before it had also
+    shown repeated `twl6030_irq: Unmapped PIH ISR 20 detected` from 145 s —
+    uninvestigated; report it if it recurs.
   - **r33+ (patch 0081), first boot after a mains unplug:** the line reads
     `Power up reset detected, time invalid until set.`, followed by `hctosys:
     unable to read the hardware clock`; `hwclock -r` and `since_epoch` fail
-    with EINVAL and `/dev/rtc` is missing until the first NTP sync writes the
-    RTC (11-minute mode). All expected. A jump back to 2000 ("Time jumped
-    backwards" in the journal) is a **REGRESSION**, and so is an RTC still
-    invalid on a warm reboot after NTP synced. The (Prague, r2, 2026-09-17) r1 boot before it had also
-    shown repeated `twl6030_irq: Unmapped PIH ISR 20 detected` from 145 s —
-    uninvestigated; report it if it recurs.
+    with EINVAL until the first NTP sync writes the RTC (11-minute mode) and
+    clears the flag; `/dev/rtc` exists throughout. All expected (verified on
+    the Prague Q, 2026-10-15). A jump back to 2000 ("Time jumped backwards"
+    in the journal) is a **REGRESSION**, and so is an RTC still invalid on a
+    warm reboot after NTP synced.
   - **≤ r1** (every v1.16.0 image until it takes the kernel OTA — the cottage Q
     as of its last record), and on any unit's **first boot after a mains
     unplug**: until `systemd-timesyncd` syncs, the wall clock is systemd's

@@ -14,14 +14,12 @@ Released 19:44 (GitHub release + OTA repo, parity 21/0). The Prague Q took it
 by apk upgrade + `nq-kernel-ota` trial boot of r33 (promoted); full diag after
 it clean. Still open:
 
-- **Prague Q, someone at home:** the r33 RTC fix has only seen warm boots.
-  Pull mains for 30 s, plug back in, then check (`scripts/diag/README.md`
-  RTC rules): dmesg `Power up reset detected, time invalid until set.` +
-  `hctosys: unable to read the hardware clock`, no "Time jumped backwards"
-  in the journal, `health.jsonl` boundary without a NUL-glued line; after the
-  first NTP sync `hwclock -r` real time, and on the next warm boot
-  `/dev/rtc` back. If the RTC stays invalid on every boot, STATUS.POWER_UP is
-  not write-1-to-clear on this PMIC (reasoned from upstream code, unmeasured).
+- **Prague Q — the power-cut test PASSED (2026-10-15 21:44, a real mains
+  cut while moving it):** `time invalid until set` + `hctosys: unable to read
+  the hardware clock`, no jump back to 2000, NTP at 38 s, `hwclock -r` real
+  time afterwards (so POWER_UP is write-1-to-clear), the first health sample
+  on its own line after the NUL tail. Left: the next warm reboot should read
+  the RTC normally (`setting system clock to 2026-…`).
 - **Cottage Q:** none of 2.1.x yet — system update from the app, then the
   kernel (r33) through `nq-kernel-ota` with someone in reach.
 - **Test nits from `just ci` (no fault, not in the hotfix):**
