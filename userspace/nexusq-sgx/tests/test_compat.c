@@ -73,7 +73,13 @@ int main(void)
 	check(!nq_glibc_compat_is_glibc_code((void *)main), "the executable (no marker) is not");
 	check(!nq_glibc_compat_is_glibc_code((void *)1), "an address in no object is not");
 	nq_glibc_compat_set_marker("libc.so.6");
+	/* plain_fn's object links the host libc: libc.so.6 on glibc, libc.musl-*
+	 * in the Alpine container test-c.sh uses off Linux (and on the device). */
+#ifdef __GLIBC__
 	check(nq_glibc_compat_is_glibc_code((void *)plain_fn), "with marker libc.so.6 a glibc-host object is glibc code");
+#else
+	check(!nq_glibc_compat_is_glibc_code((void *)plain_fn), "with marker libc.so.6 a musl-host object is not");
+#endif
 
 	check(aborts(cpy_over), "__strcpy_chk aborts when the string does not fit");
 	check(!aborts(cpy_fit), "__strcpy_chk copies when it fits exactly");
