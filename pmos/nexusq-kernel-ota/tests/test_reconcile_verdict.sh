@@ -50,6 +50,17 @@ STUB
 [ "\${1:-}" = "-r" ] && { echo "$1"; exit 0; }
 exec /bin/uname "\$@"
 STUB
+    # take_lock insists on util-linux flock (a device dependency, so the check
+    # stays). Where the host's flock is not that one (macOS has none, busybox's
+    # cannot -w) a stand-in plays it: nothing contends for the lock here.
+    if ! flock --version 2>/dev/null | grep -q util-linux; then
+        cat > "$T/bin/flock" <<'STUB'
+#!/bin/sh
+[ "${1:-}" = "--version" ] && { echo "flock from util-linux (test stand-in)"; exit 0; }
+exit 0
+STUB
+        chmod +x "$T/bin/flock"
+    fi
     chmod +x "$T/bin/apk" "$T/bin/uname"
     rm -f "$T/upgraded" "$T/added-file"
     rm -rf "$T/state"; mkdir -p "$T/state"

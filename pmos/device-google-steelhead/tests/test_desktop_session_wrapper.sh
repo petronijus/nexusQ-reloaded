@@ -31,6 +31,16 @@ t=$(cat "$WORK/now" 2>/dev/null || echo 1000)
 echo $((t + $(cat "$WORK/step" 2>/dev/null || echo 0))) >"$WORK/now"
 echo "$t"
 S
+# stat stand-in for BSD/macOS, whose stat has no -c: the wrapper reads the mesa
+# build's mtime with `stat -c %Y` (GNU and busybox). Used only where that fails.
+if ! stat -c %Y / >/dev/null 2>&1; then
+	cat >"$work/bin/stat" <<'S'
+#!/bin/sh
+[ "$1" = -c ] && [ "$2" = %Y ] && exec /usr/bin/stat -f %m "$3"
+exec /usr/bin/stat "$@"
+S
+	chmod +x "$work/bin/stat"
+fi
 chmod +x "$work/bin/startlxqtwayland" "$work/bin/date"
 
 ready() {  # ready yes|no: the sgx-env fixture
@@ -76,7 +86,7 @@ echo 0 >"$work/rc"
 run
 check "recorded failure for this build: Pixman without trying the GPU" "pixman nogpu;"
 
-touch -d '2001-01-01' "$work/sgx_dri.so"
+touch -t 200101010000 "$work/sgx_dri.so"
 run
 check "a new mesa-sgx build: the GPU is tried again" "unset gpu;"
 

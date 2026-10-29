@@ -82,6 +82,8 @@ fake_tree() {
     echo closed >"$p/asound/card1/pcm0p/sub0/status"
     echo closed >"$p/asound/card4/pcm0c/sub0/status"
     printf '[    0.000000] Booting Linux on physical CPU 0x0\n[    1.0] omap-mcbsp 40124000.mcbsp: McBSP2 ready\n' >"$r/dmesg.txt"
+    # a module for the vermagic read to find, under the kernel this host runs
+    mkdir -p "$r/modules/$(uname -r)/kernel/a/b" && : >"$r/modules/$(uname -r)/kernel/a/b/x.ko"
     # host stand-ins for the device's tools
     printf '#!/bin/sh\ncat "%s"\n' "$r/dmesg.txt" >"$r/bin/dmesg"
     printf '#!/bin/sh\necho "6.18.48-r21 SMP mod_unload modversions ARMv7 p2v8 "\n' >"$r/bin/modinfo"
@@ -94,7 +96,7 @@ fake_tree() {
 run_study() {
     local r=$1
     shift
-    env PATH="$r/bin:$PATH" NQ_SYS="$r/sys" NQ_PROC="$r/proc" OUT="$r/out" GPU_PROBE="$r/probe.sh" \
+    env PATH="$r/bin:$PATH" NQ_SYS="$r/sys" NQ_PROC="$r/proc" NQ_MODULES="$r/modules" OUT="$r/out" GPU_PROBE="$r/probe.sh" \
         SETTLE_S=1 PRE_S=0 ARM_S=4 GUARD_S=1 GPU=1 "$@" sh "$STUDY" 'T:-:-:-:-:-:none' &
     STUDY_PID=$!
     # the fake /proc/uptime ticks with the wall clock while the study runs
@@ -110,12 +112,24 @@ run_study() {
 
 live() { echo "state: RUNNING" >"$1"; }
 
+# window_open DIR: block until the study's first (pre) snapshot is complete, i.e.
+# the window is open and a change made now falls inside it. A fixed sleep cannot
+# say that: how long the study takes to get there depends on the shell running it
+# (bash 3.2 as `sh` spends a second probing `read -t`, dash does not).
+window_open() {
+    for _ in $(seq 1 100); do
+        grep -q '^first ' "$1/out/arm_T_pre.snap" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    echo "window_open: no complete pre snapshot in $1/out after 10 s" >&2
+}
+
 echo "=== guard ==="
 
 r=$TMP/idle; fake_tree "$r"; run_study "$r"; wait "$STUDY_PID"
 if [ ! -e "$r/out/ABORTED" ] && [ -s "$r/out/arm_T_post.snap" ]; then ok "a quiet box: the window runs to the end"; else bad "a quiet box: the window runs to the end" "$r/out/run.log"; fi
 
-r=$TMP/play; fake_tree "$r"; run_study "$r"; sleep 2.5; live "$r/proc/asound/card1/pcm0p/sub0/status"; wait "$STUDY_PID"
+r=$TMP/play; fake_tree "$r"; run_study "$r"; window_open "$r"; live "$r/proc/asound/card1/pcm0p/sub0/status"; wait "$STUDY_PID"
 if grep -q '^aborted:playback' "$r/out/ABORTED" 2>/dev/null && [ ! -e "$r/out/arm_T_post.snap" ]; then
     ok "speaker playback starting mid-window aborts it"
 else bad "speaker playback starting mid-window aborts it" "$r/out/run.log"; fi
@@ -131,16 +145,16 @@ if [ ! -e "$r/out/ABORTED" ] && grep -q 'ALLOW_UNITS (deliberately live during t
 else bad "ALLOW_UNITS lets the USB stream run, and both run.log and the snapshot say so" "$r/out/run.log"; fi
 
 r=$TMP/usbstop; fake_tree "$r"; live "$r/proc/asound/card4/pcm0c/sub0/status"
-run_study "$r" ALLOW_UNITS=nexusq-uac2-in.service; sleep 2.5; echo closed >"$r/proc/asound/card4/pcm0c/sub0/status"; wait "$STUDY_PID"
+run_study "$r" ALLOW_UNITS=nexusq-uac2-in.service; window_open "$r"; echo closed >"$r/proc/asound/card4/pcm0c/sub0/status"; wait "$STUDY_PID"
 if grep -q 'allowed path changed' "$r/out/ABORTED" 2>/dev/null; then ok "an allowed path that stops mid-window aborts too"; else bad "an allowed path that stops mid-window aborts too" "$r/out/run.log"; fi
 
 r=$TMP/usbplay; fake_tree "$r"; live "$r/proc/asound/card4/pcm0c/sub0/status"
-run_study "$r" ALLOW_UNITS=nexusq-uac2-in.service; sleep 2.5; live "$r/proc/asound/card1/pcm0p/sub0/status"; wait "$STUDY_PID"
+run_study "$r" ALLOW_UNITS=nexusq-uac2-in.service; window_open "$r"; live "$r/proc/asound/card1/pcm0p/sub0/status"; wait "$STUDY_PID"
 if grep -q '^aborted:playback' "$r/out/ABORTED" 2>/dev/null; then ok "allowing USB does not allow the speaker"; else bad "allowing USB does not allow the speaker" "$r/out/run.log"; fi
 
 echo "=== GPU=1 capture ==="
 
-r=$TMP/plant; fake_tree "$r"; run_study "$r"; sleep 2.5
+r=$TMP/plant; fake_tree "$r"; run_study "$r"; window_open "$r"
 echo 903 >"$r/sys/bus/platform/devices/5600fe00.target-module/power/runtime_active_time"
 echo "[ 2000.1] BUG: sleeping function called from invalid context at kernel/x.c:1" >>"$r/dmesg.txt"
 echo "[ 2000.2] davinci-mcasp: XRUN on playback" >>"$r/dmesg.txt"

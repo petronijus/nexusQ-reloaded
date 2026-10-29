@@ -36,8 +36,9 @@
 #   GPU=1 ARM_S=3600 SETTLE_S=900 OUT=/var/log/nq-gpu/A0-1 \
 #     nq-opp-study2.sh 'A0:-:-:-:-:-:none'
 #
-# NQ_SYS / NQ_PROC re-root /sys and /proc. They exist for the host test
-# (scripts/diag/tests/test_nq_opp_study2_guard.sh); on the Q leave them unset.
+# NQ_SYS / NQ_PROC / NQ_MODULES re-root /sys, /proc and /lib/modules. They exist
+# for the host test (scripts/diag/tests/test_nq_opp_study2_guard.sh); on the Q
+# leave them unset.
 set -u
 
 OUT=${OUT:-/var/log/nq-opp-study2}
@@ -49,6 +50,7 @@ GPU=${GPU:-0}
 TO=${NQ_TIMEOUT:-20}         # bound on every external command the GPU items run
 SYS=${NQ_SYS:-/sys}
 PROC=${NQ_PROC:-/proc}
+MODULES=${NQ_MODULES:-/lib/modules}
 P=$SYS/devices/system/cpu/cpufreq/policy0
 G=$SYS/devices/system/cpu/cpufreq/conservative
 _here=$(cd "$(dirname "$0")" && pwd)
@@ -344,7 +346,7 @@ edge() {
         printf '@uname %s\n' "$(uname -r)"
         printf '@version %s\n' "$(cat "$PROC"/version 2>/dev/null)"
         _ko=""
-        for _k in /lib/modules/"$(uname -r)"/kernel/*/*/*.ko*; do
+        for _k in "$MODULES/$(uname -r)"/kernel/*/*/*.ko*; do
             [ -f "$_k" ] && { _ko=$_k; break; }
         done
         _vm=""
