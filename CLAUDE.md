@@ -31,22 +31,28 @@ Project configuration lives in `.claude/` (committed). What it does for you:
 
 ## Subagents — delegate to them
 
-| Agent | When |
-|---|---|
-| `test-runner` | after code changes, on any failing test or build, and to write tests |
-| `fleet-safety-reviewer` | before committing anything under `pmos/`, `userspace/`, `kernel/`, `scripts/` or `docker-build.sh` |
-| `nexusq-docs` | after a success or a notable failure, and after a change to commands, pins or behaviour |
-| `nexusq-build` | to build the image or the rootfs (it knows the build's failure modes) |
-| `nexusq-connect` | to find a working link to a booted Q |
-| `nexusq-diag` | after every flash or upgrade, and to diagnose a unit |
-| `stock-parity-auditor` | before building a kernel/DTS/driver fix, to compare with stock |
-| `nexusq-ios-release` | to ship the app's iOS build to TestFlight |
+| Agent | Model / effort | When |
+|---|---|---|
+| `test-runner` | haiku / low | after code changes and before calling work done; read-only verdict |
+| `test-writer` | sonnet / high | when test-runner reports red, and to write tests; pass `model: "opus"` for a cross-layer, racy or flaky failure |
+| `fleet-safety-reviewer` | session / high | before committing anything under `pmos/`, `userspace/`, `kernel/`, `scripts/` or `docker-build.sh` |
+| `nexusq-docs` | sonnet / medium | after a success or a notable failure, and after a change to commands, pins or behaviour |
+| `nexusq-build` | session | to build the image or the rootfs (it knows the build's failure modes) |
+| `nexusq-connect` | session | to find a working link to a booted Q |
+| `nexusq-diag` | session | after every flash or upgrade, and to diagnose a unit |
+| `stock-parity-auditor` | session | before building a kernel/DTS/driver fix, to compare with stock |
+| `nexusq-ios-release` | session | to ship the app's iOS build to TestFlight |
+
+Each agent runs on the cheapest model that matches the session's result;
+the reviewer keeps the session model. Escalate one call with the Agent
+tool's `model` parameter rather than editing the frontmatter.
 
 ## Committing
 
 When Petr asks to run the checks and commit a stretch of work, follow the
 global `commit-in-background` skill: snapshot the finished tree, let a
-background fork split it into small commits and verify each one in its own
+background agent (haiku for a fully written plan, sonnet when it must split
+hunks or write tests) make small commits and verify each one in its own
 git worktree (`just ci` after the last), keep working meanwhile, then adopt
 its commits with `git reset --mixed`. Small diffs are committed inline.
 Never push without its own word.

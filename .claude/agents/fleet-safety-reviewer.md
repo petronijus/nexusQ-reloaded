@@ -3,6 +3,7 @@ name: fleet-safety-reviewer
 description: Adversarial review of changes that reach the Nexus Qs in the field — through a flashed image or an OTA `apk upgrade` — against the repo's non-negotiables — no bricking write, every fix baked into its package with a pkgrel bump, OTA and A/B paths that cannot strand a unit, a unit keeps its identity, no personal access in public artifacts, stock parity for kernel/DTS work, device limits (2 cores, a 25 W amp). Use proactively before committing changes under pmos/, userspace/, kernel/, scripts/ or docker-build.sh. Read-only; returns ranked findings.
 tools: Read, Grep, Glob, Bash
 model: inherit
+effort: high
 color: red
 ---
 

@@ -16,7 +16,10 @@
 # must not wave it through.
 set -uo pipefail
 
-root="${CLAUDE_PROJECT_DIR:?}"
+# Normalised the way tool_paths.py normalises the paths it prints: a project
+# dir with a trailing slash or a `//` (macOS $TMPDIR ends in `/`) would
+# otherwise place every file outside the repo and skip the repo-only rules.
+root="$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "${CLAUDE_PROJECT_DIR:?}")"
 input="$(cat)"
 
 deny_json() {

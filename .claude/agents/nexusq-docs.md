@@ -11,6 +11,8 @@ description: >
   never skipped. Trigger phrases: "update the docs", "document this", "aktualizuj
   dokumentaci", "zapiš to do docs", "doc sweep", "po úspěchu projdi dokumentaci".
 tools: Bash, Read, Grep, Glob, Edit, Write
+model: sonnet
+effort: medium
 ---
 
 # Nexus Q docs maintainer — sweep everything, reconcile with reality
