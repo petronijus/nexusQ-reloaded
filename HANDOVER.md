@@ -803,10 +803,10 @@ allow-listed account), and the first real-iPhone run of build 52.
 on USB audio. Two explanations were given and shipped in the docs, and
 **measurement on 2026-09-07 disproved both**:
 
-1. *"module-loopback ratchets its cushion, five days of it."* No: sampled live,
+1. ~~*"module-loopback ratchets its cushion, five days of it."* No~~: sampled live,
    the number does not move, and no ratchet event has been logged since the
    r95 restart.
-2. *"it is the configured cushions."* No: cutting them by 120 ms on paper moved
+2. ~~*"it is the configured cushions."* No~~: cutting them by 120 ms on paper moved
    the measured figure by 11 ms.
 
 **The mistake underneath both** is that every reading was taken while `usb_in`

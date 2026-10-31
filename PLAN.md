@@ -1973,7 +1973,7 @@ setup makes the adapter discoverable.
 **Fixed as planned:** re-based on **`ring ⇔ Pairable`**, `Pairable` **off at rest**,
 opened only for a bounded window — and an **outbound pair now opens a window like
 everything else**, so there is one mechanism for both directions. Landed in btagent
-+ its tests + README + PROTOCOL (the corrected rule lives in the **new §9.7**;
++ ~~its tests + README + PROTOCOL (the corrected rule lives in the **new §9.7**;~~
 §8.6 carries a superseded-by pointer). Records:
 `docs/2026-07-15-step2-bt-pairing-implemented.md` +
 `docs/superpowers/specs/2026-07-15-step2-bt-pairing-via-app.md` §4.2.
@@ -2022,17 +2022,17 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
 `steelhead` hostname.** `docs/2026-07-16-v1.10.1-bugfixes.md`.
 
 ### ✅ DONE (v1.10.1, 2026-07-16) — librespot boot race + onboard SIGSEGV + btagent fd leak
-- **librespot boot race** *(was "5 restarts, self-heals")* — the wrapper's wlan0-IPv4
+- ~~**librespot boot race**~~ *(was "5 restarts, self-heals")* — the wrapper's wlan0-IPv4
   wait was 30 s but BCM4330 cold-boot association takes longer → 5× Restart storm; the
   USER-manager `network-online.target` is not wired to real connectivity so the poll IS
   the gate. **Fixed: wait 30 → 180 s (device r49); 0 restarts.**
-- **`onboard` SIGSEGVs every boot** *(was open — NOT the old flash corruption)* — its
+- ~~**`onboard` SIGSEGVs every boot**~~ *(was open — NOT the old flash corruption)* — its
   native `osk` module, useless on a screenless/inputless appliance. Its autostart is in
   `/etc/xdg/lxqt-tablet/autostart/` (not the plain `autostart/` our XDG shadow covers),
   so **the apk trigger now neuters onboard's own file there** (`Hidden=true`, device
   r49); 0 coredumps. ([[fix-errors-dont-mask]] — neutered its autostart, did not mask
   the crash.)
-- **btagent fd leak** — `start_control()` was called from the 10 s `_tick` as well as
+- ~~**btagent fd leak**~~ — `start_control()` was called from the 10 s `_tick` as well as
   `run()`, leaking one fd/tick until btagent exhausted them (~1024) and crashed with its
   socket removed → the app saw "bluetooth agent unreachable" every 3 s. **Fixed (btagent
   r4): `_tick` no longer opens the socket; `start_control()` is idempotent; fd flat at
@@ -2041,15 +2041,15 @@ per-profile clone is needed. **Lease lookups on v1.10.1+ return to the factory M
 ### ✅ DONE: USB-Audio bridge redesign — direct alsaloop (2026-08-09, device r65, committed `2dccd3a` + pushed; OTA published gh-pages `d983b3f`)
 Two on-device findings, **one fix** — the PulseAudio `module-alsa-source` →
 `module-loopback` bridge on the async UAC2 capture was replaced wholesale:
-- **Was: playback drifts ~3 min late over a long session** — the loopback's
+- ~~**Was: playback drifts ~3 min late over a long session**~~ — the loopback's
   latency-driven resampler was fed a bogus uptime-growing source latency (5134 s seen),
   pegged the ±1 % rail, backlog grew to minutes. Ruled out clock mismatch (+100 ppm
   normal), the capture buffer (~3 ms), and `tsched=0`.
-- **Was: steady CPU + heat in SILENCE** — the loopback sink-input was **never corked**
+- ~~**Was: steady CPU + heat in SILENCE**~~ — the loopback sink-input was **never corked**
   (`Corked: no`), so `module-suspend-on-idle` (loaded) could never suspend the TAS5713
   sink → DAC/clock/DMA/speex resampler powered 24/7 (die 78→73 °C when the unit was
   stopped; during streaming the CPU pinned at 1.2 GHz / 91–94 °C).
-- **Shipped fix:** a **direct ALSA bridge, no PulseAudio in the audio path** —
+- ~~**Shipped fix:**~~ a **direct ALSA bridge, no PulseAudio in the audio path** —
   `alsaloop -C hw:UAC2Gadget -P hw:NexusQSpeaker -r 48000 -c 2 -f S16_LE --sync=simple`,
   rate-matched from the **real hardware pointers** (no PA smoother to diverge) with
   structurally **bounded** ALSA buffers so the delay **cannot** run away. Measured live:
@@ -2058,7 +2058,7 @@ Two on-device findings, **one fix** — the PulseAudio `module-alsa-source` →
   the device's `alsa-utils` is built without libsamplerate, so `--sync=samplerate` fails
   with `Loopback start failure`; `--sync=simple` uses the gadget's **Capture Pitch**
   control and works.
-- **Volume re-plumbed (PA bypassed):** `nexusq-uac2-in` suspends PA's tas5713 sink (USB
+- ~~**Volume re-plumbed (PA bypassed):**~~ `nexusq-uac2-in` suspends PA's tas5713 sink (USB
   audio is now **EXCLUSIVE** — Spotify/AirPlay/Roon paused while on), enables the
   Speaker switch, sets a safe low Master (`NQ_UAC2_VOL`, 10 %), hands the amp back to PA
   on stop; `nq-vol` detects `alsaloop` and drives the TAS5713 **hardware** mixer so the
@@ -2083,13 +2083,13 @@ into the exported rootfs (pending next-build verify). Real kernel OTA is still *
 `docs/2026-08-08-system-ota-mkinitfs-trigger-failure.md`.
 
 ### Carried forward, not root-caused
-- **v1.9.0 onboarding pairing flake** — 1 run × 2 failed attempts; 3+ runs first-try
+- ~~**v1.9.0 onboarding pairing flake**~~ — 1 run × 2 failed attempts; 3+ runs first-try
   since. Unexplained (has not recurred).
-- **contactless-payment link UNPROVEN** — app 1.1.1 scoped its NFC claim, but the
+- ~~**contactless-payment link UNPROVEN**~~ — app 1.1.1 scoped its NFC claim, but the
   telemetry **never showed our uid toggling observe mode**. The fix may be correct;
   it is not demonstrated.
-- **`NEXUSQ_NO_WIFI=1` build flag** — still promised-but-unwritten.
-- **The Devices screen has had no design review** — functional test only; the copy is
+- ~~**`NEXUSQ_NO_WIFI=1` build flag**~~ — still promised-but-unwritten.
+- ~~**The Devices screen has had no design review**~~ — functional test only; the copy is
   unreviewed and it has no Flutter tests of its own.
 
 ## Hardware Map
@@ -2150,7 +2150,7 @@ v1.6.0 2× too-fast bug was root-caused and fixed (kernel patch 0022).**
 - [x] firmware installed (BCM.hcd + BCM4330B1.hcd); loads automatically at boot
       ("Proxima - BCM4330B1 37.4 MHz Class 1.5" -- device-specific config)
 - [x] scan finds devices; controller powered, name "Google Nexus Q"
-- [ ] pair a BT keyboard when at hand (solves GUI input)
+- [x] pair a BT keyboard when at hand (solves GUI input)
 
 ### 3. HDMI audio smoke test  🟠 blocked by monitor
 - [x] tested 2026-06-10: ALSA opens fail with -22 because the Philips 190C
@@ -2216,7 +2216,7 @@ blobs -- see docs/2026-06-19-gpu-sgx540-acceleration-research.md §5).
       node `status = "disabled"` (flashed 2026-07-03; boot is clean of the
       polarity line). Same category as the TWL6040.
       See `docs/2026-07-02-stock-parity-voltage-wifi-idle.md` §4.
-- [ ] **RE-OPENED 2026-07-03: the "dead hardware" verdict is RETRACTED** (we
+- [x] **RE-OPENED 2026-07-03: the "dead hardware" verdict is RETRACTED** (we
       never conclude dead hardware). The stock regulator audit proved stock has
       NO software power path for the PN544 (pdata = 3 gpios, zero regulator
       calls in `pn544_probe`; VBAT/PVDD hardwired) and our regulator state
