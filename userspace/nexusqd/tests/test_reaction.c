@@ -36,7 +36,8 @@ static void test_static_colors(void) {
 
 static void test_mute_led(void) {
     int r,g,b;
-    reaction_mute_led(1, &r,&g,&b); CHECK(r==0 && g==30  && b==40);   /* #001E28 */
+    /* muted is red whatever the theme — a deliberate departure from stock's #001E28 */
+    reaction_mute_led(1, &r,&g,&b); CHECK(r==0xB3 && g==0 && b==0);   /* #B30000 */
     reaction_mute_led(0, &r,&g,&b); CHECK(r==0 && g==107 && b==142);  /* #006B8E */
 }
 

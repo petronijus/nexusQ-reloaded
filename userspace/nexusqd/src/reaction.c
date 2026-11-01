@@ -44,10 +44,16 @@ int reaction_overlay_active(const struct reaction *rx, double now) {
 }
 
 void reaction_mute_led(int muted, int *r, int *g, int *b) {
-    double a = muted ? 0.2 : 0.7;
-    *r = (int)(RX_COLOR_R * a);
-    *g = (int)(RX_COLOR_G * a);
-    *b = (int)(RX_COLOR_B * a);
+    if (muted) {
+        /* Not stock: stock dims the LED to mColor*0.2 (#001E28), which reads as
+         * "the theme, a bit darker" and is not recognisable as mute. Muted is
+         * red, independent of theme, brightness and ambient level. */
+        *r = RX_MUTED_R; *g = RX_MUTED_G; *b = RX_MUTED_B;
+        return;
+    }
+    *r = (int)(RX_COLOR_R * 0.7);
+    *g = (int)(RX_COLOR_G * 0.7);
+    *b = (int)(RX_COLOR_B * 0.7);
 }
 
 void reaction_default_color(int *r, int *g, int *b) {

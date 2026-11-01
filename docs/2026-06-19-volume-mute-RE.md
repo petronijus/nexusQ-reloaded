@@ -202,6 +202,9 @@ setLed(client, 1001, red(mDefaultColor), green(mDefaultColor), blue(mDefaultColo
 | **muted**   | `mColor × 0.2` = **`#001E28`** | `mDefaultColor` = `#000F14` |
 | **unmuted** | `mColor × 0.7` = **`#006B8E`** | `mDefaultColor` = `#000F14` |
 
+> **Our build departs here (2026-11-01, `nexusqd` r28):** muted is red `#B30000`,
+> not `#001E28` — the dim blue was not recognisable as mute. Unmuted stays `#006B8E`.
+
 So the ring is **NOT blanked** on mute — it drops to the dim `mDefaultColor` (`#000F14`), and
 the dedicated mute LED carries the mute indication (dim blue `#001E28` when muted, brighter
 blue `#006B8E` when unmuted). The mute LED is always lit some blue; muted = dimmer.

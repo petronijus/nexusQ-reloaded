@@ -14,7 +14,10 @@
 #define RX_COLOR_R 0x00            /* mColor = #0099CC */
 #define RX_COLOR_G 0x99
 #define RX_COLOR_B 0xCC
-#define RX_ANIM_S      0.336       /* 21 frames x 16 ms decelerate change-in fade */
+#define RX_MUTED_R 0xB3            /* muted mute LED = #B30000 (red at the */
+#define RX_MUTED_G 0x00            /* unmuted LED's 0.7 level); not stock  */
+#define RX_MUTED_B 0x00
+#define RX_ANIM_S     0.336       /* 21 frames x 16 ms decelerate change-in fade */
 #define RX_TIMEOUT_S   1.0         /* overlay relinquishes 1000 ms after last change */
 
 struct reaction {
@@ -35,7 +38,8 @@ void reaction_render(const struct reaction *rx, double now, struct frame *out);
 void reaction_on_volume(struct reaction *rx, int volume, double now);
 /* 1 if the volume overlay should own the ring at `now`, else 0 */
 int reaction_overlay_active(const struct reaction *rx, double now);
-/* dedicated mute LED color: muted = mColor*0.2 (#001E28), unmuted = *0.7 (#006B8E) */
+/* dedicated mute LED color: muted = red #B30000 (stock had mColor*0.2, #001E28),
+ * unmuted = mColor*0.7 (#006B8E) */
 void reaction_mute_led(int muted, int *r, int *g, int *b);
 /* idle/default ring color mDefaultColor = mColor*0.1 = #000F14 */
 void reaction_default_color(int *r, int *g, int *b);
