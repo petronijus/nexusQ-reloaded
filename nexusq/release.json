@@ -1,42 +1,42 @@
 {
   "schema": 1,
-  "version": "2.1.1",
-  "date": "2026-10-14",
-  "headline": "Back to normal after a power cut",
+  "version": "2.1.2",
+  "date": "2026-11-01",
+  "headline": "A red mute light and a calmer ring",
   "items": [
     {
       "icon": "fix",
-      "title": "The volume ring stays off the screen",
-      "text": "Turning the volume ring no longer types stray characters onto a monitor connected over HDMI."
+      "title": "Mute you can see",
+      "text": "While the Q is muted, the light in the middle of the dome now glows red, whatever theme you have chosen."
     },
     {
       "icon": "fix",
-      "title": "The right time after a power cut",
-      "text": "After a power cut the Q keeps the time it had instead of falling back to the year 2000 until it reaches the internet."
+      "title": "The ring follows quiet music",
+      "text": "The light ring no longer flickers between the music and its idle glow during quiet passages, and it keeps the beat better."
     },
     {
       "icon": "fix",
-      "title": "No lost health record",
-      "text": "The first health record after a power cut is no longer lost with the one the cut interrupted."
+      "title": "USB audio stops cleanly",
+      "text": "When a computer stops playing over USB, the Q no longer runs a processor core flat out, and it is ready the moment playback resumes."
     }
   ],
   "packages": {
     "nexusq-control": "0.1.0-r68",
-    "nexusqd": "0.1.0-r27",
+    "nexusqd": "0.1.0-r28",
     "nexusq-btagent": "0.1.0-r8",
     "nexusq-setupd": "0.1.0-r8",
     "nexusq-mqtt": "0.1.0-r17",
     "nexusq-alsa-vol": "0.1.0-r1",
     "nexusq-kernel-ota": "0.1.0-r11",
     "nexusq-rootfs-ab": "0.1.0-r6",
-    "device-google-steelhead": "1.0-r131",
-    "device-google-steelhead-nonfree-firmware": "1.0-r131",
+    "device-google-steelhead": "1.0-r132",
+    "device-google-steelhead-nonfree-firmware": "1.0-r132",
     "firmware-google-steelhead": "1-r3",
     "speexdsp": "1.2.1-r100",
     "shairport-sync": "5.5.2-r102",
-    "alsa-utils": "1.2.16-r100",
-    "alsa-utils-systemd": "1.2.16-r100",
-    "alsa-utils-udev": "1.2.16-r100",
+    "alsa-utils": "1.2.16-r101",
+    "alsa-utils-systemd": "1.2.16-r101",
+    "alsa-utils-udev": "1.2.16-r101",
     "nexusq-sgx": "1.17.4948957-r1",
     "nexusq-sgx-mesa": "24.0.9-r0"
   }
