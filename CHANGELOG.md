@@ -6,59 +6,6 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Fixed — alsaloop spun a core under SCHED_FIFO when the USB host stopped (`alsa-utils` **r101**, `device-google-steelhead` **r132**, unreleased)
-
-- alsaloop no longer spins when the USB host stops sending mid-stream. The UAC2
-  gadget capture stays RUNNING with `hw_ptr` frozen, and the ready aloop playback
-  fd made `poll()` return at once: `sched: RT throttling activated` (2026-10-31
-  19:36), 14.7 s CPU/min in the `nexusq-uac2-in` cgroup measured 2026-11-01 13:14.
-  - 0002: after a pass with nothing captured, wait on the capture alone (one
-    period, backing off to 1 s) and leave the playback untouched.
-  - 0003: the underrun recovery refills the playback to the target latency and no
-    longer leaks the shared buffer's capture count (it underran every period and
-    ended in a capture busy-poll).
-  - Host test `tests/test_alsaloop_stall.py` runs upstream's poll loop on a
-    simulated clock (fixture `tests/fixtures/alsa-utils-1.2.16/`, pinned to pkgver).
-- `nexusq-uac2-in` follows the gadget's `Capture Rate` change events through one
-  long-lived `alsactl monitor`: the bridge parks the moment the host closes its
-  stream (not 12 s later) and is woken by the next open; the 12 s amixer poll
-  while parked is gone. hw_ptr supervision stays for the open-but-silent wedge; a
-  missed event or a dying monitor falls back to polling, loudly. While parked
-  on events it still reads the flag once a minute, in case the host started
-  without an event (then it stops trusting the monitor); after a monitor
-  restart a parked wedge stays parked. Tests:
-  `test_uac2_park_action.sh`, `test_uac2_rate_event.sh` (docker).
-- RLIMIT_RTTIME comments corrected: soft == hard means SIGKILL, never SIGXCPU,
-  and every wakeup resets the count, so it cannot bound a loop that spins but
-  sleeps now and then.
-- Known: device confirmation pending — the USB host plays, then stops; alsaloop's
-  `poll()` must block instead of spinning.
-
-### Changed — the mute LED is red while muted; the visualiser stops flapping (`nexusqd` **r28**, unreleased)
-
-- Muted, the dome's centre LED showed stock's `mColor × 0.2` (`#001E28`): the
-  idle blue a little darker, which with the default theme reads as "the theme,
-  dimmed" and not as mute. It is now red, `#B30000` (the unmuted LED's 0.7
-  level), independent of the theme, the ring brightness and the ambient level.
-  Unmuted stays stock's `#006B8E`; the volume overlay still blanks the LED and
-  the amber update blink still waits for unmute, as before.
-- A deliberate departure from stock, recorded in
-  `docs/2026-06-19-volume-mute-RE.md` §2. Test: `test_reaction.c` `test_mute_led`.
-- The music visualiser no longer flaps between "audio DETECTED" and "silent"
-  (2924 transitions in one boot, up to ~200/min). Captured PCM is now cut into
-  segments by the sample clock (one 1024-sample segment per 2400 frames,
-  `audiocap_feed`) instead of a wall-clock rate limit that kept only the first
-  segment of each ~130 ms `arecord -D pulse` burst (~7.7 instead of 20
-  segments/s, ~83 % of the audio dropped — the beat tracker ran 2.6× slow).
-  "Audio present" is decided from the raw level with hysteresis (on ≥1.5e-4,
-  off <1e-4 for 0.75 s) instead of the AGC's −60 dBFS noise gate, which quiet
-  USB-audio music straddled; the AGC gain stays applied through the hold. The
-  music scene, the screensaver and the tap's quiet timer share that one
-  decision; the no-data bound is 0.75 s instead of 0.15 s. The `audio` log line
-  and `nexusled debug` report the raw level (`raw=`), debug also `segs=` and
-  `audio=`. Analysis now runs 20×/s while playing (was ~7.7): playback CPU to
-  be measured on the device. Tests: `test_audiocap.c` (five new, each seen red).
-
 ### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:
@@ -144,6 +91,66 @@ the kernel. The fix needs the manifest to carry the released kernel apart from
 the apk packages and the watch to compare it with the running kernel, with the
 app saying that the kernel goes through `nq-kernel-ota` (it is not an apk
 upgrade and needs someone in reach for the trial boot).
+
+## [2.1.2] — 2026-11-01 — a red mute light and a calmer ring
+
+OTA-only: `nexusqd` r28, `alsa-utils` r101, `device-google-steelhead` r132 on the
+v2.1.1 image (kernel 6.18.48-r33 unchanged). Tested on the Prague Q by `apk add`
+and a full diagnostic sweep; the USB-host play/stop cycle on the device is still
+to be run.
+
+### Fixed — alsaloop spun a core under SCHED_FIFO when the USB host stopped (`alsa-utils` **r101**, `device-google-steelhead` **r132**)
+
+- alsaloop no longer spins when the USB host stops sending mid-stream. The UAC2
+  gadget capture stays RUNNING with `hw_ptr` frozen, and the ready aloop playback
+  fd made `poll()` return at once: `sched: RT throttling activated` (2026-10-31
+  19:36), 14.7 s CPU/min in the `nexusq-uac2-in` cgroup measured 2026-11-01 13:14.
+  - 0002: after a pass with nothing captured, wait on the capture alone (one
+    period, backing off to 1 s) and leave the playback untouched.
+  - 0003: the underrun recovery refills the playback to the target latency and no
+    longer leaks the shared buffer's capture count (it underran every period and
+    ended in a capture busy-poll).
+  - Host test `tests/test_alsaloop_stall.py` runs upstream's poll loop on a
+    simulated clock (fixture `tests/fixtures/alsa-utils-1.2.16/`, pinned to pkgver).
+- `nexusq-uac2-in` follows the gadget's `Capture Rate` change events through one
+  long-lived `alsactl monitor`: the bridge parks the moment the host closes its
+  stream (not 12 s later) and is woken by the next open; the 12 s amixer poll
+  while parked is gone. hw_ptr supervision stays for the open-but-silent wedge; a
+  missed event or a dying monitor falls back to polling, loudly. While parked
+  on events it still reads the flag once a minute, in case the host started
+  without an event (then it stops trusting the monitor); after a monitor
+  restart a parked wedge stays parked. Tests:
+  `test_uac2_park_action.sh`, `test_uac2_rate_event.sh` (docker).
+- RLIMIT_RTTIME comments corrected: soft == hard means SIGKILL, never SIGXCPU,
+  and every wakeup resets the count, so it cannot bound a loop that spins but
+  sleeps now and then.
+- Known: device confirmation pending — the USB host plays, then stops; alsaloop's
+  `poll()` must block instead of spinning.
+
+### Changed — the mute LED is red while muted; the visualiser stops flapping (`nexusqd` **r28**)
+
+- Muted, the dome's centre LED showed stock's `mColor × 0.2` (`#001E28`): the
+  idle blue a little darker, which with the default theme reads as "the theme,
+  dimmed" and not as mute. It is now red, `#B30000` (the unmuted LED's 0.7
+  level), independent of the theme, the ring brightness and the ambient level.
+  Unmuted stays stock's `#006B8E`; the volume overlay still blanks the LED and
+  the amber update blink still waits for unmute, as before.
+- A deliberate departure from stock, recorded in
+  `docs/2026-06-19-volume-mute-RE.md` §2. Test: `test_reaction.c` `test_mute_led`.
+- The music visualiser no longer flaps between "audio DETECTED" and "silent"
+  (2924 transitions in one boot, up to ~200/min). Captured PCM is now cut into
+  segments by the sample clock (one 1024-sample segment per 2400 frames,
+  `audiocap_feed`) instead of a wall-clock rate limit that kept only the first
+  segment of each ~130 ms `arecord -D pulse` burst (~7.7 instead of 20
+  segments/s, ~83 % of the audio dropped — the beat tracker ran 2.6× slow).
+  "Audio present" is decided from the raw level with hysteresis (on ≥1.5e-4,
+  off <1e-4 for 0.75 s) instead of the AGC's −60 dBFS noise gate, which quiet
+  USB-audio music straddled; the AGC gain stays applied through the hold. The
+  music scene, the screensaver and the tap's quiet timer share that one
+  decision; the no-data bound is 0.75 s instead of 0.15 s. The `audio` log line
+  and `nexusled debug` report the raw level (`raw=`), debug also `segs=` and
+  `audio=`. Analysis now runs 20×/s while playing (was ~7.7): playback CPU to
+  be measured on the device. Tests: `test_audiocap.c` (five new, each seen red).
 
 ## [2.1.1] — 2026-10-14 — back to normal after a power cut
 

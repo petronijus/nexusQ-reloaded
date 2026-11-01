@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "2.1.1",
-  "date": "2026-10-14",
-  "headline": "Back to normal after a power cut",
+  "version": "2.1.2",
+  "date": "2026-11-01",
+  "headline": "A red mute light and a calmer ring",
   "items": [
     {
       "icon": "fix",
-      "title": "The volume ring stays off the screen",
-      "text": "Turning the volume ring no longer types stray characters onto a monitor connected over HDMI."
+      "title": "Mute you can see",
+      "text": "While the Q is muted, the light in the middle of the dome now glows red, whatever theme you have chosen."
     },
     {
       "icon": "fix",
-      "title": "The right time after a power cut",
-      "text": "After a power cut the Q keeps the time it had instead of falling back to the year 2000 until it reaches the internet."
+      "title": "The ring follows quiet music",
+      "text": "The light ring no longer flickers between the music and its idle glow during quiet passages, and it keeps the beat better."
     },
     {
       "icon": "fix",
-      "title": "No lost health record",
-      "text": "The first health record after a power cut is no longer lost with the one the cut interrupted."
+      "title": "USB audio stops cleanly",
+      "text": "When a computer stops playing over USB, the Q no longer runs a processor core flat out, and it is ready the moment playback resumes."
     }
   ]
 }
