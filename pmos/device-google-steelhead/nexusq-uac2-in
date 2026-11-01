@@ -31,6 +31,7 @@
 set -u
 
 CARD="${NQ_UAC2_CARD:-UAC2Gadget}"       # gadget capture card (async endpoint)
+ASOUND="${NQ_UAC2_ASOUND:-/proc/asound}" # where the PCM status files are (tests point it elsewhere)
 ALOOP="${NQ_UAC2_ALOOP:-Loopback}"       # snd-aloop card (spare, PULSE_IGNORE'd)
 SUB="${NQ_UAC2_ALOOP_SUB:-0}"            # aloop substream pair to use
 SRC="${NQ_UAC2_SOURCE:-usb_in}"          # PA source name
@@ -80,18 +81,26 @@ SYNC="${NQ_UAC2_SYNC:-simple}"
 # through sched_setattr(2) directly and works (verified 2026-09-12 inside
 # user@10000, whose LimitRTPRIO=50 drop-in already exists for Roon's RAAT).
 #
-# The RLIMIT_RTTIME in front of it is the safety catch: a SCHED_FIFO task that
-# spins owns its core until it blocks, and alsaloop is known to spin when its
-# input wedges (the park logic below exists for that). With the limit the kernel
-# sends SIGXCPU after RTTIME microseconds of unbroken real-time CPU and then
-# SIGKILL -- the same 200 ms rtkit imposes on PulseAudio -- and the supervisor
-# below sees an exit like any other. Never wrap without it.
+# The RLIMIT_RTTIME in front of it is a backstop, and a narrower one than this
+# comment used to claim. With soft == hard, as here and as PulseAudio sets its
+# own (rlimit-rttime, 200000:200000 on the unit), the kernel sends SIGKILL at
+# the limit -- no SIGXCPU first (kernel/time/posix-cpu-timers.c checks the hard
+# limit before the soft one) -- and the supervisor below sees an exit like any
+# other. But the count is of RT CPU *since the task last slept*: every wakeup
+# resets it (kernel/sched/rt.c, ENQUEUE_WAKEUP). It kills a loop that never
+# blocks, not one that sleeps for a moment between passes -- and alsaloop's
+# stalled-capture spin does exactly that, by its source (a 10 us nanosleep every
+# 21st pass once avail_min is at its cap), so
+# on 2026-11-01 it burned 14.7 s of CPU in one minute under this limit and only
+# the RT throttle ("sched: RT throttling activated") and the park logic below
+# stopped it. The spin itself is fixed in alsaloop (pmos/alsa-utils 0002/0003);
+# keep the limit for a loop that does not sleep at all. Never wrap without it.
 #
 # The probe runs the wrapper once against `true`: on a system where RT is not
 # permitted (no rlimit, no util-linux) it logs and falls back to a plain launch
 # rather than making every alsaloop start fail.
 RTPRIO="${NQ_UAC2_RTPRIO:-10}"           # SCHED_FIFO priority; RAAT's own threads sit higher
-RTTIME="${NQ_UAC2_RTTIME_US:-200000}"    # RLIMIT_RTTIME (us of unbroken RT CPU before SIGXCPU)
+RTTIME="${NQ_UAC2_RTTIME_US:-200000}"    # RLIMIT_RTTIME soft=hard (us of RT CPU without sleeping, then SIGKILL)
 RT="prlimit --rttime=$RTTIME:$RTTIME chrt -f $RTPRIO"
 if ! $RT true 2>/dev/null; then
 	echo "nexusq-uac2-in: WARNING real-time scheduling unavailable ($RT true failed)" \
@@ -101,7 +110,19 @@ fi
 
 pa() { pactl "$@" 2>/dev/null; }         # returns pactl stdout (module index on load)
 
-ALPID=""; MOD_SRC=""; MOD_LB=""; SILPID=""; MOD_CLI=""
+ALPID=""; MOD_SRC=""; MOD_LB=""; SILPID=""; MOD_CLI=""; MONPID=""
+
+# The Capture Rate monitor is a subshell running `alsactl monitor | while read`;
+# both halves are its children, so they go first (busybox pkill -P, present on
+# the image -- checked on the Prague unit 2026-11-01). Defined up here because
+# the stop trap can fire during the start-up waits.
+stop_monitor() {
+	[ -n "$MONPID" ] || return 0
+	pkill -P "$MONPID" 2>/dev/null
+	kill "$MONPID" 2>/dev/null
+	wait "$MONPID" 2>/dev/null
+	MONPID=""
+}
 
 # On stop: tear the PA hop down cleanly (loopback first, then its source) and stop
 # alsaloop. No suspend-sink to undo — we never suspended. KillMode=mixed keeps
@@ -120,17 +141,23 @@ stop_all() {
 	[ -n "$MOD_SRC" ] && pa unload-module "$MOD_SRC" >/dev/null 2>&1
 	[ -n "$MOD_CLI" ] && pa unload-module "$MOD_CLI" >/dev/null 2>&1
 	[ -n "$ALPID" ]   && kill "$ALPID" 2>/dev/null
+	stop_monitor
 	exit 0
 }
 trap stop_all TERM INT
+# The Capture Rate monitor (below) reports a change of the host's stream with
+# SIGUSR1; the main loop acts on the flag. Set before anything can send it --
+# USR1's default action would end the service.
+RATE_EVENT=0
+trap 'RATE_EVENT=1' USR1
 
 # The gadget capture card appears a few seconds into boot; wait briefly for it.
 i=0
 while [ "$i" -lt 20 ]; do
-	grep -q "$CARD" /proc/asound/cards 2>/dev/null && break
+	grep -q "$CARD" "$ASOUND/cards" 2>/dev/null && break
 	i=$((i + 1)); sleep 1
 done
-if ! grep -q "$CARD" /proc/asound/cards 2>/dev/null; then
+if ! grep -q "$CARD" "$ASOUND/cards" 2>/dev/null; then
 	echo "nexusq-uac2-in: UAC2 gadget card '$CARD' not present" >&2
 	exit 1
 fi
@@ -360,12 +387,16 @@ start_silence
 # 85.4 % overall, relative dynamic power 1.13x -> 1.54x, die +5.7 C, paid around the
 # clock for as long as the TV box is powered on and not playing.
 #
-# So the park state now READS the flag every tick instead of spawning anything. The
+# So the park state now READS the flag instead of spawning anything -- once per
+# change event since 2026-11-01 (the monitor below), by polling where those are
+# not to be had -- and a host that closes its stream parks the bridge on the
+# event at once, not 12 s later from hw_ptr. The hw_ptr check stays for the host
+# that stops sending with its stream left open, which raises no event. The
 # duty-cycled probe remains as a fallback for a kernel without the control, because
 # a silent fallback to "never unpark" would lose USB audio altogether — it is
 # announced once, loudly, so it cannot masquerade as the cheap path.
-GADGET_STATUS="/proc/asound/$CARD/pcm0c/sub$SUB/status"
-ALOOP_STATUS="/proc/asound/$ALOOP/pcm0p/sub$SUB/status"
+GADGET_STATUS="$ASOUND/$CARD/pcm0c/sub$SUB/status"
+ALOOP_STATUS="$ASOUND/$ALOOP/pcm0p/sub$SUB/status"
 XRUN_TICKS=0
 XRUN_CONFIRM="${NQ_UAC2_XRUN_CONFIRM:-3}"
 IDLE_TICKS=0
@@ -389,7 +420,8 @@ RATE_NUMID="$(amixer -c "$CARD" controls 2>/dev/null \
     | sed -n "s/^numid=\([0-9]*\),iface=PCM,name='Capture Rate'$/\1/p" | head -1)"
 if [ -n "$RATE_NUMID" ]; then
     echo "nexusq-uac2-in: host-streaming flag is control numid=$RATE_NUMID" \
-         "('Capture Rate' on $CARD) — parking will poll it instead of probing" >&2
+         "('Capture Rate' on $CARD) — parking follows its change events" \
+         "instead of probing" >&2
 else
     echo "nexusq-uac2-in: WARNING no 'Capture Rate' control on $CARD — falling back" \
          "to the alsaloop probe every ${PARK_RETRY_S}s, which costs about 8 pp of" \
@@ -407,14 +439,10 @@ fi
 # well past the 16 ms that makes `conservative` ramp — trading a 1200 MHz probe
 # for a permanent 700 MHz nudge is not a win.
 #
-# So the park state polls it every PARK_POLL_TICKS-th tick: 12 s by default, for
-# ~0.55 % of a core, still 2.5x quicker to wake than the 30 s probe it replaces.
-#
-# The zero-cost version would be `alsactl monitor`, one long-lived process woken by
-# the control-change notification instead of asking. NOT taken here because whether
-# u_audio actually emits a notification on this control was not verified on the
-# device, and a monitor that never fires does not degrade — USB audio would simply
-# never come back. Worth doing as a primary with this poll kept as the backstop.
+# So the flag is not polled while its change events can be had (see the monitor
+# below): it is read once per event. Only without them -- no alsactl, the monitor
+# found unreliable -- does the park state fall back to asking every
+# PARK_POLL_TICKS-th tick: 12 s by default, ~0.55 % of a core.
 capture_rate() {
     [ -n "$RATE_NUMID" ] || return 1
     amixer -c "$CARD" cget "numid=$RATE_NUMID" 2>/dev/null \
@@ -442,6 +470,142 @@ park_action() {
 	fi
 }
 
+# TESTABLE:rate_event_action — pure, like park_action. What a change event on
+# `Capture Rate` means: the HOST changed its stream, because the gadget raises it
+# only for that -- u_audio's set_active() on the alt-setting change that opens or
+# closes the stream (u_audio_start/stop_capture, both from set_alt; also on a
+# disconnect) and u_audio_set_capture_srate() on a rate change. Nothing we do
+# raises it: the control is read-only, and our own controls (Capture Pitch,
+# the volume) have names of their own that the monitor filters out.
+# $1 = PARKED, $2 = rate when we parked, $3 = rate now.
+#
+#   bridging, rate 0     -> park:   the host closed the stream. Park NOW rather
+#                                   than 12 s later from hw_ptr -- those 12 s are
+#                                   the window alsaloop used to spin in.
+#   bridging, rate != 0  -> none:   opened, or a new rate; hw_ptr supervises it.
+#   parked,   rate != 0  -> unpark: the host (re)opened its stream. Unlike the
+#                                   polled flag this is a transition, so it holds
+#                                   in the wedge too -- an event needs a host
+#                                   action, so it cannot flap on its own.
+#   parked (wedge), rate 0 -> closed: the host let go; wait for it to open.
+#   parked (closed), rate 0 -> none:  opened and closed again before we looked.
+rate_event_action() {
+	if [ "$1" = 0 ]; then
+		[ "$3" = 0 ] && echo park || echo none
+	elif [ "$3" != 0 ]; then
+		echo unpark
+	else
+		[ "$2" = 0 ] && echo none || echo closed
+	fi
+}
+
+# One long-lived `alsactl monitor` on the gadget card: it sleeps in epoll and the
+# kernel wakes it with the control notification, so following the host costs
+# nothing while nothing happens -- which replaces the 12 s amixer poll of the
+# park state and lets the bridge park the moment the host closes its stream.
+# Each "Capture Rate" line becomes a SIGUSR1 to this shell (the main loop's
+# `wait` returns on it); the flag is then read once, outside the monitor, so a
+# burst of events costs one read per wake, not one per line. Line format
+# (alsactl/monitor.c): node hw:UAC2Gadget, #4 (3,0,0,Capture Rate,0) VALUE
+#
+# The events come from u_audio, not from anything this service can observe
+# directly, so they are checked against what IS observed: if input was flowing
+# and the host closed its stream (hw_ptr froze, the flag reads 0) without an
+# event, the monitor is not to be trusted -- the park path below says so loudly
+# and goes back to polling, rather than leaving USB audio parked for good.
+# NQ_UAC2_RATE_EVENTS=0 forces the poll.
+RATE_EVENTS="${NQ_UAC2_RATE_EVENTS:-1}"
+start_monitor() {
+	[ -n "$RATE_NUMID" ] && [ "$RATE_EVENTS" = 1 ] || return 1
+	if ! command -v alsactl >/dev/null 2>&1; then
+		echo "nexusq-uac2-in: WARNING no alsactl — polling the rate flag every" \
+		     "$((PARK_POLL_TICKS * 3))s while parked" >&2
+		RATE_EVENTS=0
+		return 1
+	fi
+	_self=$$
+	(
+		alsactl monitor "hw:$CARD" 2>/dev/null | while IFS= read -r _l; do
+			case "$_l" in
+			*",Capture Rate,"*) kill -USR1 "$_self" 2>/dev/null ;;
+			esac
+		done
+	) &
+	MONPID=$!
+}
+monitor_alive() { [ -n "$MONPID" ] && kill -0 "$MONPID" 2>/dev/null; }
+MON_TICKS=0        # ticks the current monitor has lived
+MON_FAST=0         # monitors in a row that died within 20 ticks
+BACKSTOP_TICKS="${NQ_UAC2_BACKSTOP_TICKS:-20}"  # parked on events: read the flag anyway every Nth tick (60 s)
+INPUT_SEEN=0       # input moved since alsaloop last started (the event check above)
+
+# Wait until a killed alsaloop is really gone, so that the next one does not
+# find the PCMs still open (EBUSY). A `wait` alone is not enough: the monitor's
+# SIGUSR1 cuts it short (the trap runs, `wait` returns >128, the child lives).
+reap_alsaloop() {
+	while kill -0 "$ALPID" 2>/dev/null; do
+		wait "$ALPID" 2>/dev/null
+	done
+}
+
+# Stop alsaloop and enter the park state; $1 = the host's rate at that moment.
+park_alsaloop() {
+	if [ -n "$ALPID" ]; then
+		kill "$ALPID" 2>/dev/null
+		reap_alsaloop
+	fi
+	ALPID=""
+	PARKED=1; PARK_WAIT=0; PARK_POLL=0; IDLE_TICKS=0; XRUN_TICKS=0
+	PARK_RATE="$1"
+}
+unpark_alsaloop() {
+	start_alsaloop
+	reset_loopback
+	PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW=""; INPUT_SEEN=0
+}
+
+on_rate_event() {
+	_r=$(capture_rate); _r=${_r:-0}
+	case "$(rate_event_action "$PARKED" "$PARK_RATE" "$_r")" in
+	park)
+		echo "nexusq-uac2-in: host closed the stream (Capture Rate -> 0)" \
+		     "— parking alsaloop now, woken by the next change" >&2
+		park_alsaloop 0 ;;
+	unpark)
+		echo "nexusq-uac2-in: host started streaming at ${_r} Hz" \
+		     "— USB audio live again" >&2
+		unpark_alsaloop ;;
+	closed)
+		echo "nexusq-uac2-in: host closed the stream (was $PARK_RATE Hz)" \
+		     "— waiting for it to open again" >&2
+		PARK_RATE=0 ;;
+	esac
+}
+
+# After the monitor was down, read the flag once -- but that read is a plain
+# poll, not an event: no transition is implied, so parked it means what it means
+# to the poll (park_action), and the wedge stays parked on an unchanged rate
+# instead of unparking and re-parking 12 s later after every monitor death.
+catch_up_rate() {
+	if [ "$PARKED" = 0 ]; then
+		on_rate_event
+		return
+	fi
+	_r=$(capture_rate); _r=${_r:-0}
+	case "$(park_action "$PARK_RATE" "$_r")" in
+	unpark)
+		echo "nexusq-uac2-in: host started streaming at ${_r} Hz" \
+		     "while the monitor was down — USB audio live again" >&2
+		unpark_alsaloop ;;
+	closed)
+		echo "nexusq-uac2-in: host closed the stream (was $PARK_RATE Hz)" \
+		     "while the monitor was down — waiting for it to open again" >&2
+		PARK_RATE=0 ;;
+	esac   # stay / probe: the park state carries on as it was
+}
+
+start_monitor
+
 # Supervise both children: if alsaloop drops on its own (host stop/start, xrun)
 # restart just it — the PA modules stay loaded and the aloop capture underruns
 # harmlessly in the gap — and likewise re-spawn the watcher if it ever dies, which
@@ -449,8 +613,39 @@ park_action() {
 # stop runs the trap above instead; the `wait` on a sleep is interruptible, so
 # SIGTERM still fires the trap promptly.
 while : ; do
-	sleep 3 &
-	wait $!
+	if [ "$RATE_EVENT" = 0 ]; then
+		sleep 3 &
+		_sl=$!
+		# A SIGUSR1 from the monitor ends the wait early; the sleep is ours to end.
+		wait "$_sl" || kill "$_sl" 2>/dev/null
+	fi
+	if [ "$RATE_EVENT" = 1 ]; then
+		RATE_EVENT=0
+		on_rate_event
+		continue
+	fi
+	# The monitor is supervised like the other children. Whatever changed while
+	# it was down went unseen, so a restart reads the flag once to catch up. One
+	# that keeps dying young (cannot open the card, say) is given up after three
+	# tries in a row rather than re-forked every tick: the poll takes over.
+	if [ "$RATE_EVENTS" = 1 ] && [ -n "$MONPID" ]; then
+		if monitor_alive; then
+			MON_TICKS=$((MON_TICKS + 1))
+		else
+			MONPID=""
+			if [ "$MON_TICKS" -lt 20 ]; then MON_FAST=$((MON_FAST + 1)); else MON_FAST=0; fi
+			if [ "$MON_FAST" -ge 3 ]; then
+				echo "nexusq-uac2-in: WARNING the Capture Rate monitor keeps dying —" \
+				     "polling the flag every $((PARK_POLL_TICKS * 3))s while parked" >&2
+				RATE_EVENTS=0
+			else
+				echo "nexusq-uac2-in: Capture Rate monitor died, restarting it" >&2
+				MON_TICKS=0
+				start_monitor
+			fi
+			catch_up_rate
+		fi
+	fi
 	if [ "$PARKED" = 0 ] && [ -n "$ALPID" ] && ! kill -0 "$ALPID" 2>/dev/null; then
 		ALPID=""
 		start_alsaloop
@@ -468,6 +663,31 @@ while : ; do
 		# host still claiming 48000 Hz, a bare "rate is non-zero -> unpark" would
 		# unpark, find input still frozen, re-park 12 s later, and repeat forever.
 		if [ -n "$RATE_NUMID" ]; then
+			# Parked on a closed stream, the monitor's event is what wakes us.
+			# (The wedge still polls: see park_action.) A slow read every
+			# BACKSTOP_TICKS ticks backs it up: the self-check at the hw_ptr
+			# park only covers a session in which input flowed, and a unit
+			# that starts with the host idle parks without one -- if the event
+			# never came on that unit, USB audio would never return. One
+			# amixer fork a minute (~0.1 % of a core) is the price of that.
+			if [ "$PARK_RATE" = 0 ] && monitor_alive; then
+				PARK_POLL=$((PARK_POLL + 1))
+				if [ "$PARK_POLL" -ge "$BACKSTOP_TICKS" ]; then
+					PARK_POLL=0
+					_r=$(capture_rate); _r=${_r:-0}
+					if [ "$_r" != 0 ] && [ "$RATE_EVENT" = 0 ]; then
+						echo "nexusq-uac2-in: WARNING the host is streaming at ${_r} Hz" \
+						     "and no Capture Rate event said so — not trusting the" \
+						     "monitor, polling the flag every $((PARK_POLL_TICKS * 3))s" \
+						     "instead; USB audio live again" >&2
+						RATE_EVENTS=0
+						stop_monitor
+						unpark_alsaloop
+					fi
+				fi
+				ensure_modules
+				continue
+			fi
 			# Thinned to one fork per PARK_POLL_TICKS ticks — see capture_rate.
 			PARK_POLL=$((PARK_POLL + 1))
 			if [ "$PARK_POLL" -lt "$PARK_POLL_TICKS" ]; then
@@ -483,9 +703,7 @@ while : ; do
 			unpark)
 				echo "nexusq-uac2-in: host started streaming at ${_r} Hz" \
 				     "— USB audio live again" >&2
-				start_alsaloop
-				reset_loopback
-				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW=""
+				unpark_alsaloop
 				ensure_modules
 				continue ;;
 			closed)
@@ -511,10 +729,10 @@ while : ; do
 				echo "nexusq-uac2-in: input resumed (hw_ptr $_a -> $_b)" \
 				     "— USB audio live again" >&2
 				reset_loopback
-				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW="$_b"
+				PARKED=0; IDLE_TICKS=0; XRUN_TICKS=0; LAST_HW="$_b"; INPUT_SEEN=1
 			else
 				kill "$ALPID" 2>/dev/null
-				wait "$ALPID" 2>/dev/null
+				reap_alsaloop
 				ALPID=""
 			fi
 		fi
@@ -533,25 +751,40 @@ while : ; do
 	NOW_HW=$(hw_ptr)
 	INPUT_MOVING=0
 	[ -n "$NOW_HW" ] && [ -n "$LAST_HW" ] && [ "$NOW_HW" != "$LAST_HW" ] \
-		&& INPUT_MOVING=1
+		&& INPUT_MOVING=1 && INPUT_SEEN=1
 	if [ -n "$ALPID" ] && kill -0 "$ALPID" 2>/dev/null && [ "$INPUT_MOVING" = 0 ]; then
 		IDLE_TICKS=$((IDLE_TICKS + 1))
 		if [ "$IDLE_TICKS" -ge "$IDLE_CONFIRM" ]; then
-			kill "$ALPID" 2>/dev/null
-			wait "$ALPID" 2>/dev/null
-			ALPID=""
-			PARKED=1; PARK_WAIT=0; PARK_POLL=0; IDLE_TICKS=0; XRUN_TICKS=0
 			# Why we parked, in the gadget's own terms: 0 = the host closed
-			# the stream (cheap flag poll suffices), non-zero = it still
-			# claims to stream but sends nothing (the wedge — needs probing).
-			# Read AFTER alsaloop is gone, so the answer describes the host
-			# rather than anything we were still holding open.
+			# the stream (its next event, or the cheap flag poll, wakes us),
+			# non-zero = it still claims to stream but sends nothing (the
+			# wedge — needs probing). Read AFTER alsaloop is gone, so the
+			# answer describes the host rather than anything we were still
+			# holding open.
+			park_alsaloop 0
 			_pr=$(capture_rate); PARK_RATE=${_pr:-0}
+			# Input flowed and the host has closed its stream, yet no event
+			# came (it would have parked us already): the monitor cannot be
+			# relied on to wake us either. Poll instead. The second it waits
+			# covers a host that closes during this very tick, after a silent
+			# stretch: its event may still be on the way through the pipe.
+			[ "$PARK_RATE" = 0 ] && [ "$INPUT_SEEN" = 1 ] && [ "$RATE_EVENT" = 0 ] \
+				&& monitor_alive && sleep 1
+			if [ "$PARK_RATE" = 0 ] && [ "$INPUT_SEEN" = 1 ] && [ "$RATE_EVENT" = 0 ] \
+			   && monitor_alive; then
+				echo "nexusq-uac2-in: WARNING the host closed its stream without a" \
+				     "Capture Rate event — not trusting the monitor, polling" \
+				     "the flag every $((PARK_POLL_TICKS * 3))s instead" >&2
+				RATE_EVENTS=0
+				stop_monitor
+			fi
 			# Say which of the two we are in — they cost very different
 			# amounts, and "probing every 30s" printed while actually polling
 			# a flag sent the next reader looking for the wrong thing.
 			if [ -z "$RATE_NUMID" ]; then
 				_how="probing every ${PARK_RETRY_S}s"
+			elif [ "$PARK_RATE" = 0 ] && monitor_alive; then
+				_how="host stream is closed; waiting for its Capture Rate event"
 			elif [ "$PARK_RATE" = 0 ]; then
 				_how="host stream is closed; polling the rate flag every $((PARK_POLL_TICKS * 3))s"
 			else
@@ -580,7 +813,7 @@ while : ; do
 			     "$((XRUN_TICKS * 3)) s while input flows —" \
 			     "restarting a wedged alsaloop" >&2
 			kill "$ALPID" 2>/dev/null
-			wait "$ALPID" 2>/dev/null
+			reap_alsaloop
 			ALPID=""
 			start_alsaloop
 			XRUN_TICKS=0

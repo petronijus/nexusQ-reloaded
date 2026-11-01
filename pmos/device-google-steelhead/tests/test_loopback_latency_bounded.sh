@@ -45,7 +45,8 @@
 # implements sched_setscheduler() as an ENOSYS stub, so alsaloop's own request
 # fails ("Scheduler getparam failed" in every start). util-linux `chrt` goes
 # through sched_setattr(2) and works, so the alsaloop launch must be wrapped in
-# it -- with an RLIMIT_RTTIME so a wedged loop is killed instead of owning a core.
+# it -- with an RLIMIT_RTTIME, so a loop that never sleeps is killed instead of
+# owning a core (one that sleeps between passes resets the count; see the script).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -130,7 +131,7 @@ check "nexusq-uac2-in: resets the cushion on BOTH unpark paths (found $resets)" 
 
 # alsaloop must be launched real-time through util-linux chrt (its own
 # sched_setscheduler() is a musl stub), and bounded by RLIMIT_RTTIME so a loop
-# that wedges into a spin is killed by the kernel rather than starving a core.
+# that never sleeps is killed by the kernel rather than starving a core.
 alsaloop_cmd="$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$src" \
     | grep -E '^[[:space:]]*[^#]*[[:space:]]alsaloop[[:space:]]+-C' | head -1)"
 [ -n "$alsaloop_cmd" ]; check "nexusq-uac2-in: launches alsaloop" "$?"

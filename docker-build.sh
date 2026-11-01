@@ -455,8 +455,9 @@ cp "$SRC"/pmos/shairport-sync/*.patch                     "$SHAIRPORT_DIR/"
 echo "  Installed: shairport-sync (no-idle-poll override -> main/shairport-sync)"
 
 # alsa-utils: the same kind of OVERRIDE — Alpine's build (their four patches,
-# vendored) plus one that makes alsaloop set its scheduler per thread and keep
-# the FIFO priority nexusq-uac2-in gives it. See pmos/alsa-utils/APKBUILD.
+# vendored) plus ours: alsaloop sets its scheduler per thread and keeps the FIFO
+# priority nexusq-uac2-in gives it (0001), and sleeps instead of spinning while
+# its capture is stalled (0002, 0003). See pmos/alsa-utils/APKBUILD.
 ALSAUTILS_DIR="$PMAPORTS/main/alsa-utils"
 mkdir -p "$ALSAUTILS_DIR"
 cp "$SRC/pmos/alsa-utils/APKBUILD"                        "$ALSAUTILS_DIR/"

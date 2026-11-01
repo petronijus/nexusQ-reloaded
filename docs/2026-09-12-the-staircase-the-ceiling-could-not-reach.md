@@ -139,6 +139,13 @@ before its change).
    limit the kernel sends `SIGXCPU` after 200 ms of unbroken RT CPU (rtkit's
    figure for PA) and the supervisor sees an ordinary exit.
 
+   > **Correction (2026-11-01):** both halves of that were wrong. With soft ==
+   > hard the kernel sends `SIGKILL` straight away, never `SIGXCPU`; and the
+   > count resets on every wakeup, so a loop that spins but sleeps now and then
+   > is never caught. That is exactly what alsaloop did on a stalled USB host
+   > (`sched: RT throttling activated`, 14.7 s CPU/min); fixed in alsaloop
+   > itself (`alsa-utils` r101, patches 0002/0003) — see the CHANGELOG.
+
 3. **`nq-pa-rt`**, because 1 alone made things worse. r97 (1 + 2 only) went
    onto the Prague Q at 18:49 and the journal filled with
    `alsa-source.c: Overrun!` — **23, 18, 7 per minute**, settling around 3.

@@ -51,6 +51,36 @@ echo "=== the wedge must not be able to masquerade as the cheap case ==="
 check 0     48000 unpark "after 'closed' reset park_rate to 0, a real start unparks"
 check 96000 96000 probe  "and a fresh wedge at any rate still probes"
 
+# ── rate_event_action: what a change EVENT on the flag means (2026-11-01) ──
+# An event is a transition the host made, which the polled flag never was: that
+# is why, unlike park_action, a non-zero rate after an event unparks even from
+# the wedge -- and why a closed stream parks at once instead of after 12 s.
+eval "$(sed -n '/^# TESTABLE:rate_event_action/,/^}/p' "$SVC")"
+if ! type rate_event_action >/dev/null 2>&1; then
+    echo "could not extract rate_event_action from $SVC — did the TESTABLE marker move?" >&2
+    exit 2
+fi
+
+echk() {  # echk <parked> <park_rate> <cur_rate> <expected> <why>
+    local got; got="$(rate_event_action "$1" "$2" "$3")"
+    if [ "$got" = "$4" ]; then
+        PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m  parked=%s park_rate=%-6s now=%-6s -> %-7s %s\n' "$1" "$2" "$3" "$got" "$5"
+    else
+        FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m  parked=%s park_rate=%-6s now=%-6s -> %-7s (expected %s) %s\n' "$1" "$2" "$3" "$got" "$4" "$5"
+    fi
+}
+
+echo "=== event while bridging ==="
+echk 0 0 0     park   "host closed the stream: park now, not after 12 s of hw_ptr"
+echk 0 0 48000 none   "host opened or changed rate: hw_ptr supervises the bridge"
+echo "=== event while parked on a closed stream ==="
+echk 1 0 48000 unpark "host opened its stream"
+echk 1 0 44100 unpark "at any rate"
+echk 1 0 0     none   "opened and closed again before we read it: stay parked"
+echo "=== event while parked on the wedge (host claimed a rate, sent nothing) ==="
+echk 1 48000 48000 unpark "an event is a host action: it re-opened, so measure it live"
+echk 1 48000 0     closed "the host let go: wait for the next open"
+
 echo
 echo "================ $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]
