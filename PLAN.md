@@ -1982,6 +1982,10 @@ Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; n
 - [ ] **musb logs `Babble` and restarts a host session on a cable pull**: mainline decides by the
       software `is_host` flag, stock by `devctl & HM` and is silent for non-HS babble. Trace devctl at
       the reset IRQ on a replug first, then a kernel patch classifying it like stock.
+      **It strands USB audio (2026-11-01 18:08):** `musb_set_host: could not set host: 99`, then
+      `Babble`; the controller stayed `b_idle` / UDC "not attached" with VBUS valid (TWL6030 `vbus`,
+      musb `Vbus on`), so the TV could not select the Q. A UDC unbind/rebind only produced another
+      Babble; a reboot brought it back (`b_peripheral`, `configured`). Raises this item's priority.
 - [ ] **brcmfmac `no clm_blob / txcap_blob available`** is misleading: stock shipped neither and
       5.90.125 has CLM built in (full US channel set live). Fix: kernel patch logging -ENOENT at debug.
 - [ ] Optional: drop patch 0036 (BT 4330A0 placeholder) — dead with the stock `.hcd`; revert-test first.
