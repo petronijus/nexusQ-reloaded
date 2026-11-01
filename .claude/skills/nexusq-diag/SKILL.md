@@ -298,8 +298,9 @@ Findings are tagged by `kind`; interpret them like this:
   on the active sink. Both sinks run **48000 Hz** (`50-nexusq-48k.conf`; 44.1 kHz
   detunes the McASP DIT). The LED visualizer reads the active `<sink>.monitor` via
   `arecord -D pulse` + an **AGC** (`AGC_TARGET 0.15`) so it reacts to music at any
-  volume — healthy tell: steady `audio DETECTED vol=0.150`; low-volume
-  flicker↔breathing = AGC regressed. See
+  volume. Presence is a separate raw-level detector with a 0.75 s hold (nexusqd r28) —
+  healthy tell: one `audio DETECTED (vol=… raw=…)` per track start, `nexusled debug`
+  `segs=` rising ~20/s; DETECTED↔silent several times a second = the r27 flapping is back. See
   `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
 - **Each input's CAPTURE side is pinned (v1.15.1, device r92)** — PA's stock
   `module-switch-on-connect` moves existing source-outputs onto every newly appeared

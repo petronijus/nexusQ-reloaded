@@ -20,7 +20,7 @@ static void test_fade_in_no_audio(void) {
     CHECK(ss.sa == 0.0);
     /* integrate 6 s of silence in 0.1 s steps: elapsed 5->11, sa ramps after 5 -> 1 */
     double t = 0.0;
-    for (int i = 0; i < 60; i++) { t += 0.1; screensaver_update(&ss, t, 0.1, 0.0f); }
+    for (int i = 0; i < 60; i++) { t += 0.1; screensaver_update(&ss, t, 0.1, 0); }
     CHECK(ss.sa > 0.999);
     CHECK(ss.elapsed_no_audio > 10.9);
 }
@@ -30,7 +30,7 @@ static void test_fade_out_on_audio(void) {
     ss.sa = 1.0;                       /* settled */
     double t = 0.0;
     /* 1 s of audio in 0.1 s steps -> sa fades to 0, elapsed resets */
-    for (int i = 0; i < 10; i++) { t += 0.1; screensaver_update(&ss, t, 0.1, 0.5f); }
+    for (int i = 0; i < 10; i++) { t += 0.1; screensaver_update(&ss, t, 0.1, 1); }
     CHECK(ss.sa < 0.001);
     CHECK(ss.elapsed_no_audio == 0.0);
 }

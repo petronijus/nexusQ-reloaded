@@ -65,6 +65,9 @@
  * if the capture also never reads raw-silent. It is now unconditional; see
  * pa_gate_poll_due. */
 #define TAP_QUIET_S  4.0   /* raw-silent this long while tapping -> re-check if the stream ended */
+/* no PCM from the tap for this long = no audio, whatever audiocap last decided
+ * (the presence hold counts sample clock, which stops when delivery stops) */
+#define AUDIO_STALE_S AUDIOCAP_PRESENT_HOLD_S
 
 /* r13: the gate is EVENT-DRIVEN. A persistent `pactl subscribe` child (see
  * pa_subscribe_open) feeds PA events into the poll loop, and a sink-input
@@ -188,7 +191,7 @@ static void peer_name(int fd, int *pid_out, char *comm, size_t n)
     fclose(f);
 }
 
-/* apply the dedicated mute LED for the current muted state (#001E28 / #006B8E) */
+/* apply the dedicated mute LED for the current muted state (#B30000 / #006B8E) */
 static void apply_mute_led(int muted) {
     int r, g, b; reaction_mute_led(muted, &r, &g, &b); avr_set_mute(r, g, b);
 }
@@ -234,9 +237,9 @@ int main(void) {
 
     /* Plan 3b audio: spawn `arecord -D pulse` to tap PA's default source, feed PCM
      * segments to the AudioCapture port (volume/FFT/beat); the music scene reacts
-     * and the screensaver fades when getVolume >= 0.01. The tap is NOT opened here:
-     * it is gated on a live PA sink-input (see the gate in audio.h) so it stays off at
-     * idle and PA can suspend the sink. */
+     * and the screensaver fades while audio is present (audiocap_present). The tap
+     * is NOT opened here: it is gated on a live PA sink-input (see the gate in
+     * audio.h) so it stays off at idle and PA can suspend the sink. */
     signal(SIGCHLD, SIG_IGN);   /* reap arecord/pactl automatically when they exit */
     int afd = -1; pid_t apid = -1;
     struct audio_state ac; audiocap_init(&ac);
@@ -244,9 +247,8 @@ int main(void) {
     struct music_layer ml = { &music, 0.0f };
     float child_alpha = 0.0f;    /* mChildAlpha: the music scene's fade level */
     double no_audio_t = 0.0;     /* seconds since audio (for the scene fade-out delay) */
-    double last_pcm = -1.0, prev_now = start, last_seg = -1.0;
+    double last_pcm = -1.0, prev_now = start;
     int prev_audio = 0;
-    static float monoacc[SAMPLES_PER_SEGMENT]; int monofill = 0;
 
     struct compositor comp = {0};
     comp_add(&comp, (struct layer){ screensaver_layer_render, &ss, 5, 1 });
@@ -369,7 +371,7 @@ int main(void) {
             } else if (afd >= 0) {
                 /* no stream -> stop the tap so PA suspends the sink (CPU -> ~0) */
                 audio_close(&afd, &apid);
-                monofill = 0; quiet_since = -1.0;
+                audiocap_feed_reset(&ac); quiet_since = -1.0;
             }
         }
 
@@ -572,7 +574,7 @@ int main(void) {
                          * question that could not be answered from outside. */
                         double dnow = now_s();
                         double rx_age = rx.last_event > 0 ? dnow - rx.last_event : -1.0;
-                        char db[512];
+                        char db[640];
                         int dn = snprintf(db, sizeof db,
                             "up=%.1f loops=%lu renders=%lu spin=%lu ready=%lu "
                             "ctl=%lu keys=%lu rearm=%lu vol_cmds=%lu vol_from=%d:%s "
@@ -581,7 +583,7 @@ int main(void) {
                             "manual_active=%d manual_breathe=%d manual_spin=%d "
                             "ss_noaudio=%.1f ss_bright=%.4f "
                             "tap_fd=%d tap_should=%d quiet_since=%.1f vol=%d muted=%d "
-                            "dark=%d attend=%d\n",
+                            "dark=%d attend=%d segs=%lu audio=%d raw=%.5f\n",
                             dnow - start, n_loops, n_renders, n_spin, n_ready,
                             n_ctl, n_keys, n_rearm, n_vol, vol_pid, vol_comm,
                             frame_int, static_ticks, last_animating,
@@ -590,7 +592,8 @@ int main(void) {
                             ss.elapsed_no_audio, screensaver_brightness(&ss),
                             afd, tap_should_run,
                             quiet_since >= 0.0 ? dnow - quiet_since : -1.0,
-                            volume, muted, dark, attend);
+                            volume, muted, dark, attend,
+                            audiocap_segments(&ac), prev_audio, (double)audiocap_raw_level(&ac));
                         if (dn > 0 && write(c, db, (size_t)dn) < 0) { /* client gone */ }
                     }
                     else if (write(c, "ok\n", 3) < 0) { /* client gone */ }
@@ -676,13 +679,21 @@ int main(void) {
             vol_apply_next = now + VOL_APPLY_S;
         }
 
-        /* drain captured PCM -> mono -> 1024-sample segments at ~SEGMENTS_PER_SECOND.
-         * Runs on every wake (cheap: copy + rate-limited segment hand-off) so the
-         * pipe never backs up, regardless of whether this wake is a frame tick. */
+        /* drain captured PCM -> mono -> audiocap_feed, which cuts a segment every
+         * AUDIOCAP_HOP frames of SAMPLE clock (see audiocap.h). Runs on every wake
+         * so the pipe never backs up, regardless of whether this wake is a frame
+         * tick. arecord delivers ~130 ms bursts, so one wake carries several
+         * segments' worth: a wall-clock rate limit here (one `now` per wake)
+         * used to keep only the first of them. */
         if (ai >= 0 && (pfds[ai].revents & (POLLIN | POLLHUP | POLLERR))) {
             static int16_t pcm[8192];
+            static float mono[8192 / AUDIO_CHANNELS];
             ssize_t rr;
             int got = 0, dead = 0;
+            /* a delivery gap longer than the presence hold broke the sample
+             * clock (stalled or restarted tap): what arrives now is not the
+             * continuation of the half-filled hop, nor of its presence state */
+            if (last_pcm < 0.0 || now - last_pcm > AUDIO_STALE_S) audiocap_feed_reset(&ac);
             for (;;) {
                 rr = read(afd, pcm, sizeof pcm);
                 if (rr == 0) { dead = 1; break; }   /* EOF: arecord exited, pipe closed */
@@ -690,15 +701,9 @@ int main(void) {
                 int frames = (int)(rr / (ssize_t)sizeof(int16_t)) / AUDIO_CHANNELS;
                 for (int fr = 0; fr < frames; fr++) {
                     int l = pcm[fr*AUDIO_CHANNELS], r2 = pcm[fr*AUDIO_CHANNELS + 1];
-                    monoacc[monofill++] = (l + r2) / 2.0f / 32768.0f;
-                    if (monofill == SAMPLES_PER_SEGMENT) {
-                        if (last_seg < 0.0 || now - last_seg >= 1.0 / SEGMENTS_PER_SECOND) {
-                            audiocap_on_segment(&ac, monoacc);
-                            last_seg = now;
-                        }
-                        monofill = 0;
-                    }
+                    mono[fr] = (l + r2) / 2.0f / 32768.0f;
                 }
+                audiocap_feed(&ac, mono, frames);
                 got = 1;
             }
             if (got) last_pcm = now;
@@ -708,7 +713,7 @@ int main(void) {
             if (dead || (pfds[ai].revents & (POLLHUP | POLLERR))) {
                 /* arecord already exited (auto-reaped by SIGCHLD=SIG_IGN), so just
                  * drop the fd — do NOT kill apid (its pid may already be reused). */
-                close(afd); afd = -1; apid = -1; ai = -1; monofill = 0;
+                close(afd); afd = -1; apid = -1; ai = -1; audiocap_feed_reset(&ac);
                 afd_retry = now + AUDIO_RESPAWN_S;
             }
         }
@@ -726,10 +731,18 @@ int main(void) {
 
         audiocap_on_new_frame(&ac);
         float vol = audiocap_volume(&ac);
-        if (last_pcm < 0.0 || now - last_pcm > 0.15) vol = 0.0f;   /* no data -> silence */
+        /* Audio is on while audiocap says it is PRESENT (raw level, hysteresis and
+         * a hold on the sample clock — see AUDIOCAP_PRESENT_* in audiocap.h) and
+         * the tap is still delivering. The sample clock only advances while data
+         * arrives, so a tap that stops delivering altogether (a suspended monitor,
+         * a dead arecord) would freeze the hold; AUDIO_STALE_S bounds it on the
+         * wall clock instead, by the same hold. It is far above the tap's ~130 ms
+         * delivery period: the old 0.15 s bound left ~20 ms of margin over one
+         * burst, so any delivery jitter read as silence. */
+        int audio_on = audiocap_present(&ac) && last_pcm >= 0.0 && now - last_pcm <= AUDIO_STALE_S;
 
         /* BaseScreensaver fade split: music scene (childAlpha) vs idle breathing */
-        if (vol >= SS_AUDIO_THRESH) {
+        if (audio_on) {
             no_audio_t = 0.0;
             child_alpha += (float)(dt / 1.0);                 /* mSceneFadeSeconds = 1 */
             if (child_alpha > 1.0f) child_alpha = 1.0f;
@@ -740,25 +753,27 @@ int main(void) {
                 if (child_alpha < 0.0f) child_alpha = 0.0f;
             }
         }
-        screensaver_update(&ss, now, dt, vol);
+        screensaver_update(&ss, now, dt, audio_on);
         if (child_alpha > 0.0f) music_update(&music, &ac, (float)dt);
         ml.alpha = child_alpha;
 
-        int audio_on = vol >= SS_AUDIO_THRESH;
-        /* Track how long the raw capture has been silent WHILE the tap runs, so the
-         * gate above knows when to re-count sink-inputs. `vol` here is post-noise-
-         * gate (audiocap zeroes it below AGC_NOISE_FLOOR), so vol==0 means true raw
-         * silence, not a quiet-but-present passage (AGC amplifies that to ~target).
-         * This is only a re-check TRIGGER — the authoritative stop signal remains the
-         * sink-input count, so a quiet passage never actually stops the tap. */
+        /* Track how long the raw capture has been silent WHILE the tap runs: it
+         * admits sink-input 'change' events to the gate's re-count (the subscribe
+         * feed above) and, after TAP_QUIET_S, lifts the idle cadence's 4 Hz tap cap.
+         * !audio_on means the RAW level has been at digital silence (below
+         * AUDIOCAP_PRESENT_OFF) for the presence hold, or the tap stopped
+         * delivering: a quiet-but-present passage keeps audio_on. Neither use
+         * stops the tap — the authoritative stop signal remains the sink-input
+         * count, so a quiet passage never actually stops the tap. */
         if (tap_should_run && afd >= 0 && !audio_on) {
             if (quiet_since < 0.0) quiet_since = now;
         } else {
             quiet_since = -1.0;
         }
         if (audio_on != prev_audio) {
-            fprintf(stderr, "[nexusqd] audio %s (vol=%.3f) scene=%d\n",
-                    audio_on ? "DETECTED" : "silent", vol, music_scene(&music));
+            fprintf(stderr, "[nexusqd] audio %s (vol=%.3f raw=%.5f) scene=%d\n",
+                    audio_on ? "DETECTED" : "silent", vol, audiocap_raw_level(&ac),
+                    music_scene(&music));
             prev_audio = audio_on;
         }
 

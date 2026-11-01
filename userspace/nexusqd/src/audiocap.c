@@ -234,7 +234,23 @@ void audiocap_free(struct audio_state *a) {
     }
 }
 
-void audiocap_on_segment(struct audio_state *a, const float *segment) {
+/* Audio presence from the raw level of n frames whose |x| sum to sum_abs
+ * (see AUDIOCAP_PRESENT_* in audiocap.h): on at once, off only after a hold. */
+static void presence_update(struct audio_state *a, float sum_abs, int n) {
+    float raw = sum_abs / (float)n;
+    a->raw_level = raw;
+    if (raw >= AUDIOCAP_PRESENT_ON) {
+        a->present = 1;
+        a->quiet_frames = 0;
+    } else if (raw < AUDIOCAP_PRESENT_OFF) {
+        if (a->quiet_frames < AUDIOCAP_PRESENT_HOLD_FRAMES) a->quiet_frames += n;
+        if (a->quiet_frames >= AUDIOCAP_PRESENT_HOLD_FRAMES) a->present = 0;
+    } else {
+        a->quiet_frames = 0;   /* between the thresholds: hold the state, restart the hold */
+    }
+}
+
+static void process_segment(struct audio_state *a, const float *segment) {
     int start = a->buffer_index;
 
     /* raw mean-abs level of this segment (before AGC) */
@@ -246,12 +262,14 @@ void audiocap_on_segment(struct audio_state *a, const float *segment) {
     /* AGC (see audiocap.h): the PA-monitor tap is post-volume, so raw scales
      * with the listening volume. Track it (fast attack, slow release) and
      * normalize to AGC_TARGET so the visualizer reacts to the MUSIC regardless
-     * of volume; gate true silence so it falls back to the breathing idle. */
+     * of volume. Gain is zeroed only while audio is absent: a quiet segment of
+     * present audio — and every segment of the presence hold — keeps its gain,
+     * so quiet music is not gated segment by segment. */
     if (raw > a->agc_level) a->agc_level = raw;
     else a->agc_level = a->agc_level * AGC_RELEASE + raw * (1.0f - AGC_RELEASE);
     float gain;
-    if (raw < AGC_NOISE_FLOOR || a->agc_level < 1e-6f) {
-        gain = 0.0f;                                     /* silence gate */
+    if (!a->present || a->agc_level < 1e-6f) {
+        gain = 0.0f;                                     /* silence */
     } else {
         gain = AGC_TARGET / a->agc_level;
         if (gain > AGC_MAX_GAIN) gain = AGC_MAX_GAIN;
@@ -268,11 +286,43 @@ void audiocap_on_segment(struct audio_state *a, const float *segment) {
     a->volume = vol / SAMPLES_PER_SEGMENT;
     a->last_segment_index = start;
     if (a->buffer_index == AUDIO_BUF) a->buffer_index = 0;
+    a->segments++;
 
     /* FFT/beat on the ORIGINAL segment — the beat detector is scale-robust
      * (counts bins over a threshold), so AGC gain would only shift the noise. */
     fft_real(segment, a->fft);
     beat_on_segment(a, a->volume, a->fft);
+}
+
+void audiocap_on_segment(struct audio_state *a, const float *segment) {
+    float sum = 0.0f;
+    for (int i = 0; i < SAMPLES_PER_SEGMENT; i++)
+        sum += segment[i] < 0 ? -segment[i] : segment[i];
+    presence_update(a, sum, SAMPLES_PER_SEGMENT);
+    process_segment(a, segment);
+}
+
+void audiocap_feed(struct audio_state *a, const float *mono, int n) {
+    const int skip = AUDIOCAP_HOP - SAMPLES_PER_SEGMENT;   /* hop frames before the window */
+    for (int i = 0; i < n; i++) {
+        float s = mono[i];
+        a->hop_sum += s < 0 ? -s : s;
+        if (a->hop_pos >= skip) a->hop_win[a->hop_pos - skip] = s;
+        if (++a->hop_pos == AUDIOCAP_HOP) {
+            presence_update(a, a->hop_sum, AUDIOCAP_HOP);
+            process_segment(a, a->hop_win);
+            a->hop_pos = 0;
+            a->hop_sum = 0.0f;
+        }
+    }
+}
+
+void audiocap_feed_reset(struct audio_state *a) {
+    a->hop_pos = 0;
+    a->hop_sum = 0.0f;
+    a->present = 0;
+    a->quiet_frames = 0;
+    a->raw_level = 0.0f;
 }
 
 void audiocap_on_new_frame(struct audio_state *a) {
@@ -285,3 +335,6 @@ float audiocap_smoothed_beat(const struct audio_state *a)   { return a->smoothed
 int   audiocap_beat_this_frame(const struct audio_state *a) { return a->beat_this_frame; }
 const float *audiocap_buffer(const struct audio_state *a)   { return a->waveform; }
 int   audiocap_last_segment_index(const struct audio_state *a) { return a->last_segment_index; }
+int   audiocap_present(const struct audio_state *a)         { return a->present; }
+float audiocap_raw_level(const struct audio_state *a)       { return a->raw_level; }
+unsigned long audiocap_segments(const struct audio_state *a) { return a->segments; }

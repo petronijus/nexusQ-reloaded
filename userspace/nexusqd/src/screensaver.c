@@ -14,9 +14,9 @@ void screensaver_init(struct screensaver *ss, double now) {
     ss->blank_timeout = SS_BLANK_S;
 }
 
-void screensaver_update(struct screensaver *ss, double now, double dt, float volume) {
+void screensaver_update(struct screensaver *ss, double now, double dt, int audio) {
     ss->t = now;
-    if (volume < SS_AUDIO_THRESH) {
+    if (!audio) {
         ss->elapsed_no_audio += dt;
         if (ss->elapsed_no_audio > SS_PREFADEIN_S && ss->sa < 1.0) {
             ss->sa += dt / SS_FADEIN_S;

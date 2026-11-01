@@ -524,12 +524,15 @@ hardware the user usually asks about, via ssh. Quote the evidence line for each:
   **default SOURCE**, which `nexusq-control` keeps pointed at the active sink's
   `.monitor` (so the LED follows the selected output). nexusqd is root and reaches the
   uid-10000 PA via `PULSE_SERVER`/`PULSE_COOKIE` in `nexusqd.service`. An **AGC**
-  (`audiocap.c`, `AGC_TARGET 0.15`, fast attack / slow release, noise-gate) normalizes
-  the post-volume monitor level so the ring reacts to the MUSIC at any listening
-  volume. **Healthy tell:** a steady `audio DETECTED vol=0.150` (== AGC_TARGET) in the
-  nexusqd log. The pre-AGC symptom was the visualizer **flickering ↔ breathing at low
-  volume** (raw level below threshold) — if that returns, the AGC/monitor tap
-  regressed. See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
+  (`audiocap.c`, `AGC_TARGET 0.15`, fast attack / slow release) normalizes the monitor
+  level so the ring reacts to the MUSIC at any listening volume. Since **nexusqd r28**
+  segments follow the sample clock (20/s, `audiocap_feed`) and "audio present" is a
+  separate raw-level detector with hysteresis (on ≥1.5e-4, off <1e-4 held 0.75 s) —
+  the AGC no longer gates. **Healthy tell:** during playback one `audio DETECTED
+  (vol=… raw=…)` line per track start and one `audio silent` per real pause/stop;
+  `nexusled debug` shows `segs=` rising ~20/s and `audio=1`. **Regression tell:**
+  DETECTED ↔ silent several times a second during playback (the r27 flapping — 2924
+  lines in one boot, durations in ~130 ms multiples), or `segs=` rising ~8/s. See `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`.
   ✅ **Tap is GATED on playback (v1.7.1, nexusqd r8):** the `arecord -D pulse` tap
   used to run continuously (uncorked PA source-output → the `tas5713` sink stayed
   **IDLE/clocked** at silence → **~7 % idle CPU**, top idle-heat source). nexusqd
