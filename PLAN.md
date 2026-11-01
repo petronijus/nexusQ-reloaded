@@ -1985,6 +1985,12 @@ Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; n
 - [ ] **brcmfmac `no clm_blob / txcap_blob available`** is misleading: stock shipped neither and
       5.90.125 has CLM built in (full US channel set live). Fix: kernel patch logging -ENOENT at debug.
 - [ ] Optional: drop patch 0036 (BT 4330A0 placeholder) — dead with the stock `.hcd`; revert-test first.
+- [ ] **Verify v2.1.2 on the device with a USB host**: play, pause with the stream open (alsaloop must
+      block in `poll()`, no RT throttling), close (parks at once on the event), reopen (unparks);
+      measure nexusqd's playback CPU now that analysis runs 20×/s. Then tick the two items above.
+- [ ] **`nq-uac2-silence` costs ~2.4 % of a core while parked** (`nexusq-uac2-in` cgroup 2.77 % after
+      r132, capture `nq-captures/20261101-171553/`): its `arecord -D hw:Loopback,1,0` at 48 kHz, against
+      the "~0.4 %" its journal claims. Find a cheaper way to watch for silence.
 
 ### ✅ DONE (v1.10.0, 2026-07-15) — btagent invariant re-based on `Pairable`
 *(was "⛔ btagent invariant is based on the wrong property — fix first")*
