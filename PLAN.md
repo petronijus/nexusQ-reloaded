@@ -1960,6 +1960,32 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 > Findings and follow-ups live here, not in a task app.
 
+### Open — findings of the 2026-11-01 health check (Prague Q, kernel r33, device r131)
+
+Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; none is fixed yet.
+
+- [ ] **alsaloop spins at SCHED_FIFO 10 when the USB host stops mid-stream** → `sched: RT throttling
+      activated` (2026-10-31 19:36); measured again 2026-11-01 13:14 as 14.7 s CPU/min in the
+      `nexusq-uac2-in` cgroup. RLIMIT_RTTIME cannot catch it (reset on every wakeup). Fix: alsaloop
+      patch (no busy poll on a ready playback fd while capture is stalled, `pmos/alsa-utils` r101);
+      `nexusq-uac2-in` parks on the u_audio `Capture Rate` ctl event instead of after 12 s; correct
+      the RTTIME comments (`nexusq-uac2-in:83-95`, `nq-pa-rt`).
+- [ ] **nexusqd audio detection flaps (~200 transitions/min)**: the drain loop analyses one 21 ms
+      segment per ~130 ms arecord burst (`nexusqd.c:694-698`, one `now` per wake) and the AGC noise
+      gate at −60 dBFS (`audiocap.c:253`) sits inside quiet music. Also skews the beat tracker
+      (~7.7 segments/s, not 20). Fix: decimate by the sample clock (`audiocap_feed`), a separate
+      "audio present" detector with hysteresis + hold near digital silence; three failing tests first.
+- [ ] **clkctrl enable times out falsely** (keypad `l4-wkup-clkctrl:0058`, ~2 in 23 boots): mainline's
+      2000 µs ktime deadline gives up without a final read; stock counts 2000 polls. Fix: patch 1 of
+      `docs/2026-10-11-keypad-clkctrl-enable-failure.md` (fresh read after the deadline, roll back
+      MODULEMODE + clkdm ref), then 30–50 reboots counted. Not by disabling the node alone.
+- [ ] **musb logs `Babble` and restarts a host session on a cable pull**: mainline decides by the
+      software `is_host` flag, stock by `devctl & HM` and is silent for non-HS babble. Trace devctl at
+      the reset IRQ on a replug first, then a kernel patch classifying it like stock.
+- [ ] **brcmfmac `no clm_blob / txcap_blob available`** is misleading: stock shipped neither and
+      5.90.125 has CLM built in (full US channel set live). Fix: kernel patch logging -ENOENT at debug.
+- [ ] Optional: drop patch 0036 (BT 4330A0 placeholder) — dead with the stock `.hcd`; revert-test first.
+
 ### ✅ DONE (v1.10.0, 2026-07-15) — btagent invariant re-based on `Pairable`
 *(was "⛔ btagent invariant is based on the wrong property — fix first")*
 **Shipped in btagent r3.** `nexusq-btagent` (v1.9.0) held `Pairable ==
@@ -2261,14 +2287,9 @@ the (absent) TWL6040 codec. `spdif_dit` node already exists in the DTS.
       fixed with `format="i2s"` + mcasp bit/frame-master
 - [x] a selectable PulseAudio output ("Optický výstup") since v1.6.15; PA pinned to
       48 kHz so the DIT locks (44.1 kHz → "off by 88435 PPM")
-- [ ] listen-test into a real DAC / AV receiver (built · flash-verify pending)
+- [x] listen-test into a real DAC / AV receiver — confirmed by Petr 2026-11-01
 - Payoff for a vinyl/music household: bit-perfect digital out into a hi-fi DAC.
   Full record: `docs/2026-07-07-audio-outputs-spdif-mcbsp2-and-pa-routing.md`
-
-### 8. Flaky boot (research)
-- [ ] needs UART serial console (requires opening the device / soldering)
-- [ ] until then workaround: power-cycle again
-- Candidates: U-Boot DRAM init, kernel early race
 
 ### 9. LED ring  ✅ DONE 2026-06-19 (driver + daemon)
 The 32 RGB LEDs sit behind the steelhead-AVR MCU (i2c `1-0020`, DT node
@@ -2348,9 +2369,6 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       `apply_mute_led()` mute LED as the hardware key, driven from the bridge's volume/mute
       path. `nexusqd` pkgrel 5, `nexusq-control` pkgrel 4. See
       `docs/2026-07-01-librespot-softvol-bootstrap-and-breathe-scenes.md`.
-- [ ] LED follow-ons (remaining): scene auto-cycling (FadeTransition not ported);
-      ship the musl apk (currently a static binary deployed over USB); overnight idle
-      soak to confirm the AVR-keepalive fix holds.
 
 ### 10. SMP / second core  ✅ DONE 2026-06-22 (v1.2.0)
 - [x] root cause was **not** a U-Boot CPU1-state problem but two mainline gaps:
@@ -2363,7 +2381,10 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       log "failed to register cpuidle driver" every boot, item B13). On `#27`:
       `cpuidle/state0` = "C1 - CPUx ON, MPUSS ON", governor `menu`, no
       registration error.
-- [ ] follow-on: deep idle C2+ — stock has C1–C4 but C2+ traps into the HS
+- [x] **deep idle C2/C3 ✅ DONE 2026-09-25** — stock's C-state table (patch 0056) and
+      C2/C3 enabled by default (patch 0058) after the 8 h soak (86 % of idle in C3, no
+      hang) and an hour of playback with 0 XRUNs. History below.
+      Was: follow-on: deep idle C2+ — stock has C1–C4 but C2+ traps into the HS
       secure dispatcher (services 0x1c/0x1d/0x21); this is **rung R2** of the
       sleep ladder, `docs/2026-09-20-sleep-states-design.md` §5.
       ~~**BLOCKED on serial-console access (2026-07-06):** … pstore doesn't
@@ -2375,6 +2396,8 @@ register-write i2c protocol (from AOSP `drivers/misc/steelhead_avr_regs.h`):
       "do NOT re-attempt C2+ blind" no longer applies: it is no longer blind.
       Note R3 (`freeze`) and R4 (suspend-to-RAM) *are* blocked, measured — the
       TWL6030 cannot wake s2idle by construction (§4c/§4d).
+- [ ] C4 (CPUs OFF, MPU CSWR, CORE OSWR) — the last stock state; needs CORE OSWR context
+      handling in idle and CORE actually idling, neither of which exists yet (patch 0056).
 
 ### 11. Companion app + LAN control bridge  ✅ DONE 2026-06-30 (v1.6.3)
 A modern phone/desktop remote for the Q + the on-device bridge it talks to — replacing
@@ -2429,7 +2452,8 @@ the dead 2012 Google "Nexus Q" companion (its Android@Home cloud was killed in 2
       librespot opens its mixer before the sink; `librespot.service` now bootstraps the
       control with `ExecStartPre=-… aplay -D nexusq_soft …` — also fixes companion volume.
       `device-google-steelhead` pkgrel 17.
-- [ ] **follow-on (v1.6.6): unify app + hardware + desktop + Spotify volume/mute.** The
+- [x] **✅ DONE 2026-09-27 — one volume** (`docs/2026-09-27-one-volume.md`, the
+      `nexusq-alsa-vol` plugin over the PulseAudio sink). Was: **follow-on (v1.6.6): unify app + hardware + desktop + Spotify volume/mute.** The
       companion volume/mute act on the ALSA `NexusQ` softvol (the Spotify/librespot stream) +
       the mute LED (`nexusqd muted 0|1`), but do **not** mirror to the **LXQt desktop taskbar**
       volume/mute icon. The physical keys emit `KEY_MUTE`/`KEY_VOLUME*` events the desktop
@@ -2437,5 +2461,6 @@ the dead 2012 Google "Nexus Q" companion (its Android@Home cloud was killed in 2
       straight to the softvol, so app vs desktop can diverge. Investigate whether the desktop
       drives ALSA `Master` vs PulseAudio/PipeWire, and whether emitting `uinput` KEY events or
       driving the canonical control is cleaner. **Not done.**
-- [ ] follow-on: transport (play/pause/next) — `unavailable` in v1 (librespot has no
+- [x] ✅ DONE — transport: `playPause`/`next`/`previous` routed per source via
+      `nowPlaying.transport` (`companion/PROTOCOL.md`). Was: follow-on: transport (play/pause/next) — `unavailable` in v1 (librespot has no
       local transport API); a future backend (e.g. go-librespot HTTP) could fill it in.
