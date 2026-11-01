@@ -2,7 +2,7 @@
 # Based on Alpine's main/alsa-utils (Leonardo Arena, Natanael Copa), at aports
 # 3308d2766277 (2026-07-05, "main/alsa-utils: upgrade to 1.2.16").
 #
-# alsa-utils, rebuilt with one patch — a straight override of Alpine's package.
+# alsa-utils, rebuilt with three patches — a straight override of Alpine's package.
 #
 # WHY: nexusq-uac2-in (the USB audio input bridge) logs "Scheduler getparam
 # failed." at every alsaloop start. alsaloop asks for real-time scheduling with
@@ -20,6 +20,26 @@
 # IRQ threads and PulseAudio. tests/test_alsaloop_sched.py tests the patched
 # function on the host.
 #
+# 0002 (also written to go upstream) stops alsaloop busy-polling when its
+# capture stalls without stopping, which is what the UAC2 gadget does when the
+# USB host stops sending: the aloop playback fd stays ready (POLLOUT, then
+# POLLERR in XRUN), the pass finds nothing to copy, and poll() returns at once
+# again -- one full core under nexusq-uac2-in's SCHED_FIFO until the supervisor
+# parks it, "sched: RT throttling activated" in the journal (2026-11-01). After
+# such a pass alsaloop now waits on the capture alone, and leaves the playback
+# untouched until there is data for it.
+#
+# 0003 (upstreamable too) fixes the underrun recovery that runs when data comes
+# back: xrun_sync() refilled the playback with less than the target latency --
+# down to one period, so it underran again at once -- and leaked the frames it
+# wrote from the shared buffer's capture count, until the buffer looked full,
+# nothing more was read and the loop busy-polled the capture instead. That is
+# the "XRUN persists while input flows" restart nexusq-uac2-in carries.
+#
+# tests/test_alsaloop_stall.py applies all three to the vendored upstream
+# alsaloop sources (tests/fixtures/alsa-utils-$pkgver) and runs the patched
+# poll loop against a capture that streams, stalls for 10 s and comes back.
+#
 # Everything else is Alpine's build, flag for flag and patch for patch (their
 # four patches are vendored unchanged; the sums below are theirs), except the
 # -openrc subpackage with its initd/confd, dropped: this image boots systemd.
@@ -34,8 +54,8 @@
 pkgname=alsa-utils
 pkgver=1.2.16
 # Alpine ships -r0. Kept far above it on purpose; see the warning above.
-pkgrel=100
-pkgdesc="Advanced Linux Sound Architecture (ALSA) utilities (Nexus Q build: alsaloop keeps its RT policy)"
+pkgrel=101
+pkgdesc="Advanced Linux Sound Architecture (ALSA) utilities (Nexus Q build: alsaloop keeps its RT policy, sleeps on a stalled capture)"
 url="https://alsa-project.org/"
 arch="all"
 options="!check"  # No test suite, applets use ncurses / don't have --version
@@ -60,6 +80,8 @@ source="https://alsa-project.org/files/pub/utils/alsa-utils-$pkgver.tar.bz2
 
 	329.patch
 	0001-alsaloop-set-the-scheduler-per-thread-keep-an-inherited-RT-policy.patch
+	0002-alsaloop-do-not-busy-poll-playback-while-capture-is-stalled.patch
+	0003-alsaloop-refill-an-underrun-playback-to-the-target-latency.patch
 	"
 
 prepare() {
@@ -90,6 +112,12 @@ build() {
 		echo "alsa-utils: alsaloop does not read its thread's scheduling policy" >&2
 		return 1
 	}
+	# Gate: the poll timeout of 0002 must reach poll(), or a stalled capture
+	# sleeps forever instead of being re-read.
+	grep -q 'pcmjob_poll_timeout(thread->loopbacks\[i\])' alsaloop/alsaloop.c || {
+		echo "alsa-utils: alsaloop's poll() does not take the stalled-capture timeout" >&2
+		return 1
+	}
 }
 
 package() {
@@ -109,4 +137,6 @@ f04155e1e391c7f36d44422c8e769bf9370117f6bbea6c0664e9858f7a676cc958e4260e4b4d226e
 ee74137d5bf431090a2603c87c94f19063d9a62921b3c6bc1f19317e006a7ec278b66da9ccfb1b64fa5da46852f6a84ac2511b9ce74969799d0fca4cd9b2bc8d  musl-types.patch
 f66015ef6500b5be7f7dde5900832bc2bab720c24402eb2e8f5ab83bf9eb340c579ef3b78ce71693ac74c18249c806111223c33a3ac55305d567b1bb2095ebb5  329.patch
 SKIP  0001-alsaloop-set-the-scheduler-per-thread-keep-an-inherited-RT-policy.patch
+SKIP  0002-alsaloop-do-not-busy-poll-playback-while-capture-is-stalled.patch
+SKIP  0003-alsaloop-refill-an-underrun-playback-to-the-target-latency.patch
 "

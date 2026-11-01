@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 1 Nov 2026 16:14:20 +0100
+Subject: [PATCH] alsaloop: refill an underrun playback to the target latency
+
+When xrun_sync() recovers a playback underrun it computes delay1, the
+latency still queued: the capture delay plus the playback delay plus
+play->buf_count. What is missing to reach the target is therefore
+fill - delay1, all of it silence. The code subtracted play->buf_count a
+second time, and added no silence at all once buf_count reached the
+missing amount, so the playback restarted with less than the latency it
+was asked to keep - with as little as one period - and underran again.
+
+The same branch kept the shortfall in diff even when it added no
+silence, and then took only the frames written past diff off the capture
+side of a shared buffer. Each such recovery left that many frames
+counted as captured-but-unwritten for good. Repeated, the shared buffer
+filled with frames that were already played; readit() found no room,
+the capture stayed ready with nothing read, and the loop busy-polled the
+capture fd.
+
+Queue fill - delay1 frames of silence ahead of the buffered data,
+limited to what the buffer and the freshly prepared device can take in
+one write, and count only the frames written past that silence as gone
+from the capture side. Fill the silence in two pieces when it wraps
+around the end of the buffer: buf_pos is unsigned and the buffer size
+need not be a power of two, so "buf_pos -= n; buf_pos %= buf_size" did
+not wrap it correctly, and the silence was written past the end.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ alsaloop/pcmjob.c | 40 ++++++++++++++++++++++++++++------------
+ 1 file changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/alsaloop/pcmjob.c b/alsaloop/pcmjob.c
+index 9465aca..651afc7 100644
+--- a/alsaloop/pcmjob.c
++++ b/alsaloop/pcmjob.c
+@@ -961,22 +961,38 @@ static int xrun_sync(struct loopback *loop)
+ 				"sync: removed %li captured samples, delay1=%li\n", (long)diff, (long)delay1);
+ 	}
+ 	if (play->xrun_pending) {
++		snd_pcm_uframes_t pos, chunk;
++
+ 		play->xrun_pending = 0;
+-		diff = (fill - delay1) / play->pitch;
++		/*
++		 * delay1 already counts play->buf_count, so all of what is
++		 * missing to reach the target latency is silence, queued
++		 * ahead of the buffered frames.  Only the frames written past
++		 * that silence leave the capture side of a shared buffer, so
++		 * the silence must fit the just prepared device in one write.
++		 */
++		diff = fill > delay1 ? (fill - delay1) / play->pitch : 0;
++		if (diff > (snd_pcm_sframes_t)(play->buf_size - play->buf_count))
++			diff = play->buf_size - play->buf_count;
++		if (diff > (snd_pcm_sframes_t)play->buffer_size)
++			diff = play->buffer_size;
+ 		if (verbose > 6)
+ 			snd_output_printf(loop->output,
+ 				"sync: xrun_pending, silence filling %li / buf_count=%li\n", (long)diff, play->buf_count);
+-		if (fill > delay1 && play->buf_count < (snd_pcm_uframes_t)diff) {
+-			diff = diff - play->buf_count;
+-			if (verbose > 6)
+-				snd_output_printf(loop->output,
+-					"sync: playback silence added %li samples\n", (long)diff);
+-			play->buf_pos -= diff;
+-			play->buf_pos %= play->buf_size;
+-			err =  snd_pcm_format_set_silence(play->format, play->buf + play->buf_pos * play->frame_size,
+-							  diff * play->channels);
+-			if (err < 0)
+-				return err;
++		if (diff > 0) {
++			play->buf_pos = (play->buf_pos + play->buf_size - diff) % play->buf_size;
++			for (pos = play->buf_pos, chunk = diff; chunk > 0; ) {
++				snd_pcm_uframes_t n = play->buf_size - pos;
++
++				if (n > chunk)
++					n = chunk;
++				err = snd_pcm_format_set_silence(play->format, play->buf + pos * play->frame_size,
++								 n * play->channels);
++				if (err < 0)
++					return err;
++				pos = (pos + n) % play->buf_size;
++				chunk -= n;
++			}
+ 			play->buf_count += diff;
+ 		}
+ 		if ((err = snd_pcm_prepare(play->handle)) < 0) {
+-- 
+2.56.0
+

@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sun, 1 Nov 2026 16:04:58 +0100
+Subject: [PATCH] alsaloop: do not busy-poll playback while capture is stalled
+
+pcmjob_pollfds_handle() treats a pass that finds the playback ready and
+nothing captured as a stall: it breaks out without writing, and every
+21st time raises the playback avail_min by four frames. The next poll()
+still includes the playback fd, which is still ready - POLLOUT while the
+buffer drains, POLLERR once it has run dry and sits in XRUN - so poll()
+returns at once and the loop spins for as long as the capture delivers
+nothing. The avail_min step cannot stop that: POLLERR is reported
+whatever avail_min is, and four frames per 21 passes takes thousands of
+passes to matter even before the XRUN.
+
+That is forever when the capture source stops without stopping the
+stream. A USB audio gadget (u_audio) whose host stops sending leaves its
+capture substream RUNNING with the hardware pointer frozen and never
+signals it, so alsaloop between such a gadget and snd-aloop burns a
+whole CPU until it is killed. Started under SCHED_FIFO, as a low-latency
+bridge usually is, it starves everything of lower priority on that CPU
+and trips the RT throttle ("sched: RT throttling activated").
+RLIMIT_RTTIME does not catch it either: once avail_min has reached its
+cap, increase_playback_avail_min() sleeps for 10 us on every 21st pass,
+and each of those wakeups resets the scheduler's RT timeout.
+
+After a stalled pass, leave the playback out of the next poll and wait
+for the capture alone, with a timeout of one capture period that doubles
+on every pass that still reads nothing, up to one second (in case a
+wakeup is missed). Captured data wakes the loop as soon as it arrives,
+whatever the timeout; the playback is then fed as before, and an XRUN it
+ran into meanwhile is recovered once by xrun_sync(). Until data arrives
+the playback is not touched, so an XRUN with nothing captured to follow
+it is not re-prepared in a loop. The per-loop timeout reaches poll()
+through pcmjob_poll_timeout(), combined with -W the way -W already was.
+
+In steady state this replaces a short spin (playback ready, capture not
+yet) with a sleep until the capture period completes.
+
+Signed-off-by: Petr Parkan Janda <petronijus@bastla.com>
+---
+ alsaloop/alsaloop.c |   6 ++-
+ alsaloop/alsaloop.h |   3 ++
+ alsaloop/pcmjob.c   | 106 +++++++++++++++++++++++++++++++++++++-------
+ 3 files changed, 97 insertions(+), 18 deletions(-)
+
+diff --git a/alsaloop/alsaloop.c b/alsaloop/alsaloop.c
+index 7ea3554..c21c411 100644
+--- a/alsaloop/alsaloop.c
++++ b/alsaloop/alsaloop.c
+@@ -788,6 +788,7 @@ static void thread_job1(void *_data)
+ 	}
+ 	while (!quit) {
+ 		struct timeval tv1, tv2;
++		int timeout = wake;
+ 		for (i = j = 0; i < thread->loopbacks_count; i++) {
+ 			err = pcmjob_pollfds_init(thread->loopbacks[i], &pfds[j]);
+ 			if (err < 0) {
+@@ -795,10 +796,13 @@ static void thread_job1(void *_data)
+ 				my_exit(thread, EXIT_FAILURE);
+ 			}
+ 			j += err;
++			err = pcmjob_poll_timeout(thread->loopbacks[i]);
++			if (err >= 0 && (timeout < 0 || err < timeout))
++				timeout = err;
+ 		}
+ 		if (verbose > 10)
+ 			gettimeofday(&tv1, NULL);
+-		err = poll(pfds, j, wake);
++		err = poll(pfds, j, timeout);
+ 		if (err < 0)
+ 			err = -errno;
+ 		if (verbose > 10) {
+diff --git a/alsaloop/alsaloop.h b/alsaloop/alsaloop.h
+index a5539ef..9285e04 100644
+--- a/alsaloop/alsaloop.h
++++ b/alsaloop/alsaloop.h
+@@ -147,6 +147,8 @@ struct loopback {
+ 	unsigned int reinit:1;
+ 	unsigned int running:1;
+ 	unsigned int stop_pending:1;
++	unsigned int play_polled:1;	/* playback fds in the current poll set */
++	unsigned int capt_wait;		/* ms; poll only capture, see pcmjob_pollfds_handle() */
+ 	snd_pcm_uframes_t stop_count;
+ 	sync_type_t sync;		/* type of sync */
+ 	slave_type_t slave;
+@@ -212,6 +214,7 @@ int pcmjob_start(struct loopback *loop);
+ int pcmjob_stop(struct loopback *loop);
+ int pcmjob_pollfds_init(struct loopback *loop, struct pollfd *fds);
+ int pcmjob_pollfds_handle(struct loopback *loop, struct pollfd *fds);
++int pcmjob_poll_timeout(struct loopback *loop);
+ void pcmjob_state(struct loopback *loop);
+ 
+ int control_parse_id(const char *str, snd_ctl_elem_id_t *id);
+diff --git a/alsaloop/pcmjob.c b/alsaloop/pcmjob.c
+index 2720f55..9465aca 100644
+--- a/alsaloop/pcmjob.c
++++ b/alsaloop/pcmjob.c
+@@ -1682,6 +1682,7 @@ __again:
+ 	}
+ 	loop->running = 1;
+ 	loop->stop_pending = 0;
++	loop->capt_wait = 0;
+ 	if (loop->xrun) {
+ 		getcurtimestamp(&loop->xrun_last_update);
+ 		loop->xrun_last_pdelay = XRUN_PROFILE_UNKNOWN;
+@@ -1728,10 +1729,14 @@ int pcmjob_pollfds_init(struct loopback *loop, struct pollfd *fds)
+ 	int err, idx = 0;
+ 
+ 	if (loop->running) {
+-		err = snd_pcm_poll_descriptors(loop->play->handle, fds + idx, loop->play->pollfd_count);
+-		if (err < 0)
+-			return err;
+-		idx += loop->play->pollfd_count;
++		/* see capture_wait() */
++		loop->play_polled = !loop->capt_wait;
++		if (loop->play_polled) {
++			err = snd_pcm_poll_descriptors(loop->play->handle, fds + idx, loop->play->pollfd_count);
++			if (err < 0)
++				return err;
++			idx += loop->play->pollfd_count;
++		}
+ 		err = snd_pcm_poll_descriptors(loop->capt->handle, fds + idx, loop->capt->pollfd_count);
+ 		if (err < 0)
+ 			return err;
+@@ -1855,6 +1860,65 @@ static int handle_ctl_events(struct loopback_handle *lhandle,
+ 	return 1;
+ }
+ 
++/*
++ * The longest the loop sleeps on an idle capture before it reads it again,
++ * in case a wakeup was missed.
++ */
++#define CAPT_WAIT_MAX_MS	1000
++
++/*
++ * A pass found the playback side ready and nothing captured to give it.
++ *
++ * The playback fd stays ready while there is nothing to write: POLLOUT on a
++ * draining buffer, then POLLERR once it has run dry and sits in XRUN.  Poll
++ * on it again and poll() returns at once, every time, for as long as the
++ * capture delivers nothing - which is forever when its source has stopped
++ * without stopping the stream (a USB gadget whose host stops sending leaves
++ * its capture RUNNING with the hardware pointer frozen).  That is a busy
++ * loop, and under SCHED_FIFO or SCHED_RR one that owns its CPU.
++ *
++ * So the next poll leaves the playback out and waits for the capture alone,
++ * which is what has to happen before there is anything to do: the first time
++ * for one capture period, then twice as long after each pass that still read
++ * nothing, up to CAPT_WAIT_MAX_MS.  Captured data wakes the loop as soon as
++ * it arrives, whatever the timeout; the playback is then fed, and an XRUN it
++ * reached in the meantime is recovered once, by xrun_sync().  Until then the
++ * playback is not touched at all, so an XRUN without captured data to follow
++ * it is not re-prepared over and over.
++ */
++static void capture_wait(struct loopback *loop)
++{
++	struct loopback_handle *capt = loop->capt;
++	unsigned int period_ms;
++
++	if (loop->capt_wait == 0) {
++		period_ms = capt->rate ?
++			(capt->period_size * 1000 + capt->rate - 1) / capt->rate : 1;
++		if (period_ms == 0)
++			period_ms = 1;
++		if (period_ms > CAPT_WAIT_MAX_MS)
++			period_ms = CAPT_WAIT_MAX_MS;
++		loop->capt_wait = period_ms;
++	} else if (loop->capt_wait < CAPT_WAIT_MAX_MS) {
++		loop->capt_wait *= 2;
++		if (loop->capt_wait > CAPT_WAIT_MAX_MS)
++			loop->capt_wait = CAPT_WAIT_MAX_MS;
++	}
++	if (verbose > 6)
++		snd_output_printf(loop->output, "%s: capture idle, waiting %ums for it alone\n", loop->id, loop->capt_wait);
++}
++
++/*
++ * The poll timeout this loop needs, in ms, or -1 for none: set while the
++ * playback is left out of the poll set (capture_wait()).
++ */
++int pcmjob_poll_timeout(struct loopback *loop)
++{
++	if (loop->running && loop->capt_wait)
++		return (int)loop->capt_wait;
++	return -1;
++}
++
+ int pcmjob_pollfds_handle(struct loopback *loop, struct pollfd *fds)
+ {
+ 	struct loopback_handle *play = loop->play;
+@@ -1880,12 +1944,16 @@ int pcmjob_pollfds_handle(struct loopback *loop, struct pollfd *fds)
+ 	}
+ 	idx = 0;
+ 	if (loop->running) {
+-		err = snd_pcm_poll_descriptors_revents(play->handle, fds,
+-						       play->pollfd_count,
+-						       &prevents);
+-		if (err < 0)
+-			return err;
+-		idx += play->pollfd_count;
++		if (loop->play_polled) {
++			err = snd_pcm_poll_descriptors_revents(play->handle, fds,
++							       play->pollfd_count,
++							       &prevents);
++			if (err < 0)
++				return err;
++			idx += play->pollfd_count;
++		} else {
++			prevents = 0;
++		}
+ 		err = snd_pcm_poll_descriptors_revents(capt->handle, fds + idx,
+ 						       capt->pollfd_count,
+ 						       &crevents);
+@@ -1941,16 +2009,20 @@ int pcmjob_pollfds_handle(struct loopback *loop, struct pollfd *fds)
+ 		goto __pcm_end;
+ 	do {
+ 		ccount = readit(capt);
+-		if (prevents != 0 && crevents == 0 &&
+-		    ccount == 0 && loopcount == 0) {
+-			if (play->stall > 20) {
+-				play->stall = 0;
+-				increase_playback_avail_min(play);
+-				break;
++		if (crevents == 0 && ccount == 0 && loopcount == 0 &&
++		    (prevents != 0 || loop->capt_wait)) {
++			if (prevents != 0) {
++				if (play->stall > 20) {
++					play->stall = 0;
++					increase_playback_avail_min(play);
++				} else {
++					play->stall++;
++				}
+ 			}
+-			play->stall++;
++			capture_wait(loop);
+ 			break;
+ 		}
++		loop->capt_wait = 0;
+ 		if (ccount > 0)
+ 			play->stall = 0;
+ 		buf_add(loop, ccount);
+-- 
+2.56.0
+
