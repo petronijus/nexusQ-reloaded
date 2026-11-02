@@ -1964,13 +1964,13 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; none is fixed yet.
 
-- [ ] **alsaloop spins at SCHED_FIFO 10 when the USB host stops mid-stream** → `sched: RT throttling
+- [x] **alsaloop spins at SCHED_FIFO 10 when the USB host stops mid-stream** → `sched: RT throttling
       activated` (2026-10-31 19:36); measured again 2026-11-01 13:14 as 14.7 s CPU/min in the
       `nexusq-uac2-in` cgroup. RLIMIT_RTTIME cannot catch it (reset on every wakeup). Fix: alsaloop
       patch (no busy poll on a ready playback fd while capture is stalled, `pmos/alsa-utils` r101);
       `nexusq-uac2-in` parks on the u_audio `Capture Rate` ctl event instead of after 12 s; correct
       the RTTIME comments (`nexusq-uac2-in:83-95`, `nq-pa-rt`).
-- [ ] **nexusqd audio detection flaps (~200 transitions/min)**: the drain loop analyses one 21 ms
+- [x] **nexusqd audio detection flaps (~200 transitions/min)**: the drain loop analyses one 21 ms
       segment per ~130 ms arecord burst (`nexusqd.c:694-698`, one `now` per wake) and the AGC noise
       gate at −60 dBFS (`audiocap.c:253`) sits inside quiet music. Also skews the beat tracker
       (~7.7 segments/s, not 20). Fix: decimate by the sample clock (`audiocap_feed`), a separate
@@ -1989,7 +1989,7 @@ Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; n
 - [ ] **brcmfmac `no clm_blob / txcap_blob available`** is misleading: stock shipped neither and
       5.90.125 has CLM built in (full US channel set live). Fix: kernel patch logging -ENOENT at debug.
 - [ ] Optional: drop patch 0036 (BT 4330A0 placeholder) — dead with the stock `.hcd`; revert-test first.
-- [ ] **Verify v2.1.2 on the device with a USB host**: play, pause with the stream open (alsaloop must
+- [x] **Verify v2.1.2 on the device with a USB host** (Petr confirmed 2026-11-02: mute, connection and sound work; diag sweep clean): play, pause with the stream open (alsaloop must
       block in `poll()`, no RT throttling), close (parks at once on the event), reopen (unparks);
       measure nexusqd's playback CPU now that analysis runs 20×/s. Then tick the two items above.
 - [ ] **`nq-uac2-silence` costs ~2.4 % of a core while parked** (`nexusq-uac2-in` cgroup 2.77 % after
