@@ -151,9 +151,12 @@ void main() {
 
       c.didChangeAppLifecycleState(AppLifecycleState.resumed);
       // The active getState probe (3s timeout) must flag the dead link and the
-      // immediate reconnect must land on a fresh, responsive socket.
+      // immediate reconnect must land on a fresh, responsive socket. "Connected"
+      // flips before the controller has re-subscribed on that socket, so the
+      // wait includes the subscribe; asserting it right after `connected` lost
+      // the race about one run in five (seen 2026-11-14).
       await until(
-        () => sawDrop && c.state.connected,
+        () => sawDrop && c.state.connected && bridge.subscribeCount == 2,
         timeout: const Duration(seconds: 10),
       );
       expect(bridge.subscribeCount, 2);
