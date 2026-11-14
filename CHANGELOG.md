@@ -6,6 +6,26 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — an update left Spotify and AirPlay running their old binary (`nexusq-control` **r69**, unreleased)
+
+A system update restarts our system daemons, but librespot and shairport-sync
+are units of the appliance user's manager, which it never touched: they took
+the new binary and went on running the old one until the next reboot, while
+the app reported the update done. Found in the review of the librespot fix,
+which would otherwise have reached no unit. The bridge now restarts such a
+service (`StaleUserServices`): a process whose binary was replaced shows
+`/proc/<pid>/exe` as "… (deleted)", so it is found at the bridge's start and
+after every successful install with nothing remembered (never after a failed
+or killed one, which can leave a new binary without its libraries). It is
+restarted only when its source is idle by the bridge's memory and by
+PulseAudio: right after the update restarted the bridge, only PulseAudio knows
+a track is still playing (a sink-input owned by the unit's processes; no
+answer counts as busy). It is woken when playback goes idle, polls every 5
+minutes only while a service waits, and shares one restart record with the
+diagnostics mode, so a unit is never restarted twice within two minutes.
+`tests/test_stale_services.py` checks `_proc_stale` against a real process
+whose binary was renamed over; every new rule was seen failing.
+
 ### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:

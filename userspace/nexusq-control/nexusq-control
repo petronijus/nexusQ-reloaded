@@ -2329,6 +2329,60 @@ def _proc_diag(unit, exe):
     return "starting"
 
 
+def _proc_stale(unit, exe):
+    """Does the RUNNING unit run a binary an upgrade has since replaced? True,
+    False, or None when it is not running (or its launcher has not exec'd `exe`
+    yet). apk installs a new binary by renaming over the old one, so the old
+    process keeps the old inode and /proc/<pid>/exe reads "<path> (deleted)":
+    read from the process, nothing has to be remembered across a bridge restart."""
+    try:
+        with open(f"{_USER_CGROUP}/{unit}/cgroup.procs") as f:
+            pids = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return None
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != exe:
+                    continue
+            return os.readlink(f"/proc/{pid}/exe").endswith(" (deleted)")
+        except OSError:
+            continue
+    return None
+
+
+def _unit_streams(unit):
+    """Does the unit hold a PulseAudio sink-input right now? Read from
+    PulseAudio, not from the bridge's memory: a bridge that has just started
+    (the update restarts it) knows nothing of a track that keeps playing, since
+    librespot reports only changes and AirPlay is learnt from sink-input events.
+    librespot and shairport-sync open their stream while they play (corked
+    while an AirPlay sender pauses), and the stream's application.process.id is
+    one of the unit's processes. None when PulseAudio cannot be asked: the
+    caller treats that as busy, never as idle."""
+    try:
+        with open(f"{_USER_CGROUP}/{unit}/cgroup.procs") as f:
+            pids = {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        return False
+    if not pids:
+        return False
+    try:
+        r = subprocess.run(
+            ["pactl", "list", "sink-inputs"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            env={**os.environ, "PULSE_SERVER": PULSE_SERVER, "PULSE_COOKIE": PULSE_COOKIE},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    owners = set(re.findall(r'application\.process\.id = "(\d+)"', r.stdout))
+    return bool(owners & pids)
+
+
 def _diag_key(v):
     """A view minus the countdown, which changes every second and is no news."""
     return {k: x for k, x in v.items() if k != "remainingS"}
@@ -2444,6 +2498,75 @@ class Diagnostics:
             except Exception as e:  # noqa: BLE001 - never kill the thread
                 log("diagnostics step failed:", e)
                 wait = DIAG_PENDING_POLL_S
+            self.wake.wait(wait)
+            self.wake.clear()
+
+
+# How often a stale service is looked at while it waits for its source to go
+# idle -- a fallback only: the bridge wakes the check the moment playback goes
+# idle (Bridge.broadcast), so a paused track costs a wakeup per 5 minutes, not
+# per 15 s -- and how long after restarting a unit (here, or by the diagnostics
+# mode) it is left alone, so a restart that does not take is retried, never
+# hammered.
+STALE_POLL_S = float(os.environ.get("NEXUSQ_STALE_POLL_S", "300"))
+STALE_RETRY_S = 120.0
+
+
+class StaleUserServices:
+    """Restart a user service an upgrade left running on its old binary.
+
+    The system update restarts our system daemons (_PKG_RESTART), but librespot
+    and shairport-sync are units of the appliance user's manager, which it never
+    touched: they took a new binary from the OTA and went on running the old one
+    until the next reboot, while the app said the update was done (the librespot
+    0.8.0-r100 fix would have reached nobody). This restarts such a service the
+    moment its source is not playing or holding a track, as the diagnostics mode
+    does, so an update never cuts a song off.
+
+    Callables are injected so the logic is testable without systemd:
+      stale(unit, exe)  -> True/False/None   (_proc_stale)
+      busy(sid)         -> is that source playing or holding a track, as the
+                           bridge knows it
+      streams(unit)     -> does the unit hold a PulseAudio stream (_unit_streams);
+                           None (PulseAudio did not answer) counts as busy
+      restart(unit)     -> restart it if it runs (systemctl --user try-restart)
+      restarted_at(unit)-> when this or the diagnostics mode last restarted it
+    Both busy checks are needed: right after the update restarted the bridge,
+    its memory says nothing is playing, and only PulseAudio knows better. A
+    paused Spotify track that holds no stream is not knowable then; it is lost.
+    It looks at startup (the restarted bridge finds the stale service itself),
+    after a successful install, and when playback goes idle; it polls only
+    while something is stale."""
+
+    def __init__(self, stale, busy, streams, restart, restarted_at, clock=time.monotonic):
+        self.stale, self.busy, self.streams, self.clock = stale, busy, streams, clock
+        self.restart, self.restarted_at = restart, restarted_at
+        self.wake = threading.Event()
+
+    def step(self):
+        """One pass. Returns how long to sleep before the next, or None."""
+        waiting = False
+        for sid in DIAG_SERVICES:
+            unit = _SERVICE_BY_ID[sid]["unit"]
+            if self.stale(unit, DIAG_EXE[sid]) is not True:
+                continue
+            waiting = True
+            last = self.restarted_at(unit)
+            if last is not None and self.clock() - last < STALE_RETRY_S:
+                continue
+            if self.busy(sid) or self.streams(unit) is not False:
+                continue
+            log(f"update: restarting {unit}, which still runs the binary the update replaced")
+            self.restart(unit)
+        return STALE_POLL_S if waiting else None
+
+    def run(self):
+        while True:
+            try:
+                wait = self.step()
+            except Exception as e:  # noqa: BLE001 - never kill the thread
+                log("stale service check failed:", e)
+                wait = STALE_POLL_S
             self.wake.wait(wait)
             self.wake.clear()
 
@@ -3874,11 +3997,22 @@ class Bridge:
         #: extension. Only ever READ for the zone that is playing to us.
         self.roon = {}
         self._roon_zone = None
+        #: unit -> monotonic time of the last restart by the diagnostics mode
+        #: or the stale-service check, so the two never restart a unit twice
+        #: in a row.
+        self._user_restarts = {}
         self.diag = Diagnostics(
             proc_diag=_proc_diag,
             busy=self._source_busy,
-            restart=lambda unit: _systemctl_user("try-restart", unit, timeout=45),
+            restart=self._restart_user_unit,
             notify=lambda v: self.broadcast("diagnosticsChanged", v),
+        )
+        self.stale_services = StaleUserServices(
+            stale=_proc_stale,
+            busy=self._source_busy,
+            streams=_unit_streams,
+            restart=self._restart_user_unit,
+            restarted_at=self._user_restarts.get,
         )
         self.stats = ControlStats()
         # The mute LED's "update available" blink, and the release watch that
@@ -4020,6 +4154,11 @@ class Bridge:
                     )
         finally:
             self.volumes.settle(oid)
+
+    def _restart_user_unit(self, unit):
+        """try-restart a user unit, noting when (see _user_restarts)."""
+        self._user_restarts[unit] = time.monotonic()
+        return _systemctl_user("try-restart", unit, timeout=45)
 
     def _source_busy(self, sid):
         """Is this source playing, or holding a paused track? Either way a
@@ -4218,6 +4357,13 @@ class Bridge:
                 self.clients.pop(cid, None)
 
     def broadcast(self, event, data):
+        if event == "nowPlayingChanged" and isinstance(data, dict) and not data.get("playing"):
+            # A source went idle: a service waiting to be restarted on its new
+            # binary may go now (StaleUserServices). getattr: tests build a
+            # Bridge without one.
+            stale = getattr(self, "stale_services", None)
+            if stale is not None:
+                stale.wake.set()
         msg = (json.dumps({"event": event, "data": data}) + "\n").encode()
         with self.lock:
             cids = list(self.clients)
@@ -4484,6 +4630,10 @@ class Bridge:
                 self.update_led.set("daemons", False)
                 theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
                 self._finish_nexus_update(r.get("upgraded", []), theme_cmds)
+                # Only after a SUCCESSFUL install: a failed or killed one can
+                # leave a new binary next to libraries it does not have yet, and
+                # restarting into that would crash-loop a working player.
+                self.stale_services.wake.set()
                 return r, []
             finally:
                 _nexus_install_lock.release()
@@ -4526,6 +4676,7 @@ class Bridge:
                 self._finish_system_update(
                     r.get("daemons", []), r.get("rebootRecommended", False), theme_cmds, r.get("systemdChanged", False)
                 )
+                self.stale_services.wake.set()  # only after success (see installNexusUpdate)
                 return r, []
             finally:
                 _nexus_install_lock.release()
@@ -5416,6 +5567,7 @@ def main():
     threading.Thread(target=theme_restore_thread, daemon=True).start()
     threading.Thread(target=scene_restore_thread, daemon=True).start()
     threading.Thread(target=bridge.diag.run, daemon=True).start()
+    threading.Thread(target=bridge.stale_services.run, daemon=True).start()
     threading.Thread(target=bridge.ring.run, daemon=True).start()
     threading.Thread(target=bridge.brightness.run, daemon=True).start()
     threading.Thread(target=bridge.release.run, daemon=True).start()
