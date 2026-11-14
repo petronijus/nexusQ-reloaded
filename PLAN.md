@@ -1960,6 +1960,44 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 > Findings and follow-ups live here, not in a task app.
 
+### Open — the 2026-11-14 cottage Q findings (Spotify drop, failed upgrade, OTA experience)
+
+Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA items below.
+
+- [ ] **Take librespot 0.8.0-r100 and nexusq-control r69 to the units**: build (armv7, first Rust
+      package in the tree) on the desktop or macOS — not on Omarchy Mac, whose 16K-page kernel breaks
+      qemu-arm (2026-11-14) — and only once Alpine edge armv7 has rust 1.100.0 (it had 1.99.1 while the
+      other arches had 1.100.0, and crossdirect refuses the skew: `rustc version mismatch`), on a
+      fleet-keyed volume; install on the cottage Q, confirm `apk info -v librespot` and that the
+      bridge restarted the stale librespot, then a long listen with the journal watched for
+      `Connection to server closed (…); reconnecting`; an AP drop forced while playing
+      (`ss -K` on librespot's :443 socket, if the kernel has INET_DIAG_DESTROY) must not stop the
+      music or move the volume. Full diag sweep after. Then the Prague Q, then publish the OTA.
+- [ ] **Pin the overrides on the units.** A Q upgrades against Alpine edge/testing, so a newer
+      pkgver of librespot, shairport-sync, speexdsp or alsa-utils at Alpine outranks our build
+      between our releases (shairport-sync's did, 2026-10-10). `depends="pkg~ver"` is not an option
+      as such: pmbootstrap fails on version operators in depends (device APKBUILD, r103 note).
+      Candidate: tag our repo in `/etc/apk/repositories` (`@nexusq`) and keep `pkg@nexusq` in the
+      world, set by the bridge before its `apk upgrade`; design and test it in a container.
+- [ ] **Track the other overrides** (shairport-sync, speexdsp, alsa-utils) with an
+      `upstream/upstream.json` and `APKBUILD.alpine` each, so `scripts/check-overrides.py` covers them.
+- [ ] **The diagnostics mode can restart a playing service right after a bridge restart**
+      (`Diagnostics.step`, found in the 2026-11-14 review): its `busy` reads only the bridge's
+      `nowPlaying`, empty in a new bridge. Use `_unit_streams` there too, as StaleUserServices does.
+- [ ] **A nexusq-diag check that each override installed is ours** (librespot, shairport-sync,
+      speexdsp, alsa-utils at their aport's pkgver-rpkgrel).
+- [ ] **Offer 0007 (a rebuilt Spirc keeps the mixer's volume) upstream, and add the field log to
+      librespot PR #1871** — ask Petr before posting.
+- [ ] **A system upgrade is killed after 600 s mid-transaction** (`install_system_update`,
+      `timeout=600`): on 2026-11-14 the cottage Q's 393-package upgrade from r117 died at package
+      260/393 and the app reported "apk upgrade did not respond"; apk 3 writes its database at the
+      end, so the files were new and the database old until a second run finished. Never SIGKILL apk
+      mid-commit: download first (interruptible), install in its own unit, a stall watchdog.
+- [ ] **The OTA experience**: the app gives up on the call after 60 s and then sees only "busy";
+      the ring spins indeterminately. Install as a background job with phases and real progress
+      (apk 3 `--progress-fd`), pushed to the app, the ring and Home Assistant's update entity,
+      surviving the bridge's restart and a reboot, with a result at the end.
+
 ### Open — findings of the 2026-11-01 health check (Prague Q, kernel r33, device r131)
 
 Capture: `nq-captures/20261101-143923/`. Every item was root-caused read-only; none is fixed yet.
