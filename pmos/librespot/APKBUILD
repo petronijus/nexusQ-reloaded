@@ -1,0 +1,102 @@
+# Maintainer: Petr Parkan Janda <petronijus@bastla.com>
+# Based on Alpine's testing/librespot (Carlo Landmeter, Patrycja Rosa);
+# their APKBUILD is kept verbatim in upstream/APKBUILD.alpine.
+#
+# librespot 0.8.0 with upstream's open fixes for a dropped Spotify connection —
+# an override of Alpine's package.
+#
+# WHY (2026-11-14, the cottage Q, docs/2026-11-14-spotify-connection-drop.md):
+# Spotify's access point closed the session's connection at 17:05:52, as it
+# does anywhere from minutes to an hour apart. librespot 0.8.0 then invalidates
+# the whole session, but its Spirc (Spotify Connect) checks for that only at the
+# top of its loop, and the dealer websocket it listens on is a separate
+# connection that stays up, so nothing woke it: the Q showed up in Connect for
+# 3 minutes and could not play the next track, until Petr touched it in the app.
+# The Spirc that librespot then built from scratch stopped playback and set the
+# volume to the --initial-volume of the program's start, which was 0 %.
+#
+# The patches, in order (upstream issues #1492, #1682):
+#  0001-0003  PR #1871 (open, head 14c8637): the session reconnects its access
+#             point with the last login's credentials and stays valid; the dealer,
+#             the Connect registration, the Spirc and the player carry on, and a
+#             key request made during the reset waits and is sent again. The
+#             track already buffered plays through it.
+#  0004-0006  PR #1787 (open, head a1b5e44): when the session does end (reconnect
+#             failed, offline, or a close within 30 s of connecting), the dealer's
+#             subscriptions end with it, so the Spirc notices at once instead of at
+#             the next event.
+#  0007       ours: a Spirc built after the first one takes the mixer's current
+#             volume, not the program's --initial-volume. To be offered upstream.
+# Applied to v0.8.0 they conflicted only in CHANGELOG.md (dropped), core's
+# dev-dependencies (tokio "test-util" for #1871's tests, without dev's [lints])
+# and one line of Session::shutdown(), where both PRs add a call: both are kept,
+# as #1871 asks.
+#
+# Everything else is Alpine's build, flag for flag — except the -openrc
+# subpackage, its initd/confd and the pre-install that creates a `librespot`
+# system user: this image boots systemd and runs librespot as a user unit of
+# its own (device-google-steelhead's librespot.service).
+#
+# ⚠️ AN OVERRIDE, kept current by scripts/check-overrides.py (run by
+# docker-build.sh and publish-ota-repo.sh, both of which stop when it fails):
+# Alpine's APKBUILD is compared with upstream/APKBUILD.alpine and a change is
+# merged into this one three-way; a conflict, a new pkgver at Alpine, a librespot
+# release, or either PR merged upstream stops the build with what to do. pkgrel
+# is far above Alpine's (theirs: 0.8.0-r0), so apk keeps this build while the
+# pkgver matches; a new pkgver at Alpine would win, which is why the check stops.
+pkgname=librespot
+pkgver=0.8.0
+# Alpine ships -r0. Kept far above it on purpose; see the warning above.
+pkgrel=100
+pkgdesc="Open Source Spotify client library (Nexus Q build: survives a dropped Spotify connection)"
+url="https://github.com/librespot-org/librespot"
+arch="all !s390x !riscv64" # limited by cargo
+license="MIT"
+makedepends="cargo alsa-lib-dev cargo-auditable rust-bindgen nasm cmake clang-libclang openssl-dev"
+source="librespot-$pkgver.tar.gz::https://github.com/librespot-org/librespot/archive/v$pkgver.tar.gz
+	0001-core-reconnect-the-access-point-without-invalidating.patch
+	0002-core-bound-the-reconnect-and-keep-what-it-hands-over.patch
+	0003-core-end-key-requests-on-shutdown-and-drop-a-reconne.patch
+	0004-connect-end-the-Spirc-on-Shutdown-even-when-disconne.patch
+	0005-main-create-a-new-session-on-a-discovery-login-inste.patch
+	0006-core-end-the-dealer-s-subscriptions-when-the-session.patch
+	0007-main-a-rebuilt-Spirc-keeps-the-mixer-s-current-volum.patch
+	"
+# !check: as Alpine's (their note: "no test suite"). The patched tree's tests
+# run on a host with `cargo test --workspace` (pmos/librespot/upstream/README.md).
+# net: cargo crates
+options="!check net"
+
+prepare() {
+	default_prepare
+
+	cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	# Gates: default_prepare already fails when a patch does not apply; these
+	# catch a re-base that applies but leaves the old behaviour in place.
+	grep -q 'async fn run_connection' core/src/session.rs || {
+		echo "librespot: the session does not reconnect its access point (PR #1871 missing)" >&2
+		return 1
+	}
+	grep -q 'self.dealer().shutdown();' core/src/session.rs || {
+		echo "librespot: Session::shutdown() leaves the dealer alone (PR #1787 missing)" >&2
+		return 1
+	}
+	grep -q 'connect_config.initial_volume = mixer.volume();' src/main.rs || {
+		echo "librespot: a rebuilt Spirc still resets the volume (0007 missing)" >&2
+		return 1
+	}
+
+	cargo auditable build --release --frozen \
+		--features alsa-backend
+}
+
+package() {
+	install -Dm755 target/release/librespot "$pkgdir"/usr/bin/librespot
+}
+
+sha512sums="
+d2237d0d02bb73f0b49c9e50d3e5a29f3d4eb49690033a66e9afa98b9099313af287d94c5c5d951cbff8f2431a0f7fa16c19db37c37072fc03bca9b106b19439  librespot-0.8.0.tar.gz
+"

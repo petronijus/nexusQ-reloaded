@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: holofermes <1163915+holofermes@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 14:01:18 -0400
+Subject: [PATCH 4/7] connect: end the Spirc on Shutdown even when
+ disconnecting fails
+
+(cherry picked from commit 98cffacadcc67e9c2a3efa2b4e506bf51df4a674)
+---
+ connect/src/spirc.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/connect/src/spirc.rs b/connect/src/spirc.rs
+index 3f9a06f..24fca2c 100644
+--- a/connect/src/spirc.rs
++++ b/connect/src/spirc.rs
+@@ -635,11 +635,11 @@ impl SpircTask {
+             SpircCommand::Shutdown => {
+                 trace!("Received SpircCommand::Shutdown");
+                 self.handle_pause();
+-                self.handle_disconnect().await?;
+                 self.shutdown = true;
+                 if let Some(rx) = self.commands.as_mut() {
+                     rx.close()
+                 }
++                self.handle_disconnect().await?;
+             }
+             SpircCommand::Transfer(request) if !self.connect_state.is_active() => {
+                 let device_id = self.session.device_id();

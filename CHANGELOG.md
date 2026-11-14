@@ -26,6 +26,34 @@ diagnostics mode, so a unit is never restarted twice within two minutes.
 `tests/test_stale_services.py` checks `_proc_stale` against a real process
 whose binary was renamed over; every new rule was seen failing.
 
+### Fixed — Spotify stopped and the volume went to 0 when Spotify dropped the connection (`librespot` **0.8.0-r100**, unreleased)
+
+On 2026-11-14 the cottage Q lost Spotify for three minutes and came back at
+0 % volume. Spotify's access point closes librespot's connection anywhere
+from minutes to an hour apart; librespot 0.8.0 then invalidates the session,
+but its Spotify Connect loop notices only at its next event, so the Q stayed
+in Connect unable to load the next track until someone touched it in the app.
+The Connect loop it then built from scratch stopped playback and set the
+volume to the `--initial-volume` of the program's start (0 % that day).
+
+librespot is now an override of Alpine's package (`pmos/librespot/`), like
+shairport-sync: 0.8.0 with upstream's open PR #1871 (the session reconnects
+its access point and stays valid, so playback carries on through the drop),
+PR #1787 (when the session does end, the Connect loop notices at once) and a
+patch of ours (a rebuilt Connect loop keeps the mixer's current volume). It
+is in the OTA set. upstream's own tests pass on the patched tree (23 in
+`librespot-core`, six of them #1871's).
+
+The override does not freeze in the build: `scripts/check-overrides.py`
+compares it with Alpine's APKBUILD and with librespot's releases and pull
+requests. An image build stops on a new pkgver at Alpine, a conflicting Alpine
+change or versions that disagree; an OTA publish (`--strict`) also on an
+unmerged Alpine change or a newer upstream release; `just overrides` merges an
+Alpine change three-way and bumps the pkgrel. A unit in the field can still
+take a newer Alpine librespot between our builds, as shairport-sync's did on
+2026-10-10; pinning the overrides on the units is open (PLAN).
+docs/2026-11-14-spotify-connection-drop.md.
+
 ### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:

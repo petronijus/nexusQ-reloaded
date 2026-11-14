@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: holofermes <1163915+holofermes@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 13:52:55 -0400
+Subject: [PATCH 5/7] main: create a new session on a discovery login instead
+ of shutting down the old one
+
+(cherry picked from commit a61250cfe03dc14da9bc13818ec946b96507016c)
+---
+ src/main.rs | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/main.rs b/src/main.rs
+index fb85803..4dfc91b 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2027,9 +2027,9 @@ async fn main() {
+                             // Continue shutdown in its own task
+                             tokio::spawn(spirc_task);
+                         }
+-                        if !session.is_invalid() {
+-                            session.shutdown();
+-                        }
++                        // The old Spirc still needs the old session to pause and sign off.
++                        session = Session::new(setup.session_config.clone(), setup.cache.clone());
++                        player.set_session(session.clone());
+ 
+                         connecting = true;
+                     },

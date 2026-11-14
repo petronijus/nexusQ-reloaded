@@ -29,6 +29,10 @@ setup:
 doctor:
     tools/dev/doctor.sh
 
+# Bring the distro-package overrides (pmos/*/upstream/) up to date with Alpine and upstream
+overrides:
+    scripts/check-overrides.py --merge
+
 # ── fast lane (≲ 1 min, no device, no container, no build) ───────────────
 
 # Formatting, static analysis, the docs check and every unit test that needs no build

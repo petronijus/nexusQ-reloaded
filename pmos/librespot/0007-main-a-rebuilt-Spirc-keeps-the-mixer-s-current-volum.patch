@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Petr Parkan Janda <petronijus@bastla.com>
+Date: Sat, 14 Nov 2026 17:41:21 +0100
+Subject: [PATCH 7/7] main: a rebuilt Spirc keeps the mixer's current volume
+
+---
+ src/main.rs | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/main.rs b/src/main.rs
+index 4dfc91b..657307c 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2005,6 +2005,8 @@ async fn main() {
+         }
+     }
+ 
++    let mut spirc_started = false;
++
+     loop {
+         tokio::select! {
+             credentials = async {
+@@ -2045,7 +2047,14 @@ async fn main() {
+                     player.set_session(session.clone());
+                 }
+ 
+-                let connect_config = setup.connect_config.clone();
++                let mut connect_config = setup.connect_config.clone();
++                // A Spirc built after the first one (after the old one shut down, or on a
++                // Discovery handover) takes over the volume the mixer has now. The
++                // configured initial volume describes the start of the program; set
++                // again here, it would move the volume back to that start.
++                if spirc_started {
++                    connect_config.initial_volume = mixer.volume();
++                }
+ 
+                 let (spirc_, spirc_task_) = match Spirc::new(connect_config,
+                                                                 session.clone(),
+@@ -2060,6 +2069,7 @@ async fn main() {
+                 };
+                 spirc = Some(spirc_);
+                 spirc_task = Some(Box::pin(spirc_task_));
++                spirc_started = true;
+ 
+                 connecting = false;
+             },

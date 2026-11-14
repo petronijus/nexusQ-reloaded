@@ -83,6 +83,13 @@ alsa-utils
 alsa-utils-systemd
 alsa-utils-udev
 
+# The same kind of override (pmos/librespot/APKBUILD): Alpine's 0.8.0 plus
+# upstream's open fixes for a dropped Spotify connection and ours for the volume
+# of a rebuilt Spirc. Unpublished, a box in the field keeps Alpine's build, which
+# hangs for minutes whenever Spotify closes the connection and then resets the
+# volume (docs/2026-11-14-spotify-connection-drop.md).
+librespot
+
 # The SGX540 GPU for the HDMI desktop (device r127 depends on both, so an OTA
 # without them would hold the device package back). nexusq-sgx is our glue only;
 # NO TI binary is in it or anywhere in the repo: each unit fetches the pinned

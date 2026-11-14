@@ -1,0 +1,356 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Stefan Dichev <stefanbdichev@gmail.com>
+Date: Sat, 14 Nov 2026 01:32:47 +0000
+Subject: [PATCH 1/7] core: reconnect the access point without invalidating the
+ session
+
+The server closes the access-point connection often, typically right
+after a keep-alive Pong. The session was then invalidated, taking the
+dealer and Spirc with it, so the device left Spotify Connect until the
+application built a new session.
+
+The session now runs its connection in one task. When the connection
+closes, a write fails or the keep-alive times out, it logs in again on
+the next access point with the reusable credentials and the session
+stays valid. Packets sent meanwhile go out on the new connection,
+pending audio-key requests are sent again, and mercury requests and
+subscriptions and channels of the closed connection end. A failed
+reconnect, or a connection that closes within 30 s of connecting,
+still invalidates the session.
+
+A timed-out audio-key request now leaves the pending map, so it is not
+sent again after a reconnect.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013zyp13aMbmU4XmKnuCPVRb
+(cherry picked from commit 7515eae244afec760f1447322f7dac605ab2bf6b)
+---
+ core/src/audio_key.rs   |  36 +++++++++-
+ core/src/channel.rs     |  13 ++--
+ core/src/mercury/mod.rs |   7 +-
+ core/src/session.rs     | 143 ++++++++++++++++++++++++++++------------
+ 4 files changed, 147 insertions(+), 52 deletions(-)
+
+diff --git a/core/src/audio_key.rs b/core/src/audio_key.rs
+index 42cad43..8809a61 100644
+--- a/core/src/audio_key.rs
++++ b/core/src/audio_key.rs
+@@ -39,17 +39,24 @@ impl From<AudioKeyError> for Error {
+ component! {
+     AudioKeyManager : AudioKeyManagerInner {
+         sequence: SeqGenerator<u32> = SeqGenerator::new(0),
+-        pending: HashMap<u32, oneshot::Sender<Result<AudioKey, Error>>> = HashMap::new(),
++        pending: HashMap<u32, PendingKey> = HashMap::new(),
+     }
+ }
+ 
++struct PendingKey {
++    track: SpotifyId,
++    file: FileId,
++    sender: oneshot::Sender<Result<AudioKey, Error>>,
++}
++
+ impl AudioKeyManager {
+     pub(crate) fn dispatch(&self, cmd: PacketType, mut data: Bytes) -> Result<(), Error> {
+         let seq = BigEndian::read_u32(data.split_to(4).as_ref());
+ 
+         let sender = self
+             .lock(|inner| inner.pending.remove(&seq))
+-            .ok_or(AudioKeyError::Sequence(seq))?;
++            .ok_or(AudioKeyError::Sequence(seq))?
++            .sender;
+ 
+         match cmd {
+             PacketType::AesKey => {
+@@ -83,7 +90,12 @@ impl AudioKeyManager {
+ 
+         let seq = self.lock(move |inner| {
+             let seq = inner.sequence.get();
+-            inner.pending.insert(seq, tx);
++            let key = PendingKey {
++                track,
++                file,
++                sender: tx,
++            };
++            inner.pending.insert(seq, key);
+             seq
+         });
+ 
+@@ -92,12 +104,30 @@ impl AudioKeyManager {
+         match tokio::time::timeout(KEY_RESPONSE_TIMEOUT, rx).await {
+             Err(_) => {
+                 error!("Audio key response timeout");
++                self.lock(|inner| inner.pending.remove(&seq));
+                 Err(AudioKeyError::Timeout.into())
+             }
+             Ok(k) => k?,
+         }
+     }
+ 
++    /// Requests the pending keys again on a new connection: the closed one lost
++    /// their requests or their replies.
++    pub(crate) fn resend_pending(&self) {
++        let requests: Vec<_> = self.lock(|inner| {
++            inner
++                .pending
++                .iter()
++                .map(|(&seq, key)| (seq, key.track, key.file))
++                .collect()
++        });
++        for (seq, track, file) in requests {
++            if let Err(e) = self.send_key_request(seq, track, file) {
++                warn!("Unable to request audio key again: {e}");
++            }
++        }
++    }
++
+     fn send_key_request(&self, seq: u32, track: SpotifyId, file: FileId) -> Result<(), Error> {
+         let mut data: Vec<u8> = Vec::new();
+         data.write_all(&file.0)?;
+diff --git a/core/src/channel.rs b/core/src/channel.rs
+index dfdc4dc..d67cb1b 100644
+--- a/core/src/channel.rs
++++ b/core/src/channel.rs
+@@ -121,11 +121,14 @@ impl ChannelManager {
+     }
+ 
+     pub(crate) fn shutdown(&self) {
+-        self.lock(|inner| {
+-            inner.invalid = true;
+-            // destroy the sending halves of the channels to signal everyone who is waiting for something.
+-            inner.channels.clear();
+-        });
++        self.lock(|inner| inner.invalid = true);
++        self.connection_lost();
++    }
++
++    /// Ends the channels of a closed connection, which the server forgets.
++    pub(crate) fn connection_lost(&self) {
++        // destroy the sending halves of the channels to signal everyone who is waiting for something.
++        self.lock(|inner| inner.channels.clear());
+     }
+ }
+ 
+diff --git a/core/src/mercury/mod.rs b/core/src/mercury/mod.rs
+index b32aeb1..fd9e0f5 100644
+--- a/core/src/mercury/mod.rs
++++ b/core/src/mercury/mod.rs
+@@ -296,8 +296,13 @@ impl MercuryManager {
+     }
+ 
+     pub(crate) fn shutdown(&self) {
++        self.lock(|inner| inner.invalid = true);
++        self.connection_lost();
++    }
++
++    /// Ends the requests and subscriptions of a closed connection, which the server forgets.
++    pub(crate) fn connection_lost(&self) {
+         self.lock(|inner| {
+-            inner.invalid = true;
+             // destroy the sending halves of the channels to signal everyone who is waiting for something.
+             inner.pending.clear();
+             inner.subscriptions.clear();
+diff --git a/core/src/session.rs b/core/src/session.rs
+index 333678f..d08e65a 100644
+--- a/core/src/session.rs
++++ b/core/src/session.rs
+@@ -30,7 +30,7 @@ use crate::{
+ use byteorder::{BigEndian, ByteOrder};
+ use bytes::Bytes;
+ use futures_core::TryStream;
+-use futures_util::StreamExt;
++use futures_util::{SinkExt, StreamExt};
+ use librespot_protocol::authentication::AuthenticationType;
+ use num_traits::FromPrimitive;
+ use pin_project_lite::pin_project;
+@@ -40,7 +40,6 @@ use tokio::{
+     sync::mpsc,
+     time::{Duration as TokioDuration, Instant as TokioInstant, Sleep, sleep},
+ };
+-use tokio_stream::wrappers::UnboundedReceiverStream;
+ use uuid::Uuid;
+ 
+ const SESSION_DATA_POISON_MSG: &str = "session data rwlock should not be poisoned";
+@@ -124,8 +123,9 @@ struct SessionInternal {
+ /// this structs interface directly or hand it to a
+ /// `Player`.
+ ///
+-/// *Note*: [Session] instances cannot yet be reused once invalidated. After
+-/// an unexpectedly closed connection, you'll need to create a new [Session].
++/// When the server closes the access-point connection, the session logs in again
++/// on a new one and stays valid. It is only invalidated when that fails, and
++/// [Session] instances cannot be reused once invalidated: create a new one.
+ #[derive(Clone)]
+ pub struct Session(Arc<SessionInternal>);
+ 
+@@ -208,6 +208,35 @@ impl Session {
+         credentials: Credentials,
+         store_credentials: bool,
+     ) -> Result<(), Error> {
++        let (reusable_credentials, transport) = self
++            .connect_to_access_point(credentials, store_credentials)
++            .await?;
++
++        // This channel serves as a buffer for packets and serializes access to the TcpStream, such
++        // that `self.send_packet` can return immediately and needs no additional synchronization.
++        // It outlives each connection, so packets sent while reconnecting go out on the next one.
++        let (tx_connection, rx_connection) = mpsc::unbounded_channel();
++        self.0
++            .tx_connection
++            .set(tx_connection)
++            .map_err(|_| SessionError::NotConnected)?;
++
++        tokio::spawn(run_connection(
++            self.weak(),
++            transport,
++            rx_connection,
++            reusable_credentials,
++            store_credentials,
++        ));
++
++        Ok(())
++    }
++
++    async fn connect_to_access_point(
++        &self,
++        credentials: Credentials,
++        store_credentials: bool,
++    ) -> Result<(Credentials, Transport), Error> {
+         // There currently happen to be 6 APs but anything will do to avoid an infinite loop.
+         const MAX_AP_TRIES: u8 = 6;
+         let mut num_ap_tries = 0;
+@@ -258,33 +287,7 @@ impl Session {
+             }
+         }
+ 
+-        // This channel serves as a buffer for packets and serializes access to the TcpStream, such
+-        // that `self.send_packet` can return immediately and needs no additional synchronization.
+-        let (tx_connection, rx_connection) = mpsc::unbounded_channel();
+-        self.0
+-            .tx_connection
+-            .set(tx_connection)
+-            .map_err(|_| SessionError::NotConnected)?;
+-
+-        let (sink, stream) = transport.split();
+-        let sender_task = UnboundedReceiverStream::new(rx_connection)
+-            .map(Ok)
+-            .forward(sink);
+-        let session_weak = self.weak();
+-        tokio::spawn(async move {
+-            if let Err(e) = sender_task.await {
+-                error!("{e}");
+-                if let Some(session) = session_weak.try_upgrade() {
+-                    if !session.is_invalid() {
+-                        session.shutdown();
+-                    }
+-                }
+-            }
+-        });
+-
+-        tokio::spawn(DispatchTask::new(self.weak(), stream));
+-
+-        Ok(())
++        Ok((reusable_credentials, transport))
+     }
+ 
+     pub fn apresolver(&self) -> &ApResolver {
+@@ -667,6 +670,70 @@ impl Drop for SessionInternal {
+     }
+ }
+ 
++/// A connection that closes sooner is not reconnected in place, so a server that
++/// keeps closing new connections cannot cause a reconnect loop.
++const MIN_LIFETIME_TO_RECONNECT: TokioDuration = TokioDuration::from_secs(30);
++
++/// Carries the session's packets over its access-point connection. When the
++/// server closes the connection, this logs in again on a new one, so whatever
++/// runs on the session (the dealer, Connect, playback) is unaffected. Only a
++/// failed reconnect invalidates the session.
++async fn run_connection(
++    session: SessionWeak,
++    mut transport: Transport,
++    mut packets: mpsc::UnboundedReceiver<(u8, Vec<u8>)>,
++    mut credentials: Credentials,
++    store_credentials: bool,
++) {
++    loop {
++        let connected_at = TokioInstant::now();
++        let (mut sink, stream) = transport.split();
++        let send = async {
++            while let Some(packet) = packets.recv().await {
++                sink.send(packet).await?;
++            }
++            // every sender is gone with the session
++            Ok(())
++        };
++        let lost = tokio::select! {
++            result = DispatchTask::new(session.clone(), stream) => result,
++            result = send => result,
++        };
++
++        let (Err(error), Some(session)) = (lost, session.try_upgrade()) else {
++            return;
++        };
++        if session.is_invalid() {
++            return;
++        }
++        if connected_at.elapsed() < MIN_LIFETIME_TO_RECONNECT {
++            error!("Connection to server closed ({error}) right after connecting");
++            session.shutdown();
++            return;
++        }
++
++        warn!("Connection to server closed ({error}); reconnecting");
++        // the server forgets what it was asked on the closed connection
++        session.mercury().connection_lost();
++        session.channel().connection_lost();
++        match session
++            .connect_to_access_point(credentials.clone(), store_credentials)
++            .await
++        {
++            Ok((reusable_credentials, new_transport)) => {
++                credentials = reusable_credentials;
++                transport = new_transport;
++                session.audio_key().resend_pending();
++            }
++            Err(e) => {
++                error!("Reconnecting to server failed: {e}");
++                session.shutdown();
++                return;
++            }
++        }
++    }
++}
++
+ #[derive(Clone, Copy, Default, Debug, PartialEq)]
+ enum KeepAliveState {
+     #[default]
+@@ -892,15 +959,9 @@ where
+                     }
+                 }
+                 Poll::Ready(None) => {
+-                    warn!("Connection to server closed.");
+-                    session.shutdown();
+-                    return Poll::Ready(Ok(()));
+-                }
+-                Poll::Ready(Some(Err(e))) => {
+-                    error!("Connection to server closed.");
+-                    session.shutdown();
+-                    return Poll::Ready(Err(e));
++                    return Poll::Ready(Err(io::ErrorKind::UnexpectedEof.into()));
+                 }
++                Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(e)),
+                 Poll::Pending => break,
+             }
+         }
+@@ -926,10 +987,6 @@ where
+         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+             match this.keep_alive_state {
+                 ExpectingPing | ExpectingPongAck => {
+-                    if !session.is_invalid() {
+-                        session.shutdown();
+-                    }
+-                    // TODO: Optionally reconnect (with cached/last credentials?)
+                     return Poll::Ready(Err(io::Error::new(
+                         io::ErrorKind::TimedOut,
+                         format!(

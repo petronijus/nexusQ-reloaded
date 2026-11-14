@@ -96,6 +96,14 @@ fi
 # be this array, and a second copy in the gate would let the gate agree with the
 # very bug it exists to catch. A size guard below still refuses to publish
 # anything ≥99 MB, so a mistaken big apk can never break the push.
+# An override that fell behind its upstream must not be published (see
+# scripts/check-overrides.py; --strict also stops on an unmerged Alpine change
+# and a newer upstream release; `just overrides` merges what can be merged).
+python3 "$REPO_ROOT/scripts/check-overrides.py" --strict || {
+    echo "ERROR: an override needs attention (above) — refusing to publish it; run \`just overrides\`." >&2
+    exit 1
+}
+
 OTA_LIST="$REPO_ROOT/pmos/ota-packages.list"
 [ -f "$OTA_LIST" ] || { echo "ERROR: missing $OTA_LIST — refusing to publish an unknown package set" >&2; exit 1; }
 OTA_PACKAGES=(); while IFS= read -r _l; do OTA_PACKAGES+=("$_l"); done < <(sed 's/#.*//' "$OTA_LIST" | tr -d '[:blank:]' | grep -v '^$')

@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: holofermes <1163915+holofermes@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 12:45:40 -0400
+Subject: [PATCH 6/7] core: end the dealer's subscriptions when the session
+ shuts down
+
+(cherry picked from commit a1b5e44db79f6aec7b8f7ac6ee0eb5b56cfcc6b1)
+---
+ core/src/dealer/manager.rs |  8 ++++++++
+ core/src/dealer/mod.rs     | 13 +++++++++++++
+ core/src/session.rs        |  1 +
+ 3 files changed, 22 insertions(+)
+
+diff --git a/core/src/dealer/manager.rs b/core/src/dealer/manager.rs
+index 98ea026..55f9e03 100644
+--- a/core/src/dealer/manager.rs
++++ b/core/src/dealer/manager.rs
+@@ -166,6 +166,14 @@ impl DealerManager {
+         Ok(())
+     }
+ 
++    pub(crate) fn shutdown(&self) {
++        self.lock(|inner| {
++            if let Some(dealer) = inner.dealer.get() {
++                dealer.shutdown()
++            }
++        })
++    }
++
+     pub async fn close(&self) {
+         if let Some(dealer) = self.lock(|inner| inner.dealer.take()) {
+             dealer.close().await
+diff --git a/core/src/dealer/mod.rs b/core/src/dealer/mod.rs
+index 63ee6e7..ef00dd9 100644
+--- a/core/src/dealer/mod.rs
++++ b/core/src/dealer/mod.rs
+@@ -482,6 +482,19 @@ impl Dealer {
+         )
+     }
+ 
++    pub fn shutdown(&self) {
++        *self
++            .shared
++            .message_handlers
++            .lock()
++            .expect(DEALER_MESSAGE_HANDLERS_POISON_MSG) = SubscriberMap::default();
++        *self
++            .shared
++            .request_handlers
++            .lock()
++            .expect(DEALER_REQUEST_HANDLERS_POISON_MSG) = HandlerMap::default();
++    }
++
+     pub async fn close(mut self) {
+         debug!("closing dealer");
+ 
+diff --git a/core/src/session.rs b/core/src/session.rs
+index 1815a9b..ecefb86 100644
+--- a/core/src/session.rs
++++ b/core/src/session.rs
+@@ -644,6 +644,7 @@ impl Session {
+         self.mercury().shutdown();
+         self.channel().shutdown();
+         self.audio_key().shutdown();
++        self.dealer().shutdown();
+     }
+ 
+     pub fn is_invalid(&self) -> bool {

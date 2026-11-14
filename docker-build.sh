@@ -15,6 +15,16 @@ if [ ! -f "$SRC/docker-build.sh" ]; then
     exit 1
 fi
 
+# The overrides of distro packages (pmos/*/upstream/) against their upstream:
+# a newer Alpine package or upstream release, or an Alpine change not merged
+# into ours, stops the build here, before an image ships a frozen copy. /src is
+# read-only in here, so the merge itself is `just overrides` on the host.
+python3 "$SRC/scripts/check-overrides.py" || {
+    echo "docker-build.sh: an override needs attention (above); run \`just overrides\` on the host." >&2
+    echo "  Offline on purpose? NEXUSQ_SKIP_OVERRIDE_CHECK=1 skips the check, loudly." >&2
+    exit 1
+}
+
 # CROSS-COMPILE EVERYTHING, not just the kernel (2026-08-31).
 #
 # Every pmbootstrap call here used to pass --no-cross, so every armv7 package was
@@ -65,7 +75,8 @@ for apkbuild in \
     "$SRC/pmos/nexusq-rootfs-ab/APKBUILD" \
     "$SRC/pmos/speexdsp/APKBUILD" \
     "$SRC/pmos/shairport-sync/APKBUILD" \
-    "$SRC/pmos/alsa-utils/APKBUILD"; do
+    "$SRC/pmos/alsa-utils/APKBUILD" \
+    "$SRC/pmos/librespot/APKBUILD"; do
     pkg=$(basename "$(dirname "$apkbuild")")
     echo "--- $pkg ---"
     if [ ! -f "$apkbuild" ]; then
@@ -463,6 +474,16 @@ mkdir -p "$ALSAUTILS_DIR"
 cp "$SRC/pmos/alsa-utils/APKBUILD"                        "$ALSAUTILS_DIR/"
 cp "$SRC"/pmos/alsa-utils/*.patch                         "$ALSAUTILS_DIR/"
 echo "  Installed: alsa-utils (alsaloop scheduler override -> main/alsa-utils)"
+
+# librespot: the same kind of OVERRIDE — Alpine's build plus upstream's open
+# fixes for a dropped Spotify connection (PR #1871, #1787) and ours for the
+# volume of a rebuilt Spirc. See pmos/librespot/APKBUILD; its upstream base is
+# kept current by scripts/check-overrides.py, run at the top of this script.
+LIBRESPOT_DIR="$PMAPORTS/main/librespot"
+mkdir -p "$LIBRESPOT_DIR"
+cp "$SRC/pmos/librespot/APKBUILD"                         "$LIBRESPOT_DIR/"
+cp "$SRC"/pmos/librespot/*.patch                          "$LIBRESPOT_DIR/"
+echo "  Installed: librespot (connection-drop override -> main/librespot)"
 
 NEXUSQKOTA_DIR="$PMAPORTS/main/nexusq-kernel-ota"
 mkdir -p "$NEXUSQKOTA_DIR"
@@ -1545,6 +1566,40 @@ else
 fi
 
 echo ""
+echo "=== Phase 7c9: Build librespot (override: survives a dropped Spotify connection) ==="
+set +e
+# MUST run before Phase 8 for the same reason as speexdsp: device-google-steelhead
+# depends= librespot, so the rootfs would otherwise take Alpine's binary. The
+# APKBUILD gates on the three fixes being in the patched tree.
+pmbootstrap $_ucross build librespot --arch armv7 --force 2>&1
+LIBRESPOT_RC=$?
+set -e
+echo "=== librespot build exit code: $LIBRESPOT_RC ==="
+if [ $LIBRESPOT_RC -eq 0 ]; then
+    # pkgrel-EXACT, same reason as speexdsp.
+    _lsp_pv=$(sed -n 's/^pkgver=//p' "$SRC/pmos/librespot/APKBUILD" | head -1)
+    _lsp_pr=$(sed -n 's/^pkgrel=//p' "$SRC/pmos/librespot/APKBUILD" | head -1)
+    LIBRESPOT_APK=$(find "$WORK/packages" -name "librespot-${_lsp_pv}-r${_lsp_pr}.apk" -print -quit 2>/dev/null)
+    if [ -n "$LIBRESPOT_APK" ]; then
+        cp "$LIBRESPOT_APK" /tmp/output/ && echo "  Exported: $(basename "$LIBRESPOT_APK")"
+    else
+        echo "  FATAL: librespot built but the pkgrel-exact apk is not under $WORK/packages."
+        echo "  Continuing would let the rootfs install a STALE librespot from the warm repo."
+        exit 1
+    fi
+else
+    echo "  ##############################################################"
+    echo "  # librespot (override) FAILED TO BUILD. The image would take"
+    echo "  # Alpine's build, which hangs on a dropped Spotify connection"
+    echo "  # and resets the volume. See pmos/librespot/."
+    echo "  ##############################################################"
+    grep -n "ERROR\|error:\|error\[\|FAILED\|librespot:" "$WORK/log.txt" 2>/dev/null | tail -30
+    echo ""
+    echo "  Refusing to continue: every fix is in the build, or it is not a fix."
+    exit 1
+fi
+
+echo ""
 echo "=== Phase 7e: Build the kernel CROSS-NATIVE (native x86_64 speed) ==="
 # The kernel is by far the most expensive package in the tree, and until now it was
 # compiled -- like everything else here -- under qemu-arm emulation, because every
@@ -1987,6 +2042,28 @@ print(f\"{p['start']} {p['size']} {ss}\")
                 echo "  # build, not our override: alsaloop will log \"Scheduler"
                 echo "  # getparam failed.\" at every start. See Phase 7c8 and the"
                 echo "  # pin warning in pmos/alsa-utils/APKBUILD."
+                echo "  ##########################################################" ;;
+        esac
+        # SHIP CHECK: and for the librespot override (the dropped connection).
+        _ship_lsp="$(sudo awk -v RS="" -v FS="\n" '
+            { pkg = ""; ver = ""
+              for (i = 1; i <= NF; i++) {
+                  if ($i == "P:librespot")           pkg = 1
+                  else if (substr($i, 1, 2) == "V:") ver = substr($i, 3)
+              }
+              if (pkg && ver) { print ver; exit } }' \
+            "$RP_MNT/lib/apk/db/installed" 2>/dev/null)"
+        case "${_ship_lsp:-}" in
+            "$(_aport_ver librespot)")
+                echo "  SHIP CHECK: librespot = $_ship_lsp (our connection-drop build)." ;;
+            "")
+                echo "  SHIP CHECK: librespot not installed in the rootfs (?)." ;;
+            *)
+                echo "  ##########################################################"
+                echo "  # SHIP CHECK: librespot = $_ship_lsp, not our"
+                echo "  # $(_aport_ver librespot): Alpine's build or a stale one, which"
+                echo "  # hangs for minutes when Spotify drops the connection. See"
+                echo "  # Phase 7c9 and pmos/librespot/APKBUILD."
                 echo "  ##########################################################" ;;
         esac
         sudo sed -i '/[[:space:]]\/boot[[:space:]]/d' "$RP_MNT/etc/fstab"

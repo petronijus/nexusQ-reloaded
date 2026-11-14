@@ -1,0 +1,663 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Stefan Dichev <stefanbdichev@gmail.com>
+Date: Sat, 14 Nov 2026 12:17:02 +0000
+Subject: [PATCH 2/7] core: bound the reconnect and keep what it hands over
+ consistent
+
+Review follow-ups for the access-point reconnect:
+
+- Time out a login that gets no answer after 5 s, as the handshake
+  already does, so the next access point is tried; bound a reconnect as
+  a whole at 30 s, since looking up access points over HTTP has no
+  timeout.
+- Leave a session that was shut down during a reconnect alone: don't
+  apply or cache the new credentials, which could overwrite another
+  user's after a Discovery handover.
+- Audio-key requests wait while the session reconnects and get their
+  full timeout on the new connection; a shutdown ends them.
+- A mercury subscription answered on a connection that closed before it
+  registered now ends, checked under the lock that sent its request.
+- Close the old connection before reconnecting, and batch packet writes
+  again with `forward`.
+- Tests for each, on tokio's paused clock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013zyp13aMbmU4XmKnuCPVRb
+(cherry picked from commit cab322309739fea3bb971fac4d7673bd3f55f403)
+---
+ core/Cargo.toml            |   2 +-
+ core/src/audio_key.rs      | 168 ++++++++++++++++++++++++++++++++++---
+ core/src/connection/mod.rs |  41 ++++++++-
+ core/src/mercury/mod.rs    |  63 ++++++++++++--
+ core/src/session.rs        | 100 +++++++++++++---------
+ 5 files changed, 314 insertions(+), 60 deletions(-)
+
+diff --git a/core/Cargo.toml b/core/Cargo.toml
+index ffe7c10..6713857 100644
+--- a/core/Cargo.toml
++++ b/core/Cargo.toml
+@@ -117,4 +117,4 @@ vergen-gitcl = { version = "1.0", default-features = false, features = [
+ ] }
+ 
+ [dev-dependencies]
+-tokio = { version = "1", features = ["macros"] }
++tokio = { version = "1", features = ["macros", "test-util"] }
+diff --git a/core/src/audio_key.rs b/core/src/audio_key.rs
+index 8809a61..cfde798 100644
+--- a/core/src/audio_key.rs
++++ b/core/src/audio_key.rs
+@@ -40,6 +40,10 @@ component! {
+     AudioKeyManager : AudioKeyManagerInner {
+         sequence: SeqGenerator<u32> = SeqGenerator::new(0),
+         pending: HashMap<u32, PendingKey> = HashMap::new(),
++        // Counts the connections to the server, so a request can tell that it was sent
++        // again on a new one.
++        connection: u32 = 0,
++        reconnecting: bool = false,
+     }
+ }
+ 
+@@ -86,9 +90,9 @@ impl AudioKeyManager {
+     }
+ 
+     pub async fn request(&self, track: SpotifyId, file: FileId) -> Result<AudioKey, Error> {
+-        let (tx, rx) = oneshot::channel();
++        let (tx, mut rx) = oneshot::channel();
+ 
+-        let seq = self.lock(move |inner| {
++        let (seq, mut connection) = self.lock(move |inner| {
+             let seq = inner.sequence.get();
+             let key = PendingKey {
+                 track,
+@@ -96,25 +100,44 @@ impl AudioKeyManager {
+                 sender: tx,
+             };
+             inner.pending.insert(seq, key);
+-            seq
++            (seq, inner.connection)
+         });
+ 
+         self.send_key_request(seq, track, file)?;
+         const KEY_RESPONSE_TIMEOUT: Duration = Duration::from_millis(1500);
+-        match tokio::time::timeout(KEY_RESPONSE_TIMEOUT, rx).await {
+-            Err(_) => {
++        // Only time on a connection counts: a request waits while the session
++        // reconnects, and gets its full time again once it is sent on the new connection.
++        loop {
++            if let Ok(response) = tokio::time::timeout(KEY_RESPONSE_TIMEOUT, &mut rx).await {
++                return response?;
++            }
++            let timed_out = self.lock(|inner| {
++                if inner.reconnecting || inner.connection != connection {
++                    connection = inner.connection;
++                    return false;
++                }
++                inner.pending.remove(&seq);
++                true
++            });
++            if timed_out {
+                 error!("Audio key response timeout");
+-                self.lock(|inner| inner.pending.remove(&seq));
+-                Err(AudioKeyError::Timeout.into())
++                return Err(AudioKeyError::Timeout.into());
+             }
+-            Ok(k) => k?,
+         }
+     }
+ 
+-    /// Requests the pending keys again on a new connection: the closed one lost
+-    /// their requests or their replies.
+-    pub(crate) fn resend_pending(&self) {
++    /// Holds the timeouts of pending requests while the session reconnects.
++    pub(crate) fn connection_lost(&self) {
++        self.lock(|inner| inner.reconnecting = true);
++    }
++
++    /// Requests the pending keys again on the new connection, since the closed one
++    /// may have lost their requests or replies. A request still queued goes out
++    /// twice; the second reply finds nothing pending and is dropped.
++    pub(crate) fn reconnected(&self) {
+         let requests: Vec<_> = self.lock(|inner| {
++            inner.connection = inner.connection.wrapping_add(1);
++            inner.reconnecting = false;
+             inner
+                 .pending
+                 .iter()
+@@ -128,6 +151,16 @@ impl AudioKeyManager {
+         }
+     }
+ 
++    /// Ends the pending requests of a session that is shut down, for example after
++    /// it could not reconnect, and lets later ones time out instead of waiting for
++    /// a reconnect that the session no longer makes.
++    pub(crate) fn shutdown(&self) {
++        self.lock(|inner| {
++            inner.reconnecting = false;
++            inner.pending.clear();
++        });
++    }
++
+     fn send_key_request(&self, seq: u32, track: SpotifyId, file: FileId) -> Result<(), Error> {
+         let mut data: Vec<u8> = Vec::new();
+         data.write_all(&file.0)?;
+@@ -138,3 +171,116 @@ impl AudioKeyManager {
+         self.session().send_packet(PacketType::RequestKey, data)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
++
++    use super::*;
++    use crate::Session;
++
++    const KEY: [u8; 16] = [7; 16];
++
++    fn track() -> SpotifyId {
++        SpotifyId::from_raw(&[1; 16]).expect("16 bytes are a track id")
++    }
++
++    fn file() -> FileId {
++        FileId([2; 20])
++    }
++
++    async fn sent_request(packets: &mut mpsc::UnboundedReceiver<(u8, Vec<u8>)>) -> Vec<u8> {
++        let (cmd, data) = packets.recv().await.expect("a key request");
++        assert_eq!(cmd, PacketType::RequestKey as u8);
++        data
++    }
++
++    fn spawn_request(keys: &AudioKeyManager) -> JoinHandle<Result<AudioKey, Error>> {
++        let keys = keys.clone();
++        tokio::spawn(async move { keys.request(track(), file()).await })
++    }
++
++    fn key_reply(request: &[u8]) -> Bytes {
++        // the request is the file id (20 bytes), track id (16), seq (4) and 2 zero bytes
++        let mut reply = request[36..40].to_vec();
++        reply.extend_from_slice(&KEY);
++        reply.into()
++    }
++
++    fn is_timeout(error: &Error) -> bool {
++        matches!(
++            error.error.downcast_ref::<AudioKeyError>(),
++            Some(AudioKeyError::Timeout)
++        )
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn a_request_times_out_on_its_connection() {
++        let (session, _packets) = Session::with_test_connection();
++        let started = Instant::now();
++
++        let result = session.audio_key().request(track(), file()).await;
++
++        assert!(is_timeout(&result.expect_err("no reply came")));
++        assert_eq!(started.elapsed(), Duration::from_millis(1500));
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn a_request_waits_while_the_session_reconnects() {
++        let (session, mut packets) = Session::with_test_connection();
++        let keys = session.audio_key();
++        let request = spawn_request(keys);
++        let sent = sent_request(&mut packets).await;
++
++        keys.connection_lost();
++        tokio::time::sleep(Duration::from_secs(10)).await;
++        assert!(!request.is_finished());
++
++        keys.reconnected();
++        let resent = sent_request(&mut packets).await;
++        assert_eq!(resent, sent);
++        // the request sent again gets its full time on the new connection
++        tokio::time::sleep(Duration::from_millis(1400)).await;
++        keys.dispatch(PacketType::AesKey, key_reply(&resent))
++            .expect("the request is pending");
++
++        let key = request.await.expect("the request ran");
++        assert_eq!(key.expect("the reply came").0, KEY);
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn a_shutdown_ends_a_request_waiting_for_a_reconnect() {
++        let (session, mut packets) = Session::with_test_connection();
++        let keys = session.audio_key();
++        let request = spawn_request(keys);
++        sent_request(&mut packets).await;
++
++        keys.connection_lost();
++        tokio::time::sleep(Duration::from_secs(10)).await;
++        let shut_down = Instant::now();
++        session.shutdown();
++
++        let result = tokio::time::timeout(Duration::from_secs(60), request)
++            .await
++            .expect("the request ended")
++            .expect("the request ran");
++        assert!(!is_timeout(&result.expect_err("no reply came")));
++        assert_eq!(shut_down.elapsed(), Duration::ZERO);
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn a_request_after_a_shutdown_does_not_wait_for_a_reconnect() {
++        let (session, _packets) = Session::with_test_connection();
++        session.audio_key().connection_lost();
++        session.shutdown();
++
++        let result = tokio::time::timeout(
++            Duration::from_secs(60),
++            session.audio_key().request(track(), file()),
++        )
++        .await
++        .expect("the request ended");
++
++        assert!(is_timeout(&result.expect_err("no reply came")));
++    }
++}
+diff --git a/core/src/connection/mod.rs b/core/src/connection/mod.rs
+index 8301718..caca472 100644
+--- a/core/src/connection/mod.rs
++++ b/core/src/connection/mod.rs
+@@ -62,8 +62,11 @@ impl From<APLoginFailed> for AuthenticationError {
+     }
+ }
+ 
++/// How long the server may take to accept a connection and finish the handshake,
++/// and to answer the login.
++const TIMEOUT: Duration = Duration::from_secs(5);
++
+ pub async fn connect(host: &str, port: u16, proxy: Option<&Url>) -> io::Result<Transport> {
+-    const TIMEOUT: Duration = Duration::from_secs(5);
+     tokio::time::timeout(TIMEOUT, {
+         let socket = crate::socket::connect(host, port, proxy).await?;
+         debug!("Connection to AP established.");
+@@ -164,9 +167,9 @@ pub async fn authenticate(
+ 
+     debug!("Authenticating with AP using {:?}", credentials.auth_type);
+     transport.send((cmd as u8, data)).await?;
+-    let (cmd, data) = transport
+-        .next()
++    let (cmd, data) = tokio::time::timeout(TIMEOUT, transport.next())
+         .await
++        .map_err(Error::deadline_exceeded)?
+         .ok_or(AuthenticationError::Transport)??;
+     let packet_type = FromPrimitive::from_u8(cmd);
+     let result = match packet_type {
+@@ -192,3 +195,35 @@ pub async fn authenticate(
+     };
+     Ok(result?)
+ }
++
++#[cfg(test)]
++mod tests {
++    use tokio::net::TcpListener;
++
++    use super::*;
++    use crate::error::ErrorKind;
++
++    #[tokio::test(start_paused = true)]
++    async fn a_login_without_an_answer_times_out() {
++        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
++        let address = listener.local_addr().expect("an address");
++        let client = TcpStream::connect(address).await.expect("a connection");
++        // the server accepts and stays silent
++        let _server = listener.accept().await.expect("an accepted connection");
++        let mut transport = Framed::new(client, ApCodec::new(&[1; 32], &[2; 32]));
++
++        let login = authenticate(
++            &mut transport,
++            Credentials::with_password("user", "password"),
++            "device",
++        );
++        let result = tokio::time::timeout(Duration::from_secs(60), login)
++            .await
++            .expect("the login ended");
++
++        assert_eq!(
++            result.expect_err("no answer came").kind,
++            ErrorKind::DeadlineExceeded
++        );
++    }
++}
+diff --git a/core/src/mercury/mod.rs b/core/src/mercury/mod.rs
+index fd9e0f5..d7e98f2 100644
+--- a/core/src/mercury/mod.rs
++++ b/core/src/mercury/mod.rs
+@@ -25,6 +25,8 @@ component! {
+         pending: HashMap<Vec<u8>, MercuryPending> = HashMap::new(),
+         subscriptions: Vec<(String, mpsc::UnboundedSender<MercuryResponse>)> = Vec::new(),
+         invalid: bool = false,
++        // Counts the closed connections, which numbers the open one.
++        lost_connections: u32 = 0,
+     }
+ }
+ 
+@@ -54,6 +56,14 @@ impl MercuryManager {
+     }
+ 
+     fn request(&self, req: MercuryRequest) -> Result<MercuryFuture<MercuryResponse>, Error> {
++        Ok(self.request_on_connection(req)?.1)
++    }
++
++    /// Like `request`, and also numbers the connection that carries it.
++    fn request_on_connection(
++        &self,
++        req: MercuryRequest,
++    ) -> Result<(u32, MercuryFuture<MercuryResponse>), Error> {
+         let (tx, rx) = oneshot::channel();
+ 
+         let pending = MercuryPending {
+@@ -63,17 +73,18 @@ impl MercuryManager {
+         };
+ 
+         let seq = self.next_seq();
+-        self.lock(|inner| {
++        let connection = self.lock(|inner| {
+             if !inner.invalid {
+                 inner.pending.insert(seq.clone(), pending);
+             }
++            inner.lost_connections
+         });
+ 
+         let cmd = req.method.command();
+         let data = req.encode(&seq)?;
+ 
+         self.session().send_packet(cmd, data)?;
+-        Ok(MercuryFuture { receiver: rx })
++        Ok((connection, MercuryFuture { receiver: rx }))
+     }
+ 
+     pub fn get<T: Into<String>>(&self, uri: T) -> Result<MercuryFuture<MercuryResponse>, Error> {
+@@ -108,7 +119,7 @@ impl MercuryManager {
+     ) -> impl Future<Output = Result<mpsc::UnboundedReceiver<MercuryResponse>, Error>> + 'static
+     {
+         let uri = uri.into();
+-        let request = self.request(MercuryRequest {
++        let request = self.request_on_connection(MercuryRequest {
+             method: MercuryMethod::Sub,
+             uri: uri.clone(),
+             content_type: None,
+@@ -117,12 +128,14 @@ impl MercuryManager {
+ 
+         let manager = self.clone();
+         async move {
+-            let response = request?.await?;
++            let (connection, request) = request?;
++            let response = request.await?;
+ 
+             let (tx, rx) = mpsc::unbounded_channel();
+ 
+             manager.lock(move |inner| {
+-                if !inner.invalid {
++                // the server forgot the subscription if its connection closed since
++                if !inner.invalid && inner.lost_connections == connection {
+                     debug!("subscribed uri={} count={}", uri, response.payload.len());
+                     if !response.payload.is_empty() {
+                         // Old subscription protocol, watch the provided list of URIs
+@@ -300,12 +313,50 @@ impl MercuryManager {
+         self.connection_lost();
+     }
+ 
+-    /// Ends the requests and subscriptions of a closed connection, which the server forgets.
++    /// Ends the requests, subscriptions and listeners of a closed connection, as a
++    /// shutdown does, so that their callers can make them again on the new one.
+     pub(crate) fn connection_lost(&self) {
+         self.lock(|inner| {
++            inner.lost_connections = inner.lost_connections.wrapping_add(1);
+             // destroy the sending halves of the channels to signal everyone who is waiting for something.
+             inner.pending.clear();
+             inner.subscriptions.clear();
+         });
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use tokio::sync::mpsc::error::TryRecvError;
++
++    use super::*;
++    use crate::Session;
++
++    #[tokio::test]
++    async fn a_subscription_answered_on_a_closed_connection_ends() {
++        let (session, mut packets) = Session::with_test_connection();
++        let mercury = session.mercury();
++        let subscription = mercury.subscribe("hm://test/");
++        let (cmd, request) = packets.recv().await.expect("a subscribe request");
++        assert_eq!(cmd, PacketType::MercurySub as u8);
++        let seq_len = BigEndian::read_u16(&request) as usize;
++        let seq = &request[2..2 + seq_len];
++
++        // the server answers, then closes the connection before the subscriber runs
++        let reply = MercuryRequest {
++            method: MercuryMethod::Sub,
++            uri: "hm://test/".to_string(),
++            content_type: None,
++            payload: Vec::new(),
++        }
++        .encode(seq)
++        .expect("a reply");
++        mercury
++            .dispatch(PacketType::MercurySub, reply.into())
++            .expect("the request is pending");
++        mercury.connection_lost();
++
++        let mut events = subscription.await.expect("the server answered");
++        assert_eq!(events.try_recv().unwrap_err(), TryRecvError::Disconnected);
++    }
++}
+diff --git a/core/src/session.rs b/core/src/session.rs
+index d08e65a..8d7c470 100644
+--- a/core/src/session.rs
++++ b/core/src/session.rs
+@@ -30,7 +30,7 @@ use crate::{
+ use byteorder::{BigEndian, ByteOrder};
+ use bytes::Bytes;
+ use futures_core::TryStream;
+-use futures_util::{SinkExt, StreamExt};
++use futures_util::StreamExt;
+ use librespot_protocol::authentication::AuthenticationType;
+ use num_traits::FromPrimitive;
+ use pin_project_lite::pin_project;
+@@ -40,6 +40,7 @@ use tokio::{
+     sync::mpsc,
+     time::{Duration as TokioDuration, Instant as TokioInstant, Sleep, sleep},
+ };
++use tokio_stream::wrappers::UnboundedReceiverStream;
+ use uuid::Uuid;
+ 
+ const SESSION_DATA_POISON_MSG: &str = "session data rwlock should not be poisoned";
+@@ -123,9 +124,10 @@ struct SessionInternal {
+ /// this structs interface directly or hand it to a
+ /// `Player`.
+ ///
+-/// When the server closes the access-point connection, the session logs in again
+-/// on a new one and stays valid. It is only invalidated when that fails, and
+-/// [Session] instances cannot be reused once invalidated: create a new one.
++/// When the access-point connection is lost, the session logs in again on a new
++/// one and stays valid. If that fails, or the connection keeps closing right after
++/// it opens, the session is invalidated, and an invalidated [Session] cannot be
++/// reused: create a new one.
+ #[derive(Clone)]
+ pub struct Session(Arc<SessionInternal>);
+ 
+@@ -208,9 +210,8 @@ impl Session {
+         credentials: Credentials,
+         store_credentials: bool,
+     ) -> Result<(), Error> {
+-        let (reusable_credentials, transport) = self
+-            .connect_to_access_point(credentials, store_credentials)
+-            .await?;
++        let (reusable_credentials, transport) = self.connect_to_access_point(credentials).await?;
++        self.logged_in(&reusable_credentials, store_credentials);
+ 
+         // This channel serves as a buffer for packets and serializes access to the TcpStream, such
+         // that `self.send_packet` can return immediately and needs no additional synchronization.
+@@ -235,16 +236,15 @@ impl Session {
+     async fn connect_to_access_point(
+         &self,
+         credentials: Credentials,
+-        store_credentials: bool,
+     ) -> Result<(Credentials, Transport), Error> {
+         // There currently happen to be 6 APs but anything will do to avoid an infinite loop.
+         const MAX_AP_TRIES: u8 = 6;
+         let mut num_ap_tries = 0;
+-        let (reusable_credentials, transport) = loop {
++        loop {
+             let ap = self.apresolver().resolve("accesspoint").await?;
+             info!("Connecting to AP \"{}:{}\"", ap.0, ap.1);
+             match self.connect_inner(&ap, credentials.clone()).await {
+-                Ok(ct) => break ct,
++                Ok(ct) => return Ok(ct),
+                 Err(e) => {
+                     num_ap_tries += 1;
+                     if MAX_AP_TRIES == num_ap_tries {
+@@ -266,8 +266,10 @@ impl Session {
+                     }
+                 }
+             }
+-        };
++        }
++    }
+ 
++    fn logged_in(&self, reusable_credentials: &Credentials, store_credentials: bool) {
+         let username = reusable_credentials
+             .username
+             .as_ref()
+@@ -279,15 +281,13 @@ impl Session {
+             if store_credentials {
+                 let cred_changed = cache
+                     .credentials()
+-                    .map(|c| c != reusable_credentials)
++                    .map(|c| c != *reusable_credentials)
+                     .unwrap_or(true);
+                 if cred_changed {
+-                    cache.save_credentials(&reusable_credentials);
++                    cache.save_credentials(reusable_credentials);
+                 }
+             }
+         }
+-
+-        Ok((reusable_credentials, transport))
+     }
+ 
+     pub fn apresolver(&self) -> &ApResolver {
+@@ -643,6 +643,7 @@ impl Session {
+         self.0.data.write().expect(SESSION_DATA_POISON_MSG).invalid = true;
+         self.mercury().shutdown();
+         self.channel().shutdown();
++        self.audio_key().shutdown();
+     }
+ 
+     pub fn is_invalid(&self) -> bool {
+@@ -670,37 +671,37 @@ impl Drop for SessionInternal {
+     }
+ }
+ 
+-/// A connection that closes sooner is not reconnected in place, so a server that
+-/// keeps closing new connections cannot cause a reconnect loop.
++/// A connection that closes within this time of connecting invalidates the
++/// session instead of reconnecting, so reconnects are at least this far apart.
+ const MIN_LIFETIME_TO_RECONNECT: TokioDuration = TokioDuration::from_secs(30);
+ 
++/// Bounds a reconnect as a whole, including looking up access points over HTTP,
++/// so a session does not stay valid for long without a connection.
++const RECONNECT_TIMEOUT: TokioDuration = TokioDuration::from_secs(30);
++
+ /// Carries the session's packets over its access-point connection. When the
+-/// server closes the connection, this logs in again on a new one, so whatever
+-/// runs on the session (the dealer, Connect, playback) is unaffected. Only a
+-/// failed reconnect invalidates the session.
++/// connection is lost (the server closes it, a write fails or the keep-alive times
++/// out), this logs in again on a new one and the session stays valid: the dealer,
++/// Connect and playback carry on. The session is invalidated when that fails.
+ async fn run_connection(
+-    session: SessionWeak,
++    session_weak: SessionWeak,
+     mut transport: Transport,
+-    mut packets: mpsc::UnboundedReceiver<(u8, Vec<u8>)>,
++    packets: mpsc::UnboundedReceiver<(u8, Vec<u8>)>,
+     mut credentials: Credentials,
+     store_credentials: bool,
+ ) {
++    let mut packets = UnboundedReceiverStream::new(packets);
+     loop {
+         let connected_at = TokioInstant::now();
+-        let (mut sink, stream) = transport.split();
+-        let send = async {
+-            while let Some(packet) = packets.recv().await {
+-                sink.send(packet).await?;
+-            }
+-            // every sender is gone with the session
+-            Ok(())
+-        };
++        let (sink, stream) = transport.split();
++        // The connection closes when select! drops these futures, before any reconnect.
+         let lost = tokio::select! {
+-            result = DispatchTask::new(session.clone(), stream) => result,
+-            result = send => result,
++            result = DispatchTask::new(session_weak.clone(), stream) => result,
++            // ends without error once every sender is gone with the session
++            result = packets.by_ref().map(Ok).forward(sink) => result,
+         };
+ 
+-        let (Err(error), Some(session)) = (lost, session.try_upgrade()) else {
++        let (Err(error), Some(session)) = (lost, session_weak.try_upgrade()) else {
+             return;
+         };
+         if session.is_invalid() {
+@@ -713,17 +714,23 @@ async fn run_connection(
+         }
+ 
+         warn!("Connection to server closed ({error}); reconnecting");
+-        // the server forgets what it was asked on the closed connection
+         session.mercury().connection_lost();
+         session.channel().connection_lost();
+-        match session
+-            .connect_to_access_point(credentials.clone(), store_credentials)
+-            .await
+-        {
++        session.audio_key().connection_lost();
++        let reconnect = tokio::time::timeout(
++            RECONNECT_TIMEOUT,
++            session.connect_to_access_point(credentials.clone()),
++        )
++        .await
++        .unwrap_or_else(|elapsed| Err(Error::deadline_exceeded(elapsed)));
++        match reconnect {
++            // shut down while reconnecting
++            Ok(_) if session.is_invalid() => return,
+             Ok((reusable_credentials, new_transport)) => {
++                session.logged_in(&reusable_credentials, store_credentials);
+                 credentials = reusable_credentials;
+                 transport = new_transport;
+-                session.audio_key().resend_pending();
++                session.audio_key().reconnected();
+             }
+             Err(e) => {
+                 error!("Reconnecting to server failed: {e}");
+@@ -734,6 +741,21 @@ async fn run_connection(
+     }
+ }
+ 
++#[cfg(test)]
++impl Session {
++    /// A session whose packets go to the returned receiver instead of to a server.
++    pub(crate) fn with_test_connection() -> (Self, mpsc::UnboundedReceiver<(u8, Vec<u8>)>) {
++        let session = Self::new(SessionConfig::default(), None);
++        let (tx_connection, rx_connection) = mpsc::unbounded_channel();
++        session
++            .0
++            .tx_connection
++            .set(tx_connection)
++            .expect("a new session has no connection");
++        (session, rx_connection)
++    }
++}
++
+ #[derive(Clone, Copy, Default, Debug, PartialEq)]
+ enum KeepAliveState {
+     #[default]

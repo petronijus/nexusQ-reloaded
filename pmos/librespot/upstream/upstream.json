@@ -1,0 +1,9 @@
+{
+  "alpine": "testing/librespot",
+  "github": "librespot-org/librespot",
+  "release": "v0.8.0",
+  "prs": [
+    { "number": 1871, "head": "14c86372f9", "patches": ["0001", "0002", "0003"] },
+    { "number": 1787, "head": "a1b5e44db7", "patches": ["0004", "0005", "0006"] }
+  ]
+}

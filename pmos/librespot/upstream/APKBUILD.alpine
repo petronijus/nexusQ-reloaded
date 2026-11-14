@@ -1,0 +1,42 @@
+# Contributor: Carlo Landmeter <clandmeter@gmail.com>
+maintainer="Patrycja Rosa <alpine@ptrcnull.me>"
+pkgname=librespot
+pkgver=0.8.0
+pkgrel=0
+pkgdesc="Open Source Spotify client library"
+url="https://github.com/librespot-org/librespot"
+arch="all !s390x !riscv64" # limited by cargo
+license="MIT"
+makedepends="cargo alsa-lib-dev cargo-auditable rust-bindgen nasm cmake clang-libclang openssl-dev"
+install="$pkgname.pre-install"
+subpackages="$pkgname-openrc"
+source="librespot-$pkgver.tar.gz::https://github.com/librespot-org/librespot/archive/v$pkgver.tar.gz
+	$pkgname.initd
+	$pkgname.confd
+	"
+# !check: no test suite
+# net: cargo crates
+options="!check net"
+
+prepare() {
+	default_prepare
+
+	cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	cargo auditable build --release --frozen \
+		--features alsa-backend
+}
+
+package() {
+	install -Dm755 target/release/librespot "$pkgdir"/usr/bin/librespot
+	install -Dm755 "$srcdir"/$pkgname.initd "$pkgdir"/etc/init.d/$pkgname
+	install -Dm644 "$srcdir"/$pkgname.confd "$pkgdir"/etc/conf.d/$pkgname
+}
+
+sha512sums="
+d2237d0d02bb73f0b49c9e50d3e5a29f3d4eb49690033a66e9afa98b9099313af287d94c5c5d951cbff8f2431a0f7fa16c19db37c37072fc03bca9b106b19439  librespot-0.8.0.tar.gz
+c7cf6dd1afc67d02c710cd01baacee3084812cbf326514667c9b053fe0b4b7769fdac9f7fc4c2e3ee9755c6fe6d3b9bf4fda1279e507e0abd254157adf44d4c2  librespot.initd
+7be717bbe23b40d6c52b1e9b1ce4cb6d5f243b75ce5479a28fa3fff97f7e80f565321a839259ae7ee4eba47f490f1c0aec72b52e71d25620a98e4c7bcd696cde  librespot.confd
+"

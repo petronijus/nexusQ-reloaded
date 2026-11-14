@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Stefan Dichev <stefanbdichev@gmail.com>
+Date: Sat, 14 Nov 2026 13:25:47 +0000
+Subject: [PATCH 3/7] core: end key requests on shutdown, and drop a reconnect
+ nobody holds
+
+A shutdown that raced the start of a reconnect could leave the audio-key
+manager holding requests for a reconnect that never completes. The
+manager now takes no requests once its session is shut down, as Mercury
+does, so none can wait after a shutdown in either order.
+
+The connection task checks the session again after the reconnect, so a
+session shut down or dropped meanwhile neither takes over the new
+connection nor caches its credentials. A reconnect no longer resends key
+requests whose callers stopped waiting. Every wait in the key tests is
+bounded, and the login timeout's comment no longer claims the TCP
+connect, which happens outside it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013zyp13aMbmU4XmKnuCPVRb
+(cherry picked from commit 14c86372f99e08b59ea68fe4bfa1cb5ee3be5993)
+---
+ core/src/audio_key.rs      | 59 +++++++++++++++++++++++++++++---------
+ core/src/connection/mod.rs |  3 +-
+ core/src/session.rs        | 49 ++++++++++++++++---------------
+ 3 files changed, 72 insertions(+), 39 deletions(-)
+
+diff --git a/core/src/audio_key.rs b/core/src/audio_key.rs
+index cfde798..2cc77b9 100644
+--- a/core/src/audio_key.rs
++++ b/core/src/audio_key.rs
+@@ -40,6 +40,7 @@ component! {
+     AudioKeyManager : AudioKeyManagerInner {
+         sequence: SeqGenerator<u32> = SeqGenerator::new(0),
+         pending: HashMap<u32, PendingKey> = HashMap::new(),
++        invalid: bool = false,
+         // Counts the connections to the server, so a request can tell that it was sent
+         // again on a new one.
+         connection: u32 = 0,
+@@ -94,12 +95,14 @@ impl AudioKeyManager {
+ 
+         let (seq, mut connection) = self.lock(move |inner| {
+             let seq = inner.sequence.get();
+-            let key = PendingKey {
+-                track,
+-                file,
+-                sender: tx,
+-            };
+-            inner.pending.insert(seq, key);
++            if !inner.invalid {
++                let key = PendingKey {
++                    track,
++                    file,
++                    sender: tx,
++                };
++                inner.pending.insert(seq, key);
++            }
+             (seq, inner.connection)
+         });
+ 
+@@ -138,6 +141,8 @@ impl AudioKeyManager {
+         let requests: Vec<_> = self.lock(|inner| {
+             inner.connection = inner.connection.wrapping_add(1);
+             inner.reconnecting = false;
++            // requests whose callers stopped waiting
++            inner.pending.retain(|_, key| !key.sender.is_closed());
+             inner
+                 .pending
+                 .iter()
+@@ -152,11 +157,11 @@ impl AudioKeyManager {
+     }
+ 
+     /// Ends the pending requests of a session that is shut down, for example after
+-    /// it could not reconnect, and lets later ones time out instead of waiting for
+-    /// a reconnect that the session no longer makes.
++    /// it could not reconnect, and the ones made later, as Mercury does: none waits
++    /// for a reconnect that the session no longer makes.
+     pub(crate) fn shutdown(&self) {
+         self.lock(|inner| {
+-            inner.reconnecting = false;
++            inner.invalid = true;
+             inner.pending.clear();
+         });
+     }
+@@ -190,7 +195,10 @@ mod tests {
+     }
+ 
+     async fn sent_request(packets: &mut mpsc::UnboundedReceiver<(u8, Vec<u8>)>) -> Vec<u8> {
+-        let (cmd, data) = packets.recv().await.expect("a key request");
++        let (cmd, data) = tokio::time::timeout(Duration::from_secs(60), packets.recv())
++            .await
++            .expect("a key request was sent")
++            .expect("the session is open");
+         assert_eq!(cmd, PacketType::RequestKey as u8);
+         data
+     }
+@@ -219,7 +227,12 @@ mod tests {
+         let (session, _packets) = Session::with_test_connection();
+         let started = Instant::now();
+ 
+-        let result = session.audio_key().request(track(), file()).await;
++        let result = tokio::time::timeout(
++            Duration::from_secs(60),
++            session.audio_key().request(track(), file()),
++        )
++        .await
++        .expect("the request ended");
+ 
+         assert!(is_timeout(&result.expect_err("no reply came")));
+         assert_eq!(started.elapsed(), Duration::from_millis(1500));
+@@ -248,6 +261,21 @@ mod tests {
+         assert_eq!(key.expect("the reply came").0, KEY);
+     }
+ 
++    #[tokio::test(start_paused = true)]
++    async fn a_request_given_up_on_is_not_sent_again() {
++        let (session, mut packets) = Session::with_test_connection();
++        let keys = session.audio_key();
++        let request = spawn_request(keys);
++        sent_request(&mut packets).await;
++        request.abort();
++        let _ = request.await;
++
++        keys.connection_lost();
++        keys.reconnected();
++
++        assert!(packets.try_recv().is_err());
++    }
++
+     #[tokio::test(start_paused = true)]
+     async fn a_shutdown_ends_a_request_waiting_for_a_reconnect() {
+         let (session, mut packets) = Session::with_test_connection();
+@@ -269,10 +297,12 @@ mod tests {
+     }
+ 
+     #[tokio::test(start_paused = true)]
+-    async fn a_request_after_a_shutdown_does_not_wait_for_a_reconnect() {
++    async fn a_request_after_a_shutdown_ends_at_once() {
+         let (session, _packets) = Session::with_test_connection();
+-        session.audio_key().connection_lost();
++        let started = Instant::now();
+         session.shutdown();
++        // the connection task can still report a loss that raced the shutdown
++        session.audio_key().connection_lost();
+ 
+         let result = tokio::time::timeout(
+             Duration::from_secs(60),
+@@ -281,6 +311,7 @@ mod tests {
+         .await
+         .expect("the request ended");
+ 
+-        assert!(is_timeout(&result.expect_err("no reply came")));
++        assert!(!is_timeout(&result.expect_err("no reply came")));
++        assert_eq!(started.elapsed(), Duration::ZERO);
+     }
+ }
+diff --git a/core/src/connection/mod.rs b/core/src/connection/mod.rs
+index caca472..cf3a163 100644
+--- a/core/src/connection/mod.rs
++++ b/core/src/connection/mod.rs
+@@ -62,8 +62,7 @@ impl From<APLoginFailed> for AuthenticationError {
+     }
+ }
+ 
+-/// How long the server may take to accept a connection and finish the handshake,
+-/// and to answer the login.
++/// How long the server may take to finish the handshake, and to answer the login.
+ const TIMEOUT: Duration = Duration::from_secs(5);
+ 
+ pub async fn connect(host: &str, port: u16, proxy: Option<&Url>) -> io::Result<Transport> {
+diff --git a/core/src/session.rs b/core/src/session.rs
+index 8d7c470..1815a9b 100644
+--- a/core/src/session.rs
++++ b/core/src/session.rs
+@@ -125,8 +125,8 @@ struct SessionInternal {
+ /// `Player`.
+ ///
+ /// When the access-point connection is lost, the session logs in again on a new
+-/// one and stays valid. If that fails, or the connection keeps closing right after
+-/// it opens, the session is invalidated, and an invalidated [Session] cannot be
++/// one and stays valid. If that fails, or a connection closes within 30 seconds of
++/// opening, the session is invalidated, and an invalidated [Session] cannot be
+ /// reused: create a new one.
+ #[derive(Clone)]
+ pub struct Session(Arc<SessionInternal>);
+@@ -691,6 +691,8 @@ async fn run_connection(
+     store_credentials: bool,
+ ) {
+     let mut packets = UnboundedReceiverStream::new(packets);
++    // None once the session is shut down or dropped
++    let valid_session = || session_weak.try_upgrade().filter(|s| !s.is_invalid());
+     loop {
+         let connected_at = TokioInstant::now();
+         let (sink, stream) = transport.split();
+@@ -701,12 +703,9 @@ async fn run_connection(
+             result = packets.by_ref().map(Ok).forward(sink) => result,
+         };
+ 
+-        let (Err(error), Some(session)) = (lost, session_weak.try_upgrade()) else {
++        let (Err(error), Some(session)) = (lost, valid_session()) else {
+             return;
+         };
+-        if session.is_invalid() {
+-            return;
+-        }
+         if connected_at.elapsed() < MIN_LIFETIME_TO_RECONNECT {
+             error!("Connection to server closed ({error}) right after connecting");
+             session.shutdown();
+@@ -723,9 +722,13 @@ async fn run_connection(
+         )
+         .await
+         .unwrap_or_else(|elapsed| Err(Error::deadline_exceeded(elapsed)));
++        // A session shut down or dropped meanwhile must not take over the new
++        // connection, nor cache its credentials over another session's.
++        drop(session);
++        let Some(session) = valid_session() else {
++            return;
++        };
+         match reconnect {
+-            // shut down while reconnecting
+-            Ok(_) if session.is_invalid() => return,
+             Ok((reusable_credentials, new_transport)) => {
+                 session.logged_in(&reusable_credentials, store_credentials);
+                 credentials = reusable_credentials;
+@@ -741,21 +744,6 @@ async fn run_connection(
+     }
+ }
+ 
+-#[cfg(test)]
+-impl Session {
+-    /// A session whose packets go to the returned receiver instead of to a server.
+-    pub(crate) fn with_test_connection() -> (Self, mpsc::UnboundedReceiver<(u8, Vec<u8>)>) {
+-        let session = Self::new(SessionConfig::default(), None);
+-        let (tx_connection, rx_connection) = mpsc::unbounded_channel();
+-        session
+-            .0
+-            .tx_connection
+-            .set(tx_connection)
+-            .expect("a new session has no connection");
+-        (session, rx_connection)
+-    }
+-}
+-
+ #[derive(Clone, Copy, Default, Debug, PartialEq)]
+ enum KeepAliveState {
+     #[default]
+@@ -1034,3 +1022,18 @@ where
+         Poll::Pending
+     }
+ }
++
++#[cfg(test)]
++impl Session {
++    /// A session whose packets go to the returned receiver instead of to a server.
++    pub(crate) fn with_test_connection() -> (Self, mpsc::UnboundedReceiver<(u8, Vec<u8>)>) {
++        let session = Self::new(SessionConfig::default(), None);
++        let (tx_connection, rx_connection) = mpsc::unbounded_channel();
++        session
++            .0
++            .tx_connection
++            .set(tx_connection)
++            .expect("a new session has no connection");
++        (session, rx_connection)
++    }
++}
