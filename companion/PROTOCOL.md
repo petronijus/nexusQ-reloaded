@@ -913,11 +913,11 @@ flash-only glibc-rt dep); afterward the config is incremental.
 | Method | Params | Result |
 |---|---|---|
 | `checkNexusUpdate` | — | `{ packages: [{ name, installed, available, upgradable }], updateAvailable: bool, repo }` — `apk update` + `list --upgradable`/`--installed`; installs nothing |
-| `installNexusUpdate` | — | `{ ok: true, upgraded: [name], restarting: bool, triggerErrors: [name], output }` — `apk upgrade`s the daemons, animates the LEDs, then restarts the changed daemons (incl. this bridge) off-thread. `triggerErrors` (control r67): packages whose apk trigger failed in a transaction that still committed, tolerated only for triggers inert on the Q (`postmarketos-mkinitfs`); the update counts as done (see `installSystemUpdate`). Older daemons omit it; treat absent as `[]`. |
+| `installNexusUpdate` | `{ async?: bool }` | With `async: true` (control r70+): `{ started: true, job }` at once — a **`daemons` job** (§12d) upgrades the daemons, narrates on the ring and restarts the changed ones (incl. this bridge). Without it, the blocking form: waits for that job and answers `{ ok: true, upgraded: [name], restarting: bool, triggerErrors: [name], output }`. `triggerErrors` (control r67): packages whose apk trigger failed in a transaction that still committed, tolerated only for triggers inert on the Q (`postmarketos-mkinitfs`); the update counts as done (see `installSystemUpdate`). Older daemons omit it; treat absent as `[]`. |
 
-`installNexusUpdate` is guarded by an **install lock**: a concurrent install is
+Only one install runs at a time: while a job runs (§12d), another install is
 refused with error **`busy`** ("an update is already installing") rather than racing a
-second `apk upgrade`. (A flaky link had the app resend the call; with per-request
+second `apk upgrade`, and both checks answer `{ busy: true, … }` at once. (A flaky link had the app resend the call; with per-request
 threads that launched a second upgrade over the first, and the first got killed =
 `Terminated` when control restarted itself.) Other errors: `unavailable`
 (`apk upgrade` failed / cannot edit `/etc/apk/repositories`), `timeout` (apk did not
@@ -940,9 +940,16 @@ overlay) and resuming the moment that ends.
 | Phase | LED |
 |---|---|
 | Update available | mute LED **blinks amber** — `mblink 255 140 0` — while a daemon update (`checkNexusUpdate`) **or** a release (§12c) is pending; `mblink stop` when neither is (control r64+; before, only `checkNexusUpdate` drove it). The bridge re-asserts it on the ring's 30 s beat, so a restarted nexusqd gets it back; nexusqd r26+ treats a repeat as a no-op |
-| Installing (`installNexusUpdate`) | mute-LED blink held dark for the install; the RING shows a **determinate progress bar** — `progress <pct>` in `#0099CC`, eased toward a soft cap while `apk upgrade` runs, snapped to 100 % on finish |
-| Success | ring flashes **green** (`set 0 255 0`), held ~2.5 s, then back to the theme |
-| Failure | ring restored straight to the theme; once the install has ended the bridge compares the release with what is installed again, and the mute LED blinks again if something is still pending |
+| Preparing (refreshing the package lists) | mute-LED blink held dark for the whole job; the ring spins (`spin 0 153 204 2`) |
+| Downloading (control r70+, either track) | the ring **fills with the download's real progress** in deep blue — `progress <pct> 0 70 160`, 0–100 % of the download |
+| Installing | the ring **fills again** with the install's real progress in bright cyan — `progress <pct> 0 200 255` |
+| Applying (restarts) | the ring spins |
+| Success | ring flashes **green** (`set 0 255 0`), held ~2.5 s, then back to the theme (or stays green into a reboot) |
+| Failure | ring flashes **red** (`set 255 0 0`) ~2.5 s, then back to the theme; once the job has ended the bridge compares the release with what is installed again, and the mute LED blinks again if something is still pending |
+
+The job (§12d) drives the ring itself, so the narration goes on while the bridge
+restarts. Before r70 the daemon track eased a `progress` bar toward a soft cap
+and the system track spun for the whole install.
 
 These use two nexusqd LED primitives (r11), also listed in the §4 LED-ring table:
 - **`progress <pct> [R G B]`** — a determinate ring bar: lights `pct`% of the 32-LED
@@ -961,7 +968,7 @@ from the Alpine·pmOS mirrors + our config + daemons from the OTA repo) — the
 | Method | Params | Result |
 |---|---|---|
 | `checkSystemUpdate` | — | `{ packages: [{ name, installed, available }], updateAvailable: bool, kernel, repo }` — `apk update` + `apk version -l '<'`, **minus the kernel**; `kernel` is the running `uname -r` (read-only). Installs nothing. Does **NOT** blink the mute LED (that stays the §12a "daemon available" indicator). |
-| `installSystemUpdate` | — | `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, systemdChanged: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons off-thread, **reboots if base libc/init churned**. `systemdChanged` (r36, 2026-09-05) is true when `systemd` or a `systemd-*` package was in `changed` (not `postmarketos-base-systemd` / `linux-pam-systemd` / `nftables-systemd`); the daemon then runs `systemctl daemon-reexec` **before** any restart — a freshly installed systemd left the old PID 1 unable to exec services (`status=127`, no output) until re-exec. Otherwise a `daemon-reload` precedes the restarts. Older daemons omit the field; treat absent as `false`. `triggerErrors` (r67): the packages whose inert trigger (only `postmarketos-mkinitfs`) failed after the transaction committed -- apk then exits non-zero with "N error(s)" although everything is installed (postmarketos-mkinitfs 2.12.0-r1, 2026-10-12, ran a binary its own package had moved). Only such trigger failures are tolerated; a failed trigger of any other package (our device package pins the amplifier gain in its trigger), any other `ERROR:` line, or a non-zero exit without one, is still `unavailable`. Since r68 the daemon also accounts for the error apk *remembers*: after a failed trigger the package stays flagged and every later transaction, even one that runs no trigger, ends "1 error" with exit 1 and no `ERROR:` line; the daemon asks `apk fix --simulate` which packages are flagged and tolerates the count only when the inert trigger lines plus the flagged inert packages explain it (any other flagged package, or a count they do not explain, is `unavailable`). Treat absent as `[]`. |
+| `installSystemUpdate` | `{ async?: bool }` | With `async: true` (control r70+): `{ started: true, job }` at once — a **`system` job** (§12d). Without it, the blocking form waits for that job and answers `{ ok: true, changed: [name], daemons: [name], rebootRecommended: bool, systemdChanged: bool, output }` — `apk upgrade --available` across the system **except the kernel**; restarts changed daemons, **reboots if base libc/init churned**. `systemdChanged` (r36, 2026-09-05) is true when `systemd` or a `systemd-*` package was in `changed` (not `postmarketos-base-systemd` / `linux-pam-systemd` / `nftables-systemd`); the daemon then runs `systemctl daemon-reexec` **before** any restart — a freshly installed systemd left the old PID 1 unable to exec services (`status=127`, no output) until re-exec. Otherwise a `daemon-reload` precedes the restarts. Older daemons omit the field; treat absent as `false`. `triggerErrors` (r67): the packages whose inert trigger (only `postmarketos-mkinitfs`) failed after the transaction committed -- apk then exits non-zero with "N error(s)" although everything is installed (postmarketos-mkinitfs 2.12.0-r1, 2026-10-12, ran a binary its own package had moved). Only such trigger failures are tolerated; a failed trigger of any other package (our device package pins the amplifier gain in its trigger), any other `ERROR:` line, or a non-zero exit without one, is still `unavailable`. Since r68 the daemon also accounts for the error apk *remembers*: after a failed trigger the package stays flagged and every later transaction, even one that runs no trigger, ends "1 error" with exit 1 and no `ERROR:` line; the daemon asks `apk fix --simulate` which packages are flagged and tolerates the count only when the inert trigger lines plus the flagged inert packages explain it (any other flagged package, or a count they do not explain, is `unavailable`). Treat absent as `[]`. |
 
 **This track never applies a kernel.** Applying one is a boot-partition write, which
 since 2026-08-18 has its own path — `nexusq-kernel-ota`'s health-gated trial slot
@@ -977,14 +984,11 @@ any changed package name starts with **`musl` / `systemd` / `kmod` / `eudev` /
 On reboot the ring stays **green** (last thing seen = success); the app reconnects when
 the Q is back. Otherwise the theme is restored and only changed daemons restart.
 
-**LED: the INDETERMINATE spinner, not the determinate bar.** A full-system upgrade is
-slow and of unknown length (downloads + triggers like mkinitfs), so the determinate
-`progress` bar would ease to its ~92 % cap and sit there looking frozen. The system
-install narrates with **`spin 0 153 204 2`** (fast blue) → **green** `set 0 255 0` on
-success (which also stops the spin). The daemon track (§12.3) keeps the determinate bar
-— its upgrade is small and short. Guarded by the same install lock (`Err "busy"`); the
-install can drop the app link (bridge restart / reboot) — that is **expected**, success
-is confirmed by reconnect + re-check.
+**LED: the real progress (r70+).** The job narrates the download and the install on
+the ring as described in §12.3. (Before r70 the system install only spun: apk gave no
+percentage that the bridge could read.) One install at a time (`Err "busy"`); the
+install can drop the app link (bridge restart / reboot) — that is **expected**; a client
+reconnects and reads the job (`getUpdateJob`, §12d).
 
 ### 12c. Release watch — "a new release is out" (`nexusq-control` r64+)
 
@@ -1071,6 +1075,74 @@ version already on gh-pages but other packages: a unit that installed that
 release would read it as pending again, with notes it has seen. A change of
 packages is a new version with its own notes. `package-release.sh` refuses a
 release whose `pmos/release-notes.json` is for another version.
+
+### 12d. Install jobs — progress, and an install that cannot be killed (`nexusq-control` r70+)
+
+An install is a **job** (docs/2026-11-15-ota-jobs.md): `installSystemUpdate` /
+`installNexusUpdate` with `async: true` start it and answer at once. The job runs
+in its own unit (`nexusq-ota@system` / `nexusq-ota@daemons`), not in the bridge, so a
+bridge restart (its own upgrade) does not stop it. A separate apk process downloads
+the packages the update needs first, with nothing changed on the system, then another
+installs from that download; the download can be stopped and resumed, the install is never signalled
+(a shutdown waits for it). A job that a power cut or
+a reboot interrupted is started again by the bridge at its next start and finishes
+from what was downloaded (at most three attempts).
+
+| Method | Params | Result |
+|---|---|---|
+| `getUpdateJob` | — | `{ job }` — the current job, or the last one once it ended; `job: null` when this unit never ran one |
+
+Events, to every client:
+
+- **`updateProgress`** (the job object) while a job runs, when something a person
+  would notice changed (phase, percent, package, stalled, the ETA in 10 s steps), at
+  most about twice a second; also once right after a start.
+- **`updateFinished`** (the job object) once, when it ends — also when it ended while
+  no bridge watched (it restarted this bridge, or the Q rebooted), told by the next
+  bridge as it starts.
+
+The **job object**:
+
+```json
+{ "id": "20261115-101500-system", "kind": "system",
+  "state": "running", "phase": "installing",
+  "attempt": 1, "resumed": false,
+  "startedAt": 1794736500, "updatedAt": 1794736722, "finishedAt": null,
+  "stalled": false,
+  "progress": { "percent": 71, "phasePercent": 32,
+                "packagesDone": 125, "packagesTotal": 393,
+                "current": "pulseaudio",
+                "bytesDone": null, "bytesTotal": null, "etaS": 250 },
+  "result": null, "error": null }
+```
+
+- `kind`: `system` (§12b) or `daemons` (§12a).
+- `state`: `running`, then `done` or `failed`.
+- `phase`: `preparing` (refreshing the package lists) → `downloading` → `installing`
+  → `applying` (restarts) → `rebooting` (base libc/init changed; the job is `done`
+  when the Q is back) → `done` | `failed`. A phase with nothing to do is skipped.
+- `progress.percent`: overall, 0–100, never goes back (preparing 0–5, downloading
+  5–60, installing 60–95, applying 95–100). `phasePercent`: of the current phase,
+  from apk's own progress (bytes). `packagesDone`/`packagesTotal` and `current`: the
+  package apk is at in this phase. `bytesDone`/`bytesTotal`: the download only,
+  else `null`. `etaS`: seconds left, an estimate (while downloading it includes the
+  install, at about a second a package); `null` until it can be told.
+- `stalled`: the install has made no progress for 10 minutes. It goes on (apk is
+  never killed while it installs); a client says so. A download that makes no
+  progress for 5 minutes is stopped instead and the job fails — nothing was changed,
+  and a new install resumes from what came.
+- `resumed`, `attempt`: the job is finishing an interrupted one. The `result` of a
+  resumed job lists only what that attempt installed.
+- `result` (when `done`): the fields of the blocking answers above — `changed`,
+  `daemons`, `rebootRecommended`, `systemdChanged`, `triggerErrors`, `output`, and
+  for `daemons` also `upgraded`, `restarting`.
+- `error` (when `failed`): why, in words a person can read ("not enough space: the
+  update needs about 900 MiB free, the Q has 610 MiB"). Room is checked before the
+  download: the download, plus what apk says the system grows by, plus 192 MiB.
+
+Errors of the install methods: `busy` (a job runs), `bad_request` (`async` not a
+bool), `unavailable` (the job could not start; and in the blocking form, the job's
+`error`).
 
 ## 13. MQTT telemetry provisioning — v1.12.x (dev)
 

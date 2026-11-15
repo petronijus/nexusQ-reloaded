@@ -139,31 +139,28 @@ class ApkFailed(unittest.TestCase):
 
 
 class InstallPathsUseIt(unittest.TestCase):
-    """Both OTA tracks go through _apk_failed, so a trigger-only error reaches the
-    restart tail and is reported in triggerErrors."""
+    """Both OTA job kinds go through _apk_failed (OtaRunner._transaction), so a
+    trigger-only error reaches the apply step and is reported in triggerErrors."""
 
     def setUp(self):
         self.mod = load_daemon()
-        self.mod._ensure_ota_repo = lambda: None
         self.mod._apk_flagged = lambda: []
 
-    def fake_apk(self, upgrade_result):
-        def _apk(*args, timeout=90):
-            return upgrade_result if args[0] == "upgrade" else run(0, "")
-
-        return _apk
+    def transaction(self, kind, result):
+        """The install's outcome as the runner judges it (OtaRunner.run)."""
+        why = self.mod._apk_failed(result)
+        if why:
+            raise self.mod.OtaFailed(f"apk upgrade failed: {why}")
+        return self.mod.OtaRunner(kind, ring=lambda c: None)._result(result)
 
     def test_system_update_restarts_after_a_trigger_error(self):
-        self.mod._apk = self.fake_apk(run(1, TRIGGER_ONLY.replace("nexusq-sgx", "device-google-steelhead")))
-        res = self.mod.install_system_update()
-        self.assertTrue(res["ok"])
+        res = self.transaction("system", run(1, TRIGGER_ONLY.replace("nexusq-sgx", "device-google-steelhead")))
         self.assertEqual(res["daemons"], ["nq-healthd"])
         self.assertEqual(res["triggerErrors"], ["postmarketos-mkinitfs-2.12.0-r1"])
 
     def test_nexus_update_reports_a_real_failure(self):
-        self.mod._apk = self.fake_apk(run(1, REAL_FAILURE))
-        with self.assertRaises(self.mod.Err):
-            self.mod.install_nexus_update()
+        with self.assertRaises(self.mod.OtaFailed):
+            self.transaction("daemons", run(1, REAL_FAILURE))
 
 
 if __name__ == "__main__":

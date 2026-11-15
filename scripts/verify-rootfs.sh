@@ -101,6 +101,16 @@ if [ -f "$MNT/usr/lib/systemd/system/nexusq-control.service" ]; then
         ok "nexusq-control NOT nice'd" "(deliberate: app volume RPC)"
     fi
 fi
+# The update job (nexusq-control r70+, PROTOCOL §12d): without its unit the
+# bridge's install methods cannot start one. KillMode=mixed is what keeps a
+# shutdown from killing apk mid-commit.
+OTA_UNIT="$MNT/usr/lib/systemd/system/nexusq-ota@.service"
+if grep -qs '^ExecStart=/usr/bin/nexusq-control --ota-run %i$' "$OTA_UNIT" &&
+    grep -qs '^KillMode=mixed$' "$OTA_UNIT"; then
+    ok "nexusq-ota@.service runs the update job" "(KillMode=mixed)"
+else
+    bad "nexusq-ota@.service runs the update job" "unit missing or not the job runner"
+fi
 if [ -f "$MNT/usr/bin/nexusq-btagent" ]; then
     if grep -q 'SETUPD_CGROUP' "$MNT/usr/bin/nexusq-btagent"; then
         ok "btagent uses the cgroup test" "no systemctl polling"

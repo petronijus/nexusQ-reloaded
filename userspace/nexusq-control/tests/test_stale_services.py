@@ -134,6 +134,13 @@ class TestStaleUserServices(unittest.TestCase):
         self.assertIn("self.stale_services = StaleUserServices(", src)
         self.assertIn("threading.Thread(target=bridge.stale_services.run, daemon=True).start()", src)
 
+    def test_never_while_an_update_job_runs(self):
+        # A half-installed system is no place to start a player on its new binary.
+        src = open(DAEMON).read()
+        wiring = src[src.index("self.stale_services = StaleUserServices(") :]
+        wiring = wiring[: wiring.index(")\n")]
+        self.assertIn("self.ota.running()", wiring)
+
     def test_playback_going_idle_wakes_the_check(self):
         b = object.__new__(MOD.Bridge)
         b.lock = MOD.threading.Lock()
@@ -145,16 +152,18 @@ class TestStaleUserServices(unittest.TestCase):
         self.assertTrue(b.stale_services.wake.is_set())
 
     def test_only_a_successful_install_wakes_the_check(self):
-        # The wake sits after the _finish_* call in both install paths, never in
-        # the finally that also runs after a failed or killed install.
-        src = open(DAEMON).read()
-        for finish in ("self._finish_nexus_update(", "self._finish_system_update("):
-            tail = src[src.index(finish) :]
-            block = tail[: tail.index("finally:")]
-            self.assertIn("self.stale_services.wake.set()", block, finish)
-        after = src[src.index("    def _after_install(self):") :]
-        after = after[: after.index("    def _led_restore_theme")]
-        self.assertNotIn("stale_services", after)
+        # A failed or interrupted job can leave a new binary next to libraries it
+        # does not have yet: restarting into that would crash-loop a player.
+        for state, woken in (("done", True), ("failed", False)):
+            with self.subTest(state=state):
+                b = object.__new__(MOD.Bridge)
+                b.lock = MOD.threading.Lock()
+                b.clients = {}
+                b.update_led = mock_led()
+                b.stale_services = MOD.StaleUserServices(None, None, None, None, None)
+                b._after_install = lambda: None
+                b._ota_finished({"state": state, "phase": state})
+                self.assertEqual(b.stale_services.wake.is_set(), woken)
 
     def test_the_diagnostics_mode_and_this_share_one_restart_record(self):
         b = object.__new__(MOD.Bridge)
@@ -163,6 +172,17 @@ class TestStaleUserServices(unittest.TestCase):
             b._restart_user_unit(SPOT)
         sc.assert_called_once_with("try-restart", SPOT, timeout=45)
         self.assertIn(SPOT, b._user_restarts)
+
+
+def mock_led():
+    class Led:
+        def set(self, reason, on):
+            pass
+
+        def hold(self, on):
+            pass
+
+    return Led()
 
 
 class TestUnitStreams(unittest.TestCase):

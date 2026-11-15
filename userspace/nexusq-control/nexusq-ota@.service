@@ -1,0 +1,35 @@
+# userspace/nexusq-control/nexusq-ota@.service
+# An update job (PROTOCOL §12d, docs/2026-11-15-ota-jobs.md): the instance is
+# its kind, `system` (every package but the kernel) or `daemons` (our four).
+# Started by nexusq-control (`systemctl start --no-block nexusq-ota@system`),
+# which reads the job's progress from /run/nexusq/ota.json and tells the
+# clients. Never enabled: it runs when asked, and a job a power cut interrupted
+# is started again by the next bridge.
+#
+# Its own unit, so its own cgroup: the bridge restarts itself when its package
+# changes, and an apk running in the bridge's cgroup went down with it.
+[Unit]
+Description=Nexus Q update job (%i)
+Documentation=https://github.com/petronijus/nexusQ-reloaded/blob/main/docs/2026-11-15-ota-jobs.md
+# One job at a time is the bridge's rule (OtaJobs.start refuses a second).
+# No After=network-online.target: a job the next bridge resumes would sit
+# queued behind it at boot. The runner tries the package lists again for three
+# minutes and then goes on with the cached ones.
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/nexusq-control --ota-run %i
+# A shutdown stops the job: SIGTERM goes to the runner only (KillMode=mixed),
+# which stops a download (nothing changed yet) but lets an install finish --
+# apk is never killed mid-commit. The SIGKILL to the rest comes only after
+# TimeoutStopSec, longer than a large install from the cache takes (393
+# packages in 380 s on 2026-11-14).
+KillMode=mixed
+TimeoutStopSec=20min
+# The progress goes to /run/nexusq/ota.json. That directory is shared with
+# other units, so the runner creates it when missing instead of a
+# RuntimeDirectory= that would own (and on stop, remove) it.
+# Below the music: the job yields the CPU and the eMMC to playback.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

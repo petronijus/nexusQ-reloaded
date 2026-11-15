@@ -37,8 +37,10 @@ import json
 import math
 import os
 import re
+import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import unicodedata
@@ -245,7 +247,7 @@ def _theme_save(name, path=None):
 def theme_restore_thread(path=None):
     """Boot re-apply of the persisted theme. nexusqd's breathing override is
     in-memory, so a stored theme must be re-sent after every boot (and after a
-    nexusqd restart the OTA paths already handle via _led_restore_theme).
+    nexusqd restart an update job does that itself, OtaRunner._ring_theme).
     Retries briefly: nexusqd's socket may not be up yet when the bridge starts.
     Nothing stored → nothing sent, the ring keeps nexusqd's stock idle look."""
     name = _theme_load(path)
@@ -1432,43 +1434,6 @@ def nexusqd_send(line):
     except OSError as e:
         log("nexusqd send failed:", e)
         return False
-
-
-class _OtaProgress:
-    """Drive nexusqd's determinate ring bar (`progress <pct>`) during an OTA install.
-
-    apk exposes no machine-readable percentage, so a background thread eases the bar
-    asymptotically toward a soft cap while the (blocking) install runs — covering a
-    fixed fraction of the remaining gap each tick, so it decelerates and never quite
-    fills. finish() snaps it to 100%; cancel() stops it silently (e.g. on error)."""
-
-    def __init__(self, rgb=(0, 153, 204), cap=92, tick=0.4):
-        self._rgb = rgb
-        self._cap = cap
-        self._tick = tick
-        self._pct = 0
-        self._stop = threading.Event()
-        self._t = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        nexusqd_send("progress 0 %d %d %d" % self._rgb)
-        self._t.start()
-        return self
-
-    def _run(self):
-        while not self._stop.wait(self._tick):
-            self._pct += max(1, (self._cap - self._pct) * 18 // 100)
-            if self._pct >= self._cap:
-                self._pct = self._cap
-            nexusqd_send("progress %d %d %d %d" % ((self._pct,) + self._rgb))
-
-    def cancel(self):
-        self._stop.set()
-        self._t.join(timeout=1.0)
-
-    def finish(self):
-        self.cancel()
-        nexusqd_send("progress 100 %d %d %d" % self._rgb)
 
 
 BTAGENT_SOCK = os.environ.get("NEXUSQ_BTAGENT_SOCK", "/run/nexusq-btagent.sock")
@@ -3226,27 +3191,19 @@ def eq_restore_thread():
 NEXUSQ_OTA_REPO = "https://petronijus.github.io/nexusQ-reloaded/nexusq"
 OTA_PACKAGES = ["nexusq-control", "nexusqd", "nexusq-btagent", "nexusq-setupd"]
 _APK_REPOS = "/etc/apk/repositories"
-# Two locks, two jobs:
-#  * _apk_lock serializes the actual `apk` SUBPROCESS (see _apk). `apk` holds an
-#    exclusive DB lock, so two apk processes at once fail with "Unable to lock
-#    database" — two concurrent CHECKS, or a check racing an install, hit that.
-#    Every apk call queues behind it (sub-second for checks).
-#  * _nexus_install_lock marks "an INSTALL is in progress". Installs take it
-#    (non-blocking → refuse a concurrent install). Checks only *test* it: if an
-#    install holds it they return busy=True immediately (don't block on the
-#    install's long `apk upgrade`); otherwise they run normally and their apk
-#    calls just serialize via _apk_lock. This is the fix for r26's regression,
-#    where checks TOOK _nexus_install_lock and so a routine check-during-check
-#    (the app runs checkNexusUpdate on open) wrongly reported "update in progress".
-_nexus_install_lock = threading.Lock()
+# _apk_lock serializes the `apk` SUBPROCESSES of this bridge (see _apk): apk
+# holds an exclusive DB lock, so two at once fail with "Unable to lock
+# database". An INSTALL is not one of them any more: it runs as a job in its
+# own unit (OtaRunner), and while one runs the checks answer busy=True at once
+# (OtaJobs.running) instead of queueing behind its apk.
 _apk_lock = threading.Lock()
 
 
 def _apk(*args, timeout=90):
     # One apk process at a time (exclusive DB lock). Bounded wait: if an install's
     # long `apk upgrade` holds it, a racing check gives up after its own timeout
-    # rather than hanging (checks are short-circuited earlier anyway via
-    # _nexus_install_lock, so this only catches the rare start-mid-check race).
+    # rather than hanging (checks answer busy=True while an install job runs,
+    # so this only catches two checks at once).
     if not _apk_lock.acquire(timeout=timeout):
         raise Err("busy", "apk is busy with another operation")
     try:
@@ -3398,33 +3355,6 @@ def _apk_changed(r):
     return names
 
 
-def install_nexus_update():
-    """Upgrade our daemons from the OTA repo. Returns which packages actually
-    changed; the caller (the bridge) handles the LED animation + the restarts,
-    because it knows the current LED theme to restore afterwards."""
-    _ensure_ota_repo()
-    try:
-        _apk("update", timeout=60)
-        r = _apk("upgrade", *OTA_PACKAGES, timeout=150)
-        why = _apk_failed(r)
-        if why:
-            raise Err("unavailable", f"apk upgrade failed: {why}")
-        changed = _apk_changed(r)
-        upgraded = [p for p in OTA_PACKAGES if p in changed]
-        trig = _apk_trigger_errors(r)
-        if trig:
-            log("apk upgrade committed; trigger(s) failed:", ", ".join(trig))
-        return {
-            "ok": True,
-            "upgraded": upgraded,
-            "restarting": bool(upgraded),
-            "triggerErrors": trig,
-            "output": ((r.stdout or "") + (r.stderr or "")).strip()[-400:],
-        }
-    except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk upgrade did not respond") from None
-
-
 # --- full-system OTA (PROTOCOL §12b) --------------------------------------
 # The DEVICE track above upgrades only our four daemons. The SYSTEM track here is
 # the "apt upgrade" of the whole appliance: every package with a newer candidate
@@ -3460,8 +3390,8 @@ _REBOOT_HINTS = ("musl", "systemd", "kmod", "eudev", "busybox", "openrc")
 # (package name != service name), and nexusq-mqtt was never in the restart set
 # at all — so a device-config or telemetry upgrade left the OLD process running
 # until an unrelated reboot, while the app cheerfully reported "up to date".
-# nexusq-control restarts itself last (it drops the bridge), so it is handled
-# specially in _finish_system_update, not here.
+# nexusq-control restarts itself last (it drops the bridge), so OtaRunner._apply
+# handles it specially, not here.
 _PKG_RESTART = {
     "nexusqd": ("nexusqd",),
     "nexusq-btagent": ("nexusq-btagent",),
@@ -3566,47 +3496,1054 @@ def check_system_update():
         raise Err("timeout", "apk did not respond") from None
 
 
-def install_system_update():
-    """`apk upgrade --available` across the whole system EXCEPT the kernel (which
-    is never offered over OTA). Returns which packages changed, which of our
-    daemons need a restart, and whether a reboot is advisable (base libc/init
-    churn)."""
-    _ensure_ota_repo()
+# --- OTA jobs (PROTOCOL §12d, docs/2026-11-15-ota-jobs.md) -----------------
+# An install used to be one blocking call inside the bridge: `apk upgrade` with
+# a 600 s timeout, a spinner on the ring and no idea of progress anywhere. On
+# 2026-11-14 the cottage Q's 393-package upgrade was SIGKILLed at package
+# 260/393 by that timeout -- apk 3 writes its database at the END of a
+# transaction, so the files were new and the database old until a second run.
+#
+# Now an install is a JOB. The bridge writes the request to OTA_JOB_PATH and
+# starts nexusq-ota@<kind>.service, which runs this same file as
+# `nexusq-control --ota-run <kind>` (OtaRunner): in its own cgroup, so neither a
+# restart of the bridge nor its own upgrade can stop it. The job is three apk
+# processes, and the boundary between "may be stopped" and "is never touched"
+# is a process boundary, not something read from apk's output:
+#   1. plan      `apk upgrade --simulate -vv`: what changes, how much to fetch,
+#                how much more room the system takes. Changes nothing.
+#   2. download  `apk fetch` of exactly the packages the plan names, into the
+#                job's cache under apk's cache file names. Changes nothing on
+#                the system, so it may be stopped at any moment (a stall, a
+#                shutdown) and the next try reuses what came.
+#   3. install   `apk upgrade` from that cache. Never signalled, never waited
+#                out: a shutdown waits for it, a stall is only reported.
+# --progress-fd gives the real progress of 2 and 3. The runner drives the ring
+# itself and applies the result (restarts, the bridge last, or a reboot); the
+# bridge (OtaJobs) only watches and tells the clients. A job that a power cut
+# or a reboot interrupted is started again by the next bridge and finishes from
+# the cache (Petr, 2026-11-14).
+
+OTA_KINDS = ("system", "daemons")
+OTA_CACHE_DIR = os.environ.get("NEXUSQ_OTA_CACHE", "/var/cache/nexusq-ota")
+# Durable: written at every phase change (eMMC). Live: the progress, rewritten
+# up to twice a second while a job runs (tmpfs).
+OTA_JOB_PATH = os.environ.get("NEXUSQ_OTA_JOB", "/var/lib/nexusq/ota/job.json")
+OTA_LIVE_PATH = os.environ.get("NEXUSQ_OTA_LIVE", "/run/nexusq/ota.json")
+OTA_UNIT = "nexusq-ota@{}.service"
+# Where systemd puts the instances' processes: the watcher reads this instead
+# of forking `systemctl is-active` twice a second for the length of a job.
+OTA_UNIT_CGROUP = "/sys/fs/cgroup/system.slice/system-nexusq\\x2dota.slice/nexusq-ota@{}.service/cgroup.procs"
+APK_BIN = os.environ.get("NEXUSQ_APK", "apk")
+# apk's own name for a package in a cache (context.c default_cachename_spec):
+# `apk fetch` writes the download under it, so the install finds it cached.
+APK_CACHENAME_SPEC = "${name}-${version}.${hash:8}.apk"
+# The package lists are refreshed by the job's `apk update` only. Without this,
+# the install (opened for writing) refetches lists older than 4 h and refuses
+# to go on when that fails -- a resumed job after a long power cut, with
+# every package already in the cache, would fail for want of a mirror.
+OTA_LISTS_MAX_AGE_MIN = 525600
+OTA_MAX_ATTEMPTS = 3
+# A download that moves nothing for this long is stopped (nothing has been
+# changed yet; the cache keeps what came). An install is never stopped: past
+# this it is only reported as stalled.
+OTA_DOWNLOAD_STALL_S = float(os.environ.get("NEXUSQ_OTA_DL_STALL_S", "300"))
+OTA_INSTALL_STALL_S = float(os.environ.get("NEXUSQ_OTA_INST_STALL_S", "600"))
+OTA_NET_TIMEOUT_S = 60
+# Refreshing the package lists at the start of a job: a resumed job starts at
+# boot, often before WiFi is up, and one lagging mirror makes `apk update`
+# exit non-zero although the others answered. So it is tried again for a
+# while, and a job whose cache already holds lists goes on with those.
+OTA_INDEX_TRIES = 6
+OTA_INDEX_RETRY_S = 30.0
+# Install time per package from the cache, for the ETA while still
+# downloading: the cottage Q installed 393 packages from the cache in 380 s
+# (2026-11-14).
+OTA_INSTALL_S_PER_PKG = 1.0
+# Room a job needs on `/`: the download (it sits in the cache until the job is
+# done), what the system grows by (apk's own figure), and a margin.
+OTA_SPACE_MARGIN = 192 << 20
+OTA_LIVE_EVERY_S = 0.5
+OTA_DRAIN_S = 10.0
+# How the phases share the overall percent. A phase with nothing to do is
+# skipped; the percent never goes back.
+OTA_SPAN = {"preparing": (0, 5), "downloading": (5, 60), "installing": (60, 95), "applying": (95, 100)}
+# The ring: the download fills it in deep blue, the install fills it again in
+# bright cyan, each over its own phase, so the phase reads from across the room.
+OTA_RING = {"downloading": (0, 70, 160), "installing": (0, 200, 255)}
+OTA_RING_OK = "set 0 255 0"
+OTA_RING_FAILED = "set 255 0 0"
+_APK_STEP = re.compile(r"^\(\s*(\d+)/(\d+)\)\s+([A-Z][a-z]+)\s+(\S+)")
+# The plan's lines that put a package on the system: `(3/9) Upgrading x (1-r0 -> 2-r0)`.
+_APK_PUTS = re.compile(
+    r"^\(\s*\d+/\d+\)\s+(Installing|Upgrading|Downgrading|Replacing|Reinstalling)\s+(\S+)\s+\(([^)]*)\)"
+)
+# `apk fetch` names each package as it starts it (no count).
+_APK_FETCHING = re.compile(r"^Downloading (\S+)$")
+_APK_PROGRESS = re.compile(r"^(\d+)/(\d+) ([a-z]+)$")
+_APK_PKG_WEIGHT = 64 * 1024  # apk_progress_weight(): bytes + 64 KiB per package
+_APK_SIZE = r"([\d.]+) (B|KiB|MiB|GiB|TiB)"
+_APK_NEED = re.compile(r"Need to download " + _APK_SIZE)
+_APK_AFTER = re.compile(
+    r"After this operation, " + _APK_SIZE + r" of (additional disk space will be used|disk space will be freed)"
+)
+_APK_UNITS = {"B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40}
+# The phases in the only order they can come in.
+_OTA_ORDER = ("preparing", "downloading", "installing", "applying")
+
+
+class OtaFailed(Exception):
+    """A job ends here, with a reason for the person who started it."""
+
+
+def _ota_write(path, obj):
+    """Atomic JSON write (tempfile + rename): a power cut mid-write must never
+    leave a torn job file -- the next bridge decides from it whether to resume."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, separators=(",", ":"))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _ota_read(path):
     try:
-        _apk("update", timeout=60)
-        # --ignore the kernel EXPLICITLY. This used to be a plain
-        # `upgrade --available`, and the "kernel is never touched" promise in the
-        # docstring was enforced only by the kernel not existing in any repo the
-        # device reads. From 2026-08-18 it DOES exist there (kernel OTA phase 2
-        # publishes it as a payload source), so without this flag a "System
-        # update" tap would install it — which deletes the RUNNING kernel's
-        # /lib/modules and writes nothing to the boot partition, i.e. the next
-        # boot comes up on the old kernel with no modules: no cfg80211, no WiFi,
-        # no way back in. The kernel is applied by nq-kernel-ota, never by apk.
-        r = _apk("upgrade", "--available", "--ignore", _KERNEL_PKG, timeout=600)
-        why = _apk_failed(r)
-        if why:
-            raise Err("unavailable", f"apk upgrade failed: {why}")
-        changed = _apk_changed(r)
-        trig = _apk_trigger_errors(r)
-        if trig:
-            log("system upgrade committed; trigger(s) failed:", ", ".join(trig))
-        # Services (not package names) to restart — nq-healthd lives inside
-        # device-google-steelhead and nexusq-mqtt is its own daemon, both of
-        # which the old package-name list silently skipped (r29).
-        daemons = _services_for_changed(changed)
-        reboot = any(c.startswith(_REBOOT_HINTS) for c in changed)
+        with open(path) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def ota_new_job(kind, wall=time.time):
+    now = wall()
+    return {
+        "id": time.strftime("%Y%m%d-%H%M%S", time.gmtime(now)) + f"-{kind}",
+        "kind": kind,
+        "state": "running",
+        "phase": "preparing",
+        "attempt": 1,
+        "resumed": False,
+        "startedAt": int(now),
+        "updatedAt": int(now),
+        "finishedAt": None,
+        "stalled": False,
+        "progress": ota_empty_progress(),
+        "result": None,
+        "error": None,
+    }
+
+
+def ota_empty_progress():
+    return {
+        "percent": 0,
+        "phasePercent": 0,
+        "packagesDone": 0,
+        "packagesTotal": 0,
+        "current": None,
+        "bytesDone": None,
+        "bytesTotal": None,
+        "etaS": None,
+    }
+
+
+def _apk_size(num, unit):
+    return int(float(num) * _APK_UNITS[unit])
+
+
+def ota_parse_plan(text):
+    """What `apk upgrade --simulate -vv` says it would do: the number of
+    changes, the bytes to download, how much the system grows (negative when it
+    shrinks), and `name=version` of every package it puts on the system -- the
+    exact set the download fetches."""
+    changes = 0
+    fetch = []
+    for line in text.splitlines():
+        m = _APK_STEP.match(line.strip())
+        if m:
+            changes = max(changes, int(m.group(2)))
+        put = _APK_PUTS.match(line.strip())
+        if put:
+            # The new version: after "->" when there is an old one. A package
+            # from a tagged repository prints as `name@tag`; `apk fetch` takes
+            # the bare name (its dependency parser keeps the tag in the name).
+            name = put.group(2).split("@", 1)[0]
+            fetch.append(f"{name}={put.group(3).split('->')[-1].strip()}")
+    need = _APK_NEED.search(text)
+    after = _APK_AFTER.search(text)
+    grow = 0
+    if after:
+        grow = _apk_size(after.group(1), after.group(2))
+        if after.group(3).startswith("disk space will be freed"):
+            grow = -grow
+    return {"changes": changes, "download": _apk_size(*need.groups()) if need else 0, "grow": grow, "fetch": fetch}
+
+
+def _ota_common(cache_dir, keep_lists=True):
+    argv = [APK_BIN, "--cache-dir", cache_dir, "--timeout", str(OTA_NET_TIMEOUT_S), "--no-interactive"]
+    if keep_lists:
+        argv += ["--cache-max-age", str(OTA_LISTS_MAX_AGE_MIN)]
+    return argv
+
+
+def _ota_upgrade_args(kind):
+    if kind == "system":
+        # --ignore the kernel EXPLICITLY: the OTA repo carries it as the payload
+        # source of nq-kernel-ota (since 2026-08-23), and apk installing it would
+        # delete the RUNNING kernel's /lib/modules and write nothing to the boot
+        # partition -- the next boot without WiFi. apk never applies a kernel.
+        return ["upgrade", "--available", "--ignore", _KERNEL_PKG]
+    return ["upgrade"] + list(OTA_PACKAGES)
+
+
+def ota_plan_argv(kind, cache_dir):
+    return _ota_common(cache_dir) + ["--simulate", "-v", "-v"] + _ota_upgrade_args(kind)
+
+
+def ota_download_argv(cache_dir, progress_fd, packages):
+    """`apk fetch` of exactly the plan's packages (`name=version`) into the
+    cache, under apk's cache file names, so the install finds them cached. Not
+    `apk cache download`: it fetches every package of the solution, changed or
+    not (apk_solver_precache_changeset with changes_only=false) -- the whole
+    system, about 1000 packages, for a one-package update."""
+    return (
+        _ota_common(cache_dir)
+        + ["--progress-fd", str(progress_fd), "fetch", "--pkgname-spec", APK_CACHENAME_SPEC, "-o", cache_dir]
+        + list(packages)
+    )
+
+
+def ota_install_argv(kind, cache_dir, progress_fd):
+    """The install, from the cache. --cache-predownload makes apk fetch anything
+    the download missed BEFORE it changes a file, so a gap fails or fills the
+    cache first instead of failing half-way through the transaction."""
+    return _ota_common(cache_dir) + ["--cache-predownload", "--progress-fd", str(progress_fd)] + _ota_upgrade_args(kind)
+
+
+class OtaProgress:
+    """apk's output, turned into the job's progress. Pure. The runner says which
+    process runs (set_phase); the log lines (`(12/393) Upgrading x (...)`) and the
+    --progress-fd lines (`done/total download|install`) of that process move the
+    numbers. A line of another stage is ignored: apk's log and its progress fd
+    are two pipes, read in whatever order they come, and the phase only ever
+    moves forward."""
+
+    STAGE = {"downloading": "fetch", "installing": "install"}
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.phase = "preparing"
+        self.phase_pct = 0.0
+        self.done = self.total = 0
+        self.pkgs_done = self.pkgs_total = 0
+        self.dl_pkgs = 0  # how many the download fetches (from the plan)
+        self.install_pkgs = 0  # from the plan, for the ETA while downloading
+        self.current = None
+        self.phase_started = self.last_advance = clock()
+        self.best = 0  # the overall percent never goes back
+
+    def later(self, phase):
+        order = _OTA_ORDER.index
+        return phase not in _OTA_ORDER or self.phase not in _OTA_ORDER or order(phase) >= order(self.phase)
+
+    def set_phase(self, phase):
+        if phase == self.phase or not self.later(phase):
+            return False
+        self.phase, self.phase_pct = phase, 0.0
+        self.done = self.total = 0
+        self.pkgs_done = self.pkgs_total = 0
+        self.current = None
+        self.phase_started = self.last_advance = self.clock()
+        return True
+
+    def feed_progress(self, line):
+        m = _APK_PROGRESS.match(line.strip())
+        if not m or self.STAGE.get(self.phase) != m.group(3):
+            return False  # not progress, or another stage's
+        done, total = int(m.group(1)), int(m.group(2))
+        if (done, total) != (self.done, self.total):
+            self.last_advance = self.clock()
+        self.done, self.total = done, total
+        self.phase_pct = min(100.0, 100.0 * done / total) if total else 0.0
+        return True
+
+    def feed_line(self, line):
+        line = line.strip()
+        if self.phase == "downloading":
+            m = _APK_FETCHING.match(line)
+            if not m:
+                return False
+            # `apk fetch` names each package as it starts it, without a count.
+            self.pkgs_done = min(self.pkgs_done + 1, self.dl_pkgs) if self.current else 0
+            self.pkgs_total = self.dl_pkgs
+            self.current = _pkg_name(m.group(1))
+            self.last_advance = self.clock()
+            return True
+        m = _APK_STEP.match(line)
+        if not m or self.phase != "installing" or m.group(3) == "Downloading":
+            return False  # not a step, or another stage's line
+        n, total, name = int(m.group(1)), int(m.group(2)), m.group(4)
+        self.pkgs_done, self.pkgs_total = n - 1, total
+        self.current = name
+        self.last_advance = self.clock()
+        return True
+
+    def download_bytes(self):
+        """(done, total) bytes of the download, without apk's per-package weight."""
+        if self.phase != "downloading" or not self.total:
+            return None, None
+        pkgs = self.dl_pkgs or 0
+        total = max(0, self.total - pkgs * _APK_PKG_WEIGHT)
+        done = max(0, min(total, self.done - self.pkgs_done * _APK_PKG_WEIGHT))
+        return done, total
+
+    def stalled(self):
+        limit = {"downloading": OTA_DOWNLOAD_STALL_S, "installing": OTA_INSTALL_STALL_S}.get(self.phase)
+        return limit is not None and self.clock() - self.last_advance > limit
+
+    def eta(self):
+        elapsed = self.clock() - self.phase_started
+        if self.phase not in self.STAGE or self.phase_pct < 2 or elapsed < 5:
+            return None
+        left = elapsed * (100.0 - self.phase_pct) / self.phase_pct
+        if self.phase == "downloading":
+            left += (self.install_pkgs or self.dl_pkgs) * OTA_INSTALL_S_PER_PKG
+        return int(left)
+
+    def percent(self, phase=None, phase_pct=None):
+        phase = phase or self.phase
+        phase_pct = self.phase_pct if phase_pct is None else phase_pct
+        lo, hi = OTA_SPAN.get(phase, (100, 100))
+        self.best = max(self.best, int(lo + (hi - lo) * phase_pct / 100.0))
+        return self.best
+
+    def snapshot(self):
+        done_b, total_b = self.download_bytes()
         return {
-            "ok": True,
+            "percent": self.percent(),
+            "phasePercent": int(self.phase_pct),
+            "packagesDone": self.pkgs_done,
+            "packagesTotal": self.pkgs_total,
+            "current": self.current,
+            "bytesDone": done_b,
+            "bytesTotal": total_b,
+            "etaS": self.eta(),
+        }
+
+
+def _free_bytes(path="/"):
+    st = os.statvfs(path)
+    return st.f_bavail * st.f_frsize
+
+
+def _dir_bytes(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+class OtaRunner:
+    """The job itself, in nexusq-ota@<kind>.service. Everything that touches the
+    system is injected, so a test runs it with a fake apk and no systemd."""
+
+    def __init__(
+        self,
+        kind,
+        job_path=None,
+        live_path=None,
+        cache_dir=None,
+        new=False,
+        run=subprocess.run,
+        ring=None,
+        free_bytes=_free_bytes,
+        ensure_repo=None,
+        clock=time.monotonic,
+        wall=time.time,
+        sleep=time.sleep,
+    ):
+        if kind not in OTA_KINDS:
+            raise ValueError(f"unknown update kind {kind!r}")
+        self.kind = kind
+        self.job_path = job_path or OTA_JOB_PATH
+        self.live_path = live_path or OTA_LIVE_PATH
+        self.cache_dir = cache_dir or OTA_CACHE_DIR
+        self.new = new
+        self.run_cmd, self.free_bytes = run, free_bytes
+        self.ring = ring or nexusqd_send
+        self.ensure_repo = ensure_repo or _ensure_ota_repo
+        self.clock, self.wall, self.sleep = clock, wall, sleep
+        self.prog = OtaProgress(clock)
+        self.job = None
+        self._live_at = 0.0
+        self._ring_last = None
+        self._stop_reason = None
+        self._terminating = False
+        self._shutdown = False
+
+    # --- state ---------------------------------------------------------------
+    def _load_job(self):
+        """The request the bridge wrote, or None when there is none to run: a
+        start that comes late (queued behind the boot) must not begin a fresh
+        job behind the bridge's back -- the bridge counts attempts. `new`
+        (`--ota-run <kind> --new`, by hand) makes one."""
+        j = _ota_read(self.job_path)
+        if not j or j.get("state") != "running" or j.get("kind") != self.kind:
+            if not self.new:
+                return None
+            j = ota_new_job(self.kind, self.wall)
+        j.setdefault("progress", ota_empty_progress())
+        j["phase"] = "preparing"
+        j["stalled"] = False
+        j["error"] = None
+        return j
+
+    def _durable(self):
+        """The phase, on the eMMC. Never raises: a full or failing disk must not
+        end the runner while apk runs (systemd would SIGKILL apk with it)."""
+        self.job["updatedAt"] = int(self.wall())
+        try:
+            _ota_write(self.job_path, self.job)
+        except OSError as e:
+            log("ota: job state not written:", e)
+        self._live(force=True)
+
+    def _live(self, force=False):
+        now = self.clock()
+        if not force and now - self._live_at < OTA_LIVE_EVERY_S:
+            return
+        self._live_at = now
+        try:
+            self.job["updatedAt"] = int(self.wall())
+            self.job["progress"] = self.prog.snapshot()
+            self.job["stalled"] = self.prog.stalled()
+            _ota_write(self.live_path, self.job)
+        except OSError as e:
+            log("ota: live progress not written:", e)
+        self._ring_progress()
+
+    def _phase(self, phase):
+        self.job["phase"] = phase
+        if phase in OTA_SPAN:
+            self.prog.set_phase(phase)
+            self.job["progress"]["percent"] = self.prog.percent(phase, 0)
+        self._durable()
+
+    # --- ring ----------------------------------------------------------------
+    def _ring_progress(self):
+        phase = self.prog.phase
+        if phase in OTA_RING:
+            cmd = "progress %d %d %d %d" % ((int(self.prog.phase_pct),) + OTA_RING[phase])
+        elif self.job["phase"] in ("preparing", "applying"):
+            cmd = "spin 0 153 204 2"
+        else:
+            return
+        if cmd != self._ring_last:
+            self._ring_last = cmd
+            self.ring(cmd)
+
+    def _ring_theme(self):
+        name = _theme_load()
+        for c in THEME_CMDS.get(name, ["auto"]) if name else ["auto"]:
+            self.ring(c)
+
+    # --- the job -------------------------------------------------------------
+    def on_sigterm(self, *_):
+        """systemd stops the unit (a shutdown; KillMode=mixed sends this to the
+        runner only). A download is stopped, an install is waited for; either
+        way the job stays `running`, and the next boot's bridge finishes it."""
+        self._shutdown = True
+
+    def run(self):
+        """Returns the process exit status: 0 done (or left for the next boot),
+        1 failed."""
+        self.job = self._load_job()
+        if self.job is None:
+            log(f"ota: no {self.kind} job is waiting to run; nothing to do (--new starts one by hand)")
+            return 0
+        log(f"ota: job {self.job['id']} ({self.kind}), attempt {self.job['attempt']}")
+        try:
+            self._phase("preparing")
+            self.ensure_repo()
+            os.makedirs(self.cache_dir, exist_ok=True)
+            self._refresh_index()
+            plan = self._plan()
+            if plan["changes"] == 0:
+                log("ota: nothing to install")
+                self.job["result"] = self._result(subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+                return self._apply(self.job["result"])
+            self._check_space(plan)
+            if self._shutdown:
+                return self._leave_for_next_boot()
+            if plan["download"] > 0 and plan["fetch"]:
+                self._download(plan)
+            if self._shutdown:
+                return self._leave_for_next_boot()
+            res = self._install()
+            if self._shutdown:
+                # apk ran to its end; the restarts would only fight the shutdown.
+                return self._leave_for_next_boot()
+            why = _apk_failed(res)
+            if why:
+                raise OtaFailed(f"apk upgrade failed: {why}")
+            result = self._result(res)
+            self._purge_cache()
+            self.job["result"] = result
+            return self._apply(result)
+        except OtaFailed as e:
+            if self._shutdown:
+                return self._leave_for_next_boot()
+            return self._fail(str(e))
+        except Err as e:
+            return self._fail(e.message)
+        except Exception as e:  # noqa: BLE001 - a job always ends with a reason
+            log("ota: unexpected failure:", repr(e))
+            return self._fail(f"the update stopped unexpectedly ({type(e).__name__}: {e})")
+
+    def _refresh_index(self):
+        """`apk update` into the job's cache. Tried again while it fails (WiFi
+        not up yet at boot, a mirror lagging); after the last try a cache that
+        already holds lists goes on with them (a resumed job needs nothing
+        new), and an empty one fails the job."""
+        why = None
+        for attempt in range(OTA_INDEX_TRIES):
+            if self._shutdown:
+                raise OtaFailed("the Q is shutting down")
+            try:
+                r = self.run_cmd(
+                    _ota_common(self.cache_dir, keep_lists=False) + ["update"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                why = str(e)
+            else:
+                if r.returncode == 0:
+                    return
+                lines = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+                why = lines[-1] if lines else f"apk exited {r.returncode}"
+            log(f"ota: refreshing the package lists failed ({why}), try {attempt + 1}/{OTA_INDEX_TRIES}")
+            if attempt + 1 < OTA_INDEX_TRIES:
+                self.sleep(OTA_INDEX_RETRY_S)
+        try:
+            cached = any(n.startswith("APKINDEX.") for n in os.listdir(self.cache_dir))
+        except OSError:
+            cached = False
+        if not cached:
+            raise OtaFailed(f"could not refresh the package lists: {why}")
+        log("ota: going on with the package lists already in the cache")
+
+    def _plan(self):
+        try:
+            r = self.run_cmd(ota_plan_argv(self.kind, self.cache_dir), capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise OtaFailed(f"could not work out the update: {e}") from None
+        text = (r.stdout or "") + "\n" + (r.stderr or "")
+        if r.returncode != 0:
+            errors = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("ERROR")]
+            raise OtaFailed("could not work out the update: " + (errors[0] if errors else f"apk exited {r.returncode}"))
+        plan = ota_parse_plan(text)
+        self.prog.install_pkgs = plan["changes"]
+        fetch, grow = plan["download"] >> 20, plan["grow"] >> 20
+        log(f"ota: plan: {plan['changes']} changes, {fetch} MiB to fetch, grows {grow} MiB")
+        return plan
+
+    def _check_space(self, plan):
+        """The download stays in the cache until the job is done, and the
+        system grows by apk's own figure: both have to fit, with a margin.
+        What the cache already holds of THIS plan is counted in; anything else
+        there (a superseded package from a failed job) is not, and the partial
+        files a stopped fetch leaves (`*.tmp.<pid>`, never used) go first."""
+        need = plan["download"] + max(0, plan["grow"]) + OTA_SPACE_MARGIN
+        wanted = tuple(entry.replace("=", "-", 1) + "." for entry in plan["fetch"])
+        have = 0
+        try:
+            names = os.listdir(self.cache_dir)
+        except OSError:
+            names = []
+        for n in names:
+            path = os.path.join(self.cache_dir, n)
+            try:
+                if ".tmp." in n:
+                    os.unlink(path)
+                elif n.endswith(".apk") and n.startswith(wanted):
+                    have += os.lstat(path).st_blocks * 512
+            except OSError:
+                pass
+        free = self.free_bytes("/") + have
+        if free >= need:
+            return
+        hint = ""
+        spotify = _dir_bytes("/var/cache/librespot") + _dir_bytes("/home/user/.cache/librespot")
+        if spotify > 64 << 20:
+            hint = f" (the Spotify cache holds {spotify >> 20} MiB; it shrinks when Spotify restarts)"
+        raise OtaFailed(
+            f"not enough space: the update needs about {need >> 20} MiB free, the Q has {free >> 20} MiB{hint}"
+        )
+
+    def _download(self, plan):
+        self._phase("downloading")
+        self.prog.dl_pkgs = len(plan["fetch"])
+        res = self._run_apk(ota_download_argv(self.cache_dir, "{fd}", plan["fetch"]), "downloading", may_stop=True)
+        if self._stop_reason:
+            raise OtaFailed(self._stop_reason)
+        if res.returncode != 0:
+            errors = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip().startswith("ERROR")]
+            raise OtaFailed("the download failed: " + (errors[0] if errors else f"apk exited {res.returncode}"))
+
+    def _install(self):
+        self._phase("installing")
+        return self._run_apk(ota_install_argv(self.kind, self.cache_dir, "{fd}"), "installing", may_stop=False)
+
+    def _result(self, res):
+        changed = _apk_changed(res)
+        trig = _apk_trigger_errors(res)
+        if trig:
+            log("ota: transaction committed; trigger(s) failed:", ", ".join(trig))
+        output = ((res.stdout or "") + (res.stderr or "")).strip()[-500:]
+        if self.kind == "daemons":
+            upgraded = [p for p in OTA_PACKAGES if p in changed]
+            return {
+                "changed": changed,
+                "upgraded": upgraded,
+                "daemons": _services_for_changed(upgraded),
+                "restarting": bool(upgraded),
+                "rebootRecommended": False,
+                "systemdChanged": False,
+                "triggerErrors": trig,
+                "output": output,
+            }
+        return {
             "changed": changed,
-            "daemons": daemons,
-            "rebootRecommended": reboot,
+            "daemons": _services_for_changed(changed),
+            "rebootRecommended": any(c.startswith(_REBOOT_HINTS) for c in changed),
             "systemdChanged": _systemd_changed(changed),
             "triggerErrors": trig,
-            "output": ((r.stdout or "") + (r.stderr or "")).strip()[-500:],
+            "output": output,
         }
+
+    def _run_apk(self, argv, phase, may_stop):
+        """Run one apk process, reading its log and its --progress-fd as they come.
+
+        It returns only after apk has exited, whatever goes wrong here: the
+        runner leaving early would have systemd SIGKILL apk with it
+        (KillMode=mixed), mid-commit if it is the install. Only the download
+        (`may_stop`) is ever signalled. Returns a CompletedProcess whose stdout
+        is the whole log."""
+        import selectors
+
+        rfd, wfd = os.pipe()
+        argv = [a.replace("{fd}", str(wfd)) for a in argv]
+        log("ota:", " ".join(argv))
+        try:
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, pass_fds=(wfd,))
+        except OSError as e:
+            os.close(rfd)
+            os.close(wfd)
+            raise OtaFailed(f"could not start apk: {e}") from None
+        os.close(wfd)
+        out = []
+        bufs = {"log": b"", "progress": b""}
+        sel = selectors.DefaultSelector()
+        sel.register(p.stdout, selectors.EVENT_READ, "log")
+        sel.register(rfd, selectors.EVENT_READ, "progress")
+        open_streams = 2
+        exited_at = None
+        while open_streams:
+            # apk does not mark the progress fd close-on-exec, so a process a
+            # package script leaves behind can hold a pipe open after apk has
+            # exited: drain for a while, then stop reading.
+            if p.poll() is not None:
+                exited_at = exited_at or self.clock()
+                if self.clock() - exited_at > OTA_DRAIN_S:
+                    log("ota: apk has exited but a pipe stays open (a process a script left); not waiting for it")
+                    break
+            try:
+                ready = sel.select(timeout=1.0)
+            except OSError as e:  # EINTR is retried by Python; anything else: keep waiting
+                log("ota: select failed:", e)
+                ready = []
+            for key, _ in ready:
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                    open_streams -= 1
+                    continue
+                bufs[key.data] += chunk
+                *lines, bufs[key.data] = bufs[key.data].split(b"\n")
+                for raw in lines:
+                    line = raw.decode("utf-8", "replace")
+                    if key.data == "log":
+                        out.append(line)
+                    try:
+                        if key.data == "log":
+                            self.prog.feed_line(line)
+                        else:
+                            self.prog.feed_progress(line)
+                    except Exception as e:  # noqa: BLE001 - never leave apk behind
+                        log("ota: could not read a line of apk's:", repr(e))
+            try:
+                self._live()
+                if may_stop and not self._terminating:
+                    if self._shutdown:
+                        self._stop(p, "the Q is shutting down")
+                    elif self.prog.stalled():
+                        self._stop(p, f"the download made no progress for {int(OTA_DOWNLOAD_STALL_S // 60)} minutes")
+            except Exception as e:  # noqa: BLE001 - never leave apk behind
+                log("ota: progress step failed:", repr(e))
+        sel.close()
+        os.close(rfd)
+        rc = p.wait()
+        if bufs["log"]:
+            out.append(bufs["log"].decode("utf-8", "replace"))
+        self._live(force=True)
+        return subprocess.CompletedProcess(argv, rc, stdout="\n".join(out), stderr="")
+
+    def _stop(self, p, reason):
+        """The download only (_run_apk's may_stop): nothing on the system has
+        changed, and the cache keeps what came."""
+        log("ota: stopping the download:", reason)
+        self._stop_reason = reason
+        self._terminating = True
+        try:
+            p.terminate()
+        except OSError:
+            pass
+
+    def _purge_cache(self):
+        try:
+            self.run_cmd(_ota_common(self.cache_dir) + ["cache", "purge"], capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as e:
+            log("ota: cache not purged:", e)
+
+    def _apply(self, result):
+        self._phase("applying")
+        self.ring("spin 0 153 204 2")
+        restarted_nexusqd = False
+        for argv in _systemctl_plan(result["daemons"], result.get("systemdChanged", False)):
+            try:
+                self.run_cmd(argv, capture_output=True, timeout=60)
+                restarted_nexusqd = restarted_nexusqd or argv[1:] == ["restart", "nexusqd"]
+            except (OSError, subprocess.SubprocessError) as e:
+                log("ota:", " ".join(argv), "failed:", e)
+        if restarted_nexusqd:
+            self.sleep(1.5)  # the ring daemon is back before it is driven
+        self.prog.phase_pct = 100.0
+        self.job["progress"] = self.prog.snapshot()
+        self.job["progress"]["percent"] = 100
+        self.ring(OTA_RING_OK)
+        self.sleep(2.5)
+        if result.get("rebootRecommended"):
+            # A job interrupted here is done: the next bridge reads "rebooting".
+            self.job["phase"] = "rebooting"
+            self._durable()
+            log("ota: base libc/init changed, rebooting")
+            self.run_cmd(["systemctl", "--no-block", "reboot"], capture_output=True, timeout=30)
+            return 0
+        self._ring_theme()
+        self._finish("done", None)
+        if "nexusq-control" in result.get("changed", []):
+            # Last, and without waiting: the job is recorded as done first, so
+            # the new bridge reads the outcome instead of a running job.
+            self.run_cmd(["systemctl", "--no-block", "restart", "nexusq-control"], capture_output=True, timeout=30)
+        return 0
+
+    def _leave_for_next_boot(self):
+        log("ota: shutting down; the next boot finishes the job")
+        self.job["state"] = "running"
+        self._durable()
+        return 0
+
+    def _finish(self, state, error):
+        self.job["state"] = state
+        self.job["phase"] = state
+        self.job["error"] = error
+        self.job["stalled"] = False
+        self.job["finishedAt"] = int(self.wall())
+        self._durable()
+
+    def _fail(self, reason):
+        log("ota: failed:", reason)
+        try:
+            self.ring(OTA_RING_FAILED)
+            self.sleep(2.5)
+            self._ring_theme()
+        finally:
+            self._finish("failed", reason)
+        return 1
+
+
+def _ota_legacy_result(job):
+    """A finished job as the blocking install methods answered before jobs."""
+    if not job:
+        raise Err("unavailable", "the update did not start")
+    if job.get("state") != "done":
+        raise Err("unavailable", job.get("error") or "the update did not finish")
+    return {"ok": True, **(job.get("result") or {})}
+
+
+def _ota_unit_active(kind):
+    """Is nexusq-ota@kind running: True, False, or None when that cannot be
+    told. Read from the unit's cgroup -- the watcher asks twice a second for
+    the length of a job, and a `systemctl` fork each time competes with apk and
+    the music on two cores. Only when the cgroup is not there does it ask
+    systemd: a start that is still queued (a resumed job at boot) has no cgroup
+    yet and is running for this purpose, not gone; an answer systemd cannot
+    give (during the job's own `daemon-reexec`) is None, never "gone"."""
+    try:
+        with open(OTA_UNIT_CGROUP.format(kind)) as f:
+            if f.read().strip():
+                return True
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "ActiveState", "-p", "Job", OTA_UNIT.format(kind)],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
     except (OSError, subprocess.SubprocessError):
-        raise Err("timeout", "apk upgrade did not respond") from None
+        return None
+    props = dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+    if r.returncode != 0 or "ActiveState" not in props:
+        return None
+    if props.get("Job", "").strip():
+        return True  # a start (or stop) is queued
+    if props["ActiveState"] in ("active", "activating", "deactivating", "reloading"):
+        return True
+    return False if props["ActiveState"] in ("inactive", "failed") else None
+
+
+def _ota_start_unit(kind):
+    r = subprocess.run(
+        ["systemctl", "--no-block", "start", OTA_UNIT.format(kind)], capture_output=True, text=True, timeout=15
+    )
+    if r.returncode != 0:
+        raise Err("unavailable", f"cannot start the update: {(r.stderr or '').strip()[:160]}")
+
+
+def _ota_visible(job):
+    """What a client would notice changing: never more news than that."""
+    p = job.get("progress") or {}
+    return (
+        job.get("id"),
+        job.get("state"),
+        job.get("phase"),
+        job.get("stalled"),
+        p.get("percent"),
+        p.get("phasePercent"),
+        p.get("packagesDone"),
+        p.get("current"),
+        (p.get("etaS") or 0) // 10,
+    )
+
+
+class OtaJobs:
+    """The bridge's side of a job: start it, answer for it, watch it, and tell.
+
+    Callables are injected so the logic is testable without systemd:
+      unit_active(kind)    -> is nexusq-ota@kind running
+      start_unit(kind)     -> start it (raises Err when systemd refuses)
+      progress(job)        -> broadcast updateProgress
+      finished(job)        -> broadcast updateFinished and run the bridge's tail
+    """
+
+    POLL_S = 0.5
+    # How long a job may read "running" with its unit gone before it counts as
+    # interrupted (the runner's last write and its exit are not atomic).
+    GONE_GRACE_S = 5.0
+
+    def __init__(
+        self,
+        progress,
+        finished,
+        unit_active=_ota_unit_active,
+        start_unit=_ota_start_unit,
+        job_path=None,
+        live_path=None,
+        clock=time.monotonic,
+        wall=time.time,
+    ):
+        self.progress, self.finished = progress, finished
+        self.unit_active, self.start_unit = unit_active, start_unit
+        self.job_path = job_path or OTA_JOB_PATH
+        self.live_path = live_path or OTA_LIVE_PATH
+        self.clock, self.wall = clock, wall
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self._last_visible = None
+        self._gone_since = None
+
+    def job(self):
+        """The current or last job, with its live progress while it runs."""
+        durable = _ota_read(self.job_path)
+        if not durable or durable.get("kind") not in OTA_KINDS:
+            return None
+        if durable.get("state") == "running":
+            # The runner rewrites the live copy with every durable write, so
+            # while the job runs the live one is the newer; once it has ended,
+            # the durable one is the answer (it carries `reported`).
+            live = _ota_read(self.live_path)
+            if live and live.get("id") == durable.get("id") and live.get("state") == "running":
+                return live
+        return durable
+
+    def running(self):
+        j = _ota_read(self.job_path)
+        return bool(j and j.get("state") == "running")
+
+    def start(self, kind):
+        if kind not in OTA_KINDS:
+            raise Err("bad_request", f"unknown update kind {kind!r}")
+        with self.lock:
+            cur = _ota_read(self.job_path)
+            if cur and cur.get("state") == "running":
+                raise Err("busy", "an update is already installing")
+            job = ota_new_job(kind, self.wall)
+            _ota_write(self.job_path, job)
+            try:
+                self.start_unit(kind)
+            except Err as e:
+                job.update(state="failed", phase="failed", error=e.message, finishedAt=int(self.wall()))
+                _ota_write(self.job_path, job)
+                raise
+            log(f"ota: started job {job['id']}")
+            self._last_visible = None
+            self.wake.set()
+            return job
+
+    def resume(self):
+        """At the bridge's start, and when a running job's unit vanished: a job
+        that did not end finishes itself (Petr, 2026-11-14) -- apk installs what
+        is missing from the cache and the job applies it. Returns the job."""
+        with self.lock:
+            j = _ota_read(self.job_path)
+            if not j or j.get("state") != "running":
+                return j
+            if j.get("kind") not in OTA_KINDS:
+                now = int(self.wall())
+                j.update(state="failed", phase="failed", error="the update job record was unreadable", finishedAt=now)
+                _ota_write(self.job_path, j)
+                self.wake.set()
+                return j
+            if self.unit_active(j["kind"]) is not False:
+                self.wake.set()  # still at work (or cannot be told): leave it be
+                return j
+            now = int(self.wall())
+            if j.get("phase") == "rebooting":
+                j.update(state="done", phase="done", finishedAt=now, updatedAt=now)
+                log(f"ota: job {j['id']} finished with the reboot")
+            elif j.get("attempt", 1) >= OTA_MAX_ATTEMPTS:
+                j.update(
+                    state="failed",
+                    phase="failed",
+                    error=f"the update was interrupted {j.get('attempt', 1)} times; check the Q and try again",
+                    finishedAt=now,
+                    updatedAt=now,
+                )
+                log(f"ota: job {j['id']} interrupted {j.get('attempt')} times, giving up")
+            else:
+                j.update(
+                    attempt=j.get("attempt", 1) + 1,
+                    resumed=True,
+                    phase="preparing",
+                    stalled=False,
+                    updatedAt=now,
+                )
+                _ota_write(self.job_path, j)
+                log(f"ota: job {j['id']} was interrupted; resuming (attempt {j['attempt']})")
+                try:
+                    self.start_unit(j["kind"])
+                except Err as e:
+                    j.update(state="failed", phase="failed", error=e.message, finishedAt=now)
+                    _ota_write(self.job_path, j)
+                    self.wake.set()
+                    return j
+                self.wake.set()
+                return j
+            _ota_write(self.job_path, j)
+            self.wake.set()
+            return j
+
+    def step(self):
+        """One look at the job. Returns how long to sleep, or None (idle)."""
+        j = self.job()
+        if not j:
+            return None
+        vis = _ota_visible(j)
+        if j.get("state") != "running":
+            if self._last_visible is not None or self._pending_finish(j):
+                self._last_visible = None
+                self._gone_since = None
+                self._mark_reported(j)
+                self.finished(j)
+            return None
+        if vis != self._last_visible:
+            self._last_visible = vis
+            self.progress(j)
+        if self.unit_active(j.get("kind")) is not False:
+            self._gone_since = None  # running, or cannot be told: not gone
+        else:
+            now = self.clock()
+            self._gone_since = self._gone_since or now
+            if now - self._gone_since > self.GONE_GRACE_S:
+                self._gone_since = None
+                self.resume()
+        return self.POLL_S
+
+    def _pending_finish(self, j):
+        """A job that ended while no bridge watched it (it restarted us, or the
+        Q rebooted) is still announced once."""
+        return not j.get("reported")
+
+    def _mark_reported(self, j):
+        with self.lock:
+            cur = _ota_read(self.job_path)
+            if cur and cur.get("id") == j.get("id") and cur.get("state") != "running":
+                cur["reported"] = True
+                try:
+                    _ota_write(self.job_path, cur)
+                except OSError as e:
+                    log("ota: could not mark the job reported:", e)
+
+    def wait(self, poll_s=1.0):
+        """Block until the current job ends (the blocking form of the install
+        methods, for clients that do not ask for `async`). Returns the job."""
+        while True:
+            j = self.job()
+            if not j or j.get("state") != "running":
+                return j
+            time.sleep(poll_s)
+
+    def run(self):
+        try:
+            self.resume()
+        except Exception as e:  # noqa: BLE001 - never kill the watcher
+            log("ota resume failed:", e)
+        while True:
+            try:
+                wait = self.step()
+            except Exception as e:  # noqa: BLE001 - never kill the thread
+                log("ota watch failed:", e)
+                wait = self.POLL_S
+            if wait is None:
+                self.wake.wait()
+            else:
+                self.wake.wait(wait)
+            self.wake.clear()
 
 
 def start_setup_mode():
@@ -4009,7 +4946,9 @@ class Bridge:
         )
         self.stale_services = StaleUserServices(
             stale=_proc_stale,
-            busy=self._source_busy,
+            # Never while an update job runs: a half-installed system is no
+            # place to start a player on its new binary.
+            busy=lambda sid: self._source_busy(sid) or self.ota.running(),
             streams=_unit_streams,
             restart=self._restart_user_unit,
             restarted_at=self._user_restarts.get,
@@ -4019,11 +4958,19 @@ class Bridge:
         # is one of its two reasons (PROTOCOL §12c). Its thread is started by
         # main(), so a test can build a Bridge without one.
         self.update_led = UpdateLed(nexusqd_send)
+        # Installs are jobs (OtaRunner, in its own unit); this watches them.
+        # Its thread is started by main(), like the release watch's.
+        self.ota = OtaJobs(
+            progress=lambda job: self.broadcast("updateProgress", job),
+            finished=self._ota_finished,
+        )
+        if self.ota.running():
+            self.update_led.hold(True)  # a job outlived the previous bridge
         self.release = ReleaseWatch(
             fetch=_release_fetch,
             installed=_apk_installed,
             vcmp=_apk_vcmp,
-            busy=_nexus_install_lock.locked,
+            busy=self.ota.running,
             notify=lambda v: self.broadcast("updateStatusChanged", v),
             led=lambda on: self.update_led.set("release", on),
         )
@@ -4596,58 +5543,21 @@ class Bridge:
             st = delete_eq_preset(p)
             return st, [("eqPresetsChanged", st)]
 
-        # --- system OTA: update the device's own daemons (PROTOCOL §12) --------
-        # The LEDs narrate it: the dedicated MUTE LED blinks amber = update available;
-        # the ring shows a determinate PROGRESS bar while installing; green flash =
-        # done (then back to the theme). The ring is left on the user's theme while an
-        # update merely waits, so "available" is signalled only on the mute LED.
+        # --- OTA (PROTOCOL §12): checks answer here, installs are jobs (§12d) --
+        # The mute LED blinks amber while an update is available; an install is
+        # a job in its own unit (OtaRunner) that drives the ring with its real
+        # progress, and this bridge only starts it, answers for it and tells the
+        # clients (updateProgress / updateFinished).
         if method == "checkNexusUpdate":
-            # busy=True ONLY while an INSTALL is running (don't block on its long
-            # `apk upgrade`); a plain check-vs-check just serializes via _apk_lock
-            # inside _apk, so a routine poll never wrongly reads "update in
-            # progress". `apk` itself can't race (DB lock) — _apk_lock guards it.
-            if _nexus_install_lock.locked():
+            # busy=True while a job runs: a check must not queue behind its apk.
+            if self.ota.running():
                 return {"packages": [], "updateAvailable": False, "busy": True, "repo": NEXUSQ_OTA_REPO}, []
             r = check_nexus_update()
             self.update_led.set("daemons", bool(r.get("updateAvailable")))  # amber blink while pending
             return r, []
-        if method == "installNexusUpdate":
-            # Refuse a second concurrent install (flaky-link resend) rather than
-            # racing a second apk upgrade over the first.
-            if not _nexus_install_lock.acquire(blocking=False):
-                raise Err("busy", "an update is already installing")
-            try:
-                self.update_led.hold(True)  # no "available" blink while installing
-                prog = _OtaProgress().start()  # determinate ring bar
-                try:
-                    r = install_nexus_update()
-                except Err:
-                    prog.cancel()
-                    self._led_restore_theme()
-                    raise
-                prog.finish()  # snap the bar to 100%
-                time.sleep(0.35)
-                self.update_led.set("daemons", False)
-                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
-                self._finish_nexus_update(r.get("upgraded", []), theme_cmds)
-                # Only after a SUCCESSFUL install: a failed or killed one can
-                # leave a new binary next to libraries it does not have yet, and
-                # restarting into that would crash-loop a working player.
-                self.stale_services.wake.set()
-                return r, []
-            finally:
-                _nexus_install_lock.release()
-                self._after_install()
-
-        # --- full-system OTA (the "apt upgrade", PROTOCOL §12b) --------------
-        # Distinct from the daemon track above: checkSystemUpdate does NOT blink
-        # the mute LED (that stays the daemon-"available" indicator); it only feeds
-        # the app's System section. The install narrates on the RING (progress bar
-        # -> green) and may reboot if base libc/init churned.
         if method == "checkSystemUpdate":
-            # busy only while an INSTALL runs (see checkNexusUpdate); apk itself is
-            # serialized by _apk_lock, so a check never races the DB lock.
-            if _nexus_install_lock.locked():
+            # Does NOT blink the mute LED (the daemon track's indicator).
+            if self.ota.running():
                 return {
                     "packages": [],
                     "updateAvailable": False,
@@ -4656,31 +5566,26 @@ class Bridge:
                     "repo": NEXUSQ_OTA_REPO,
                 }, []
             return check_system_update(), []
-        if method == "installSystemUpdate":
-            if not _nexus_install_lock.acquire(blocking=False):
-                raise Err("busy", "an update is already installing")
+        if method in ("installNexusUpdate", "installSystemUpdate"):
+            kind = "daemons" if method == "installNexusUpdate" else "system"
+            wait = p.get("async", False)
+            if not isinstance(wait, bool):
+                raise Err("bad_request", "async must be a bool")
+            self.update_led.hold(True)  # no "available" blink while installing
             try:
-                self.update_led.hold(True)  # no "available" blink while installing
-                # A full-system upgrade is slow and of UNKNOWN length (downloads +
-                # triggers like mkinitfs), so the determinate bar would ease to its
-                # cap and sit there looking frozen. Use the INDETERMINATE spinner
-                # instead — it keeps moving for the whole install.
-                nexusqd_send("spin 0 153 204 2")
-                try:
-                    r = install_system_update()
-                except Err:
-                    self._led_restore_theme()
-                    raise
-                self.update_led.set("daemons", False)  # the system track installs the daemons too
-                theme_cmds = list(THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]))
-                self._finish_system_update(
-                    r.get("daemons", []), r.get("rebootRecommended", False), theme_cmds, r.get("systemdChanged", False)
-                )
-                self.stale_services.wake.set()  # only after success (see installNexusUpdate)
-                return r, []
-            finally:
-                _nexus_install_lock.release()
-                self._after_install()
+                job = self.ota.start(kind)
+            except Err:
+                if not self.ota.running():  # a running job keeps the LED held
+                    self.update_led.hold(False)
+                raise
+            if wait:
+                return {"started": True, "job": job}, [("updateProgress", job)]
+            # The blocking form, for clients that predate jobs (and Home
+            # Assistant before nexusq-mqtt r18): the same job, waited for. The
+            # link may drop while it applies (the bridge restarts) -- expected.
+            return _ota_legacy_result(self.ota.wait()), []
+        if method == "getUpdateJob":
+            return {"job": self.ota.job()}, []
 
         # --- release watch: is a new Nexus Q release out? (PROTOCOL §12c) ----
         if method == "getUpdateStatus":
@@ -4712,92 +5617,18 @@ class Bridge:
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def _led_restore_theme(self):
-        """Put the ring back to the user's current colour theme (or auto)."""
-        for c in THEME_CMDS.get(self.state.get("theme", "blue"), ["auto"]):
-            nexusqd_send(c)
-
-    def _finish_nexus_update(self, upgraded, theme_cmds):
-        """Off-thread tail of an OTA install (so the ack ships first): restart any
-        changed non-control daemon, flash the ring GREEN (success, like a good
-        pairing), restore the theme, then restart nexusq-control — which drops the
-        link; the app reconnects to the new build."""
-
-        def _do():
-            time.sleep(0.4)
-            restarted_nexusqd = False
-            for svc in ("nexusqd", "nexusq-btagent", "nexusq-setupd"):
-                if svc in upgraded:
-                    try:
-                        subprocess.run(["systemctl", "restart", svc], capture_output=True, timeout=30)
-                        restarted_nexusqd = restarted_nexusqd or svc == "nexusqd"
-                    except (OSError, subprocess.SubprocessError):
-                        pass
-            if restarted_nexusqd:
-                time.sleep(1.5)  # let the ring daemon come back before we drive it
-                self.update_led.reassert()  # its blink was in the old process's memory
-            nexusqd_send("set 0 255 0")  # green success
-            time.sleep(2.5)
-            for c in theme_cmds:
-                nexusqd_send(c)  # back to the user's theme
-            if "nexusq-control" in upgraded:
-                try:
-                    subprocess.run(
-                        ["systemctl", "--no-block", "restart", "nexusq-control"], capture_output=True, timeout=10
-                    )
-                except (OSError, subprocess.SubprocessError):
-                    pass
-
-        threading.Thread(target=_do, daemon=True).start()
-
-    def _finish_system_update(self, daemons, reboot, theme_cmds, systemd_changed=False):
-        """Off-thread tail of a full-system install: make PID 1 able to act
-        (daemon-reexec when systemd itself changed, daemon-reload otherwise),
-        restart changed daemons, flash the ring green, then either REBOOT (base
-        libc/init churned — a reboot is the clean way to apply it; also restarts
-        the bridge, so the app reconnects when the Q comes back) or restore the
-        theme + restart the bridge if it was among the upgraded ones."""
-
-        def _do():
-            time.sleep(0.4)
-            restarted_nexusqd = False
-            # nexusq-control is NOT restarted here — it kills the bridge, so it
-            # goes last (below). nq-healthd (device-google-steelhead) and
-            # nexusq-mqtt are cheap, stateless daemons safe to bounce anytime.
-            # The order, and the re-exec/reload that has to come first, is
-            # _systemctl_plan's job — see it for the 2026-09-05 measurement.
-            for argv in _systemctl_plan(daemons, systemd_changed):
-                try:
-                    subprocess.run(argv, capture_output=True, timeout=30)
-                    if argv[1] == "restart" and argv[2] == "nexusqd":
-                        restarted_nexusqd = True
-                except (OSError, subprocess.SubprocessError):
-                    pass
-            if restarted_nexusqd:
-                time.sleep(1.5)
-                self.update_led.reassert()  # its blink was in the old process's memory
-            nexusqd_send("set 0 255 0")  # green success (this also stops the spinner)
-            time.sleep(2.5)
-            if reboot:
-                # base libc/init changed — reboot to apply it cleanly. Stay GREEN
-                # (don't flip to the theme first) so the last thing seen is success,
-                # then the device reboots; the app reconnects when it's back.
-                try:
-                    subprocess.run(["systemctl", "reboot"], capture_output=True, timeout=10)
-                except (OSError, subprocess.SubprocessError):
-                    pass
-                return
-            for c in theme_cmds:
-                nexusqd_send(c)
-            if "nexusq-control" in daemons:
-                try:
-                    subprocess.run(
-                        ["systemctl", "--no-block", "restart", "nexusq-control"], capture_output=True, timeout=10
-                    )
-                except (OSError, subprocess.SubprocessError):
-                    pass
-
-        threading.Thread(target=_do, daemon=True).start()
+    def _ota_finished(self, job):
+        """A job ended (OtaJobs saw it, or found it ended at the bridge's start):
+        tell the clients, let the mute LED speak again once the release is
+        compared with what is installed now, and -- only after a SUCCESS -- look
+        for user services left on a replaced binary (a failed or interrupted job
+        can leave a new binary next to libraries it does not have yet)."""
+        self.broadcast("updateFinished", job)
+        if job.get("state") == "done":
+            self.update_led.set("daemons", False)  # the job installed the daemons too
+        self._after_install()
+        if job.get("state") == "done":
+            self.stale_services.wake.set()
 
     def _volume_cmd(self, method, p):
         # Volume/mute always act on the *active output's* PA sink, so the knob is
@@ -5560,6 +6391,11 @@ def pa_watch_thread(bridge):
 
 
 def main():
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "--ota-run":
+        # nexusq-ota@<kind>.service: the install job, not the bridge.
+        runner = OtaRunner(sys.argv[2], new=sys.argv[3:] == ["--new"])
+        signal.signal(signal.SIGTERM, runner.on_sigterm)
+        sys.exit(runner.run())
     bridge = Bridge()
     threading.Thread(target=serve_unix, args=(bridge,), daemon=True).start()
     threading.Thread(target=pa_watch_thread, args=(bridge,), daemon=True).start()
@@ -5571,6 +6407,7 @@ def main():
     threading.Thread(target=bridge.ring.run, daemon=True).start()
     threading.Thread(target=bridge.brightness.run, daemon=True).start()
     threading.Thread(target=bridge.release.run, daemon=True).start()
+    threading.Thread(target=bridge.ota.run, daemon=True).start()
     publish_mdns()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
