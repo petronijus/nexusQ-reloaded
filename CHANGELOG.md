@@ -6,6 +6,61 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Added — an update you can watch, and one that cannot be killed half-way (`nexusq-control` **r70**, `nexusq-mqtt` **r18**, `device` **r133**, `nexusq-rootfs-ab` **r7**, app **1.28.0+70**, unreleased)
+
+On 2026-11-14 the cottage Q's first update in two months (393 packages) was
+SIGKILLed at package 260 by the bridge's 600 s timeout, leaving new files
+under an old apk database; the app said "apk upgrade did not respond" after
+60 s, the ring spun for twenty minutes, and a second press finished it.
+docs/2026-11-15-ota-jobs.md; PROTOCOL §12d.
+
+- **An install is a job** in its own unit (`nexusq-ota@system` /
+  `nexusq-ota@daemons`, `nexusq-control --ota-run`), not inside the bridge, so
+  the bridge's own restart cannot stop it. The install methods take
+  `async: true` and answer at once with the job; without it they wait for the
+  job and answer as before (no timeout kills apk any more).
+- **Plan, download, install: three apk processes.** `apk upgrade --simulate
+  -vv` says what changes, what to fetch and how much the system grows;
+  `apk fetch` downloads exactly those packages into the job's cache with
+  nothing changed (under apk's cache names); `apk upgrade` installs from the
+  cache. Only the job's `apk update` refreshes the package lists. Only the download is ever stopped (no progress for 5 minutes, a
+  shutdown); the install is never signalled, only reported stalled after 10
+  minutes, and a shutdown waits for it (`KillMode=mixed`,
+  `TimeoutStopSec=20min`). The runner never returns while apk runs, even when
+  the disk fails under it. Room (download + growth + 192 MiB) is checked
+  before the download. `apk update` is tried six times, and a cache that
+  holds lists goes on with them. A start that comes late (queued at boot)
+  never begins an uncounted job, and a queued start is not taken for an
+  interrupted one.
+- **Interrupted jobs finish themselves.** A job a power cut or a reboot cut
+  short is started again by the next bridge and finishes from the cache (at
+  most three attempts); one interrupted by its own reboot is done.
+- **Real progress, from apk itself** (`--progress-fd`): the phase, an overall
+  percent that never goes back, the package count and name, the download in
+  MB, and an estimate of the time left. The two pipes apk writes are read in
+  whatever order they come; the phase only moves forward.
+- **The ring shows it**: the download fills it in deep blue, the install
+  fills it again in bright cyan, green when done, red when it failed, then
+  the theme (it used to spin, or ease to a fake cap).
+- **The app shows it**: a progress card in the same colours as the ring, with
+  the phase, the percent, MB or packages, the package it is at and the time
+  left; it says when the Q is away (the bridge restarting, a reboot) and
+  picks the job up again on reconnect, after the app was closed, or after a
+  power cut. The home screen's indicator fills with the percent. A failed job
+  says why.
+- **Home Assistant shows it**: the update entity carries `update_percentage`
+  and the phase in words, at most every 2 s.
+- `getUpdateJob`, events `updateProgress` / `updateFinished`; `checkSystemUpdate`
+  and `checkNexusUpdate` answer `busy` while a job runs.
+- **Diagnostics** (device r133): the snapshot's `UPDATE_JOB` section;
+  `nq-health-report` reports a running job, warns about a stalled one, one
+  that has run for an hour and a cache left over, and reports a failed one.
+- **A/B** (nexusq-rootfs-ab r7): the slot copy and the split skip and clear
+  the job's cache, as they do apk's.
+
+The first update **to** r70 still runs on the old bridge's code; every update
+after it is a job.
+
 ### Fixed — an update left Spotify and AirPlay running their old binary (`nexusq-control` **r69**, unreleased)
 
 A system update restarts our system daemons, but librespot and shairport-sync

@@ -1993,10 +1993,23 @@ Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA i
       260/393 and the app reported "apk upgrade did not respond"; apk 3 writes its database at the
       end, so the files were new and the database old until a second run finished. Never SIGKILL apk
       mid-commit: download first (interruptible), install in its own unit, a stall watchdog.
+      **Implemented 2026-11-15** (control r70, docs/2026-11-15-ota-jobs.md); open until a device
+      has taken an update as a job (see "Take the OTA jobs to a unit" below).
 - [ ] **The OTA experience**: the app gives up on the call after 60 s and then sees only "busy";
       the ring spins indeterminately. Install as a background job with phases and real progress
       (apk 3 `--progress-fd`), pushed to the app, the ring and Home Assistant's update entity,
       surviving the bridge's restart and a reboot, with a result at the end.
+      **Implemented 2026-11-15** (control r70, mqtt r18, app 1.28.0+70); open until seen on a unit.
+- [ ] **Take the OTA jobs to a unit** (control r70, mqtt r18, device r133, rootfs-ab r7, app 1.28.0+70):
+      build on macOS or the desktop. **The Prague Q first, never the cottage Q first** (out of reach
+      for weeks; a first device run with fault injection is when a unit gets stranded). The first
+      update TO r70 runs on the old bridge (r69), so install r70 that way or by `apk add`, then
+      publish a test release and watch a job end to end: the ring's two colours, the app card,
+      HA's percent, `journalctl -u 'nexusq-ota@*'`. Fault injection there: restart the bridge
+      mid-job (the job goes on), reboot mid-download (resumes from the cache), reboot mid-install
+      (finishes at the next boot), no network at boot with a resume pending (retries, then the
+      cached lists), a near-full disk (refused before the download). Full diag sweep, incl. CPU
+      frequency and VDD_MPU against the OPP. Only then the cottage Q, as an ordinary update.
 
 ### Open — findings of the 2026-11-01 health check (Prague Q, kernel r33, device r131)
 
