@@ -102,6 +102,40 @@ class Fake:
         return [p for t, p, _ in self.published if t.endswith("/update/state")]
 
 
+def job(phase="downloading", percent=30, state="running", kind="system", **progress):
+    p = {"percent": percent, "phasePercent": 50, "packagesDone": 0, "packagesTotal": 0, "current": None}
+    p.update(progress)
+    return {"id": "j1", "kind": kind, "state": state, "phase": phase, "stalled": False, "resumed": False, "progress": p}
+
+
+class TestJobPayload(unittest.TestCase):
+    """A running job (control r70+): its percent and its phase in words."""
+
+    def test_percent_and_the_last_check_stay(self):
+        st = MOD.update_state_payload("1.0-r116", {"packages": [DEV]}, job=job(percent=42))
+        self.assertTrue(st["in_progress"])
+        self.assertEqual(st["update_percentage"], 42)
+        self.assertEqual(st["latest_version"], "1.0-r116", "the device package's new version, from the check")
+
+    def test_the_phases_in_words(self):
+        dl = job(bytesDone=45 << 20, bytesTotal=120 << 20, etaS=240)
+        self.assertEqual(MOD.job_summary(dl), "Downloading: 45 MB of 120 MB, about 4 min left.")
+        inst = job("installing", 70, packagesDone=125, packagesTotal=393, current="pulseaudio", etaS=30)
+        self.assertEqual(MOD.job_summary(inst), "Installing 125 of 393 packages (pulseaudio), about a minute left.")
+        self.assertEqual(MOD.job_summary(job("applying")), "Restarting the Q's services.")
+        self.assertEqual(MOD.job_summary(job("preparing")), "Preparing the update.")
+
+    def test_stalled_and_resumed_are_said(self):
+        j = job("installing", stalled=None)
+        j["stalled"], j["resumed"] = True, True
+        text = MOD.job_summary(j)
+        self.assertTrue(text.startswith("Finishing an interrupted update."))
+        self.assertIn("no progress for a while", text)
+
+    def test_no_job_no_percentage(self):
+        self.assertNotIn("update_percentage", MOD.update_state_payload("1.0-r116", {"packages": []}))
+
+
 class TestLink(unittest.TestCase):
     def test_timed_checks(self):
         f = Fake()
@@ -187,6 +221,78 @@ class TestLink(unittest.TestCase):
         self.assertEqual([c for c, _ in f.calls], ["installSystemUpdate", "checkSystemUpdate"])
         self.assertFalse(f.states()[-1]["in_progress"])
         self.assertIn("nexusq-control", f.states()[-1]["release_summary"])
+
+    def test_an_async_install_shows_the_job_and_then_its_progress(self):
+        f = Fake(install={"started": True, "job": job("preparing", 0)})
+        f.link.submit(f.link.topics["install"], "install")
+        f.link.step()
+        self.assertEqual(f.calls, [("installSystemUpdate", MOD.UPDATE_INSTALL_TIMEOUT_S)])
+        self.assertEqual(f.states()[-1]["update_percentage"], 0)
+        f.now += 5
+        f.link.apply_event("updateProgress", job("installing", 70, packagesDone=10, packagesTotal=20))
+        self.assertEqual(f.states()[-1]["update_percentage"], 70)
+        self.assertIn("Installing 10 of 20", f.states()[-1]["release_summary"])
+
+    def test_progress_reaches_home_assistant_at_a_bounded_rate(self):
+        f = Fake()
+        f.link.apply_event("updateProgress", job(percent=10))
+        f.link.apply_event("updateProgress", job(percent=11))  # same phase, too soon
+        self.assertEqual([s["update_percentage"] for s in f.states()], [10])
+        f.link.apply_event("updateProgress", job("installing", 61))  # a new phase: at once
+        f.now += MOD.UPDATE_PROGRESS_EVERY_S
+        f.link.apply_event("updateProgress", job("installing", 70))
+        self.assertEqual([s["update_percentage"] for s in f.states()], [10, 61, 70])
+
+    def test_the_version_is_read_once_per_job(self):
+        f = Fake()
+        reads = []
+        f.link.version = lambda: reads.append(1) or "1.0-r116"
+        for pct in range(10, 60, 5):
+            f.now += MOD.UPDATE_PROGRESS_EVERY_S
+            f.link.apply_event("updateProgress", job(percent=pct))
+        self.assertEqual(len(reads), 1)
+
+    def test_the_end_of_a_job_checks_or_says_it_reboots(self):
+        f = Fake()
+        f.link.apply_event("updateProgress", job(percent=50))
+        f.link.apply_event("updateFinished", job("done", 100, state="done"))
+        f.link.step()
+        self.assertEqual([c for c, _ in f.calls], ["checkSystemUpdate"])
+        self.assertFalse(f.states()[-1]["in_progress"])
+        g = Fake()
+        done = job("rebooting", 100, state="done")
+        done["result"] = {"rebootRecommended": True}
+        g.link.apply_event("updateFinished", done)
+        self.assertIn("rebooting", g.states()[-1]["release_summary"])
+
+    def test_a_daemons_job_is_not_this_entity_s_install_but_its_end_checks(self):
+        f = Fake()
+        f.link.apply_event("updateProgress", job(kind="daemons"))
+        self.assertEqual(f.states(), [])
+        f.link.apply_event("updateFinished", job("done", 100, state="done", kind="daemons"))
+        f.link.step()
+        self.assertEqual([c for c, _ in f.calls], ["checkSystemUpdate"])
+
+    def test_a_job_running_when_the_feed_connects_is_shown(self):
+        f = Fake()
+        f.link.call = lambda method, params, timeout=5: (
+            f.calls.append((method, timeout)) or {"job": job("installing", 80)}
+        )
+        f.link.set_state({})
+        f.link.step()
+        self.assertEqual(f.calls[0][0], "getUpdateJob")
+        self.assertEqual(f.states()[-1]["update_percentage"], 80)
+
+    def test_a_bridge_without_jobs_is_quiet(self):
+        f = Fake()
+
+        def call(method, params, timeout=5):
+            raise MOD.ControlError("unknown_method", method)
+
+        f.link.call = call
+        f.link.set_state({})
+        f.link.step()
+        self.assertEqual(f.states(), [])
 
     def test_bridge_down_publishes_nothing_new(self):
         f = Fake()

@@ -1689,6 +1689,9 @@ UPDATE_CHECK_EVERY_S = int(os.environ.get("NQMQTT_UPDATE_EVERY_S", str(6 * 3600)
 # measured at several minutes on this CPU.
 UPDATE_INSTALL_TIMEOUT_S = 900
 DEVICE_PKG = "device-google-steelhead"
+# A running job's progress (control r70+) reaches Home Assistant at most this
+# often, and at once when its phase changes.
+UPDATE_PROGRESS_EVERY_S = 2.0
 # HA shows at most 255 characters of release_summary.
 HA_SUMMARY_MAX = 255
 
@@ -1707,7 +1710,46 @@ def read_device_version():
     return out[len(pre) :] if out.startswith(pre) else None
 
 
-def update_state_payload(installed, check, phase=None):
+def _mib(n):
+    return f"{n / (1 << 20):.0f} MB" if n >= 10 << 20 else f"{n / (1 << 20):.1f} MB"
+
+
+def _eta_text(eta):
+    if not isinstance(eta, (int, float)) or eta <= 0:
+        return ""
+    if eta < 90:
+        return ", about a minute left"
+    return f", about {round(eta / 60)} min left"
+
+
+def job_summary(job):
+    """What an update job is doing, in a sentence (PROTOCOL §12d)."""
+    p = job.get("progress") or {}
+    phase = job.get("phase")
+    eta = _eta_text(p.get("etaS"))
+    if phase == "downloading" and isinstance(p.get("bytesTotal"), int) and p["bytesTotal"] > 0:
+        text = f"Downloading: {_mib(p.get('bytesDone') or 0)} of {_mib(p['bytesTotal'])}{eta}."
+    elif phase == "downloading":
+        text = f"Downloading{eta}."
+    elif phase == "installing" and p.get("packagesTotal"):
+        current = f" ({p['current']})" if p.get("current") else ""
+        text = f"Installing {p.get('packagesDone', 0)} of {p['packagesTotal']} packages{current}{eta}."
+    elif phase == "installing":
+        text = f"Installing{eta}."
+    elif phase == "applying":
+        text = "Restarting the Q's services."
+    elif phase == "rebooting":
+        text = "Installed. The Q is rebooting to finish."
+    else:
+        text = "Preparing the update."
+    if job.get("stalled"):
+        text += " It has made no progress for a while; it keeps going."
+    if job.get("resumed"):
+        text = "Finishing an interrupted update. " + text
+    return text
+
+
+def update_state_payload(installed, check, phase=None, job=None):
     """Home Assistant's MQTT `update` JSON for a checkSystemUpdate result.
 
     HA calls it an update when latest_version differs from installed_version
@@ -1717,7 +1759,11 @@ def update_state_payload(installed, check, phase=None):
     move too. That string is deliberately not a version (it has spaces): HA
     cannot order it, and an unorderable pair that differs reads as an update.
     `phase`: None, "installing" or "rebooting" -- both of the latter set
-    in_progress, which HA shows as a spinner on the entity."""
+    in_progress, which HA shows as a spinner on the entity. `job`: a running
+    update job (control r70+, PROTOCOL §12d): its phase in words and its
+    overall percent as `update_percentage`, which HA shows as a progress
+    bar; `check` stays the last check, so the entity still says what is
+    being installed."""
     installed = installed or "unknown"
     pkgs = [p for p in (check or {}).get("packages", []) if isinstance(p, dict) and isinstance(p.get("name"), str)]
     busy = bool((check or {}).get("busy"))
@@ -1728,7 +1774,9 @@ def update_state_payload(installed, check, phase=None):
     others = len(pkgs) - (1 if dev is not None else 0)
     if others:
         latest = f"{latest} + {others} update{'s' if others != 1 else ''}"
-    if phase == "rebooting":
+    if job is not None:
+        summary = job_summary(job)
+    elif phase == "rebooting":
         summary = "Installed. The Q is rebooting to finish."
     elif phase == "installing" or busy:
         summary = "Installing. Services restart when it is done; the Q may reboot."
@@ -1738,13 +1786,19 @@ def update_state_payload(installed, check, phase=None):
             summary = summary[: HA_SUMMARY_MAX - 1] + "…"
     else:
         summary = "Up to date."
-    return {
+    if len(summary) > HA_SUMMARY_MAX:
+        summary = summary[: HA_SUMMARY_MAX - 1] + "…"
+    payload = {
         "installed_version": installed,
         "latest_version": latest,
         "title": "Nexus Q system",
         "release_summary": summary,
-        "in_progress": phase is not None or busy,
+        "in_progress": job is not None or phase is not None or busy,
     }
+    pct = ((job or {}).get("progress") or {}).get("percent")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        payload["update_percentage"] = max(0, min(100, int(pct)))
+    return payload
 
 
 def update_discovery_configs(node_id, display_name, prefix):
@@ -1808,6 +1862,10 @@ class UpdateLink:
         self._cv = threading.Condition()
         self._queue = []
         self._last = None  # the last payload published
+        self._check = None  # the last check's answer, kept while a job runs
+        self._job_id = None  # the job this link reported running, if any
+        self._job_installed = None
+        self._job_shown = (None, 0.0)  # (phase, when) of the last progress publish
         self._next_check = clock() + UPDATE_FIRST_CHECK_S
 
     def command_topics(self):
@@ -1825,10 +1883,7 @@ class UpdateLink:
         if kind == "install" and text.strip() != "install":
             log("update: ignored install payload", text[:40])
             return True
-        with self._cv:
-            if kind not in self._queue:
-                self._queue.append(kind)
-            self._cv.notify()
+        self._enqueue(kind)
         return True
 
     def _put(self, payload):
@@ -1840,20 +1895,95 @@ class UpdateLink:
         if self._last is not None:
             self.publish(self.topics["state"], json.dumps(self._last), True)
 
+    # --- BridgeFeed consumer: the job's progress arrives as events -----------
+    def set_state(self, full):
+        """The feed (re)connected: ask for a job that may be running already
+        (started from the app, or by the bridge resuming one)."""
+        self._enqueue("job")
+
+    def apply_event(self, event, data):
+        if event not in ("updateProgress", "updateFinished") or not isinstance(data, dict):
+            return
+        if data.get("kind") != "system":
+            # A daemons job (the app's App update) is not this entity's
+            # install, but its end moves versions: check then.
+            if event == "updateFinished":
+                self._enqueue("check")
+            return
+        if event == "updateProgress" and data.get("state") == "running":
+            self._show_job(data)
+        elif event == "updateFinished":
+            self._job_id = None
+            if data.get("state") == "done" and (data.get("result") or {}).get("rebootRecommended"):
+                self._put(update_state_payload(self.version(), self._check, "rebooting"))
+            else:
+                self._enqueue("check")
+
+    def bridge_down(self):
+        pass
+
+    def _show_job(self, job):
+        """Publish a running job's progress. The bridge sends up to two events a
+        second; Home Assistant gets one every UPDATE_PROGRESS_EVERY_S, or at
+        once when the phase changes. The installed version is read once per
+        job: `apk info` twice a second on this CPU, mid-install, is not free."""
+        if job.get("id") != self._job_id:
+            self._job_id = job.get("id")
+            self._job_installed = self.version()
+            self._job_shown = (None, 0.0)
+        now = self.clock()
+        last_phase, last_at = self._job_shown
+        if job.get("phase") == last_phase and now - last_at < UPDATE_PROGRESS_EVERY_S:
+            return
+        self._job_shown = (job.get("phase"), now)
+        phase = "rebooting" if job.get("phase") == "rebooting" else None
+        self._put(update_state_payload(self._job_installed, self._check, phase, job=job))
+
+    def _enqueue(self, kind):
+        with self._cv:
+            if kind not in self._queue:
+                self._queue.append(kind)
+            self._cv.notify()
+
+    def sync_job(self):
+        try:
+            r = self.call("getUpdateJob", {}, timeout=10)
+        except ControlError as e:
+            if e.code != "unknown_method":  # a bridge before r70 has no jobs
+                log("update: getUpdateJob failed:", e)
+            return
+        except (OSError, ValueError) as e:
+            log("update: getUpdateJob failed:", e)
+            return
+        job = (r or {}).get("job")
+        if isinstance(job, dict) and job.get("state") == "running" and job.get("kind") == "system":
+            self._show_job(job)
+        elif self._job_id is not None:
+            # It ended while the feed was down: show what a check says now.
+            self._job_id = None
+            self.check()
+
     def check(self):
         try:
             r = self.call("checkSystemUpdate", {}, timeout=180)
         except (OSError, ValueError, ControlError) as e:
             log("update: check failed:", e)
             return None
+        if r and r.get("busy") and self._job_id is not None:
+            return r  # a job runs; its events keep the entity current
+        if r and not r.get("busy"):
+            self._check = r
         self._put(update_state_payload(self.version(), r))
         return r
 
     def install(self):
         installed = self.version()
-        self._put(update_state_payload(installed, None, "installing"))
+        self._put(update_state_payload(installed, self._check, "installing"))
         try:
-            r = self.call("installSystemUpdate", {}, timeout=UPDATE_INSTALL_TIMEOUT_S)
+            # async (control r70+): the answer is the job, its progress comes as
+            # events. A bridge before r70 ignores the flag and answers when apk
+            # is done, as it always did -- handled below.
+            r = self.call("installSystemUpdate", {"async": True}, timeout=UPDATE_INSTALL_TIMEOUT_S)
         except (OSError, ValueError, ControlError) as e:
             # `busy` = the app is installing right now: say so; the next check
             # shows the outcome. Anything else: back to what a check says.
@@ -1862,6 +1992,9 @@ class UpdateLink:
                 self._put(update_state_payload(installed, {"busy": True}))
             else:
                 self.check()
+            return
+        if isinstance(r.get("job"), dict):
+            self._show_job(r["job"])
             return
         if r.get("rebootRecommended"):
             self._put(update_state_payload(self.version(), None, "rebooting"))
@@ -1878,6 +2011,8 @@ class UpdateLink:
         if kind == "install":
             self.install()
             self._next_check = self.clock() + UPDATE_CHECK_EVERY_S
+        elif kind == "job":
+            self.sync_job()
         elif kind == "check" or self.clock() >= self._next_check:
             self.check()
             self._next_check = self.clock() + UPDATE_CHECK_EVERY_S
@@ -2636,13 +2771,13 @@ def run():
         vol = VolumeLink(node_id, display_name, prefix, conf["discovery_prefix"], safe_publish)
         feed.append(vol)
         threading.Thread(target=vol.worker, daemon=True).start()
-    if feed:
-        threading.Thread(target=BridgeFeed(feed).listen, daemon=True).start()
-
     upd = None
     if UPDATE_ENABLED:
         upd = UpdateLink(prefix, node_id, safe_publish)
+        feed.append(upd)  # a job's progress arrives as bridge events
         threading.Thread(target=upd.worker, daemon=True).start()
+    if feed:
+        threading.Thread(target=BridgeFeed(feed).listen, daemon=True).start()
 
     def publish_discovery(topic, payload):
         """A discovery publish of this unit: recorded for the guard and sent
