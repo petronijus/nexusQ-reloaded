@@ -468,6 +468,59 @@ def snapshot_gpu_dvfs(snap_text):
     return (dvfs if "governor" in dvfs else None), rail
 
 
+# An update job (nexusq-control r70+, PROTOCOL §12d) that has run this long is
+# worth a look: the cottage Q's 393-package upgrade took about 25 minutes.
+OTA_JOB_LONG_S = 3600
+# Packages this large in the download cache with no job running were left by
+# a failed or stopped job (they are purged after a successful one; the package
+# lists stay, so only *.apk counts).
+OTA_CACHE_LEFT_KB = 1024
+
+
+def _json_line(lines):
+    for ln in lines:
+        try:
+            v = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(v, dict):
+            return v
+    return None
+
+
+def snapshot_update_job(snap_text):
+    """Findings from the snapshot's UPDATE_JOB section: (sev, kind, message)."""
+    out = []
+    job = _json_line(snapshot_block(snap_text, "UPDATE_JOB", "job"))
+    live = _json_line(snapshot_block(snap_text, "UPDATE_JOB", "live"))
+    cache = snapshot_block(snap_text, "UPDATE_JOB", "cache packages kB")
+    try:
+        cache_kb = int(cache[0].split()[0]) if cache else 0
+    except (ValueError, IndexError):
+        cache_kb = 0
+    running = bool(job and job.get("state") == "running")
+    if running:
+        cur = live if live and live.get("id") == job.get("id") else job
+        p = cur.get("progress") or {}
+        took = (cur.get("updatedAt") or 0) - (job.get("startedAt") or 0)
+        what = f"{job.get('kind')} job {job.get('id')} in {cur.get('phase')} at {p.get('percent')}%"
+        if job.get("phase") == "rebooting":
+            out.append(("info", "ota_job", f"an update {what}: the Q is rebooting to finish it"))
+        elif cur.get("stalled"):
+            out.append(("warn", "ota_stalled", f"an update {what} has made no progress for 10+ minutes"))
+        elif took > OTA_JOB_LONG_S:
+            out.append(("warn", "ota_long", f"an update {what} has run for {took // 60} min"))
+        else:
+            out.append(("info", "ota_job", f"an update {what} (attempt {job.get('attempt', 1)})"))
+    elif job and job.get("state") == "failed":
+        out.append(("info", "ota_failed", f"the last update ({job.get('id')}) failed: {job.get('error')}"))
+    if not running and cache_kb > OTA_CACHE_LEFT_KB:
+        out.append(
+            ("warn", "ota_cache_left", f"{cache_kb // 1024} MiB left in /var/cache/nexusq-ota with no update running")
+        )
+    return out
+
+
 def analyze(rows, events, snap_text, mem_rows=None):
     findings = []  # (severity, kind, message, t_mono_or_None)
 
@@ -809,6 +862,8 @@ def analyze(rows, events, snap_text, mem_rows=None):
             add("warn", "snapshot_truncated", "nq-diag-snapshot did not finish (truncated/blocked)")
         for line in snapshot_block(snap_text, "SYSTEMD", "systemctl --failed --no-legend"):
             add("warn", "failed_unit", f"systemd failed unit: {line[:120]}")
+        for sev, kind, msg in snapshot_update_job(snap_text):
+            add(sev, kind, msg)
         # The SGX clock comes from dpll_per_m7x2_ck (patch 0062). Without DVFS
         # it stays at stock's OPP100, 307.2 MHz; with DVFS (kernel r31) it is
         # one of stock's three OPPs, and 384 MHz must come with VDD_CORE at

@@ -229,6 +229,17 @@ sec SYSTEMD
 run systemctl --failed --no-legend
 sub "running units"; t systemctl list-units --type=service --state=running --no-legend 2>/dev/null
 
+sec UPDATE_JOB
+# nexusq-control r70+ (PROTOCOL §12d): the last install job, its live progress,
+# the job units and the packages the job's download cache still holds. nq-health-report
+# flags a job that is stalled or has run for an hour, a failed one, and a cache
+# left over with no job running.
+sub "job"; t cat /var/lib/nexusq/ota/job.json 2>/dev/null || echo "(no job yet)"
+sub "live"; t cat /run/nexusq/ota.json 2>/dev/null || echo "(none)"
+sub "units"; t systemctl list-units 'nexusq-ota@*' --all --no-legend 2>/dev/null
+# Packages only: `apk cache purge` keeps the package lists (several MB) by design.
+sub "cache packages kB"; t sh -c 'du -ck /var/cache/nexusq-ota/*.apk 2>/dev/null | tail -n1 | cut -f1' | grep . || echo 0
+
 sec PSTORE
 # NOT /sys/fs/pstore: systemd-pstore.service copies every record into the archive
 # below at boot and unlinks it from pstorefs, so pstorefs is empty within a second

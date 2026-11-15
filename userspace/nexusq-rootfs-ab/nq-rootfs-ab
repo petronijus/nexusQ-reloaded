@@ -98,7 +98,8 @@ cmd_populate() {
     # contents (keeping the directory) skips a guaranteed-useless 100+ MB and one
     # alarming boot message that means nothing.
     tar -C / --one-file-system --numeric-owner --xattrs --acls --sparse \
-        --exclude='./var/log/journal/*' --exclude='./var/cache/apk/*' -cf - . \
+        --exclude='./var/log/journal/*' --exclude='./var/cache/apk/*' \
+        --exclude='./var/cache/nexusq-ota/*' -cf - . \
         | tar -C "$MNT" --numeric-owner --xattrs --acls \
               --warning=no-timestamp -xf - \
         || die "copy failed"
@@ -305,10 +306,12 @@ cmd_split() {
     set -- $(ab_layout "$(cat "$SYSBLOCK/mmcblk0/size")" "$(cat "$SYSBLOCK/mmcblk0p13/start")")
     _asz=$1
 
-    # Both are caches -- librespot fetches audio files again on demand, apk keeps
-    # downloads only for reinstalls -- and every block they hold is a block the
-    # shrink has to move while the power must not fail. So they go first, always.
-    _c=$(du -sk /home/user/.cache/librespot/files /var/cache/apk 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    # All are caches -- librespot fetches audio files again on demand, apk keeps
+    # downloads only for reinstalls, an update job's downloads (nexusq-control
+    # r70+) are fetched again by its next try -- and every block they hold is a
+    # block the shrink has to move while the power must not fail. So they go
+    # first, always.
+    _c=$(du -sk /home/user/.cache/librespot/files /var/cache/apk /var/cache/nexusq-ota 2>/dev/null | awk '{s+=$1} END {print s+0}')
     if [ "$_dry" = 1 ]; then
         log "dry run: would clear $(( _c / 1024 )) MiB of caches (Spotify audio files, apk downloads);"
         log "the fit below is judged WITH them, so it is the pessimistic answer"
@@ -316,7 +319,8 @@ cmd_split() {
         rm -rf /home/user/.cache/librespot/files 2>/dev/null || true
         apk cache clean >/dev/null 2>&1 || true
         rm -f /var/cache/apk/*.apk /var/cache/apk/*.tar.gz 2>/dev/null || true
-        log "cleared $(( _c / 1024 )) MiB of caches (Spotify audio files, apk downloads)"
+        rm -f /var/cache/nexusq-ota/*.apk /var/cache/nexusq-ota/*.tar.gz 2>/dev/null || true
+        log "cleared $(( _c / 1024 )) MiB of caches (Spotify audio files, apk and update downloads)"
         sync
     fi
 
