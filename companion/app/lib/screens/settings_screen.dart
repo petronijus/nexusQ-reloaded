@@ -11,6 +11,7 @@ import '../update/release.dart';
 import '../update/release_alerts.dart';
 import '../update/release_background.dart';
 import '../update/update_coordinator.dart';
+import '../update/update_job_view.dart';
 import '../widgets/whats_new.dart';
 import 'debug_log_screen.dart';
 import 'health_screen.dart';
@@ -572,9 +573,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     ),
-                  // Progress area — device daemons first (activity bar), then the
+                  // Progress area — device daemons first (the job's real
+                  // progress; an activity bar on a bridge before r70), then the
                   // phone app download (determinate bar), then the Update button.
-                  if (_upd.installingNexus)
+                  if (_upd.nexusJob != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: UpdateJobProgressView(
+                        job: _upd.nexusJob!,
+                        linkUp: _upd.linkUp,
+                      ),
+                    )
+                  else if (_upd.installingNexus)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
@@ -739,7 +749,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     ),
-                  if (_upd.installingSystem)
+                  if (_upd.systemJob != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: UpdateJobProgressView(
+                        job: _upd.systemJob!,
+                        linkUp: _upd.linkUp,
+                      ),
+                    )
+                  else if (_upd.installingSystem)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Column(
@@ -754,9 +772,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          // Live phase message (installing → applying/restarting
-                          // → reconnecting → verifying); apk has no % so we narrate
-                          // the stages we know.
+                          // A bridge before r70 reports no progress: the phases
+                          // the app knows are narrated (installing → applying →
+                          // reconnecting → verifying).
                           Text(
                             _upd.systemProgress ??
                                 'Upgrading all packages on the device.',

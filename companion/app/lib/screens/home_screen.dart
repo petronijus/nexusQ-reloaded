@@ -186,26 +186,37 @@ class _HomeScreenState extends State<HomeScreen> {
               // closed (UpdateCoordinator); say so here, and lead back to it.
               ListenableBuilder(
                 listenable: UpdateCoordinator.forClient(controller.client),
-                builder: (context, _) =>
-                    UpdateCoordinator.forClient(controller.client).busy
-                    ? IconButton(
-                        tooltip: 'Update in progress',
-                        icon: const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: NexusQColors.accent,
-                          ),
-                        ),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                SettingsScreen(client: controller.client),
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
+                builder: (context, _) {
+                  final upd = UpdateCoordinator.forClient(controller.client);
+                  if (!upd.busy) return const SizedBox.shrink();
+                  // A job (r70+) has a real percent: the Q's ring fills with
+                  // it, and so does this. Before r70, or for the phone app's
+                  // own download, it just turns.
+                  final job = upd.job;
+                  return IconButton(
+                    tooltip: job != null
+                        ? '${job.headline} — ${job.percent}%'
+                        : 'Update in progress',
+                    icon: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        value: job?.fraction,
+                        strokeWidth: 2,
+                        color: NexusQColors.accent,
+                        backgroundColor: job != null
+                            ? NexusQColors.divider
+                            : null,
+                      ),
+                    ),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            SettingsScreen(client: controller.client),
+                      ),
+                    ),
+                  );
+                },
               ),
               // Debug mode (Devices → Developer): quick access to the connection
               // log, right where the "Disconnected" banner appears — so the user

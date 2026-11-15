@@ -24,6 +24,7 @@ import '../debug/app_log.dart';
 import '../protocol/client.dart';
 import 'app_update.dart';
 import 'release.dart';
+import 'update_job.dart';
 
 class UpdateCoordinator extends ChangeNotifier {
   UpdateCoordinator(this.client, {Future<void> Function(Duration)? sleep})
@@ -32,19 +33,34 @@ class UpdateCoordinator extends ChangeNotifier {
     // client; the coordinator lives as long as the client, so it listens for
     // as long as the link can carry one.
     _events = client.events.listen((e) {
-      if (e.event == 'updateStatusChanged') {
-        _set(() => _release = UpdateStatus.fromJson(e.data));
+      switch (e.event) {
+        case 'updateStatusChanged':
+          _set(() => _release = UpdateStatus.fromJson(e.data));
+        case 'updateProgress':
+          final job = UpdateJob.fromJson(e.data);
+          if (job != null && job.running) _set(() => _job = job);
+        case 'updateFinished':
+          final job = UpdateJob.fromJson(e.data);
+          if (job != null) unawaited(_onJobFinished(job));
       }
+    });
+    // An install job (PROTOCOL §12d) restarts the bridge and may reboot the
+    // Q: the link drops, comes back, and the job is asked for again.
+    _connection = client.connection.listen((up) {
+      _set(() => _linkUp = up);
+      if (up) unawaited(refreshJob());
     });
   }
 
   final NexusQClient client;
   final Future<void> Function(Duration) _sleep;
   late final StreamSubscription<NexusQEvent> _events;
+  late final StreamSubscription<bool> _connection;
 
   @override
   void dispose() {
     _events.cancel();
+    _connection.cancel();
     super.dispose();
   }
 
@@ -80,7 +96,8 @@ class UpdateCoordinator extends ChangeNotifier {
 
   Map<String, dynamic>? get nexusCheck => _nexusCheck;
   bool get checkingNexus => _checkingNexus;
-  bool get installingNexus => _installingNexus;
+  bool get installingNexus =>
+      _installingNexus || _starting == 'daemons' || nexusJob != null;
   String? get nexusError => _nexusError;
   bool get nexusUpdateAvailable => _nexusCheck?['updateAvailable'] == true;
 
@@ -93,7 +110,8 @@ class UpdateCoordinator extends ChangeNotifier {
 
   Map<String, dynamic>? get systemCheck => _systemCheck;
   bool get checkingSystem => _checkingSystem;
-  bool get installingSystem => _installingSystem;
+  bool get installingSystem =>
+      _installingSystem || _starting == 'system' || systemJob != null;
   String? get systemError => _systemError;
   String? get systemProgress => _systemProgress;
   bool get systemUpdateAvailable => _systemCheck?['updateAvailable'] == true;
@@ -103,7 +121,123 @@ class UpdateCoordinator extends ChangeNotifier {
   // does whichever is needed (daemons first — installing the app restarts the
   // phone, so it goes last, onto an already-updated device).
   bool get companionUpdateAvailable => _update != null || nexusUpdateAvailable;
-  bool get companionBusy => _downloading || _installingNexus;
+  bool get companionBusy => _downloading || installingNexus;
+
+  // --- install jobs (PROTOCOL §12d, nexusq-control r70+) --------------------
+  // The job the Q runs, with its real progress; null when none runs (and on a
+  // bridge before r70, which installs inside one blocking call instead).
+  UpdateJob? _job;
+  bool _linkUp = true;
+  // The install asked for and not answered yet (`system` / `daemons`): busy
+  // from the tap on, so the card never looks idle while the Q decides, and a
+  // second tap is ignored. A bridge before r70 answers only when apk is done.
+  String? _starting;
+
+  /// The running job, of either kind.
+  UpdateJob? get job => _job != null && _job!.running ? _job : null;
+  UpdateJob? get systemJob => job != null && job!.isSystem ? job : null;
+  UpdateJob? get nexusJob => job != null && !job!.isSystem ? job : null;
+
+  /// False while the link to the Q is down (a job restarts the bridge).
+  bool get linkUp => _linkUp;
+
+  /// Ask the Q for its job: after a (re)connect, or when the app opens.
+  Future<void> refreshJob() async {
+    Map<String, dynamic>? r;
+    try {
+      r = await client.call('getUpdateJob');
+    } on NexusQError catch (e) {
+      // unknown_method: a bridge before r70, which has no jobs.
+      if (e.code != 'unknown_method') {
+        AppLog.add('update', 'getUpdateJob failed: $e', warn: true);
+      }
+      return;
+    } catch (e) {
+      AppLog.add('update', 'getUpdateJob failed: $e', warn: true);
+      return;
+    }
+    final fresh = UpdateJob.fromJson(r['job']);
+    if (fresh == null) return;
+    if (fresh.running) {
+      _set(() => _job = fresh);
+    } else if (_job != null && _job!.id == fresh.id && _job!.running) {
+      // It ended while the link was down (the bridge restarted, the Q
+      // rebooted): the next bridge told an empty room.
+      await _onJobFinished(fresh);
+    }
+  }
+
+  Future<void> _onJobFinished(UpdateJob finished) async {
+    // A job this app watched gets its outcome said; one it never saw (Home
+    // Assistant started it, or it ended before the app opened) only moves
+    // the versions, so the checks are refreshed quietly.
+    final watched = _job != null && _job!.id == finished.id;
+    _set(() => _job = null);
+    if (finished.isSystem) {
+      await checkSystemUpdate();
+    } else {
+      await checkNexusUpdate();
+    }
+    if (watched && finished.failed) {
+      final message =
+          'The update failed: ${finished.error ?? 'the Q gave no reason'}';
+      _set(() {
+        if (finished.isSystem) {
+          _systemError = message;
+        } else {
+          _nexusError = message;
+        }
+      });
+    }
+    await refreshRelease();
+  }
+
+  /// Start a job of [method]; true when the Q answered with one. False means a
+  /// bridge before r70 (it ignores `async` and blocks; the 60 s slow-call
+  /// timeout ends the wait) or a lost answer: the caller narrates the old way.
+  Future<bool> _startJob(String method, void Function(String) error) async {
+    Map<String, dynamic>? r;
+    try {
+      r = await client.call(method, {'async': true});
+    } on NexusQError catch (e) {
+      if (e.code == 'busy') {
+        error('An update is already in progress on the Q.');
+        await refreshJob();
+        return true; // its progress shows; nothing else to narrate
+      }
+      AppLog.add('update', '$method failed: $e', warn: true);
+      // No answer: a bridge before r70 still working, or a lost link.
+      if (_noAnswer(e)) return false;
+      // The Q answered with a reason (the job could not start, apk failed on
+      // a bridge before r70): say it, do not narrate an install that is not
+      // happening.
+      _set(() => _starting = null);
+      error('The update did not start: ${e.message}');
+      return true;
+    } catch (e) {
+      AppLog.add('update', '$method failed: $e', warn: true);
+      return false;
+    }
+    final started = UpdateJob.fromJson(r['job']);
+    if (started == null) return false;
+    _set(() {
+      _job = started;
+      _starting = null;
+    });
+    return true;
+  }
+
+  /// No answer from the Q, as opposed to an answer that says no: the client's
+  /// own timeout (a bridge before r70 blocks until apk is done) or the link.
+  static bool _noAnswer(NexusQError e) =>
+      e.code == 'internal' ||
+      e.code == 'disconnected' ||
+      (e.code == 'unavailable' &&
+          const [
+            'not connected',
+            'connection closed',
+            'client closed',
+          ].contains(e.message));
 
   // --- release watch (PROTOCOL §12c) ---------------------------------------
   // Whether a new Nexus Q release is out, as the Q itself knows it. Null
@@ -140,7 +274,7 @@ class UpdateCoordinator extends ChangeNotifier {
   }
 
   /// Anything in flight on any track — what the home screen indicator shows.
-  bool get busy => companionBusy || _installingSystem;
+  bool get busy => companionBusy || installingSystem;
 
   void _set(void Function() change) {
     change();
@@ -220,7 +354,7 @@ class UpdateCoordinator extends ChangeNotifier {
   // --- device daemon track ---------------------------------------------------
 
   Future<void> checkNexusUpdate() async {
-    if (_checkingNexus || _installingNexus) return;
+    if (_checkingNexus || installingNexus) return;
     _set(() {
       _checkingNexus = true;
       _nexusError = null;
@@ -233,19 +367,28 @@ class UpdateCoordinator extends ChangeNotifier {
   }
 
   Future<void> installNexusUpdate() async {
-    if (_installingNexus) return;
+    if (installingNexus) return;
     _set(() {
-      _installingNexus = true; // "Installing…" until verified
       _nexusError = null;
+      _starting = 'daemons';
+    });
+    // r70+: a job, whose progress and end arrive as events.
+    if (await _startJob('installNexusUpdate', (m) => _nexusError = m)) {
+      _set(() => _starting = null);
+      return;
+    }
+    _set(() {
+      _starting = null;
+      _installingNexus = true; // "Installing…" until verified
       // keep _nexusCheck: its package list is what the UI shows as "what's
       // installing"; clearing it hid the whole install block.
     });
-    // Installing upgrades the daemons and RESTARTS them — including the control
+    // A bridge before r70: the call above WAS the install (it ignores `async`).
+    // It upgrades the daemons and RESTARTS them — including the control
     // bridge, which necessarily drops THIS connection. So a null/timeout from
     // the call is EXPECTED, not a failure: the device may well have succeeded.
     // The real outcome is confirmed by reconnecting and re-checking, never by
-    // this call's return value.
-    await _call('installNexusUpdate');
+    // that call's return value — and never by calling it again.
     await _sleep(const Duration(seconds: 8)); // daemons restart + relink
     await _verifyNexusInstall();
   }
@@ -276,7 +419,7 @@ class UpdateCoordinator extends ChangeNotifier {
   // --- full-system track -----------------------------------------------------
 
   Future<void> checkSystemUpdate() async {
-    if (_checkingSystem || _installingSystem) return;
+    if (_checkingSystem || installingSystem) return;
     // The ⟳ asks both: the packages (apk) and the release (its notes).
     unawaited(refreshRelease(check: true));
     _set(() {
@@ -297,16 +440,24 @@ class UpdateCoordinator extends ChangeNotifier {
   }
 
   Future<void> installSystemUpdate() async {
-    if (_installingSystem) return;
+    if (installingSystem) return;
     _set(() {
-      _installingSystem = true;
       _systemError = null;
+      _starting = 'system';
+    });
+    // r70+: a job, whose progress and end arrive as events.
+    if (await _startJob('installSystemUpdate', (m) => _systemError = m)) {
+      _set(() => _starting = null);
+      return;
+    }
+    // A bridge before r70: one blocking call, then reconnect and re-check.
+    // The call usually timed out (60 s) long before apk was done; the install
+    // went on and the re-check below waits for it.
+    _set(() {
+      _starting = null;
+      _installingSystem = true;
       _systemProgress = 'Downloading & installing packages on the Q…';
     });
-    // A full-system upgrade restarts the daemons — and may REBOOT the Q (base
-    // libc/init churn) — so the call's disconnect is EXPECTED. apk exposes no
-    // percentage, so the phases we DO know are narrated instead.
-    await _call('installSystemUpdate');
     _set(
       () => _systemProgress = 'Applying updates — the Q may restart to finish…',
     );

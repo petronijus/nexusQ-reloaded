@@ -29,6 +29,13 @@ class NexusQColors {
   static const ledPurple = Color(0xFFAA66CC);
   static const ledYellow = Color(0xFFFFBB33);
   static const ledRed = Color(0xFFCC0000);
+
+  /// An update's progress, in the ring's colours for the same phase
+  /// (PROTOCOL §12.3): the download fills the ring in deep blue (`0 70 160`,
+  /// lifted here to stay legible on a card), the install in bright cyan
+  /// (`0 200 255`). What the phone shows is what the Q shows.
+  static const otaDownload = Color(0xFF2F6BD8);
+  static const otaInstall = Color(0xFF00C8FF);
 }
 
 /// Spacing tokens (from the original `dimens.xml`).

@@ -277,6 +277,9 @@ class DeviceController extends ChangeNotifier with WidgetsBindingObserver {
       ).catchError((Object e) => AppLog.add('update', 'remember: $e')),
     );
     unawaited(UpdateCoordinator.forClient(_client).refreshRelease());
+    // A job may be running already (PROTOCOL §12d): started before the app
+    // opened, or resumed by the bridge after a power cut.
+    unawaited(UpdateCoordinator.forClient(_client).refreshJob());
   }
 
   void _onEvent(NexusQEvent e) {
