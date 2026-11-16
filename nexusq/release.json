@@ -1,42 +1,43 @@
 {
   "schema": 1,
-  "version": "2.1.2",
-  "date": "2026-11-01",
-  "headline": "A red mute light and a calmer ring",
+  "version": "2.1.3",
+  "date": "2026-11-16",
+  "headline": "Updates you can watch, and Spotify that keeps playing",
   "items": [
     {
-      "icon": "fix",
-      "title": "Mute you can see",
-      "text": "While the Q is muted, the light in the middle of the dome now glows red, whatever theme you have chosen."
+      "icon": "new",
+      "title": "Updates you can follow",
+      "text": "The app shows an update step by step, from the download to the install, and it keeps going if the app closes or the connection drops."
+    },
+    {
+      "icon": "music",
+      "title": "Spotify rides out a dropped connection",
+      "text": "When Spotify's servers drop the connection, playback carries on, and the volume stays where you left it."
     },
     {
       "icon": "fix",
-      "title": "The ring follows quiet music",
-      "text": "The light ring no longer flickers between the music and its idle glow during quiet passages, and it keeps the beat better."
-    },
-    {
-      "icon": "fix",
-      "title": "USB audio stops cleanly",
-      "text": "When a computer stops playing over USB, the Q no longer runs a processor core flat out, and it is ready the moment playback resumes."
+      "title": "Spotify and AirPlay pick up an update",
+      "text": "After an update, Spotify and AirPlay switch to the new version as soon as nothing is playing, with no restart of the Q."
     }
   ],
   "packages": {
-    "nexusq-control": "0.1.0-r68",
+    "nexusq-control": "0.1.0-r73",
     "nexusqd": "0.1.0-r28",
     "nexusq-btagent": "0.1.0-r8",
     "nexusq-setupd": "0.1.0-r8",
-    "nexusq-mqtt": "0.1.0-r17",
+    "nexusq-mqtt": "0.1.0-r18",
     "nexusq-alsa-vol": "0.1.0-r1",
     "nexusq-kernel-ota": "0.1.0-r11",
-    "nexusq-rootfs-ab": "0.1.0-r6",
-    "device-google-steelhead": "1.0-r132",
-    "device-google-steelhead-nonfree-firmware": "1.0-r132",
+    "nexusq-rootfs-ab": "0.1.0-r7",
+    "device-google-steelhead": "1.0-r133",
+    "device-google-steelhead-nonfree-firmware": "1.0-r133",
     "firmware-google-steelhead": "1-r3",
     "speexdsp": "1.2.1-r100",
     "shairport-sync": "5.5.2-r102",
     "alsa-utils": "1.2.16-r101",
     "alsa-utils-systemd": "1.2.16-r101",
     "alsa-utils-udev": "1.2.16-r101",
+    "librespot": "0.8.0-r100",
     "nexusq-sgx": "1.17.4948957-r1",
     "nexusq-sgx-mesa": "24.0.9-r0"
   }
