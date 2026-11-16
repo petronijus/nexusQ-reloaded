@@ -299,7 +299,16 @@ void main() {
         expect(u.systemJob, isNull);
         expect(u.installingSystem, isFalse);
         expect(u.systemError, isNull);
-        expect(c.calls, containsAll(['checkSystemUpdate', 'getUpdateStatus']));
+        // A System update moves our daemons too (the Prague Q, 2026-11-15:
+        // the card kept saying nexusq-control r70 under r72).
+        expect(
+          c.calls,
+          containsAll([
+            'checkSystemUpdate',
+            'checkNexusUpdate',
+            'getUpdateStatus',
+          ]),
+        );
       },
     );
 
@@ -338,7 +347,7 @@ void main() {
         expect(u.linkUp, isTrue);
         expect(u.systemJob, isNull);
         expect(c.calls, contains('getUpdateJob'));
-        expect(c.calls, contains('checkSystemUpdate'));
+        expect(c.calls, containsAll(['checkSystemUpdate', 'checkNexusUpdate']));
       },
     );
 

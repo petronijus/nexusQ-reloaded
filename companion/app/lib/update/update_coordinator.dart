@@ -173,11 +173,10 @@ class UpdateCoordinator extends ChangeNotifier {
     // the versions, so the checks are refreshed quietly.
     final watched = _job != null && _job!.id == finished.id;
     _set(() => _job = null);
-    if (finished.isSystem) {
-      await checkSystemUpdate();
-    } else {
-      await checkNexusUpdate();
-    }
+    // A System update moves our daemons too (upgrade --available), so the
+    // device track is read again after either kind.
+    if (finished.isSystem) await checkSystemUpdate();
+    await checkNexusUpdate();
     if (watched && finished.failed) {
       final message =
           'The update failed: ${finished.error ?? 'the Q gave no reason'}';

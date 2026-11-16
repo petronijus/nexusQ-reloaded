@@ -6,6 +6,14 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — after a System update the app still showed the old `nexusq-control` (app **1.28.1+71**, unreleased)
+
+When a job ended, the app read only the check of the job's own kind. A System
+update (`upgrade --available`) moves our daemons too, so the line "device
+nexusq-control …" kept the old revision until Settings was opened again (the
+Prague Q, 2026-11-15: r70 shown, r72 running). The device check is now read
+after either kind.
+
 ### Added — an update you can watch, and one that cannot be killed half-way (`nexusq-control` **r70**, `nexusq-mqtt` **r18**, `device` **r133**, `nexusq-rootfs-ab` **r7**, app **1.28.0+70**, unreleased)
 
 On 2026-11-14 the cottage Q's first update in two months (393 packages) was
