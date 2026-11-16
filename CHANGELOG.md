@@ -6,6 +6,15 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+## [2.1.3] — 2026-11-16 — updates you can watch, and Spotify that keeps playing
+
+OTA-only: `nexusq-control` r73, `nexusq-mqtt` r18, `nexusq-rootfs-ab` r7,
+`device-google-steelhead` r133 and `librespot` 0.8.0-r100 on the v2.1.1 image
+(kernel 6.18.48-r33 unchanged), with app 1.28.1+71. The first publish through
+the install gate below. Tested on the Prague Q by `apk add` and a full
+diagnostic sweep (`nq-captures/20261116-185433/`); librespot riding out a
+dropped Spotify connection is still to be seen in real listening.
+
 ### Fixed — a publish could leave out a listed package without a word (`scripts/publish-ota-repo.sh`)
 
 The publish copies the newest build of each package in `pmos/ota-packages.list`
@@ -69,7 +78,7 @@ librespot had to build under qemu, and a qemu-only rust build there sets
 `RUSTC_WRAPPER=sccache` without installing sccache. The build went through
 with `--no-ccache`.
 
-### Fixed — a version the fetch took against the plan went unnoticed (`nexusq-control` **r73**, unreleased)
+### Fixed — a version the fetch took against the plan went unnoticed (`nexusq-control` **r73**)
 
 Since r72 the download fetches by name, so it takes the highest version the
 repositories carry. Where the plan wants another one (a System update going
@@ -80,7 +89,7 @@ fill `/` before apk gave up. After the fetch the job now drops every `.apk` the
 plan does not name. When a plan package is missing, it checks the room again
 before the install starts. Found in the fleet-safety review of r72.
 
-### Fixed — after a System update the app still showed the old `nexusq-control` (app **1.28.1+71**, unreleased)
+### Fixed — after a System update the app still showed the old `nexusq-control` (app **1.28.1+71**)
 
 When a job ended, the app read only the check of the job's own kind. A System
 update (`upgrade --available`) moves our daemons too, so the line "device
@@ -88,7 +97,7 @@ nexusq-control …" kept the old revision until Settings was opened again (the
 Prague Q, 2026-11-15: r70 shown, r72 running). The device check is now read
 after either kind.
 
-### Fixed — the download of every update job failed: "the download failed: apk exited 99" (`nexusq-control` **r72**, unreleased)
+### Fixed — the download of every update job failed: "the download failed: apk exited 99" (`nexusq-control` **r72**)
 
 With the plan fixed (r71), the second job on the Prague Q (2026-11-15) failed
 7 s into its download. The download fetched the plan's packages as
@@ -102,7 +111,7 @@ update's `--available` goes down to the repository's, and there the install's
 "unable to select" line, which has no ERROR prefix, is now the job's reason
 instead of the exit code.
 
-### Fixed — the first update job failed before it started: "could not work out the update: apk exited 1" (`nexusq-control` **r71**, unreleased)
+### Fixed — the first update job failed before it started: "could not work out the update: apk exited 1" (`nexusq-control` **r71**)
 
 The first real System update on the Prague Q (2026-11-15, r70) failed in its
 plan step, 20 s in. apk still remembers the failed trigger of
@@ -118,7 +127,7 @@ nothing accounts for) still fails the job, and now says which. The download
 (`apk fetch`) does not count remembered errors and needed no change. The plan
 itself upgrades `postmarketos-mkinitfs` to 2.12.2-r0.
 
-### Added — an update you can watch, and one that cannot be killed half-way (`nexusq-control` **r70**, `nexusq-mqtt` **r18**, `device` **r133**, `nexusq-rootfs-ab` **r7**, app **1.28.0+70**, unreleased)
+### Added — an update you can watch, and one that cannot be killed half-way (`nexusq-control` **r70**, `nexusq-mqtt` **r18**, `device` **r133**, `nexusq-rootfs-ab` **r7**, app **1.28.0+70**)
 
 On 2026-11-14 the cottage Q's first update in two months (393 packages) was
 SIGKILLed at package 260 by the bridge's 600 s timeout, leaving new files
@@ -173,7 +182,7 @@ docs/2026-11-15-ota-jobs.md; PROTOCOL §12d.
 The first update **to** r70 still runs on the old bridge's code; every update
 after it is a job.
 
-### Fixed — an update left Spotify and AirPlay running their old binary (`nexusq-control` **r69**, unreleased)
+### Fixed — an update left Spotify and AirPlay running their old binary (`nexusq-control` **r69**)
 
 A system update restarts our system daemons, but librespot and shairport-sync
 are units of the appliance user's manager, which it never touched: they took
@@ -193,7 +202,7 @@ diagnostics mode, so a unit is never restarted twice within two minutes.
 `tests/test_stale_services.py` checks `_proc_stale` against a real process
 whose binary was renamed over; every new rule was seen failing.
 
-### Fixed — Spotify stopped and the volume went to 0 when Spotify dropped the connection (`librespot` **0.8.0-r100**, unreleased)
+### Fixed — Spotify stopped and the volume went to 0 when Spotify dropped the connection (`librespot` **0.8.0-r100**)
 
 On 2026-11-14 the cottage Q lost Spotify for three minutes and came back at
 0 % volume. Spotify's access point closes librespot's connection anywhere
@@ -221,7 +230,7 @@ take a newer Alpine librespot between our builds, as shairport-sync's did on
 2026-10-10; pinning the overrides on the units is open (PLAN).
 docs/2026-11-14-spotify-connection-drop.md.
 
-### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**, unreleased)
+### Fixed — the app asked for storage, photo, video and audio access (app **1.27.1+69**)
 
 Google Play stopped the first closed-testing release (68) on 2026-10-11:
 "photo and video permissions" need a declared core use. The app never asked
@@ -235,7 +244,7 @@ whose APK or bundle carries them again, or any other storage, background
 location or advertising-ID permission; seen failing on build 68 and on every
 APK built since 1.8.0.
 
-### Fixed — the output picker spoke Czech (`nexusq-control` **r65**, app **1.27.1+68**, unreleased)
+### Fixed — the output picker spoke Czech (`nexusq-control` **r65**, app **1.27.1+68**)
 
 Found on 2026-10-11 while taking the store screenshots: the home screen's
 OUTPUT picker read "Reproduktor" and "Optický výstup". Every UI string is
@@ -253,7 +262,7 @@ Also in the app: Settings had a "Sound" heading with nothing under it, left
 behind when the equalizer moved to the home screen in 1.15.0 (fef4a56); it is
 gone.
 
-### Changed — a sharp launcher icon, and the Google Play listing (app **1.27.1+68**, unreleased)
+### Changed — a sharp launcher icon, and the Google Play listing (app **1.27.1+68**)
 
 The launcher icon has been the original Nexus Q app's "Q" since 5671c63, but
 that mark only ever shipped as a bitmap of at most 96x96: upscaled to the
