@@ -2046,8 +2046,8 @@ Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA i
       `.apk-new` next to our `/etc/pulse/default.pa`, `/etc/avahi/avahi-daemon.conf` and
       `/etc/fstab` (diff them against upstream). The pmOS nftables defaults open 24727 and
       53317 for apps the Q does not run. A job cannot be cancelled from anywhere.
-- [ ] **The download does not notice a version the plan did not want** (review 2026-11-16, control
-      r72): the fetch goes by name and takes the highest version the repositories carry. Where the
+- [x] **The download does not notice a version the plan did not want** (review 2026-11-16, control
+      r72; fixed in r73, host tests; on a unit with the next job): the fetch goes by name and takes the highest version the repositories carry. Where the
       plan wants another (a System update going down to the repository's, a tagged repo, a pin),
       the wrong file lands in the cache and the install's `--cache-predownload` adds the right one,
       counted by no room check and without the stall guard. A big package could fill `/` before

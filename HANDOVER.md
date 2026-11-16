@@ -15,11 +15,11 @@ what was still open in them is below.
 
 | | Prague Q (`steelhead`, 192.168.20.246) | Cottage Q (`nexus-q-sumperak`, cottage LAN only) |
 |---|---|---|
-| release | v2.1.2 + its first OTA job (2026-11-15 23:00: 254 packages, apk-tools 3.0.9, systemd 262.2) with control r72, mqtt r18, rootfs-ab r7 by hand; device r132; rootfs slot B committed | v2.1.2, upgraded 2026-11-14 from r117 (the upgrade the 600 s timeout cut, then finished by hand) |
+| release | v2.1.2 + its first OTA job (2026-11-15 23:00: 254 packages, apk-tools 3.0.9, systemd 262.2) with control r73, mqtt r18, rootfs-ab r7 by hand; device r132; rootfs slot B committed | v2.1.2, upgraded 2026-11-14 from r117 (the upgrade the 600 s timeout cut, then finished by hand) |
 | kernel | 6.18.48-r33 | not recorded on 2026-11-14 — read `uname -r`; v2.1.x wants r33 through `nq-kernel-ota` |
 | reach | LAN, USB gadget `172.16.43.1`, eth-direct `10.42.0.2` | only from the cottage LAN; the Tailscale hop wants a password not in 1Password |
 
-In the tree and **not released**: `nexusq-control` r69 to r72, `nexusq-mqtt`
+In the tree and **not released**: `nexusq-control` r69 to r73, `nexusq-mqtt`
 r18, `nexusq-rootfs-ab` r7 (on the Prague Q only), `device-google-steelhead`
 r133 and `librespot` 0.8.0-r100 (on no unit, unbuilt: rust skew, PLAN)
 (CHANGELOG `[Unreleased]`); app 1.27.1, 1.28.0+70 and 1.28.1+71

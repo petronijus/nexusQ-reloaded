@@ -6,6 +6,17 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a version the fetch took against the plan went unnoticed (`nexusq-control` **r73**, unreleased)
+
+Since r72 the download fetches by name, so it takes the highest version the
+repositories carry. Where the plan wants another one (a System update going
+down to the repository's, a tagged repository, a pin), that file sat in the
+cache unused. The install's `--cache-predownload` then fetched the right one,
+counted by no room check and without the stall guard, so a big package could
+fill `/` before apk gave up. After the fetch the job now drops every `.apk` the
+plan does not name. When a plan package is missing, it checks the room again
+before the install starts. Found in the fleet-safety review of r72.
+
 ### Fixed — after a System update the app still showed the old `nexusq-control` (app **1.28.1+71**, unreleased)
 
 When a job ended, the app read only the check of the job's own kind. A System

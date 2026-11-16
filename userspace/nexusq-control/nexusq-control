@@ -3703,6 +3703,12 @@ def ota_plan_argv(kind, cache_dir):
     return _ota_common(cache_dir) + ["--simulate", "-v", "-v"] + _ota_upgrade_args(kind)
 
 
+def _ota_cache_prefixes(plan):
+    """The start of each plan package's cache file name (`name-version.`, apk's
+    `${name}-${version}.${hash:8}.apk`), in the plan's order."""
+    return tuple(entry.replace("=", "-", 1) + "." for entry in plan["fetch"])
+
+
 def ota_download_argv(cache_dir, progress_fd, packages):
     """`apk fetch` of the plan's packages into the cache, under apk's cache
     file names, so the install finds them cached. Not `apk cache download`: it
@@ -3715,8 +3721,8 @@ def ota_download_argv(cache_dir, progress_fd, packages):
     (apk 3.0.8 and 3.0.9, the Prague Q, 2026-11-15: the first job died there).
     It takes the best version the repositories carry, which is the plan's
     except when a System update's --available goes DOWN to the repository's;
-    then the install's --cache-predownload fetches the plan's version before
-    any file changes (a wasted download, never a half install)."""
+    OtaRunner._settle_cache drops such a file and checks the room for what the
+    install's --cache-predownload then fetches (before any file changes)."""
     names = list(dict.fromkeys(entry.split("=", 1)[0] for entry in packages))
     return (
         _ota_common(cache_dir)
@@ -4074,7 +4080,7 @@ class OtaRunner:
         there (a superseded package from a failed job) is not, and the partial
         files a stopped fetch leaves (`*.tmp.<pid>`, never used) go first."""
         need = plan["download"] + max(0, plan["grow"]) + OTA_SPACE_MARGIN
-        wanted = tuple(entry.replace("=", "-", 1) + "." for entry in plan["fetch"])
+        wanted = _ota_cache_prefixes(plan)
         have = 0
         try:
             names = os.listdir(self.cache_dir)
@@ -4115,6 +4121,33 @@ class OtaRunner:
                 if ln.strip().startswith("ERROR") or ": unable to select package" in ln
             ]
             raise OtaFailed("the download failed: " + (errors[0] if errors else f"apk exited {res.returncode}"))
+        self._settle_cache(plan)
+
+    def _settle_cache(self, plan):
+        """The fetch goes by name, so it takes the highest version the
+        repositories carry; where the plan wants another (a System update going
+        down to the repository's, a tagged repository, a pin) the cache gets a
+        file the install never uses, and the install's --cache-predownload adds
+        the right one. So: drop every .apk the plan does not name, and when a
+        plan package is missing, check the room again for what the install still
+        has to fetch -- before it starts, while nothing has changed."""
+        wanted = _ota_cache_prefixes(plan)
+        try:
+            names = [n for n in os.listdir(self.cache_dir) if n.endswith(".apk")]
+        except OSError:
+            return
+        stray = [n for n in names if not n.startswith(wanted)]
+        for n in stray:
+            try:
+                os.unlink(os.path.join(self.cache_dir, n))
+            except OSError:
+                pass
+        missing = [e for e, pre in zip(plan["fetch"], wanted) if not any(n.startswith(pre) for n in names)]
+        if stray:
+            log(f"ota: dropped {len(stray)} package(s) the plan did not want: {', '.join(stray[:8])}")
+        if missing:
+            log(f"ota: the install fetches {len(missing)} more: {', '.join(missing[:8])}")
+            self._check_space(plan)
 
     def _install(self):
         self._phase("installing")

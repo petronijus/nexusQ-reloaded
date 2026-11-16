@@ -69,6 +69,9 @@ FAKE_APK = textwrap.dedent(
                 os.write(fd, (arg + "\\n").encode())
             elif kind == "sleep":
                 time.sleep(arg)
+            elif kind == "file":  # a package the fetch put in the cache (-o)
+                with open(os.path.join(args[args.index("-o") + 1], arg), "wb") as f:
+                    f.write(b"x" * 4096)
         open(plan["argv_log"] + "." + name + ".finished", "w").close()
         sys.exit(plan.get(name + "_rc", 0))
 
@@ -502,6 +505,41 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(r.runner().run(), 1)
         self.assertIn("nexusqd: unable to select package", r.job()["error"])
         self.assertFalse(r.finished("install"))
+
+    def test_a_version_the_fetch_took_against_the_plan_is_dropped(self):
+        # The fetch goes by name and takes the highest version; the plan wanted
+        # nexusq-control r70 and the repositories also carry r71.
+        r = self.rig(
+            download=DOWNLOAD
+            + [("file", "nexusqd-0.1.0-r29.0a1b2c3d.apk"), ("file", "nexusq-control-0.1.0-r71.4e5f6a7b.apk")]
+        )
+        frees = []
+        run = r.runner()
+        run.free_bytes = lambda path: frees.append(path) or 10 << 30
+        self.assertEqual(run.run(), 0)
+        self.assertTrue(r.finished("install"))
+        self.assertEqual(len(frees), 2, "the room is checked again before the install")
+        # The install ran from what the plan wants; the stray r71 never reached it.
+        self.assertFalse(os.path.exists(os.path.join(r.cache, "nexusq-control-0.1.0-r71.4e5f6a7b.apk")))
+
+    def test_a_missing_plan_package_the_disk_cannot_take_fails_before_the_install(self):
+        r = self.rig(download=DOWNLOAD + [("file", "nexusqd-0.1.0-r29.0a1b2c3d.apk")])
+        frees = []
+        run = r.runner()
+        run.free_bytes = lambda path: frees.append(path) or (10 << 30 if len(frees) == 1 else 1 << 20)
+        self.assertEqual(run.run(), 1)
+        self.assertIn("not enough space", r.job()["error"])
+        self.assertFalse(r.finished("install"))
+
+    def test_a_cache_that_holds_the_whole_plan_is_left_alone(self):
+        names = ["nexusqd-0.1.0-r29.0a1b2c3d.apk", "nexusq-control-0.1.0-r70.4e5f6a7b.apk"]
+        r = self.rig(download=DOWNLOAD + [("file", n) for n in names])
+        frees = []
+        run = r.runner()
+        run.free_bytes = lambda path: frees.append(path) or 10 << 30
+        self.assertEqual(run.run(), 0)
+        self.assertEqual(len(frees), 1, "no second room check")
+        self.assertTrue(r.finished("install"))
 
     def test_a_failed_download_fails_before_anything_changed(self):
         r = self.rig(download=DOWNLOAD[:3] + [("log", "ERROR: nexusqd-0.1.0-r29: network error")], download_rc=1)
