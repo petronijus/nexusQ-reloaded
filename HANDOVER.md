@@ -37,6 +37,11 @@ r133 and `librespot` 0.8.0-r100 (on no unit, unbuilt: rust skew, PLAN)
 
 ## Cottage Q (needs someone on the cottage LAN)
 
+- [ ] Record its apk state for the OTA install gate:
+      `scripts/capture-unit-apk-state.sh root@<its address> nexus-q-sumperak`
+      (into the gitignored `private/units/`; the gate then simulates its own
+      System update before every publish). Until then only the Prague Q and
+      the newest image are checked.
 - [ ] Kernel: `uname -r`; if it is older than r33, `nq-kernel-ota stage-latest
       && nq-kernel-ota try` with someone in reach, then read
       `journalctl -u nexusq-kernel-ota-promote` (the first real run of

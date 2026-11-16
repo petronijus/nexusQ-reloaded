@@ -6,6 +6,69 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a publish could leave out a listed package without a word (`scripts/publish-ota-repo.sh`)
+
+The publish copies the newest build of each package in `pmos/ota-packages.list`
+from the build volume and skipped one with no build silently. librespot entered
+the list with r100 (2026-11-14) but was never built on the publishing volume;
+device r133, which depends on it, was ready to go out without it. A unit would
+then have taken Alpine's own librespot 0.8.0-r0, the build the override replaces.
+For a package no upstream carries, `apk` would have held the device package back
+and still exited 0.
+
+A new install gate, `scripts/ota-repo-gate.sh`, now runs before anything is
+pushed. It refuses the repo when:
+- an upstream repository a unit uses does not answer (apk 3 only warns and
+  resolves without it, which would blind the next checks);
+- a listed package is missing from it;
+- it cannot be installed from scratch (`apk add --simulate` on an armv7 root
+  against a unit's own upstream repositories, read from the Prague Q);
+- upstream carries a newer build of one of our packages than we do;
+- for each unit: its own System update (`upgrade --available --ignore
+  linux-google-steelhead` over the unit's real apk database) fails, or leaves
+  one of our packages anywhere but at the published version. A held-back
+  package with `apk` exiting 0 is exactly this case, and the test reproduces
+  it. A package the update would remove, or roll back because the build volume
+  is behind the unit or the unit carries an unpublished test build, is refused
+  too. The same update runs against upstream alone as a baseline: when edge by
+  itself breaks a unit, the gate still refuses any error the repo adds, but not
+  upstream's own. It warns that the unit was not judged, and the publish
+  repeats that warning at its very end, so upstream churn never stops a
+  publish (a hotfix included).
+
+The unit states come from `scripts/capture-unit-apk-state.sh <ssh-target>
+<hostname>`, which reads the hostname first and then records the unit's
+`/lib/apk/db/installed`, `/etc/apk/world` and `/etc/apk/repositories` in
+`private/units/<hostname>/` with a dated label; each unit is simulated with
+its own upstream repositories. Every index is fetched once, into a cache all
+simulations share. The capture runs on macOS too. The Prague Q was recorded on 2026-11-16; the cottage Q
+waits for someone on its LAN (HANDOVER). The last image built on the volume is
+checked as one more state, named as a fresh flash.
+
+The packages a unit has from its image but the repo does not carry (today
+`nexusq-glibc-rt`) are listed in `pmos/image-only-packages.list`, pinned to the
+oldest version still in the field. The from-scratch simulation starts with them
+installed. `tests/test_aports.py` checks that every aport is in exactly one of
+the two lists. The container's apk-tools is brought up to edge's first
+(`alpine:edge` still shipped 3.0.7; the units run 3.0.9).
+
+Covered by `scripts/tests/test-ota-repo-gate.sh` (docker lane, offline, 14
+cases) and `scripts/tests/test-capture-unit-apk-state.sh` (fake ssh, 3 cases).
+Each refusal was watched failing with its check removed.
+Found reviewing the gate (fleet-safety review), and fixed in it: the
+unreachable-repo pass, the image-only version read from the volume (wrong for
+the field, and a false red on a volume seeded for OTA only), and the
+from-scratch simulation being blind to a unit's installed packages; then, in
+a second round, judging "a unit" by the build volume's own image, which after a
+full build already holds the published versions and so proves nothing; and,
+in a third, the edge cases of that unit check.
+
+On the same day, building librespot r100 without crossdirect hit a pmbootstrap
+3.11 bug. Alpine edge's armv7 rust (1.99.1) is behind the host's (1.100.0), so
+librespot had to build under qemu, and a qemu-only rust build there sets
+`RUSTC_WRAPPER=sccache` without installing sccache. The build went through
+with `--no-ccache`.
+
 ### Fixed — a version the fetch took against the plan went unnoticed (`nexusq-control` **r73**, unreleased)
 
 Since r72 the download fetches by name, so it takes the highest version the

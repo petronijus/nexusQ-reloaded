@@ -10,6 +10,11 @@ patch that does not exist, fails the build late, after the docker setup.
 For the aports whose files live next to their APKBUILD, a file that is not in
 `source=` never reaches $srcdir: it is dead weight that reads as shipped.
 
+Every aport is either published by OTA (pmos/ota-packages.list) or deliberately
+flash-only (pmos/image-only-packages.list), never both and never neither: the
+OTA install gate trusts the second list as "already on every unit", so a name
+moved there to quiet the gate would hide an OTA miss.
+
 And where one source is kept twice — once next to the aport that packs it,
 once next to the unit tests that exercise it — the two must stay identical.
 """
@@ -164,6 +169,39 @@ class SgxAppHints(unittest.TestCase):
         apkbuild = (PMOS / "nexusq-sgx" / "APKBUILD").read_text()
         self.assertIn("powervr.ini", sources(PMOS / "nexusq-sgx" / "APKBUILD"))
         self.assertRegex(apkbuild, r'install -Dm644 powervr\.ini "\$pkgdir"/etc/powervr\.ini')
+
+
+def _list_entries(path: Path) -> list[str]:
+    lines = (line.split("#", 1)[0].strip() for line in path.read_text().splitlines())
+    return [line for line in lines if line]
+
+
+class OtaPackageLists(unittest.TestCase):
+    OTA = _list_entries(PMOS / "ota-packages.list")
+    IMAGE_ONLY = _list_entries(PMOS / "image-only-packages.list")
+    IMAGE_ONLY_NAMES = [e.split("=", 1)[0] for e in IMAGE_ONLY]
+    APORTS = sorted(d.name for d in PMOS.iterdir() if (d / "APKBUILD").is_file())
+
+    def test_image_only_entries_pin_the_oldest_version_in_the_field(self):
+        for entry in self.IMAGE_ONLY:
+            with self.subTest(entry=entry):
+                self.assertRegex(entry, r"^[a-z0-9][a-z0-9.+_-]*=[0-9][^=\s]*-r[0-9]+$", "want <name>=<version>-r<N>")
+
+    def test_no_package_is_in_both_lists(self):
+        self.assertEqual(sorted(set(self.OTA) & set(self.IMAGE_ONLY_NAMES)), [])
+
+    def test_every_aport_is_in_exactly_one_list(self):
+        self.assertTrue(self.APORTS, "no aports found; the layout changed")
+        listed = set(self.OTA) | set(self.IMAGE_ONLY_NAMES)
+        self.assertEqual(
+            [a for a in self.APORTS if a not in listed],
+            [],
+            "an aport in neither pmos/ota-packages.list nor pmos/image-only-packages.list: "
+            "decide whether units get it by OTA",
+        )
+
+    def test_every_image_only_package_is_an_aport(self):
+        self.assertEqual([n for n in self.IMAGE_ONLY_NAMES if n not in self.APORTS], [])
 
 
 class ShippedCopies(unittest.TestCase):

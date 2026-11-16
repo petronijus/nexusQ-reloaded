@@ -3,6 +3,7 @@
 # This list is the SINGLE SOURCE OF TRUTH, read by:
 #   scripts/publish-ota-repo.sh    — what gets copied into the signed repo
 #   scripts/verify-ota-parity.sh   — what the release gate compares
+#   scripts/ota-repo-gate.sh       — refuses a publish that misses one of them
 #
 # It exists because the set used to live only inside publish-ota-repo.sh, and a
 # package missing from it fails SILENTLY: apk simply never offers the newer
@@ -17,7 +18,8 @@
 #
 # NOT here, deliberately:
 #   nexusq-glibc-rt   ~180 MB static Roon base — over GitHub's 100 MB limit,
-#                     flash-only. It changes about never.
+#                     flash-only. It changes about never. Listed in
+#                     pmos/image-only-packages.list, which the install gate reads.
 #   the kernel itself is here only as a PAYLOAD (see linux-google-steelhead
 #   below), never as something apk installs.
 

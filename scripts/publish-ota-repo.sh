@@ -123,7 +123,7 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
   mkdir -p /out/nexusq/armv7; cd /out/nexusq/armv7
   for pkg in '"${OTA_PACKAGES[*]}"'; do
     f=$(ls -1 $REPO/${pkg}-[0-9]*.apk 2>/dev/null | sort -V | tail -1)
-    [ -n "$f" ] || continue
+    [ -n "$f" ] || continue   # refused below by the install gate, by name
     sz=$(stat -c%s "$f")
     if [ "$sz" -ge 103809024 ]; then
       echo "  !! SKIP $(basename "$f") — ${sz} bytes >= 99 MB (GitHub limit); NOT publishing" >&2
@@ -151,6 +151,51 @@ docker run --rm -v "$VOL":/w -v "$STAGE":/out alpine sh -c '
   abuild-sign -k $HOME/.abuild/'"$KEY"'.rsa APKINDEX.tar.gz
   chmod -R a+rw /out
 '
+
+# THE INSTALL GATE. The copy loop above skips a listed package that has no build
+# on the volume (or is too big), and nothing used to say so: librespot r100 sat in
+# the list unbuilt while device r133, which depends on it, was ready to go out
+# (2026-11-16). A unit would have taken Alpine's librespot or held the device
+# package back with `apk` exiting 0. The gate refuses a repo that misses a listed
+# package, that cannot be installed against a unit's upstream repositories (or
+# one of them does not answer), or whose own version of a package loses to a
+# newer upstream one; see scripts/ota-repo-gate.sh.
+echo "=== install gate: the repo is complete and installs as published ==="
+IMAGE_ONLY_LIST="$REPO_ROOT/pmos/image-only-packages.list"
+[ -f "$IMAGE_ONLY_LIST" ] || { echo "ERROR: missing $IMAGE_ONLY_LIST" >&2; exit 1; }
+IMAGE_ONLY=()
+while IFS= read -r _pv; do IMAGE_ONLY+=("$_pv"); done \
+    < <(sed 's/#.*//' "$IMAGE_ONLY_LIST" | tr -d '[:blank:]' | grep -v '^$')
+# Each unit's own System update (check 4), against the apk state recorded from
+# each unit (scripts/capture-unit-apk-state.sh -> private/units/<hostname>/).
+# The rootfs chroot of the last image built on this volume is added as one more
+# state, named as what it is: after a full build it already holds the versions
+# being published, so it stands in for a freshly flashed unit, never for one in
+# the field.
+UNIT_ARGS=()
+for _u in "$REPO_ROOT"/private/units/*/; do
+    [ -f "$_u/lib/apk/db/installed" ] || continue
+    UNIT_ARGS+=(--unit-root "$_u")
+done
+[ "${#UNIT_ARGS[@]}" -gt 0 ] || echo "  (no unit state in private/units/: record them with scripts/capture-unit-apk-state.sh)"
+mkdir -p "$STAGE/unit-image"
+docker run --rm -v "$VOL":/w:ro -v "$STAGE/unit-image":/out alpine sh -c '
+    C=/w/chroot_rootfs_google-steelhead
+    [ -f $C/lib/apk/db/installed ] && [ -f $C/etc/apk/world ] || exit 3
+    mkdir -p /out/lib/apk /out/etc/apk
+    cp -r $C/lib/apk/db /out/lib/apk/ && cp $C/etc/apk/world /out/etc/apk/
+    echo "the newest image built on '"$VOL"' (a fresh flash, not a unit in the field)" > /out/LABEL
+    chmod -R a+rwX /out' || _urc=$?
+case "${_urc:-0}" in
+    0) UNIT_ARGS+=(--unit-root "$STAGE/unit-image") ;;
+    3) echo "  (no image rootfs on $VOL)" ;;
+    *) echo "ERROR: could not copy the image's apk database out of $VOL" >&2; exit 1 ;;
+esac
+# Its output is kept: a unit the gate could not judge ("!!?") is repeated at the
+# very end, where it does not scroll away under the push.
+"$REPO_ROOT/scripts/ota-repo-gate.sh" ${UNIT_ARGS[@]+"${UNIT_ARGS[@]}"} "$STAGE/nexusq" "$OTA_LIST" \
+    ${IMAGE_ONLY[@]+"${IMAGE_ONLY[@]}"} 2>&1 | tee "$STAGE/install-gate.log"
+grep -A3 -F '!!?' "$STAGE/install-gate.log" > "$STAGE/install-gate-warnings.txt" || true
 
 # THE SECRETS GATE. gh-pages is PUBLIC, and `device-google-steelhead` bakes the
 # WiFi profile (PSK in plain text) and ssh authorized_keys when built from the
@@ -302,4 +347,8 @@ else
 fi
 git -C "$REPO_ROOT" worktree remove "$WT" --force
 trap 'sudo rm -rf "$STAGE" 2>/dev/null || rm -rf "$STAGE"' EXIT
+if [ -s "$STAGE/install-gate-warnings.txt" ]; then
+    echo "=== the install gate could not judge everything (repeated from above) ===" >&2
+    cat "$STAGE/install-gate-warnings.txt" >&2
+fi
 echo "=== done — https://petronijus.github.io/nexusQ-reloaded/nexusq ==="

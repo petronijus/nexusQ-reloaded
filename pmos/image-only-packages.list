@@ -1,0 +1,21 @@
+# Packages every unit has from its image that the OTA repo does NOT carry —
+# one `<name>=<version>` per line, `#` comments and blank lines ignored.
+#
+# Read by scripts/publish-ota-repo.sh for its install gate
+# (scripts/ota-repo-gate.sh): the gate simulates a unit installing the repo, and
+# on a unit these are already installed, so the simulation starts with them
+# installed too. Without that, a
+# published package that depends on one of them (device-google-steelhead needs
+# nexusq-glibc-rt) would look uninstallable; with it, nothing else can hide here.
+#
+# The version is the OLDEST still on a unit in the field, not the newest build:
+# a unit keeps the one of its last flash, and a published package that needs a
+# newer one would fail a unit's whole update. Raise it only when every unit has
+# been reflashed past it (HANDOVER.md has the units).
+#
+# A name belongs here only when it is deliberately flash-only. Anything a unit
+# should receive by OTA belongs in pmos/ota-packages.list instead;
+# tests/test_aports.py checks that every aport is in exactly one of the two.
+
+# ~180 MB static Roon base — over GitHub's 100 MB limit; changes about never.
+nexusq-glibc-rt=1.0-r0
