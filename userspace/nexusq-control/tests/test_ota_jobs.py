@@ -2,8 +2,9 @@
 
 What is pinned:
 - A job is three apk processes -- plan (`--simulate -vv`), download
-  (`cache download`), install (`upgrade` from the cache) -- run against a fake
-  apk that writes a real --progress-fd. Their log and progress lines become the
+  (`fetch` by name), install (`upgrade` from the cache) -- run against a fake
+  apk that writes a real --progress-fd and, like the real one, takes no version
+  constraint in a fetch. Their log and progress lines become the
   job's progress; a line of another phase is ignored and the phase only moves
   forward; the overall percent never goes back.
 - The phases are recorded durably in order; the ring shows the download and
@@ -84,6 +85,15 @@ FAKE_APK = textwrap.dedent(
     if "cache" in args and "purge" in args:
         sys.exit(0)
     if "fetch" in args:
+        # Real apk 3.0.8/3.0.9 (the Prague Q, 2026-11-15): a non-recursive
+        # fetch looks packages up by NAME only, so `name=version` (or any other
+        # constraint) is no name at all.
+        bad = [a for a in args[args.index("-o") + 2 :] if any(c in a for c in "=<>~")]
+        if bad:
+            for a in bad:
+                print(a.split("=")[0].split("<")[0].split(">")[0].split("~")[0]
+                      + ": unable to select package (or its dependencies)")
+            sys.exit(min(len(bad), 99))
         steps("download")
     if "upgrade" in args:
         steps("install")
@@ -328,11 +338,13 @@ class TestPlanAndArgv(unittest.TestCase):
         self.assertEqual(plan[plan.index("--ignore") + 1], MOD._KERNEL_PKG)
         self.assertIn("--simulate", plan)
 
-    def test_the_download_fetches_exactly_the_plan_under_cache_names(self):
-        argv = MOD.ota_download_argv("/c", 7, ["nexusqd=0.1.0-r29"])
+    def test_the_download_fetches_the_plan_s_packages_by_name_under_cache_names(self):
+        # apk fetch takes no version constraint; the install's --cache-predownload
+        # catches a version the plan wanted and the fetch did not take.
+        argv = MOD.ota_download_argv("/c", 7, ["nexusqd=0.1.0-r29", "py3-x=1.0-r0", "nexusqd=0.1.0-r29"])
         self.assertEqual(
             argv[argv.index("fetch") :],
-            ["fetch", "--pkgname-spec", MOD.APK_CACHENAME_SPEC, "-o", "/c", "nexusqd=0.1.0-r29"],
+            ["fetch", "--pkgname-spec", MOD.APK_CACHENAME_SPEC, "-o", "/c", "nexusqd", "py3-x"],
         )
         self.assertEqual(MOD.APK_CACHENAME_SPEC, "${name}-${version}.${hash:8}.apk", "apk's own cache name")
 
@@ -389,7 +401,7 @@ class TestRunner(unittest.TestCase):
                 kinds.append("install")
         self.assertEqual(kinds, ["update", "plan", "download", "install", "purge"])
         fetch = next(a for a in r.apk_calls() if "fetch" in a)
-        self.assertEqual(fetch[-2:], ["nexusqd=0.1.0-r29", "nexusq-control=0.1.0-r70"], "exactly the plan")
+        self.assertEqual(fetch[-2:], ["nexusqd", "nexusq-control"], "the plan's packages, by name")
 
     def test_the_ring_shows_both_phases_in_their_colours_then_green_then_the_theme(self):
         r = self.rig()
@@ -461,6 +473,35 @@ class TestRunner(unittest.TestCase):
         self.assertIn(MOD.OTA_RING_FAILED, r.ring)
         self.assertEqual(r.ring[-1], "auto")
         self.assertFalse([c for c in r.cmds if c[0] == "systemctl"], "nothing applied")
+
+    def test_a_remembered_inert_trigger_error_does_not_fail_the_plan(self):
+        # apk keeps postmarketos-mkinitfs flagged after its 2.12.0-r1 trigger
+        # failed, and every later run -- the --simulate plan too -- ends
+        # "1 error" and exits 1 with no ERROR line. The first real job on the
+        # Prague Q died there (2026-11-15).
+        r = self.rig(simulate=SIMULATE.replace("OK:", "1 error;"), simulate_rc=1)
+        with patch.object(MOD, "_apk_flagged", lambda: ["postmarketos-mkinitfs"]):
+            self.assertEqual(r.runner().run(), 0)
+        self.assertEqual(r.job()["state"], "done")
+        self.assertTrue(r.finished("install"))
+
+    def test_a_plan_error_nothing_accounts_for_fails_the_job(self):
+        r = self.rig(simulate=SIMULATE.replace("OK:", "1 error;"), simulate_rc=1)
+        self.assertEqual(r.runner().run(), 1)
+        self.assertIn("could not work out the update: apk reported 1 error(s)", r.job()["error"])
+        self.assertFalse(r.finished("download"))
+
+    def test_a_plan_error_line_fails_the_job_with_it(self):
+        r = self.rig(simulate="ERROR: unable to select packages:\n  foo (no such package)", simulate_rc=1)
+        with patch.object(MOD, "_apk_flagged", lambda: ["postmarketos-mkinitfs"]):
+            self.assertEqual(r.runner().run(), 1)
+        self.assertIn("unable to select packages", r.job()["error"])
+
+    def test_apk_s_unable_to_select_is_the_reason_of_a_failed_download(self):
+        r = self.rig(download=[("log", "nexusqd: unable to select package (or its dependencies)")], download_rc=1)
+        self.assertEqual(r.runner().run(), 1)
+        self.assertIn("nexusqd: unable to select package", r.job()["error"])
+        self.assertFalse(r.finished("install"))
 
     def test_a_failed_download_fails_before_anything_changed(self):
         r = self.rig(download=DOWNLOAD[:3] + [("log", "ERROR: nexusqd-0.1.0-r29: network error")], download_rc=1)

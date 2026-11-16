@@ -3270,7 +3270,8 @@ _APK_ERROR_COUNT = re.compile(r"^(\d+) errors?;", re.M)
 
 
 def _apk_failed(r):
-    """None when an `apk add/upgrade` committed its transaction, else the reason.
+    """None when an `apk add/upgrade` committed its transaction (or a
+    `--simulate` of one worked out its plan), else the reason.
 
     apk exits non-zero both when the transaction failed and when it committed
     but a package's TRIGGER script failed afterwards ("ERROR: lib/apk/exec/
@@ -3656,8 +3657,8 @@ def _apk_size(num, unit):
 def ota_parse_plan(text):
     """What `apk upgrade --simulate -vv` says it would do: the number of
     changes, the bytes to download, how much the system grows (negative when it
-    shrinks), and `name=version` of every package it puts on the system -- the
-    exact set the download fetches."""
+    shrinks), and `name=version` of every package it puts on the system -- what
+    the download fetches (by name) and the room check finds in the cache."""
     changes = 0
     fetch = []
     for line in text.splitlines():
@@ -3703,15 +3704,24 @@ def ota_plan_argv(kind, cache_dir):
 
 
 def ota_download_argv(cache_dir, progress_fd, packages):
-    """`apk fetch` of exactly the plan's packages (`name=version`) into the
-    cache, under apk's cache file names, so the install finds them cached. Not
-    `apk cache download`: it fetches every package of the solution, changed or
-    not (apk_solver_precache_changeset with changes_only=false) -- the whole
-    system, about 1000 packages, for a one-package update."""
+    """`apk fetch` of the plan's packages into the cache, under apk's cache
+    file names, so the install finds them cached. Not `apk cache download`: it
+    fetches every package of the solution, changed or not
+    (apk_solver_precache_changeset with changes_only=false) -- the whole
+    system, about 1000 packages, for a one-package update.
+
+    By NAME: a non-recursive `apk fetch` looks its arguments up as names, so
+    `name=version` -- or any constraint -- is "unable to select package"
+    (apk 3.0.8 and 3.0.9, the Prague Q, 2026-11-15: the first job died there).
+    It takes the best version the repositories carry, which is the plan's
+    except when a System update's --available goes DOWN to the repository's;
+    then the install's --cache-predownload fetches the plan's version before
+    any file changes (a wasted download, never a half install)."""
+    names = list(dict.fromkeys(entry.split("=", 1)[0] for entry in packages))
     return (
         _ota_common(cache_dir)
         + ["--progress-fd", str(progress_fd), "fetch", "--pkgname-spec", APK_CACHENAME_SPEC, "-o", cache_dir]
-        + list(packages)
+        + names
     )
 
 
@@ -4045,11 +4055,13 @@ class OtaRunner:
             r = self.run_cmd(ota_plan_argv(self.kind, self.cache_dir), capture_output=True, text=True, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
             raise OtaFailed(f"could not work out the update: {e}") from None
-        text = (r.stdout or "") + "\n" + (r.stderr or "")
-        if r.returncode != 0:
-            errors = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("ERROR")]
-            raise OtaFailed("could not work out the update: " + (errors[0] if errors else f"apk exited {r.returncode}"))
-        plan = ota_parse_plan(text)
+        # The same judgement as the install: --simulate also ends "1 error" and
+        # exits 1 for an error apk only remembers (a flagged inert trigger),
+        # which says nothing about this plan.
+        why = _apk_failed(r)
+        if why:
+            raise OtaFailed(f"could not work out the update: {why}")
+        plan = ota_parse_plan((r.stdout or "") + "\n" + (r.stderr or ""))
         self.prog.install_pkgs = plan["changes"]
         fetch, grow = plan["download"] >> 20, plan["grow"] >> 20
         log(f"ota: plan: {plan['changes']} changes, {fetch} MiB to fetch, grows {grow} MiB")
@@ -4095,7 +4107,13 @@ class OtaRunner:
         if self._stop_reason:
             raise OtaFailed(self._stop_reason)
         if res.returncode != 0:
-            errors = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip().startswith("ERROR")]
+            # apk fetch reports a package it cannot find without an ERROR prefix
+            # ("<name>: unable to select package ..."), and exits with the count.
+            errors = [
+                ln.strip()
+                for ln in (res.stdout or "").splitlines()
+                if ln.strip().startswith("ERROR") or ": unable to select package" in ln
+            ]
             raise OtaFailed("the download failed: " + (errors[0] if errors else f"apk exited {res.returncode}"))
 
     def _install(self):

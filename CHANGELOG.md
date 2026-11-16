@@ -14,6 +14,36 @@ nexusq-control …" kept the old revision until Settings was opened again (the
 Prague Q, 2026-11-15: r70 shown, r72 running). The device check is now read
 after either kind.
 
+### Fixed — the download of every update job failed: "the download failed: apk exited 99" (`nexusq-control` **r72**, unreleased)
+
+With the plan fixed (r71), the second job on the Prague Q (2026-11-15) failed
+7 s into its download. The download fetched the plan's packages as
+`name=version`. A non-recursive `apk fetch` looks its arguments up as names only,
+so every one of them was "unable to select package" (apk 3.0.8 and 3.0.9
+both, tried on the unit). The tests had a fake apk that took the constraint. It
+now refuses one the way apk does, and with it every job test went red. The
+download fetches by name. That is the plan's version except where a System
+update's `--available` goes down to the repository's, and there the install's
+`--cache-predownload` fetches the right one before any file changes. apk's
+"unable to select" line, which has no ERROR prefix, is now the job's reason
+instead of the exit code.
+
+### Fixed — the first update job failed before it started: "could not work out the update: apk exited 1" (`nexusq-control` **r71**, unreleased)
+
+The first real System update on the Prague Q (2026-11-15, r70) failed in its
+plan step, 20 s in. apk still remembers the failed trigger of
+`postmarketos-mkinitfs` 2.12.0-r1 (`f:s` in `lib/apk/db/installed`; the trigger
+calls `/usr/sbin/mkinitfs`, which the package moved to `/usr/bin`). So every
+apk run ends "1 error" and exits 1 with no ERROR line, the plan's `--simulate`
+included, even an empty `apk add`. The install step already accounted for that
+(`_apk_failed`: the error count against the inert triggers apk keeps flagged).
+The new plan step took any non-zero exit as a failure, so on any unit with the
+flag no job could ever start; the cottage Q is expected to carry it too. The
+plan now uses the same judgement. A real plan error (an ERROR line, a count
+nothing accounts for) still fails the job, and now says which. The download
+(`apk fetch`) does not count remembered errors and needed no change. The plan
+itself upgrades `postmarketos-mkinitfs` to 2.12.2-r0.
+
 ### Added — an update you can watch, and one that cannot be killed half-way (`nexusq-control` **r70**, `nexusq-mqtt` **r18**, `device` **r133**, `nexusq-rootfs-ab` **r7**, app **1.28.0+70**, unreleased)
 
 On 2026-11-14 the cottage Q's first update in two months (393 packages) was
