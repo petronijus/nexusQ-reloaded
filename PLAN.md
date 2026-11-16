@@ -1999,6 +1999,12 @@ Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA i
       the ring spins indeterminately. Install as a background job with phases and real progress
       (apk 3 `--progress-fd`), pushed to the app, the ring and Home Assistant's update entity,
       surviving the bridge's restart and a reboot, with a result at the end.
+- [ ] **`NetworkManager-wait-online` stays failed after a boot without DHCP** (Prague Q, found in the
+      2026-11-15 sweep, `nq-captures/20261115-195542/`): after the 2026-11-06 mains cut the router's
+      DHCP came up ~11 min after the Q (first lease at 702 s); the WiFi watchdog healed it as designed,
+      but the unit sat `failed` for nine days and turns every later sweep WARN. Decide what the unit
+      should do when the network is late — nothing on the Q needs network-online to boot — rather
+      than mask it.
       **Implemented 2026-11-15** (control r70, mqtt r18, app 1.28.0+70); open until seen on a unit.
 - [ ] **Take the OTA jobs to a unit** (control r70, mqtt r18, device r133, rootfs-ab r7, app 1.28.0+70):
       build on macOS or the desktop. **The Prague Q first, never the cottage Q first** (out of reach
@@ -2010,6 +2016,57 @@ Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA i
       (finishes at the next boot), no network at boot with a resume pending (retries, then the
       cached lists), a near-full disk (refused before the download). Full diag sweep, incl. CPU
       frequency and VDD_MPU against the OPP. Only then the cottage Q, as an ordinary update.
+      **2026-11-15:** control r70, mqtt r18 and rootfs-ab r7 built (desktop, fleet key) and
+      installed on the Prague Q by `apk add` at 19:54 (from r68 / r17 / r6; the one apk error was
+      the transaction's trigger). A hand `apk add` restarts neither daemon: both kept running the
+      old code until `systemctl restart nexusq-control nexusq-mqtt` (19:55). Device r133 is not
+      built — see the next item; the Prague Q stays on r132 (only the diag's `UPDATE_JOB` section
+      is missing, nothing in r70 needs it).
+      **2026-11-15, 22:24:** the first System update from the app failed in its plan step,
+      "could not work out the update: apk exited 1". apk still flags `postmarketos-mkinitfs`
+      (`f:s`, its 2.12.0-r1 trigger), so every apk run exits 1 with "1 error". The install
+      tolerated that, the new plan step did not. Fixed in control r71 (CHANGELOG). The flag stays
+      on the Prague Q on purpose: the r71 job has to pass with it, and the plan upgrades mkinitfs
+      to 2.12.2-r0, which should clear it.
+      **22:41:** the second job passed its plan and failed 7 s into the download: `apk fetch`
+      takes no `name=version` (apk 3.0.8 and 3.0.9), and the r70 tests used a fake apk that did.
+      Fixed in control r72 (fetch by name). The published repo holds control r68 / mqtt r17 /
+      rootfs-ab r6, and a System update's `--available` would have gone DOWN to them. So the test
+      ran against a temporary signed repo (fleet key) served from the desktop with only control
+      r72, mqtt r18 and rootfs-ab r7, added to the Prague Q's `/etc/apk/repositories` and removed
+      afterwards. **22:52–23:01: the first job end to end.** Plan 254 changes / 226 MiB, the
+      download in about 7 min with the app card's MB, packages and ETA, the install, "base
+      libc/init changed, rebooting", up again at 23:01, and the bridge closed the job ("finished
+      with the reboot"). 8 min 25 s, a 552 MiB memory peak (39 MiB in swap). The mkinitfs flag is
+      gone (`apk` says OK again), and the kernel is still r33. Not seen by anyone: the ring's two
+      colours (nobody was at the Q). Still open: HA's percent during a job, the fault injection
+      below, then the cottage Q. The full diag after it (`nq-captures/20261115-230258/`) found no
+      regression: fwupd came in only as a dependency and stays inactive, PipeWire never started,
+      nftables still lets ssh, the bridge, Spotify and AirPlay through, and mDNS works. It left
+      `.apk-new` next to our `/etc/pulse/default.pa`, `/etc/avahi/avahi-daemon.conf` and
+      `/etc/fstab` (diff them against upstream). The pmOS nftables defaults open 24727 and
+      53317 for apps the Q does not run. A job cannot be cancelled from anywhere.
+- [ ] **The download does not notice a version the plan did not want** (review 2026-11-16, control
+      r72): the fetch goes by name and takes the highest version the repositories carry. Where the
+      plan wants another (a System update going down to the repository's, a tagged repo, a pin),
+      the wrong file lands in the cache and the install's `--cache-predownload` adds the right one,
+      counted by no room check and without the stall guard. A big package could fill `/` before
+      apk aborts (nothing changed, but `/` stays full). Fix: after the fetch, check every plan
+      entry has its cache file (the prefix match `_check_space` uses), unlink what the fetch wrote
+      that the plan does not name, log it, and check the room again before the install.
+- [ ] **The cottage Q's first job** (review 2026-11-16): its interrupted 2026-11-14 update may
+      have left a package other than mkinitfs flagged; then every plan fails with "apk keeps X in
+      an error state" and only ssh + `apk fix <pkg>` mends it. With a link: `hostname`, then the
+      read-only `apk fix --simulate`. Its first update to r72 runs on r68's in-bridge path with
+      the 600 s timeout that killed apk on 2026-11-14, so update **Daemons** first (four
+      packages), then the System update, which is then a job. Full diag after.
+- [ ] **No device package builds while librespot cannot** (2026-11-15): `device-google-steelhead`
+      `depends=librespot`, and since librespot became our aport (r100) pmbootstrap builds it before
+      any device revision; with Alpine edge armv7 on rust 1.99.1 and x86_64 on 1.100.0, crossdirect
+      refuses (`rustc version mismatch`), so device r133 failed in both the full build and
+      `OTA_PACKAGES_ONLY`. Every device fix is blocked until edge armv7 has rust 1.100.0, unless the
+      build handles a native/target rust skew (e.g. librespot built without crossdirect) — decide
+      which; do not pin or drop the aport. Logs: `nq-captures/r133-*build-2026-11-15.log`.
 
 ### Open — findings of the 2026-11-01 health check (Prague Q, kernel r33, device r131)
 

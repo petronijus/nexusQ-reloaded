@@ -1,943 +1,137 @@
 # Cross-machine handover
 
 Steps that were done on ONE machine but have to be done on the others before the
-project works there. Delete a section once its steps are done on that OS.
+project works there, and what each unit still owes. Delete an item once its step
+is done; the history stays in git, `HANDOFF.md` (the session log) and the
+CHANGELOG. Engineering work in the tree lives in `PLAN.md`, not here.
 
-`HANDOFF.md` is the session log — what happened and why. **This file is the todo
-list for the other machines.** Matching tasks live in Todoist → **AI-handover**.
+Rewritten 2026-11-15: every section before it described finished work (v2.0.0
+to v2.1.1, the 6.18 bump, the persist store, the fleet key) and was deleted;
+what was still open in them is below.
 
 ---
 
-## Release v2.1.1 — 2026-10-14 (power-cut hotfix)
+## State of the units — 2026-11-15
 
-Released 19:44 (GitHub release + OTA repo, parity 21/0). The Prague Q took it
-by apk upgrade + `nq-kernel-ota` trial boot of r33 (promoted); full diag after
-it clean. Still open:
-
-- **Prague Q — the power-cut test PASSED (2026-10-15 21:44, a real mains
-  cut while moving it):** `time invalid until set` + `hctosys: unable to read
-  the hardware clock`, no jump back to 2000, NTP at 38 s, `hwclock -r` real
-  time afterwards (so POWER_UP is write-1-to-clear), the first health sample
-  on its own line after the NUL tail. Left: the next warm reboot should read
-  the RTC normally (`setting system clock to 2026-…`).
-- **Cottage Q:** none of 2.1.x yet — system update from the app, then the
-  kernel (r33) through `nq-kernel-ota` with someone in reach.
-- **Test nits from `just ci` (no fault, not in the hotfix):**
-  `companion/app/test/eq_card_test.dart:954` taps "Reset to flat" at an
-  off-screen offset (the reset step may be untested);
-  `pmos/device-google-steelhead/tests/test_uac2_silence_producer.py:190`
-  leaves a file open (ResourceWarning).
-
-## Release v2.1.0 — 2026-10-14
-
-Released 16:09 (GitHub release + OTA repo, parity 21/0). The Prague Q runs the
-v2.1.0 content as a dev image from **rootfs slot B** (p14, committed 15:09;
-slot A holds the older system with the same packages installed by hand): before
-any `fastboot flash userdata` there, `nq-slot set a` first (INSTALL.md). The
-cottage Q has none of 2.1.0 yet: system update from the app, then kernel r32
-through `nq-kernel-ota` with someone in reach. During the release push the
-pre-push `flutter test` hung for 15 min (frontend_server, no output) while
-another project's e2e suite loaded the desktop; killed, the push went through.
-
-## GPU speed and frequency scaling — state 2026-10-13 evening
-
-Done 2026-10-13: device r129 built and installed on the Prague Q by hand
-(`apk add`; healthd's gpu_* fields and the snapshot's GPU_SGX540 section
-verified live); the parameter buffer (nexusq-sgx r1, `/etc/powervr.ini`, copied
-to the unit by hand, package not built yet): benchmark 83, terrain clean.
-
-Done the same evening: kernel r28 (patch 0076: stock CORE table, VDD_CORE set
-to 1127 mV through the core VP at boot) trial-booted and autopromoted on the
-Prague Q; `VP_CORE_VOLTAGE` reads vsel 0x23 = 1 139 440 µV, stable under the
-GPU benchmark (82 against 83); full diag clean apart from the known keypad
-clkctrl failure, which fired before the VDD_CORE write. Slot-A backup = r27.
-
-2026-10-14 00:10: kernel r29 (= r28 + the review's readback logging) trial-booted;
-stock RAM boot measured stock's VDD_CORE: nominal 1127 mV, SmartReflex-calibrated
-**1076 mV** — we sit 63 mV above it, open loop (power-clocks-pm.md, Addendum).
-nexusq-control r67 installed by hand on the Prague Q 2026-10-14 (replaces the hand r66).
-2026-10-14 11:15: kernel r30 (patch 0077, the VDD_CORE VC-bridge regulator)
-trial-booted and autopromoted on the Prague Q; VP ceiling measured: VDDMAX 0x28
-does not clamp a force-update (1.25 V request → vsel 0x2c, back to 0x23). Full
-diag clean apart from the keypad clkctrl failure, which hit this boot.
-Slot-A backup = r29.
-2026-10-14 12:13: kernel r31 (GPU DVFS, patches 0078-0080) trial-booted and
-autopromoted on the Prague Q (slot-A backup = r30); devfreq up, idle 153.6 MHz,
-VDD_CORE 1253380 µV at 384 MHz. glmark2: 81 at 307.2, 91 at 384, 91 with DVFS.
-The fleet-safety review's fixes make r32 (VP TRANXDONE error propagated,
-regulator readback check, debugfs write knob removed, resume at the previous
-OPP) together with device r130 (healthd/snapshot GPU DVFS fields). r30-r32 and
-r130 are not committed yet. The cottage Q runs none of this.
-2026-10-14 13:22: kernel r32 trial-booted and autopromoted on the Prague Q
-(slot-A backup = r31), with device r130 and nexusq-control r68 installed by
-hand. Under load 384 MHz at VDD_CORE 1253380 µV (rail/clock/rail one read),
-idle 153.6 MHz at 1139440 µV, resumes go 153.6 -> 384 directly; full diag
-clean apart from thermal: a 12 s dual-core CPU load with the desktop up peaked
-at 98.9 °C, the highest so far, 1.1 °C under the 100 °C passive trip
-(`nq-captures/20261014-132814/`). Watch item, not throttled.
-
-Next, in this order (`docs/gpu-sgx540/power-clocks-pm.md` Addendum 2026-10-13):
-1. ~~Stock RAM boot~~ done (idle only: no GL client without `/system`, so
-   stock's behaviour at 384 MHz stays unmeasured).
-2. ~~VP ceiling, VDD_CORE regulator~~ done (r30). ~~384 MHz inside the GPU's
-   runtime PM~~ done with step 3 (r31/r32).
-3. ~~GPU DVFS 153.6/307.2/384 MHz~~ done (r31, review fixes in r32); measured
-   with `nq-gpu-bench`. Not yet measured: the idle/active power cost
-   (`nq-opp-study2.sh GPU=1`).
-Upstream known issue: `postmarketos-mkinitfs 2.12.0-r1` trigger fails
-(pmaports MR !9764); the Prague Q shows "1 error" on every apk transaction
-until the fixed package lands. Up to nexusq-control r65 the app's
-updates treat that as a failure (packages installed, restarts skipped, error
-shown); **r67 tolerates the mkinitfs trigger error only** (`triggerErrors`). Until
-r67 is on a unit, do not run its system update from the app. The Prague Q runs
-r67 (by hand, 2026-10-14); the cottage Q does not.
-
-Kernel r29 = r28 + the review's fixes (the boot log reports the VP readback,
-the failure message names the VC ON value). Before an OTA: rebuild r28/r1 from the committed tree, check the kernel apk's /boot
-layout, `apk upgrade` the Prague Q, full diag incl. VDD_MPU vs OPP.
-
-## Prague Q — 2026-10-12: GPU desktop image flashed, NOT a release
-
-- **Flashed 2026-10-12 ~23:10** from the private image of `26b5af2`: boot p9 =
-  kernel **6.18.48-r27**, rootfs slot A (p13, committed) = device **r128**,
-  nexusq-sgx r0, nexusq-sgx-mesa r0. Slot B (p14) still holds the previous,
-  hand-patched rootfs; kernel trial slot p8 holds r26. The unit had committed
-  rootfs slot B, so the flash first booted the old rootfs (no modules for
-  r27); fixed with `nq-slot try a` → `promote a` (INSTALL.md §2 now says so).
-  `nexusq-kernel-ota-promote` is enabled again (fresh rootfs, no mask).
-- **Full diag after the flash: clean** (`nq-captures/20261012-233023/`): only
-  the known boot-storm thermal peak (94 °C), one RoonBridge CLR crash at boot
-  (restarted itself; watch whether it recurs) and one boot-time
-  `pactl suspend-source roon_in 1 FAILED` from nq-uac2-silence.
-- **Cable-pull test on the packaged r128 passed** (USB physically pulled,
-  `docs/gpu-sgx540/drafts/stall/cable-pull-test.sh`): ttyGS0 getty restarted,
-  no console lock held, PID 1 answered through two desktop stop/starts and a
-  getty@tty1 restart; a reboot without USB came up clean and the desktop
-  started on the GPU.
-- **Not published**, and must not be until the measurement gate (groundwork
-  §4 Phase 5) passes. Kernel r26 must never be published (empty /boot layout,
-  see CHANGELOG r27).
-- **Open:** reading `/proc/tty/driver/*` hung the unit hard (RCU stall on
-  CPU0); do not read it on a unit until it is understood. A reflash of
-  `userdata` on a unit with committed slot B boots the old rootfs — today a
-  documented manual step; the initramfs could detect a freshly flashed slot A.
-- **Decision pending:** the runtime hardware watchdog is not armed on the units
-  (`RuntimeWatchdogUSec=0`); a kernel-side GPU hang would not recover.
-
-## Any machine — 2026-10-11: nexusq-control r65 and app 1.27.1+68 are NOT built or released
-
-`nexusq-control` r65 labels the audio outputs in English ("Speaker",
-"Optical"; they were Czech). It is in the tree, not built, not in the OTA
-repo: it goes out with the next image release. The app 1.27.1+68 (sharp
-launcher icon, English output names whatever the Q sends, no empty "Sound"
-heading) runs on Petr's Pixel as a DEBUG build from the working tree; the
-release (GitHub `app-v1.27.1`, `companion/app-release.json`, iOS) is not cut.
-
-## Any machine — 2026-10-10: v2.0.2 is RELEASED
-
-Released from the desktop on 2026-10-10: the OTA repo on gh-pages (release.json
-says 2.0.2; parity gate 19/0) and the GitHub release `v2.0.2` (boot 6.41 MiB,
-rootfs 681 MiB). The only package change is `shairport-sync` 5.5.2-r102 (it
-had to ship: Alpine's 5.5.1-r0 outranked our 5.1-r100). No app release; the
-app stays 1.27.0.
-
-- **Prague Q:** runs r102 from the published repo (`apk fix`, binary md5 equal
-  to the repo apk's), restarted 19:00. Idle shairport-sync wakes 1.5/s (as 5.1 did); the sweep
-  after it was clean.
-  **Not yet checked: an AirPlay stream on 5.5.2** -- Petr declined a listening
-  test before the release. The next time AirPlay is used, confirm from data:
-  a `shairport-sync` sink-input appears, no XRUN in dmesg, Now Playing in the
-  app, a volume move lands where `airplay_attn_cdb` predicts.
-- **Cottage Q:** takes v2.0.2 (and v2.0.1 before it, see below) over the air
-  with the app's system update; the kernel did not change in 2.0.2.
-
-## Any machine — 2026-10-04: v2.0.1 is RELEASED
-
-Released from the desktop on 2026-10-04: the OTA repo on gh-pages (release.json
-says 2.0.1; parity gate 19/0) and the GitHub release `v2.0.1` (boot 6.41 MiB,
-rootfs 687 MiB). Kernel 6.18.48-r20 (patch 0061, the USB-plug PIH error),
-device r126 (nq-healthd's `mem.jsonl`), `nexusq-kernel-ota` r11 (prunes dead
-module trees, depends on util-linux `flock`). No app release; the app stays
-1.27.0.
-
-- **Prague Q:** already runs all of it, installed by hand on 2026-10-03, and
-  is current against the repo. Its memory trend starts with the r20 boot
-  (22:45 CEST): after a few days, `nq-health-report`'s `mem_trend` should name
-  what grew ~0.33 MB/h on the 3-day boot before.
-- **Cottage Q:** takes v2.0.1 like v2.0.0, over the air: the app's system
-  update, then `nq-kernel-ota stage-latest && nq-kernel-ota try` with someone
-  in reach. Check `apk info -e flock` first (it arrives with
-  `nexusq-rootfs-ab` r4+); kernel-ota r11 refuses to write without it.
-- Not exercised on a unit yet: `prune` at the end of a real kernel OTA's
-  promote. The cottage's v2.0.1 kernel OTA will be the first; read
-  `journalctl -u nexusq-kernel-ota-promote` there.
-
-## Any machine — 2026-10-02: v2.0.0 is RELEASED; what is left of it
-
-Released from the desktop on 2026-10-02: the OTA repo on gh-pages (with
-`release.json`, so every v2 unit's release watch sees 2.0.0; parity gate 19/0),
-the GitHub release `v2.0.0` (boot 6.41 MiB, rootfs 682 MiB), `app-v1.27.0`
-(the github APK, release key + rotation) and `companion/app-release.json`.
-
-Left of the release:
-1. **iOS 1.27.0+67 to TestFlight** (the nexusq-ios-release agent, VM 108).
-   Not done: Claude Code's permission classifier refused the agent the read of
-   the ASC API key from 1Password ("Kulturni prehled ASC API Key"). Petr has to
-   allow that read (a permission rule, or approving it when asked); he has
-   already OK'd shutting Windows VM 106 down for it. Until then the app release
-   is Android-only, against the both-tracks rule.
-2. **Prague Q** (runs r124 / r64 / r26 / mqtt r17 by hand): take the update
-   through the app (checks the OTA path and the HA Install press), then
-   `nq-kernel-ota` for kernel r19; full diag sweep after. Then diagnostics mode
-   on (librespot re-auth loop), and Roon's zone to Fixed volume.
-3. **Cottage Q:** offline since 2026-09-28 01:54 (power cut); once it is back
-   it can take v2 over the air. Then the Šumperák HA section (below).
-4. The one-volume test below was still not run before the release.
-
-The 2026-09-30 notes below are kept for the store work and the volume test.
-
-**The one-volume test is not done yet.** Petr wants to test it properly first.
-The plan (agreed, not run): the Prague Q at 10-30 %, Petr drives Spotify, the
-app, the dome and an iPhone over AirPlay; I watch the sink, the bridge's events
-and the librespot / shairport / `AirPlayVolumeFollow` logs. Open question to
-check first: after the dome moves the volume, does the Spotify app show the
-Q's level on connect, or only after the next play (librespot re-reads the mixer
-at play; `docs/2026-09-27-one-volume.md`).
-
-**Home Assistant:** the "Nexus Q" view of the KolacicekAPrdelcicka dashboard
-gained Sound (volume slider, mute) and Lights (LED ring brightness, theme,
-visualisation, ambient, schedule) per Q, and the header's "vol unknown" is
-fixed (it read the retired `sensor.nexus_q_volume`). The Šumperák section has
-no theme / visualisation selects yet: its nexusq-mqtt r10 has no such
-entities; add them after that unit takes v2. Backup of the dashboard before
-the change: the session's scratchpad (not in the repo).
-
-**The companion app to Google Play and F-Droid** (Petr: both). Done and pushed
-(app 1.27.0+67, commit 0100050):
-- flavors `github` / `play` / `fdroid`; only github updates itself;
-- a release key in 1Password ("nexusQ companion Android release key", also the
-  Play upload key) with a rotation record from the old debug key; Petr's Pixel
-  took 1.27.0 in place and runs on the new key;
-- `build-apk.sh --release` builds from a clean export of the last commit (no
-  stock assets of the original app); `--release --flavor play` gives a clean
-  AAB, verified, not uploaded anywhere.
-
-Open, in order:
-1. ✅ **Store icon and sphere art: the originals** (Petr, 2026-10-10), the
-   Google "Q" and `companion/app/assets/device/sphere.png`, in every flavor; accepted risk:
-   Play may reject apps that look like Google's at review (check whether the
-   Kulturní přehled app is on the same developer account, since repeated
-   violations can suspend all of it). The Q exists only as a 96 px bitmap, so
-   the store icon is a vector redraw of it (`companion/app/tool/store/q-mark.svg`,
-   measured from the bitmap). The launcher icon, a 96 px upscale before,
-   was soft; since app 1.27.1+68 it is rendered from the SVG too.
-2. **Store metadata** in `companion/app/fastlane/metadata/android/en-US/`
-   (read by both Play and F-Droid). Done 2026-10-10: title, short/full
-   description (with "not affiliated with Google" and the Spotify 25-user
-   limit), changelog for 68, icon 512 and feature graphic 1024x500
-   (`companion/app/tool/store/make_store_art.sh` renders both), and five
-   phone screenshots (2026-10-11, Petr's Pixel 9 Pro Fold, outer display, app
-   1.27.1+68 debug against the Prague Q): home, equalizer, settings, devices,
-   health. Clear of personal data (the Spotify account name, the WiFi SSID),
-   and fitted onto a black 1080x1920 canvas, because Play now takes phone
-   screenshots only at exactly 9:16 or 16:9 (taller shots scaled down,
-   shorter ones padded below). Not shot: the setup wizard, because a debug
-   build shows the original app's stock imagery that a release does not carry.
-3. ✅ **Privacy policy page** (Play requires one), published 2026-10-11 at
-   https://petronijus.github.io/nexusQ-reloaded/privacy/ (text approved by
-   Petr; contact: GitHub issues only). Source `companion/privacy/index.html`,
-   copied by hand to gh-pages `privacy/index.html`; the OTA publish leaves it
-   alone. That URL goes into the Play Console's privacy policy field, and the
-   data safety form follows it: no data collected or shared.
-4. **Play Console** — the developer account is on **Petr's gmail Google
-   account**, not on petronijus@bastla.com (that developer account was
-   closed by Google on 2024-04-07 for inactivity; ignore it). Done
-   2026-10-11: app "Nexus Q Reloaded" (`org.nexusq.nexusq_companion`, app id
-   4973283573535202951) created, free, automatic protection on; every App
-   content declaration saved (privacy policy URL; sign-in: no account, the
-   reviewer uses the connect screen's **Demo** button; no ads; 18+; content
-   rating PEGI 3 / ESRB Everyone with petronijus@bastla.com as the IARC
-   contact; data safety: nothing collected or shared; no advertising ID;
-   not a government, financial or health app); store settings (Music &
-   Audio, contact petronijus@bastla.com, website the GitHub repo); the
-   default store listing from fastlane (texts, icon, feature graphic, five
-   screenshots; AI label: none, the art is hand-written SVG). **Internal
-   testing live 2026-10-11:** release 68 (1.27.1), the `play` AAB from
-   0d39cd6 signed with our release key (now the upload key; Google holds the
-   app signing key), testers = the account's "Internal testers" list; join
-   link https://play.google.com/apps/internaltest/4701738953222611772. Until
-   Google reviews the listing, testers see the temporary name
-   `org.nexusq.nexusq_companion (unreviewed)`; "Send app for review" stays
-   locked until the dashboard's remaining steps (the closed test) are done.
-   An install from Play does not go over the GitHub/debug build (other
-   signer): uninstall that first. The closed track (Alpha: all countries,
-   list "Nexus Q Reloaded testers", feedback = GitHub issues) refused 68
-   for its photo/video permissions (open_filex); 1.27.1+69 removes them.
-   Internal testing moved to 69 too (68 had to go: Play checks every active
-   bundle). **2026-10-11 18:09 Petr submitted the 15 changes for review**
-   (closed release 69 for 177 countries, the listing, every declaration).
-   Next, once approved: Petr gathers testers into "Nexus Q Reloaded testers"
-   and sends them the closed-test opt-in link; a **closed test with 12
-   testers for 14 days**, then apply for production. Petr gathers the
-   testers; he confirms each submission.
-   Also open: **Android developer verification** (Console, left menu) — the
-   GitHub APK's package name and our signing key must be registered there,
-   or certified devices in the countries where it applies stop installing
-   the sideloaded app (the deadline was 2026-09-30).
-5. **F-Droid — on hold:** with the original Google assets F-Droid refuses
-   the app (non-free assets); it needs free art in the fdroid flavor first.
-   Then: a merge request to `fdroiddata` (Petr's GitLab account) with a
-   recipe building `--flavor fdroid` from this repo; the fdroid build must come
-   out unsigned for F-Droid to sign, and the Spotify client ID is not in the
-   public source (Spotify control is off in that build unless the recipe passes
-   it; it is a public PKCE id). Review takes weeks.
-6. ✅ Spotify control works only for users added to the Spotify developer app
-   (25 max) unless Spotify grants extended quota; the store text says so.
-7. iOS goes to the App Store at the v2 release through VM 108 (Petr).
-
-## Any machine — 2026-09-30: USB audio doze — kernel 6.18.48-r18 + device r121 are NOT built or published
-
-Kernel patch 0059 (u_audio doze, `docs/2026-09-30-usb-audio-doze.md`) is in
-the tree as **linux-google-steelhead 6.18.48-r18**; `nexusq-usb-gadget.sh` in
-**device r121** switches it on. Neither is built or published.
-
-- **The Prague Q runs the v2 test set as installed packages** since 2026-09-30
-  12:12: kernel 6.18.48-r18 (promoted by nq-kernel-ota), device r121, control
-  r60, mqtt r12, btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6, from the
-  fleet-signed apks in `output/ota-v2test-2026-09-30/` (not in the OTA repo).
-  It survives reboots; the full diag was clean (CHANGELOG). The cottage Q is
-  still on r120/r17.
-- **Since 14:19 the same day it runs the next test set on top** (the four
-  boot-log fixes, CHANGELOG): kernel 6.18.48-r19 (patch 0060, promoted),
-  device r124 (since 15:25), nexusqd r25, control r61, btagent r8, setupd r8,
-  mqtt r14 and
-  the alsa-utils 1.2.16-r100 override with its -systemd and -udev, from
-  `output/ota-v2test-2026-09-30b/` and `-30c/`. They ship with v2 like the rest; at
-  publish time alsa-utils reaches the units only through `apk upgrade
-  --available` (the System update), as speexdsp and shairport-sync do. The
-  image in `output/` (build 2026-09-30c: `boot.img` and
-  `nexusq-rootfs-v2test-2026-09-30c-sparse.img`, hashes in
-  `nexusq-2026-09-30c-v2test.sha256`) carries exactly this set with device
-  r124; it is a dev image with the access files baked in, never a release.
-  Before the release, on the cottage Q: `apk info -e alsaconf alsa-utils-openrc`
-  must name nothing (alsaconf r0 pins `alsa-utils=1.2.16-r0` and would hold
-  the upgrade back); the Prague Q has neither (checked 2026-09-30).
-- **Ships with the v2 release, not before** (Petr, 2026-09-30: no publish while
-  v2 is under test). Then: build the kernel (r18) and the image or the OTA packages; publish
-  both (the kernel goes to the units through `nexusq-kernel-ota`, device r121
-  through `apk upgrade`). A unit that gets r121 before r18 logs once that
-  u_audio has no doze, and works as before.
-- On the Prague Q after the update: `cat /sys/module/u_audio/parameters/doze_idle_ms`
-  reads 5000; with the TV idle, `awk '/musb-hdrc/' /proc/interrupts` grows by
-  ~100/s, not ~2000/s; sound from the TV starts normally; then the full
-  nexusq-diag sweep. Keep the cottage Q off r18/r121 until Prague has passed.
-
-## Any machine — 2026-09-30: release alerts (control r64, nexusqd r26, app 1.26.0) are NOT released
-
-The Q checks for a release itself and the app notifies (PROTOCOL §12c,
-CHANGELOG). Ships with v2.
-
-- **Since 2026-10-02 it also runs nexusq-mqtt r17** (the discovery guard, the
-  24 h residency sensors, the HA Install fix, retained commands ignored;
-  `output/ota-v2test-2026-10-02/`). Owed after the publish: one real Install
-  press in HA with an update pending, then the diag sweep.
-- **The Prague Q runs nexusq-control r64 and nexusqd r26** (by `apk add`,
-  from `output/ota-v2test-2026-09-30d/`; rebooted 17:22, first check 3 min
-  after the bridge started). Until the OTA repo has a `release.json`
-  (the v2 publish writes it) its watch logs `release watch: check failed:
-  HTTP 404` every 30 minutes (seen 2026-09-30 17:05). Expected, and gone at the publish.
-- **At the v2 release:** approve or rewrite `pmos/release-notes.json` and
-  drop its `"draft": true` (`package-release.sh` refuses a draft or notes for
-  another version; a publish meanwhile keeps the published release.json); after
-  the publish, `curl https://petronijus.github.io/nexusQ-reloaded/nexusq/release.json`
-  answers, and on a unit `getUpdateStatus {"refresh": true}` reads it.
-- **iOS compiles** (`just ci` on the MacBook, 2026-10-02, no codesign) with the
-  new Info.plist (BGTaskScheduler, `fetch`) and AppDelegate. Not yet run on a
-  device: at the release, check a background refresh (Xcode: Debug → Simulate
-  Background Fetch) posts the notification.
-- **The phone app** 1.26.0+65 has not been on a phone: a release APK is built on
-  the MacBook (the debug key is machine-bound, app README). Then: allow the
-  notification at the first connect, and check the banner against a unit with
-  a pending release.
-
-## Every clone — 2026-09-29: the developer harness (`just`, git hooks)
-
-The repo now has `just check` / `just ci`, lefthook git hooks and Claude Code
-hooks (`AGENTS.md`, `docs/development.md`). Git hooks install per clone, so each
-machine runs, once, in its own checkout:
-
-```sh
-just setup      # uv Python 3.14, lefthook install, blame ignore list, flutter pub get, doctor
-```
-
-- **petronijus-PC** — ✅ done 2026-09-29; `just ci` green.
-- **MacBook** — ✅ done 2026-10-02: hooks installed, the verification copy gone,
-  `just ci` green (docker suites, ALSA integration test, Android build and the
-  iOS build without codesign included; Docker Desktop must be running).
-- **Omarchy** — ✅ done 2026-10-10: shares `~/Documents` with Ubuntu (the SAME
-  clone, hooks already live); `just doctor` clean (every tool, Python 3.14,
-  Flutter 3.47.5, libpulse headers, Docker), `just check` green.
-- **Windows** — nothing: the checks are not set up there.
-
-The seven packages bumped for the reformat (device r121, control r60, mqtt r12,
-btagent r7, setupd r7, kernel-ota r10, rootfs-ab r6) are **not built or
-published**. Six carry no behaviour change; device r121 also carries the
-nq-healthd fix (a VDD mismatch is re-read after 50 ms before it counts; LED
-events once per stretch). When they are built: `apk upgrade` on the Prague Q,
-the full nexusq-diag sweep (CPU frequency and VDD_MPU against the OPP), then on
-the unit: `led_static` once per idle stretch in `/var/log/nq-health/events.jsonl`,
-no `vdd_mismatch` through OPP changes, and `systemctl restart nq-healthd` comes
-back clean. Keep the cottage Q off r121 until Prague has passed.
-
-## Every host that plugs a Q in over USB — 2026-09-28: the gadget moved to 172.16.43.1
-
-The Q's USB-net gadget is off pmOS's shared `172.16.42.0/24`. Petr's Lumia 1020 sits
-there too, and with both plugged into omarchy, `172.16.42.1` always routed to the Q.
-Device **r120**: `/etc/unudhcpd.conf` = `172.16.43.1`/`.2`, the gadget script takes
-its address from it, and `verify-rootfs.sh` section 10 gates it. The initramfs and
-rescue gadget is on `.43` too, from the next flash or rescue build.
-
-- **Prague Q:** live since 2026-09-28 17:00. The r120 files were placed by hand and
-  survived a reboot. The apk agrees once r120 is built and installed; nothing to
-  undo.
-- **Cottage Q:** stays on `.42` until it takes r120 with the v2.0.0 publish.
-- **omarchy:** done. NM profile `nexusq-usb` (MAC `02:1A:11:00:00:02`, static
-  `172.16.43.2/24`, `ipv4.never-default`, autoconnect-priority 10).
-- **Ubuntu (petronijus-PC) and the MacBook**, the first time a Q on r120 is on the
-  cable:
-  - `git pull` (`nqctl` defaults to `.43` and finds the iface by MAC);
-  - on Ubuntu, the same `nmcli con add` as in INSTALL.md §4;
-  - on macOS, give the RNDIS/ECM interface `172.16.43.2/24` in Network settings
-    (or rely on the Q's DHCP);
-  - `ssh-keygen -R 172.16.42.1` if that entry was the Q's.
-- **Windows:** rerun `scripts/install-gadget-rndis.ps1` elevated. It now picks the
-  adapter by the Q's MAC and assigns `172.16.43.2`.
-
-## Desktop (petronijus-PC) — 2026-09-27: the v2.0.0 work is all in `main`, NOTHING is published
-
-> **Version:** Petr, 2026-09-28: this is a big update, so the image release is
-> **v2.0.0**, not v1.20.0. The app keeps its own track (1.25.0 today).
-
-Done on the MacBook; the user asked to stop here and hand over. **Nothing below
-is released**: no gh-pages publish, no GitHub release, no app release. v2.0.0
-waits for Petr's word ("vydej"). What is in `main` since v1.19.0:
-
-| package | rev | what |
+| | Prague Q (`steelhead`, 192.168.20.246) | Cottage Q (`nexus-q-sumperak`, cottage LAN only) |
 |---|---|---|
-| device-google-steelhead | **r120** | A/B for every unit (r112–113), persist pstore/mqtt/settings, entropy credit, Roon waits for PA, `nq-diag`, `nq-pulse.sh`, one volume, no `module-switch-on-connect` (r118: the LED visualiser tap), CPU accounting in health.jsonl (r119), USB gadget on 172.16.43.1, the LED fingerprint in health.jsonl, PA off the UAC2 gadget card (r120) |
-| nexusq-alsa-vol | **r1 (new aport)** | the `ctl.nexusq_vol` ALSA control: one volume (`docs/2026-09-27-one-volume.md`) |
-| nexusq-control | **r58** | diagnostics mode (r51), LED ring (r52), ambient (r53), one volume + AirPlay push-back (r54), no made-up volume at boot (r55), ambient fades + the tap's source kept on the monitor (r56), ambient wakes only when its level changes (r57), counters for nq-healthd (r58) |
-| nexusq-mqtt | **r10** | C-states + diagnostics (r8), ring in HA (r9), HA system update + volume/mute (r10) |
-| nexusqd / nexusq-setupd | **r24** / r6 | ring off + schedule, ambient (from `feat/ux-fixes`, merged 9fafbda); `brightness N [ms]` fades (r24) |
-| nexusq-kernel-ota / nexusq-rootfs-ab | **r9** / r5 | per-unit identity at boot; storage check per OTA; rescue text says 172.16.43.1 (r9) |
-| shairport-sync | 5.1-r100 | no idle polling (new to `ota-packages.list`) |
-| app | **1.25.0+63** | ring (1.23), ambient (1.24), device diagnostics + Idle depth + Spotify volume mirror (1.25) |
-
-**On this PC:**
-
-1. `git pull`. Nothing machine-specific changed; the fleet key and the build
-   volume work as before.
-2. Optional, once: the plugin's integration test pulls Alpine packages on
-   every run; a local image saves that (`userspace/nexusq-alsa-vol/README.md`,
-   Tests). `sh userspace/nexusq-alsa-vol/tests/run-integration.sh` must print
-   `plugin: PIC, entry point exported` and `test_player_mappings: ok`.
-3. **When Petr says release (v2.0.0):** the full image build as usual. The
-   gates changed:
-   - `verify-rootfs.sh` has a **section 9 (one volume)**: the plugin, its
-     `/etc/alsa/conf.d` entry, `nq-pulse.sh`, and librespot/shairport pointed at
-     `nexusq_vol`;
-   - `nexusq-alsa-vol` is in `pmos/ota-packages.list` and gets built in
-     Phase 7c5b;
-   - `publish-ota-repo.sh` must carry both `nexusq-alsa-vol` and
-     `shairport-sync`.
-
-   The device r117 `depends=` the plugin, so an OTA without it would be held
-   back.
-4. **App 1.25.0 on both tracks**, also on Petr's word:
-   - Android from here (`build-apk.sh`, `gh release` `app-v1.25.0`,
-     `companion/app-release.json`);
-   - iOS through the `nexusq-ios-release` agent (VM 108).
-
-   1.23/1.24 were never released either, so this one release carries all three.
-5. **Prague Q after the publish:**
-   - the app's system update;
-   - then switch **Developer → Device diagnostics (24 h)** on (or
-     `setDiagnostics {enabled:true, hours:72}`), so the next librespot
-     re-auth loop is caught at debug level (CHANGELOG Known issues, update
-     2026-09-27: it does NOT match upstream #1716);
-   - in Roon, set the zone to **Fixed volume**.
-
-**Needs a phone at a Q** (not testable from a desk, never run yet):
-- Spotify: the slider moves the app's number exactly and the other way round
-  (app release → Spotify via the Web API; knob → Spotify at the next play).
-- AirPlay from an iPhone: the iPhone slider moves the Q; then move the app's
-  slider during the session and check that the iPhone's slider follows after
-  ~1 s (MPRIS SetVolume → DACP) and the Q does NOT move on the echo. Expected
-  log line if not: `airplay: SetVolume failed` in `journalctl -u
-  nexusq-control`.
-- To reproduce the librespot loop on purpose: play Spotify on a Q with
-  diagnostics on, then drop its dealer socket with an nft rule that rejects
-  (tcp reset) the dealer's address for a minute. `ss -K` does not work here:
-  the kernel has `CONFIG_INET_DIAG_DESTROY` off. Then read `journalctl
-  _SYSTEMD_USER_UNIT=librespot.service`.
-
-**The Prague Q** runs everything above since 2026-09-27 evening, installed from
-local apks on the desktop (`output/ota-r117/`; since 23:55 also device **r118**,
-control **r56**, nexusqd **r24**, applied live without a reboot), rebooted
-twice before that; the full diag sweep is in `nq-captures/20260927-223229/`. Before the
-install its sink was lowered from 90 % to 30 %, because the sink is now also
-Spotify's and AirPlay's level. After the publish its apk simply agrees.
-
-**The cottage Q** already runs everything above except the kernel/rootfs
-parts it had (installed 2026-09-26/27 from local apks: device r117, control
-r54, mqtt r10, alsa-vol r1, nexusqd r23, setupd r6). Diagnostics mode is on
-there until **2026-09-29 22:21 UTC**. Verified on it: volume unchanged over
-restarts, player/knob/HA paths exact, C-states and diagnostics in MQTT, the
-HA update entity (it lists 9 pending systemd 262-r2 updates — not installed).
-After the publish its apk simply agrees; nothing to reinstall.
-
-**Todoist:** the nexusq feature tasks were completed on 2026-09-28 at Petr's
-request; their record is CHANGELOG [Unreleased]. Nothing more to tick after the release.
-
-## Any machine — 2026-09-26: the idle-audit + A/B packages are built, NOT published — ⏩ superseded by the section above
-
-Current: device-google-steelhead **r113** (r112 + the static enable link for
-nexusq-resize-rootfs, which now runs every boot) and `nexusq-rootfs-ab` **r4**
-(`ensure`, nexusq-storage-check.timer — the storage check after every OTA),
-`output/ota-r113/`; and from earlier today: `nexusq-rootfs-ab` r3 (superseded),
-`nexusq-control` **r50**, `nexusq-btagent` **r6** and the new `shairport-sync`
-**5.1-r100** override (`output/ota-r112/`, btagent + shairport in
-`output/ota-r110/`). r110/r111, control r49 and rootfs-ab r2 were local test
-builds superseded by these — never publish them. Nothing is on gh-pages yet,
-and `shairport-sync` is new to `pmos/ota-packages.list`, so the next publish
-must carry it.
-
-The cottage Q got its A/B slots over the air from rootfs-ab r2/r3 on
-2026-09-26 (`docs/2026-09-26-ab-slots-for-every-unit.md`). Prague already has
-them (hand split, 2026-08-20), so the migration timer does nothing there.
-**The first-boot online split has only run in a container** — the first unit
-flashed with an image from this tree is its hardware test.
-
-- Publish with the normal OTA path (`OTA_PACKAGES_ONLY=1` build on a machine
-  with the fleet key, then `publish-ota-repo.sh`), or with the next release.
-- **Prague**: after the publish, the app's system update — `.post-upgrade`
-  disables and stops systemd-oomd live; no reboot required, but one gives the
-  cleanest check (`systemctl is-active systemd-oomd` must stay `inactive`).
-- Record: `docs/2026-09-26-idle-audit-five-pollers.md`, CHANGELOG [Unreleased].
-
-## Šumperák Q — 2026-09-26: brought to v1.19.0 — ✅ done
-
-Done at the cottage from the MacBook, on the cottage LAN, right after v1.19.0
-was published (gh-pages `1c18c2e`). This supersedes the 2026-09-19 section
-below — r103's persist store came along in the same upgrade.
-
-- `apk upgrade --available --ignore linux-google-steelhead`: device r102 →
-  **r109**, firmware r2 → **r3**, `nexusqd` r20 → r21, `nexusq-control` r45 →
-  r48, `nexusq-setupd` r4 → r5, `nexusq-mqtt` r6 → r7, plus 110-odd Alpine edge
-  packages. The r103 `.pre-upgrade` moved `device.json` under the persist
-  mountpoint as designed.
-- Reboot → `nq-persist status`: store created and mounted, all **four** bind
-  mounts MOUNTED (user-systemd, nm-connections 4 entries, bluetooth 9, roon),
-  4 ssh host keys rendered, no site NTP (correct for the cottage). Hostname,
-  `device.json` (Šumperák / chalupa), all four ssh fingerprints, WiFi profiles
-  and the BT bond are unchanged against the pre-upgrade capture.
-- `nq-kernel-ota stage-latest` (identity carried: wifi `05:1f:11`, bt
-  `73:ac:9c`) → `try` → back in 53 s → **healthy after 10 s, promoted**;
-  reconcile left apk on `linux-google-steelhead-6.18.48-r17` without help,
-  because the kernel came from the published repo this time.
-- On r17: WiFi firmware `5.90.125 (TOB)` (stock), C2/C3 enabled and entered on
-  both CPUs, `dmesg -l err,warn` = the four known initramfs/GPT lines, no failed
-  units, MQTT connected, gateway `192.168.50.1` 0 % loss.
-- Captures: `nq-captures/sumperak-v1.19.0/` (before / after-reboot / kota-* / final).
-
-⚠️ Noticed, not changed: the cottage Q still carries Prague's
-`wifi-svatovitske-internety-5g.nmconnection` (and two `.bak` copies of its own
-profile), now inside the persist store. That profile holds the Prague PSK that
-the open p1 Todoist task says to rotate — once it is rotated, this copy is
-stale; delete it (via the trash) the next time anyone is on this box.
-
-## Šumperák Q — 2026-09-19: take device r103 + `nexusq-control` r46 + `nexusq-setupd` r5 (the persist store) — ✅ done 2026-09-26 (see above)
-
-Published from the desktop (gh-pages `aacc4ae`, secrets gate 11/11 clean) and
-running on the Prague Q. The cottage Q was **not reachable from Prague**: the
-cottage's Tailscale node `dietpi-sumperak` (`100.122.96.6`) wants a password
-that is not in 1Password, and `192.168.48.57` is not routed from here. So it is
-the one thing left — either the app's own "Nexus Q" update, or on the cottage
-LAN:
-
-```
-ssh root@nexus-q-sumperak.local        # = 192.168.48.57
-apk update && apk upgrade --available --ignore linux-google-steelhead
-systemctl reboot                       # the store mounts on the next boot
-nq-persist status                      # expect: mounted, 3 bind mounts MOUNTED, N ssh keys rendered
-```
-
-What to expect, and what to check afterwards (Prague's record is in HANDOFF
-2026-09-19): `.pre-upgrade` moves the cottage's `/etc/nexusq/device.json`
-(it IS named — "Šumperák") under the store's mountpoint, the symlink serves the
-old name until the reboot, the first boot formats `cache` (stock's empty ext4)
-and seeds the store from the rootfs: the toggles, the WiFi profile, the BT
-bonds, the ssh host keys, the hostname `nexus-q-sumperak`. Afterwards
-`cat /etc/nexusq/device.json` must still say Šumperák, `hostname` must still be
-`nexus-q-sumperak`, and the ssh fingerprint must be unchanged. The cottage has
-no LAN NTP server, so **no `nq-persist ntp set` there** — that is Prague's
-(`192.168.20.1`).
-
-## Prague Q — 2026-09-18: take `nexusq-kernel-ota` r7 + `device-google-steelhead` r102 — ✅ done 2026-09-19
-
-Both were built and published **from the MacBook at the cottage** (gh-pages
-`09bd713`, secrets gate 11/11 clean) and installed on the Šumperák Q. The Prague
-Q is not reachable from the cottage LAN, so it is the one thing left:
-
-```
-ssh -J root@100.110.110.100 root@192.168.20.246
-apk update && apk upgrade --available --ignore linux-google-steelhead
-```
-
-or just let the app's own "Nexus Q" update do it. Prague already runs
-`6.18.48-r2`, so this is a plain userspace upgrade — no kernel OTA.
-
-- **r7** stops `nq-kernel-ota` rebooting the device whenever it prints its usage.
-- **r102** takes Prague's own gateway `192.168.20.1` out of the fleet-wide NTP
-  list. **Prague loses its LAN NTP server by this change.** If that matters,
-  add it back as a per-site drop-in (`20-<site>-ntp.conf`, sorting after the
-  fleet file) in the private overlay — not in the fleet package, which is how it
-  broke the cottage in the first place.
-
-**Done 2026-09-19 22:06 CEST from the desktop PC, directly on the Prague LAN**
-(`ssh root@192.168.20.246`, hostname `steelhead` verified first). Plain
-`apk upgrade --available --ignore linux-google-steelhead`: `nexusq-kernel-ota`
-r5 → **r7**, `device-google-steelhead` r101 → **r102**, kernel stays `6.18.48-r2`,
-plus 27 Alpine edge packages (glib, mesa, qt6-qtbase, ca-certificates, libinput…),
-no reboot. The r102 pre/post-upgrade access migration ran and lost nothing —
-both `authorized_keys` files, the WiFi profile and `/etc/nexusq/mqtt.json` are
-as before. Verified afterwards:
-
-- `nq-kernel-ota` with no arguments prints its usage and the uptime keeps
-  counting — the r7 fix holds on this unit too.
-- `systemd-timesyncd` restarted onto the new list: `ServerName=162.159.200.1`,
-  offset +8 ms, synchronized. **Prague no longer uses its gateway for NTP**; the
-  per-site drop-in was deliberately NOT added — the private overlay has no
-  per-site mechanism yet (everything in it bakes into the fleet package that
-  both units flash), so it would need runtime site detection first. Open
-  question for Petr; the cost today is only the WAN-down case, and with the
-  RTC ticking since `6.18.48-r2` a reboot no longer starts from 2000-01-01
-  unless mains was cut.
-- Journal after the upgrade: only the known systemd-262 `Kernel Core Pattern
-  Register` noise (109× this boot, predates the upgrade — CHANGELOG 1.16.0
-  known issues) and the libkscreen D-Bus naming lint
-  (`docs/2026-07-02-boot-error-inventory.md`). `dmesg -l err,warn` is the one
-  `hrtimer: interrupt took` line from 28 min *before* the upgrade. No failed
-  units.
-
-Nothing left to do on this unit. Both units now run device r102 / kernel-ota r7.
-
-## Šumperák Q — 2026-09-18: brought to v1.17.0 — ✅ done
-
-Done at the cottage on the MacBook, on the cottage LAN (`nexus-q-sumperak.local`
-= `192.168.48.57`). r96 → **r101**, `nexusqd` r18 → **r20**, `nexusq-kernel-ota`
-r5 → **r6**, kernel `6.18.48-r0` → **r2** via `nq-kernel-ota` stage-latest → try
-→ (auto)promote → reconcile. Nothing left to do on this unit.
-
-Worth knowing for the next OTA on a non-first unit: **r6 carries the per-unit
-identity automatically** — `stage-latest` logged `local-mac-address carried
-over: f8:8f:ca:20:48:e1 -> f8:8f:ca:05:1f:11` and the same for the BT address,
-and the unit came up as itself. The hand DTB patch is no longer part of an OTA;
-it remains the rule for a full **flash**.
-
-Also expected and not a fault: `dmesg -l err,warn` is 5 lines here, not the
-empty log v1.17.0 reports for Prague. Four of them are the `[nq-ab]` progress
-lines and the GPT notice, which live in the **initramfs** — `nq-kernel-ota`
-carries the boot slot's ramdisk over by design, so the log-level change from
-device r101 only lands on this unit with a real flash.
-
-## MacBook — 2026-09-16: flash v1.16.0 onto the Prague Q — ✅ done
-
-This section used to carry the scp / fastboot steps for the build that became
-**v1.16.0** (device r101, `nexusqd` r20, kernel `6.18.48-r1` — the `init-ab`
-log-level change lives in the ramdisk, which `nq-kernel-ota` deliberately never
-replaces, so only a flash could deliver it). The flash happened: on 2026-09-17
-the Q's apk db reads `device-google-steelhead-1.0-r101`,
-`linux-google-steelhead-6.18.48-r1`, `nexusqd-0.1.0-r20`, `nexusq-control-0.1.0-r45`,
-uptime since ≈ 2026-09-16 15:19 CEST, and the `/root/nexusqd-r18-backup/` left
-by the hand-install is gone (fresh rootfs). Nothing left to do on the MacBook.
-
-**What the post-flash predictions actually came to** (read-only probe
-2026-09-17; the FULL `nexusq-diag` sweep ran that evening on the r2 kernel-OTA
-boot that superseded this one — **PASS**, capture `nq-captures/20260917-232610/`,
-recorded in HANDOFF.md's 2026-09-17 session):
-
-- `dmesg -l err,warn` did **not** drop to one line on r1: it was **5** — `twl_rtc
-  … Power up reset detected.` plus `twl6030_irq: Unmapped PIH ISR 20 detected`
-  ×2 (145 s, 160 s) and one `musb-hdrc Babble` (160 s). The sweep characterised
-  them: PIH bit 20 is **CHRG_CTRL**, which `twl6030-irq.c` copies onto the VBUS
-  bit on every VBUS change; on this battery-less board nothing consumes bit 20,
-  so the driver prints. Both lines bracket a gadget ACM hangup — a **USB cable
-  event**, not a fault. On r2 `dmesg -l err,warn` is one line, but only because
-  no VBUS edge occurred; re-plugging USB would reproduce it. **Fixed
-  2026-10-03 in kernel 6.18.48-r20** (patch 0061: every PIH hwirq mapped, as
-  stock), verified with a cable replug on the Prague Q.
-- The `twl_rtc` line was **not** "no RTC battery, genuinely external" as this
-  section claimed: the TWL6030 RTC counter was **stopped** (`RTC_CTRL_REG` 0x00,
-  `since_epoch` frozen at 946684800 across the whole boot) because MSECURE was
-  never driven high. **Fixed 2026-09-17 in kernel `6.18.48-r2`**, on the Prague
-  Q via kernel OTA (autopromoted to slot A 23:23 CEST) and **released as
-  v1.17.0** on 2026-09-18. On r2 `dmesg -l err,warn` at 1 min uptime is the one
-  `twl_rtc … Power up reset detected.` line, expected after a mains unplug (no
-  backup cell). CHANGELOG `[Unreleased]`,
-  `docs/2026-09-16-out-of-box-unlock-palm-gesture-and-the-rtc-that-never-ticks.md`
-  §4 + addendum.
-- Not re-checked here: `/proc/pressure/` + `systemd-oomd` running, no
-  `pids.max` warnings, `nexusled debug` `loops ≈ renders`, zero PAM session churn.
-
-## Desktop (petronijus-PC) — 2026-09-06 evening: the Prague Q is warm — ✅ repaired the same evening
-
-Diagnosed read-only from the MacBook (`nexusq-diag`, capture
-`nq-captures/20260906-160616/` on that machine), repaired on the PC. Full record:
-`docs/2026-09-06-the-guard-that-was-asleep-on-paper.md`; CHANGELOG
-`[Unreleased]` → "the Roon idle guard believed itself asleep".
-
-**What it was:** not a hot die (67 °C, the idle floor) but the Roon path awake
-for 4.75 days with nothing playing — amp powered since Sep 1 21:37, PulseAudio
-resampling silence, load ~1.0. The live Roon-loopback module reload for the r92
-fix had resumed `roon_in` behind the guard, and `nq-uac2-silence` in producer
-mode only ever trusted its own `asleep` flag.
-
-**Done on the PC (2026-09-06 17:00–17:15):**
-
-- Immediate relief: user unit restarted → `roon_in`, the amp sink and the
-  tas5713 PCM all idle within 20 s.
-- Fix in `pmos/device-google-steelhead/nq-uac2-silence`: reconciles the producer
-  PCM against the **capture side of the same aloop cable**
-  (`/proc/asound/RoonLoop/pcm1c/sub0/status`, new `NQ_CONSUMER_PCM`, set in
-  `nexusq-roon-idle.service`) on every poll, both directions, after 1 s of
-  sustained disagreement. Seen failing first (11 new tests, red on r93; live
-  `pactl suspend-source roon_in 0` left the source RUNNING for 15 s with the
-  guard silent), then green and undone within 1 s on the device.
-- `device-google-steelhead` **r94** built (`OTA_PACKAGES_ONLY=1`), **published**
-  (gh-pages `c861ac9`, secrets gate 11/11 clean) and **installed on the Prague Q
-  at 17:23** via the app's own path (`apk upgrade --available --ignore
-  linux-google-steelhead`); the trigger re-run against the apk-installed guard
-  was undone within 2 s. `install-fleet-signing-key.sh --check` clean (the
-  standing Todoist task — done); `seed-ota-volume.sh` was NOT a no-op here
-  (`seeded=10 kept=1 retired=6`, see the note) — run it before any OTA-only
-  publish on a machine that did not build the last release.
-- ⏳ **Šumperák Q still on r93** — not reachable from Prague (different network).
-  Next time anyone is on the cottage network: the app's *System* update, or
-  `apk update && apk upgrade --available --ignore linux-google-steelhead` over
-  ssh. Until then its Roon guard has the old hole; a `roon.service` restart
-  there would re-arm it correctly but not fix it.
-- Not fixed, noticed in the build log: `docker-build.sh` Phase 2's aport listing
-  prints `ERROR: failed to source APKBUILD` for all 8 non-device aports
-  (subshell `source` under `set -e`, cosmetic — the build itself is fine).
-
-**The rest of that list was worked through the same evening** — record:
-`docs/2026-09-06-two-spheres-one-topic-and-a-log-that-cried-wolf.md`.
-
-- ✅ **Home Assistant showed the cottage under Prague's entities** — fixed and
-  verified (`nexusq-mqtt` **r5**, published, installed on Prague). It was NOT a
-  topic collision on the wire: each box was publishing to its own prefix. The
-  flat `<prefix>/health/state` simply names no device, so HA had nothing to
-  disambiguate with. Topics are now `<prefix>/<node_id>/…` and the Will lives
-  there too; the flat ones stay for the app, marked legacy. Prague's entities
-  came back within one publish.
-- ✅ **Build log cried wolf** — `docker-build.sh` reported `ERROR: failed to
-  source APKBUILD` for 9 of 11 aports on every build. Cause was `set -u`
-  (an APKBUILD expands `$srcdir` at top level), not a broken aport. Fixed, and
-  a genuinely broken APKBUILD is still reported.
-- ⚠️ **systemd-262 journal noise — upstream, not ours.** `systemd-coredump
-  --check-requirements` fails because 6.18.48 returns `PIDFD_INFO_COREDUMP` but
-  not `PIDFD_INFO_COREDUMP_SIGNAL` (probed directly on the device; the kernel
-  source only sets the signal flag when a dump really happened) and Alpine ships
-  systemd **262~rc1**, which wants both. The `pids.max` half is
-  `CONFIG_CGROUP_PIDS` missing from `steelhead_defconfig` — a one-line change
-  worth folding into the next kernel bump, not worth a kernel OTA alone.
-  **What IS ours:** `nexusq-control`'s `_systemctl_user()` uses
-  `--machine=user@.host`, which opens a PAM session per call and emits the noise
-  288×/day. Measured replacement: `setpriv --reuid=10000 --regid=10000
-  --clear-groups env XDG_RUNTIME_DIR=… DBUS_SESSION_BUS_ADDRESS=… systemctl
-  --user` — identical answers, **zero** noise lines. Queued as **r38**, behind
-  the other session's r37 commit; do not land it on top of r37 unpublished.
-- USB host streaming silence into the gadget (~30 % of a core, documented cost)
-  is now the largest idle consumer. Host-side, not a device fault.
-
-**🚨 Release-tooling gap, hit for real:** `publish-ota-repo.sh` ships the newest
-build of every listed package from the shared volume, so publishing
-`nexusq-mqtt` r5 also published another session's unapproved `nexusq-control`
-r37. Rolled back in minutes (apk parked in
-`packages/edge/armv7/.held-unapproved/`, gh-pages `43173cd` back to r36, no
-device took it), but a Q that ran `apk update` inside that window then failed
-its next upgrade with `HTTP 404` until `apk update` was re-run. Nothing can
-currently express "built, not approved" — fix candidates in the dated note.
-
----
-
-## ✅ Now Playing works — and the reason it never did (control r40, 2026-09-07)
-
-The standing "Spotify control — not yet verified by a human" item finally got
-its human, and the first look found the feature had been dead since day one.
-Audio played, the app's Now Playing row stayed empty, and `librespot`'s
-`--onevent` hook had never fired: the bridge runs as root and bound its hook
-socket **root:root 0660**, while librespot runs as **uid 10000**. Every connect
-was `EACCES`, and the hook is deliberately best-effort — it must never break
-playback — so nothing ever logged it.
-
-**r40 hands the socket's group to the appliance user** (still 0660; not 0666,
-because the socket takes commands). Verified on Petr's own playback: the socket
-now reads `root:user`, uid 10000 connects, and at the next track change the
-bridge reported *Jungle Flower — Les Baxter*, source `spotify`, transport
-`spotify-web`.
-
-⚠️ **After any bridge restart Now Playing is blank until the next event.**
-librespot reports only on track change / play / pause and cannot be asked what
-is playing — that absence is precisely why the app drives Spotify through the
-Web API. Do not chase this as a bug; change the track and it fills in.
-
-Still unverified by a human: the Spotify **control** half (Settings → Spotify
-account → Connect, then pause from the phone — needs Premium and an
-allow-listed account), and the first real-iPhone run of build 52.
-
-## Open — the USB audio delay is NOT diagnosed, and two answers were wrong
-
-**Read this before touching the USB hop.** On 2026-09-06 Petr reported a delay
-on USB audio. Two explanations were given and shipped in the docs, and
-**measurement on 2026-09-07 disproved both**:
-
-1. ~~*"module-loopback ratchets its cushion, five days of it."* No~~: sampled live,
-   the number does not move, and no ratchet event has been logged since the
-   r95 restart.
-2. ~~*"it is the configured cushions."* No~~: cutting them by 120 ms on paper moved
-   the measured figure by 11 ms.
-
-**The mistake underneath both** is that every reading was taken while `usb_in`
-was **SUSPENDED**. The TV keeps the USB stream open and sends digital silence,
-so `nq-uac2-silence` parks the source; a starved `module-loopback` then reports
-a large, static Buffer Latency that nobody hears. Rule for anyone measuring
-this: `pactl list short sources` must show **usb_in RUNNING** and
-`/proc/asound/card2/pcm0p/sub0/status` must read RUNNING, or the number is
-meaningless.
-
-Measured properly — service stopped, chain rebuilt by hand without the silence
-watcher — the shipped configuration is **56 ms**, and it is already near the
-optimum:
-
-| configuration | measured |
-|---|---|
-| **as shipped** (alsaloop 80 ms + loopback 120 ms) | **56 ms** |
-| loopback cushion 30 ms | 44 ms |
-| small PA fragments + cushion 30 ms | 60 ms |
-| everything tight (20 + 20) | 128 ms — worse; too small to absorb jitter |
-
-**Where it landed** (Petr, 2026-09-07): *"latence [je] v pořádku a byla v
-pořádku už předtím, dokud se to nerozhodilo"* — so the path is good again and
-the degradation was real while it lasted. It persisted until the restart cleared
-it, which is the shape of the one-way climb the journal records (120 -> 145 on
-09-02/03) on a service that had run five days without restarting. r95's ceiling
-and reset-on-unpark are the right guard for that, and the reset does fire (the
-module index moves between sessions).
-
-**What was never established** is how large the degraded state actually got: by
-the time anyone measured with a running source, the restart had cleared it. The
-243 ms figure is not evidence of magnitude — it was read off a suspended source.
-Nothing further is open unless it comes back; if it does, measure it WHILE
-degraded and with usb_in RUNNING, and the untouched suspects are the Xiaomi
-box'"'"'s own output pipeline and a true end-to-end figure.
-
-To drive a test without waiting for him: `adb connect 192.168.20.169:5555` works
-(it needed the box awake — an earlier "unauthorized" was just that), and
-`tinyplay` exists on the box, though a `file://` VIEW intent is blocked by
-modern Android so pushing a WAV and opening it does not play.
-
-## ✅ done 2026-09-06 — app 1.18.1 is out on BOTH tracks, and iOS moved off the MacBook
-
-This section used to hand the iOS half to the MacBook. It is not needed: the
-build was cut on the **Proxmox macOS VM 108** instead, and that is now the
-normal way.
-
-- **Android**: `app-v1.18.1` + `nexusq-companion-1.18.1.apk`,
-  `companion/app-release.json` → 1.18.1 / 52 (live on raw.githubusercontent).
-- **iOS**: build **52** uploaded from VM 108, `VALID` in App Store Connect
-  (Delivery UUID `ca293ef3-5e84-4d15-995a-bad1cee3c505`), TestFlight group
-  "Internal".
-- **Bridge**: `nexusq-control` r37 on gh-pages and on the Prague Q, theme
-  persistence verified on the box.
-
-**Anyone can cut an iOS build now** — use the `nexusq-ios-release` skill/agent.
-It costs Petr his Windows VM for ~10 minutes (they share RAM) and puts it back.
-The VM was bootstrapped on 2026-09-06 and keeps its state, so a later run is
-just: swap the VMs, pull, build, upload, swap back.
-
-Still not verified by a human, and needing a phone rather than a machine:
-Spotify control end to end, and the first run on a real iPhone (52 is the first
-TestFlight build that carries the picker).
-
-## Desktop (petronijus-PC) — 2026-08-31: v1.15.0 SHIPPED
-
-Both steps this section used to list are done, so it is trimmed to what is still
-live. **v1.15.0 is published** (mainline 6.18 LTS, cross-native build), the
-cross-native kernel **booted** on the Prague Q, and the `k618b` perf study came
-back clean — no regression, and the earlier "regression" turned out to be the
-collector's own ssh polling. Full record:
-`docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`.
-
-**Still open, and none of it is a blocker for what shipped:**
-
-- **Ethernet after a cold power-cycle is unverified on 6.18.** Patches
-  0006/0008/0012 exist for exactly that path and it only proves itself cold, with
-  a cable. HDMI, fastboot-over-ssh (0044), USB-host re-probe and USB Audio are
-  likewise unexercised.
-- **Kernel OTA itself has been running safely in the field** (Petr, 2026-09-01) —
-  the trial-slot flow with its health gate is not the shaky part, and nothing here
-  should be read as a warning against using it.
-  The narrower open item is the **rollback's module-restore path** (`nexusq-kernel-ota`
-  r4): it only executes when a trial kernel actually fails and gets rolled back, so
-  a run of good OTAs — however long — cannot exercise it. Still unproven rather
-  than suspect.
-- **The app cannot offer a kernel update.** `checkSystemUpdate` filters the kernel
-  out — correctly, since apk must never apply one — so a kernel reaches a device
-  only via `nq-kernel-ota` over ssh. A proper fix gives the kernel its own track.
-  Rationale and consequence are written into `nexusq-control` at `_KERNEL_PKG`.
-- ~~**Šumperák** still trusts a different signing key and cannot OTA at all.~~
-  Resolved 2026-09-05 (fleet key installed, r92 + 6.18.48 over the air).
-
-**Two live traps worth keeping in front of anyone touching this:**
-
-- 🚨 **`172.16.42.1` is the Lumia, not the Q.** Since 2026-09-28 (device r120,
-  live on the Prague Q) the Q's gadget is **`172.16.43.1`**, and `nqctl`
-  defaults to it. The cottage Q stays on `.42` until it takes r120, so still
-  check that `hostname` = steelhead. `nqctl` auto-mode tries USB *before* WiFi. It also reports the Q
-  unreachable when OPNsense is down, because it resolves the WiFi lease through
-  it. `hostname` first, always. The Q lives at **192.168.20.246**.
-- 🚨 **One build at a time on `nexusq-workdir`, across all sessions.** A second
-  build zaps the first one's chroots mid-compile and the victim sees a *fake
-  toolchain error*. `docker ps` before starting anything.
-
-## Desktop (petronijus-PC) — the 6.18 bump: lessons worth keeping
-
-⚠️ This section used to read *"the 6.18 kernel rebase is done but UNBUILT"* and
-carried a **Resume here** checklist. All of it shipped in **v1.15.0** on
-2026-08-31 — the rebase is in git, the kernel is built, booted and published, and
-the patch stack is at 6.18.48. The checklist is deleted rather than corrected: a
-todo list that describes finished work sends the next session to redo it, and its
-`6.12.12` references made the repo look like it was still on the old kernel.
-
-What is kept below is the part that outlives the bump and applies to the **next**
-one (the following LTS is due around Nov/Dec 2026). Full record:
-`docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`;
-current state in memory `kernel-618-rebase-result`.
-
-### Found at build time (2026-08-31)
-
-- **Three patches applied with zero fuzz and still did not compile** against 6.18:
-  0005 and 0029 (upstream constified the sysfs `bin_attribute` API) and 0007
-  (upstream migrated clk from `.round_rate` to `.determine_rate(hw, req)`, and
-  git's 3-way merge planted our body into the new signature, where the old
-  parameters no longer exist). All three are fixed and compile-verified.
-  **A clean `patch` apply says nothing about compiling** — the GNU-patch gate is
-  necessary, not sufficient, and it cannot see a 3-way-merge hazard like 0007.
-
-  **Pre-flight before booking the shared build volume**, which catches all of them
-  in one pass in ~102 s with no docker and no volume:
+| release | v2.1.2 + its first OTA job (2026-11-15 23:00: 254 packages, apk-tools 3.0.9, systemd 262.2) with control r72, mqtt r18, rootfs-ab r7 by hand; device r132; rootfs slot B committed | v2.1.2, upgraded 2026-11-14 from r117 (the upgrade the 600 s timeout cut, then finished by hand) |
+| kernel | 6.18.48-r33 | not recorded on 2026-11-14 — read `uname -r`; v2.1.x wants r33 through `nq-kernel-ota` |
+| reach | LAN, USB gadget `172.16.43.1`, eth-direct `10.42.0.2` | only from the cottage LAN; the Tailscale hop wants a password not in 1Password |
+
+In the tree and **not released**: `nexusq-control` r69 to r72, `nexusq-mqtt`
+r18, `nexusq-rootfs-ab` r7 (on the Prague Q only), `device-google-steelhead`
+r133 and `librespot` 0.8.0-r100 (on no unit, unbuilt: rust skew, PLAN)
+(CHANGELOG `[Unreleased]`); app 1.27.1, 1.28.0+70 and 1.28.1+71
+(the last released app is 1.27.0). The order they take to the units is in
+`PLAN.md`: the Prague Q first, never the cottage Q first.
+
+## Prague Q
+
+- [ ] **Not yet checked: AirPlay on shairport-sync 5.5.x.** The next time
+      AirPlay is used, confirm from data: a `shairport-sync` sink-input appears,
+      no XRUN in dmesg, Now Playing in the app, a volume move lands where
+      `airplay_attn_cdb` predicts.
+- [ ] Do not read `/proc/tty/driver/*` on a unit: it hung the Prague Q hard
+      (RCU stall on CPU0, 2026-10-12) and is not understood yet.
+
+## Cottage Q (needs someone on the cottage LAN)
+
+- [ ] Kernel: `uname -r`; if it is older than r33, `nq-kernel-ota stage-latest
+      && nq-kernel-ota try` with someone in reach, then read
+      `journalctl -u nexusq-kernel-ota-promote` (the first real run of
+      kernel-ota's `prune` at promote).
+- [ ] Delete Prague's `wifi-svatovitske-internety-5g.nmconnection` and the two
+      `.bak` copies of its own profile from the persist store
+      (`/var/lib/nexusq/persist/nm-connections/`, via the trash) — once the
+      Prague PSK is rotated (Todoist AI-handover, p1) this copy is stale anyway.
+- [ ] Home Assistant: the Šumperák section of the "Nexus Q" dashboard has no
+      theme / visualisation selects; its mqtt was r10 then. The unit runs v2.1.2
+      now, so the entities exist: add them like Prague's.
+
+## Needs a phone at a Q (never run, not testable from a desk)
+
+- [ ] **The one-volume test** (Petr wants to drive it): the Prague Q at
+      10-30 %, Petr drives Spotify, the app, the dome and an iPhone over
+      AirPlay; watch the sink, the bridge's events and the librespot /
+      shairport / `AirPlayVolumeFollow` logs. First question: after the dome
+      moves the volume, does the Spotify app show the Q's level on connect, or
+      only after the next play (`docs/2026-09-27-one-volume.md`)?
+- [ ] AirPlay from an iPhone: the iPhone slider moves the Q; the app's slider
+      moved during the session moves the iPhone's after ~1 s (MPRIS SetVolume
+      → DACP) and the Q does NOT move on the echo (`airplay: SetVolume failed`
+      in `journalctl -u nexusq-control` if not).
+- [ ] Spotify **control** end to end (Settings → Spotify account → Connect,
+      then pause from the phone; Premium, allow-listed account).
+- [ ] iOS: a background refresh (Xcode: Debug → Simulate Background Fetch)
+      posts the release notification.
+
+## The companion app in the stores
+
+- [ ] **Google Play** (developer account on Petr's gmail): closed release 69
+      was submitted for review 2026-10-11. Once approved, Petr gathers testers
+      into "Nexus Q Reloaded testers" and sends the opt-in link; a **closed
+      test with 12 testers for 14 days**, then apply for production. Petr
+      confirms each submission.
+- [ ] **Android developer verification** (Play Console, left menu): register
+      the GitHub APK's package name and our signing key, or certified devices
+      stop installing the sideloaded app where it applies.
+- [ ] **iOS** to the App Store through VM 108 (`nexusq-ios-release`), Petr's call.
+- F-Droid is on hold: it refuses the original Google assets; the fdroid flavor
+  needs free art first, then an `fdroiddata` merge request (Petr's GitLab).
+
+## Machines
+
+- [ ] **Ubuntu (petronijus-PC) and the MacBook, the first time a Q is on the
+      cable** (the gadget is `172.16.43.1` since device r120; `172.16.42.1` is
+      the Lumia): `git pull`; on Ubuntu the `nmcli con add` of INSTALL.md §4; on
+      macOS give the RNDIS/ECM interface `172.16.43.2/24` (or rely on the Q's
+      DHCP); `ssh-keygen -R 172.16.42.1` if that entry was the Q's. Omarchy
+      (desktop): done.
+- [ ] **Windows:** rerun `scripts/install-gadget-rndis.ps1` elevated (picks the
+      adapter by the Q's MAC, assigns `172.16.43.2`). The checks (`just`) are not
+      set up there.
+- **Any machine that will publish OTA**, once and after a long gap:
+  `scripts/install-fleet-signing-key.sh --check` (signing key and trust), then
+  `scripts/seed-ota-volume.sh` before the first `publish-ota-repo.sh`. The
+  desktop and the MacBook are release machines.
+
+## Decisions and loose ends without a home in PLAN
+
+- [ ] **Runtime hardware watchdog**: not armed on the units
+      (`RuntimeWatchdogUSec=0`); a kernel-side GPU hang would not recover.
+      Petr's decision.
+- [ ] **Prague's NTP**: since device r102 the gateway is out of the fleet-wide
+      list; a per-site drop-in needs runtime site detection first (the private
+      overlay bakes into the one fleet package). Only costs the WAN-down case.
+- [ ] **Release tooling**: `publish-ota-repo.sh` ships the newest build of every
+      listed package on the volume; nothing expresses "built, not approved"
+      (it published an unapproved control r37 on 2026-09-06, rolled back).
+      `docs/2026-09-06-two-spheres-one-topic-and-a-log-that-cried-wolf.md`.
+- [ ] **The app cannot offer a kernel update** (`checkSystemUpdate` filters
+      it, correctly); a kernel reaches a unit only through `nq-kernel-ota`
+      over ssh. Fix: give the kernel its own track (`_KERNEL_PKG` in
+      nexusq-control).
+- [ ] Unexercised on 6.18: ethernet after a cold power-cycle (patches
+      0006/0008/0012), HDMI, fastboot-over-ssh (0044), and kernel-ota's
+      rollback module-restore path (runs only when a trial kernel fails).
+- [ ] Test nits from `just ci` (no fault): `companion/app/test/eq_card_test.dart:954`
+      taps "Reset to flat" at an off-screen offset;
+      `pmos/device-google-steelhead/tests/test_uac2_silence_producer.py:190`
+      leaves a file open (ResourceWarning).
+- [ ] Upstream: mainline `tas571x_coefficient_info()` still sets
+      `max = 0xffffffff` (`-1` in a 32-bit long), our patch 0046 — worth a post
+      to ASoC; ask Petr before posting.
+
+## For the next kernel LTS bump (due around Nov/Dec 2026)
+
+From the 6.18 bump (`docs/2026-08-31-kernel-6.18-lts-and-the-rollback-that-disarmed-itself.md`):
+
+- A clean `patch` apply says nothing about compiling: 0005, 0029 and 0007
+  applied with zero fuzz and did not build against 6.18 (constified sysfs
+  `bin_attribute`, clk `.round_rate` → `.determine_rate`, a 3-way merge that
+  planted the old body into the new signature). Pre-flight in ~100 s without
+  docker or the build volume:
 
   ```sh
   cd ~/nexusq-build/kstack/linux            # the patch stack, branch `steelhead`
@@ -947,84 +141,18 @@ current state in memory `kernel-618-rebase-result`.
   make olddefconfig && make -j"$(nproc)" all
   ```
 
-  ⚠️ **A green build here is NOT proof the shipped kernel is good.** This is
-  arm-gnu 13.3 against glibc headers; the kernel actually ships built with Alpine
-  gcc 15.2.0 for musl. It is a fast *API-drift* gate, nothing more — the real
-  build still has to run, and the device still has to boot it.
-- **Only one build may run on this machine at a time**, across all sessions — see
-  memory `build-volume-is-single-writer`. A second build zaps the first one's
-  chroots mid-compile and the victim sees a *fake toolchain error*
-  (`cannot execute cc1: posix_spawn`). `docker ps` before starting anything.
-- **`sha512sums` must be trimmed alongside `source=`.** Dropping 0004 and 0032
-  from `source=` while leaving their `SKIP` lines aborts abuild with
-  "Number of checksums(96 / 2) does not correspond to number of sources(46)".
+  It is an API-drift gate only (arm-gnu 13.3, glibc headers); the shipped
+  kernel is Alpine gcc 15.2 for musl and must still build and boot.
+- Trim `sha512sums` together with `source=` (abuild aborts on a count mismatch).
+- `CONFIG_CGROUP_PIDS` is missing from `steelhead_defconfig` (the systemd
+  `pids.max` noise); fold it into the bump.
+- One build at a time on the shared volume, across all sessions: `docker ps` first.
 
-### A patch worth sending upstream
+## Measuring the USB audio delay
 
-Mainline's `tas571x_coefficient_info()` **still** sets
-`uinfo->value.integer.max = 0xffffffff`, which is `-1` in a 32-bit `long`, so
-every biquad coefficient write is clamped. That is our patch 0046. As of 6.18.48
-it is unfixed and now also reaches TAS5717/5719 and the newly added TAS5733 on
-every 32-bit host. Small, clean, defensible — worth a post to ASoC.
-
-Full state: memory `kernel-618-rebase-result`.
-
----
-
-## MacBook — 2026-08-30: you can cut releases here now, after one command
-
-The fleet signing key **is installed** (2026-08-31, `scripts/install-fleet-signing-key.sh`;
-`pmos@local-6a93112c` retired, `pmos@local-6a42e957` verified byte-identical to
-`pmos/ota-signing-key.rsa.pub`). This machine can cut releases — the gates all
-work on macOS, see HANDOFF.md → "macOS specifics".
-
-**The volume is seeded (2026-09-05).** The packages that were sitting in
-`nexusq-workdir`'s `packages/edge/armv7` had been built with the *old* key
-(`device-google-steelhead` r87–r89, `linux-google-steelhead-6.12.12-r52`,
-`nexusq-control` r35, `nexusqd` r17, …); `publish-ota-repo.sh` would have
-re-signed a fresh index over them and `apk upgrade --available` would have failed
-on every Q. `scripts/seed-ota-volume.sh` replaced them with the published
-fleet-signed apks (`seeded=11 retired=7`; the old ones are in
-`.retired-pmos@local-6a93112c/`, not deleted). An `OTA_PACKAGES_ONLY=1` publish
-from here is safe now — and `publish-ota-repo.sh` refuses any foreign-signed apk
-by name, so it cannot silently stop being safe.
-
-**Trust reconciled too (2026-09-05, later the same day).** The seed alone was not
-enough: the volume *signed* with the fleet key but still *trusted* only the
-retired one — pmbootstrap 3 keeps trust in `config_apk_keys/`, filled once at
-first init — so the first build died at abuild's index update with `UNTRUSTED
-signature`. `install-fleet-signing-key.sh` now reconciles that on every run and
-did here: trust installed, 1 key retired, 13 stale apks parked.
-
-**This MacBook IS a release machine now.** `v1.15.2` was cut from here end to
-end: full `PUBLIC_RELEASE=1` build in 13.5 min, `verify-rootfs.sh` 29/29 (see
-HANDOFF "macOS specifics" for the `--entrypoint bash` form — the older recipe
-there was wrong), assets + OTA publish (gh-pages `62e418a`), parity 13/13, both
-units upgraded from it the same evening. The only macOS-specific fix it needed
-was `544ef09` (the release scripts used bash-4 `mapfile`; macOS ships bash 3.2).
-
-## Any machine that will publish OTA — two checks, once
-
-1. **`scripts/install-fleet-signing-key.sh --check`** — since 2026-09-05 this also
-   reconciles *trust* (`config_apk_keys/`), not just the signing key, and parks
-   foreign-signed apks. **Desktop: run it once** — expected to be a no-op, but the
-   trust dir there has never been checked against the fleet key explicitly.
-   (Todoist → AI-handover task exists for this.)
-2. **`scripts/seed-ota-volume.sh`** before the first `publish-ota-repo.sh` (and
-   after any long gap in building). It reads the published index, downloads and
-   signature-checks each apk, and places them in the volume so an OTA-only build
-   does not publish stale or foreign-signed packages for everything it did not
-   rebuild. Idempotent; on the desktop, which has built everything itself, a
-   no-op that says so.
-
-Record: `docs/2026-09-05-six-days-dark-and-the-ota-that-renamed-the-cottage.md` §3.
-
----
-
-## Šumperák Q — ✅ done 2026-09-05
-
-This section used to say *"cannot OTA at all, needs someone on site"*. Someone was
-on site: the fleet key is in its `/etc/apk/keys`, it is on **v1.15.2** (device
-r93, kernel-ota r5, kernel 6.18.48-r0, upgraded over the air at 19:16 CEST) with
-its own identity restored, on DHCP as `nexus-q-sumperak.local`. Nothing left to do
-on the other machines for it.
+Only with `usb_in` RUNNING (`pactl list short sources`) and
+`/proc/asound/card2/pcm0p/sub0/status` RUNNING: a suspended source reports a
+large static latency nobody hears, which produced two wrong answers in
+September. Shipped configuration measured 56 ms (2026-09-07), near the optimum.
+Nothing is open unless the degradation comes back; then measure it while
+degraded.
