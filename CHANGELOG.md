@@ -6,6 +6,23 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
+### Fixed — a wedged Wi-Fi chip kept a Q offline for three days (device **r134**, unreleased)
+
+On 2026-11-18 the BCM4330 on the Prague Q stopped answering on its SDIO bus
+(`brcmf_sdio_bus_rxctl: resumed on timeout`, then -110 on every command). The
+Wi-Fi watchdog noticed within two minutes, but its only repairs were
+`nmcli` bounces, which cannot reach a chip the driver cannot reach: ~1 200 of
+them failed over three days until the Q was power-cycled by hand.
+`nexusq-wifi-watchdog` now climbs a ladder, one rung per failed repair: the
+nmcli repair, then a chip reset (unload brcmfmac, unbind and rebind the SDIO
+host so its pwrseq pulses the reset line, reload), then a reboot — the last only
+when no other interface reaches the box, after 10 min of uptime, and at most 3
+times in a row (the count is kept on the persist partition). A reboot shows up
+in Home Assistant's "WiFi repairs" counter. Measured on the Prague Q: a forced
+chip reset is back on the network in 37–39 s. Installed there by hand; the
+cottage Q gets it with the next system update. Why the firmware hung is still
+unknown. `docs/2026-11-21-wifi-sdio-wedge-escalation.md`.
+
 ## [2.1.3] — 2026-11-16 — updates you can watch, and Spotify that keeps playing
 
 OTA-only: `nexusq-control` r73, `nexusq-mqtt` r18, `nexusq-rootfs-ab` r7,

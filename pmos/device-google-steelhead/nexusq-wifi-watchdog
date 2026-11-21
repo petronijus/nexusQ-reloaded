@@ -41,6 +41,26 @@
 #      up now is news, and a quiet fix buried in a log would hide it. /run is
 #      tmpfs, so the count is per boot; a restart of this service continues it.
 #
+#   5. ESCALATE — the repairs above only talk to NetworkManager. On 2026-11-18
+#      08:02 the BCM4330 itself stopped answering on its SDIO bus
+#      (`brcmf_sdio_bus_rxctl: resumed on timeout`, then -110 on every command):
+#      the heal and then ~1 200 reconnects ran for three days, every one ending
+#      `assoc:no`, because no nmcli call can revive a chip the driver cannot
+#      reach (docs/2026-11-21-wifi-sdio-wedge-escalation.md). So repairs now
+#      climb a ladder, one rung per FAILED repair, and drop back to the bottom
+#      as soon as one works or the link is seen healthy:
+#        soft    the nmcli bounce / reconnect above (NQ_WIFI_RESET_AFTER failures)
+#        reset   power-cycle the chip: unload brcmfmac, unbind and rebind the SDIO
+#                host (its mmc-pwrseq pulses the chip's reset line), reload, and
+#                connect (NQ_WIFI_REBOOT_AFTER failed resets)
+#        reboot  last resort, and only when nothing else can reach the box: no
+#                default route over another interface, at least NQ_WIFI_MIN_UPTIME
+#                seconds of uptime, and fewer than NQ_WIFI_MAX_REBOOTS reboots in a
+#                row (the count lives on the persist partition and is cleared after
+#                NQ_WIFI_OK_TO_CLEAR healthy checks, so a box that cannot be fixed
+#                cannot reboot-loop). The next boot starts with repairs=1 so Home
+#                Assistant's "WiFi repairs" counter shows that it happened.
+#
 # Scope: ONLY ever touches wlan0. States that are not ours to fix are left
 # alone: unmanaged (10) and unavailable (20) mean the radio is off or the driver
 # is gone, and anything between prepare (40) and activated (100) means NM is
@@ -49,7 +69,9 @@
 # state NM will not leave on its own.
 #
 # Env overrides: NQ_WIFI_INTERVAL, NQ_WIFI_FAILS, NQ_WIFI_COOLDOWN,
-# NQ_WIFI_BADLOSS, NQ_WIFI_DOWNS, NQ_LOGDIR, NQ_WIFI_LOGCAP, NQ_RUNDIR.
+# NQ_WIFI_BADLOSS, NQ_WIFI_DOWNS, NQ_LOGDIR, NQ_WIFI_LOGCAP, NQ_RUNDIR,
+# NQ_WIFI_RESET_AFTER, NQ_WIFI_REBOOT_AFTER, NQ_WIFI_MIN_UPTIME,
+# NQ_WIFI_MAX_REBOOTS, NQ_WIFI_OK_TO_CLEAR, NQ_PERSIST, NQ_WIFI_MMC.
 set -u
 
 IFACE=wlan0
@@ -72,6 +94,16 @@ CAP="${NQ_WIFI_LOGCAP:-20000}"           # keep at most this many log lines (wee
                                          # data; a steady day is only ~300 lines now)
 RUNDIR="${NQ_RUNDIR:-/run/nexusq}"
 STATE="$RUNDIR/wifi-watchdog.json"       # repair count for nexusq-mqtt (job 4)
+
+RESET_AFTER="${NQ_WIFI_RESET_AFTER:-2}"   # failed soft repairs before the chip is reset
+REBOOT_AFTER="${NQ_WIFI_REBOOT_AFTER:-2}" # failed chip resets before a reboot is considered
+MIN_UPTIME="${NQ_WIFI_MIN_UPTIME:-600}"   # never reboot a box younger than this (s)
+MAX_REBOOTS="${NQ_WIFI_MAX_REBOOTS:-3}"   # consecutive watchdog reboots before we stop
+OK_TO_CLEAR="${NQ_WIFI_OK_TO_CLEAR:-20}"  # healthy checks (~10 min) that clear that count
+PERSIST="${NQ_PERSIST:-/var/lib/nexusq/persist}"
+REBOOTS_FILE="$PERSIST/wifi-watchdog-reboots"
+MMC_HOST="${NQ_WIFI_MMC:-480d5000.mmc}"   # the SDIO host the BCM4330 sits on (fallback;
+                                          # the live one is read from sysfs when wlan0 exists)
 
 mkdir -p "$LOGDIR" "$RUNDIR"
 
@@ -231,10 +263,127 @@ write_state() {
 	printf '{%s}\n' "$_body" > "$1.tmp" && mv -f "$1.tmp" "$1"
 }
 
-# Count a finished repair and publish it through the state file.
+# TESTABLE:escalation
+# escalation <failed-repairs-in-a-row> <chip-resets-tried> [reset-after] [reboot-after]
+# Which rung of the ladder the next repair stands on: soft (the nmcli bounce /
+# reconnect), reset (power-cycle the chip) or reboot. One rung per failed repair;
+# the caller zeroes both counts when a repair works or the link is seen healthy.
+escalation() {
+	_f=${1:-0}; _r=${2:-0}; _ra=${3:-${RESET_AFTER:-2}}; _rb=${4:-${REBOOT_AFTER:-2}}
+	if [ "$_f" -lt "$_ra" ]; then echo soft
+	elif [ "$_r" -lt "$_rb" ]; then echo reset
+	else echo reboot; fi
+}
+
+# TESTABLE:reboot_allowed
+# reboot_allowed <uptime-s> <other-route yes|no> <reboots-in-a-row> [min-uptime] [max-reboots]
+# Prints "yes", or the reason a reboot must not happen: other-route (something
+# else still reaches the box, so wlan0 is not worth a reboot), young (it has not
+# been up long enough to tell a wedge from a slow boot), limit (it already
+# rebooted this many times in a row without the link ever staying healthy — a
+# box that cannot be fixed must not reboot-loop).
+reboot_allowed() {
+	_u=${1:-0}; _o=${2:-no}; _n=${3:-0}; _mu=${4:-${MIN_UPTIME:-600}}; _mx=${5:-${MAX_REBOOTS:-3}}
+	if [ "$_o" = yes ]; then echo other-route
+	elif [ "$_u" -lt "$_mu" ]; then echo young
+	elif [ "$_n" -ge "$_mx" ]; then echo limit
+	else echo yes; fi
+}
+
+# TESTABLE:other_route
+# other_route <output of `ip route show default`>: "yes" when a default route
+# runs over an interface other than wlan0 (ethernet, the USB gadget).
+other_route() {
+	_other=no
+	while IFS= read -r _l; do
+		case "$_l" in
+			*"default "*) case "$_l" in *"dev wlan0"*) ;; *) _other=yes ;; esac ;;
+		esac
+	done <<EOF
+$1
+EOF
+	echo "$_other"
+}
+
+# The SDIO host wlan0's chip hangs off ("480d5000.mmc"), read from the device
+# link while wlan0 still exists; the configured one otherwise.
+mmc_host_of() {
+	_p=$(readlink -f "/sys/class/net/$IFACE/device" 2>/dev/null)
+	case "$_p" in
+		*/mmc_host/*) _p=${_p%/mmc_host/*}; echo "${_p##*/}" ;;
+		*)            echo "$MMC_HOST" ;;
+	esac
+}
+
+# Power-cycle the chip. NetworkManager cannot: the driver cannot talk to a chip
+# that stopped answering on SDIO. Unloading brcmfmac, then unbinding and
+# rebinding the SDIO host controller makes the kernel run the host's mmc-pwrseq
+# (bcm4330-pwrseq pulses the chip's reset line), and the reload downloads the
+# firmware afresh. Every step is bounded by `timeout`: a dead chip makes some of
+# them slow, none may hold the watchdog forever.
+chip_reset() {
+	_host=$(mmc_host_of)
+	_drv=/sys/bus/platform/drivers/omap_hsmmc
+	timeout -k 5 40 modprobe -r brcmfmac_wcc brcmfmac >/dev/null 2>&1
+	if [ -e "$_drv/$_host" ]; then
+		echo "$_host" > "$_drv/unbind" 2>/dev/null
+		sleep 2
+		echo "$_host" > "$_drv/bind" 2>/dev/null
+		sleep 2
+	fi
+	timeout -k 5 40 modprobe brcmfmac >/dev/null 2>&1
+	_i=0
+	while [ ! -e "/sys/class/net/$IFACE" ] && [ "$_i" -lt 30 ]; do sleep 1; _i=$((_i + 1)); done
+	sleep 3                       # let NetworkManager adopt the new device first
+	connect_wlan
+}
+
+# Count a finished repair, publish it through the state file, and move the
+# ladder: a repair that left a usable link zeroes it, a failed one climbs a rung.
 record_repair() {  # <kind> <associated yes|no> <loss-after %>
 	repairs=$((repairs + 1))
-	write_state "$STATE" "$repairs" "$1" "$(repair_ok "$2" "$3" "$BAD_LOSS")" "$(mono)"
+	_ok=$(repair_ok "$2" "$3" "$BAD_LOSS")
+	write_state "$STATE" "$repairs" "$1" "$_ok" "$(mono)"
+	if [ "$_ok" = true ]; then
+		failed_repairs=0; chip_resets=0
+	else
+		failed_repairs=$((failed_repairs + 1))
+	fi
+}
+
+# The reboot rung. Counts the reboot on the persist partition BEFORE going down
+# (so a crash right after still counts) and leaves the reason in the log.
+wifi_reboot() {
+	emit "{\"t\":$(mono),\"ev\":\"reboot\",\"reboots\":$((reboots + 1)),\"note\":\"chip reset failed $chip_resets times and nothing else reaches the box\"}"
+	printf '%s\n' "$((reboots + 1))" > "$REBOOTS_FILE" 2>/dev/null
+	sync
+	systemctl reboot 2>/dev/null || reboot
+	sleep 60
+}
+
+# Pick and run the repair for this moment. <soft> is the function the caller
+# wants at the bottom rung (heal or reconnect), with its arguments after it.
+do_repair() {
+	_soft=$1; shift
+	_rung=$(escalation "$failed_repairs" "$chip_resets")
+	if [ "$_rung" = reboot ]; then
+		_why=$(reboot_allowed "$(mono)" "$(other_route "$(ip route show default 2>/dev/null)")" "$reboots")
+		if [ "$_why" = yes ]; then wifi_reboot; return; fi
+		emit "{\"t\":$(mono),\"ev\":\"reboot_skipped\",\"why\":\"$_why\"}"
+		_rung=reset
+	fi
+	case "$_rung" in
+		reset)
+			chip_resets=$((chip_resets + 1))
+			sig=$(signal)
+			emit "{\"t\":$(mono),\"ev\":\"chip_reset\",\"n\":$chip_resets,\"failed_repairs\":$failed_repairs,\"sig\":\"${sig:-?}\",\"note\":\"nmcli repairs did not bring wlan0 back; power-cycling the BCM4330\"}"
+			up=$(chip_reset)
+			g=$(gw); after=100; [ -n "$g" ] && after=$(loss_to "$g")
+			emit "{\"t\":$(mono),\"ev\":\"chip_reset_result\",\"assoc\":\"$up\",\"loss_after\":$after,\"gw\":\"${g:-?}\"}"
+			record_repair reset "$up" "$after" ;;
+		*)
+			"$_soft" "$@" ;;
+	esac
 }
 
 heal() {
@@ -262,9 +411,23 @@ fails=0
 downs=0
 last_heal=0
 repairs=$(repairs_in "$STATE")
+failed_repairs=0      # consecutive repairs that left no usable link (the ladder's input)
+chip_resets=0         # chip resets tried since the link was last healthy
+okstreak=0            # consecutive healthy checks (clears the reboot count)
+reboots=$(cat "$REBOOTS_FILE" 2>/dev/null); reboots=${reboots:-0}
+case "$reboots" in *[!0-9]*) reboots=0 ;; esac
 # First start this boot: publish "0 repairs" so a reader can tell a running
 # watchdog with nothing to report from one that is not running at all.
 [ -f "$STATE" ] || write_state "$STATE" 0
+# This boot is the watchdog's own doing: the reboot rung wrote the marker before
+# going down. /run is tmpfs, so without this Home Assistant would show a fresh
+# boot with nothing to report, hiding that the link had been dead long enough
+# for a reboot. The count is only cleared once the link has stayed healthy.
+if [ "$reboots" -gt 0 ] && [ "$repairs" -eq 0 ]; then
+	repairs=1
+	write_state "$STATE" 1 reboot true "$(mono)"
+	emit "{\"t\":$(mono),\"ev\":\"boot_after_wifi_reboot\",\"reboots\":$reboots}"
+fi
 prev_st=""
 tick=0
 emit "{\"t\":$(mono),\"ev\":\"start\",\"interval\":$INTERVAL,\"fails_to_heal\":$FAILS_TO_HEAL,\"cooldown\":$HEAL_COOLDOWN,\"downs_to_reconnect\":$DOWN_TO_RECONNECT,\"heartbeat_every\":$HEARTBEAT_EVERY,\"repairs\":$repairs}"
@@ -317,17 +480,31 @@ while :; do
 	fi
 	prev_st="$st"
 
+	# A healthy link zeroes the ladder, and once it has stayed healthy for a
+	# while the persisted reboot count goes too (a recovered box may reboot
+	# again for a future wedge; one that never recovers may not loop).
+	if [ "$st" = ok ]; then
+		failed_repairs=0; chip_resets=0
+		okstreak=$((okstreak + 1))
+		if [ "$okstreak" -ge "$OK_TO_CLEAR" ] && [ "$reboots" -gt 0 ]; then
+			rm -f "$REBOOTS_FILE"; reboots=0
+			emit "{\"t\":$(mono),\"ev\":\"reboot_count_cleared\"}"
+		fi
+	else
+		okstreak=0
+	fi
+
 	now_s
 	now=$NOW
 	if { [ "$st" = bad ] || [ "$st" = nogw ]; } && [ "$fails" -ge "$FAILS_TO_HEAL" ]; then
 		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
-			heal "$loss"
+			do_repair heal "$loss"
 			last_heal=$(mono)
 			fails=0
 		fi
 	elif [ "$st" = down ] && [ "$act" = reconnect ]; then
 		if [ $((now - last_heal)) -ge "$HEAL_COOLDOWN" ]; then
-			reconnect "$nm" "$downs"
+			do_repair reconnect "$nm" "$downs"
 			last_heal=$(mono)
 			downs=0
 		fi
