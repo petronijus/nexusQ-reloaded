@@ -228,6 +228,10 @@ Sink Input #13
         self.assertIs(self.streams(self.PACTL, unit=AIR), False)
 
 
+# _proc_stale reads /proc/<pid>/exe, which only Linux has: on the macOS host the
+# suite also runs on it can only answer None, and "not running" would pass there
+# for the wrong reason. The device and Linux hosts run all three.
+@unittest.skipUnless(os.path.isdir(f"/proc/{os.getpid()}"), "needs a Linux /proc (the device's)")
 class TestProcStale(unittest.TestCase):
     """Against a real process: a copy of `sleep` named like the service binary."""
 

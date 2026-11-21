@@ -24,12 +24,21 @@
  */
 #include <alsa/asoundlib.h>
 
+#include <errno.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "alsaloop.h"
+
+/* alsa-lib answers snd_pcm_start() on a PCM that is not prepared with -EBADFD,
+ * and the simulated PCM below must answer the same. EBADFD is Linux-only: the
+ * macOS host the test also runs on has no such errno, so give it Linux's value
+ * (77) there. The device and Linux hosts keep their own definition. */
+#ifndef EBADFD
+#define EBADFD 77
+#endif
 
 #define RATE 48000U
 #define CHANNELS 2U
