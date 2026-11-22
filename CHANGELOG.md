@@ -6,7 +6,14 @@ All notable changes to Nexus Q Reloaded. Format follows
 
 ## [Unreleased]
 
-### Fixed — a wedged Wi-Fi chip kept a Q offline for three days (device **r134**, unreleased)
+## [2.1.4] — 2026-11-22 — Wi-Fi that brings itself back
+
+OTA-only: `device-google-steelhead` r134 on the v2.1.1 image (kernel
+6.18.48-r33 and every other package as in 2.1.3). Tested on the Prague Q by
+`apk add` and a full diagnostic sweep (`nq-captures/20261122-142459/`); the
+reboot rung is covered by the host tests only.
+
+### Fixed — a wedged Wi-Fi chip kept a Q offline for three days (device **r134**)
 
 On 2026-11-18 the BCM4330 on the Prague Q stopped answering on its SDIO bus
 (`brcmf_sdio_bus_rxctl: resumed on timeout`, then -110 on every command). The
@@ -19,8 +26,9 @@ host so its pwrseq pulses the reset line, reload), then a reboot — the last on
 when no other interface reaches the box, after 10 min of uptime, and at most 3
 times in a row (the count is kept on the persist partition). A reboot shows up
 in Home Assistant's "WiFi repairs" counter. Measured on the Prague Q: a forced
-chip reset is back on the network in 37–39 s. Installed there by hand; the
-cottage Q gets it with the next system update. Why the firmware hung is still
+chip reset is back on the network in 37–39 s. The Prague Q took the
+package by `apk add` on 2026-11-22; the cottage Q gets it with its next
+system update. Why the firmware hung is still
 unknown. `docs/2026-11-21-wifi-sdio-wedge-escalation.md`.
 
 ## [2.1.3] — 2026-11-16 — updates you can watch, and Spotify that keeps playing

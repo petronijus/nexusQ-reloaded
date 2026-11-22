@@ -1,23 +1,13 @@
 {
   "schema": 1,
-  "version": "2.1.3",
-  "date": "2026-11-16",
-  "headline": "Updates you can watch, and Spotify that keeps playing",
+  "version": "2.1.4",
+  "date": "2026-11-22",
+  "headline": "Wi-Fi that brings itself back",
   "items": [
     {
-      "icon": "new",
-      "title": "Updates you can follow",
-      "text": "The app shows an update step by step, from the download to the install, and it keeps going if the app closes or the connection drops."
-    },
-    {
-      "icon": "music",
-      "title": "Spotify rides out a dropped connection",
-      "text": "When Spotify's servers drop the connection, playback carries on, and the volume stays where you left it."
-    },
-    {
-      "icon": "fix",
-      "title": "Spotify and AirPlay pick up an update",
-      "text": "After an update, Spotify and AirPlay switch to the new version as soon as nothing is playing, with no restart of the Q."
+      "icon": "wifi",
+      "title": "Wi-Fi recovers from a stuck chip",
+      "text": "If the Wi-Fi chip stops responding, the Q resets it and is back online in under a minute, and restarts itself if that is not enough."
     }
   ]
 }

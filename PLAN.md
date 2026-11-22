@@ -1960,6 +1960,26 @@ HANDOFF.md "Session 2026-06-10" for root causes and access paths).
 
 > Findings and follow-ups live here, not in a task app.
 
+### Open — after the 2026-11-18 SDIO wedge (device r134, v2.1.4)
+
+Capture: `nq-captures/20261122-142459/` (Prague Q, diag after r134). Context in
+`docs/2026-11-21-wifi-sdio-wedge-escalation.md`.
+
+- [ ] **NetworkManager crashed during the wedge**: a SIGSEGV core on the Prague
+      Q, `/var/lib/systemd/coredump/core.NetworkManager…zst`, 2026-11-18 08:04:57,
+      two minutes after the wedge began. Read it with `coredumpctl info`, find
+      whether it fed the outage, record it in the wedge doc and fix it.
+- [ ] **A chip reset is followed by one `brcmf_escan_timeout` ~20 s later**: seen
+      after each of the three forced resets on 2026-11-21 (374–490 s); every
+      reset still recovered in under 40 s. Find whether it is our bring-up order
+      after the rebind (stock-parity) before the reset rung meets a real wedge.
+- [ ] **The cottage Q logged a WiFi repair**: Home Assistant shows
+      `wifi_repairs` = 1 at 2026-11-21 19:15 UTC, on device r133 (no ladder yet).
+      Read its watchdog log at the next visit.
+- [ ] **Watchdog stop takes ~40 s**: `systemctl restart nexusq-wifi-watchdog`
+      after the r134 install hung that long; the shell likely defers SIGTERM
+      until its `sleep 30` child exits. Check and make the stop prompt.
+
 ### Open — the 2026-11-14 cottage Q findings (Spotify drop, failed upgrade, OTA experience)
 
 Diagnosis in `docs/2026-11-14-spotify-connection-drop.md`; the upgrade and OTA items below.
